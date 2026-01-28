@@ -51,6 +51,37 @@ jobs:
       - name: Package extension
         run: npm run package
       
+      - name: Generate or use existing extension key
+        run: |
+          # Generate a new key for CRX signing if not exists
+          # Note: For consistent extension ID across releases, store the key as a secret
+          if [ -n "${{ secrets.EXTENSION_PEM }}" ]; then
+            echo "${{ secrets.EXTENSION_PEM }}" > extension.pem
+          else
+            openssl genrsa -out extension.pem 2048
+          fi
+      
+      - name: Install Chrome for CRX packaging
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      
+      - name: Package CRX file
+        run: |
+          VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          
+          # Use Chrome to pack the extension
+          google-chrome --pack-extension=dist --pack-extension-key=extension.pem --no-sandbox 2>/dev/null || true
+          
+          # Move and rename the CRX file
+          if [ -f dist.crx ]; then
+            mv dist.crx "releases/new-tab-note-v${VERSION}.crx"
+            echo "CRX file created successfully"
+          else
+            echo "Warning: CRX file was not created"
+          fi
+      
       - name: Get version
         id: version
         run: |
@@ -58,6 +89,23 @@ jobs:
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Generate checksums
+        id: checksums
+        run: |
+          cd releases
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          ZIP_SHA256=$(sha256sum "new-tab-note-v${VERSION}.zip" | cut -d' ' -f1)
+          echo "zip_sha256=${ZIP_SHA256}" >> $GITHUB_OUTPUT
+          
+          if [ -f "new-tab-note-v${VERSION}.crx" ]; then
+            CRX_SHA256=$(sha256sum "new-tab-note-v${VERSION}.crx" | cut -d' ' -f1)
+            echo "crx_sha256=${CRX_SHA256}" >> $GITHUB_OUTPUT
+            echo "has_crx=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_crx=false" >> $GITHUB_OUTPUT
           fi
       
       - name: Create Release
@@ -68,27 +116,38 @@ jobs:
           body: |
             ## New Tab Note v${{ steps.version.outputs.version }}
             
-            ### Installation
+            ### Installation Options
             
-            #### From Chrome Web Store (Recommended)
-            *Coming soon*
+            #### Option 1: Chrome Web Store (Recommended)
+            *Coming soon - pending review*
             
-            #### Manual Installation
-            1. Download `new-tab-note-v${{ steps.version.outputs.version }}.zip` from the assets below
-            2. Extract the zip file to a folder
+            #### Option 2: Direct CRX Install (Enterprise/Developer)
+            > ⚠️ Chrome restricts CRX installation to enterprise environments or developer mode.
+            
+            1. Download `new-tab-note-v${{ steps.version.outputs.version }}.crx`
+            2. Open Chrome and go to `chrome://extensions/`
+            3. Enable "Developer mode" in the top right
+            4. Drag and drop the `.crx` file onto the extensions page
+            
+            #### Option 3: Load Unpacked (Developer Mode)
+            1. Download `new-tab-note-v${{ steps.version.outputs.version }}.zip`
+            2. Extract the zip file to a permanent location
             3. Open Chrome and go to `chrome://extensions/`
             4. Enable "Developer mode" in the top right
             5. Click "Load unpacked" and select the extracted folder
             
-            ### Checksums
+            ### Checksums (SHA256)
             ```
-            SHA256: $(sha256sum releases/new-tab-note-v${{ steps.version.outputs.version }}.zip | cut -d' ' -f1)
+            ZIP: ${{ steps.checksums.outputs.zip_sha256 }}
+            CRX: ${{ steps.checksums.outputs.crx_sha256 }}
             ```
           files: |
             releases/new-tab-note-v${{ steps.version.outputs.version }}.zip
+            releases/new-tab-note-v${{ steps.version.outputs.version }}.crx
           draft: false
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
@@ -96,5 +155,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: extension-package
-          path: releases/*.zip
+          path: releases/*
           retention-days: 30
+      
+      - name: Cleanup sensitive files
+        if: always()
+        run: rm -f extension.pem

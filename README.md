@@ -118,10 +118,23 @@ Access settings via the gear icon in the header:
 
 ## Installation
 
-### From Release (Recommended)
+### From Chrome Web Store (Recommended)
+
+_Coming soon - pending review_
+
+### From Release - CRX File (Enterprise/Developer)
+
+> ⚠️ Chrome restricts `.crx` installation to enterprise environments or developer mode due to security policies.
+
+1. Download the latest `new-tab-note-vX.X.X.crx` from [Releases](https://github.com/keyurgolani/new-tab-note/releases)
+2. Open Chrome and navigate to `chrome://extensions/`
+3. Enable "Developer mode" in the top right corner
+4. Drag and drop the `.crx` file onto the extensions page
+
+### From Release - ZIP File (Developer Mode)
 
 1. Download the latest `new-tab-note-vX.X.X.zip` from [Releases](https://github.com/keyurgolani/new-tab-note/releases)
-2. Extract the zip file to a folder
+2. Extract the zip file to a permanent location
 3. Open Chrome and navigate to `chrome://extensions/`
 4. Enable "Developer mode" in the top right corner
 5. Click "Load unpacked" and select the extracted folder
