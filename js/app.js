@@ -656,11 +656,16 @@ class App {
    * Move note to trash by ID
    */
   async trashNoteById(noteId) {
-    await Storage.trashNote(noteId);
+    const result = await Storage.trashNote(noteId);
     await this.closeTabForNote(noteId);
     await this.refreshNotesList();
     await this.handleNoteRemoved(noteId);
-    Utils.showToast('Note moved to trash', 'success');
+    
+    if (result && result.permanentlyDeleted) {
+      Utils.showToast('Empty note deleted', 'success');
+    } else {
+      Utils.showToast('Note moved to trash', 'success');
+    }
   }
 
   /**

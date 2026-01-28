@@ -276,11 +276,90 @@ class StorageManager {
   }
 
   /**
+   * Check if a note is empty (has no meaningful content)
+   */
+  async isNoteEmpty(noteId) {
+    const elements = await this.getElementsByNote(noteId);
+    
+    // No elements means empty
+    if (elements.length === 0) {
+      return true;
+    }
+    
+    // Check if all elements have no meaningful content
+    for (const el of elements) {
+      // Check text content
+      if (el.content) {
+        // Strip HTML tags and check for actual text
+        const textContent = el.content.replace(/<[^>]*>/g, '').trim();
+        if (textContent.length > 0) {
+          return false;
+        }
+      }
+      
+      // Check for media content
+      if (el.imageUrl || el.fileData || el.videoUrl) {
+        return false;
+      }
+      
+      // Check for table data
+      if (el.tableData && Array.isArray(el.tableData)) {
+        const hasContent = el.tableData.some(row => 
+          row.some(cell => cell && cell.trim() && !cell.startsWith('Header '))
+        );
+        if (hasContent) {
+          return false;
+        }
+      }
+      
+      // Check for bookmark
+      if (el.url && el.title) {
+        return false;
+      }
+      
+      // Check for toggle children content
+      if (el.children) {
+        const childContent = el.children.replace(/<[^>]*>/g, '').trim();
+        if (childContent.length > 0) {
+          return false;
+        }
+      }
+      
+      // Check for equation
+      if (el.equation && el.equation.trim()) {
+        return false;
+      }
+    }
+    
+    return true;
+  }
+
+  /**
+   * Check if a note is untitled
+   */
+  isNoteUntitled(note) {
+    if (!note || !note.name) return true;
+    const name = note.name.toLowerCase().trim();
+    return name === '' || name === 'untitled' || name.match(/^untitled\s*\d*$/);
+  }
+
+  /**
    * Move note to trash (soft delete)
+   * If note is untitled and empty, permanently delete instead
    */
   async trashNote(id) {
     const note = await this.getNote(id);
     if (!note) return null;
+    
+    // Check if note is untitled and empty - if so, permanently delete
+    const isUntitled = this.isNoteUntitled(note);
+    if (isUntitled) {
+      const isEmpty = await this.isNoteEmpty(id);
+      if (isEmpty) {
+        await this.permanentlyDeleteNote(id);
+        return { permanentlyDeleted: true };
+      }
+    }
     
     note.trashed = true;
     note.trashedAt = Date.now();
