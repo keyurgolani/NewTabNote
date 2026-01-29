@@ -51,37 +51,6 @@ jobs:
       - name: Package extension
         run: npm run package
       
-      - name: Generate or use existing extension key
-        run: |
-          # Generate a new key for CRX signing if not exists
-          # Note: For consistent extension ID across releases, store the key as a secret
-          if [ -n "${{ secrets.EXTENSION_PEM }}" ]; then
-            echo "${{ secrets.EXTENSION_PEM }}" > extension.pem
-          else
-            openssl genrsa -out extension.pem 2048
-          fi
-      
-      - name: Install Chrome for CRX packaging
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-      
-      - name: Package CRX file
-        run: |
-          VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
-          VERSION="${VERSION#v}"
-          
-          # Use Chrome to pack the extension
-          google-chrome --pack-extension=dist --pack-extension-key=extension.pem --no-sandbox 2>/dev/null || true
-          
-          # Move and rename the CRX file
-          if [ -f dist.crx ]; then
-            mv dist.crx "releases/new-tab-note-v${VERSION}.crx"
-            echo "CRX file created successfully"
-          else
-            echo "Warning: CRX file was not created"
-          fi
-      
       - name: Get version
         id: version
         run: |
@@ -96,19 +65,10 @@ jobs:
         run: |
           cd releases
           VERSION="${{ steps.version.outputs.version }}"
-          
           ZIP_SHA256=$(sha256sum "new-tab-note-v${VERSION}.zip" | cut -d' ' -f1)
           echo "zip_sha256=${ZIP_SHA256}" >> $GITHUB_OUTPUT
-          
-          if [ -f "new-tab-note-v${VERSION}.crx" ]; then
-            CRX_SHA256=$(sha256sum "new-tab-note-v${VERSION}.crx" | cut -d' ' -f1)
-            echo "crx_sha256=${CRX_SHA256}" >> $GITHUB_OUTPUT
-            echo "has_crx=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_crx=false" >> $GITHUB_OUTPUT
-          fi
       
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -119,31 +79,21 @@ jobs:
             ### Installation Options
             
             #### Option 1: Chrome Web Store (Recommended)
-            *Coming soon - pending review*
+            Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/${{ secrets.CHROME_EXTENSION_ID }})
             
-            #### Option 2: Direct CRX Install (Enterprise/Developer)
-            > ⚠️ Chrome restricts CRX installation to enterprise environments or developer mode.
-            
-            1. Download `new-tab-note-v${{ steps.version.outputs.version }}.crx`
-            2. Open Chrome and go to `chrome://extensions/`
-            3. Enable "Developer mode" in the top right
-            4. Drag and drop the `.crx` file onto the extensions page
-            
-            #### Option 3: Load Unpacked (Developer Mode)
+            #### Option 2: Load Unpacked (Developer Mode)
             1. Download `new-tab-note-v${{ steps.version.outputs.version }}.zip`
             2. Extract the zip file to a permanent location
             3. Open Chrome and go to `chrome://extensions/`
             4. Enable "Developer mode" in the top right
             5. Click "Load unpacked" and select the extracted folder
             
-            ### Checksums (SHA256)
+            ### Checksum (SHA256)
             ```
             ZIP: ${{ steps.checksums.outputs.zip_sha256 }}
-            CRX: ${{ steps.checksums.outputs.crx_sha256 }}
             ```
           files: |
             releases/new-tab-note-v${{ steps.version.outputs.version }}.zip
-            releases/new-tab-note-v${{ steps.version.outputs.version }}.crx
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -151,13 +101,78 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: Upload to Chrome Web Store
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP_FILE="releases/new-tab-note-v${VERSION}.zip"
+          
+          # Skip if secrets are not configured
+          if [ -z "$CHROME_CLIENT_ID" ] || [ -z "$CHROME_CLIENT_SECRET" ] || [ -z "$CHROME_REFRESH_TOKEN" ] || [ -z "$CHROME_EXTENSION_ID" ]; then
+            echo "Chrome Web Store secrets not configured, skipping upload"
+            exit 0
+          fi
+          
+          echo "Getting access token..."
+          ACCESS_TOKEN=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
+            -d "client_id=${CHROME_CLIENT_ID}" \
+            -d "client_secret=${CHROME_CLIENT_SECRET}" \
+            -d "refresh_token=${CHROME_REFRESH_TOKEN}" \
+            -d "grant_type=refresh_token" | jq -r '.access_token')
+          
+          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+            echo "Failed to get access token"
+            exit 1
+          fi
+          
+          echo "Uploading to Chrome Web Store..."
+          UPLOAD_RESPONSE=$(curl -s -X PUT \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -T "${ZIP_FILE}" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}")
+          
+          echo "Upload response: $UPLOAD_RESPONSE"
+          
+          UPLOAD_STATE=$(echo "$UPLOAD_RESPONSE" | jq -r '.uploadState')
+          ERROR_CODE=$(echo "$UPLOAD_RESPONSE" | jq -r '.itemError[0].error_code // empty')
+          
+          if [ "$UPLOAD_STATE" = "SUCCESS" ]; then
+            echo "Upload successful!"
+          elif [ "$ERROR_CODE" = "ITEM_NOT_UPDATABLE" ]; then
+            echo "Extension is currently pending review or ready to publish - cannot update at this time"
+            echo "This is expected if you recently submitted for review. Try again after the review is complete."
+            exit 0
+          else
+            echo "Upload failed with state: $UPLOAD_STATE"
+            echo "$UPLOAD_RESPONSE" | jq '.itemError // empty'
+            exit 1
+          fi
+          
+          echo "Publishing to Chrome Web Store..."
+          PUBLISH_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}/publish")
+          
+          echo "Publish response: $PUBLISH_RESPONSE"
+          
+          PUBLISH_STATUS=$(echo "$PUBLISH_RESPONSE" | jq -r '.status[0] // .status // empty')
+          if [ "$PUBLISH_STATUS" = "OK" ] || [ "$PUBLISH_STATUS" = "ITEM_PENDING_REVIEW" ]; then
+            echo "Successfully published to Chrome Web Store!"
+          else
+            echo "Publish status: $PUBLISH_STATUS"
+            echo "Note: Extension may require manual review before going live"
+          fi
+      
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: extension-package
           path: releases/*
           retention-days: 30
-      
-      - name: Cleanup sensitive files
-        if: always()
-        run: rm -f extension.pem

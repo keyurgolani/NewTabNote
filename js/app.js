@@ -63,6 +63,9 @@ class App {
       this.applyFont();
       this.applyWidth();
 
+      // Listen for settings changes from other tabs
+      this.setupSettingsSync();
+
       // Check if we have notes to display
       if (this.notes.length === 0 && this.archivedNotes.length === 0) {
         // Create a new untitled note so user can start typing immediately
@@ -3073,6 +3076,70 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.editor) {
       requestAnimationFrame(() => this.editor.updateWideContentCentering());
     }
+  }
+
+  /**
+   * Setup cross-tab settings synchronization
+   * Listens for settings changes from other tabs and applies them
+   */
+  setupSettingsSync() {
+    Storage.onSettingsChange(async (changes) => {
+      // Apply theme changes
+      if (changes.theme) {
+        await this.applyTheme();
+      }
+      
+      // Apply font changes
+      if (changes.font) {
+        await this.applyFont();
+      }
+      
+      // Apply width changes
+      if (changes.width) {
+        await this.applyWidth();
+      }
+      
+      // Apply sidebar state changes
+      if (changes.sidebarOpen !== undefined) {
+        this.sidebarOpen = changes.sidebarOpen.newValue;
+        this.updateSidebarState();
+      }
+      
+      if (changes.sidebarWidth) {
+        this.sidebarWidth = changes.sidebarWidth.newValue;
+        this.applySidebarWidth();
+      }
+      
+      if (changes.sidebarViewMode) {
+        this.sidebarViewMode = changes.sidebarViewMode.newValue;
+        this.applySidebarViewMode();
+      }
+      
+      // Apply AI sidebar width changes
+      if (changes.aiSidebarWidth) {
+        this.aiSidebarWidth = changes.aiSidebarWidth.newValue;
+        const aiSidebar = document.getElementById('ai-sidebar');
+        if (aiSidebar && this.aiSidebarOpen) {
+          aiSidebar.style.width = this.aiSidebarWidth + 'px';
+        }
+      }
+      
+      // Reinitialize LLM if provider settings changed
+      if (changes.llmProvider || changes.llmApiKey || changes.llmModel || changes.ollamaUrl) {
+        await LLM.init();
+        this.updateAISidebarState();
+      }
+      
+      // Update auto-title settings
+      if (changes.autoTitleEnabled !== undefined || changes.autoTitleInterval) {
+        this.setupAutoTitle();
+      }
+      
+      // Update insights settings
+      if (changes.insightsEnabled !== undefined || changes.insightsInterval) {
+        this.setupInsightsExtraction();
+      }
+    });
   }
 
   /**

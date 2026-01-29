@@ -618,30 +618,86 @@ class StorageManager {
   }
 
   // ============ Settings Operations ============
+  // Settings use chrome.storage.local for cross-tab synchronization
 
   /**
-   * Get setting
+   * Get setting from chrome.storage.local
    */
   async getSetting(key, defaultValue = null) {
-    return new Promise((resolve, reject) => {
-      const store = this.getStore('settings');
-      const request = store.get(key);
-      request.onsuccess = () => {
-        resolve(request.result ? request.result.value : defaultValue);
-      };
-      request.onerror = () => reject(request.error);
+    return new Promise((resolve) => {
+      const storageKey = `setting_${key}`;
+      chrome.storage.local.get([storageKey], (result) => {
+        if (chrome.runtime.lastError) {
+          console.warn('Error getting setting:', chrome.runtime.lastError);
+          resolve(defaultValue);
+          return;
+        }
+        resolve(result[storageKey] !== undefined ? result[storageKey] : defaultValue);
+      });
     });
   }
 
   /**
-   * Set setting
+   * Set setting in chrome.storage.local
    */
   async setSetting(key, value) {
     return new Promise((resolve, reject) => {
-      const store = this.getStore('settings', 'readwrite');
-      const request = store.put({ key, value });
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+      const storageKey = `setting_${key}`;
+      chrome.storage.local.set({ [storageKey]: value }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error setting value:', chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Get all settings
+   */
+  async getAllSettings() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (result) => {
+        if (chrome.runtime.lastError) {
+          console.warn('Error getting all settings:', chrome.runtime.lastError);
+          resolve({});
+          return;
+        }
+        // Filter to only setting_ prefixed keys and remove prefix
+        const settings = {};
+        for (const [key, value] of Object.entries(result)) {
+          if (key.startsWith('setting_')) {
+            settings[key.substring(8)] = value;
+          }
+        }
+        resolve(settings);
+      });
+    });
+  }
+
+  /**
+   * Add listener for settings changes (for cross-tab sync)
+   */
+  onSettingsChange(callback) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return;
+      
+      const settingChanges = {};
+      for (const [key, change] of Object.entries(changes)) {
+        if (key.startsWith('setting_')) {
+          const settingKey = key.substring(8);
+          settingChanges[settingKey] = {
+            oldValue: change.oldValue,
+            newValue: change.newValue
+          };
+        }
+      }
+      
+      if (Object.keys(settingChanges).length > 0) {
+        callback(settingChanges);
+      }
     });
   }
 
