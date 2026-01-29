@@ -1,17 +1,13 @@
 {
   "manifest_version": 3,
   "name": "New Tab Note",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A rich block-based note editor that replaces your new tab page with AI-powered features",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
   "permissions": ["storage", "unlimitedStorage", "offscreen"],
-  "host_permissions": [
-    "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
-    "https://*/*"
-  ],
+  "host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "js/background.js"
   },
