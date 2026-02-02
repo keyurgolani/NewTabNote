@@ -219,6 +219,8 @@ OLLAMA_ORIGINS=chrome-extension://* ollama serve
 - AI requests go directly to your configured provider with your API key
 - API keys are stored locally and never transmitted elsewhere
 
+For complete details, see our [Privacy Policy](PRIVACY_POLICY.md).
+
 ## License
 
 MIT

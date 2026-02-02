@@ -29,7 +29,7 @@ class StorageManager {
         reject(event.target.error);
       };
 
-      request.onsuccess = (event) => {
+      request.onsuccess = async (event) => {
         this.db = event.target.result;
 
         // Verify all stores exist
@@ -44,6 +44,9 @@ class StorageManager {
           this.deleteAndRetry().then(resolve).catch(reject);
           return;
         }
+
+        // Initialize default settings in chrome.storage.local on first load
+        await this.initializeDefaultSettings();
 
         resolve();
       };
@@ -698,6 +701,60 @@ class StorageManager {
       if (Object.keys(settingChanges).length > 0) {
         callback(settingChanges);
       }
+    });
+  }
+
+  /**
+   * Initialize default settings in chrome.storage.local on first load
+   * This ensures the storage permission is actively used from the start
+   */
+  async initializeDefaultSettings() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['setting_storageInitialized'], async (result) => {
+        if (result.setting_storageInitialized) {
+          // Already initialized
+          resolve();
+          return;
+        }
+
+        // Default settings to write
+        const defaultSettings = {
+          setting_storageInitialized: true,
+          setting_theme: 'system',
+          setting_font: 'default',
+          setting_width: 'default',
+          setting_llmProvider: 'none',
+          setting_llmApiKey: '',
+          setting_llmModel: '',
+          setting_ollamaUrl: 'http://localhost:11434',
+          setting_trashRetention: 30,
+          setting_sidebarOpen: true,
+          setting_sidebarWidth: 260,
+          setting_sidebarViewMode: 'list',
+          setting_autoTitleEnabled: false,
+          setting_autoTitleInterval: 15,
+          setting_insightsEnabled: false,
+          setting_insightsInterval: 360,
+          setting_aiSidebarWidth: 360,
+          setting_openTabs: null,
+          setting_activeTabIndex: 0,
+          setting_aiChatHistory: [],
+          setting_noteChatMessages: [],
+          setting_globalChatHistory: [],
+          setting_globalChatMessages: [],
+          setting_lastAutoTitleRun: 0,
+          setting_lastInsightsRun: 0
+        };
+
+        chrome.storage.local.set(defaultSettings, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('Error initializing default settings:', chrome.runtime.lastError);
+          } else {
+            console.log('Default settings initialized in chrome.storage.local');
+          }
+          resolve();
+        });
+      });
     });
   }
 
