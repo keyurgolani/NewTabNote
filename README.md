@@ -120,7 +120,8 @@ Access settings via the gear icon in the header:
 
 ### From Chrome Web Store (Recommended)
 
-_Coming soon - pending review_
+1. Visit [New Tab Note](https://chromewebstore.google.com/detail/new-tab-note/emildbpnneonfcanpfnafkphiflbddig)
+2. Click on `Add To Chrome` button.
 
 ### From Release - CRX File (Enterprise/Developer)
 
