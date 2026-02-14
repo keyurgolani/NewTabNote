@@ -180,6 +180,7 @@ const Utils = {
    * Parse color to RGB
    */
   parseColor(color) {
+    if (typeof document === 'undefined') return html;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1;
     const ctx = canvas.getContext('2d');
@@ -246,6 +247,7 @@ const Utils = {
    * Download data as file
    */
   downloadFile(data, filename, type = 'application/json') {
+    if (typeof document === 'undefined') return;
     const blob = new Blob([data], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -261,6 +263,10 @@ const Utils = {
    * Show toast notification
    */
   showToast(message, type = 'info', duration = 3000) {
+    if (typeof document === 'undefined') {
+      console.log(`Toast (${type}): ${message}`);
+      return;
+    }
     let container = document.querySelector('.toast-container');
     if (!container) {
       container = document.createElement('div');
@@ -362,13 +368,13 @@ const Utils = {
    */
   fuzzyMatch(query, text) {
     if (!query || !text) return 0;
-    
+
     query = query.toLowerCase().trim();
     text = text.toLowerCase();
-    
+
     // Exact match gets highest score
     if (text === query) return 100;
-    
+
     // Contains exact query
     if (text.includes(query)) {
       // Bonus for match at start
@@ -377,18 +383,18 @@ const Utils = {
       if (text.includes(' ' + query) || text.includes('-' + query)) return 85;
       return 80;
     }
-    
+
     // Check if all query characters appear in order (fuzzy)
     let queryIndex = 0;
     let consecutiveMatches = 0;
     let maxConsecutive = 0;
     let totalMatches = 0;
     let lastMatchIndex = -2;
-    
+
     for (let i = 0; i < text.length && queryIndex < query.length; i++) {
       if (text[i] === query[queryIndex]) {
         totalMatches++;
-        
+
         // Track consecutive matches
         if (i === lastMatchIndex + 1) {
           consecutiveMatches++;
@@ -396,15 +402,15 @@ const Utils = {
         } else {
           consecutiveMatches = 1;
         }
-        
+
         lastMatchIndex = i;
         queryIndex++;
       }
     }
-    
+
     // All characters must be found in order
     if (queryIndex < query.length) return 0;
-    
+
     // Calculate score based on:
     // - Percentage of query matched
     // - Consecutive character bonus
@@ -412,7 +418,7 @@ const Utils = {
     const matchRatio = totalMatches / query.length;
     const consecutiveBonus = (maxConsecutive / query.length) * 20;
     const lengthBonus = Math.max(0, 10 - Math.abs(text.length - query.length));
-    
+
     return Math.min(70, 30 + (matchRatio * 20) + consecutiveBonus + lengthBonus);
   },
 
@@ -422,13 +428,13 @@ const Utils = {
    */
   fuzzySearchNotes(notes, query) {
     if (!query || !query.trim()) return notes;
-    
+
     const scored = notes.map(note => {
       const name = note.name || 'Untitled';
       const score = this.fuzzyMatch(query, name);
       return { note, score };
     });
-    
+
     return scored
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -457,7 +463,7 @@ const Utils = {
   parseMarkdownTables(text) {
     // Match table pattern: header row, separator row, and data rows
     const tableRegex = /^(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/gm;
-    
+
     return text.replace(tableRegex, (match, headerRow, separatorRow, bodyRows) => {
       // Parse alignment from separator row
       const alignments = separatorRow
@@ -502,8 +508,37 @@ const Utils = {
   },
 
   /**
+   * Extract wikilinks from text [[Note Name]]
+   * @param {string} text - Text to parse
+   * @returns {Array<string>} - Array of note names
+   */
+  extractWikiLinks(text) {
+    if (!text) return [];
+    const regex = /\[\[([^\]]+)\]\]/g;
+    const links = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      links.push(match[1].trim());
+    }
+    return [...new Set(links)]; // Return unique links
+  },
+
+  /**
+   * Convert wikilinks to HTML links
+   * @param {string} html - HTML content to process
+   * @returns {string} - HTML with wikilinks converted to <a> tags
+   */
+  convertWikiLinksToHtml(html) {
+    if (!html) return '';
+    return html.replace(/\[\[([^\]]+)\]\]/g, (match, noteName) => {
+      const name = noteName.trim();
+      return `<a href="#" class="wiki-link" data-note-name="${this.escapeHtml(name)}">[[${this.escapeHtml(name)}]]</a>`;
+    });
+  },
+
+  /**
    * Parse markdown text to HTML
-   * Supports: headers, bold, italic, code blocks, inline code, lists, blockquotes, links, hr, tables, paragraphs
+   * Supports: headers, bold, italic, code blocks, inline code, lists, blockquotes, links, hr, tables, paragraphs, and wikilinks
    * @param {string} text - Markdown text to parse
    * @returns {string} - HTML string
    */
@@ -529,6 +564,9 @@ const Utils = {
       inlineCodes.push(`<code>${this.escapeHtml(code)}</code>`);
       return `\x00INLINECODE${index}\x00`;
     });
+
+    // Wikilinks [[Note]]
+    result = this.convertWikiLinksToHtml(result);
 
     // Process block-level elements
 
@@ -611,4 +649,5 @@ const Utils = {
 };
 
 // Make Utils globally available
-window.Utils = Utils;
+var globalObject = typeof window !== 'undefined' ? window : self;
+globalObject.Utils = Utils;

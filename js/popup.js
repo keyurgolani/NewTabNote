@@ -5,42 +5,28 @@
 class PopupStorage {
   constructor() {
     this.dbName = 'CanvasTabDB';
-    this.dbVersion = 2;
     this.db = null;
   }
 
   async init() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
+      // Open without a version to use whatever version currently exists.
+      // The popup only reads data, so it should never trigger onupgradeneeded.
+      const request = indexedDB.open(this.dbName);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         this.db = request.result;
         resolve();
       };
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains('canvases')) {
-          const store = db.createObjectStore('canvases', { keyPath: 'id' });
-          store.createIndex('name', 'name', { unique: false });
-          store.createIndex('updatedAt', 'updatedAt', { unique: false });
-        }
-        if (!db.objectStoreNames.contains('elements')) {
-          const store = db.createObjectStore('elements', { keyPath: 'id' });
-          store.createIndex('canvasId', 'canvasId', { unique: false });
-          store.createIndex('type', 'type', { unique: false });
-        }
-        if (!db.objectStoreNames.contains('settings')) {
-          db.createObjectStore('settings', { keyPath: 'key' });
-        }
-        if (!db.objectStoreNames.contains('media')) {
-          const store = db.createObjectStore('media', { keyPath: 'id' });
-          store.createIndex('canvasId', 'canvasId', { unique: false });
-        }
-      };
     });
   }
 
+  hasStore(name) {
+    return this.db.objectStoreNames.contains(name);
+  }
+
   async getAllNotes() {
+    if (!this.hasStore('canvases')) return [];
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('canvases', 'readonly');
       const store = tx.objectStore('canvases');
@@ -63,6 +49,7 @@ class PopupStorage {
   }
 
   async getSetting(key, defaultValue = null) {
+    if (!this.hasStore('settings')) return defaultValue;
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('settings', 'readonly');
       const store = tx.objectStore('settings');

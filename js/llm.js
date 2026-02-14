@@ -4,11 +4,63 @@
  * Qwen, GLM, Kimi, MiniMax, and Ollama providers with dynamic model loading from APIs
  */
 
+/**
+ * Endpoint configurations for each provider
+ * Some providers have multiple endpoints based on region or plan type
+ */
+const PROVIDER_ENDPOINTS = {
+  openai: [
+    { id: 'default', name: 'Global (api.openai.com)', baseUrl: 'https://api.openai.com/v1' },
+  ],
+  anthropic: [
+    { id: 'default', name: 'Global (api.anthropic.com)', baseUrl: 'https://api.anthropic.com/v1' },
+  ],
+  gemini: [
+    { id: 'default', name: 'Global (generativelanguage.googleapis.com)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' },
+  ],
+  openrouter: [
+    { id: 'default', name: 'Global (openrouter.ai)', baseUrl: 'https://openrouter.ai/api/v1' },
+  ],
+  xai: [
+    { id: 'default', name: 'Global (api.x.ai)', baseUrl: 'https://api.x.ai/v1' },
+  ],
+  deepseek: [
+    { id: 'default', name: 'Global (api.deepseek.com)', baseUrl: 'https://api.deepseek.com' },
+  ],
+  mistral: [
+    { id: 'default', name: 'Global (api.mistral.ai)', baseUrl: 'https://api.mistral.ai/v1' },
+  ],
+  groq: [
+    { id: 'default', name: 'Global (api.groq.com)', baseUrl: 'https://api.groq.com/openai/v1' },
+  ],
+  qwen: [
+    { id: 'intl', name: 'International (dashscope-intl.aliyuncs.com)', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' },
+    { id: 'china', name: 'China (dashscope.aliyuncs.com)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  ],
+  glm: [
+    { id: 'general', name: 'General API (api.z.ai)', baseUrl: 'https://api.z.ai/api/paas/v4' },
+    { id: 'coding', name: 'Coding Plan (api.z.ai/coding)', baseUrl: 'https://api.z.ai/api/coding/paas/v4' },
+    { id: 'china', name: 'China (open.bigmodel.cn)', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
+  ],
+  kimi: [
+    { id: 'intl', name: 'International (api.moonshot.ai)', baseUrl: 'https://api.moonshot.ai/v1' },
+    { id: 'china', name: 'China (api.moonshot.cn)', baseUrl: 'https://api.moonshot.cn/v1' },
+  ],
+  minimax: [
+    { id: 'intl', name: 'International (api.minimax.io)', baseUrl: 'https://api.minimax.io/v1' },
+    { id: 'china', name: 'China (api.minimax.chat)', baseUrl: 'https://api.minimax.chat/v1' },
+  ],
+  ollama: [
+    { id: 'default', name: 'Local (localhost:11434)', baseUrl: 'http://localhost:11434' },
+  ],
+};
+
 class LLMService {
   constructor() {
     this.provider = 'none';
     this.apiKey = '';
     this.model = '';
+    this.endpoint = 'default'; // Selected endpoint ID
     this.ollamaUrl = 'http://localhost:11434';
     this.cachedModels = {};
     this.loadingModels = false;
@@ -18,7 +70,57 @@ class LLMService {
     this.provider = await Storage.getSetting('llmProvider', 'none');
     this.apiKey = await Storage.getSetting('llmApiKey', '');
     this.model = await Storage.getSetting('llmModel', '');
+    this.endpoint = await Storage.getSetting('llmEndpoint', this.getDefaultEndpointForProvider(this.provider));
     this.ollamaUrl = await Storage.getSetting('ollamaUrl', 'http://localhost:11434');
+  }
+
+  /**
+   * Get the default endpoint ID for a provider
+   */
+  getDefaultEndpointForProvider(provider) {
+    // Default to international/non-China endpoints
+    const defaults = {
+      openai: 'default',
+      anthropic: 'default',
+      gemini: 'default',
+      openrouter: 'default',
+      xai: 'default',
+      deepseek: 'default',
+      mistral: 'default',
+      groq: 'default',
+      qwen: 'intl',
+      glm: 'general',
+      kimi: 'intl',
+      minimax: 'intl',
+      ollama: 'default',
+    };
+    return defaults[provider] || 'default';
+  }
+
+  /**
+   * Get available endpoints for a provider
+   */
+  getEndpointsForProvider(provider) {
+    return PROVIDER_ENDPOINTS[provider] || [];
+  }
+
+  /**
+   * Get the base URL for the current provider and endpoint selection
+   */
+  getBaseUrl() {
+    const endpoints = PROVIDER_ENDPOINTS[this.provider];
+    if (!endpoints) return '';
+    
+    const endpoint = endpoints.find(e => e.id === this.endpoint);
+    return endpoint ? endpoint.baseUrl : endpoints[0]?.baseUrl || '';
+  }
+
+  /**
+   * Set the endpoint for the current provider
+   */
+  async setEndpoint(endpointId) {
+    this.endpoint = endpointId;
+    await Storage.setSetting('llmEndpoint', endpointId);
   }
 
   isConfigured() {
@@ -157,8 +259,12 @@ class LLMService {
         { id: 'glm-4-air', name: 'GLM-4 Air' },
         { id: 'glm-4-airx', name: 'GLM-4 AirX' },
         { id: 'glm-4-long', name: 'GLM-4 Long' },
+        { id: 'glm-4-flashx', name: 'GLM-4 FlashX' },
         { id: 'glm-4-flash', name: 'GLM-4 Flash' },
         { id: 'glm-4', name: 'GLM-4' },
+        { id: 'glm-z1-air', name: 'GLM-Z1 Air' },
+        { id: 'glm-z1-airx', name: 'GLM-Z1 AirX' },
+        { id: 'glm-z1-flash', name: 'GLM-Z1 Flash' },
       ],
       kimi: [
         { id: 'moonshot-v1-128k', name: 'Moonshot 128K' },
@@ -439,8 +545,35 @@ class LLMService {
   }
 
   async fetchGLMModels(apiKey) {
-    // GLM (Zhipu) doesn't have a public models list API, use fallback
-    return this.getFallbackModels('glm');
+    try {
+      // Get the base URL for GLM based on selected endpoint
+      const endpoints = PROVIDER_ENDPOINTS.glm;
+      const endpoint = endpoints.find(e => e.id === this.endpoint) || endpoints[0];
+      const baseUrl = endpoint.baseUrl;
+      
+      const response = await this.fetchViaBackground(`${baseUrl}/models`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch GLM models, using fallback');
+        return this.getFallbackModels('glm');
+      }
+      
+      const data = response.data;
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        name: m.id,
+      }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('glm');
+    } catch (error) {
+      console.warn('GLM models fetch error:', error);
+      return this.getFallbackModels('glm');
+    }
   }
 
   async fetchKimiModels(apiKey) {
@@ -788,8 +921,9 @@ class LLMService {
   }
 
   async chatQwen(messages) {
-    // Qwen uses DashScope API (Alibaba Cloud)
-    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+    // Qwen uses DashScope API - use selected endpoint
+    const baseUrl = this.getBaseUrl();
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -812,8 +946,9 @@ class LLMService {
   }
 
   async chatGLM(messages) {
-    // GLM uses Zhipu AI API
-    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+    // GLM uses Zhipu AI API - use selected endpoint (general, coding, or china)
+    const baseUrl = this.getBaseUrl();
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -836,8 +971,9 @@ class LLMService {
   }
 
   async chatKimi(messages) {
-    // Kimi uses Moonshot API
-    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+    // Kimi uses Moonshot API - use selected endpoint
+    const baseUrl = this.getBaseUrl();
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -860,8 +996,9 @@ class LLMService {
   }
 
   async chatMiniMax(messages) {
-    // MiniMax API
-    const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
+    // MiniMax API - use selected endpoint
+    const baseUrl = this.getBaseUrl();
+    const response = await fetch(`${baseUrl}/text/chatcompletion_v2`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1047,6 +1184,12 @@ Return JSON in this exact format:
     try {
       const response = await this.chat(messages);
       
+      // Check for empty or undefined response
+      if (!response || typeof response !== 'string' || response.trim() === '') {
+        console.warn('LLM returned empty response for insights extraction');
+        return null;
+      }
+      
       // Log raw response for debugging
       console.log('LLM raw response for insights:', response);
       
@@ -1063,6 +1206,12 @@ Return JSON in this exact format:
         if (jsonMatch) {
           jsonStr = jsonMatch[0];
         }
+      }
+      
+      // Check if we have valid JSON string to parse
+      if (!jsonStr || jsonStr.trim() === '') {
+        console.warn('No valid JSON found in LLM response');
+        return null;
       }
       
       // Log extracted JSON string for debugging

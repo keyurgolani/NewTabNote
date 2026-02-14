@@ -1,11 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>New Tab Note</title>
   <link rel="stylesheet" href="css/editor.css">
+  <link rel="stylesheet" href="css/stats.css">
 </head>
+
 <body>
   <div id="app">
     <!-- Sidebar -->
@@ -14,18 +17,12 @@
         <div id="sidebar-toggle-container" class="sidebar-toggle-container"></div>
         <div class="sidebar-tabs">
           <button id="sidebar-tab-notes" class="sidebar-tab active">Notes</button>
-          <button id="sidebar-tab-archive" class="sidebar-tab">
-            Archive
-            <span id="archive-count" class="sidebar-tab-badge hidden">0</span>
-          </button>
-          <button id="sidebar-tab-trash" class="sidebar-tab">
-            Trash
-            <span id="trash-count" class="sidebar-tab-badge hidden">0</span>
-          </button>
+          <button id="sidebar-tab-templates" class="sidebar-tab">Templates</button>
         </div>
       </div>
       <div class="sidebar-search">
-        <svg class="sidebar-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg class="sidebar-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
           <circle cx="11" cy="11" r="8"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
@@ -52,14 +49,28 @@
         </div>
       </div>
       <div class="sidebar-note-actions">
-        <button id="sidebar-new-note" class="sidebar-new-note-btn" title="New Note">
+        <button id="sidebar-new-note" class="sidebar-action-btn primary" title="New Note" aria-label="Create New Note">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
           </svg>
-          <span>New Note</span>
         </button>
-        <button id="sidebar-import-note" class="sidebar-import-btn" title="Import Note">
+        <button id="sidebar-daily-note" class="sidebar-action-btn" title="Today's Daily Note">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+        </button>
+        <button id="sidebar-new-folder" class="sidebar-action-btn" title="New Folder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            <line x1="12" y1="11" x2="12" y2="17"></line>
+            <line x1="9" y1="14" x2="15" y2="14"></line>
+          </svg>
+        </button>
+        <button id="sidebar-import-note" class="sidebar-action-btn" title="Import Note">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
@@ -67,15 +78,91 @@
           </svg>
         </button>
       </div>
+      <div id="sidebar-calendar" class="sidebar-calendar">
+        <div class="calendar-header">
+          <button id="calendar-prev" class="calendar-nav" title="Previous month">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+          </button>
+          <span id="calendar-month-label" class="calendar-month-label"></span>
+          <button id="calendar-next" class="calendar-nav" title="Next month">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </button>
+          <button id="calendar-today" class="calendar-nav calendar-today-btn" title="Go to today">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+        <div class="calendar-grid">
+          <div class="calendar-weekdays">
+            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+          </div>
+          <div id="calendar-days" class="calendar-days"></div>
+        </div>
+      </div>
       <div id="sidebar-notes-list" class="sidebar-notes-list"></div>
+
+      <!-- Bulk Actions Bar -->
+      <div id="sidebar-bulk-actions" class="sidebar-bulk-actions">
+        <div class="bulk-actions-count">0 selected</div>
+        <div class="bulk-actions-btns">
+          <button id="bulk-archive-btn" class="secondary-btn-small" title="Archive Selected">Archive</button>
+          <button id="bulk-delete-btn" class="secondary-btn-small danger" title="Move Selected to Trash">Trash</button>
+          <button id="bulk-cancel-btn" class="secondary-btn-small">Cancel</button>
+        </div>
+      </div>
+
       <div id="sidebar-trash-actions" class="sidebar-trash-actions hidden">
         <button id="empty-trash-btn" class="danger-btn-small">Empty Trash</button>
+      </div>
+      <div class="sidebar-footer">
+        <button id="sidebar-tab-archive" class="sidebar-footer-btn" title="Archive">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="21 8 21 21 3 21 3 8"></polyline>
+            <rect x="1" y="3" width="22" height="5"></rect>
+            <line x1="10" y1="12" x2="14" y2="12"></line>
+          </svg>
+          <span id="archive-count" class="sidebar-tab-badge hidden">0</span>
+        </button>
+        <button id="sidebar-tab-trash" class="sidebar-footer-btn" title="Trash">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span id="trash-count" class="sidebar-tab-badge hidden">0</span>
+        </button>
+        <div class="sidebar-footer-separator"></div>
+        <button id="sidebar-stats" class="sidebar-footer-btn" title="Analytics & Stats" aria-label="Analytics & Stats">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+        </button>
+        <button id="shortcuts-btn" class="sidebar-footer-btn" title="Keyboard Shortcuts (?)" aria-label="Open Keyboard Shortcuts helper">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
       </div>
       <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
     </aside>
 
     <!-- Note Context Menu -->
     <div id="note-context-menu" class="context-menu hidden">
+      <button id="ctx-select-note" class="context-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <polyline points="9 11 12 14 22 4"></polyline>
+        </svg>
+        Select
+      </button>
       <button id="ctx-open-note" class="context-menu-item">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -86,7 +173,9 @@
       </button>
       <button id="ctx-generate-title" class="context-menu-item">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          <path
+            d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
+          </path>
           <line x1="8" y1="14" x2="16" y2="14"></line>
         </svg>
         Generate Title
@@ -101,7 +190,9 @@
       </button>
       <button id="ctx-extract-insights" class="context-menu-item">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          <path
+            d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
+          </path>
           <circle cx="8" cy="14" r="1"></circle>
           <circle cx="16" cy="14" r="1"></circle>
         </svg>
@@ -114,6 +205,20 @@
           <line x1="10" y1="12" x2="14" y2="12"></line>
         </svg>
         Archive
+      </button>
+      <button id="ctx-convert-template" class="context-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+        </svg>
+        Convert to Template
+      </button>
+      <button id="ctx-back-to-note" class="context-menu-item hidden">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+        </svg>
+        Back to Note
       </button>
       <button id="ctx-unarchive-note" class="context-menu-item hidden">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -159,13 +264,26 @@
               <line x1="9" y1="3" x2="9" y2="21"></line>
             </svg>
           </button>
+          <button id="split-view-toggle" class="icon-btn" title="Toggle Split View">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="12" y1="3" x2="12" y2="21"></line>
+            </svg>
+          </button>
+          <button id="pip-toggle" class="icon-btn" title="Pop out note">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="14 3 21 3 21 10"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </button>
         </div>
-        
+
         <!-- Note Tabs -->
         <div id="note-tabs" class="note-tabs">
           <!-- Tabs populated dynamically -->
         </div>
-        
+
         <div class="header-center">
           <button id="new-tab-btn" class="icon-btn" title="New Tab">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -174,7 +292,7 @@
             </svg>
           </button>
         </div>
-        
+
         <div class="header-right">
           <span id="save-status" class="save-status">Saved</span>
           <div id="width-selector-header" class="width-selector-header">
@@ -202,7 +320,9 @@
           <button id="settings-btn" class="icon-btn" title="Settings">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+              </path>
             </svg>
           </button>
         </div>
@@ -230,17 +350,146 @@
         </button>
       </div>
 
-      <!-- Main Editor -->
-      <main id="editor-container">
-        <div id="editor">
-          <div id="page-title" contenteditable="true" data-placeholder="Untitled" spellcheck="false"></div>
-          <div id="page-timestamp" class="page-timestamp"></div>
-          <div id="blocks-container"></div>
-          <div id="add-block-hint" class="add-block-hint">
-            <span>Press Enter to add a new block, or type / for commands</span>
+      <!-- Main Workspace -->
+      <main id="workspace-container">
+        <!-- Left Editor Pane -->
+        <div id="editor-container" class="editor-pane active">
+          <div id="editor" class="editor">
+            <div id="page-title" class="page-title" contenteditable="true" data-placeholder="Untitled"
+              spellcheck="false"></div>
+            <div id="page-timestamp" class="page-timestamp"></div>
+            <div id="blocks-container" class="blocks-container"></div>
+            <div id="add-block-hint" class="add-block-hint">
+              <span>Press Enter to add a new block, or type / for commands</span>
+            </div>
+
+            <div id="backlinks-panel" class="backlinks-panel hidden">
+              <div class="backlinks-header">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <span>Backlinks</span>
+              </div>
+              <div id="backlinks-list" class="backlinks-list"></div>
+            </div>
+
+            <!-- Editor-specific floating menus -->
+            <div id="slash-menu" class="slash-menu hidden">
+              <div class="slash-menu-header">Basic blocks</div>
+              <div class="slash-menu-items"></div>
+            </div>
+
+            <div id="wiki-menu" class="slash-menu hidden">
+              <div class="slash-menu-header">Link to note</div>
+              <div class="slash-menu-items"></div>
+            </div>
+
+            <div id="template-menu" class="slash-menu hidden">
+              <div class="slash-menu-header">Insert template</div>
+              <div class="slash-menu-items"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Editor Pane (initially hidden) -->
+        <div id="secondary-editor-container" class="editor-pane secondary hidden">
+          <div class="editor">
+            <div class="page-title" contenteditable="true" data-placeholder="Untitled" spellcheck="false"></div>
+            <div class="page-timestamp"></div>
+            <div class="blocks-container"></div>
+            <div class="add-block-hint">
+              <span>Press Enter to add a new block, or type / for commands</span>
+            </div>
+
+            <div class="backlinks-panel hidden">
+              <div class="backlinks-header">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <span>Backlinks</span>
+              </div>
+              <div class="backlinks-list"></div>
+            </div>
+
+            <div class="slash-menu hidden">
+              <div class="slash-menu-header">Basic blocks</div>
+              <div class="slash-menu-items"></div>
+            </div>
+
+            <div class="wiki-menu slash-menu hidden">
+              <div class="slash-menu-header">Link to note</div>
+              <div class="slash-menu-items"></div>
+            </div>
+
+            <div class="template-menu slash-menu hidden">
+              <div class="slash-menu-header">Insert template</div>
+              <div class="slash-menu-items"></div>
+            </div>
           </div>
         </div>
       </main>
+
+      <!-- Stats Dashboard -->
+      <div id="stats-dashboard" class="stats-container hidden">
+        <div class="stats-header">
+          <h1>Analytics & Insights</h1>
+          <button id="stats-close-btn" class="stats-back-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+            Back to Editor
+          </button>
+        </div>
+
+        <div class="stats-overview">
+          <div class="stat-card">
+            <span class="label">Total Notes</span>
+            <span id="stat-total-notes" class="value">0</span>
+          </div>
+          <div class="stat-card">
+            <span class="label">Daily Notes</span>
+            <span id="stat-daily-notes" class="value">0</span>
+          </div>
+          <div class="stat-card">
+            <span class="label">Total Words</span>
+            <span id="stat-total-words" class="value">0</span>
+          </div>
+          <div class="stat-card">
+            <span class="label">Active Tags</span>
+            <span id="stat-active-tags" class="value">0</span>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-wrapper">
+            <h3>Activity (Last 30 Days)</h3>
+            <div class="chart-container">
+              <canvas id="activity-chart"></canvas>
+            </div>
+          </div>
+          <div class="chart-wrapper">
+            <h3>Content Breakdown</h3>
+            <div class="chart-container">
+              <canvas id="content-chart"></canvas>
+            </div>
+          </div>
+          <div class="chart-wrapper">
+            <h3>Top Tags</h3>
+            <div class="chart-container">
+              <canvas id="tags-chart"></canvas>
+            </div>
+          </div>
+          <div class="chart-wrapper">
+            <h3>Notes by Folder</h3>
+            <div class="chart-container">
+              <canvas id="folders-chart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
 
     </div>
 
@@ -250,7 +499,9 @@
       <div class="ai-sidebar-header">
         <span class="ai-sidebar-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+            <path
+              d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
+            </path>
             <circle cx="7.5" cy="14.5" r="1.5"></circle>
             <circle cx="16.5" cy="14.5" r="1.5"></circle>
           </svg>
@@ -263,17 +514,19 @@
           </svg>
         </button>
       </div>
-      
+
       <!-- Chat Mode Tabs -->
       <div class="ai-chat-tabs">
         <button id="ai-tab-note" class="ai-chat-tab active" title="Chat about current note">This Note</button>
         <button id="ai-tab-all" class="ai-chat-tab" title="Search across all notes">All Notes</button>
+        <button id="ai-tab-smart" class="ai-chat-tab" title="Proactive insights and related notes">Insights</button>
       </div>
 
       <!-- Note Chat Panel -->
       <div id="ai-panel-note" class="ai-chat-panel active">
         <div id="ai-sticky-suggestions" class="ai-sticky-suggestions hidden">
-          <button class="ai-sticky-btn" data-prompt="Summarize this note" title="Summarize">
+          <button class="ai-sticky-btn" data-prompt="Adjust the tone of this note" title="Tone adjuster"
+            aria-label="Adjust tone">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="21" y1="10" x2="3" y2="10"></line>
               <line x1="21" y1="6" x2="3" y2="6"></line>
@@ -281,7 +534,8 @@
               <line x1="21" y1="18" x2="10" y2="18"></line>
             </svg>
           </button>
-          <button class="ai-sticky-btn" data-prompt="Expand on the main points in this note" title="Expand">
+          <button class="ai-sticky-btn" data-prompt="Expand on the main points in this note" title="Expand"
+            aria-label="Expand content">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 3 21 3 21 9"></polyline>
               <polyline points="9 21 3 21 3 15"></polyline>
@@ -289,29 +543,35 @@
               <line x1="3" y1="21" x2="10" y2="14"></line>
             </svg>
           </button>
-          <button class="ai-sticky-btn" data-prompt="Generate a concise title for this note" title="Generate title">
+          <button class="ai-sticky-btn" data-prompt="Generate a concise title for this note" title="Generate title"
+            aria-label="Generate title">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
             </svg>
           </button>
-          <button class="ai-sticky-btn" data-prompt="What are the key takeaways from this note?" title="Key takeaways">
+          <button class="ai-sticky-btn" data-prompt="What are the key takeaways from this note?" title="Key takeaways"
+            aria-label="Get takeaways">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"></circle>
               <line x1="12" y1="16" x2="12" y2="12"></line>
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
             </svg>
           </button>
-          <button class="ai-sticky-btn" data-prompt="Suggest follow-up questions based on this note" title="Suggest questions">
+          <button class="ai-sticky-btn" data-prompt="Suggest follow-up questions based on this note"
+            title="Suggest questions" aria-label="Suggest questions">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"></circle>
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
             </svg>
           </button>
-          <button class="ai-sticky-btn ai-extract-insights-btn" data-action="extract-insights" title="Extract insights">
+          <button class="ai-sticky-btn ai-extract-insights-btn" data-action="extract-insights" title="Extract insights"
+            aria-label="Extract insights">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+              <path
+                d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
+              </path>
             </svg>
           </button>
         </div>
@@ -320,11 +580,16 @@
             <p>Chat with AI about your current note. Ask questions, request summaries, expand content, and more.</p>
             <div class="ai-chat-suggestions">
               <button class="ai-suggestion-btn" data-prompt="Summarize this note">Summarize note</button>
-              <button class="ai-suggestion-btn" data-prompt="Expand on the main points in this note">Expand content</button>
-              <button class="ai-suggestion-btn" data-prompt="Generate a concise title for this note">Generate title</button>
-              <button class="ai-suggestion-btn" data-prompt="What are the key takeaways from this note?">Key takeaways</button>
-              <button class="ai-suggestion-btn" data-prompt="Suggest follow-up questions based on this note">Suggest questions</button>
-              <button class="ai-suggestion-btn ai-extract-insights-btn" data-action="extract-insights">Extract insights</button>
+              <button class="ai-suggestion-btn" data-prompt="Expand on the main points in this note">Expand
+                content</button>
+              <button class="ai-suggestion-btn" data-prompt="Generate a concise title for this note">Generate
+                title</button>
+              <button class="ai-suggestion-btn" data-prompt="What are the key takeaways from this note?">Key
+                takeaways</button>
+              <button class="ai-suggestion-btn" data-prompt="Suggest follow-up questions based on this note">Suggest
+                questions</button>
+              <button class="ai-suggestion-btn ai-extract-insights-btn" data-action="extract-insights">Extract
+                insights</button>
             </div>
           </div>
         </div>
@@ -355,8 +620,10 @@
           <div class="ai-chat-welcome global-chat-welcome">
             <p>Search across all your notes. AI will find relevant notes and answer based on their content.</p>
             <div class="ai-chat-suggestions">
-              <button class="global-chat-suggestion" data-prompt="What are my upcoming deadlines?">Upcoming deadlines</button>
-              <button class="global-chat-suggestion" data-prompt="Summarize my recent meeting notes">Meeting summaries</button>
+              <button class="global-chat-suggestion" data-prompt="What are my upcoming deadlines?">Upcoming
+                deadlines</button>
+              <button class="global-chat-suggestion" data-prompt="Summarize my recent meeting notes">Meeting
+                summaries</button>
               <button class="global-chat-suggestion" data-prompt="What tasks do I have pending?">Pending tasks</button>
               <button class="global-chat-suggestion" data-prompt="Find notes about">Find notes about...</button>
             </div>
@@ -383,6 +650,46 @@
         </div>
       </div>
 
+      <!-- Smart Insights Panel -->
+      <div id="ai-panel-smart" class="ai-chat-panel">
+        <div class="ai-smart-content">
+          <div id="ai-smart-empty" class="ai-smart-empty">
+            <p>Start writing to see smart suggestions, related notes, and extracted tasks.</p>
+          </div>
+
+          <div id="ai-smart-results" class="ai-smart-results hidden">
+            <!-- Suggested Tags -->
+            <div class="ai-smart-section">
+              <div class="ai-smart-section-header">
+                <span>Suggested Tags</span>
+              </div>
+              <div id="ai-suggested-tags" class="ai-tag-list"></div>
+            </div>
+
+            <!-- Action Items -->
+            <div class="ai-smart-section">
+              <div class="ai-smart-section-header">
+                <span>Action Items</span>
+              </div>
+              <div id="ai-extracted-actions" class="ai-action-list"></div>
+            </div>
+
+            <!-- Related Notes -->
+            <div class="ai-smart-section">
+              <div class="ai-smart-section-header">
+                <span>Related Notes</span>
+              </div>
+              <div id="ai-related-notes" class="ai-related-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="ai-smart-loading" class="ai-chat-loading hidden">
+          <div class="ai-loading-spinner"></div>
+          <span>Analyzing note...</span>
+        </div>
+      </div>
+
       <div id="ai-not-configured-sidebar" class="ai-not-configured-sidebar hidden">
         <p>AI not configured</p>
         <button id="ai-sidebar-open-settings" class="secondary-btn">Open Settings</button>
@@ -392,17 +699,14 @@
     <!-- Floating AI Chat Button -->
     <button id="ai-floating-btn" class="ai-floating-btn" title="AI Chat">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+        <path
+          d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
+        </path>
         <circle cx="7.5" cy="14.5" r="1.5"></circle>
         <circle cx="16.5" cy="14.5" r="1.5"></circle>
       </svg>
     </button>
 
-    <!-- Slash Command Menu -->
-    <div id="slash-menu" class="slash-menu hidden">
-      <div class="slash-menu-header">Basic blocks</div>
-      <div class="slash-menu-items"></div>
-    </div>
 
     <!-- Settings Modal -->
     <div id="settings-modal" class="modal hidden">
@@ -417,11 +721,15 @@
               <h3>Appearance</h3>
               <div class="setting-row">
                 <label>Theme</label>
-                <select id="theme-select">
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
-                  <option value="system">System</option>
-                </select>
+                <div class="theme-select-wrapper">
+                  <select id="theme-select">
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                    <option value="system">System</option>
+                    <!-- Custom themes populated dynamically -->
+                  </select>
+                  <button id="open-theme-builder-btn" class="secondary-btn-small">Builder</button>
+                </div>
               </div>
               <div class="setting-row">
                 <label>Font</label>
@@ -442,7 +750,21 @@
               </div>
             </div>
             <div class="settings-section">
-              <h3>AI Assistant</h3>
+              <h3>Daily Notes</h3>
+              <div class="setting-row">
+                <label>Daily Note Template</label>
+                <select id="daily-note-template-select">
+                  <option value="">No template</option>
+                  <!-- Populated dynamically from templates -->
+                </select>
+              </div>
+              <p class="setting-hint">
+                New daily notes will automatically be initialized with this template.
+              </p>
+            </div>
+
+            <div class="settings-section">
+              <h3>AI Chat (LLM)</h3>
               <div class="setting-row">
                 <label>Provider</label>
                 <select id="llm-provider-select">
@@ -565,24 +887,145 @@
             <div class="settings-section">
               <h3>Data</h3>
               <div class="setting-row">
-                <button id="export-all-btn" class="secondary-btn">Export All Notes</button>
                 <button id="export-current-btn" class="secondary-btn">Export Current Note</button>
+                <button id="export-all-btn" class="secondary-btn">Export JSON</button>
               </div>
-              <div class="setting-row">
+              <div class="setting-row" style="margin-top: 8px;">
+                <button id="export-zip-btn" class="secondary-btn">Export All (ZIP/MD)</button>
                 <button id="backup-btn" class="secondary-btn">Create Backup</button>
-                <button id="import-btn" class="secondary-btn">Import / Restore</button>
               </div>
             </div>
-            <div class="settings-section">
-              <h3>Current Note</h3>
-              <div id="pages-list"></div>
-              <button id="delete-page-btn" class="danger-btn">Delete Current Note</button>
+            <div class="setting-row">
+              <button id="import-btn" class="secondary-btn">Import / Restore</button>
+              <div style="flex: 1"></div>
             </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Auto Backup</h3>
+            <div class="settings-row">
+              <div class="settings-label">
+                <span class="settings-title">Automatic Reminders</span>
+                <span class="settings-desc">Remind you to backup periodically</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="auto-backup-toggle">
+                <span class="slider round"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <span class="settings-title">Frequency</span>
+              </div>
+              <select id="backup-frequency-select" class="settings-input">
+                <option value="7">Every week</option>
+                <option value="14">Every 2 weeks</option>
+                <option value="30">Every month</option>
+              </select>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>Current Note</h3>
+            <div id="pages-list"></div>
+            <button id="delete-page-btn" class="danger-btn">Delete Current Note</button>
           </div>
         </div>
       </div>
     </div>
+  </div>
 
+  <!-- Theme Builder Modal -->
+  <div id="theme-builder-modal" class="modal hidden">
+    <div class="modal-content theme-builder-content">
+      <div class="modal-header">
+        <h2>Theme Builder</h2>
+        <button class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="theme-builder-grid">
+          <div class="theme-builder-preview-section">
+            <div class="theme-name-input">
+              <label>Theme Name</label>
+              <input type="text" id="theme-builder-name" placeholder="My Custom Theme">
+            </div>
+
+            <div class="theme-builder-controls">
+              <h4>Colors</h4>
+              <div id="theme-color-controls">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="theme-builder-cancel" class="secondary-btn">Cancel</button>
+        <button id="theme-builder-save" class="primary-btn">Save Theme</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- Shortcuts Modal -->
+  <div id="shortcuts-modal" class="modal hidden">
+    <div class="modal-content shortcuts-content">
+      <div class="modal-header">
+        <h2>Keyboard Shortcuts</h2>
+        <button class="close-btn" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="shortcuts-grid">
+        <div class="shortcut-section">
+          <h3>General</h3>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>N</kbd></span>
+            <span class="shortcut-desc">New Note</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>D</kbd></span>
+            <span class="shortcut-desc">Today's Note</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>K</kbd></span>
+            <span class="shortcut-desc">Search / Command Palette</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>A</kbd></span>
+            <span class="shortcut-desc">Toggle AI Sidebar</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>\</kbd></span>
+            <span class="shortcut-desc">Toggle Sidebar</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>?</kbd></span>
+            <span class="shortcut-desc">Show Shortcuts (This help)</span>
+          </div>
+        </div>
+        <div class="shortcut-section">
+          <h3>Editor</h3>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Enter</kbd></span>
+            <span class="shortcut-desc">Toggle Checkbox / Task</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>1-3</kbd></span>
+            <span class="shortcut-desc">Convert to Header 1-3</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>&uarr;</kbd>/<kbd>&darr;</kbd></span>
+            <span class="shortcut-desc">Move block up/down</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>/</kbd></span>
+            <span class="shortcut-desc">Open Slash Menu (empty block)</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>[</kbd> <kbd>[</kbd></span>
+            <span class="shortcut-desc">Link to another note</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <input type="file" id="import-input" accept=".json" class="hidden">
@@ -592,9 +1035,21 @@
 
   <script src="js/utils.js"></script>
   <script src="js/storage.js"></script>
+  <script src="js/theme-engine.js"></script>
+  <script src="js/virtual-scroller.js"></script>
+  <script src="js/lib/fuse.js"></script>
+  <script src="js/lib/jszip.min.js"></script>
+  <script src="js/search.js"></script>
+  <script src="js/image-compression.js"></script>
   <script src="js/blocks.js"></script>
   <script src="js/editor.js"></script>
   <script src="js/llm.js"></script>
+  <script src="js/lib/chart.js"></script>
+  <script src="js/analytics.js"></script>
+  <script src="js/lib/transformers.js"></script>
+  <script src="js/embeddings.js"></script>
+  <script src="js/onboarding.js"></script>
   <script src="js/app.js"></script>
 </body>
+
 </html>

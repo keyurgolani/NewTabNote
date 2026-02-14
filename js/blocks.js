@@ -191,13 +191,13 @@ class Block {
     };
 
     const created = formatTime(this.createdAt);
-    
+
     // Show updated time only if different from created (more than 1 minute)
     if (this.updatedAt && Math.abs(this.updatedAt - this.createdAt) > 60000) {
       const updated = formatTime(this.updatedAt);
       return `Created ${created} · Updated ${updated}`;
     }
-    
+
     return `Created ${created}`;
   }
 
@@ -237,21 +237,30 @@ class Block {
         break;
 
       case 'image':
+        const imgWrapper = document.createElement('div');
+        imgWrapper.className = 'image-block-wrapper';
+
         if (this.imageUrl) {
           const img = document.createElement('img');
-          img.src = this.imageUrl;
+          // Use data-src for Intersection Observer lazy loading
+          img.dataset.src = this.imageUrl;
+          img.className = 'lazy-image';
           img.alt = 'Image';
-          block.appendChild(img);
+          imgWrapper.appendChild(img);
         } else {
           const placeholder = document.createElement('div');
           placeholder.className = 'image-placeholder';
           placeholder.textContent = 'Click to add image';
           placeholder.addEventListener('click', () => {
-            document.getElementById('image-input').dataset.blockId = this.id;
-            document.getElementById('image-input').click();
+            const input = document.getElementById('image-input');
+            if (input) {
+              input.dataset.blockId = this.id;
+              input.click();
+            }
           });
-          block.appendChild(placeholder);
+          imgWrapper.appendChild(placeholder);
         }
+        block.appendChild(imgWrapper);
         break;
 
       case 'toggle':
@@ -320,7 +329,7 @@ class Block {
         if (this.checked) {
           block.classList.add('checked');
         }
-        // Fall through to add content
+      // Fall through to add content
 
       case 'callout':
         if (this.type === 'callout') {
@@ -329,7 +338,7 @@ class Block {
           icon.textContent = this.calloutIcon;
           block.appendChild(icon);
         }
-        // Fall through to add content
+      // Fall through to add content
 
       default:
         const content = document.createElement('div');

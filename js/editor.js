@@ -3,18 +3,38 @@
  */
 
 class BlockEditor {
-  constructor() {
+  constructor(config = {}) {
+    this.root = config.root || document;
+    this.doc = this.root.ownerDocument || this.root || document;
     this.noteId = null;
     this.noteData = null;
     this.blocks = [];
-    this.container = document.getElementById('blocks-container');
-    this.titleEl = document.getElementById('page-title');
-    this.slashMenu = document.getElementById('slash-menu');
-    this.slashMenuItems = this.slashMenu.querySelector('.slash-menu-items');
+    this.onChange = config.onChange || null;
+    this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
+    this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
+    this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
+    this.slashMenuItems = this.slashMenu ? this.slashMenu.querySelector('.slash-menu-items') : null;
     this.activeBlock = null;
     this.slashMenuVisible = false;
     this.slashMenuIndex = 0;
     this.slashFilter = '';
+
+    // Wiki menu (for bidirectional linking)
+    this.wikiMenu = this.root.querySelector('.wiki-menu') || this.doc.getElementById('wiki-menu');
+    this.wikiMenuItems = this.wikiMenu ? this.wikiMenu.querySelector('.slash-menu-items') : null;
+    this.wikiMenuVisible = false;
+    this.wikiMenuIndex = 0;
+    this.wikiFilter = '';
+    this.noteNames = []; // Cached note names for autocomplete
+
+    // Template menu
+    this.templateMenu = this.root.querySelector('.template-menu') || this.doc.getElementById('template-menu');
+    this.templateMenuItems = this.templateMenu ? this.templateMenu.querySelector('.slash-menu-items') : null;
+    this.templateMenuVisible = false;
+    this.templateMenuIndex = 0;
+    this.templateFilter = '';
+    this.templates = []; // Cached templates
+
     this.saveTimeout = null;
     this.isDragging = false;
     this.draggedBlock = null;
@@ -23,8 +43,29 @@ class BlockEditor {
     this.pendingAutoTitle = false; // Prevent duplicate auto-title calls
     this.insightsPollingId = null; // Polling interval for insights extraction completion
 
+    // Image/File inputs are usually global per editor pane or shared
+    this.imageInput = this.root.querySelector('.image-input') || this.doc.getElementById('image-input');
+    this.fileInput = this.root.querySelector('.file-input') || this.doc.getElementById('file-input');
+
+    // Lazy loading for images
+    this.initImageObserver();
+
     this.setupEventListeners();
     this.buildSlashMenu();
+  }
+
+  /**
+   * Helper to get the app instance, searching opener if in PiP
+   */
+  getApp() {
+    return window.app || (window.opener && window.opener.app);
+  }
+
+  /**
+   * Helper to get the LLM instance, searching opener if in PiP
+   */
+  getLLM() {
+    return window.LLM || (window.opener && window.opener.LLM);
   }
 
   /**
@@ -49,35 +90,45 @@ class BlockEditor {
     this.container.addEventListener('drop', (e) => this.onDrop(e));
 
     // Add block hint
-    document.getElementById('add-block-hint').addEventListener('click', () => {
-      this.addBlockAtEnd();
-    });
+    const addBlockHint = this.root.querySelector('.add-block-hint') || this.doc.getElementById('add-block-hint');
+    if (addBlockHint) {
+      addBlockHint.addEventListener('click', () => {
+        this.addBlockAtEnd();
+      });
+    }
 
     // Slash menu
     this.slashMenu.addEventListener('click', (e) => this.onSlashMenuClick(e));
 
     // Close slash menu on outside click
-    document.addEventListener('click', (e) => {
+    this.doc.addEventListener('click', (e) => {
       if (!this.slashMenu.contains(e.target) && this.slashMenuVisible) {
         this.hideSlashMenu();
       }
     });
 
     // Image input
-    document.getElementById('image-input').addEventListener('change', (e) => {
-      this.handleImageUpload(e);
-    });
+    if (this.imageInput) {
+      this.imageInput.addEventListener('change', (e) => {
+        this.handleImageUpload(e);
+      });
+    }
 
     // File input
-    document.getElementById('file-input').addEventListener('change', (e) => {
-      this.handleFileUpload(e);
-    });
+    if (this.fileInput) {
+      this.fileInput.addEventListener('change', (e) => {
+        this.handleFileUpload(e);
+      });
+    }
 
     // Global keyboard shortcuts
-    document.addEventListener('keydown', (e) => this.onGlobalKeyDown(e));
+    this.doc.addEventListener('keydown', (e) => this.onGlobalKeyDown(e));
 
-    // Window resize - update wide content centering
-    window.addEventListener('resize', Utils.debounce(() => {
+    // Global paste handler
+    this.doc.addEventListener('paste', (e) => this.onPaste(e));
+
+    // Window resize
+    this.doc.defaultView.addEventListener('resize', Utils.debounce(() => {
       this.updateWideContentCentering();
     }, 100));
   }
@@ -129,6 +180,9 @@ class BlockEditor {
     // Render blocks
     this.renderBlocks();
 
+    // Render backlinks
+    this.renderBacklinks();
+
     // If no blocks, create initial empty block and focus it
     if (this.blocks.length === 0) {
       const block = this.createBlock('text');
@@ -137,8 +191,9 @@ class BlockEditor {
     }
 
     // Scroll to top of editor
-    const editorContainer = document.getElementById('editor-container');
-    
+    // Set editor width
+    const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
+
     // Focus first block, then ensure scroll is at top
     setTimeout(() => {
       const firstContent = this.container.querySelector('.block-content');
@@ -171,12 +226,12 @@ class BlockEditor {
     // Poll every 2 seconds to check if extraction completed
     this.insightsPollingId = setInterval(async () => {
       const stillExtracting = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
-      
+
       if (!stillExtracting) {
         // Extraction completed - reload note data and render insights
         clearInterval(this.insightsPollingId);
         this.insightsPollingId = null;
-        
+
         // Reload note data to get updated insights
         this.noteData = await Storage.getNote(this.noteId);
         await this.renderInsights();
@@ -189,7 +244,7 @@ class BlockEditor {
    */
   async renderInsights() {
     // Remove existing insights section
-    const existingInsights = document.getElementById('note-insights');
+    const existingInsights = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
     if (existingInsights) {
       existingInsights.remove();
     }
@@ -220,25 +275,25 @@ class BlockEditor {
 
     const insights = this.noteData.insights;
     const hasContent = (insights.todos && insights.todos.length > 0) ||
-                       (insights.reminders && insights.reminders.length > 0) ||
-                       (insights.deadlines && insights.deadlines.length > 0) ||
-                       (insights.highlights && insights.highlights.length > 0) ||
-                       (insights.tags && insights.tags.length > 0);
+      (insights.reminders && insights.reminders.length > 0) ||
+      (insights.deadlines && insights.deadlines.length > 0) ||
+      (insights.highlights && insights.highlights.length > 0) ||
+      (insights.tags && insights.tags.length > 0);
 
     if (!hasContent) {
       return;
     }
 
     // Create insights container
-    const insightsEl = document.createElement('div');
+    const insightsEl = this.doc.createElement('div');
     insightsEl.id = 'note-insights';
     insightsEl.className = 'note-insights';
 
     // Header
-    const header = document.createElement('div');
+    const header = this.doc.createElement('div');
     header.className = 'note-insights-header';
-    
-    const titleContainer = document.createElement('div');
+
+    const titleContainer = this.doc.createElement('div');
     titleContainer.className = 'note-insights-title';
     titleContainer.innerHTML = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,18 +301,18 @@ class BlockEditor {
       </svg>
       <span>AI Insights</span>
     `;
-    
-    const meta = document.createElement('div');
+
+    const meta = this.doc.createElement('div');
     meta.className = 'note-insights-meta';
     if (insights.extractedAt) {
       meta.textContent = `Updated ${this.formatRelativeTime(insights.extractedAt)}`;
     }
-    
-    const refreshBtn = document.createElement('button');
+
+    const refreshBtn = this.doc.createElement('button');
     refreshBtn.className = 'note-insights-refresh';
     refreshBtn.textContent = 'Refresh';
     refreshBtn.addEventListener('click', () => this.refreshInsights());
-    
+
     header.appendChild(titleContainer);
     header.appendChild(meta);
     header.appendChild(refreshBtn);
@@ -265,21 +320,21 @@ class BlockEditor {
 
     // Tags section (displayed at top as pills)
     if (insights.tags && insights.tags.length > 0) {
-      const tagsContainer = document.createElement('div');
+      const tagsContainer = this.doc.createElement('div');
       tagsContainer.className = 'note-insights-tags';
-      
+
       insights.tags.forEach(tag => {
-        const tagEl = document.createElement('span');
+        const tagEl = this.doc.createElement('span');
         tagEl.className = 'note-insights-tag';
         tagEl.textContent = tag;
         tagsContainer.appendChild(tagEl);
       });
-      
+
       insightsEl.appendChild(tagsContainer);
     }
 
     // Content container
-    const content = document.createElement('div');
+    const content = this.doc.createElement('div');
     content.className = 'note-insights-content';
 
     // Deadlines section
@@ -305,7 +360,7 @@ class BlockEditor {
     insightsEl.appendChild(content);
 
     // Insert after timestamp
-    const timestamp = document.getElementById('page-timestamp');
+    const timestamp = this.root.querySelector('.page-timestamp') || this.doc.getElementById('page-timestamp');
     if (timestamp) {
       timestamp.after(insightsEl);
     } else {
@@ -317,33 +372,33 @@ class BlockEditor {
    * Create an insights section
    */
   createInsightsSection(title, items, type) {
-    const section = document.createElement('div');
+    const section = this.doc.createElement('div');
     section.className = 'note-insights-section';
 
-    const sectionTitle = document.createElement('div');
+    const sectionTitle = this.doc.createElement('div');
     sectionTitle.className = 'note-insights-section-title';
     sectionTitle.textContent = title;
     section.appendChild(sectionTitle);
 
-    const list = document.createElement('ul');
+    const list = this.doc.createElement('ul');
     list.className = `note-insights-list ${type}`;
 
     items.forEach(item => {
-      const li = document.createElement('li');
-      
+      const li = this.doc.createElement('li');
+
       if (type === 'deadlines' && typeof item === 'object') {
-        const textSpan = document.createElement('span');
+        const textSpan = this.doc.createElement('span');
         textSpan.textContent = item.text;
         li.appendChild(textSpan);
-        
+
         if (item.date) {
           const dateInfo = this.getRelativeDateInfo(item.date);
-          const dateSpan = document.createElement('span');
+          const dateSpan = this.doc.createElement('span');
           dateSpan.className = 'deadline-date';
           if (dateInfo.urgency) {
             dateSpan.classList.add(dateInfo.urgency);
           }
-          
+
           // Show relative date with actual date in parentheses
           if (dateInfo.relative !== dateInfo.formatted) {
             dateSpan.innerHTML = `${dateInfo.relative} <span class="deadline-actual-date">(${dateInfo.formatted})</span>`;
@@ -355,7 +410,7 @@ class BlockEditor {
       } else {
         li.textContent = typeof item === 'object' ? item.text : item;
       }
-      
+
       list.appendChild(li);
     });
 
@@ -368,19 +423,19 @@ class BlockEditor {
    */
   getRelativeDateInfo(dateStr) {
     if (!dateStr) return { relative: '', formatted: '', urgency: null };
-    
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const targetDate = new Date(dateStr + 'T00:00:00');
     const diffTime = targetDate.getTime() - today.getTime();
     const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-    
+
     const formatted = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    
+
     let relative = '';
     let urgency = null;
-    
+
     if (diffDays < -1) {
       relative = `${Math.abs(diffDays)} days ago`;
       urgency = 'overdue';
@@ -403,7 +458,7 @@ class BlockEditor {
       relative = formatted;
       urgency = null;
     }
-    
+
     return { relative, formatted, urgency };
   }
 
@@ -437,13 +492,13 @@ class BlockEditor {
    */
   showInsightsLoadingInEditor() {
     // Remove existing insights section
-    const existingInsights = document.getElementById('note-insights');
+    const existingInsights = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
     if (existingInsights) {
       existingInsights.remove();
     }
 
     // Create loading placeholder
-    const loadingEl = document.createElement('div');
+    const loadingEl = this.doc.createElement('div');
     loadingEl.id = 'note-insights';
     loadingEl.className = 'note-insights insights-loading';
     loadingEl.innerHTML = `
@@ -462,7 +517,7 @@ class BlockEditor {
     `;
 
     // Insert after timestamp
-    const timestamp = document.getElementById('page-timestamp');
+    const timestamp = this.doc.getElementById('page-timestamp');
     if (timestamp) {
       timestamp.after(loadingEl);
     }
@@ -472,12 +527,13 @@ class BlockEditor {
    * Refresh insights for current note
    */
   async refreshInsights() {
-    if (!this.noteId || !window.LLM || !window.LLM.isConfigured()) {
+    const llm = this.getLLM();
+    if (!this.noteId || !llm || !llm.isConfigured()) {
       Utils.showToast('AI not configured', 'error');
       return;
     }
 
-    const refreshBtn = document.querySelector('.note-insights-refresh');
+    const refreshBtn = this.doc.querySelector('.note-insights-refresh');
     if (refreshBtn) {
       refreshBtn.classList.add('loading');
       refreshBtn.textContent = 'Extracting...';
@@ -490,8 +546,8 @@ class BlockEditor {
         return;
       }
 
-      const insights = await window.LLM.extractInsights(content, this.noteData.name);
-      
+      const insights = await llm.extractInsights(content, this.noteData.name);
+
       if (insights) {
         this.noteData.insights = insights;
         this.noteData.lastInsightsExtractedAt = Date.now();
@@ -517,7 +573,7 @@ class BlockEditor {
    */
   extractBlockTextContent(block) {
     if (!block) return '';
-    
+
     switch (block.type) {
       case 'text':
       case 'h1':
@@ -547,7 +603,7 @@ class BlockEditor {
    */
   stripHtmlTags(html) {
     if (!html) return '';
-    const div = document.createElement('div');
+    const div = this.doc.createElement('div');
     div.innerHTML = html;
     return div.textContent || div.innerText || '';
   }
@@ -566,13 +622,11 @@ class BlockEditor {
       this.container.appendChild(el);
     });
 
+    this.observeImages();
     this.updateAddBlockHint();
-    
+
     // Update wide content centering after render
     requestAnimationFrame(() => this.updateWideContentCentering());
-    
-    // Also update centering when images finish loading (they may not have dimensions yet)
-    this.setupImageLoadHandlers();
   }
 
   /**
@@ -598,7 +652,7 @@ class BlockEditor {
    * When content is wider than editor width, center it by applying negative left margin
    */
   updateWideContentCentering() {
-    const editor = document.getElementById('editor');
+    const editor = this.root.querySelector('.editor') || this.doc.getElementById('editor');
     if (!editor) return;
 
     const editorWidth = editor.offsetWidth;
@@ -697,6 +751,8 @@ class BlockEditor {
     this.focusBlock(block.id);
     this.scheduleSave();
     this.updateAddBlockHint();
+
+    if (this.onChange) this.onChange();
   }
 
   /**
@@ -817,10 +873,10 @@ class BlockEditor {
    * Place caret at end of element
    */
   placeCaretAtEnd(el) {
-    const range = document.createRange();
+    const range = this.doc.createRange();
     range.selectNodeContents(el);
     range.collapse(false);
-    const sel = window.getSelection();
+    const sel = this.doc.defaultView.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
   }
@@ -829,10 +885,10 @@ class BlockEditor {
    * Place caret at start of element
    */
   placeCaretAtStart(el) {
-    const range = document.createRange();
+    const range = this.doc.createRange();
     range.selectNodeContents(el);
     range.collapse(true);
-    const sel = window.getSelection();
+    const sel = this.doc.defaultView.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
   }
@@ -841,7 +897,7 @@ class BlockEditor {
    * Update add block hint visibility
    */
   updateAddBlockHint() {
-    const hint = document.getElementById('add-block-hint');
+    const hint = this.root.querySelector('.add-block-hint') || this.doc.getElementById('add-block-hint');
     hint.style.display = this.blocks.length === 0 ? 'block' : 'none';
   }
 
@@ -854,20 +910,23 @@ class BlockEditor {
     if (this.noteData) {
       const newTitle = this.titleEl.textContent.trim() || 'Untitled';
       const oldTitle = this.noteData.name;
-      
+
       this.noteData.name = newTitle;
-      
+
       // Mark title as manually set if user actually changed it
       // (not just the initial load or auto-title update)
       if (oldTitle !== newTitle && !this.isAutoTitleUpdate) {
         this.noteData.titleManuallySet = true;
       }
-      
+
       this.scheduleSave();
-      
+
+      if (this.onChange) this.onChange();
+
       // Notify app to update tab name
-      if (window.app && window.app.updateCurrentTabName) {
-        window.app.updateCurrentTabName(this.noteData.name);
+      const app = this.getApp();
+      if (app && app.updateCurrentTabName) {
+        app.updateCurrentTabName(this.noteData.name);
       }
     }
   }
@@ -881,13 +940,20 @@ class BlockEditor {
       this.isAutoTitleUpdate = true;
       this.noteData.name = title;
       this.noteData.lastAutoTitleAt = Date.now();
+      if (this.isTitleAutoGenerated && this.autoTitleNoteId === this.noteId) {
+        this.isTitleAutoGenerated = false;
+      }
       this.titleEl.textContent = title;
       this.isAutoTitleUpdate = false;
+
       this.scheduleSave();
-      
+
+      if (this.onChange) this.onChange();
+
       // Notify app to update tab name
-      if (window.app && window.app.updateCurrentTabName) {
-        window.app.updateCurrentTabName(title);
+      const app = this.getApp();
+      if (app && app.updateCurrentTabName) {
+        app.updateCurrentTabName(title);
       }
     }
   }
@@ -916,7 +982,7 @@ class BlockEditor {
   /**
    * Handle block input
    */
-  onBlockInput(e) {
+  async onBlockInput(e) {
     const blockEl = e.target.closest('.block');
     if (!blockEl) return;
 
@@ -960,13 +1026,15 @@ class BlockEditor {
       block.markUpdated();
     }
 
-    // Check for markdown shortcuts
-    this.checkMarkdownShortcuts(block, content);
+    // Check for wikilinks
+    this.checkWikiLinks(block, content);
 
     // Check for first content and trigger auto-title if applicable
     this.checkFirstContentAutoTitle();
 
     this.scheduleSave();
+
+    if (this.onChange) this.onChange();
   }
 
   /**
@@ -994,7 +1062,7 @@ class BlockEditor {
 
     // Check if title is "Untitled"
     const currentTitle = this.noteData?.name || '';
-    const isUntitled = !currentTitle || 
+    const isUntitled = !currentTitle ||
       currentTitle.toLowerCase() === 'untitled' ||
       currentTitle.toLowerCase().startsWith('untitled ');
 
@@ -1008,7 +1076,8 @@ class BlockEditor {
       return;
     }
 
-    if (!window.LLM || !window.LLM.isConfigured()) {
+    const llm = this.getLLM();
+    if (!llm || !llm.isConfigured()) {
       return;
     }
 
@@ -1022,7 +1091,7 @@ class BlockEditor {
 
     try {
       console.log('First content detected, generating auto-title for note:', this.noteId);
-      const newTitle = await window.LLM.generateTitle(currentContent);
+      const newTitle = await llm.generateTitle(currentContent);
 
       if (newTitle && newTitle.trim()) {
         this.setTitleProgrammatically(newTitle);
@@ -1046,9 +1115,168 @@ class BlockEditor {
   }
 
   /**
+   * Check for wikilink shortcuts [[
+   */
+  async checkWikiLinks(block, contentEl) {
+    const selection = this.doc.defaultView.getSelection();
+    if (!selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const textBefore = range.startContainer.textContent.substring(0, range.startOffset);
+
+    // Check if user just typed [[
+    const lastTwo = textBefore.slice(-2);
+    if (lastTwo === '[[' && !this.wikiMenuVisible) {
+      // Get all note names for autocomplete
+      this.noteNames = await Storage.getNoteNames();
+      this.showWikiMenu(contentEl.closest('.block'));
+      return;
+    }
+
+    // Update filter if menu is visible
+    if (this.wikiMenuVisible) {
+      const match = textBefore.match(/\[\[([^\]]*)$/);
+      if (match) {
+        this.wikiFilter = match[1];
+        this.renderWikiMenu();
+      } else {
+        this.hideWikiMenu();
+      }
+    }
+  }
+
+  /**
+   * Show wikilink menu
+   */
+  showWikiMenu(blockEl) {
+    if (!this.wikiMenu) return;
+    this.wikiMenuVisible = true;
+    this.wikiMenuIndex = 0;
+    this.wikiFilter = '';
+    this.wikiMenu.classList.remove('hidden');
+
+    // Position menu
+    const selection = this.doc.defaultView.getSelection();
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+
+    this.wikiMenu.style.left = `${rect.left}px`;
+    this.wikiMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
+
+    this.renderWikiMenu();
+  }
+
+  /**
+   * Hide wikilink menu
+   */
+  hideWikiMenu() {
+    this.wikiMenuVisible = false;
+    if (this.wikiMenu) this.wikiMenu.classList.add('hidden');
+  }
+
+  /**
+   * Render wikilink menu items
+   */
+  renderWikiMenu() {
+    if (!this.wikiMenuItems) return;
+    this.wikiMenuItems.innerHTML = '';
+
+    const filtered = this.noteNames
+      .filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase()))
+      .slice(0, 10);
+
+    if (filtered.length === 0) {
+      const empty = this.doc.createElement('div');
+      empty.className = 'slash-menu-item empty';
+      empty.textContent = 'No matching notes';
+      this.wikiMenuItems.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((name, index) => {
+      const item = this.doc.createElement('div');
+      item.className = `slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`;
+      item.innerHTML = `
+        <div class="slash-menu-item-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+        </div>
+        <div class="slash-menu-item-text">
+          <div class="slash-menu-item-title">${name}</div>
+        </div>
+      `;
+      item.addEventListener('click', () => this.selectWikiMenuItem(name));
+      itemsContainer.appendChild(item);
+    });
+  }
+
+  /**
+   * Select an item from the wiki menu
+   */
+  selectWikiMenuItem(noteName) {
+    const selection = this.doc.defaultView.getSelection();
+    if (!selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const container = range.startContainer;
+    const text = container.textContent;
+
+    // Find the [[ that triggered the menu
+    const beforePos = text.lastIndexOf('[[', range.startOffset - 1);
+    if (beforePos !== -1) {
+      const beforeText = text.substring(0, beforePos);
+      const afterText = text.substring(range.startOffset);
+
+      // Create wiki link HTML
+      const escapedNoteName = Utils.escapeHtml(noteName);
+      const linkHtml = `<a href="#" class="wiki-link" data-note-name="${escapedNoteName}">[[${escapedNoteName}]]</a>&nbsp;`;
+
+      // Replace text node with HTML
+      // Since it's contenteditable, we can use document.execCommand or manual DOM manipulation
+      // Manual manipulation is often more reliable
+      const parent = container.parentElement;
+      const index = Array.from(parent.childNodes).indexOf(container);
+
+      const beforeNode = this.doc.createTextNode(beforeText);
+      const afterNode = this.doc.createTextNode(afterText);
+
+      const tempDiv = this.doc.createElement('div');
+      tempDiv.innerHTML = linkHtml;
+      const linkNode = tempDiv.firstChild;
+      const spaceNode = tempDiv.lastChild;
+
+      parent.replaceChild(afterNode, container);
+      parent.insertBefore(beforeNode, afterNode);
+      parent.insertBefore(linkNode, afterNode);
+      parent.insertBefore(spaceNode, afterNode);
+
+      // Place caret after the space
+      const newRange = this.doc.createRange();
+      newRange.setStart(spaceNode, 1);
+      newRange.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+
+      // Update block content
+      const blockEl = parent.closest('.block');
+      if (blockEl) {
+        const block = this.getBlockById(blockEl.dataset.id);
+        if (block) {
+          block.content = parent.innerHTML;
+          this.scheduleSave();
+        }
+      }
+    }
+
+    this.hideWikiMenu();
+  }
+
+  /**
    * Check for markdown shortcuts
    */
-  checkMarkdownShortcuts(block, contentEl) {
+  async checkMarkdownShortcuts(block, contentEl) {
     if (block.type !== 'text') return;
 
     const text = contentEl.textContent;
@@ -1077,6 +1305,163 @@ class BlockEditor {
         return;
       }
     }
+
+    // Check for /template
+    if (text === '/template') {
+      this.templates = await Storage.getTemplates();
+      this.showTemplateMenu(contentEl.closest('.block'));
+      return;
+    }
+  }
+
+  /**
+   * Show template menu
+   */
+  showTemplateMenu(blockEl) {
+    if (!this.templateMenu) return;
+    this.templateMenuVisible = true;
+    this.templateMenuIndex = 0;
+    this.templateFilter = '';
+    this.templateMenu.classList.remove('hidden');
+
+    const rect = blockEl.getBoundingClientRect();
+    this.templateMenu.style.left = `${rect.left}px`;
+    this.templateMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
+
+    this.renderTemplateMenu();
+  }
+
+  /**
+   * Hide template menu
+   */
+  hideTemplateMenu() {
+    this.templateMenuVisible = false;
+    if (this.templateMenu) this.templateMenu.classList.add('hidden');
+  }
+
+  /**
+   * Render template menu items
+   */
+  renderTemplateMenu() {
+    if (!this.templateMenuItems) return;
+    this.templateMenuItems.innerHTML = '';
+
+    const filtered = this.templates
+      .filter(t => t.name.toLowerCase().includes(this.templateFilter.toLowerCase()))
+      .slice(0, 10);
+
+    if (filtered.length === 0) {
+      const empty = this.doc.createElement('div');
+      empty.className = 'slash-menu-item empty';
+      empty.textContent = 'No templates found';
+      this.templateMenuItems.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((template, index) => {
+      const item = this.doc.createElement('div');
+      item.className = `slash-menu-item ${index === this.templateMenuIndex ? 'active' : ''}`;
+      item.innerHTML = `
+        <div class="slash-menu-item-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+        </div>
+        <div class="slash-menu-item-text">
+          <div class="slash-menu-item-title">${template.name}</div>
+        </div>
+      `;
+      item.addEventListener('click', () => this.selectTemplateItem(template.id));
+      this.templateMenuItems.appendChild(item);
+    });
+  }
+
+  /**
+   * Select a template to insert
+   */
+  async selectTemplateItem(templateId) {
+    const templateBlocks = await Storage.getNoteElements(templateId);
+    if (!templateBlocks || templateBlocks.length === 0) {
+      this.hideTemplateMenu();
+      return;
+    }
+
+    // Get current selection point
+    const selection = this.doc.defaultView.getSelection();
+    if (!selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const currentBlockEl = range.startContainer.parentElement.closest('.block');
+    if (!currentBlockEl) return;
+
+    const currentBlockId = currentBlockEl.dataset.id;
+    const currentBlockIndex = this.blocks.findIndex(b => b.id === currentBlockId);
+
+    // Remove the "/template" text if present
+    const contentEl = currentBlockEl.querySelector('.block-content');
+    if (contentEl && contentEl.textContent.startsWith('/template')) {
+      contentEl.textContent = contentEl.textContent.replace('/template', '').trim();
+    }
+
+    // Insert blocks from template
+    const newBlocks = [];
+    for (const blockData of templateBlocks) {
+      // Clone block data and generate new ID
+      const newData = { ...blockData, id: Utils.generateId(), canvasId: this.noteId };
+
+      // Variable replacement
+      if (newData.content) {
+        newData.content = this.processTemplateVariables(newData.content);
+      }
+      if (newData.tableData) {
+        newData.tableData = newData.tableData.map(row =>
+          row.map(cell => this.processTemplateVariables(cell))
+        );
+      }
+
+      const newBlock = Block.deserialize(newData);
+      newBlocks.push(newBlock);
+    }
+
+    // Add blocks to the list at the correct position
+    this.blocks.splice(currentBlockIndex + 1, 0, ...newBlocks);
+
+    // Save all new blocks
+    for (let i = 0; i < this.blocks.length; i++) {
+      this.blocks[i].order = i;
+      await Storage.saveElement(this.blocks[i].serialize());
+    }
+
+    this.renderBlocks();
+    this.hideTemplateMenu();
+    this.scheduleSave();
+
+    // Focus first inserted block
+    if (newBlocks.length > 0) {
+      this.focusBlock(newBlocks[0].id);
+    }
+  }
+
+  /**
+   * Process variables in template content
+   */
+  processTemplateVariables(text) {
+    if (typeof text !== 'string') return text;
+
+    const now = new Date();
+    const variables = {
+      '{{date}}': now.toLocaleDateString(),
+      '{{time}}': now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      '{{title}}': this.noteData?.name || 'Untitled',
+      '{{datetime}}': now.toLocaleString(),
+    };
+
+    let result = text;
+    for (const [key, value] of Object.entries(variables)) {
+      result = result.split(key).join(value);
+    }
+    return result;
   }
 
   /**
@@ -1148,12 +1533,74 @@ class BlockEditor {
       }
     }
 
+    // Handle wiki menu navigation
+    if (this.wikiMenuVisible) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const items = this.noteNames.filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase())).slice(0, 10);
+        this.wikiMenuIndex = (this.wikiMenuIndex + 1) % items.length;
+        this.renderWikiMenu();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = this.noteNames.filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase())).slice(0, 10);
+        this.wikiMenuIndex = (this.wikiMenuIndex - 1 + items.length) % items.length;
+        this.renderWikiMenu();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const items = this.noteNames.filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase())).slice(0, 10);
+        if (items[this.wikiMenuIndex]) {
+          this.selectWikiMenuItem(items[this.wikiMenuIndex]);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.hideWikiMenu();
+        return;
+      }
+    }
+
+    // Handle template menu navigation
+    if (this.templateMenuVisible) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const items = this.templates.filter(t => t.name.toLowerCase().includes(this.templateFilter.toLowerCase())).slice(0, 10);
+        this.templateMenuIndex = (this.templateMenuIndex + 1) % items.length;
+        this.renderTemplateMenu();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = this.templates.filter(t => t.name.toLowerCase().includes(this.templateFilter.toLowerCase())).slice(0, 10);
+        this.templateMenuIndex = (this.templateMenuIndex - 1 + items.length) % items.length;
+        this.renderTemplateMenu();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const items = this.templates.filter(t => t.name.toLowerCase().includes(this.templateFilter.toLowerCase())).slice(0, 10);
+        if (items[this.templateMenuIndex]) {
+          this.selectTemplateItem(items[this.templateMenuIndex].id);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.hideTemplateMenu();
+        return;
+      }
+    }
+
     // Enter - create new block
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
 
       // Get content after cursor
-      const sel = window.getSelection();
+      const sel = this.doc.defaultView.getSelection();
       const range = sel.getRangeAt(0);
       const afterRange = range.cloneRange();
       afterRange.selectNodeContents(content);
@@ -1182,7 +1629,7 @@ class BlockEditor {
 
     // Backspace at start - merge with previous or change type
     if (e.key === 'Backspace') {
-      const sel = window.getSelection();
+      const sel = this.doc.defaultView.getSelection();
       if (sel.isCollapsed && this.isCaretAtStart(content)) {
         e.preventDefault();
 
@@ -1219,7 +1666,7 @@ class BlockEditor {
 
     // Delete at end - merge with next
     if (e.key === 'Delete') {
-      const sel = window.getSelection();
+      const sel = this.doc.defaultView.getSelection();
       if (sel.isCollapsed && this.isCaretAtEnd(content)) {
         e.preventDefault();
 
@@ -1289,7 +1736,7 @@ class BlockEditor {
   onBlockBlur(e) {
     // Delay to allow click events to fire
     setTimeout(() => {
-      if (!this.container.contains(document.activeElement)) {
+      if (!this.container.contains(this.doc.activeElement)) {
         this.activeBlock = null;
       }
     }, 100);
@@ -1353,6 +1800,17 @@ class BlockEditor {
       // Handled by block creation
       return;
     }
+
+    // Wiki Link click
+    if (e.target.closest('.wiki-link')) {
+      e.preventDefault();
+      const noteName = e.target.closest('.wiki-link').dataset.noteName;
+      const app = this.getApp();
+      if (noteName && app) {
+        app.openNoteByName(noteName);
+      }
+      return;
+    }
   }
 
   /**
@@ -1412,7 +1870,7 @@ class BlockEditor {
     if (oldEl) {
       const newEl = block.createElement();
       oldEl.replaceWith(newEl);
-      
+
       // Update wide content centering if this is a wide block type
       if (['table', 'image', 'video'].includes(block.type)) {
         requestAnimationFrame(() => this.updateWideContentCentering());
@@ -1452,6 +1910,7 @@ class BlockEditor {
    * Build slash menu items
    */
   buildSlashMenu() {
+    if (!this.slashMenuItems) return;
     this.slashMenuItems.innerHTML = '';
 
     const types = [
@@ -1462,7 +1921,7 @@ class BlockEditor {
 
     types.forEach((type, index) => {
       const info = BlockTypes[type];
-      const item = document.createElement('div');
+      const item = this.doc.createElement('div');
       item.className = 'slash-menu-item';
       item.dataset.type = type;
       item.dataset.index = index;
@@ -1513,6 +1972,7 @@ class BlockEditor {
    * Update slash menu selection
    */
   updateSlashMenuSelection() {
+    if (!this.slashMenuItems) return;
     const items = this.slashMenuItems.querySelectorAll('.slash-menu-item');
     items.forEach((item, index) => {
       item.classList.toggle('selected', index === this.slashMenuIndex);
@@ -1601,6 +2061,13 @@ class BlockEditor {
    */
   onDrop(e) {
     e.preventDefault();
+    this.container.classList.remove('drag-over');
+
+    // Handle file drop
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      this.handleFiles(e.dataTransfer.files);
+      return;
+    }
 
     const targetEl = e.target.closest('.block');
     if (!targetEl || targetEl.dataset.id === this.draggedBlock) return;
@@ -1619,6 +2086,77 @@ class BlockEditor {
 
     this.renderBlocks();
     this.scheduleSave();
+  }
+
+  /**
+   * Handle global paste event
+   */
+  onPaste(e) {
+    // Only handle if not in an input/textarea (unless it's our blocks)
+    const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+    const isBlock = e.target.closest('.block-content');
+
+    if (isInput && !isBlock) return;
+
+    const items = e.clipboardData.items;
+    const files = [];
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const file = items[i].getAsFile();
+        if (file) files.push(file);
+      }
+    }
+
+    if (files.length > 0) {
+      e.preventDefault();
+      this.handleFiles(files);
+    }
+  }
+
+  /**
+   * Handle multiple files (from drop or paste)
+   */
+  async handleFiles(files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith('image/')) {
+        await this.uploadImageAndCreateBlock(file);
+      }
+    }
+  }
+
+  /**
+   * Upload image and create a block for it
+   */
+  async uploadImageAndCreateBlock(file) {
+    try {
+      // Compress image first
+      let blob = file;
+      const win = this.doc.defaultView;
+      if (win.ImageCompression || (win.opener && win.opener.ImageCompression)) {
+        blob = await ImageCompression.compress(file);
+      }
+
+      const dataUrl = await Utils.readFileAsDataURL(blob);
+
+      // Create new image block
+      const block = this.createBlock('image');
+      block.imageUrl = dataUrl;
+
+      // Add after active block or at end
+      if (this.activeBlock) {
+        const index = this.blocks.findIndex(b => b.id === this.activeBlock.id);
+        this.blocks.splice(index + 1, 0, block);
+      } else {
+        this.blocks.push(block);
+      }
+
+      this.renderBlocks();
+      this.scheduleSave();
+    } catch (error) {
+      console.error('Failed to upload image:', error);
+    }
   }
 
   // ============ Image Handling ============
@@ -1714,7 +2252,7 @@ class BlockEditor {
    * Check if caret is at start of element
    */
   isCaretAtStart(el) {
-    const sel = window.getSelection();
+    const sel = this.doc.defaultView.getSelection();
     if (!sel.isCollapsed) return false;
 
     const range = sel.getRangeAt(0);
@@ -1729,7 +2267,7 @@ class BlockEditor {
    * Check if caret is at end of element
    */
   isCaretAtEnd(el) {
-    const sel = window.getSelection();
+    const sel = this.doc.defaultView.getSelection();
     if (!sel.isCollapsed) return false;
 
     const range = sel.getRangeAt(0);
@@ -1744,11 +2282,11 @@ class BlockEditor {
    * Place caret at specific position
    */
   placeCaretAtPosition(el, position) {
-    const range = document.createRange();
-    const sel = window.getSelection();
+    const range = this.doc.createRange();
+    const sel = this.doc.defaultView.getSelection();
 
     let currentPos = 0;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    const walker = this.doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
 
     while (walker.nextNode()) {
       const node = walker.currentNode;
@@ -1773,9 +2311,54 @@ class BlockEditor {
    * Get text from document fragment
    */
   getTextFromFragment(fragment) {
-    const div = document.createElement('div');
+    const div = this.doc.createElement('div');
     div.appendChild(fragment.cloneNode(true));
     return div.innerHTML;
+  }
+
+  /**
+   * Render backlinks panel
+   */
+  async renderBacklinks() {
+    const panel = this.root.querySelector('.backlinks-panel') || this.doc.getElementById('backlinks-panel');
+    const list = this.root.querySelector('.backlinks-list') || this.doc.getElementById('backlinks-list');
+    if (!panel || !list) return;
+
+    if (!this.noteId) {
+      panel.classList.add('hidden');
+      return;
+    }
+
+    const backlinks = await Storage.getBacklinks(this.noteId);
+
+    if (backlinks.length === 0) {
+      panel.classList.add('hidden');
+      return;
+    }
+
+    panel.classList.remove('hidden');
+    list.innerHTML = '';
+
+    backlinks.forEach(note => {
+      const item = this.doc.createElement('div');
+      item.className = 'backlink-item';
+      item.innerHTML = `
+        <div class="backlink-item-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+        </div>
+        <div class="backlink-item-title">${note.name || 'Untitled'}</div>
+      `;
+      item.addEventListener('click', () => {
+        const app = this.getApp();
+        if (app) {
+          app.openNote(note.id);
+        }
+      });
+      list.appendChild(item);
+    });
   }
 
   // ============ Saving ============
@@ -1798,6 +2381,11 @@ class BlockEditor {
       // Save note
       if (this.noteData) {
         await Storage.updateNote(this.noteData);
+
+        // Update bidirectional links
+        const text = this.getAllBlocksTextContent();
+        const linkNames = Utils.extractWikiLinks(text);
+        await Storage.updateNoteLinks(this.noteId, linkNames);
       }
 
       // Save blocks
@@ -1811,6 +2399,12 @@ class BlockEditor {
       }
 
       this.updateSaveStatus('Saved');
+
+      // Trigger background indexing
+      const app = this.getApp();
+      if (app && app.triggerIndexing) {
+        app.triggerIndexing();
+      }
     } catch (error) {
       console.error('Failed to save:', error);
       this.updateSaveStatus('Error saving');
@@ -1821,7 +2415,7 @@ class BlockEditor {
    * Update save status display
    */
   updateSaveStatus(status) {
-    const el = document.getElementById('save-status');
+    const el = this.doc.getElementById('save-status');
     if (el) {
       el.textContent = status;
     }
@@ -1831,7 +2425,7 @@ class BlockEditor {
    * Update timestamp display below title
    */
   updateTimestampDisplay() {
-    const timestampEl = document.getElementById('page-timestamp');
+    const timestampEl = this.root.querySelector('.page-timestamp') || this.doc.getElementById('page-timestamp');
     if (!timestampEl || !this.noteData) return;
 
     const createdAt = this.noteData.createdAt;
@@ -1843,7 +2437,7 @@ class BlockEditor {
     }
 
     const createdStr = Utils.formatTimestamp(createdAt);
-    
+
     // Show both created and updated if different (more than 1 minute apart)
     if (updatedAt && Math.abs(updatedAt - createdAt) > 60000) {
       const updatedStr = Utils.formatTimestamp(updatedAt);
@@ -1851,6 +2445,45 @@ class BlockEditor {
     } else {
       timestampEl.textContent = `Created ${createdStr}`;
     }
+  }
+
+  /**
+   * Initialize Intersection Observer for lazy loading images
+   */
+  initImageObserver() {
+    this.imageObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          if (img.dataset.src) {
+            img.src = img.dataset.src;
+            img.removeAttribute('data-src');
+            img.classList.remove('lazy-image');
+            img.classList.add('loaded');
+
+            // Update centering once this specific image loads
+            img.addEventListener('load', () => {
+              this.updateWideContentCentering();
+            }, { once: true });
+
+            observer.unobserve(img);
+          }
+        }
+      });
+    }, {
+      rootMargin: '400px 0px', // Preload images 400px before they enter viewport
+      threshold: 0.01
+    });
+  }
+
+  /**
+   * Start observing lazy images in a container
+   */
+  observeImages(container = this.container) {
+    const images = container.querySelectorAll('.lazy-image');
+    images.forEach(img => {
+      this.imageObserver.observe(img);
+    });
   }
 }
 
