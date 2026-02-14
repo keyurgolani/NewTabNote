@@ -1,165 +1,78 @@
-# New Tab Note
+# NewTabNote: Transform Your New Tab into an AI-Powered Second Brain
 
-A rich block-based note editor that replaces your browser's new tab page. Inspired by Notion and Obsidian, designed for quick note-taking with AI-powered features.
+![NewTabNote Hero](assets/marquee_promo_tile.png)
 
-## Features
+**NewTabNote** replaces your blank new tab page with a professional, block-based editor inspired by Notion and Obsidian. Whether you're capturing quick ideas, managing complex projects, or using AI to summarize your thoughts, NewTabNote is designed for speed, privacy, and productivity.
 
-### Editor
+## 🚀 Key Features
 
-- **Block-Based Editor**: 18 different block types for structured content
-- **Slash Commands**: Type `/` in an empty block to access all block types
-- **Markdown Shortcuts**: Use familiar shortcuts like `# `, `- `, `> `, ` ``` `
-- **Drag & Drop**: Reorder blocks by dragging the handle
-- **Block Timestamps**: Hover over any block to see creation and last edit time
-- **Wide Content Support**: Tables, images, and videos automatically center when wider than the editor
+### 📝 Advanced Block-Based Editor
+![Your New Tab, Reimagined.](assets/promo_1.png)
+- **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
+- **Slash Commands**: Type `/` to instantly access any block type.
+- **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
+- **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
-### Organization
+### 🤖 Your Personal AI Assistant
+![AI-Powered Insights.](assets/promo_2.png)
+- **Smart Summarization**: Get the gist of long notes in seconds.
+- **Content Expansion**: Let AI help you flesh out ideas and add detail.
+- **Auto-Titling**: Never see "Untitled" again—AI generates relevant titles based on your content.
+- **Multi-Provider Support**: Connect to OpenAI (GPT-4o), Anthropic (Claude 3.5), Google Gemini, or even local models via Ollama.
 
-- **Multiple Notes**: Create and manage unlimited notes
-- **Tabbed Interface**: Open multiple notes in tabs, double-click sidebar items to open in new tab
-- **Sidebar Navigation**: Browse, search, and manage all notes with list or card view
-- **Archive**: Archive notes you want to keep but hide from the main list
-- **Trash**: Deleted notes go to trash with configurable auto-delete (7-90 days)
-- **Fuzzy Search**: Quickly find notes by searching titles and content
+### 📂 Professional Organization
+![Organize Your Thoughts.](assets/promo_3.png)
+- **Unlimited Notes & Folders**: Organize your life without limits.
+- **Fuzzy Search**: Find any note instantly by searching titles or content.
+- **Tabbed Interface**: Work on multiple notes simultaneously with a familiar tabbed view.
+- **Daily Notes**: One-click access to your daily journal or scratchpad.
 
-### Customization
+### 🔒 Privacy & Performance First
+- **100% Local Storage**: Your data stays in your browser (IndexedDB). No servers, no tracking.
+- **Offline Ready**: Works perfectly without an internet connection (except AI features).
+- **Export/Import**: Full control over your data with JSON and Markdown export options.
 
-- **Theme**: Light, Dark, or System (auto-detect)
-- **Font**: System Default, Serif, or Monospace
-- **Editor Width**: Narrow (540px), Default (720px), Wide (900px), or Full Width
-- **Resizable Sidebar**: Drag the sidebar edge to resize (180-500px)
+---
 
-### AI Assistant
+## 🎨 Customization
+- **Themes**: Light, Dark, and System modes.
+- **Typography**: Choose between System, Serif, or Monospace fonts.
+- **Layout**: Adjustable editor width (Narrow to Full Width) and resizable sidebar.
 
-- **AI Chat Sidebar**: Floating button opens a chat interface for AI interactions
-- **Summarize**: Get concise summaries of your notes
-- **Expand**: Add more details and explanations to content
-- **Generate Title**: Auto-generate titles for untitled notes
-- **Ask Questions**: Ask anything about your note content
-- **Auto-Title**: Optionally auto-generate titles when you start typing in a new note
+---
 
-Supported AI Providers:
+## 💡 Why NewTabNote?
+Most "New Tab" extensions are either too simple or cluttered with ads. NewTabNote is built for power users who want a clean, distraction-free environment that feels like a premium desktop app, right inside their browser.
 
-- **OpenAI**: GPT-4o, GPT-4o Mini, GPT-4 Turbo, GPT-3.5 Turbo
-- **Anthropic**: Claude Sonnet 4, Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku
-- **Google Gemini**: Gemini 2.0 Flash, Gemini 1.5 Pro, Gemini 1.5 Flash
-- **OpenRouter**: Access multiple models via single API
-- **Ollama**: Run local models (requires CORS configuration)
+---
 
-### Data Management
-
-- **Local Storage**: All data stored locally in IndexedDB
-- **Export/Import**: Backup and restore notes as JSON
-- **Export to Markdown**: Export individual notes as `.md` files
-- **No Server Required**: Works completely offline (except AI features)
-
-## Block Types
-
-| Type          | Shortcut        | Description                                     |
-| ------------- | --------------- | ----------------------------------------------- |
-| Text          | -               | Plain text paragraph                            |
-| Heading 1     | `# `            | Large section heading                           |
-| Heading 2     | `## `           | Medium section heading                          |
-| Heading 3     | `### `          | Small section heading                           |
-| Bulleted List | `- ` or `* `    | Bullet point item                               |
-| Numbered List | `1. `           | Numbered list item                              |
-| To-do         | `[] ` or `[ ] ` | Checkbox item                                   |
-| Toggle        | `/toggle`       | Collapsible content section                     |
-| Quote         | `> `            | Block quote                                     |
-| Code          | ` ``` `         | Code block with monospace font                  |
-| Divider       | `---`           | Horizontal separator line                       |
-| Callout       | `/callout`      | Highlighted info box with icon                  |
-| Image         | `/image`        | Upload and display images                       |
-| Table         | `/table`        | Editable table with add/remove rows and columns |
-| Bookmark      | `/bookmark`     | Link preview card with title and description    |
-| Video         | `/video`        | Embed YouTube or Vimeo videos                   |
-| File          | `/file`         | File attachment with download                   |
-| Equation      | `/equation`     | Math equation display                           |
-
-## Keyboard Shortcuts
-
-| Action             | Shortcut                    |
-| ------------------ | --------------------------- |
-| New block          | `Enter`                     |
-| Delete/merge block | `Backspace` at start        |
-| Navigate blocks    | `Arrow Up/Down`             |
-| Open commands      | `/` in empty block          |
-| Focus title        | `Arrow Up` from first block |
-
-## Settings
-
-Access settings via the gear icon in the header:
-
-### Appearance
-
-- **Theme**: Light / Dark / System
-- **Font**: Default / Serif / Monospace
-- **Editor Width**: Narrow / Default / Wide / Full
-
-### AI Assistant
-
-- **Provider**: Select your AI provider
-- **API Key**: Enter your API key (stored locally)
-- **Model**: Choose from available models (auto-fetched from API)
-- **Ollama URL**: Configure local Ollama server URL
-- **Auto-generate titles**: Enable automatic title generation for new notes
-- **Auto-title interval**: How often to check for untitled notes (5 min - 1 month)
-
-### Trash
-
-- **Auto-delete after**: 7 / 14 / 30 / 60 / 90 days, or Never
-
-### Data
-
-- **Export All Notes**: Download all notes as JSON backup
-- **Export Current Note**: Download current note as JSON
-- **Create Backup**: Full backup including media
-- **Import / Restore**: Restore from backup file
-
-## Installation
+## 📥 Installation
 
 ### From Chrome Web Store (Recommended)
+**[Install NewTabNote on the Chrome Web Store](https://chromewebstore.google.com/detail/new-tab-note/emildbpnneonfcanpfnafkphiflbddig)**
 
-1. Visit [New Tab Note](https://chromewebstore.google.com/detail/new-tab-note/emildbpnneonfcanpfnafkphiflbddig)
-2. Click on `Add To Chrome` button.
-
-### From Release - CRX File (Enterprise/Developer)
-
-> ⚠️ Chrome restricts `.crx` installation to enterprise environments or developer mode due to security policies.
-
-1. Download the latest `new-tab-note-vX.X.X.crx` from [Releases](https://github.com/keyurgolani/new-tab-note/releases)
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable "Developer mode" in the top right corner
-4. Drag and drop the `.crx` file onto the extensions page
-
-### From Release - ZIP File (Developer Mode)
-
+### Manual Installation (Developer Mode)
 1. Download the latest `new-tab-note-vX.X.X.zip` from [Releases](https://github.com/keyurgolani/new-tab-note/releases)
 2. Extract the zip file to a permanent location
 3. Open Chrome and navigate to `chrome://extensions/`
-4. Enable "Developer mode" in the top right corner
-5. Click "Load unpacked" and select the extracted folder
-6. Open a new tab to start using New Tab Note
+4. Enable **"Developer mode"** in the top right corner
+5. Click **"Load unpacked"** and select the extracted folder
+6. Open a new tab to start using NewTabNote
 
 ### From Source (Development)
-
 1. Clone this repository
 2. Install dependencies: `npm install`
 3. Build the extension: `npm run build`
 4. Open Chrome and navigate to `chrome://extensions/`
-5. Enable "Developer mode" in the top right corner
-6. Click "Load unpacked" and select the `dist` folder
-7. Open a new tab to start using New Tab Note
+5. Enable **"Developer mode"** in the top right corner
+6. Click **"Load unpacked"** and select the `dist` folder
+7. Open a new tab to start using NewTabNote
 
-## Development
+---
 
-### Prerequisites
-
-- Node.js 18+
-- npm
+## 🛠 Development
 
 ### Scripts
-
 ```bash
 # Install dependencies
 npm install
@@ -175,53 +88,19 @@ npm run package
 
 # Full release build (clean + build + package)
 npm run release
-
-# Clean build artifacts
-npm run clean
 ```
 
-### Project Structure
+---
 
-```
-new-tab-note/
-├── css/              # Stylesheets
-├── icons/            # Extension icons
-├── js/               # Source JavaScript
-├── scripts/          # Build scripts
-├── dist/             # Build output (generated)
-├── releases/         # Release packages (generated)
-├── manifest.json     # Chrome extension manifest
-├── newtab.html       # Main new tab page
-├── popup.html        # Extension popup
-└── offscreen.html    # Offscreen document for API calls
-```
-
-### Release Process
-
-Releases are automated via GitHub Actions. To create a new release:
-
-1. Update version in `manifest.json` and `package.json`
-2. Commit and push changes
-3. Create and push a tag: `git tag v1.0.1 && git push origin v1.0.1`
-4. GitHub Actions will build, package, and create a release with the `.zip` file
-
-## Ollama Setup
-
-To use Ollama (local AI models), start Ollama with CORS enabled:
-
-```bash
-OLLAMA_ORIGINS=chrome-extension://* ollama serve
-```
-
-## Privacy
-
-- All notes are stored locally in your browser's IndexedDB
-- No data is sent to any server except when using AI features
-- AI requests go directly to your configured provider with your API key
-- API keys are stored locally and never transmitted elsewhere
+## 🔒 Privacy
+- All notes are stored locally in your browser's IndexedDB.
+- No data is sent to any server except when using AI features.
+- AI requests go directly to your configured provider with your API key.
+- API keys are stored locally and never transmitted elsewhere.
 
 For complete details, see our [Privacy Policy](PRIVACY_POLICY.md).
 
-## License
+---
 
+## 📜 License
 MIT
