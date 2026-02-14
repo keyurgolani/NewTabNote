@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "New Tab Note",
+  "name": "NewTabNote: AI-Powered Block Editor & Note-Taking",
   "version": "1.1.5",
-  "description": "A rich block-based note editor that replaces your new tab page with AI-powered features",
+  "description": "Transform Your New Tab into a Powerful Second Brain. Professional block-based editor inspired by Notion and Obsidian with AI features.",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
