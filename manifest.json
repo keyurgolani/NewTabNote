@@ -6,8 +6,47 @@
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
-  "permissions": ["storage", "unlimitedStorage", "offscreen"],
-  "host_permissions": ["https://*/*"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "offscreen",
+    "contextMenus",
+    "notifications",
+    "activeTab"
+  ],
+  "commands": {
+    "capture-page": {
+      "suggested_key": {
+        "default": "Alt+P"
+      },
+      "description": "Capture current page to Daily Note"
+    },
+    "capture-selection": {
+      "suggested_key": {
+        "default": "Alt+S"
+      },
+      "description": "Capture selected text to Daily Note"
+    }
+  },
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://openrouter.ai/*",
+    "https://api.x.ai/*",
+    "https://api.deepseek.com/*",
+    "https://api.mistral.ai/*",
+    "https://api.groq.com/*",
+    "https://dashscope-intl.aliyuncs.com/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.z.ai/*",
+    "https://open.bigmodel.cn/*",
+    "https://api.moonshot.ai/*",
+    "https://api.moonshot.cn/*",
+    "https://api.minimax.io/*",
+    "https://api.minimax.chat/*",
+    "http://localhost/*"
+  ],
   "background": {
     "service_worker": "js/background.js"
   },
@@ -22,5 +61,8 @@
       "16": "icons/icon16.png",
       "48": "icons/icon48.png"
     }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://cdn.jsdelivr.net https://*.huggingface.co https://*.hf.co https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://openrouter.ai https://api.x.ai https://api.deepseek.com https://api.mistral.ai https://api.groq.com https://dashscope-intl.aliyuncs.com https://dashscope.aliyuncs.com https://api.z.ai https://open.bigmodel.cn https://api.moonshot.ai https://api.moonshot.cn https://api.minimax.io https://api.minimax.chat http://localhost:*"
   }
 }
