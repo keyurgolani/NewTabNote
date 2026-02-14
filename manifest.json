@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NewTabNote: AI-Powered Block Editor & Note-Taking",
   "version": "1.2.0",
-  "description": "Transform Your New Tab into a Powerful Second Brain. Professional block-based editor inspired by Notion and Obsidian with AI features.",
+  "description": "Transform Your New Tab into an AI-powered second brain. Professional block-based editor inspired by Notion and Obsidian.",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
