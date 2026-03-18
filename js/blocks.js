@@ -7,7 +7,9 @@ const BlockTypes = {
     name: 'Text',
     description: 'Plain text paragraph',
     icon: 'T',
-    placeholder: '',
+    placeholder: typeof BlockPlaceholders !== 'undefined'
+      ? BlockPlaceholders.getBlockPlaceholder('text', '')
+      : '',
     shortcut: null,
   },
   h1: {
@@ -139,6 +141,7 @@ class Block {
     this.id = options.id || Utils.generateId();
     this.type = options.type || 'text';
     this.content = options.content || '';
+    this.indentLevel = options.indentLevel || 0;
     this.checked = options.checked || false;
     this.imageUrl = options.imageUrl || null;
     this.calloutIcon = options.calloutIcon || '💡';
@@ -209,6 +212,7 @@ class Block {
     block.className = 'block';
     block.dataset.id = this.id;
     block.dataset.type = this.type;
+    block.style.setProperty('--block-indent-level', this.indentLevel || 0);
     block.draggable = true;
 
     // Add drag handle
@@ -277,7 +281,9 @@ class Block {
         toggleContent.className = 'block-content';
         toggleContent.contentEditable = true;
         toggleContent.spellcheck = true;
-        toggleContent.dataset.placeholder = BlockTypes.toggle.placeholder;
+        toggleContent.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
+          ? BlockPlaceholders.getBlockPlaceholder('toggle', BlockTypes.toggle.placeholder)
+          : BlockTypes.toggle.placeholder;
         toggleContent.innerHTML = this.content;
         block.appendChild(toggleContent);
 
@@ -345,7 +351,9 @@ class Block {
         content.className = 'block-content';
         content.contentEditable = true;
         content.spellcheck = true;
-        content.dataset.placeholder = BlockTypes[this.type]?.placeholder || '';
+        content.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
+          ? BlockPlaceholders.getBlockPlaceholder(this.type, BlockTypes[this.type]?.placeholder)
+          : (BlockTypes[this.type]?.placeholder || '');
         content.innerHTML = this.content;
         block.appendChild(content);
     }
@@ -674,6 +682,7 @@ class Block {
       id: this.id,
       type: this.type,
       content: this.content,
+      indentLevel: this.indentLevel,
       checked: this.checked,
       imageUrl: this.imageUrl,
       calloutIcon: this.calloutIcon,

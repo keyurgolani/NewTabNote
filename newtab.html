@@ -27,6 +27,11 @@
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
         <input type="text" id="sidebar-search" placeholder="Search notes..." />
+        <select id="sidebar-sort" class="sidebar-sort-select" aria-label="Sort notes">
+          <option value="updated">Recent</option>
+          <option value="created">Created</option>
+          <option value="alphabetical">A-Z</option>
+        </select>
         <div class="sidebar-view-toggle">
           <button id="sidebar-view-list" class="sidebar-view-btn active" title="List View">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -525,47 +530,7 @@
       <!-- Note Chat Panel -->
       <div id="ai-panel-note" class="ai-chat-panel active">
         <div id="ai-sticky-suggestions" class="ai-sticky-suggestions hidden">
-          <button class="ai-sticky-btn" data-prompt="Adjust the tone of this note" title="Tone adjuster"
-            aria-label="Adjust tone">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="21" y1="10" x2="3" y2="10"></line>
-              <line x1="21" y1="6" x2="3" y2="6"></line>
-              <line x1="21" y1="14" x2="3" y2="14"></line>
-              <line x1="21" y1="18" x2="10" y2="18"></line>
-            </svg>
-          </button>
-          <button class="ai-sticky-btn" data-prompt="Expand on the main points in this note" title="Expand"
-            aria-label="Expand content">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 3 21 3 21 9"></polyline>
-              <polyline points="9 21 3 21 3 15"></polyline>
-              <line x1="21" y1="3" x2="14" y2="10"></line>
-              <line x1="3" y1="21" x2="10" y2="14"></line>
-            </svg>
-          </button>
-          <button class="ai-sticky-btn" data-prompt="Generate a concise title for this note" title="Generate title"
-            aria-label="Generate title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-            </svg>
-          </button>
-          <button class="ai-sticky-btn" data-prompt="What are the key takeaways from this note?" title="Key takeaways"
-            aria-label="Get takeaways">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-          </button>
-          <button class="ai-sticky-btn" data-prompt="Suggest follow-up questions based on this note"
-            title="Suggest questions" aria-label="Suggest questions">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-          </button>
+          <div id="ai-sticky-template-buttons" class="ai-sticky-template-buttons"></div>
           <button class="ai-sticky-btn ai-extract-insights-btn" data-action="extract-insights" title="Extract insights"
             aria-label="Extract insights">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -579,15 +544,7 @@
           <div class="ai-chat-welcome">
             <p>Chat with AI about your current note. Ask questions, request summaries, expand content, and more.</p>
             <div class="ai-chat-suggestions">
-              <button class="ai-suggestion-btn" data-prompt="Summarize this note">Summarize note</button>
-              <button class="ai-suggestion-btn" data-prompt="Expand on the main points in this note">Expand
-                content</button>
-              <button class="ai-suggestion-btn" data-prompt="Generate a concise title for this note">Generate
-                title</button>
-              <button class="ai-suggestion-btn" data-prompt="What are the key takeaways from this note?">Key
-                takeaways</button>
-              <button class="ai-suggestion-btn" data-prompt="Suggest follow-up questions based on this note">Suggest
-                questions</button>
+              <div id="ai-note-suggestion-buttons" class="ai-template-suggestion-list"></div>
               <button class="ai-suggestion-btn ai-extract-insights-btn" data-action="extract-insights">Extract
                 insights</button>
             </div>
@@ -620,12 +577,8 @@
           <div class="ai-chat-welcome global-chat-welcome">
             <p>Search across all your notes. AI will find relevant notes and answer based on their content.</p>
             <div class="ai-chat-suggestions">
-              <button class="global-chat-suggestion" data-prompt="What are my upcoming deadlines?">Upcoming
-                deadlines</button>
-              <button class="global-chat-suggestion" data-prompt="Summarize my recent meeting notes">Meeting
-                summaries</button>
-              <button class="global-chat-suggestion" data-prompt="What tasks do I have pending?">Pending tasks</button>
-              <button class="global-chat-suggestion" data-prompt="Find notes about">Find notes about...</button>
+              <div id="ai-global-suggestion-buttons"
+                class="ai-template-suggestion-list ai-template-suggestion-list-inline"></div>
             </div>
           </div>
         </div>
@@ -869,6 +822,51 @@
               <p class="setting-hint llm-insights-hint hidden">
                 Periodically extracts action items, reminders, deadlines, and key points from your notes.
               </p>
+              <div class="ai-prompt-templates-settings">
+                <div class="ai-prompt-templates-header">
+                  <h4>AI Prompt Templates</h4>
+                  <div class="ai-prompt-templates-toolbar">
+                    <button id="ai-template-add-btn" class="secondary-btn-small" type="button">Add</button>
+                    <button id="ai-template-reset-btn" class="secondary-btn-small" type="button">Reset defaults</button>
+                  </div>
+                </div>
+                <p class="setting-hint">Customize the note-chat and all-notes suggestion chips.</p>
+                <div id="ai-prompt-template-list" class="ai-prompt-template-list"></div>
+                <div id="ai-prompt-template-empty" class="ai-prompt-template-empty hidden">
+                  No prompt templates yet. Add one or restore the defaults.
+                </div>
+                <form id="ai-prompt-template-form" class="ai-prompt-template-form hidden">
+                  <input type="hidden" id="ai-prompt-template-edit-id">
+                  <div class="setting-row">
+                    <label for="ai-prompt-template-label">Label</label>
+                    <input type="text" id="ai-prompt-template-label" placeholder="Summarize note" maxlength="40">
+                  </div>
+                  <div class="setting-row">
+                    <label for="ai-prompt-template-scope">Show in</label>
+                    <select id="ai-prompt-template-scope">
+                      <option value="note">This Note</option>
+                      <option value="global">All Notes</option>
+                      <option value="both">Both</option>
+                    </select>
+                  </div>
+                  <div class="setting-row">
+                    <label for="ai-prompt-template-behavior">Action</label>
+                    <select id="ai-prompt-template-behavior">
+                      <option value="send">Send immediately</option>
+                      <option value="prefill">Insert into input</option>
+                    </select>
+                  </div>
+                  <div class="setting-row ai-prompt-template-textarea-row">
+                    <label for="ai-prompt-template-prompt">Prompt</label>
+                    <textarea id="ai-prompt-template-prompt" rows="3"
+                      placeholder="Summarize the main ideas from this note"></textarea>
+                  </div>
+                  <div class="ai-prompt-template-form-actions">
+                    <button id="ai-template-cancel-btn" class="secondary-btn" type="button">Cancel</button>
+                    <button id="ai-template-save-btn" class="primary-btn" type="submit">Save template</button>
+                  </div>
+                </form>
+              </div>
             </div>
             <div class="settings-section">
               <h3>Trash</h3>
@@ -977,8 +975,12 @@
         <div class="shortcut-section">
           <h3>General</h3>
           <div class="shortcut-item">
-            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>N</kbd></span>
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd></span>
             <span class="shortcut-desc">New Note</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd></span>
+            <span class="shortcut-desc">Command Palette</span>
           </div>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>D</kbd></span>
@@ -986,15 +988,19 @@
           </div>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>K</kbd></span>
-            <span class="shortcut-desc">Search / Command Palette</span>
+            <span class="shortcut-desc">Search Notes</span>
           </div>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>A</kbd></span>
             <span class="shortcut-desc">Toggle AI Sidebar</span>
           </div>
           <div class="shortcut-item">
-            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>\</kbd></span>
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd></span>
             <span class="shortcut-desc">Toggle Sidebar</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>F11</kbd></span>
+            <span class="shortcut-desc">Toggle Focus Mode</span>
           </div>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd>?</kbd></span>
@@ -1005,15 +1011,19 @@
           <h3>Editor</h3>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Enter</kbd></span>
-            <span class="shortcut-desc">Toggle Checkbox / Task</span>
+            <span class="shortcut-desc">Insert Block Below</span>
           </div>
           <div class="shortcut-item">
-            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>1-3</kbd></span>
+            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>1-3</kbd></span>
             <span class="shortcut-desc">Convert to Header 1-3</span>
           </div>
           <div class="shortcut-item">
-            <span class="shortcut-key"><kbd>Alt</kbd> + <kbd>&uarr;</kbd>/<kbd>&darr;</kbd></span>
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>&uarr;</kbd>/<kbd>&darr;</kbd></span>
             <span class="shortcut-desc">Move block up/down</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd></span>
+            <span class="shortcut-desc">Indent or Outdent List Items</span>
           </div>
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd>/</kbd></span>
@@ -1028,6 +1038,49 @@
     </div>
   </div>
 
+  <div id="command-palette-modal" class="modal hidden">
+    <div class="modal-content command-palette-content" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="command-palette-header">
+        <div class="command-palette-search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input
+            id="command-palette-input"
+            type="text"
+            placeholder="Jump to a note or run a command..."
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Search notes and commands"
+          />
+        </div>
+        <button id="command-palette-close" class="close-btn" aria-label="Close command palette">&times;</button>
+      </div>
+      <div class="command-palette-body">
+        <div id="command-palette-results" class="command-palette-results" role="listbox" aria-label="Command palette results"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="ai-insert-preview-modal" class="modal hidden">
+    <div class="modal-content ai-insert-preview-content" role="dialog" aria-modal="true" aria-label="AI insert preview">
+      <div class="modal-header">
+        <h2 id="ai-insert-preview-title">Preview AI Insert</h2>
+        <button id="ai-insert-preview-close" class="close-btn" aria-label="Close AI insert preview">&times;</button>
+      </div>
+      <div class="modal-body ai-insert-preview-body">
+        <p id="ai-insert-preview-summary" class="ai-insert-preview-summary"></p>
+        <div id="ai-insert-preview-counts" class="ai-insert-preview-counts"></div>
+        <div id="ai-insert-preview-items" class="ai-insert-preview-items"></div>
+      </div>
+      <div class="modal-footer ai-insert-preview-footer">
+        <button id="ai-insert-preview-cancel" class="secondary-btn">Cancel</button>
+        <button id="ai-insert-preview-confirm" class="primary-btn">Insert</button>
+      </div>
+    </div>
+  </div>
+
   <input type="file" id="import-input" accept=".json" class="hidden">
   <input type="file" id="note-import-input" accept=".md,.txt,.json" class="hidden">
   <input type="file" id="image-input" accept="image/*" class="hidden">
@@ -1037,6 +1090,13 @@
   <script src="js/storage.js"></script>
   <script src="js/theme-engine.js"></script>
   <script src="js/virtual-scroller.js"></script>
+  <script src="js/block-placeholders.js"></script>
+  <script src="js/resizable-panel.js"></script>
+  <script src="js/sidebar-utils.js"></script>
+  <script src="js/shortcut-utils.js"></script>
+  <script src="js/command-palette-utils.js"></script>
+  <script src="js/ai-prompt-templates.js"></script>
+  <script src="js/ai-response-utils.js"></script>
   <script src="js/lib/fuse.js"></script>
   <script src="js/lib/jszip.min.js"></script>
   <script src="js/search.js"></script>
