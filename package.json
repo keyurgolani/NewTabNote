@@ -7,6 +7,7 @@
     "build": "node scripts/build.js",
     "build:dev": "node scripts/build.js --dev",
     "clean": "rm -rf dist",
+    "test": "node --test test/*.test.js",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package"
   },

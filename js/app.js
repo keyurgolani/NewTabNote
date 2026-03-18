@@ -13,12 +13,14 @@ class App {
     this.sidebarOpen = true;
     this.sidebarView = 'notes'; // 'notes', 'archive', or 'trash'
     this.sidebarWidth = 260;
+    this.sidebarSortMode = 'updated';
     this.sidebarViewMode = 'list'; // 'list' or 'cards'
     this.notes = [];
     this.archivedNotes = [];
     this.trashedNotes = [];
     this.templates = []; // NEW: templates list
     this.folders = []; // NEW: folders list
+    this.searchIndexByNoteId = new Map();
     this.searchQuery = '';
     this.contextMenuNoteId = null;
     // Calendar
@@ -37,7 +39,15 @@ class App {
     // AI Chat sidebar
     this.aiSidebarOpen = false;
     this.aiSidebarWidth = 360;
+    this.sidebarResizer = null;
+    this.aiSidebarResizer = null;
+    this.focusMode = false;
+    this.commandPaletteItems = [];
+    this.commandPaletteIndex = 0;
     this.aiChatHistory = [];
+    this.aiPromptTemplates = [];
+    this.aiPromptTemplateEditingId = null;
+    this.aiInsertPreviewState = null;
     // Virtual Scroller
     this.notesScroller = null;
     // Search Indexer
@@ -49,6 +59,9 @@ class App {
     // Multi-select
     this.selectionMode = false;
     this.selectedNoteIds = new Set();
+    this.triggerIndexing = Utils.debounce(() => {
+      this.rebuildSearchIndex();
+    }, 300);
   }
 
   /**
@@ -61,6 +74,7 @@ class App {
 
       // Initialize LLM service
       await LLM.init();
+      await this.loadAIPromptTemplates();
 
       // Get notes and folders
       this.notes = await Storage.getAllNotes();
@@ -68,6 +82,7 @@ class App {
       this.trashedNotes = await Storage.getTrashedNotes();
       this.templates = await Storage.getTemplates();
       this.folders = await Storage.getAllFolders();
+      await this.refreshSearchIndexEntries();
 
       // Initialize editors
       const editorChangeHandler = Utils.debounce(() => {
@@ -117,6 +132,8 @@ class App {
       // Setup UI
       this.setupPageSelector(this.notes);
       this.setupSettings();
+      this.setupCommandPalette();
+      this.setupAIInsertPreview();
       this.setupSidebar();
       await this.setupAI();
       this.setupWidthSelectorPill();
@@ -255,6 +272,7 @@ class App {
     const toggleBtn = document.getElementById('sidebar-toggle');
     const newNoteBtn = document.getElementById('sidebar-new-note');
     const searchInput = document.getElementById('sidebar-search');
+    const sortSelect = document.getElementById('sidebar-sort');
     const tabNotes = document.getElementById('sidebar-tab-notes');
     const tabTemplates = document.getElementById('sidebar-tab-templates');
     const tabArchive = document.getElementById('sidebar-tab-archive');
@@ -266,7 +284,11 @@ class App {
     // Load sidebar state from settings
     this.sidebarOpen = await Storage.getSetting('sidebarOpen', true);
     this.sidebarWidth = await Storage.getSetting('sidebarWidth', 260);
+    this.sidebarSortMode = await Storage.getSetting('sidebarSortMode', 'updated');
     this.sidebarViewMode = await Storage.getSetting('sidebarViewMode', 'list');
+    if (sortSelect) {
+      sortSelect.value = this.sidebarSortMode;
+    }
 
     this.updateSidebarState();
     this.applySidebarWidth();
@@ -274,9 +296,7 @@ class App {
 
     // Toggle sidebar
     toggleBtn.addEventListener('click', async () => {
-      this.sidebarOpen = !this.sidebarOpen;
-      this.updateSidebarState();
-      await Storage.setSetting('sidebarOpen', this.sidebarOpen);
+      await this.toggleSidebar();
     });
 
     // New note button - opens in new tab
@@ -337,6 +357,14 @@ class App {
       this.searchQuery = e.target.value;
       await this.renderNotesList();
     });
+
+    if (sortSelect) {
+      sortSelect.addEventListener('change', async (e) => {
+        this.sidebarSortMode = e.target.value;
+        await Storage.setSetting('sidebarSortMode', this.sidebarSortMode);
+        await this.renderNotesList();
+      });
+    }
 
     // Sidebar tabs
     tabNotes.addEventListener('click', () => {
@@ -402,48 +430,22 @@ class App {
     const sidebar = document.getElementById('sidebar');
     const resizeHandle = document.getElementById('sidebar-resize-handle');
 
-    if (!resizeHandle) return;
+    if (this.sidebarResizer) {
+      this.sidebarResizer.destroy();
+    }
 
-    let isResizing = false;
-    let startX = 0;
-    let startWidth = 0;
+    if (!sidebar || !resizeHandle) return;
 
-    resizeHandle.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-
-      isResizing = true;
-      startX = e.clientX;
-      startWidth = sidebar.offsetWidth;
-
-      sidebar.classList.add('resizing');
-      resizeHandle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-
-      e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (!isResizing) return;
-
-      const delta = e.clientX - startX;
-      const newWidth = Math.min(500, Math.max(180, startWidth + delta));
-
-      sidebar.style.width = newWidth + 'px';
-    });
-
-    document.addEventListener('mouseup', async () => {
-      if (!isResizing) return;
-
-      isResizing = false;
-      sidebar.classList.remove('resizing');
-      resizeHandle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-
-      // Save the new width
-      this.sidebarWidth = sidebar.offsetWidth;
-      await Storage.setSetting('sidebarWidth', this.sidebarWidth);
+    this.sidebarResizer = new ResizablePanel({
+      panel: sidebar,
+      handle: resizeHandle,
+      min: 180,
+      max: 500,
+      direction: 'right',
+      onResizeEnd: async (width) => {
+        this.sidebarWidth = width;
+        await Storage.setSetting('sidebarWidth', this.sidebarWidth);
+      },
     });
   }
 
@@ -857,6 +859,10 @@ class App {
    * Parse markdown text into an array of block objects
    */
   markdownToBlocks(text) {
+    if (typeof AIResponseUtils !== 'undefined' && AIResponseUtils.markdownToBlocks) {
+      return AIResponseUtils.markdownToBlocks(text);
+    }
+
     const blocks = [];
     const lines = text.split('\n');
     let i = 0;
@@ -1041,6 +1047,10 @@ class App {
    * Convert markdown inline formatting to HTML
    */
   markdownInlineToHtml(text) {
+    if (typeof AIResponseUtils !== 'undefined' && AIResponseUtils.markdownInlineToHtml) {
+      return AIResponseUtils.markdownInlineToHtml(text);
+    }
+
     let result = text;
     // Bold
     result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -1518,6 +1528,23 @@ class App {
   }
 
   /**
+   * Toggle sidebar open/closed and persist the state
+   */
+  async toggleSidebar(force) {
+    this.sidebarOpen = force !== undefined ? force : !this.sidebarOpen;
+    this.updateSidebarState();
+    await Storage.setSetting('sidebarOpen', this.sidebarOpen);
+  }
+
+  toggleFocusMode(force) {
+    this.focusMode = force !== undefined ? force : !this.focusMode;
+    if (this.focusMode) {
+      this.closeAllModals();
+    }
+    document.body.classList.toggle('focus-mode', this.focusMode);
+  }
+
+  /**
    * Refresh notes list from storage
    */
   async refreshNotesList() {
@@ -1526,12 +1553,16 @@ class App {
     this.trashedNotes = await Storage.getTrashedNotes();
     this.templates = await Storage.getTemplates();
     this.folders = await Storage.getAllFolders();
+    await this.refreshSearchIndexEntries();
     this.updateBadgeCounts();
     await this.renderNotesList();
     this.renderCalendar();
     this.refreshPageSelector();
     this.updateEmptyState();
     this.updateSidebarTabs();
+    if (this.isCommandPaletteOpen()) {
+      this.refreshCommandPaletteResults();
+    }
   }
 
   /**
@@ -1558,6 +1589,12 @@ class App {
         trashBadge.classList.add('hidden');
       }
     }
+  }
+
+  async refreshSearchIndexEntries() {
+    const entries = await Storage.getSearchIndex();
+    this.searchIndexByNoteId = new Map(entries.map(entry => [entry.noteId, entry]));
+    return entries;
   }
 
   /**
@@ -1635,7 +1672,7 @@ class App {
       if (this.templates.length === 0) {
         this.renderEmptySidebar(list);
       } else {
-        this.templates.forEach(note => {
+        this.getSortedSidebarNotes(this.templates).forEach(note => {
           list.appendChild(this.createSidebarNoteItem(note));
         });
       }
@@ -1665,9 +1702,17 @@ class App {
     this.renderFolderTree(list, null, notesInFolders);
 
     // Render root notes
-    rootNotes.forEach(note => {
+    this.getSortedSidebarNotes(rootNotes).forEach(note => {
       list.appendChild(this.createSidebarNoteItem(note));
     });
+  }
+
+  getSortedSidebarNotes(notes) {
+    if (typeof SidebarUtils === 'undefined') {
+      return notes;
+    }
+
+    return SidebarUtils.sortNotes(notes, this.sidebarSortMode);
   }
 
   /**
@@ -1757,7 +1802,7 @@ class App {
       this.renderFolderTree(contents, folder.id, notesInFolders);
 
       // Render notes in this folder
-      const notes = notesInFolders[folder.id] || [];
+      const notes = this.getSortedSidebarNotes(notesInFolders[folder.id] || []);
       notes.forEach(note => {
         const el = this.createSidebarNoteItem(note);
         contents.appendChild(el);
@@ -1794,6 +1839,12 @@ class App {
     const isActive = (this.editor && this.editor.noteId === note.id) ||
       (this.secondaryEditor && this.secondaryEditor.noteId === note.id);
     el.className = `sidebar-note-item ${isActive ? 'active' : ''}`;
+    if (this.selectionMode) {
+      el.classList.add('selection-mode');
+    }
+    if (note.archived || note.trashed) {
+      el.classList.add('archived');
+    }
     el.dataset.id = note.id;
     el.draggable = !this.selectionMode;
 
@@ -1806,22 +1857,87 @@ class App {
     });
     el.appendChild(checkbox);
 
-    const name = note.name || 'Untitled';
-    const firstLine = note.preview || '';
+    const model = typeof SidebarUtils !== 'undefined'
+      ? SidebarUtils.buildSidebarNoteModel(note, {
+        searchIndexEntry: this.searchIndexByNoteId.get(note.id),
+      })
+      : {
+        title: note.name || 'Untitled',
+        preview: note.preview || '',
+        relativeTime: '',
+        tags: [],
+        todoSummary: '',
+        isPinned: Boolean(note.pinned),
+      };
 
-    el.innerHTML += `
-      <div class="sidebar-note-content">
-        <div class="sidebar-note-title">${name}</div>
-        <div class="sidebar-note-preview">${firstLine}</div>
-      </div>
-    `;
+    const content = document.createElement('div');
+    content.className = 'sidebar-note-content';
 
-    // Add back the checkbox click listener since innerHTML clears it
-    const newCheckbox = el.querySelector('.sidebar-note-checkbox');
-    newCheckbox.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleNoteSelection(note.id);
-    });
+    const header = document.createElement('div');
+    header.className = 'sidebar-note-header';
+
+    const title = document.createElement('div');
+    title.className = 'sidebar-note-name';
+    title.textContent = model.title;
+    header.appendChild(title);
+
+    if (model.relativeTime) {
+      const time = document.createElement('div');
+      time.className = 'sidebar-note-time';
+      time.textContent = model.relativeTime;
+      header.appendChild(time);
+    }
+
+    content.appendChild(header);
+
+    if (model.preview) {
+      const preview = document.createElement('div');
+      preview.className = 'sidebar-note-preview';
+      preview.textContent = model.preview;
+      content.appendChild(preview);
+    }
+
+    if (model.todoSummary || model.tags.length > 0) {
+      const footer = document.createElement('div');
+      footer.className = 'sidebar-note-footer';
+
+      if (model.todoSummary) {
+        const progress = document.createElement('span');
+        progress.className = 'sidebar-note-progress';
+        progress.textContent = model.todoSummary;
+        footer.appendChild(progress);
+      }
+
+      model.tags.forEach(tag => {
+        const tagEl = document.createElement('span');
+        tagEl.className = 'sidebar-note-tag';
+        tagEl.textContent = `#${tag}`;
+        footer.appendChild(tagEl);
+      });
+
+      content.appendChild(footer);
+    }
+
+    el.appendChild(content);
+
+    const canPin = this.sidebarView === 'notes' && !note.archived && !note.trashed && !note.isTemplate;
+    if (canPin) {
+      const pinBtn = document.createElement('button');
+      pinBtn.className = `sidebar-note-pin ${model.isPinned ? 'pinned' : ''}`;
+      pinBtn.type = 'button';
+      pinBtn.title = model.isPinned ? 'Unpin note' : 'Pin note';
+      pinBtn.setAttribute('aria-label', model.isPinned ? 'Unpin note' : 'Pin note');
+      pinBtn.setAttribute('aria-pressed', model.isPinned ? 'true' : 'false');
+      pinBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 17v5"></path>
+        <path d="M5 3h14l-3 7v4l-4-2-4 2v-4z"></path>
+      </svg>`;
+      pinBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this.toggleNotePin(note.id);
+      });
+      el.appendChild(pinBtn);
+    }
 
     el.addEventListener('click', () => {
       if (this.selectionMode) {
@@ -1839,12 +1955,24 @@ class App {
     return el;
   }
 
+  async toggleNotePin(noteId) {
+    const note = await Storage.getNote(noteId);
+    if (!note) {
+      return;
+    }
+
+    note.pinned = !note.pinned;
+    await Storage.updateNote(note);
+    await this.refreshNotesList();
+    Utils.showToast(note.pinned ? 'Note pinned' : 'Note unpinned', 'success');
+  }
+
   /**
    * Render search results (flat list)
    */
   async renderSearchResults(list) {
     // Sync search index data to SearchEngine
-    const searchIndexData = await Storage.getSearchIndex();
+    const searchIndexData = await this.refreshSearchIndexEntries();
     this.searchEngine.updateIndex(searchIndexData);
     const searchResults = await this.searchEngine.search(this.searchQuery);
 
@@ -2158,9 +2286,8 @@ class App {
 
     const closeBtn = modal.querySelector('.close-btn');
 
-    settingsBtn.addEventListener('click', () => {
-      modal.classList.remove('hidden');
-      this.updateSettingsUI();
+    settingsBtn.addEventListener('click', async () => {
+      await this.openSettingsModal();
     });
 
     if (closeBtn) {
@@ -2440,6 +2567,9 @@ class App {
         dailyNoteTemplateSelect.appendChild(option);
       });
     }
+
+    this.renderAIPromptTemplateSettings();
+
     // Notes list
     await this.updateNotesList();
   }
@@ -2475,6 +2605,945 @@ class App {
     });
   }
 
+  async openSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+
+    this.closeAllModals();
+    modal.classList.remove('hidden');
+    await this.updateSettingsUI();
+  }
+
+  setupCommandPalette() {
+    const modal = document.getElementById('command-palette-modal');
+    const input = document.getElementById('command-palette-input');
+    const results = document.getElementById('command-palette-results');
+    const closeBtn = document.getElementById('command-palette-close');
+
+    if (!modal || !input || !results) {
+      return;
+    }
+
+    input.addEventListener('input', () => {
+      this.refreshCommandPaletteResults(input.value);
+    });
+
+    closeBtn?.addEventListener('click', () => {
+      this.toggleCommandPalette(false);
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        this.toggleCommandPalette(false);
+      }
+    });
+
+    results.addEventListener('click', async (e) => {
+      const itemEl = e.target.closest('.command-palette-item');
+      if (!itemEl) {
+        return;
+      }
+
+      const index = Number(itemEl.dataset.index);
+      if (Number.isInteger(index)) {
+        await this.selectCommandPaletteItem(index);
+      }
+    });
+  }
+
+  isCommandPaletteOpen() {
+    const modal = document.getElementById('command-palette-modal');
+    return Boolean(modal && !modal.classList.contains('hidden'));
+  }
+
+  toggleCommandPalette(force, initialQuery = '') {
+    const modal = document.getElementById('command-palette-modal');
+    const input = document.getElementById('command-palette-input');
+
+    if (!modal || !input) {
+      return;
+    }
+
+    const show = force !== undefined ? force : modal.classList.contains('hidden');
+
+    if (!show) {
+      modal.classList.add('hidden');
+      input.value = '';
+      this.commandPaletteItems = [];
+      this.commandPaletteIndex = 0;
+      return;
+    }
+
+    this.closeAllModals();
+    modal.classList.remove('hidden');
+    input.value = initialQuery;
+    this.refreshCommandPaletteResults(initialQuery);
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
+  getCommandPaletteCommands() {
+    return [
+      {
+        id: 'new-note',
+        title: 'New Note',
+        description: 'Create a blank note and focus the title',
+        keywords: ['create', 'note', 'blank'],
+      },
+      {
+        id: 'open-daily-note',
+        title: 'Open Daily Note',
+        description: 'Jump to today\'s note',
+        keywords: ['daily', 'today', 'journal'],
+      },
+      {
+        id: 'open-settings',
+        title: 'Open Settings',
+        description: 'Adjust appearance, AI, and backups',
+        keywords: ['preferences', 'config', 'options'],
+      },
+      {
+        id: 'toggle-sidebar',
+        title: this.sidebarOpen ? 'Hide Sidebar' : 'Show Sidebar',
+        description: 'Collapse or expand the notes sidebar',
+        keywords: ['sidebar', 'navigation', 'panel'],
+      },
+      {
+        id: 'toggle-ai',
+        title: this.aiSidebarOpen ? 'Hide AI Sidebar' : 'Show AI Sidebar',
+        description: 'Open or close the AI assistant',
+        keywords: ['assistant', 'chat', 'ai'],
+      },
+      {
+        id: 'toggle-focus-mode',
+        title: this.focusMode ? 'Exit Focus Mode' : 'Enter Focus Mode',
+        description: 'Hide distractions and center the editor',
+        keywords: ['focus', 'zen', 'writing'],
+      },
+    ];
+  }
+
+  getCommandPaletteNotes() {
+    const activeNoteId = this.getEditor()?.noteId;
+    const openNoteIds = new Set(this.openTabs.map(tab => tab.noteId));
+    const noteCollections = [...this.notes, ...this.archivedNotes];
+
+    return noteCollections.map(note => {
+      const searchEntry = this.searchIndexByNoteId.get(note.id);
+      const previewSource = note.preview || searchEntry?.content || '';
+      const preview = previewSource
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 140);
+
+      return {
+        id: note.id,
+        name: note.name || 'Untitled',
+        preview,
+        searchText: searchEntry?.content || preview,
+        tags: note.insights?.tags || searchEntry?.tags || [],
+        badges: note.archived ? ['Archived'] : [],
+        updatedAt: note.updatedAt || 0,
+        createdAt: note.createdAt || 0,
+        isActive: note.id === activeNoteId,
+        isOpen: openNoteIds.has(note.id),
+      };
+    });
+  }
+
+  refreshCommandPaletteResults(query) {
+    if (typeof CommandPaletteUtils === 'undefined') {
+      return;
+    }
+
+    const input = document.getElementById('command-palette-input');
+    const nextQuery = query !== undefined ? query : input?.value || '';
+
+    this.commandPaletteItems = CommandPaletteUtils.buildCommandPaletteItems({
+      query: nextQuery,
+      commands: this.getCommandPaletteCommands(),
+      notes: this.getCommandPaletteNotes(),
+      limit: 12,
+    });
+
+    if (query !== undefined) {
+      this.commandPaletteIndex = 0;
+    } else {
+      this.commandPaletteIndex = Math.min(
+        this.commandPaletteIndex,
+        Math.max(this.commandPaletteItems.length - 1, 0)
+      );
+    }
+
+    this.renderCommandPaletteResults();
+  }
+
+  renderCommandPaletteResults() {
+    const results = document.getElementById('command-palette-results');
+    if (!results) {
+      return;
+    }
+
+    results.innerHTML = '';
+
+    if (this.commandPaletteItems.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.className = 'command-palette-empty';
+      emptyState.textContent = 'No notes or commands match that search.';
+      results.appendChild(emptyState);
+      return;
+    }
+
+    this.commandPaletteItems.forEach((item, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `command-palette-item ${index === this.commandPaletteIndex ? 'selected' : ''}`;
+      button.dataset.index = String(index);
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', index === this.commandPaletteIndex ? 'true' : 'false');
+
+      const main = document.createElement('div');
+      main.className = 'command-palette-item-main';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'command-palette-item-title-row';
+
+      const title = document.createElement('span');
+      title.className = 'command-palette-item-title';
+      title.textContent = item.title;
+      titleRow.appendChild(title);
+      main.appendChild(titleRow);
+
+      if (item.subtitle) {
+        const subtitle = document.createElement('div');
+        subtitle.className = 'command-palette-item-subtitle';
+        subtitle.textContent = item.subtitle;
+        main.appendChild(subtitle);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'command-palette-item-meta';
+
+      const kindChip = document.createElement('span');
+      kindChip.className = `command-palette-chip kind-${item.kind}`;
+      kindChip.textContent = item.kind === 'command' ? 'Command' : 'Note';
+      meta.appendChild(kindChip);
+
+      if (Array.isArray(item.badges)) {
+        item.badges.forEach(label => {
+          const badge = document.createElement('span');
+          badge.className = 'command-palette-chip';
+          badge.textContent = label;
+          meta.appendChild(badge);
+        });
+      }
+
+      button.appendChild(main);
+      button.appendChild(meta);
+      results.appendChild(button);
+    });
+
+    const selected = results.querySelector('.command-palette-item.selected');
+    selected?.scrollIntoView({ block: 'nearest' });
+  }
+
+  moveCommandPaletteSelection(direction) {
+    if (this.commandPaletteItems.length === 0) {
+      return;
+    }
+
+    const lastIndex = this.commandPaletteItems.length - 1;
+    this.commandPaletteIndex = Math.max(0, Math.min(lastIndex, this.commandPaletteIndex + direction));
+    this.renderCommandPaletteResults();
+  }
+
+  async selectCommandPaletteItem(index = this.commandPaletteIndex) {
+    const item = this.commandPaletteItems[index];
+    if (!item) {
+      return;
+    }
+
+    await this.executeCommandPaletteItem(item);
+  }
+
+  async executeCommandPaletteItem(item) {
+    this.toggleCommandPalette(false);
+
+    if (item.kind === 'note') {
+      await this.openNoteById(item.noteId);
+      return;
+    }
+
+    switch (item.commandId) {
+      case 'new-note':
+        await this.openNewTab();
+        break;
+      case 'open-daily-note': {
+        const note = await Storage.ensureDailyNote();
+        await this.refreshNotesList();
+        await this.openNoteInNewTab(note.id);
+        break;
+      }
+      case 'open-settings':
+        await this.openSettingsModal();
+        break;
+      case 'toggle-sidebar':
+        await this.toggleSidebar();
+        break;
+      case 'toggle-ai':
+        this.toggleAISidebar();
+        break;
+      case 'toggle-focus-mode':
+        this.toggleFocusMode();
+        break;
+      default:
+        break;
+    }
+  }
+
+  async handleCommandPaletteShortcuts(e) {
+    if (!this.isCommandPaletteOpen()) {
+      return false;
+    }
+
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        this.toggleCommandPalette(false);
+        return true;
+      case 'ArrowDown':
+        e.preventDefault();
+        this.moveCommandPaletteSelection(1);
+        return true;
+      case 'ArrowUp':
+        e.preventDefault();
+        this.moveCommandPaletteSelection(-1);
+        return true;
+      case 'Tab':
+        e.preventDefault();
+        this.moveCommandPaletteSelection(e.shiftKey ? -1 : 1);
+        return true;
+      case 'Enter':
+        e.preventDefault();
+        await this.selectCommandPaletteItem();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  getAIPromptTemplateApi() {
+    return typeof AIPromptTemplates !== 'undefined' ? AIPromptTemplates : null;
+  }
+
+  getDefaultAIPromptTemplates() {
+    const api = this.getAIPromptTemplateApi();
+    return api ? api.getDefaultAIPromptTemplates() : [];
+  }
+
+  sanitizeAIPromptTemplates(templates) {
+    const api = this.getAIPromptTemplateApi();
+    if (!api) {
+      return Array.isArray(templates) ? templates.slice() : [];
+    }
+    return api.sanitizeAIPromptTemplates(templates);
+  }
+
+  getAIPromptTemplatesForScope(scope) {
+    const api = this.getAIPromptTemplateApi();
+    if (!api) {
+      return [];
+    }
+    return api.getAIPromptTemplatesForScope(this.aiPromptTemplates, scope);
+  }
+
+  async loadAIPromptTemplates() {
+    const savedTemplates = await Storage.getSetting('aiPromptTemplates', null);
+    this.aiPromptTemplates = this.sanitizeAIPromptTemplates(savedTemplates);
+
+    if (savedTemplates === null || !Array.isArray(savedTemplates)) {
+      try {
+        await Storage.setSetting('aiPromptTemplates', this.aiPromptTemplates);
+      } catch (error) {
+        console.warn('Failed to seed AI prompt templates:', error);
+      }
+    }
+
+    this.renderAIPromptSuggestions();
+    return this.aiPromptTemplates;
+  }
+
+  async persistAIPromptTemplates(templates, successMessage = '') {
+    const sanitized = this.sanitizeAIPromptTemplates(templates);
+
+    try {
+      await Storage.setSetting('aiPromptTemplates', sanitized);
+      this.aiPromptTemplates = sanitized;
+      this.renderAIPromptSuggestions();
+      this.renderAIPromptTemplateSettings();
+      if (successMessage) {
+        Utils.showToast(successMessage, 'success');
+      }
+      return true;
+    } catch (error) {
+      console.error('Failed to save AI prompt templates:', error);
+      Utils.showToast('Failed to save AI prompt templates', 'error');
+      return false;
+    }
+  }
+
+  createAIPromptSuggestionButton(template, variant = 'note') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.templateId = template.id;
+    button.title = template.prompt;
+    button.textContent = template.label;
+
+    if (variant === 'sticky') {
+      button.className = 'ai-sticky-template-btn';
+    } else if (variant === 'global') {
+      button.className = 'global-chat-suggestion';
+    } else {
+      button.className = 'ai-suggestion-btn';
+    }
+
+    return button;
+  }
+
+  renderAIPromptSuggestions() {
+    const noteSuggestions = document.getElementById('ai-note-suggestion-buttons');
+    const stickySuggestions = document.getElementById('ai-sticky-template-buttons');
+    const globalSuggestions = document.getElementById('ai-global-suggestion-buttons');
+
+    if (noteSuggestions) {
+      noteSuggestions.innerHTML = '';
+      this.getAIPromptTemplatesForScope('note').forEach(template => {
+        noteSuggestions.appendChild(this.createAIPromptSuggestionButton(template, 'note'));
+      });
+    }
+
+    if (stickySuggestions) {
+      stickySuggestions.innerHTML = '';
+      this.getAIPromptTemplatesForScope('note').slice(0, 4).forEach(template => {
+        stickySuggestions.appendChild(this.createAIPromptSuggestionButton(template, 'sticky'));
+      });
+    }
+
+    if (globalSuggestions) {
+      globalSuggestions.innerHTML = '';
+      this.getAIPromptTemplatesForScope('global').forEach(template => {
+        globalSuggestions.appendChild(this.createAIPromptSuggestionButton(template, 'global'));
+      });
+    }
+  }
+
+  applyAIPromptTemplate(template, scope) {
+    const input = document.getElementById(scope === 'global' ? 'global-chat-input' : 'ai-chat-input');
+    if (!input || !template) {
+      return;
+    }
+
+    input.value = template.prompt;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    if (template.behavior === 'prefill') {
+      input.focus();
+      if (typeof input.setSelectionRange === 'function') {
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
+      }
+      return;
+    }
+
+    if (scope === 'global') {
+      this.sendGlobalChatMessage();
+    } else {
+      this.sendAIChatMessage();
+    }
+  }
+
+  handleAIPromptSuggestionClick(event, scope) {
+    const button = event.target.closest('[data-template-id]');
+    if (!button) {
+      return;
+    }
+
+    const template = this.aiPromptTemplates.find(item => item.id === button.dataset.templateId);
+    if (!template) {
+      return;
+    }
+
+    this.applyAIPromptTemplate(template, scope);
+  }
+
+  setupAIPromptTemplateSettings() {
+    const list = document.getElementById('ai-prompt-template-list');
+    const addBtn = document.getElementById('ai-template-add-btn');
+    const resetBtn = document.getElementById('ai-template-reset-btn');
+    const form = document.getElementById('ai-prompt-template-form');
+    const cancelBtn = document.getElementById('ai-template-cancel-btn');
+
+    addBtn?.addEventListener('click', () => {
+      this.openAIPromptTemplateEditor();
+    });
+
+    resetBtn?.addEventListener('click', async () => {
+      await this.resetAIPromptTemplates();
+    });
+
+    list?.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-action][data-template-id]');
+      if (!button) {
+        return;
+      }
+
+      const { action, templateId } = button.dataset;
+
+      if (action === 'edit') {
+        this.openAIPromptTemplateEditor(templateId);
+        return;
+      }
+
+      if (action === 'delete') {
+        await this.deleteAIPromptTemplate(templateId);
+        return;
+      }
+
+      if (action === 'move-up' || action === 'move-down') {
+        await this.moveAIPromptTemplateSetting(templateId, action === 'move-up' ? 'up' : 'down');
+      }
+    });
+
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await this.submitAIPromptTemplateForm();
+    });
+
+    cancelBtn?.addEventListener('click', () => {
+      this.closeAIPromptTemplateEditor();
+    });
+  }
+
+  renderAIPromptTemplateSettings() {
+    const list = document.getElementById('ai-prompt-template-list');
+    const empty = document.getElementById('ai-prompt-template-empty');
+    if (!list || !empty) {
+      return;
+    }
+
+    list.innerHTML = '';
+    empty.classList.toggle('hidden', this.aiPromptTemplates.length > 0);
+
+    this.aiPromptTemplates.forEach((template, index) => {
+      const row = document.createElement('div');
+      row.className = 'ai-prompt-template-item';
+
+      const main = document.createElement('div');
+      main.className = 'ai-prompt-template-main';
+
+      const meta = document.createElement('div');
+      meta.className = 'ai-prompt-template-meta';
+
+      const label = document.createElement('span');
+      label.className = 'ai-prompt-template-label';
+      label.textContent = template.label;
+      meta.appendChild(label);
+
+      const scopeBadge = document.createElement('span');
+      scopeBadge.className = 'ai-prompt-template-badge';
+      scopeBadge.textContent = template.scope === 'both' ? 'Both' : template.scope === 'note' ? 'This Note' : 'All Notes';
+      meta.appendChild(scopeBadge);
+
+      const behaviorBadge = document.createElement('span');
+      behaviorBadge.className = 'ai-prompt-template-badge';
+      behaviorBadge.textContent = template.behavior === 'prefill' ? 'Prefill' : 'Send';
+      meta.appendChild(behaviorBadge);
+
+      const prompt = document.createElement('div');
+      prompt.className = 'ai-prompt-template-prompt';
+      prompt.textContent = template.prompt;
+
+      main.appendChild(meta);
+      main.appendChild(prompt);
+
+      const actions = document.createElement('div');
+      actions.className = 'ai-prompt-template-actions';
+
+      const moveUpBtn = document.createElement('button');
+      moveUpBtn.type = 'button';
+      moveUpBtn.className = 'secondary-btn-small';
+      moveUpBtn.dataset.action = 'move-up';
+      moveUpBtn.dataset.templateId = template.id;
+      moveUpBtn.textContent = 'Up';
+      moveUpBtn.disabled = index === 0;
+      actions.appendChild(moveUpBtn);
+
+      const moveDownBtn = document.createElement('button');
+      moveDownBtn.type = 'button';
+      moveDownBtn.className = 'secondary-btn-small';
+      moveDownBtn.dataset.action = 'move-down';
+      moveDownBtn.dataset.templateId = template.id;
+      moveDownBtn.textContent = 'Down';
+      moveDownBtn.disabled = index === this.aiPromptTemplates.length - 1;
+      actions.appendChild(moveDownBtn);
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'secondary-btn-small';
+      editBtn.dataset.action = 'edit';
+      editBtn.dataset.templateId = template.id;
+      editBtn.textContent = 'Edit';
+      actions.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'secondary-btn-small';
+      deleteBtn.dataset.action = 'delete';
+      deleteBtn.dataset.templateId = template.id;
+      deleteBtn.textContent = 'Delete';
+      actions.appendChild(deleteBtn);
+
+      row.appendChild(main);
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+
+  openAIPromptTemplateEditor(templateId = '') {
+    const form = document.getElementById('ai-prompt-template-form');
+    const idInput = document.getElementById('ai-prompt-template-edit-id');
+    const labelInput = document.getElementById('ai-prompt-template-label');
+    const scopeInput = document.getElementById('ai-prompt-template-scope');
+    const behaviorInput = document.getElementById('ai-prompt-template-behavior');
+    const promptInput = document.getElementById('ai-prompt-template-prompt');
+    const saveBtn = document.getElementById('ai-template-save-btn');
+
+    if (!form || !labelInput || !scopeInput || !behaviorInput || !promptInput || !idInput) {
+      return;
+    }
+
+    const template = templateId
+      ? this.aiPromptTemplates.find(item => item.id === templateId)
+      : null;
+
+    this.aiPromptTemplateEditingId = template ? template.id : null;
+    idInput.value = template ? template.id : '';
+    labelInput.value = template ? template.label : '';
+    scopeInput.value = template ? template.scope : 'note';
+    behaviorInput.value = template ? template.behavior : 'send';
+    promptInput.value = template ? template.prompt : '';
+    if (saveBtn) {
+      saveBtn.textContent = template ? 'Save changes' : 'Save template';
+    }
+
+    form.classList.remove('hidden');
+    labelInput.focus();
+  }
+
+  closeAIPromptTemplateEditor() {
+    const form = document.getElementById('ai-prompt-template-form');
+    const idInput = document.getElementById('ai-prompt-template-edit-id');
+    const labelInput = document.getElementById('ai-prompt-template-label');
+    const scopeInput = document.getElementById('ai-prompt-template-scope');
+    const behaviorInput = document.getElementById('ai-prompt-template-behavior');
+    const promptInput = document.getElementById('ai-prompt-template-prompt');
+    const saveBtn = document.getElementById('ai-template-save-btn');
+
+    this.aiPromptTemplateEditingId = null;
+
+    if (form) {
+      form.classList.add('hidden');
+    }
+    if (idInput) {
+      idInput.value = '';
+    }
+    if (labelInput) {
+      labelInput.value = '';
+    }
+    if (scopeInput) {
+      scopeInput.value = 'note';
+    }
+    if (behaviorInput) {
+      behaviorInput.value = 'send';
+    }
+    if (promptInput) {
+      promptInput.value = '';
+    }
+    if (saveBtn) {
+      saveBtn.textContent = 'Save template';
+    }
+  }
+
+  async submitAIPromptTemplateForm() {
+    const idInput = document.getElementById('ai-prompt-template-edit-id');
+    const labelInput = document.getElementById('ai-prompt-template-label');
+    const scopeInput = document.getElementById('ai-prompt-template-scope');
+    const behaviorInput = document.getElementById('ai-prompt-template-behavior');
+    const promptInput = document.getElementById('ai-prompt-template-prompt');
+
+    const label = labelInput?.value.trim() || '';
+    const prompt = promptInput?.value.trim() || '';
+    const scope = scopeInput?.value || 'note';
+    const behavior = behaviorInput?.value || 'send';
+    const editingId = idInput?.value || '';
+
+    if (!label || !prompt) {
+      Utils.showToast('Template label and prompt are required', 'error');
+      return;
+    }
+
+    const nextTemplates = this.aiPromptTemplates.slice();
+    const nextTemplate = {
+      id: editingId || undefined,
+      label,
+      prompt,
+      scope,
+      behavior,
+    };
+
+    if (editingId) {
+      const index = nextTemplates.findIndex(template => template.id === editingId);
+      if (index !== -1) {
+        nextTemplates[index] = nextTemplate;
+      }
+    } else {
+      nextTemplates.push(nextTemplate);
+    }
+
+    const saved = await this.persistAIPromptTemplates(nextTemplates, 'AI prompt templates updated');
+    if (saved) {
+      this.closeAIPromptTemplateEditor();
+    }
+  }
+
+  async moveAIPromptTemplateSetting(templateId, direction) {
+    const api = this.getAIPromptTemplateApi();
+    if (!api) {
+      return;
+    }
+
+    const reordered = api.moveAIPromptTemplate(this.aiPromptTemplates, templateId, direction);
+    await this.persistAIPromptTemplates(reordered);
+  }
+
+  async deleteAIPromptTemplate(templateId) {
+    const nextTemplates = this.aiPromptTemplates.filter(template => template.id !== templateId);
+    const saved = await this.persistAIPromptTemplates(nextTemplates, 'AI prompt template removed');
+    if (saved && this.aiPromptTemplateEditingId === templateId) {
+      this.closeAIPromptTemplateEditor();
+    }
+  }
+
+  async resetAIPromptTemplates() {
+    const saved = await this.persistAIPromptTemplates(this.getDefaultAIPromptTemplates(), 'Default AI prompt templates restored');
+    if (saved) {
+      this.closeAIPromptTemplateEditor();
+    }
+  }
+
+  setupAIInsertPreview() {
+    const modal = document.getElementById('ai-insert-preview-modal');
+    const closeBtn = document.getElementById('ai-insert-preview-close');
+    const cancelBtn = document.getElementById('ai-insert-preview-cancel');
+    const confirmBtn = document.getElementById('ai-insert-preview-confirm');
+
+    if (!modal) {
+      return;
+    }
+
+    closeBtn?.addEventListener('click', () => {
+      this.closeAIInsertPreview();
+    });
+
+    cancelBtn?.addEventListener('click', () => {
+      this.closeAIInsertPreview();
+    });
+
+    confirmBtn?.addEventListener('click', async () => {
+      await this.confirmAIInsertPreview();
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        this.closeAIInsertPreview();
+      }
+    });
+  }
+
+  closeAIInsertPreview() {
+    const modal = document.getElementById('ai-insert-preview-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+    this.aiInsertPreviewState = null;
+  }
+
+  buildAIInsertBlocks(content) {
+    if (typeof AIResponseUtils === 'undefined') {
+      return [{ type: 'text', content }];
+    }
+
+    return AIResponseUtils.parseAIResponseToBlocks(content);
+  }
+
+  getAIInsertPreviewData(blocks) {
+    if (typeof AIResponseUtils === 'undefined') {
+      return {
+        totalBlocks: blocks.length,
+        counts: [{ type: 'text', count: blocks.length }],
+        summary: '',
+        items: blocks.map(block => ({ type: block.type || 'text', content: block.content || '', checked: Boolean(block.checked) })),
+      };
+    }
+
+    return AIResponseUtils.buildAIInsertPreview(blocks);
+  }
+
+  openAIInsertPreview(action, content) {
+    const editor = this.getEditor();
+    if (action === 'append' && (!editor || !editor.noteId)) {
+      Utils.showToast('No note is currently open', 'error');
+      return;
+    }
+
+    const modal = document.getElementById('ai-insert-preview-modal');
+    if (!modal) {
+      return;
+    }
+
+    const blocks = this.buildAIInsertBlocks(content);
+    const preview = this.getAIInsertPreviewData(blocks);
+
+    this.aiInsertPreviewState = {
+      action,
+      blocks,
+      content,
+      preview,
+    };
+
+    this.renderAIInsertPreview();
+    this.closeAllModals();
+    modal.classList.remove('hidden');
+  }
+
+  renderAIInsertPreview() {
+    if (!this.aiInsertPreviewState) {
+      return;
+    }
+
+    const titleEl = document.getElementById('ai-insert-preview-title');
+    const summaryEl = document.getElementById('ai-insert-preview-summary');
+    const countsEl = document.getElementById('ai-insert-preview-counts');
+    const itemsEl = document.getElementById('ai-insert-preview-items');
+    const confirmBtn = document.getElementById('ai-insert-preview-confirm');
+    const { action, preview } = this.aiInsertPreviewState;
+
+    if (titleEl) {
+      titleEl.textContent = action === 'append' ? 'Preview Append to Note' : 'Preview New Note';
+    }
+
+    if (summaryEl) {
+      summaryEl.textContent = preview.summary
+        ? `This will insert ${preview.totalBlocks} block${preview.totalBlocks === 1 ? '' : 's'}: ${preview.summary}`
+        : `This will insert ${preview.totalBlocks} block${preview.totalBlocks === 1 ? '' : 's'}.`;
+    }
+
+    if (confirmBtn) {
+      confirmBtn.textContent = action === 'append' ? 'Append Blocks' : 'Create Note';
+    }
+
+    if (countsEl) {
+      countsEl.innerHTML = '';
+      preview.counts.forEach(entry => {
+        const badge = document.createElement('span');
+        badge.className = 'ai-insert-preview-count';
+        badge.textContent = `${entry.count} ${entry.type}`;
+        countsEl.appendChild(badge);
+      });
+    }
+
+    if (itemsEl) {
+      itemsEl.innerHTML = '';
+      preview.items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'ai-insert-preview-item';
+
+        const typeEl = document.createElement('div');
+        typeEl.className = 'ai-insert-preview-item-type';
+        typeEl.textContent = item.checked ? `${item.type} (done)` : item.type;
+
+        const textEl = document.createElement('div');
+        textEl.className = `ai-insert-preview-item-text ${item.content ? '' : 'ai-insert-preview-item-empty'}`.trim();
+        textEl.textContent = item.content || 'No text preview for this block';
+
+        row.appendChild(typeEl);
+        row.appendChild(textEl);
+        itemsEl.appendChild(row);
+      });
+    }
+  }
+
+  async confirmAIInsertPreview() {
+    if (!this.aiInsertPreviewState) {
+      return;
+    }
+
+    const { action, blocks, content } = this.aiInsertPreviewState;
+    this.closeAIInsertPreview();
+
+    if (action === 'append') {
+      await this.appendAIResponseToNote(blocks);
+      return;
+    }
+
+    await this.createNoteFromAIResponse(blocks, content);
+  }
+
+  createPersistentBlocksForNote(noteId, blocks, startOrder = 0) {
+    const timestamp = Date.now();
+
+    return blocks.map((block, index) => ({
+      ...block,
+      id: Utils.generateId(),
+      canvasId: noteId,
+      order: startOrder + index,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+  }
+
+  async refreshNoteMetadataAfterInsert(noteId) {
+    const note = await Storage.getNote(noteId);
+    if (!note) {
+      return;
+    }
+
+    const blocks = (await Storage.getElementsByNote(noteId))
+      .sort((left, right) => (left.order || 0) - (right.order || 0));
+
+    if (typeof SidebarUtils !== 'undefined') {
+      const metadata = SidebarUtils.buildNoteSaveMetadata(blocks);
+      note.preview = metadata.preview;
+      note.todoProgress = metadata.todoProgress;
+    }
+
+    await Storage.updateNote(note);
+
+    const linkNames = Utils.extractWikiLinks(
+      blocks
+        .map(block => block.content || block.title || block.caption || '')
+        .filter(Boolean)
+        .join('\n')
+    );
+    await Storage.updateNoteLinks(noteId, linkNames);
+
+    if (this.triggerIndexing) {
+      this.triggerIndexing();
+    }
+  }
+
   /**
    * Setup AI chat sidebar functionality
    */
@@ -2485,6 +3554,8 @@ class App {
     const chatInput = document.getElementById('ai-chat-input');
     const chatSendBtn = document.getElementById('ai-chat-send');
     const settingsBtn = document.getElementById('ai-sidebar-open-settings');
+    const noteSuggestions = document.getElementById('ai-note-suggestion-buttons');
+    const stickyTemplateButtons = document.getElementById('ai-sticky-template-buttons');
 
     // Tab elements
     const tabNote = document.getElementById('ai-tab-note');
@@ -2560,42 +3631,26 @@ class App {
       chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
     });
 
-    // Suggestion buttons (welcome area)
-    document.querySelectorAll('.ai-suggestion-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.action;
-        if (action === 'extract-insights') {
-          this.extractInsightsFromChat();
-          return;
-        }
-        const prompt = btn.dataset.prompt;
-        if (prompt) {
-          chatInput.value = prompt;
-          this.sendAIChatMessage();
-        }
-      });
+    noteSuggestions?.addEventListener('click', (event) => {
+      this.handleAIPromptSuggestionClick(event, 'note');
     });
 
-    // Sticky suggestion buttons
-    document.querySelectorAll('.ai-sticky-btn').forEach(btn => {
+    stickyTemplateButtons?.addEventListener('click', (event) => {
+      this.handleAIPromptSuggestionClick(event, 'note');
+    });
+
+    document.querySelectorAll('.ai-extract-insights-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
         if (action === 'extract-insights') {
           this.extractInsightsFromChat();
-          return;
-        }
-        const prompt = btn.dataset.prompt;
-        if (prompt) {
-          chatInput.value = prompt;
-          this.sendAIChatMessage();
         }
       });
     });
 
     // Open settings from sidebar
-    settingsBtn?.addEventListener('click', () => {
-      document.getElementById('settings-modal').classList.remove('hidden');
-      this.updateSettingsUI();
+    settingsBtn?.addEventListener('click', async () => {
+      await this.openSettingsModal();
     });
 
     // Clear note chat button
@@ -2612,6 +3667,8 @@ class App {
 
     // Setup LLM settings
     this.setupLLMSettings();
+    this.setupAIPromptTemplateSettings();
+    this.renderAIPromptSuggestions();
 
     // Update visibility based on LLM configuration
     this.updateAISidebarState();
@@ -2664,47 +3721,22 @@ class App {
     const sidebar = document.getElementById('ai-sidebar');
     const resizeHandle = document.getElementById('ai-sidebar-resize-handle');
 
-    if (!resizeHandle) return;
+    if (this.aiSidebarResizer) {
+      this.aiSidebarResizer.destroy();
+    }
 
-    let isResizing = false;
-    let startX = 0;
-    let startWidth = 0;
+    if (!sidebar || !resizeHandle) return;
 
-    resizeHandle.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-
-      isResizing = true;
-      startX = e.clientX;
-      startWidth = sidebar.offsetWidth;
-
-      sidebar.classList.add('resizing');
-      resizeHandle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-
-      e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (!isResizing) return;
-
-      const delta = startX - e.clientX;
-      const newWidth = Math.min(600, Math.max(280, startWidth + delta));
-
-      sidebar.style.width = newWidth + 'px';
-    });
-
-    document.addEventListener('mouseup', async () => {
-      if (!isResizing) return;
-
-      isResizing = false;
-      sidebar.classList.remove('resizing');
-      resizeHandle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-
-      this.aiSidebarWidth = sidebar.offsetWidth;
-      await Storage.setSetting('aiSidebarWidth', this.aiSidebarWidth);
+    this.aiSidebarResizer = new ResizablePanel({
+      panel: sidebar,
+      handle: resizeHandle,
+      min: 280,
+      max: 600,
+      direction: 'left',
+      onResizeEnd: async (width) => {
+        this.aiSidebarWidth = width;
+        await Storage.setSetting('aiSidebarWidth', this.aiSidebarWidth);
+      },
     });
   }
 
@@ -3123,6 +4155,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   setupGlobalChat() {
     const chatInput = document.getElementById('global-chat-input');
     const sendBtn = document.getElementById('global-chat-send');
+    const suggestionButtons = document.getElementById('ai-global-suggestion-buttons');
 
     if (!chatInput) return;
 
@@ -3147,19 +4180,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
     });
 
-    // Suggestion buttons
-    document.querySelectorAll('.global-chat-suggestion').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const prompt = btn.dataset.prompt;
-        if (prompt) {
-          chatInput.value = prompt;
-          if (prompt.endsWith('...')) {
-            chatInput.focus();
-          } else {
-            this.sendGlobalChatMessage();
-          }
-        }
-      });
+    suggestionButtons?.addEventListener('click', (event) => {
+      this.handleAIPromptSuggestionClick(event, 'global');
     });
 
     // Clear global chat button
@@ -3373,7 +4395,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         <line x1="12" y1="18" x2="12" y2="12"></line>
         <line x1="9" y1="15" x2="15" y2="15"></line>
       </svg>`;
-      newNoteBtn.addEventListener('click', () => this.createNoteFromAIResponse(content));
+      newNoteBtn.addEventListener('click', () => this.openAIInsertPreview('new-note', content));
       actionsEl.appendChild(newNoteBtn);
 
       messageEl.appendChild(actionsEl);
@@ -3552,9 +4574,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    */
   async openNoteById(noteId) {
     // Check if note is already open in a tab
-    const existingTab = this.openTabs.find(t => t.noteId === noteId);
-    if (existingTab) {
-      await this.switchToTab(noteId);
+    const existingTabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
+    if (existingTabIndex !== -1) {
+      await this.switchToTab(existingTabIndex);
     } else {
       await this.openNoteInNewTab(noteId);
     }
@@ -3605,7 +4627,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       appendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 5v14M5 12h14"></path>
       </svg>`;
-      appendBtn.addEventListener('click', () => this.appendAIResponseToNote(content));
+      appendBtn.addEventListener('click', () => this.openAIInsertPreview('append', content));
       actionsEl.appendChild(appendBtn);
 
       // Create new note button
@@ -3618,7 +4640,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         <line x1="12" y1="18" x2="12" y2="12"></line>
         <line x1="9" y1="15" x2="15" y2="15"></line>
       </svg>`;
-      newNoteBtn.addEventListener('click', () => this.createNoteFromAIResponse(content));
+      newNoteBtn.addEventListener('click', () => this.openAIInsertPreview('new-note', content));
       actionsEl.appendChild(newNoteBtn);
 
       // Copy button
@@ -3644,30 +4666,28 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   /**
    * Append AI response content to the current note
    */
-  async appendAIResponseToNote(content) {
-    if (!this.editor || !this.editor.noteId) {
+  async appendAIResponseToNote(blocksOrContent) {
+    const editor = this.getEditor();
+    if (!editor || !editor.noteId) {
       Utils.showToast('No note is currently open', 'error');
       return;
     }
 
     try {
-      // Create a new text block with the AI content
-      const block = {
-        id: Utils.generateId(),
-        canvasId: this.editor.noteId,
-        type: 'text',
-        content: content,
-        order: await this.editor.getNextBlockOrder(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
+      const parsedBlocks = Array.isArray(blocksOrContent)
+        ? blocksOrContent
+        : this.buildAIInsertBlocks(blocksOrContent);
 
-      await Storage.saveElement(block);
+      await editor.save();
+      const startOrder = await editor.getNextBlockOrder();
+      const elements = this.createPersistentBlocksForNote(editor.noteId, parsedBlocks, startOrder);
 
-      // Reload the note to show the new block
-      await this.editor.loadNote(this.editor.noteId);
+      await Storage.saveElements(elements);
+      await this.refreshNoteMetadataAfterInsert(editor.noteId);
+      await editor.loadNote(editor.noteId);
+      await this.refreshNotesList();
 
-      Utils.showToast('Content added to note', 'success');
+      Utils.showToast(`Added ${elements.length} AI block${elements.length === 1 ? '' : 's'} to note`, 'success');
     } catch (error) {
       console.error('Failed to append content:', error);
       Utils.showToast('Failed to add content', 'error');
@@ -3677,33 +4697,23 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   /**
    * Create a new note from AI response content
    */
-  async createNoteFromAIResponse(content) {
+  async createNoteFromAIResponse(blocksOrContent, rawContent = '') {
     try {
-      // Create a new note with temporary title
+      const parsedBlocks = Array.isArray(blocksOrContent)
+        ? blocksOrContent
+        : this.buildAIInsertBlocks(blocksOrContent);
       const note = await Storage.createNote('AI Generated');
+      const elements = this.createPersistentBlocksForNote(note.id, parsedBlocks, 0);
 
-      // Create a text block with the content
-      const block = {
-        id: Utils.generateId(),
-        canvasId: note.id,
-        type: 'text',
-        content: content,
-        order: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
-      await Storage.saveElement(block);
-
-      // Refresh and open the new note
+      await Storage.saveElements(elements);
+      await this.refreshNoteMetadataAfterInsert(note.id);
       await this.refreshNotesList();
       await this.openNoteInNewTab(note.id);
 
-      Utils.showToast('New note created', 'success');
+      Utils.showToast('New note created from AI response', 'success');
 
-      // Async generate title if LLM is configured (don't block UI)
       if (LLM.isConfigured()) {
-        this.generateTitleForNewNote(note.id, content);
+        this.generateTitleForNewNote(note.id, rawContent || parsedBlocks.map(block => block.content || '').join('\n'));
       }
     } catch (error) {
       console.error('Failed to create note:', error);
@@ -4322,6 +5332,15 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         this.applySidebarViewMode();
       }
 
+      if (changes.sidebarSortMode) {
+        this.sidebarSortMode = changes.sidebarSortMode.newValue;
+        const sortSelect = document.getElementById('sidebar-sort');
+        if (sortSelect) {
+          sortSelect.value = this.sidebarSortMode;
+        }
+        await this.renderNotesList();
+      }
+
       // Apply AI sidebar width changes
       if (changes.aiSidebarWidth) {
         this.aiSidebarWidth = changes.aiSidebarWidth.newValue;
@@ -4335,6 +5354,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       if (changes.llmProvider || changes.llmApiKey || changes.llmModel || changes.ollamaUrl) {
         await LLM.init();
         this.updateAISidebarState();
+      }
+
+      if (changes.aiPromptTemplates) {
+        this.aiPromptTemplates = this.sanitizeAIPromptTemplates(changes.aiPromptTemplates.newValue);
+        this.renderAIPromptSuggestions();
+        this.renderAIPromptTemplateSettings();
       }
 
       // Update auto-title settings
@@ -5470,6 +6495,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       this.indexerWorker.onmessage = async (e) => {
         if (e.data.type === 'INDEX_COMPLETE') {
           await Storage.setSearchIndex(e.data.data);
+          await this.refreshSearchIndexEntries();
         }
       };
 
@@ -5716,52 +6742,66 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   setupShortcuts() {
     this.updateShortcutLabels();
 
-    window.addEventListener('keydown', (e) => {
+    window.addEventListener('keydown', async (e) => {
+      if (await this.handleCommandPaletteShortcuts(e)) {
+        return;
+      }
+
       // Don't trigger if user is typing in an input/textarea (except specific modifiers)
       const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.getAttribute('contenteditable') === 'true';
 
       const modKey = (navigator.platform.toUpperCase().indexOf('MAC') >= 0) ? e.metaKey : e.ctrlKey;
-      const altKey = e.altKey;
+      const shortcutAction = typeof ShortcutUtils !== 'undefined'
+        ? ShortcutUtils.getAppShortcutAction({
+          code: e.code,
+          key: e.key,
+          modKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          isInput,
+        })
+        : null;
 
-      // ? for help (only if not in input)
-      if (e.key === '?' && !isInput) {
-        e.preventDefault();
-        this.toggleShortcutsModal();
-        return;
-      }
-
-      // Esc to close all modals/menus
-      if (e.key === 'Escape') {
-        this.closeAllModals();
-        return;
-      }
-
-      // Alt + N: New Note
-      if (altKey && e.code === 'KeyN') {
-        e.preventDefault();
-        this.createFirstNote();
-        return;
-      }
-
-      // Alt + A: AI Sidebar
-      if (altKey && e.code === 'KeyA') {
-        e.preventDefault();
-        this.toggleAISidebar();
-        return;
-      }
-
-      // Mod + \: Toggle Sidebar
-      if (modKey && e.code === 'Backslash') {
-        e.preventDefault();
-        this.toggleSidebar();
-        return;
-      }
-
-      // Mod + K: Search
-      if (modKey && e.code === 'KeyK') {
-        e.preventDefault();
-        document.getElementById('sidebar-search')?.focus();
-        return;
+      switch (shortcutAction) {
+        case 'show-shortcuts':
+          e.preventDefault();
+          this.toggleShortcutsModal();
+          return;
+        case 'escape':
+          e.preventDefault();
+          if (this.focusMode) {
+            this.toggleFocusMode(false);
+            return;
+          }
+          this.closeAllModals();
+          return;
+        case 'new-note':
+        case 'legacy-new-note':
+          e.preventDefault();
+          await this.openNewTab();
+          return;
+        case 'command-palette':
+          e.preventDefault();
+          this.toggleCommandPalette();
+          return;
+        case 'toggle-ai':
+          e.preventDefault();
+          this.toggleAISidebar();
+          return;
+        case 'toggle-sidebar':
+          e.preventDefault();
+          await this.toggleSidebar();
+          return;
+        case 'focus-search':
+          e.preventDefault();
+          document.getElementById('sidebar-search')?.focus();
+          return;
+        case 'toggle-focus-mode':
+          e.preventDefault();
+          this.toggleFocusMode();
+          return;
+        default:
+          return;
       }
     });
   }

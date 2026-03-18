@@ -733,10 +733,11 @@ class BlockEditor {
   /**
    * Create a new block
    */
-  createBlock(type, content = '') {
+  createBlock(type, content = '', options = {}) {
     return new Block({
       type,
       content,
+      ...options,
     });
   }
 
@@ -769,9 +770,9 @@ class BlockEditor {
   /**
    * Insert block after another
    */
-  insertBlockAfter(afterId, type = 'text', content = '') {
+  insertBlockAfter(afterId, type = 'text', content = '', options = {}) {
     const index = this.blocks.findIndex((b) => b.id === afterId);
-    const block = this.createBlock(type, content);
+    const block = this.createBlock(type, content, options);
 
     if (index === -1) {
       this.blocks.push(block);
@@ -785,6 +786,54 @@ class BlockEditor {
     this.scheduleSave();
 
     return block;
+  }
+
+  /**
+   * Move a block up or down in the document order
+   */
+  moveBlockByDirection(blockId, direction) {
+    const index = this.blocks.findIndex((block) => block.id === blockId);
+    if (index === -1) return;
+
+    const targetIndex = Math.max(0, Math.min(this.blocks.length - 1, index + direction));
+    if (targetIndex === index) return;
+
+    if (typeof ShortcutUtils !== 'undefined') {
+      this.blocks = ShortcutUtils.moveItemInArray(this.blocks, index, targetIndex);
+    } else {
+      const moved = [...this.blocks];
+      const [item] = moved.splice(index, 1);
+      moved.splice(targetIndex, 0, item);
+      this.blocks = moved;
+    }
+
+    this.renderBlocks();
+    this.focusBlock(blockId, true);
+    this.scheduleSave();
+  }
+
+  /**
+   * Adjust indentation for list-like blocks
+   */
+  adjustBlockIndent(blockId, delta) {
+    const block = this.getBlockById(blockId);
+    if (!block || !['bullet', 'numbered', 'todo'].includes(block.type)) {
+      return;
+    }
+
+    const currentIndent = block.indentLevel || 0;
+    const nextIndent = typeof ShortcutUtils !== 'undefined'
+      ? ShortcutUtils.clampIndentLevel(currentIndent, delta)
+      : Math.max(0, Math.min(4, currentIndent + delta));
+
+    if (nextIndent === currentIndent) {
+      return;
+    }
+
+    block.indentLevel = nextIndent;
+    this.rerenderBlock(block);
+    this.focusBlock(block.id, true);
+    this.scheduleSave();
   }
 
   /**
@@ -1595,6 +1644,46 @@ class BlockEditor {
       }
     }
 
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    const shortcutAction = typeof ShortcutUtils !== 'undefined'
+      ? ShortcutUtils.getEditorShortcutAction({
+        code: e.code,
+        key: e.key,
+        modKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        blockType: block.type,
+      })
+      : null;
+
+    if (shortcutAction) {
+      e.preventDefault();
+
+      if (shortcutAction.type === 'insert-below') {
+        const nextType = ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'text';
+        this.insertBlockAfter(block.id, nextType, '', {
+          indentLevel: block.indentLevel || 0,
+        });
+        return;
+      }
+
+      if (shortcutAction.type === 'move-block') {
+        this.moveBlockByDirection(block.id, shortcutAction.direction);
+        return;
+      }
+
+      if (shortcutAction.type === 'convert-block') {
+        this.changeBlockType(block.id, shortcutAction.blockType);
+        return;
+      }
+
+      if (shortcutAction.type === 'indent-block') {
+        this.adjustBlockIndent(block.id, shortcutAction.delta);
+        return;
+      }
+    }
+
     // Enter - create new block
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1622,7 +1711,9 @@ class BlockEditor {
       }
 
       // Create new block
-      this.insertBlockAfter(block.id, newType, afterText);
+      this.insertBlockAfter(block.id, newType, afterText, {
+        indentLevel: ['bullet', 'numbered', 'todo'].includes(newType) ? (block.indentLevel || 0) : 0,
+      });
       this.scheduleSave();
       return;
     }
@@ -1708,14 +1799,6 @@ class BlockEditor {
         if (index < this.blocks.length - 1) {
           this.focusBlock(this.blocks[index + 1].id);
         }
-      }
-    }
-
-    // Tab - indent (for lists)
-    if (e.key === 'Tab') {
-      if (block.type === 'bullet' || block.type === 'numbered' || block.type === 'todo') {
-        e.preventDefault();
-        // TODO: Implement indentation
       }
     }
   }
@@ -2380,6 +2463,12 @@ class BlockEditor {
     try {
       // Save note
       if (this.noteData) {
+        if (typeof SidebarUtils !== 'undefined') {
+          const metadata = SidebarUtils.buildNoteSaveMetadata(this.blocks);
+          this.noteData.preview = metadata.preview;
+          this.noteData.todoProgress = metadata.todoProgress;
+        }
+
         await Storage.updateNote(this.noteData);
 
         // Update bidirectional links

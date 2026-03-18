@@ -333,6 +333,9 @@ class DatabaseManager {
       lastAutoTitleAt: null, // Track when auto-title last ran
       insights: null, // AI-extracted insights (todos, reminders, deadlines, highlights)
       lastInsightsExtractedAt: null, // Track when insights were last extracted
+      preview: '',
+      pinned: false,
+      todoProgress: null,
       isDaily: false, // flag for daily notes
       dateStr: null, // e.g., '2026-01-28' for daily notes
       isTemplate: false, // flag for template notes
