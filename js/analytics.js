@@ -3,23 +3,36 @@
  */
 class AnalyticsManager {
     constructor() {
-        this.storage = window.Storage;
+        this.storage = null;
     }
 
     /**
-     * Get global overview stats
+     * Lazily resolve the Storage reference.
+     * @returns {DatabaseManager}
+     */
+    _getStorage() {
+        if (!this.storage) {
+            this.storage = (typeof window !== 'undefined' ? window : self).Storage;
+        }
+        return this.storage;
+    }
+
+    /**
+     * Get global overview stats.
+     * @returns {Promise<{totalNotes: number, archivedNotes: number, trashedNotes: number, totalWords: number}>} Overview statistics
      */
     async getGlobalStats() {
-        const notes = await this.storage.getAllNotes();
-        const archived = await this.storage.getArchivedNotes();
-        const trashed = await this.storage.getTrashedNotes();
+        const storage = this._getStorage();
+        const notes = await storage.getAllNotes();
+        const archived = await storage.getArchivedNotes();
+        const trashed = await storage.getTrashedNotes();
 
         // Total word count (rough estimate from text blocks)
         let totalWords = 0;
         const allNotes = [...notes, ...archived, ...trashed];
 
         for (const note of allNotes) {
-            const elements = await this.storage.getElementsByNote(note.id);
+            const elements = await storage.getElementsByNote(note.id);
             for (const el of elements) {
                 if (el.type === 'text' && el.content) {
                     totalWords += el.content.trim().split(/\s+/).length;
@@ -36,11 +49,14 @@ class AnalyticsManager {
     }
 
     /**
-     * Get activity data for the last X days
+     * Get activity data for the last X days.
+     * @param {number} [days=30] - Number of days to look back
+     * @returns {Promise<Array<{date: string, created: number, updated: number}>>} Activity data sorted by date
      */
     async getActivityData(days = 30) {
-        const notes = await this.storage.getAllNotes();
-        const archived = await this.storage.getArchivedNotes();
+        const storage = this._getStorage();
+        const notes = await storage.getAllNotes();
+        const archived = await storage.getArchivedNotes();
         const allNotes = [...notes, ...archived];
 
         const activityMap = {};
@@ -73,14 +89,16 @@ class AnalyticsManager {
     }
 
     /**
-     * Get distribution of tags
+     * Get distribution of tags across all notes.
+     * @returns {Promise<Array<[string, number]>>} Top 10 tags as [tag, count] pairs
      */
     async getTagDistribution() {
-        const notes = await this.storage.getAllNotes();
+        const storage = this._getStorage();
+        const notes = await storage.getAllNotes();
         const tagCounts = {};
 
         for (const note of notes) {
-            const elements = await this.storage.getElementsByNote(note.id);
+            const elements = await storage.getElementsByNote(note.id);
             const textContent = elements
                 .filter(el => el.type === 'text')
                 .map(el => el.content)
@@ -98,10 +116,12 @@ class AnalyticsManager {
     }
 
     /**
-     * Get breakdown of content types (blocks)
+     * Get breakdown of content types (blocks) across all notes.
+     * @returns {Promise<Object<string, number>>} Block type counts
      */
     async getContentTypeBreakdown() {
-        const notes = await this.storage.getAllNotes();
+        const storage = this._getStorage();
+        const notes = await storage.getAllNotes();
         const typeCounts = {
             text: 0,
             image: 0,
@@ -113,7 +133,7 @@ class AnalyticsManager {
         };
 
         for (const note of notes) {
-            const elements = await this.storage.getElementsByNote(note.id);
+            const elements = await storage.getElementsByNote(note.id);
             elements.forEach(el => {
                 if (typeCounts.hasOwnProperty(el.type)) {
                     typeCounts[el.type]++;
@@ -127,7 +147,9 @@ class AnalyticsManager {
     }
 
     /**
-     * Helper to extract tags from text
+     * Extract hashtags from text content.
+     * @param {string} text - Text to extract tags from
+     * @returns {Array<string>} Unique lowercase tags
      */
     extractTags(text) {
         if (!text) return [];

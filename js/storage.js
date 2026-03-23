@@ -47,10 +47,39 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
-    this.dbVersion = 7; // Bumped version for vectors
+    this.dbVersion = 8; // Bumped version for snapshots
     this.db = null;
     // Store names kept as 'canvases' for backward compatibility with existing databases
-    this.requiredStores = ['canvases', 'elements', 'settings', 'media', 'search_index', 'folders', 'links', 'themes', 'vectors'];
+    this.requiredStores = ['canvases', 'elements', 'settings', 'media', 'search_index', 'folders', 'links', 'themes', 'vectors', 'snapshots'];
+  }
+
+  /**
+   * Sleep for the specified number of milliseconds.
+   * @param {number} ms
+   * @returns {Promise<void>}
+   */
+  _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Retry a function with exponential backoff, throwing StorageError on final failure.
+   * @param {Function} fn - Async function to execute
+   * @param {string} operation - Name of the operation (for error reporting)
+   * @param {number} [maxRetries=2] - Maximum number of retry attempts
+   * @returns {Promise<*>}
+   */
+  async withRetry(fn, operation, maxRetries = 2) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (attempt === maxRetries) {
+          throw new StorageError('TRANSACTION_FAILED', operation, error);
+        }
+        await this._sleep(100 * Math.pow(4, attempt)); // 100ms, 400ms
+      }
+    }
   }
 
   /**
@@ -87,12 +116,19 @@ class DatabaseManager {
         // Initialize default settings in chrome.storage.local on first load
         await this.initializeDefaultSettings();
 
+        // Run referential integrity check and remove orphans
+        try {
+          await this._removeOrphans();
+        } catch (e) {
+          console.warn('Integrity check encountered an error:', e);
+        }
+
         resolve();
       };
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
-        console.log('Upgrading database from version', event.oldVersion, 'to', event.newVersion);
+        console.debug('Upgrading database from version', event.oldVersion, 'to', event.newVersion);
 
         // Canvases store
         if (!db.objectStoreNames.contains('canvases')) {
@@ -148,6 +184,13 @@ class DatabaseManager {
         if (!db.objectStoreNames.contains('vectors')) {
           db.createObjectStore('vectors', { keyPath: 'id' });
         }
+
+        // Snapshots store (for version history)
+        if (!db.objectStoreNames.contains('snapshots')) {
+          const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
+          snapshotStore.createIndex('noteId', 'noteId', { unique: false });
+          snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
+        }
       };
 
       request.onblocked = () => {
@@ -157,13 +200,14 @@ class DatabaseManager {
   }
 
   /**
-   * Check if database is corrupted and needs repair
+   * Check if database is corrupted and needs repair.
+   * Exports existing data to chrome.storage.local before deleting a corrupted DB.
    */
   async checkAndRepairDatabase() {
     return new Promise((resolve) => {
       const request = indexedDB.open(this.dbName);
 
-      request.onsuccess = (event) => {
+      request.onsuccess = async (event) => {
         const db = event.target.result;
         const currentVersion = db.version;
 
@@ -172,18 +216,25 @@ class DatabaseManager {
           (store) => !db.objectStoreNames.contains(store)
         );
 
-        db.close();
-
         if (missingStores.length > 0 && currentVersion >= this.dbVersion) {
-          // Database is corrupted, delete it
-          console.warn('Corrupted database detected, deleting...');
+          // Database is corrupted — export what we can before deleting
+          console.warn('Corrupted database detected, exporting data before delete...');
+          try {
+            await this._exportBeforeCorruptionDelete(db);
+          } catch (e) {
+            console.warn('Failed to export data before corruption delete:', e);
+          }
+
+          db.close();
+
           const deleteRequest = indexedDB.deleteDatabase(this.dbName);
           deleteRequest.onsuccess = () => {
-            console.log('Corrupted database deleted');
+            console.debug('Corrupted database deleted');
             resolve();
           };
           deleteRequest.onerror = () => resolve();
         } else {
+          db.close();
           resolve();
         }
       };
@@ -193,15 +244,23 @@ class DatabaseManager {
   }
 
   /**
-   * Delete database and retry initialization
+   * Delete database and retry initialization.
+   * Exports existing data to chrome.storage.local before deleting.
    */
   async deleteAndRetry() {
+    // Export data before deleting
+    try {
+      await this._exportBeforeCorruptionDelete(this.db);
+    } catch (e) {
+      console.warn('Failed to export data before DB delete/recreate:', e);
+    }
+
     return new Promise((resolve, reject) => {
-      console.log('Deleting database for fresh start...');
+      console.debug('Deleting database for fresh start...');
       const deleteRequest = indexedDB.deleteDatabase(this.dbName);
 
       deleteRequest.onsuccess = () => {
-        console.log('Database deleted, reinitializing...');
+        console.debug('Database deleted, reinitializing...');
         // Retry init
         const request = indexedDB.open(this.dbName, this.dbVersion);
 
@@ -237,6 +296,12 @@ class DatabaseManager {
           const linkStore = db.createObjectStore('links', { keyPath: 'id' });
           linkStore.createIndex('fromNoteId', 'fromNoteId', { unique: false });
           linkStore.createIndex('toNoteId', 'toNoteId', { unique: false });
+
+          db.createObjectStore('vectors', { keyPath: 'id' });
+
+          const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
+          snapshotStore.createIndex('noteId', 'noteId', { unique: false });
+          snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
         };
       };
 
@@ -244,6 +309,249 @@ class DatabaseManager {
         reject(new Error('Failed to delete corrupted database'));
       };
     });
+  }
+
+  /**
+   * Export existing data to chrome.storage.local before a corruption delete.
+   * Reads whatever stores are available and saves as a recovery backup.
+   * @param {IDBDatabase} db - The open database handle
+   * @returns {Promise<void>}
+   */
+  async _exportBeforeCorruptionDelete(db) {
+    const data = { recoveryBackup: true, timestamp: Date.now(), canvases: [], elements: [] };
+
+    const readStore = (storeName) => new Promise((resolve) => {
+      try {
+        if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+        const tx = db.transaction(storeName, 'readonly');
+        const request = tx.objectStore(storeName).getAll();
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => resolve([]);
+      } catch (e) { resolve([]); }
+    });
+
+    data.canvases = await readStore('canvases');
+    data.elements = await readStore('elements');
+
+    const key = `recovery_backup_${Date.now()}`;
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ [key]: data }, () => resolve());
+    });
+    console.debug('Recovery backup saved to chrome.storage.local:', key);
+  }
+
+  /**
+   * Create an automatic JSON backup of all notes to chrome.storage.local.
+   * Retains the last 3 backups, removing the oldest when exceeded.
+   * @returns {Promise<void>}
+   */
+  async createAutoBackup() {
+    const data = await this.exportAll();
+    data.autoBackup = true;
+    data.backupCreatedAt = Date.now();
+
+    const key = `auto_backup_${Date.now()}`;
+
+    // Get existing auto backup keys
+    const existingKeys = await this._getAutoBackupKeys();
+
+    // Save new backup
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: data }, () => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    // Remove oldest backups if more than 3 (including the new one)
+    const allKeys = [...existingKeys, key].sort();
+    if (allKeys.length > 3) {
+      const toRemove = allKeys.slice(0, allKeys.length - 3);
+      await new Promise((resolve) => {
+        chrome.storage.local.remove(toRemove, () => resolve());
+      });
+    }
+
+    // Update last backup timestamp
+    await this.setSetting('lastBackupAt', Date.now());
+  }
+
+  /**
+   * Get all automatic backup entries from chrome.storage.local.
+   * @returns {Promise<Array<{key: string, data: Object}>>}
+   */
+  async getAutoBackups() {
+    const keys = await this._getAutoBackupKeys();
+    if (keys.length === 0) return [];
+
+    return new Promise((resolve) => {
+      chrome.storage.local.get(keys, (result) => {
+        const backups = keys
+          .filter(k => result[k])
+          .map(k => ({ key: k, data: result[k] }))
+          .sort((a, b) => (b.data.backupCreatedAt || 0) - (a.data.backupCreatedAt || 0));
+        resolve(backups);
+      });
+    });
+  }
+
+  /**
+   * Get the storage keys for all automatic backups.
+   * @returns {Promise<string[]>}
+   */
+  async _getAutoBackupKeys() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (result) => {
+        if (chrome.runtime.lastError) { resolve([]); return; }
+        const keys = Object.keys(result).filter(k => k.startsWith('auto_backup_'));
+        resolve(keys.sort());
+      });
+    });
+  }
+
+  /**
+   * Collect all note IDs from the canvases store.
+   * @returns {Promise<Set<string>>}
+   */
+  async _getAllNoteIds() {
+    return new Promise((resolve, reject) => {
+      const store = this.getStore('canvases');
+      const request = store.getAllKeys();
+      request.onsuccess = () => resolve(new Set(request.result));
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Remove orphaned entries from a store where the foreign key references a non-existent note.
+   * @param {string} storeName - Object store name
+   * @param {string} foreignKey - Property name that references a note ID
+   * @param {Set<string>} noteIds - Set of valid note IDs
+   * @returns {Promise<number>} Number of orphans removed
+   */
+  async _removeOrphansFromStore(storeName, foreignKey, noteIds) {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      const request = store.getAll();
+      let removed = 0;
+
+      request.onsuccess = () => {
+        const entries = request.result;
+        for (const entry of entries) {
+          const refId = entry[foreignKey];
+          if (refId && !noteIds.has(refId)) {
+            store.delete(entry.id || entry[store.keyPath]);
+            removed++;
+          }
+        }
+      };
+
+      tx.oncomplete = () => resolve(removed);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  /**
+   * Run referential integrity check and remove orphaned entries.
+   * Scans elements, search_index, links, and vectors for references to non-existent notes.
+   * @returns {Promise<void>}
+   */
+  async _removeOrphans() {
+    const noteIds = await this._getAllNoteIds();
+
+    // elements: canvasId → note ID
+    await this._removeOrphansFromStore('elements', 'canvasId', noteIds);
+
+    // search_index: noteId → note ID
+    await this._removeOrphansFromStore('search_index', 'noteId', noteIds);
+
+    // links: check both fromNoteId and toNoteId
+    await new Promise((resolve, reject) => {
+      const tx = this.db.transaction('links', 'readwrite');
+      const store = tx.objectStore('links');
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        for (const link of request.result) {
+          if ((link.fromNoteId && !noteIds.has(link.fromNoteId)) ||
+              (link.toNoteId && !noteIds.has(link.toNoteId))) {
+            store.delete(link.id);
+          }
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+
+    // vectors: noteId → note ID (keyPath is 'id', but noteId field references the note)
+    await this._removeOrphansFromStore('vectors', 'noteId', noteIds);
+
+    // snapshots: noteId → note ID
+    await this._removeOrphansFromStore('snapshots', 'noteId', noteIds);
+  }
+
+  /**
+   * Validate database integrity and return a report.
+   * Does NOT modify data — read-only scan.
+   * @returns {Promise<{orphanedElements: number, orphanedSearchIndex: number, orphanedLinks: number, orphanedVectors: number, missingStores: string[]}>}
+   */
+  async validateDatabase() {
+    const report = {
+      orphanedElements: 0,
+      orphanedSearchIndex: 0,
+      orphanedLinks: 0,
+      orphanedVectors: 0,
+      missingStores: []
+    };
+
+    // Check missing stores
+    report.missingStores = this.requiredStores.filter(
+      (store) => !this.db.objectStoreNames.contains(store)
+    );
+
+    const noteIds = await this._getAllNoteIds();
+
+    // Scan elements
+    const elements = await new Promise((resolve, reject) => {
+      const request = this.getStore('elements').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    report.orphanedElements = elements.filter(e => e.canvasId && !noteIds.has(e.canvasId)).length;
+
+    // Scan search_index
+    const searchEntries = await new Promise((resolve, reject) => {
+      const request = this.getStore('search_index').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    report.orphanedSearchIndex = searchEntries.filter(e => e.noteId && !noteIds.has(e.noteId)).length;
+
+    // Scan links
+    const links = await new Promise((resolve, reject) => {
+      const request = this.getStore('links').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    report.orphanedLinks = links.filter(l =>
+      (l.fromNoteId && !noteIds.has(l.fromNoteId)) ||
+      (l.toNoteId && !noteIds.has(l.toNoteId))
+    ).length;
+
+    // Scan vectors
+    const vectors = await new Promise((resolve, reject) => {
+      const request = this.getStore('vectors').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    report.orphanedVectors = vectors.filter(v => v.noteId && !noteIds.has(v.noteId)).length;
+
+    return report;
   }
 
   /**
@@ -351,18 +659,20 @@ class DatabaseManager {
       },
     };
 
-    const tx = this.transaction(['canvases', 'search_index'], 'readwrite');
-    await tx.objectStore('canvases').add(note);
+    return this.withRetry(async () => {
+      const tx = this.transaction(['canvases', 'search_index'], 'readwrite');
+      await tx.objectStore('canvases').add(note);
 
-    // Initial search index entry
-    await tx.objectStore('search_index').add({
-      noteId: note.id,
-      name: note.name,
-      content: '',
-      updatedAt: note.updatedAt
-    });
+      // Initial search index entry
+      await tx.objectStore('search_index').add({
+        noteId: note.id,
+        name: note.name,
+        content: '',
+        updatedAt: note.updatedAt
+      });
 
-    return note;
+      return note;
+    }, 'createNote');
   }
 
   /**
@@ -419,7 +729,7 @@ class DatabaseManager {
    * Apply a template to a note
    */
   async applyTemplateToNote(noteId, templateId) {
-    const templateElements = await this.getNoteElements(templateId);
+    const templateElements = await this.getElementsByNote(templateId);
     if (!templateElements || templateElements.length === 0) return;
 
     const note = await this.getNote(noteId);
@@ -525,28 +835,56 @@ class DatabaseManager {
    * Set the entire search index
    */
   async setSearchIndex(data) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       store.clear();
       data.forEach(entry => store.put(entry));
       const tx = store.transaction || store.db.transaction(['search_index'], 'readwrite');
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
+    }), 'setSearchIndex');
   }
 
   /**
    * Update search index for a note
    */
   async updateNoteSearchIndex(noteId, data) {
-    const store = this.getStore('search_index', 'readwrite');
-    const entry = await store.get(noteId);
-    if (entry) {
-      const updatedEntry = { ...entry, ...data, updatedAt: Date.now() };
-      await store.put(updatedEntry);
-    } else {
-      await store.add({ noteId, ...data, updatedAt: Date.now() });
-    }
+    return this.withRetry(async () => {
+      const store = this.getStore('search_index', 'readwrite');
+      const entry = await store.get(noteId);
+      if (entry) {
+        const updatedEntry = { ...entry, ...data, updatedAt: Date.now() };
+        await store.put(updatedEntry);
+      } else {
+        await store.add({ noteId, ...data, updatedAt: Date.now() });
+      }
+    }, 'updateNoteSearchIndex');
+  }
+
+  /**
+   * Set a single search index entry (upsert)
+   * @param {Object} entry - Search index entry with noteId
+   */
+  async setSearchIndexEntry(entry) {
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const store = this.getStore('search_index', 'readwrite');
+      const request = store.put(entry);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    }), 'setSearchIndexEntry');
+  }
+
+  /**
+   * Remove a single search index entry by noteId
+   * @param {string} noteId
+   */
+  async removeSearchIndexEntry(noteId) {
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const store = this.getStore('search_index', 'readwrite');
+      const request = store.delete(noteId);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    }), 'removeSearchIndexEntry');
   }
 
   /**
@@ -689,12 +1027,19 @@ class DatabaseManager {
       console.warn('Failed to delete vectors for note:', id, e);
     }
 
-    return new Promise((resolve, reject) => {
+    // Delete snapshots for this note
+    try {
+      await this.deleteSnapshotsByNote(id);
+    } catch (e) {
+      console.warn('Failed to delete snapshots for note:', id, e);
+    }
+
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('canvases', 'readwrite');
       const request = store.delete(id);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
-    });
+    }), 'permanentlyDeleteNote');
   }
 
   /**
@@ -784,7 +1129,7 @@ class DatabaseManager {
    */
   async updateNote(note) {
     note.updatedAt = Date.now();
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       // Store name 'canvases' kept for backward compatibility
       const store = this.getStore('canvases', 'readwrite');
       const request = store.put(note);
@@ -796,14 +1141,14 @@ class DatabaseManager {
         resolve(note);
       };
       request.onerror = () => reject(request.error);
-    });
+    }), 'updateNote');
   }
 
   /**
    * Helper to update only name in search index
    */
   async updateNoteNameInSearchIndex(noteId, name) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       const getRequest = store.get(noteId);
       getRequest.onsuccess = () => {
@@ -819,7 +1164,7 @@ class DatabaseManager {
         }
       };
       getRequest.onerror = () => reject(getRequest.error);
-    });
+    }), 'updateNoteNameInSearchIndex');
   }
 
   // ============ Folder Operations ============
@@ -838,7 +1183,9 @@ class DatabaseManager {
       collapsed: false
     };
 
-    await this.getStore('folders', 'readwrite').add(folder);
+    await this.withRetry(async () => {
+      await this.getStore('folders', 'readwrite').add(folder);
+    }, 'createFolder');
     return folder;
   }
 
@@ -869,11 +1216,11 @@ class DatabaseManager {
    */
   async updateFolder(folder) {
     folder.updatedAt = Date.now();
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const request = this.getStore('folders', 'readwrite').put(folder);
       request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
-    });
+    }), 'updateFolder');
   }
 
   /**
@@ -908,25 +1255,25 @@ class DatabaseManager {
     }
 
     // 2. Delete folders and process notes (e.g., move to trash or delete)
-    const tx = this.transaction(['folders', 'canvases'], 'readwrite');
-    const folderStore = tx.objectStore('folders');
-    const noteStore = tx.objectStore('canvases');
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const tx = this.transaction(['folders', 'canvases'], 'readwrite');
+      const folderStore = tx.objectStore('folders');
+      const noteStore = tx.objectStore('canvases');
 
-    for (const id of foldersToDelete) {
-      folderStore.delete(id);
-    }
+      for (const id of foldersToDelete) {
+        folderStore.delete(id);
+      }
 
-    for (const note of notesToProcess) {
-      // For now, move orphaned notes to root (null folder)
-      note.folderId = null;
-      note.updatedAt = Date.now();
-      noteStore.put(note);
-    }
+      for (const note of notesToProcess) {
+        // For now, move orphaned notes to root (null folder)
+        note.folderId = null;
+        note.updatedAt = Date.now();
+        noteStore.put(note);
+      }
 
-    return new Promise((resolve, reject) => {
       tx.oncomplete = () => resolve(true);
       tx.onerror = () => reject(tx.error);
-    });
+    }), 'deleteFolder');
   }
 
   /**
@@ -974,51 +1321,55 @@ class DatabaseManager {
     });
 
     // 2. Clear old links and add new ones
-    const tx = this.transaction('links', 'readwrite');
-    const store = tx.objectStore('links');
+    return this.withRetry(() => {
+      const tx = this.transaction('links', 'readwrite');
+      const store = tx.objectStore('links');
 
-    // Manual clear
-    const index = store.index('fromNoteId');
-    const request = index.getAll(fromNoteId);
+      // Manual clear
+      const index = store.index('fromNoteId');
+      const request = index.getAll(fromNoteId);
 
-    return new Promise((resolve, reject) => {
-      request.onsuccess = async () => {
-        const existingLinks = request.result;
-        existingLinks.forEach(link => store.delete(link.id));
+      return new Promise((resolve, reject) => {
+        request.onsuccess = async () => {
+          const existingLinks = request.result;
+          existingLinks.forEach(link => store.delete(link.id));
 
-        // Add new unique links
-        const uniqueTargetIds = [...new Set(targetIds)];
-        uniqueTargetIds.forEach(toNoteId => {
-          store.add({
-            id: Utils.generateId(),
-            fromNoteId,
-            toNoteId,
-            createdAt: Date.now()
+          // Add new unique links
+          const uniqueTargetIds = [...new Set(targetIds)];
+          uniqueTargetIds.forEach(toNoteId => {
+            store.add({
+              id: Utils.generateId(),
+              fromNoteId,
+              toNoteId,
+              createdAt: Date.now()
+            });
           });
-        });
 
-        resolve();
-      };
-      request.onerror = () => reject(request.error);
-    });
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      });
+    }, 'updateNoteLinks');
   }
 
   /**
    * Clear all links originating from a note
    */
   async clearLinksFromNote(noteId) {
-    const tx = this.transaction('links', 'readwrite');
-    const store = tx.objectStore('links');
-    const index = store.index('fromNoteId');
-    const request = index.getAll(noteId);
+    return this.withRetry(() => {
+      const tx = this.transaction('links', 'readwrite');
+      const store = tx.objectStore('links');
+      const index = store.index('fromNoteId');
+      const request = index.getAll(noteId);
 
-    return new Promise((resolve) => {
-      request.onsuccess = () => {
-        request.result.forEach(link => store.delete(link.id));
-        resolve();
-      };
-      request.onerror = () => resolve();
-    });
+      return new Promise((resolve) => {
+        request.onsuccess = () => {
+          request.result.forEach(link => store.delete(link.id));
+          resolve();
+        };
+        request.onerror = () => resolve();
+      });
+    }, 'clearLinksFromNote');
   }
 
   /**
@@ -1052,19 +1403,19 @@ class DatabaseManager {
    * Save element
    */
   async saveElement(element) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('elements', 'readwrite');
       const request = store.put(element);
       request.onsuccess = () => resolve(element);
       request.onerror = () => reject(request.error);
-    });
+    }), 'saveElement');
   }
 
   /**
    * Save multiple elements
    */
   async saveElements(elements) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const tx = this.transaction('elements', 'readwrite');
       const store = tx.objectStore('elements');
 
@@ -1072,7 +1423,7 @@ class DatabaseManager {
 
       tx.oncomplete = () => resolve(elements);
       tx.onerror = () => reject(tx.error);
-    });
+    }), 'saveElements');
   }
 
   /**
@@ -1093,19 +1444,19 @@ class DatabaseManager {
    * Delete element
    */
   async deleteElement(id) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('elements', 'readwrite');
       const request = store.delete(id);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
-    });
+    }), 'deleteElement');
   }
 
   /**
    * Delete multiple elements
    */
   async deleteElements(ids) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const tx = this.transaction('elements', 'readwrite');
       const store = tx.objectStore('elements');
 
@@ -1113,7 +1464,7 @@ class DatabaseManager {
 
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
+    }), 'deleteElements');
   }
 
   /**
@@ -1141,12 +1492,12 @@ class DatabaseManager {
       createdAt: Date.now(),
     };
 
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('media', 'readwrite');
       const request = store.put(media);
       request.onsuccess = () => resolve(media);
       request.onerror = () => reject(request.error);
-    });
+    }), 'saveMedia');
   }
 
   /**
@@ -1166,7 +1517,7 @@ class DatabaseManager {
    * Note: Index name 'canvasId' kept for backward compatibility
    */
   async deleteMediaByNote(noteId) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const tx = this.transaction('media', 'readwrite');
       const store = tx.objectStore('media');
       // Index name 'canvasId' kept for backward compatibility
@@ -1179,7 +1530,7 @@ class DatabaseManager {
 
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
+    }), 'deleteMediaByNote');
   }
 
   // ============ Settings Operations ============
@@ -1318,7 +1669,7 @@ class DatabaseManager {
           if (chrome.runtime.lastError) {
             console.warn('Error initializing default settings:', chrome.runtime.lastError);
           } else {
-            console.log('Default settings initialized in chrome.storage.local');
+            console.debug('Default settings initialized in chrome.storage.local');
           }
           resolve();
         });
@@ -1444,13 +1795,13 @@ class DatabaseManager {
           });
       }
 
-      await new Promise((resolve, reject) => {
+      await this.withRetry(() => new Promise((resolve, reject) => {
         // Store name 'canvases' kept for backward compatibility
         const store = this.getStore('canvases', 'readwrite');
         const request = store.put(note);
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error);
-      });
+      }), 'importData');
     }
 
     // Import elements
@@ -1490,36 +1841,36 @@ class DatabaseManager {
     if (!theme.id) theme.id = Utils.generateId();
     theme.updatedAt = Date.now();
 
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('themes', 'readwrite');
       const request = store.put(theme);
       request.onsuccess = () => resolve(theme);
       request.onerror = () => reject(request.error);
-    });
+    }), 'saveCustomTheme');
   }
 
   /**
    * Delete a custom theme
    */
   async deleteCustomTheme(id) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('themes', 'readwrite');
       const request = store.delete(id);
       request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
-    });
+    }), 'deleteCustomTheme');
   }
 
   /**
    * Save a vector embedding for a note
    */
   async saveVector(noteId, vector) {
-    return new Promise((resolve, reject) => {
+    return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('vectors', 'readwrite');
       const request = store.put({ id: noteId, noteId, vector, updatedAt: Date.now() });
       request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
-    });
+    }), 'saveVector');
   }
 
   /**
@@ -1544,6 +1895,110 @@ class DatabaseManager {
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
     });
+  }
+  // ============ Snapshot / Version History Operations ============
+
+  /**
+   * Save a version snapshot for a note.
+   * @param {string} noteId
+   * @param {Array<Object>} blocks - Serialized block data
+   * @param {string} title - Note title at snapshot time
+   * @returns {Promise<Object>} The saved snapshot
+   */
+  async saveSnapshot(noteId, blocks, title) {
+    const snapshot = {
+      id: Utils.generateId(),
+      noteId,
+      timestamp: Date.now(),
+      blocks,
+      title,
+    };
+
+    await this.withRetry(() => new Promise((resolve, reject) => {
+      const store = this.getStore('snapshots', 'readwrite');
+      const request = store.put(snapshot);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    }), 'saveSnapshot');
+
+    // Prune to max 50 per note
+    await this.pruneSnapshots(noteId, 50);
+
+    return snapshot;
+  }
+
+  /**
+   * Get all snapshots for a note, sorted newest-first.
+   * @param {string} noteId
+   * @returns {Promise<Array<Object>>}
+   */
+  async getSnapshots(noteId) {
+    return new Promise((resolve, reject) => {
+      const store = this.getStore('snapshots');
+      const index = store.index('noteId');
+      const request = index.getAll(noteId);
+      request.onsuccess = () => {
+        const snapshots = request.result.sort((a, b) => b.timestamp - a.timestamp);
+        resolve(snapshots);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Delete a single snapshot by ID.
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  async deleteSnapshot(id) {
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const store = this.getStore('snapshots', 'readwrite');
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    }), 'deleteSnapshot');
+  }
+
+  /**
+   * Prune snapshots for a note, keeping only the most recent `maxCount`.
+   * @param {string} noteId
+   * @param {number} maxCount
+   * @returns {Promise<number>} Number of snapshots removed
+   */
+  async pruneSnapshots(noteId, maxCount) {
+    const snapshots = await this.getSnapshots(noteId);
+    if (snapshots.length <= maxCount) return 0;
+
+    const toRemove = snapshots.slice(maxCount);
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const tx = this.transaction('snapshots', 'readwrite');
+      const store = tx.objectStore('snapshots');
+      for (const s of toRemove) {
+        store.delete(s.id);
+      }
+      tx.oncomplete = () => resolve(toRemove.length);
+      tx.onerror = () => reject(tx.error);
+    }), 'pruneSnapshots');
+  }
+
+  /**
+   * Delete all snapshots for a note.
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
+  async deleteSnapshotsByNote(noteId) {
+    const snapshots = await this.getSnapshots(noteId);
+    if (snapshots.length === 0) return;
+
+    return this.withRetry(() => new Promise((resolve, reject) => {
+      const tx = this.transaction('snapshots', 'readwrite');
+      const store = tx.objectStore('snapshots');
+      for (const s of snapshots) {
+        store.delete(s.id);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    }), 'deleteSnapshotsByNote');
   }
 }
 

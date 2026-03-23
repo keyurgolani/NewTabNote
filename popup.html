@@ -130,6 +130,36 @@
       flex-shrink: 0;
     }
 
+    /* Quick Note Input */
+    .quick-note {
+      padding: 12px 20px;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .quick-note input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .quick-note input::placeholder {
+      color: var(--text-faint);
+    }
+
+    .quick-note input:focus {
+      border-color: var(--accent-color);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+
     /* Main Layout - Two Columns with independent scroll */
     .main-content {
       display: flex;
@@ -412,6 +442,11 @@
       </svg>
       Open Notes
     </button>
+  </div>
+
+  <!-- Quick Note Input -->
+  <div class="quick-note">
+    <input type="text" id="quick-note-input" placeholder="Quick note... press Enter to save" aria-label="Quick note input" autocomplete="off">
   </div>
 
   <!-- Main Content - Two Columns -->

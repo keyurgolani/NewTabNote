@@ -5,6 +5,7 @@
 const Utils = {
   /**
    * Generate a unique ID
+   * @returns {string} A unique identifier string
    */
   generateId() {
     return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -12,6 +13,8 @@ const Utils = {
 
   /**
    * Deep clone an object
+   * @param {*} obj - The object to clone
+   * @returns {*} A deep copy of the object
    */
   deepClone(obj) {
     return JSON.parse(JSON.stringify(obj));
@@ -19,6 +22,9 @@ const Utils = {
 
   /**
    * Debounce function
+   * @param {Function} fn - The function to debounce
+   * @param {number} delay - Delay in milliseconds
+   * @returns {Function} The debounced function
    */
   debounce(fn, delay) {
     let timeoutId;
@@ -30,6 +36,9 @@ const Utils = {
 
   /**
    * Throttle function
+   * @param {Function} fn - The function to throttle
+   * @param {number} limit - Minimum interval in milliseconds
+   * @returns {Function} The throttled function
    */
   throttle(fn, limit) {
     let inThrottle;
@@ -44,6 +53,10 @@ const Utils = {
 
   /**
    * Clamp a value between min and max
+   * @param {number} value - The value to clamp
+   * @param {number} min - Minimum bound
+   * @param {number} max - Maximum bound
+   * @returns {number} The clamped value
    */
   clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
@@ -51,6 +64,10 @@ const Utils = {
 
   /**
    * Linear interpolation
+   * @param {number} a - Start value
+   * @param {number} b - End value
+   * @param {number} t - Interpolation factor (0-1)
+   * @returns {number} The interpolated value
    */
   lerp(a, b, t) {
     return a + (b - a) * t;
@@ -58,6 +75,11 @@ const Utils = {
 
   /**
    * Calculate distance between two points
+   * @param {number} x1 - First point X
+   * @param {number} y1 - First point Y
+   * @param {number} x2 - Second point X
+   * @param {number} y2 - Second point Y
+   * @returns {number} The Euclidean distance
    */
   distance(x1, y1, x2, y2) {
     return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
@@ -65,6 +87,10 @@ const Utils = {
 
   /**
    * Check if point is inside rectangle
+   * @param {number} px - Point X
+   * @param {number} py - Point Y
+   * @param {{x: number, y: number, width: number, height: number}} rect - The rectangle
+   * @returns {boolean} True if point is inside the rectangle
    */
   pointInRect(px, py, rect) {
     return (
@@ -77,6 +103,9 @@ const Utils = {
 
   /**
    * Check if two rectangles intersect
+   * @param {{x: number, y: number, width: number, height: number}} r1 - First rectangle
+   * @param {{x: number, y: number, width: number, height: number}} r2 - Second rectangle
+   * @returns {boolean} True if the rectangles intersect
    */
   rectsIntersect(r1, r2) {
     return !(
@@ -89,6 +118,8 @@ const Utils = {
 
   /**
    * Get bounding box of multiple elements
+   * @param {Array<{getBounds: () => {x: number, y: number, width: number, height: number}}>} elements - Elements with getBounds method
+   * @returns {{x: number, y: number, width: number, height: number}|null} The bounding box or null if empty
    */
   getBoundingBox(elements) {
     if (elements.length === 0) return null;
@@ -116,6 +147,10 @@ const Utils = {
 
   /**
    * Convert screen coordinates to canvas coordinates
+   * @param {number} screenX - Screen X coordinate
+   * @param {number} screenY - Screen Y coordinate
+   * @param {{offsetX: number, offsetY: number, scale: number}} viewport - Viewport transform
+   * @returns {{x: number, y: number}} Canvas coordinates
    */
   screenToCanvas(screenX, screenY, viewport) {
     return {
@@ -126,6 +161,10 @@ const Utils = {
 
   /**
    * Convert canvas coordinates to screen coordinates
+   * @param {number} canvasX - Canvas X coordinate
+   * @param {number} canvasY - Canvas Y coordinate
+   * @param {{offsetX: number, offsetY: number, scale: number}} viewport - Viewport transform
+   * @returns {{x: number, y: number}} Screen coordinates
    */
   canvasToScreen(canvasX, canvasY, viewport) {
     return {
@@ -136,6 +175,8 @@ const Utils = {
 
   /**
    * Format file size
+   * @param {number} bytes - Size in bytes
+   * @returns {string} Human-readable file size string
    */
   formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
@@ -147,6 +188,8 @@ const Utils = {
 
   /**
    * Format date
+   * @param {number|string|Date} date - Date value to format
+   * @returns {string} Formatted date string
    */
   formatDate(date) {
     return new Intl.DateTimeFormat('en-US', {
@@ -160,6 +203,8 @@ const Utils = {
 
   /**
    * Format timestamp for display (e.g., "Jan 28, 2026 at 3:45 PM")
+   * @param {number} timestamp - Unix timestamp in milliseconds
+   * @returns {string} Formatted timestamp string
    */
   formatTimestamp(timestamp) {
     const date = new Date(timestamp);
@@ -178,6 +223,8 @@ const Utils = {
 
   /**
    * Parse color to RGB
+   * @param {string} color - CSS color string
+   * @returns {{r: number, g: number, b: number, a: number}} RGBA components
    */
   parseColor(color) {
     if (typeof document === 'undefined') return html;
@@ -192,6 +239,10 @@ const Utils = {
 
   /**
    * Convert RGB to hex
+   * @param {number} r - Red (0-255)
+   * @param {number} g - Green (0-255)
+   * @param {number} b - Blue (0-255)
+   * @returns {string} Hex color string
    */
   rgbToHex(r, g, b) {
     return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('');
@@ -199,6 +250,8 @@ const Utils = {
 
   /**
    * Get contrasting text color (black or white)
+   * @param {string} hexColor - Hex color string
+   * @returns {string} '#000000' or '#ffffff'
    */
   getContrastColor(hexColor) {
     const { r, g, b } = this.parseColor(hexColor);
@@ -208,6 +261,8 @@ const Utils = {
 
   /**
    * Load image from URL or file
+   * @param {string} src - Image source URL or data URI
+   * @returns {Promise<HTMLImageElement>} The loaded image element
    */
   loadImage(src) {
     return new Promise((resolve, reject) => {
@@ -221,6 +276,8 @@ const Utils = {
 
   /**
    * Read file as data URL
+   * @param {File} file - File to read
+   * @returns {Promise<string>} Data URL string
    */
   readFileAsDataURL(file) {
     return new Promise((resolve, reject) => {
@@ -233,6 +290,8 @@ const Utils = {
 
   /**
    * Read file as text
+   * @param {File} file - File to read
+   * @returns {Promise<string>} File contents as text
    */
   readFileAsText(file) {
     return new Promise((resolve, reject) => {
@@ -245,6 +304,10 @@ const Utils = {
 
   /**
    * Download data as file
+   * @param {string} data - File content
+   * @param {string} filename - Download filename
+   * @param {string} [type='application/json'] - MIME type
+   * @returns {void}
    */
   downloadFile(data, filename, type = 'application/json') {
     if (typeof document === 'undefined') return;
@@ -261,16 +324,22 @@ const Utils = {
 
   /**
    * Show toast notification
+   * @param {string} message - Toast message text
+   * @param {string} [type='info'] - Toast type ('info', 'error', 'success')
+   * @param {number} [duration=3000] - Duration in milliseconds
+   * @returns {void}
    */
   showToast(message, type = 'info', duration = 3000) {
     if (typeof document === 'undefined') {
-      console.log(`Toast (${type}): ${message}`);
+      console.debug(`Toast (${type}): ${message}`);
       return;
     }
     let container = document.querySelector('.toast-container');
     if (!container) {
       container = document.createElement('div');
       container.className = 'toast-container';
+      container.setAttribute('aria-live', 'polite');
+      container.setAttribute('role', 'status');
       document.body.appendChild(container);
     }
 
@@ -287,6 +356,8 @@ const Utils = {
 
   /**
    * Fetch link preview data
+   * @param {string} url - URL to fetch preview for
+   * @returns {Promise<{url: string, title: string, description: string, image: string|null, favicon: string|null}>} Link preview data
    */
   async fetchLinkPreview(url) {
     // In a real extension, you'd use a background script or proxy service
@@ -313,6 +384,8 @@ const Utils = {
 
   /**
    * Smooth bezier curve through points
+   * @param {Array<{x: number, y: number}>} points - Array of points
+   * @returns {string} SVG path string
    */
   getSmoothPath(points) {
     if (points.length < 2) return '';
@@ -343,6 +416,11 @@ const Utils = {
 
   /**
    * Get rotation angle from two points
+   * @param {number} cx - Center X
+   * @param {number} cy - Center Y
+   * @param {number} px - Point X
+   * @param {number} py - Point Y
+   * @returns {number} Angle in radians
    */
   getAngle(cx, cy, px, py) {
     return Math.atan2(py - cy, px - cx);
@@ -350,6 +428,12 @@ const Utils = {
 
   /**
    * Rotate point around center
+   * @param {number} px - Point X
+   * @param {number} py - Point Y
+   * @param {number} cx - Center X
+   * @param {number} cy - Center Y
+   * @param {number} angle - Rotation angle in radians
+   * @returns {{x: number, y: number}} Rotated point
    */
   rotatePoint(px, py, cx, cy, angle) {
     const cos = Math.cos(angle);
@@ -364,7 +448,9 @@ const Utils = {
 
   /**
    * Fuzzy search - matches partial words, handles typos, and ranks results
-   * Returns a score (0 = no match, higher = better match)
+   * @param {string} query - Search query
+   * @param {string} text - Text to match against
+   * @returns {number} Match score (0 = no match, higher = better match)
    */
   fuzzyMatch(query, text) {
     if (!query || !text) return 0;
@@ -424,7 +510,9 @@ const Utils = {
 
   /**
    * Search notes with fuzzy matching
-   * Returns notes sorted by relevance score
+   * @param {Array<{name?: string}>} notes - Array of note objects
+   * @param {string} query - Search query
+   * @returns {Array<{name?: string}>} Notes sorted by relevance score
    */
   fuzzySearchNotes(notes, query) {
     if (!query || !query.trim()) return notes;
@@ -645,6 +733,38 @@ const Utils = {
     result = result.replace(/(<\/(?:h[1-3]|ul|ol|blockquote|pre|hr)>)<\/p>/g, '$1');
 
     return result;
+  },
+
+  /**
+   * Set up focus trapping within a modal element.
+   * Returns a cleanup function to remove the trap.
+   * @param {HTMLElement} modal - The modal container element
+   * @returns {function(): void} Cleanup function to remove the focus trap
+   */
+  trapFocus(modal) {
+    const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    function onKeyDown(e) {
+      if (e.key !== 'Tab') return;
+      const focusable = Array.from(modal.querySelectorAll(FOCUSABLE)).filter(el => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    modal.addEventListener('keydown', onKeyDown);
+    return () => modal.removeEventListener('keydown', onKeyDown);
   },
 };
 

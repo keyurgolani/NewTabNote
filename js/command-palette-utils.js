@@ -1,4 +1,9 @@
 (function (global) {
+  /**
+   * Normalize a palette query string to lowercase trimmed form.
+   * @param {string} [query=''] - Raw query
+   * @returns {string} Normalized query
+   */
   function normalizePaletteQuery(query = '') {
     return String(query)
       .toLowerCase()
@@ -180,6 +185,15 @@
     };
   }
 
+  /**
+   * Build a ranked list of command palette items from commands and notes.
+   * @param {Object} [options={}] - Options
+   * @param {string} [options.query=''] - Search query
+   * @param {Array<Object>} [options.commands=[]] - Available commands
+   * @param {Array<Object>} [options.notes=[]] - Available notes
+   * @param {number} [options.limit=12] - Maximum items to return
+   * @returns {Array<{id: string, kind: string, title: string, subtitle: string, score: number}>} Ranked items
+   */
   function buildCommandPaletteItems({
     query = '',
     commands = [],

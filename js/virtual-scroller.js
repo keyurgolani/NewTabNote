@@ -2,6 +2,14 @@
  * Virtual Scroller - efficiently renders long lists by only rendering visible items
  */
 class VirtualScroller {
+  /**
+   * @param {Object} options - Scroller options
+   * @param {HTMLElement} options.container - The scrollable container element
+   * @param {number} options.itemHeight - Fixed height of each item in pixels
+   * @param {function(Object, number): HTMLElement} options.renderItem - Function to create a DOM element for an item
+   * @param {Array<Object>} [options.items=[]] - All items to render
+   * @param {number} [options.buffer=3] - Number of extra items to render above/below viewport
+   */
   constructor(options) {
     this.container = options.container;     // The scrollable container
     this.itemHeight = options.itemHeight;   // Fixed height of each item
@@ -27,6 +35,11 @@ class VirtualScroller {
     this.update();
   }
 
+  /**
+   * Replace the items array and re-render.
+   * @param {Array<Object>} items - New items array
+   * @returns {void}
+   */
   setItems(items) {
     this.items = items;
     this.update();

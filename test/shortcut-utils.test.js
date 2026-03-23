@@ -119,3 +119,45 @@ test('moveItemInArray reorders a block collection without mutating the input arr
   assert.deepEqual(moved, ['b', 'c', 'a']);
   assert.deepEqual(original, ['a', 'b', 'c']);
 });
+
+test('app-level shortcut resolves Alt+D to daily-note action', () => {
+  assert.equal(getAppShortcutAction({
+    code: 'KeyD',
+    key: 'd',
+    modKey: false,
+    shiftKey: false,
+    altKey: true,
+    isInput: false,
+  }), 'daily-note');
+});
+
+test('app-level shortcut resolves Ctrl+Tab to next-tab and Ctrl+Shift+Tab to prev-tab', () => {
+  assert.equal(getAppShortcutAction({
+    code: 'Tab',
+    key: 'Tab',
+    modKey: true,
+    shiftKey: false,
+    altKey: false,
+    isInput: false,
+  }), 'next-tab');
+
+  assert.equal(getAppShortcutAction({
+    code: 'Tab',
+    key: 'Tab',
+    modKey: true,
+    shiftKey: true,
+    altKey: false,
+    isInput: false,
+  }), 'prev-tab');
+});
+
+test('app-level shortcut resolves Ctrl+W to close-tab action', () => {
+  assert.equal(getAppShortcutAction({
+    code: 'KeyW',
+    key: 'w',
+    modKey: true,
+    shiftKey: false,
+    altKey: false,
+    isInput: false,
+  }), 'close-tab');
+});

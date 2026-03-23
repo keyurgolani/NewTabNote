@@ -8,6 +8,10 @@ class PopupStorage {
     this.db = null;
   }
 
+  /**
+   * Initialize the database connection.
+   * @returns {Promise<void>}
+   */
   async init() {
     return new Promise((resolve, reject) => {
       // Open without a version to use whatever version currently exists.
@@ -21,10 +25,19 @@ class PopupStorage {
     });
   }
 
+  /**
+   * Check if an object store exists in the database.
+   * @param {string} name - Store name
+   * @returns {boolean} True if the store exists
+   */
   hasStore(name) {
     return this.db.objectStoreNames.contains(name);
   }
 
+  /**
+   * Get all active (non-archived, non-trashed) notes.
+   * @returns {Promise<Array<Object>>} Active notes sorted by updatedAt descending
+   */
   async getAllNotes() {
     if (!this.hasStore('canvases')) return [];
     return new Promise((resolve, reject) => {
@@ -39,6 +52,10 @@ class PopupStorage {
     });
   }
 
+  /**
+   * Get notes that have AI-extracted insights.
+   * @returns {Promise<Array<Object>>} Notes with insights
+   */
   async getNotesWithInsights() {
     const notes = await this.getAllNotes();
     return notes.filter(note => note.insights && (
@@ -48,6 +65,12 @@ class PopupStorage {
     ));
   }
 
+  /**
+   * Get a setting value from the settings store.
+   * @param {string} key - Setting key
+   * @param {*} [defaultValue=null] - Default value if not found
+   * @returns {Promise<*>} Setting value
+   */
   async getSetting(key, defaultValue = null) {
     if (!this.hasStore('settings')) return defaultValue;
     return new Promise((resolve, reject) => {
@@ -61,6 +84,11 @@ class PopupStorage {
     });
   }
 
+  /**
+   * Create a new note.
+   * @param {string} name - Note name
+   * @returns {Promise<Object>} Created note object
+   */
   async createNote(name) {
     const note = {
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -198,14 +226,15 @@ function renderDailySummary(summary) {
       const isToday = deadline.date === today;
       if (isToday) li.className = 'today';
       
-      let dateHtml = '';
+      li.textContent = deadline.text;
       if (deadline.date) {
         const isSoon = deadline.date <= threeDaysFromNow;
-        const dateClass = isToday ? 'today' : (isSoon ? 'soon' : '');
-        const dateText = isToday ? 'Today' : formatDeadlineDate(deadline.date);
-        dateHtml = '<span class="deadline-date ' + dateClass + '">' + dateText + '</span>';
+        const dateSpan = document.createElement('span');
+        dateSpan.className = 'deadline-date ' + (isToday ? 'today' : (isSoon ? 'soon' : ''));
+        dateSpan.textContent = isToday ? 'Today' : formatDeadlineDate(deadline.date);
+        li.appendChild(document.createTextNode(' '));
+        li.appendChild(dateSpan);
       }
-      li.innerHTML = escapeHtml(deadline.text) + dateHtml;
       list.appendChild(li);
     }
     
@@ -253,6 +282,40 @@ function renderDailySummary(summary) {
 }
 
 
+/**
+ * Render the recent notes list in the popup.
+ * @param {Array<Object>} notes - All active notes sorted by updatedAt descending
+ */
+function renderRecentNotes(notes) {
+  const list = document.getElementById('page-list');
+
+  if (notes.length === 0) {
+    list.innerHTML = '<div class="empty">No notes yet</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  const recentNotes = notes.slice(0, 5);
+
+  for (const note of recentNotes) {
+    const item = document.createElement('div');
+    item.className = 'page-item';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.textContent = note.name || 'Untitled';
+    item.appendChild(nameSpan);
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'date';
+    dateSpan.textContent = formatDate(note.updatedAt);
+    item.appendChild(dateSpan);
+    item.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'newtab.html' });
+    });
+    list.appendChild(item);
+  }
+}
+
+
 async function init() {
   const storage = new PopupStorage();
 
@@ -281,25 +344,7 @@ async function init() {
     }
 
     const notes = await storage.getAllNotes();
-    const list = document.getElementById('page-list');
-
-    if (notes.length === 0) {
-      list.innerHTML = '<div class="empty">No notes yet</div>';
-    } else {
-      list.innerHTML = '';
-      const recentNotes = notes.slice(0, 5);
-
-      for (const note of recentNotes) {
-        const item = document.createElement('div');
-        item.className = 'page-item';
-        item.innerHTML = '<span class="name">' + escapeHtml(note.name || 'Untitled') + '</span>' +
-          '<span class="date">' + formatDate(note.updatedAt) + '</span>';
-        item.addEventListener('click', () => {
-          chrome.tabs.create({ url: 'newtab.html' });
-        });
-        list.appendChild(item);
-      }
-    }
+    renderRecentNotes(notes);
   } catch (error) {
     console.error('Failed to load notes:', error);
     document.getElementById('page-list').innerHTML = '<div class="empty">Failed to load notes</div>';
@@ -307,6 +352,28 @@ async function init() {
 
   document.getElementById('open-tab').addEventListener('click', () => {
     chrome.tabs.create({ url: 'newtab.html' });
+  });
+
+  // Quick Note input — creates a new note on Enter
+  const quickNoteInput = document.getElementById('quick-note-input');
+  quickNoteInput.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const text = quickNoteInput.value.trim();
+    if (!text) return;
+
+    quickNoteInput.disabled = true;
+    try {
+      await storage.createNote(text);
+      quickNoteInput.value = '';
+      // Refresh the recent notes list
+      const updatedNotes = await storage.getAllNotes();
+      renderRecentNotes(updatedNotes);
+    } catch (err) {
+      console.error('Failed to create quick note:', err);
+    } finally {
+      quickNoteInput.disabled = false;
+      quickNoteInput.focus();
+    }
   });
 }
 

@@ -11,10 +11,16 @@ try {
 }
 
 // Global Storage instance for background (instantiated in storage.js)
-Storage.init();
+let storageReady = Storage.init().catch(e => {
+  console.error('Storage init failed in background:', e);
+});
 
 let creatingOffscreen;
 
+/**
+ * Ensure the offscreen document exists for API proxying.
+ * @returns {Promise<void>}
+ */
 async function ensureOffscreenDocument() {
   const offscreenUrl = 'offscreen.html';
 
@@ -49,10 +55,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'API_REQUEST') {
-    console.log('Background: Received API_REQUEST for', request.url);
+    console.debug('Background: Received API_REQUEST for', request.url);
     handleApiRequest(request)
       .then(response => {
-        console.log('Background: API response status:', response.status, 'ok:', response.ok);
+        console.debug('Background: API response status:', response.status, 'ok:', response.ok);
         sendResponse(response);
       })
       .catch(error => {
@@ -63,10 +69,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+/**
+ * Handle an API request by proxying it via fetch or offscreen document.
+ * @param {{url: string, options: Object}} request - Request details
+ * @returns {Promise<{ok: boolean, status: number, data: *}>} Response object
+ */
 async function handleApiRequest(request) {
   const { url, options } = request;
 
-  console.log('Background: Making fetch to', url);
+  console.debug('Background: Making fetch to', url);
 
   // For localhost requests, try to use the offscreen document
   if (url.includes('localhost') || url.includes('127.0.0.1')) {
@@ -82,7 +93,7 @@ async function handleApiRequest(request) {
         return response;
       }
     } catch (e) {
-      console.log('Background: Offscreen failed, trying direct fetch:', e.message);
+      console.debug('Background: Offscreen failed, trying direct fetch:', e.message);
     }
   }
 
@@ -99,7 +110,7 @@ async function handleApiRequest(request) {
     }
 
     const response = await fetch(url, fetchOptions);
-    console.log('Background: Fetch response status:', response.status);
+    console.debug('Background: Fetch response status:', response.status);
 
     const contentType = response.headers.get('content-type') || '';
 
@@ -193,6 +204,7 @@ chrome.commands.onCommand.addListener(async (command) => {
  */
 async function captureToDailyNote(item) {
   try {
+    await storageReady;
     const note = await Storage.ensureDailyNote();
 
     // Create new block

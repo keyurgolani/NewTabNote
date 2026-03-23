@@ -3,7 +3,11 @@
  */
 const ImageCompression = {
     /**
-     * Compress an image file
+     * Compress an image file to a target max width and quality.
+     * @param {File} file - Image file to compress
+     * @param {number} [maxWidth=1200] - Maximum width in pixels
+     * @param {number} [quality=0.8] - JPEG/WebP quality (0-1)
+     * @returns {Promise<Blob>} Compressed image blob
      */
     async compress(file, maxWidth = 1200, quality = 0.8) {
         return new Promise((resolve, reject) => {

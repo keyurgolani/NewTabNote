@@ -53,14 +53,44 @@ class App {
     // Search Indexer
     this.indexerWorker = null;
     this.searchEngine = new SearchEngine();
+    // Sidebar controller
+    this.sidebarController = null;
+    // Tab controller
+    this.tabController = null;
+    // AI Chat controller
+    this.aiChatController = null;
+    // Settings controller
+    this.settingsController = null;
+    // Theme builder controller
+    this.themeBuilderController = null;
+    // Analytics controller
+    this.analyticsController = null;
+    // Graph view
+    this.graphView = null;
+    // Notes manager
+    this.notesManager = null;
+    // Shortcuts manager
+    this.shortcutsManager = null;
+    // Export/Import service
+    this.exportImportService = null;
+    // Sync service
+    this.syncService = null;
+    // Core infrastructure
+    this.eventBus = null;
+    this.domRefs = null;
+    this.logger = null;
     // Analytics
     this.statsOpen = false;
     this.charts = {};
     // Multi-select
     this.selectionMode = false;
     this.selectedNoteIds = new Set();
-    this.triggerIndexing = Utils.debounce(() => {
-      this.rebuildSearchIndex();
+    this.triggerIndexing = Utils.debounce((noteId) => {
+      if (noteId && this.notesManager) {
+        this.notesManager.updateNoteIndex(noteId);
+      } else {
+        this.rebuildSearchIndex();
+      }
     }, 300);
   }
 
@@ -69,12 +99,25 @@ class App {
    */
   async init() {
     try {
+      // Initialize core infrastructure
+      this.eventBus = createEventBus();
+      this.logger = createLogger();
+      this.domRefs = createDomRefs();
+
       // Initialize storage
       await Storage.init();
 
+      // Populate DOM cache after document is ready
+      this.domRefs.init();
+
       // Initialize LLM service
       await LLM.init();
-      await this.loadAIPromptTemplates();
+
+      // Global unhandled rejection handler
+      window.addEventListener('unhandledrejection', (event) => {
+        this.logger.error('App', 'Unhandled promise rejection', event.reason);
+        Utils.showToast('An unexpected error occurred', 'error');
+      });
 
       // Get notes and folders
       this.notes = await Storage.getAllNotes();
@@ -86,7 +129,11 @@ class App {
 
       // Initialize editors
       const editorChangeHandler = Utils.debounce(() => {
-        this.updateSmartSuggestions();
+        if (this.aiChatController) {
+          this.aiChatController.updateSmartSuggestions();
+        } else {
+          this.updateSmartSuggestions();
+        }
       }, 2000);
 
       this.editor = new BlockEditor({
@@ -100,93 +147,81 @@ class App {
       window.editor = this.editor;
       window.secondaryEditor = this.secondaryEditor;
 
-      // Split view toggle
-      const splitViewToggle = document.getElementById('split-view-toggle');
-      if (splitViewToggle) {
-        splitViewToggle.addEventListener('click', () => this.toggleSplitView());
+      // Wire version history button (Req 31.2)
+      const versionHistoryBtn = document.getElementById('version-history-btn');
+      if (versionHistoryBtn) {
+        versionHistoryBtn.addEventListener('click', () => {
+          const activeEditor = this.getEditor();
+          if (activeEditor && activeEditor.noteId) {
+            activeEditor.toggleVersionHistory();
+          }
+        });
       }
 
-      // PiP toggle
-      const pipToggle = document.getElementById('pip-toggle');
-      if (pipToggle) {
-        if ('documentPictureInPicture' in window) {
-          pipToggle.addEventListener('click', () => {
-            const editor = this.getEditor();
-            if (editor && editor.noteId) {
-              this.openNoteInPiP(editor.noteId);
-            }
-          });
-        } else {
-          pipToggle.classList.add('hidden');
-        }
+      // Wire focus mode button (Req 32.1)
+      const focusModeBtn = document.getElementById('focus-mode-btn');
+      if (focusModeBtn) {
+        focusModeBtn.addEventListener('click', () => {
+          this.toggleFocusMode();
+        });
       }
-
-      // Pane focus listeners
-      document.getElementById('editor-container').addEventListener('click', () => {
-        this.setActiveEditorSide('left');
-      }, true);
-      document.getElementById('secondary-editor-container').addEventListener('click', () => {
-        this.setActiveEditorSide('right');
-      }, true);
 
       // Setup UI
       this.setupPageSelector(this.notes);
-      this.setupSettings();
-      this.setupCommandPalette();
-      this.setupAIInsertPreview();
-      this.setupSidebar();
-      await this.setupAI();
-      this.setupWidthSelectorPill();
-      this.setupTabs();
+      await this.initSidebarController();
+      await this.initTabController();
+      await this.initAIChatController();
+      await this.initSettingsController();
       this.setupEmptyState();
-      this.setupAutoTitle();
-      this.setupInsightsExtraction();
-      this.applyFont();
-      this.applyWidth();
-      this.setupShortcuts();
+      await this.initNotesManager();
+      await this.initShortcutsManager();
+      await this.initExportImportService();
 
       // Initialize Theme Engine
       await Themes.init();
-      this.setupThemeBuilder();
-
-      // Listen for settings changes from other tabs
-      this.setupSettingsSync();
+      await this.initThemeBuilderController();
 
       // Check if we have notes to display
-      if (this.notes.length === 0 && this.archivedNotes.length === 0) {
-        // Create a new untitled note so user can start typing immediately
+      const hasCompletedOnboarding = await Onboarding.hasCompleted();
+      if (this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding) {
+        // First-run: show onboarding walkthrough
+        await this.runOnboarding();
+      } else if (this.notes.length === 0 && this.archivedNotes.length === 0) {
+        // Returning user with no notes
         await this.createFirstNote();
       } else if (this.notes.length > 0) {
-        // Load first note and tabs
-        await this.editor.loadNote(this.notes[0].id);
-        await this.loadSavedTabs();
-      } else {
-        // Onboarding for new users
-        await this.runOnboarding();
+        // Try loading cached last-opened note for fast startup (Req 27.2)
+        const cachedNoteId = await TabController.getCachedLastOpenedNoteId();
+        const cachedNote = cachedNoteId ? this.notes.find(n => n.id === cachedNoteId) : null;
+        if (cachedNote) {
+          await this.editor.loadNote(cachedNote.id);
+        } else {
+          await this.editor.loadNote(this.notes[0].id);
+        }
+        await this.tabController.loadSavedTabs();
       }
 
       this.updateEmptyState();
-      // Auto-backup check
-      this.checkBackupStatus();
       this.updateBadgeCounts();
 
-      // Initialize search indexer
-      this.initIndexer();
+      // Defer non-critical initialization until after first render (Req 27.1)
+      const deferWork = async () => {
+        await this.initAnalyticsController();
+        await this.initGraphView();
+        await this.initSyncService();
+        if (this.notesManager) {
+          await this.notesManager.deferredInit();
+          this.indexerWorker = this.notesManager.indexerWorker;
+        }
+      };
 
-      // Initialize Embeddings and load Vectors
-      await this.initEmbeddings();
-
-      // Setup Stats listeners
-      const statsBtn = document.getElementById('sidebar-stats');
-      if (statsBtn) {
-        statsBtn.addEventListener('click', () => this.toggleStats());
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(() => deferWork().catch(e => this.logger.error('App', 'Deferred init failed', e)));
+      } else {
+        setTimeout(() => deferWork().catch(e => this.logger.error('App', 'Deferred init failed', e)), 200);
       }
-      const statsCloseBtn = document.getElementById('stats-close-btn');
-      if (statsCloseBtn) {
-        statsCloseBtn.addEventListener('click', () => this.toggleStats());
-      }
 
-      console.log('New Tab Note initialized successfully');
+      this.logger.info('App', 'New Tab Note initialized successfully');
     } catch (error) {
       console.error('Failed to initialize app:', error);
       this.showErrorState(error);
@@ -222,25 +257,48 @@ class App {
     // 1. Setup default settings
     await Onboarding.setupFirstRun();
 
-    // 2. Create Welcome Note
+    // 2. Create Welcome Note with example blocks
     const note = await Storage.createNote('Welcome to NewTabNote 🚀');
-
-    // Add onboarding blocks
     const blocks = Onboarding.getWelcomeNoteContent();
     for (let i = 0; i < blocks.length; i++) {
       const blockData = blocks[i];
-      await Storage.createElement(note.id, blockData.type, blockData.content, i);
+      await Storage.saveElement({
+        id: Utils.generateId(),
+        type: blockData.type,
+        content: blockData.content || '',
+        canvasId: note.id,
+        order: i,
+        checked: blockData.checked || false,
+        indentLevel: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
     }
 
-    // 3. Mark onboarding as seen
-    await Storage.saveSetting('hasCompletedOnboarding', true);
-
-    // 4. Load the note
+    // 3. Load the welcome note so the editor is visible during walkthrough
     await this.refreshNotesList();
     await this.openNoteInNewTab(note.id);
 
-    // 5. Trigger feature highlights after a short delay
-    setTimeout(() => this.showFeatureHighlights(), 3000);
+    // 4. Run interactive tooltip walkthrough (dismiss at any step marks complete)
+    await Onboarding.runWalkthrough();
+
+    // 5. Mark onboarding as complete
+    await Onboarding.markComplete();
+
+    // 6. Show quick-start prompt
+    const choice = await Onboarding.showQuickStartPrompt(note.id);
+
+    // 7. Handle user's choice
+    if (choice === 'blank') {
+      await this.createFirstNote();
+    } else if (choice === 'import') {
+      // Trigger import dialog
+      const importInput = document.getElementById('note-import-input');
+      if (importInput) {
+        importInput.click();
+      }
+    }
+    // 'sample' — already viewing the welcome note, nothing to do
   }
 
   /**
@@ -262,6 +320,454 @@ class App {
         el.addEventListener('click', () => el.classList.remove('feature-highlight-pulse'), { once: true });
       }
     });
+  }
+
+  /**
+   * Initialize the SidebarController and wire callbacks.
+   */
+  async initSidebarController() {
+    this.sidebarController = new SidebarController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Share data
+    this.sidebarController.notes = this.notes;
+    this.sidebarController.archivedNotes = this.archivedNotes;
+    this.sidebarController.trashedNotes = this.trashedNotes;
+    this.sidebarController.templates = this.templates;
+    this.sidebarController.folders = this.folders;
+    this.sidebarController.searchIndexByNoteId = this.searchIndexByNoteId;
+    this.sidebarController.searchEngine = this.searchEngine;
+
+    // Wire callbacks so the controller can trigger App-level actions
+    this.sidebarController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.sidebarController.onOpenNewTab = () => this.openNewTab();
+    this.sidebarController.getEditor = () => this.getEditor();
+    this.sidebarController.onArchiveNote = (noteId) => this.archiveNote(noteId);
+    this.sidebarController.onUnarchiveNote = (noteId) => this.unarchiveNote(noteId);
+    this.sidebarController.onTrashNote = (noteId) => this.trashNoteById(noteId);
+    this.sidebarController.onRestoreNote = (noteId) => this.restoreNoteById(noteId);
+    this.sidebarController.onPermanentlyDeleteNote = (noteId) => this.permanentlyDeleteNoteById(noteId);
+    this.sidebarController.onGenerateTitle = (noteId) => this.generateTitleForNote(noteId);
+    this.sidebarController.onExportNote = (noteId) => this.exportNoteById(noteId);
+    this.sidebarController.onExtractInsights = (noteId) => this.extractInsightsForNote(noteId);
+    this.sidebarController.onConvertNoteToTemplate = (noteId) => this.convertNoteToTemplate(noteId);
+    this.sidebarController.onConvertTemplateToNote = (noteId) => this.convertTemplateToNote(noteId);
+    this.sidebarController.onImportNote = (file) => this.importNote(file);
+
+    await this.sidebarController.init();
+
+    // Sync state back to App for backward compat
+    this.sidebarOpen = this.sidebarController.sidebarOpen;
+    this.sidebarView = this.sidebarController.sidebarView;
+    this.sidebarWidth = this.sidebarController.sidebarWidth;
+    this.sidebarSortMode = this.sidebarController.sidebarSortMode;
+    this.sidebarViewMode = this.sidebarController.sidebarViewMode;
+  }
+
+  /**
+   * Initialize the TabController and wire callbacks.
+   */
+  async initTabController() {
+    this.tabController = new TabController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Share editor references
+    this.tabController.editor = this.editor;
+    this.tabController.secondaryEditor = this.secondaryEditor;
+
+    // Wire callbacks so the controller can trigger App-level actions
+    this.tabController.onCreateNote = () => Storage.createNote('Untitled');
+    this.tabController.onRefreshNotesList = () => this.refreshNotesList();
+    this.tabController.onRenderNotesList = () => this.renderNotesList();
+    this.tabController.onGetNotes = () => this.notes;
+
+    await this.tabController.init();
+
+    // Sync state back to App for backward compat
+    this.openTabs = this.tabController.openTabs;
+    this.activeTabIndex = this.tabController.activeTabIndex;
+    this.splitViewEnabled = this.tabController.splitViewEnabled;
+    this.activeEditorSide = this.tabController.activeEditorSide;
+    this.pipWindow = this.tabController.pipWindow;
+    this.pipEditor = this.tabController.pipEditor;
+  }
+
+  /**
+   * Initialize the AIChatController and wire callbacks.
+   */
+  async initAIChatController() {
+    this.aiChatController = new AIChatController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+      llm: LLM,
+    });
+
+    // Share search engine reference
+    this.aiChatController.searchEngine = this.searchEngine;
+
+    // Wire callbacks so the controller can trigger App-level actions
+    this.aiChatController.getEditor = () => this.getEditor();
+    this.aiChatController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.aiChatController.onOpenNoteById = (noteId) => this.openNoteById(noteId);
+    this.aiChatController.onRefreshNotesList = () => this.refreshNotesList();
+    this.aiChatController.onRenderNotesList = () => this.renderNotesList();
+    this.aiChatController.onOpenNewTab = () => this.openNewTab();
+    this.aiChatController.onOpenSettingsModal = () => this.openSettingsModal();
+    this.aiChatController.onCloseAllModals = () => this.closeAllModals();
+    this.aiChatController.onGetOpenTabs = () => this.openTabs;
+    this.aiChatController.onRenderTabs = () => this.renderTabs();
+    this.aiChatController.onSaveTabs = () => this.saveTabs();
+    this.aiChatController.onGetNotes = () => this.notes;
+    this.aiChatController.onTriggerIndexing = () => this.triggerIndexing();
+    this.aiChatController.onLoadEmbeddingsModel = () => {
+      if (this.notesManager) this.notesManager.loadEmbeddingsModel();
+    };
+
+    await this.aiChatController.init();
+
+    // Sync state back to App for backward compat
+    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
+    this.aiSidebarWidth = this.aiChatController.aiSidebarWidth;
+    this.aiChatHistory = this.aiChatController.aiChatHistory;
+    this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
+    this.aiInsertPreviewState = this.aiChatController.aiInsertPreviewState;
+  }
+
+  /**
+   * Initialize the SettingsController and wire callbacks.
+   */
+  async initSettingsController() {
+    this.settingsController = new SettingsController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire callbacks so the controller can trigger App-level actions
+    this.settingsController.getEditor = () => this.getEditor();
+    this.settingsController.onApplyTheme = () => this.applyTheme();
+    this.settingsController.onOpenThemeBuilder = () => {
+      if (this.themeBuilderController) {
+        this.themeBuilderController.openThemeBuilder();
+      } else {
+        this.openThemeBuilder();
+      }
+    };
+    this.settingsController.onCloseAllModals = () => this.closeAllModals();
+    this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
+    this.settingsController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.settingsController.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
+    this.settingsController.onHandleNoteRemoved = (noteId) => this.handleNoteRemoved(noteId);
+    this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
+    this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
+    this.settingsController.onRenderAIPromptTemplateSettings = () => {
+      if (this.aiChatController) {
+        this.aiChatController.renderAIPromptTemplateSettings();
+      } else {
+        this.renderAIPromptTemplateSettings();
+      }
+    };
+
+    // Settings sync callbacks
+    this.settingsController.onSidebarStateChanged = (key, value) => {
+      if (key === 'sidebarOpen') {
+        this.sidebarOpen = value;
+        this.updateSidebarState();
+      } else if (key === 'sidebarWidth') {
+        this.sidebarWidth = value;
+        this.applySidebarWidth();
+      } else if (key === 'sidebarViewMode') {
+        this.sidebarViewMode = value;
+        this.applySidebarViewMode();
+      } else if (key === 'sidebarSortMode') {
+        this.sidebarSortMode = value;
+        const sortSelect = document.getElementById('sidebar-sort');
+        if (sortSelect) sortSelect.value = this.sidebarSortMode;
+        this.renderNotesList();
+      }
+    };
+    this.settingsController.onAISidebarWidthChanged = (value) => {
+      this.aiSidebarWidth = value;
+      if (this.aiChatController) {
+        this.aiChatController.aiSidebarWidth = this.aiSidebarWidth;
+      }
+      const aiSidebar = document.getElementById('ai-sidebar');
+      if (aiSidebar && this.aiSidebarOpen) {
+        aiSidebar.style.width = this.aiSidebarWidth + 'px';
+      }
+    };
+    this.settingsController.onLLMSettingsChanged = async () => {
+      await LLM.init();
+      this.updateAISidebarState();
+    };
+    this.settingsController.onAIPromptTemplatesChanged = (newValue) => {
+      if (this.aiChatController) {
+        this.aiChatController.aiPromptTemplates = this.aiChatController.sanitizeAIPromptTemplates(newValue);
+        this.aiChatController.renderAIPromptSuggestions();
+        this.aiChatController.renderAIPromptTemplateSettings();
+        this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
+      } else {
+        this.aiPromptTemplates = this.sanitizeAIPromptTemplates(newValue);
+        this.renderAIPromptSuggestions();
+        this.renderAIPromptTemplateSettings();
+      }
+    };
+
+    await this.settingsController.init();
+  }
+
+  /**
+   * Initialize the ThemeBuilderController and wire callbacks.
+   */
+  async initThemeBuilderController() {
+    this.themeBuilderController = new ThemeBuilderController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire callbacks so the controller can trigger App-level actions
+    this.themeBuilderController.onApplyTheme = () => this.applyTheme();
+
+    await this.themeBuilderController.init();
+  }
+
+  /**
+   * Initialize the AnalyticsController and wire callbacks.
+   */
+  async initAnalyticsController() {
+    this.analyticsController = new AnalyticsController({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Share data
+    this.analyticsController.notes = this.notes;
+    this.analyticsController.folders = this.folders;
+
+    // Wire callbacks so the controller can query App-level state
+    this.analyticsController.onGetSidebarOpen = () => this.sidebarOpen;
+    this.analyticsController.onGetAISidebarOpen = () => this.aiSidebarOpen;
+
+    await this.analyticsController.init();
+
+    // Sync state back to App for backward compat
+    this.statsOpen = this.analyticsController.statsOpen;
+    this.charts = this.analyticsController.charts;
+  }
+
+  async initGraphView() {
+    if (typeof GraphView === 'undefined') return;
+
+    this.graphView = new GraphView({
+      storage: Storage,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    });
+
+    this.graphView.onOpenNote = (noteId) => this.openNoteInNewTab(noteId);
+    this.graphView.onGetSidebarOpen = () => this.sidebarOpen;
+    this.graphView.onGetAISidebarOpen = () => this.aiSidebarOpen;
+
+    await this.graphView.init();
+  }
+
+  /**
+   * Initialize the SyncService for cross-device sync (Req 35).
+   */
+  async initSyncService() {
+    if (typeof SyncService === 'undefined') return;
+
+    this.syncService = new SyncService({
+      storage: Storage,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    });
+
+    await this.syncService.init();
+
+    // Listen for sync state changes to update UI
+    this.eventBus.on('sync:stateChanged', (state) => {
+      this._updateSyncStatusUI(state);
+    });
+
+    // If a provider was previously configured, try reconnecting
+    if (this.syncService.state.provider) {
+      try {
+        const providerName = this.syncService.state.provider;
+        if (providerName === 'webdav') {
+          const config = await Storage.getSetting('syncWebdavConfig');
+          if (config) {
+            await this.syncService.connect(providerName, config);
+            this.syncService.startAutoSync();
+          }
+        }
+        // gdrive/dropbox would need re-auth via stored tokens (placeholder)
+      } catch (err) {
+        this.logger.warn('App', 'Failed to reconnect sync provider', err);
+      }
+    }
+
+    this._updateSyncStatusUI(this.syncService.getState());
+  }
+
+  /**
+   * Update the sync status indicator in the header.
+   * @param {Object} state - SyncState
+   */
+  _updateSyncStatusUI(state) {
+    let indicator = document.getElementById('sync-status-indicator');
+    if (!indicator) return;
+
+    if (!state.provider) {
+      indicator.classList.add('hidden');
+      return;
+    }
+
+    indicator.classList.remove('hidden');
+    const icon = indicator.querySelector('.sync-status-icon');
+    const text = indicator.querySelector('.sync-status-text');
+    if (!icon || !text) return;
+
+    if (state.status === 'syncing') {
+      icon.className = 'sync-status-icon syncing';
+      text.textContent = 'Syncing...';
+    } else if (state.status === 'error') {
+      icon.className = 'sync-status-icon error';
+      text.textContent = state.errorMessage || 'Sync error';
+    } else {
+      icon.className = 'sync-status-icon idle';
+      const lastSync = state.lastSyncAt
+        ? new Date(state.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'Never';
+      const pending = state.pendingChanges > 0 ? ` (${state.pendingChanges} pending)` : '';
+      text.textContent = 'Synced ' + lastSync + pending;
+    }
+  }
+
+
+  /**
+   * Initialize the NotesManager and wire callbacks.
+   */
+  async initNotesManager() {
+    this.notesManager = new NotesManager({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+      llm: LLM,
+    });
+
+    // Share data
+    this.notesManager.notes = this.notes;
+    this.notesManager.archivedNotes = this.archivedNotes;
+    this.notesManager.trashedNotes = this.trashedNotes;
+    this.notesManager.templates = this.templates;
+    this.notesManager.folders = this.folders;
+    this.notesManager.searchEngine = this.searchEngine;
+    this.notesManager.searchIndexByNoteId = this.searchIndexByNoteId;
+
+    // Wire callbacks so the manager can trigger App-level actions
+    this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
+    this.notesManager.onRenderNotesList = () => this.renderNotesList();
+    this.notesManager.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
+    this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.notesManager.onCreateFirstNote = () => this.createFirstNote();
+    this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
+    this.notesManager.getEditor = () => this.getEditor();
+    this.notesManager.getOpenTabs = () => this.openTabs;
+    this.notesManager.onRenderTabs = () => this.renderTabs();
+    this.notesManager.onSaveTabs = () => this.saveTabs();
+
+    await this.notesManager.init();
+
+    // Sync state back to App for backward compat
+    this.autoTitleIntervalId = this.notesManager.autoTitleIntervalId;
+    this.autoTitleRunning = this.notesManager.autoTitleRunning;
+    this.insightsIntervalId = this.notesManager.insightsIntervalId;
+    this.insightsRunning = this.notesManager.insightsRunning;
+    this.indexerWorker = this.notesManager.indexerWorker;
+  }
+
+  /**
+   * Initialize the ShortcutsManager and wire callbacks.
+   */
+  async initShortcutsManager() {
+    this.shortcutsManager = new ShortcutsManager({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire callbacks so the manager can trigger App-level actions
+    this.shortcutsManager.onToggleSidebar = () => this.toggleSidebar();
+    this.shortcutsManager.onToggleAISidebar = () => this.toggleAISidebar();
+    this.shortcutsManager.onOpenNewTab = () => this.openNewTab();
+    this.shortcutsManager.onOpenNoteById = (noteId) => this.openNoteById(noteId);
+    this.shortcutsManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.shortcutsManager.onOpenSettingsModal = () => this.openSettingsModal();
+    this.shortcutsManager.onCloseAllModals = () => this.closeAllModals();
+    this.shortcutsManager.onToggleShortcutsModal = () => this.toggleShortcutsModal();
+    this.shortcutsManager.onEnsureDailyNote = () => Storage.ensureDailyNote();
+    this.shortcutsManager.onRefreshNotesList = () => this.refreshNotesList();
+    this.shortcutsManager.onCycleTab = (dir) => {
+      if (this.tabController) this.tabController.cycleTab(dir);
+    };
+    this.shortcutsManager.onCloseCurrentTab = () => {
+      if (this.tabController) return this.tabController.closeCurrentTab();
+    };
+    this.shortcutsManager.getEditor = () => this.getEditor();
+    this.shortcutsManager.getOpenTabs = () => this.openTabs;
+    this.shortcutsManager.getNotes = () => this.notes;
+    this.shortcutsManager.getArchivedNotes = () => this.archivedNotes;
+    this.shortcutsManager.getSearchIndexByNoteId = () => this.searchIndexByNoteId;
+    this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
+    this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
+
+    await this.shortcutsManager.init();
+
+    // Sync state back to App for backward compat
+    this.focusMode = this.shortcutsManager.focusMode;
+    this.commandPaletteItems = this.shortcutsManager.commandPaletteItems;
+    this.commandPaletteIndex = this.shortcutsManager.commandPaletteIndex;
+  }
+
+  /**
+   * Initialize the ExportImportService and wire controller references.
+   */
+  async initExportImportService() {
+    this.exportImportService = new ExportImportService({
+      storage: Storage,
+      eventBus: this.eventBus,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire controller references
+    this.exportImportService.settingsController = this.settingsController;
+    this.exportImportService.notesManager = this.notesManager;
+
+    // Wire App-level callbacks
+    this.exportImportService.getEditor = () => this.getEditor();
+    this.exportImportService.onRefreshNotesList = () => this.refreshNotesList();
+    this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+
+    await this.exportImportService.init();
   }
 
   /**
@@ -321,7 +827,7 @@ class App {
     // New Folder button
     if (newFolderBtn) {
       newFolderBtn.addEventListener('click', async () => {
-        const name = prompt('Folder name:', 'New Folder');
+        const name = await promptDialog({ title: 'New Folder', message: 'Folder name:', defaultValue: 'New Folder' });
         if (name) {
           await Storage.createFolder(name);
           await this.refreshNotesList();
@@ -517,6 +1023,10 @@ class App {
    * Render calendar grid
    */
   renderCalendar() {
+    if (this.sidebarController) {
+      this.sidebarController.renderCalendar();
+      return;
+    }
     const daysContainer = document.getElementById('calendar-days');
     const monthLabel = document.getElementById('calendar-month-label');
     if (!daysContainer || !monthLabel) return;
@@ -599,6 +1109,10 @@ class App {
    * Apply sidebar width from settings
    */
   applySidebarWidth() {
+    if (this.sidebarController) {
+      this.sidebarController.applySidebarWidth();
+      return;
+    }
     const sidebar = document.getElementById('sidebar');
     if (sidebar && this.sidebarWidth) {
       sidebar.style.width = this.sidebarWidth + 'px';
@@ -609,6 +1123,10 @@ class App {
    * Apply sidebar view mode (list/cards)
    */
   applySidebarViewMode() {
+    if (this.sidebarController) {
+      this.sidebarController.applySidebarViewMode();
+      return;
+    }
     const notesList = document.getElementById('sidebar-notes-list');
     const listBtn = document.getElementById('sidebar-view-list');
     const cardsBtn = document.getElementById('sidebar-view-cards');
@@ -627,6 +1145,10 @@ class App {
    * Update sidebar tabs active state
    */
   updateSidebarTabs() {
+    if (this.sidebarController) {
+      this.sidebarController.updateSidebarTabs();
+      return;
+    }
     const tabNotes = document.getElementById('sidebar-tab-notes');
     const tabTemplates = document.getElementById('sidebar-tab-templates');
     const tabArchive = document.getElementById('sidebar-tab-archive');
@@ -764,6 +1286,10 @@ class App {
    * Export a note by ID as markdown
    */
   async exportNoteById(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.exportNoteById(noteId);
+      return;
+    }
     try {
       const note = await Storage.getNote(noteId);
       if (!note) {
@@ -1073,6 +1599,10 @@ class App {
    * Show context menu for a note
    */
   showNoteContextMenu(e, noteId, viewType) {
+    if (this.sidebarController) {
+      this.sidebarController.showNoteContextMenu(e, noteId, viewType);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
 
@@ -1131,6 +1661,10 @@ class App {
    * Generate title for a note using AI (ignores all configurations)
    */
   async generateTitleForNote(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.generateTitleForNote(noteId);
+      return;
+    }
     // Check if LLM is configured
     if (!LLM.isConfigured()) {
       Utils.showToast('AI not configured. Please set up in Settings.', 'error');
@@ -1218,6 +1752,10 @@ class App {
    * Extract insights for a note by ID
    */
   async extractInsightsForNote(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.extractInsightsForNote(noteId);
+      return;
+    }
     // Check if LLM is configured
     if (!LLM.isConfigured()) {
       Utils.showToast('AI not configured. Please set up in Settings.', 'error');
@@ -1259,7 +1797,7 @@ class App {
         return;
       }
 
-      console.log('Extracting insights for note content length:', content.length);
+      this.logger.debug('App', 'Extracting insights for note content length:', content.length);
       const insights = await LLM.extractInsights(content, note.name);
 
       if (!insights) {
@@ -1355,6 +1893,10 @@ class App {
    * Archive a note by ID
    */
   async archiveNote(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.archiveNote(noteId);
+      return;
+    }
     await Storage.archiveNote(noteId);
     await this.closeTabForNote(noteId);
     await this.refreshNotesList();
@@ -1366,6 +1908,10 @@ class App {
    * Unarchive a note by ID
    */
   async unarchiveNote(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.unarchiveNote(noteId);
+      return;
+    }
     await Storage.unarchiveNote(noteId);
     await this.refreshNotesList();
     Utils.showToast('Note restored from archive', 'success');
@@ -1375,6 +1921,10 @@ class App {
    * Move note to trash by ID
    */
   async trashNoteById(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.trashNoteById(noteId);
+      return;
+    }
     const result = await Storage.trashNote(noteId);
     await this.closeTabForNote(noteId);
     await this.refreshNotesList();
@@ -1391,6 +1941,10 @@ class App {
    * Restore note from trash by ID
    */
   async restoreNoteById(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.restoreNoteById(noteId);
+      return;
+    }
     await Storage.restoreNote(noteId);
     await this.refreshNotesList();
     Utils.showToast('Note restored from trash', 'success');
@@ -1400,7 +1954,11 @@ class App {
    * Permanently delete note by ID
    */
   async permanentlyDeleteNoteById(noteId) {
-    if (!confirm('Delete this note permanently? This cannot be undone.')) {
+    if (this.notesManager) {
+      await this.notesManager.permanentlyDeleteNoteById(noteId);
+      return;
+    }
+    if (!await confirmDialog({ title: 'Delete Permanently', message: 'Delete this note permanently? This cannot be undone.', confirmText: 'Delete', danger: true })) {
       return;
     }
 
@@ -1412,6 +1970,10 @@ class App {
    * Close tab for a specific note if open
    */
   closeTabForNote(noteId) {
+    if (this.tabController) {
+      this.tabController.closeTabForNote(noteId);
+      return;
+    }
     const tabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
     if (tabIndex !== -1) {
       this.closeTab(tabIndex);
@@ -1422,6 +1984,10 @@ class App {
    * Convert a note to a template
    */
   async convertNoteToTemplate(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.convertNoteToTemplate(noteId);
+      return;
+    }
     const note = await Storage.getNote(noteId);
     if (!note) return;
 
@@ -1436,6 +2002,10 @@ class App {
    * Convert a template back to a note
    */
   async convertTemplateToNote(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.convertTemplateToNote(noteId);
+      return;
+    }
     const note = await Storage.getNote(noteId);
     if (!note) return;
 
@@ -1449,6 +2019,10 @@ class App {
    * Handle when a note is removed (archived/trashed) - create new note or load another
    */
   async handleNoteRemoved(noteId) {
+    if (this.notesManager) {
+      await this.notesManager.handleNoteRemoved(noteId);
+      return;
+    }
     const notes = await Storage.getAllNotes();
 
     if (notes.length === 0) {
@@ -1466,12 +2040,16 @@ class App {
    * Empty trash - permanently delete all trashed notes
    */
   async emptyTrash() {
+    if (this.sidebarController) {
+      await this.sidebarController.emptyTrash();
+      return;
+    }
     if (this.trashedNotes.length === 0) {
       Utils.showToast('Trash is already empty', 'info');
       return;
     }
 
-    if (!confirm(`Permanently delete ${this.trashedNotes.length} note(s)? This cannot be undone.`)) {
+    if (!await confirmDialog({ title: 'Empty Trash', message: `Permanently delete ${this.trashedNotes.length} note(s)? This cannot be undone.`, confirmText: 'Delete', danger: true })) {
       return;
     }
 
@@ -1488,7 +2066,7 @@ class App {
     if (retentionDays > 0) {
       const deletedCount = await Storage.cleanupTrash(retentionDays);
       if (deletedCount > 0) {
-        console.log(`Auto-deleted ${deletedCount} expired note(s) from trash`);
+        this.logger.info('App', `Auto-deleted ${deletedCount} expired note(s) from trash`);
         await this.refreshNotesList();
       }
     }
@@ -1505,6 +2083,10 @@ class App {
    * Update sidebar open/closed state
    */
   updateSidebarState() {
+    if (this.sidebarController) {
+      this.sidebarController.updateSidebarState();
+      return;
+    }
     const sidebar = document.getElementById('sidebar');
     const toggleBtn = document.getElementById('sidebar-toggle');
     const headerLeft = document.querySelector('.header-left');
@@ -1531,12 +2113,22 @@ class App {
    * Toggle sidebar open/closed and persist the state
    */
   async toggleSidebar(force) {
+    if (this.sidebarController) {
+      await this.sidebarController.toggleSidebar(force);
+      this.sidebarOpen = this.sidebarController.sidebarOpen;
+      return;
+    }
     this.sidebarOpen = force !== undefined ? force : !this.sidebarOpen;
     this.updateSidebarState();
     await Storage.setSetting('sidebarOpen', this.sidebarOpen);
   }
 
   toggleFocusMode(force) {
+    if (this.shortcutsManager) {
+      this.shortcutsManager.toggleFocusMode(force);
+      this.focusMode = this.shortcutsManager.focusMode;
+      return;
+    }
     this.focusMode = force !== undefined ? force : !this.focusMode;
     if (this.focusMode) {
       this.closeAllModals();
@@ -1554,13 +2146,43 @@ class App {
     this.templates = await Storage.getTemplates();
     this.folders = await Storage.getAllFolders();
     await this.refreshSearchIndexEntries();
-    this.updateBadgeCounts();
-    await this.renderNotesList();
-    this.renderCalendar();
+
+    // Sync data to sidebar controller
+    if (this.sidebarController) {
+      this.sidebarController.notes = this.notes;
+      this.sidebarController.archivedNotes = this.archivedNotes;
+      this.sidebarController.trashedNotes = this.trashedNotes;
+      this.sidebarController.templates = this.templates;
+      this.sidebarController.folders = this.folders;
+      this.sidebarController.searchIndexByNoteId = this.searchIndexByNoteId;
+      this.sidebarController.updateBadgeCounts();
+      await this.sidebarController.renderNotesList();
+      this.sidebarController.renderCalendar();
+      this.sidebarController.updateSidebarTabs();
+    } else {
+      this.updateBadgeCounts();
+      await this.renderNotesList();
+      this.renderCalendar();
+      this.updateSidebarTabs();
+    }
+
+    // Sync data to notes manager
+    if (this.notesManager) {
+      this.notesManager.notes = this.notes;
+      this.notesManager.archivedNotes = this.archivedNotes;
+      this.notesManager.trashedNotes = this.trashedNotes;
+      this.notesManager.templates = this.templates;
+      this.notesManager.folders = this.folders;
+      this.notesManager.searchIndexByNoteId = this.searchIndexByNoteId;
+    }
+
     this.refreshPageSelector();
     this.updateEmptyState();
-    this.updateSidebarTabs();
-    if (this.isCommandPaletteOpen()) {
+    if (this.shortcutsManager) {
+      if (this.shortcutsManager.isCommandPaletteOpen()) {
+        this.shortcutsManager.refreshCommandPaletteResults();
+      }
+    } else if (this.isCommandPaletteOpen()) {
       this.refreshCommandPaletteResults();
     }
   }
@@ -1569,6 +2191,10 @@ class App {
    * Update badge counts for archive and trash tabs
    */
   updateBadgeCounts() {
+    if (this.sidebarController) {
+      this.sidebarController.updateBadgeCounts();
+      return;
+    }
     const archiveBadge = document.getElementById('archive-count');
     const trashBadge = document.getElementById('trash-count');
 
@@ -1592,6 +2218,11 @@ class App {
   }
 
   async refreshSearchIndexEntries() {
+    if (this.notesManager) {
+      const entries = await this.notesManager.refreshSearchIndexEntries();
+      this.searchIndexByNoteId = this.notesManager.searchIndexByNoteId;
+      return entries;
+    }
     const entries = await Storage.getSearchIndex();
     this.searchIndexByNoteId = new Map(entries.map(entry => [entry.noteId, entry]));
     return entries;
@@ -1629,12 +2260,43 @@ class App {
     editorContainer.classList.add('hidden');
     document.getElementById('note-tabs').innerHTML = '';
     this.openTabs = [];
+    if (this.tabController) {
+      this.tabController.openTabs = this.openTabs;
+    }
+  }
+
+  /**
+   * Update a single note's preview data in the sidebar without a full refresh.
+   * Called by the editor after each save so the sidebar stays current.
+   * @param {Object} noteData - The saved note object with updated preview/todoProgress
+   */
+  updateSidebarNotePreview(noteData) {
+    if (!noteData || !noteData.id) return;
+    const lists = [this.notes, this.archivedNotes];
+    if (this.sidebarController) {
+      lists.push(this.sidebarController.notes, this.sidebarController.archivedNotes);
+    }
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      const note = list.find(n => n.id === noteData.id);
+      if (note) {
+        note.preview = noteData.preview;
+        note.todoProgress = noteData.todoProgress;
+        note.updatedAt = noteData.updatedAt || Date.now();
+        note.name = noteData.name;
+      }
+    }
+    this.renderNotesList();
   }
 
   /**
    * Render notes list in sidebar (with folders)
    */
   async renderNotesList() {
+    if (this.sidebarController) {
+      await this.sidebarController.renderNotesList();
+      return;
+    }
     const list = document.getElementById('sidebar-notes-list');
     if (!list) return;
 
@@ -2033,91 +2695,27 @@ class App {
    * Setup tab functionality
    */
   setupTabs() {
-    const newTabBtn = document.getElementById('new-tab-btn');
-
-    if (newTabBtn) {
-      newTabBtn.addEventListener('click', async () => {
-        await this.openNewTab();
-      });
-    }
-
-    // Middle-click on tab bar to open new tab
-    const tabsContainer = document.getElementById('note-tabs');
-    if (tabsContainer) {
-      tabsContainer.addEventListener('auxclick', async (e) => {
-        if (e.button === 1 && e.target === tabsContainer) {
-          e.preventDefault();
-          await this.openNewTab();
-        }
-      });
-    }
+    if (this.tabController) return;
+    // Legacy fallback — TabController handles this in initTabController
   }
 
   /**
    * Load saved tabs from storage or create initial tab
    */
   async loadSavedTabs() {
-    const savedTabs = await Storage.getSetting('openTabs', null);
-    const savedActiveIndex = await Storage.getSetting('activeTabIndex', 0);
-    this.splitViewEnabled = await Storage.getSetting('splitViewEnabled', false);
-    const secondaryNoteId = await Storage.getSetting('secondaryNoteId', null);
-
-    if (savedTabs && savedTabs.length > 0) {
-      // Validate that saved tabs still exist
-      const validTabs = [];
-      for (const tab of savedTabs) {
-        const note = await Storage.getNote(tab.noteId);
-        if (note) {
-          validTabs.push({ noteId: note.id, name: note.name || 'Untitled' });
-        }
-      }
-
-      if (validTabs.length > 0) {
-        this.openTabs = validTabs;
-        this.activeTabIndex = Math.min(savedActiveIndex, validTabs.length - 1);
-        await this.switchToTab(this.activeTabIndex);
-
-        if (this.splitViewEnabled) {
-          // Force toggle to enable UI
-          this.splitViewEnabled = false;
-          await this.toggleSplitView();
-          if (secondaryNoteId) {
-            await this.secondaryEditor.loadNote(secondaryNoteId);
-          }
-        }
-
-        this.renderTabs();
-        return;
-      }
+    if (this.tabController) {
+      await this.tabController.loadSavedTabs();
+      return;
     }
-
-    // No saved tabs or all invalid - create initial tab with first note
-    if (this.notes.length > 0) {
-      this.openTabs = [{ noteId: this.notes[0].id, name: this.notes[0].name || 'Untitled' }];
-      this.activeTabIndex = 0;
-      await this.editor.loadNote(this.notes[0].id);
-    }
-
-    if (this.splitViewEnabled) {
-      this.splitViewEnabled = false;
-      await this.toggleSplitView();
-      if (secondaryNoteId) {
-        await this.secondaryEditor.loadNote(secondaryNoteId);
-      }
-    }
-
-    this.renderTabs();
   }
 
   /**
    * Save tabs to storage
    */
   async saveTabs() {
-    await Storage.setSetting('openTabs', this.openTabs);
-    await Storage.setSetting('activeTabIndex', this.activeTabIndex);
-    await Storage.setSetting('splitViewEnabled', this.splitViewEnabled);
-    if (this.secondaryEditor && this.secondaryEditor.noteId) {
-      await Storage.setSetting('secondaryNoteId', this.secondaryEditor.noteId);
+    if (this.tabController) {
+      await this.tabController.saveTabs();
+      return;
     }
   }
 
@@ -2125,134 +2723,59 @@ class App {
    * Render tabs in the header
    */
   renderTabs() {
-    const container = document.getElementById('note-tabs');
-    if (!container) return;
-
-    container.innerHTML = '';
-
-    this.openTabs.forEach((tab, index) => {
-      const tabEl = document.createElement('button');
-      tabEl.className = 'note-tab';
-      if (index === this.activeTabIndex) {
-        tabEl.classList.add('active');
-      }
-      tabEl.dataset.index = index;
-
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'note-tab-name';
-      nameSpan.textContent = tab.name || 'Untitled';
-      tabEl.appendChild(nameSpan);
-
-      // Close button (only show if more than one tab)
-      if (this.openTabs.length > 1) {
-        const closeBtn = document.createElement('span');
-        closeBtn.className = 'note-tab-close';
-        closeBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>`;
-        closeBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          await this.closeTab(index);
-        });
-        tabEl.appendChild(closeBtn);
-      }
-
-      // Click to switch tab
-      tabEl.addEventListener('click', async () => {
-        await this.switchToTab(index);
-      });
-
-      // Middle-click to close tab
-      tabEl.addEventListener('auxclick', async (e) => {
-        if (e.button === 1) {
-          e.preventDefault();
-          await this.closeTab(index);
-        }
-      });
-
-      container.appendChild(tabEl);
-    });
+    if (this.tabController) {
+      this.tabController.renderTabs();
+      return;
+    }
   }
 
   /**
    * Switch to a specific tab
    */
   async switchToTab(index) {
-    if (index < 0 || index >= this.openTabs.length) return;
-
-    this.activeTabIndex = index;
-    const tab = this.openTabs[index];
-
-    await this.getEditor().loadNote(tab.noteId);
-    this.renderTabs();
-    this.renderNotesList();
-    await this.saveTabs();
+    if (this.tabController) {
+      await this.tabController.switchToTab(index);
+      return;
+    }
   }
 
   /**
    * Open a note in a new tab
    */
   async openNoteInNewTab(noteId) {
-    const note = await Storage.getNote(noteId);
-    if (!note) return;
-
-    // Check if already open
-    const existingIndex = this.openTabs.findIndex(t => t.noteId === noteId);
-    if (existingIndex !== -1) {
-      await this.switchToTab(existingIndex);
+    if (this.tabController) {
+      await this.tabController.openNoteInNewTab(noteId);
       return;
     }
-
-    // Add new tab
-    this.openTabs.push({ noteId: note.id, name: note.name || 'Untitled' });
-    this.activeTabIndex = this.openTabs.length - 1;
-
-    await this.getEditor().loadNote(noteId);
-    this.renderTabs();
-    this.renderNotesList();
-    await this.saveTabs();
   }
 
   /**
    * Open a new tab with a new note
    */
   async openNewTab() {
-    const note = await Storage.createNote('Untitled');
-    await this.refreshNotesList();
-    await this.openNoteInNewTab(note.id);
-    document.getElementById('page-title').focus();
+    if (this.tabController) {
+      await this.tabController.openNewTab();
+      return;
+    }
   }
 
   /**
    * Close a tab
    */
   async closeTab(index) {
-    if (this.openTabs.length <= 1) return; // Don't close last tab
-
-    this.openTabs.splice(index, 1);
-
-    // Adjust active index if needed
-    if (this.activeTabIndex >= this.openTabs.length) {
-      this.activeTabIndex = this.openTabs.length - 1;
-    } else if (this.activeTabIndex > index) {
-      this.activeTabIndex--;
-    } else if (this.activeTabIndex === index) {
-      // Stay at same index (which now points to next tab) or go to previous
-      this.activeTabIndex = Math.min(index, this.openTabs.length - 1);
+    if (this.tabController) {
+      await this.tabController.closeTab(index);
+      return;
     }
-
-    await this.switchToTab(this.activeTabIndex);
   }
 
   /**
    * Update tab name when note title changes
    */
   updateCurrentTabName(name) {
-    if (this.openTabs[this.activeTabIndex]) {
-      this.openTabs[this.activeTabIndex].name = name || 'Untitled';
-      this.renderTabs();
-      this.saveTabs();
+    if (this.tabController) {
+      this.tabController.updateCurrentTabName(name);
+      return;
     }
   }
 
@@ -2260,19 +2783,9 @@ class App {
    * Open note in current tab or new tab based on modifier key
    */
   async openNoteWithModifier(noteId, event) {
-    if (event && (event.ctrlKey || event.metaKey)) {
-      // Ctrl/Cmd+click opens in new tab
-      await this.openNoteInNewTab(noteId);
-    } else {
-      // Regular click opens in current tab
-      const note = await Storage.getNote(noteId);
-      if (!note) return;
-
-      this.openTabs[this.activeTabIndex] = { noteId: note.id, name: note.name || 'Untitled' };
-      await this.getEditor().loadNote(noteId);
-      this.renderTabs();
-      this.renderNotesList();
-      await this.saveTabs();
+    if (this.tabController) {
+      await this.tabController.openNoteWithModifier(noteId, event);
+      return;
     }
   }
 
@@ -2280,341 +2793,44 @@ class App {
    * Setup settings modal
    */
   setupSettings() {
-    const modal = document.getElementById('settings-modal');
-    const settingsBtn = document.getElementById('settings-btn');
-    if (!modal || !settingsBtn) return;
-
-    const closeBtn = modal.querySelector('.close-btn');
-
-    settingsBtn.addEventListener('click', async () => {
-      await this.openSettingsModal();
-    });
-
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => {
-        modal.classList.add('hidden');
-      });
-    }
-
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        modal.classList.add('hidden');
-      }
-    });
-
-    // Theme select
-    const themeSelect = document.getElementById('theme-select');
-    if (themeSelect) {
-      themeSelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('theme', e.target.value);
-        this.applyTheme();
-      });
-    }
-
-    // Font select
-    const fontSelect = document.getElementById('font-select');
-    if (fontSelect) {
-      fontSelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('font', e.target.value);
-        this.applyFont();
-      });
-    }
-
-    // Width select
-    const widthSelect = document.getElementById('width-select');
-    if (widthSelect) {
-      widthSelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('width', e.target.value);
-        this.applyWidth();
-      });
-    }
-
-    // Export All
-    const exportAllBtn = document.getElementById('export-all-btn');
-    if (exportAllBtn) {
-      exportAllBtn.addEventListener('click', async () => {
-        await this.exportAll();
-      });
-    }
-
-    // Export Current Note
-    const exportCurrentBtn = document.getElementById('export-current-btn');
-    if (exportCurrentBtn) {
-      exportCurrentBtn.addEventListener('click', async () => {
-        await this.exportCurrentNote();
-      });
-    }
-
-    // Export ZIP
-    const exportZipBtn = document.getElementById('export-zip-btn');
-    if (exportZipBtn) {
-      exportZipBtn.addEventListener('click', async () => {
-        await this.exportAllAsMarkdown();
-      });
-    }
-
-    // Create Backup
-    const backupBtn = document.getElementById('backup-btn');
-    if (backupBtn) {
-      backupBtn.addEventListener('click', async () => {
-        await this.createBackup();
-      });
-    }
-
-    // Import
-    const importBtn = document.getElementById('import-btn');
-    const importInput = document.getElementById('import-input');
-    if (importBtn && importInput) {
-      importBtn.addEventListener('click', () => {
-        importInput.click();
-      });
-
-      importInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (file) {
-          await this.importFromFile(file);
-        }
-        e.target.value = '';
-      });
-    }
-    // Delete note
-    const deletePageBtn = document.getElementById('delete-page-btn');
-    if (deletePageBtn) {
-      deletePageBtn.addEventListener('click', async () => {
-        await this.deleteCurrentNote();
-      });
-    }
-
-    // Trash retention setting
-    const trashRetentionSelect = document.getElementById('trash-retention-select');
-    if (trashRetentionSelect) {
-      trashRetentionSelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('trashRetention', parseInt(e.target.value));
-      });
-    }
-
-    // Daily Note template
-    const dailyNoteTemplateSelect = document.getElementById('daily-note-template-select');
-    if (dailyNoteTemplateSelect) {
-      dailyNoteTemplateSelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('dailyNoteTemplate', e.target.value);
-      });
-    }
-
-    // Auto Backup settings
-    const autoBackupToggle = document.getElementById('auto-backup-toggle');
-    if (autoBackupToggle) {
-      autoBackupToggle.addEventListener('change', async (e) => {
-        await Storage.setSetting('autoBackupEnabled', e.target.checked);
-      });
-    }
-
-    const backupFrequencySelect = document.getElementById('backup-frequency-select');
-    if (backupFrequencySelect) {
-      backupFrequencySelect.addEventListener('change', async (e) => {
-        await Storage.setSetting('autoBackupFrequency', parseInt(e.target.value));
-      });
-    }
-
-    // Theme Builder button
-    const openThemeBuilderBtn = document.getElementById('open-theme-builder-btn');
-    if (openThemeBuilderBtn) {
-      openThemeBuilderBtn.addEventListener('click', () => {
-        const modal = document.getElementById('settings-modal');
-        if (modal) modal.classList.add('hidden');
-        this.openThemeBuilder();
-      });
-    }
-
-    // Help / Shortcuts button
-    const shortcutsBtn = document.getElementById('shortcuts-btn');
-    if (shortcutsBtn) {
-      shortcutsBtn.addEventListener('click', () => {
-        this.toggleShortcutsModal();
-      });
-    }
-
-    const shortcutsModal = document.getElementById('shortcuts-modal');
-    if (shortcutsModal) {
-      const closeBtn = shortcutsModal.querySelector('.close-btn');
-      closeBtn?.addEventListener('click', () => this.toggleShortcutsModal(false));
-      shortcutsModal.addEventListener('click', (e) => {
-        if (e.target === shortcutsModal) this.toggleShortcutsModal(false);
-      });
-    }
+    if (this.settingsController) return; // Handled by SettingsController
   }
-
   /**
    * Update settings UI
    */
   async updateSettingsUI() {
-    // Theme
-    const themeSelect = document.getElementById('theme-select');
-    if (themeSelect) {
-      const options = await Themes.getThemeOptions();
-      const currentTheme = await Storage.getSetting('theme', 'system');
-
-      themeSelect.innerHTML = '';
-      options.forEach(opt => {
-        const option = document.createElement('option');
-        option.value = opt.id;
-        option.textContent = opt.name;
-        option.selected = opt.id === currentTheme;
-        themeSelect.appendChild(option);
-      });
-      themeSelect.value = currentTheme;
-    }
-
-    // Font
-    const font = await Storage.getSetting('font', 'default');
-    document.getElementById('font-select').value = font;
-
-    // Width
-    const width = await Storage.getSetting('width', 'default');
-    document.getElementById('width-select').value = width;
-
-    // LLM settings
-    const provider = await Storage.getSetting('llmProvider', 'none');
-    const apiKey = await Storage.getSetting('llmApiKey', '');
-    const model = await Storage.getSetting('llmModel', '');
-    const ollamaUrl = await Storage.getSetting('ollamaUrl', 'http://localhost:11434');
-
-    document.getElementById('llm-provider-select').value = provider;
-    document.getElementById('llm-api-key').value = apiKey;
-
-    const ollamaUrlInput = document.getElementById('ollama-url');
-    if (ollamaUrlInput) {
-      ollamaUrlInput.value = ollamaUrl;
-    }
-
-    this.updateLLMSettingsVisibility(provider);
-    await this.loadAndPopulateModels(provider, apiKey);
-
-    if (model) {
-      const modelSelect = document.getElementById('llm-model-select');
-      if (modelSelect) {
-        modelSelect.value = model;
+    if (this.settingsController) {
+      await this.settingsController.updateSettingsUI();
+      // Also update LLM settings from AIChatController
+      if (this.aiChatController) {
+        await this.aiChatController.updateLLMSettingsUI();
       }
+      return;
     }
-
-    // Auto-title settings
-    const autoTitleEnabled = await Storage.getSetting('autoTitleEnabled', false);
-    const autoTitleInterval = await Storage.getSetting('autoTitleInterval', 15);
-
-    const autoTitleEnabledCheckbox = document.getElementById('auto-title-enabled');
-    const autoTitleIntervalSelect = document.getElementById('auto-title-interval');
-
-    if (autoTitleEnabledCheckbox) {
-      autoTitleEnabledCheckbox.checked = autoTitleEnabled;
-    }
-    if (autoTitleIntervalSelect) {
-      autoTitleIntervalSelect.value = autoTitleInterval.toString();
-    }
-
-    // Update auto-title interval visibility based on enabled state
-    this.updateAutoTitleIntervalVisibility(autoTitleEnabled);
-
-    // Insights extraction settings
-    const insightsEnabled = await Storage.getSetting('insightsEnabled', false);
-    const insightsInterval = await Storage.getSetting('insightsInterval', 360);
-
-    const insightsEnabledCheckbox = document.getElementById('insights-enabled');
-    const insightsIntervalSelect = document.getElementById('insights-interval');
-
-    if (insightsEnabledCheckbox) {
-      insightsEnabledCheckbox.checked = insightsEnabled;
-    }
-
-    // Auto Backup settings
-    const autoBackupEnabled = await Storage.getSetting('autoBackupEnabled', false);
-    const autoBackupFrequency = await Storage.getSetting('autoBackupFrequency', 7);
-
-    const autoBackupToggle = document.getElementById('auto-backup-toggle');
-    const backupFrequencySelect = document.getElementById('backup-frequency-select');
-
-    if (autoBackupToggle) {
-      autoBackupToggle.checked = autoBackupEnabled;
-    }
-    if (backupFrequencySelect) {
-      backupFrequencySelect.value = autoBackupFrequency.toString();
-    }
-    if (insightsIntervalSelect) {
-      insightsIntervalSelect.value = insightsInterval.toString();
-    }
-
-    // Update insights interval visibility based on enabled state
-    this.updateInsightsIntervalVisibility(insightsEnabled);
-
-    // Trash retention
-    const trashRetention = await Storage.getSetting('trashRetention', 30);
-    const trashRetentionSelect = document.getElementById('trash-retention-select');
-    if (trashRetentionSelect) {
-      trashRetentionSelect.value = (await Storage.getSetting('trashRetention', 30)).toString();
-    }
-
-    // Daily Note Template
-    const dailyNoteTemplateSelect = document.getElementById('daily-note-template-select');
-    if (dailyNoteTemplateSelect) {
-      const templates = await Storage.getTemplates();
-      const currentTemplateId = await Storage.getSetting('dailyNoteTemplate', '');
-
-      dailyNoteTemplateSelect.innerHTML = '<option value="">No template</option>';
-      templates.forEach(t => {
-        const option = document.createElement('option');
-        option.value = t.id;
-        option.textContent = t.name;
-        option.selected = t.id === currentTemplateId;
-        dailyNoteTemplateSelect.appendChild(option);
-      });
-    }
-
-    this.renderAIPromptTemplateSettings();
-
-    // Notes list
-    await this.updateNotesList();
   }
 
   /**
    * Update notes list in settings
    */
   async updateNotesList() {
-    const list = document.getElementById('pages-list');
-    const notes = await Storage.getAllNotes();
-
-    list.innerHTML = '';
-
-    notes.forEach((note) => {
-      const item = document.createElement('div');
-      item.className = 'page-item';
-      if (note.id === this.editor.noteId) {
-        item.classList.add('active');
-      }
-
-      item.innerHTML = `
-        <span class="page-item-name">${note.name || 'Untitled'}</span>
-        <span class="page-item-date">${Utils.formatDate(note.updatedAt)}</span>
-      `;
-
-      item.addEventListener('click', async () => {
-        await this.editor.loadNote(note.id);
-        await this.refreshNotesList();
-        document.getElementById('settings-modal').classList.add('hidden');
-      });
-
-      list.appendChild(item);
-    });
+    if (this.settingsController) {
+      await this.settingsController.updateNotesList();
+      return;
+    }
   }
 
   async openSettingsModal() {
-    const modal = document.getElementById('settings-modal');
-    if (!modal) return;
-
-    this.closeAllModals();
-    modal.classList.remove('hidden');
-    await this.updateSettingsUI();
+    if (this.settingsController) {
+      await this.settingsController.openSettingsModal();
+      return;
+    }
   }
 
   setupCommandPalette() {
+    if (this.shortcutsManager) {
+      // Already initialized via initShortcutsManager
+      return;
+    }
     const modal = document.getElementById('command-palette-modal');
     const input = document.getElementById('command-palette-input');
     const results = document.getElementById('command-palette-results');
@@ -2652,11 +2868,18 @@ class App {
   }
 
   isCommandPaletteOpen() {
+    if (this.shortcutsManager) {
+      return this.shortcutsManager.isCommandPaletteOpen();
+    }
     const modal = document.getElementById('command-palette-modal');
     return Boolean(modal && !modal.classList.contains('hidden'));
   }
 
   toggleCommandPalette(force, initialQuery = '') {
+    if (this.shortcutsManager) {
+      this.shortcutsManager.toggleCommandPalette(force, initialQuery);
+      return;
+    }
     const modal = document.getElementById('command-palette-modal');
     const input = document.getElementById('command-palette-input');
 
@@ -2754,6 +2977,10 @@ class App {
   }
 
   refreshCommandPaletteResults(query) {
+    if (this.shortcutsManager) {
+      this.shortcutsManager.refreshCommandPaletteResults(query);
+      return;
+    }
     if (typeof CommandPaletteUtils === 'undefined') {
       return;
     }
@@ -3540,7 +3767,7 @@ class App {
     await Storage.updateNoteLinks(noteId, linkNames);
 
     if (this.triggerIndexing) {
-      this.triggerIndexing();
+      this.triggerIndexing(noteId);
     }
   }
 
@@ -3678,6 +3905,10 @@ class App {
    * Switch between AI chat tabs
    */
   switchAITab(tab) {
+    if (this.aiChatController) {
+      this.aiChatController.switchAITab(tab);
+      return;
+    }
     const tabNote = document.getElementById('ai-tab-note');
     const tabAll = document.getElementById('ai-tab-all');
     const panelNote = document.getElementById('ai-panel-note');
@@ -3744,6 +3975,11 @@ class App {
    * Toggle AI sidebar open/closed
    */
   toggleAISidebar() {
+    if (this.aiChatController) {
+      this.aiChatController.toggleAISidebar();
+      this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
+      return;
+    }
     if (this.aiSidebarOpen) {
       this.closeAISidebar();
     } else {
@@ -3755,6 +3991,11 @@ class App {
    * Open AI sidebar
    */
   openAISidebar() {
+    if (this.aiChatController) {
+      this.aiChatController.openAISidebar();
+      this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
+      return;
+    }
     const sidebar = document.getElementById('ai-sidebar');
     const floatingBtn = document.getElementById('ai-floating-btn');
 
@@ -3781,6 +4022,11 @@ class App {
    * Close AI sidebar
    */
   closeAISidebar() {
+    if (this.aiChatController) {
+      this.aiChatController.closeAISidebar();
+      this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
+      return;
+    }
     const sidebar = document.getElementById('ai-sidebar');
     const floatingBtn = document.getElementById('ai-floating-btn');
 
@@ -3939,6 +4185,10 @@ class App {
    * Update AI sidebar state based on LLM configuration
    */
   updateAISidebarState() {
+    if (this.aiChatController) {
+      this.aiChatController.updateAISidebarState();
+      return;
+    }
     const notConfigured = document.getElementById('ai-not-configured-sidebar');
     const chatMessages = document.getElementById('ai-chat-messages');
     const chatInputArea = document.querySelector('.ai-chat-input-area');
@@ -4329,7 +4579,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = Utils.parseMarkdown(content);
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
     } else {
       contentEl.textContent = content;
     }
@@ -4356,8 +4606,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
           </svg>
-          <span>${note.title}</span>
         `;
+        const badgeTitleSpan = document.createElement('span');
+        badgeTitleSpan.textContent = note.title;
+        badgeEl.appendChild(badgeTitleSpan);
         badgeEl.addEventListener('click', () => {
           this.closeAISidebar();
           this.openNoteById(note.id);
@@ -4409,29 +4661,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Toggle the statistics dashboard
    */
   async toggleStats() {
-    const dashboard = document.getElementById('stats-dashboard');
-    const main = document.querySelector('main');
-    const sidebar = document.getElementById('sidebar');
-    const aiSidebar = document.getElementById('ai-sidebar');
-
-    if (this.statsOpen) {
-      // Closing stats
-      dashboard.classList.add('hidden');
-      dashboard.classList.remove('active');
-      main.classList.remove('hidden');
-      if (this.sidebarOpen) sidebar.classList.remove('hidden');
-      if (this.aiSidebarOpen) aiSidebar.classList.remove('hidden');
-      this.statsOpen = false;
-    } else {
-      // Opening stats
-      this.statsOpen = true;
-      dashboard.classList.remove('hidden');
-      setTimeout(() => dashboard.classList.add('active'), 10);
-      main.classList.add('hidden');
-      sidebar.classList.add('hidden');
-      aiSidebar.classList.add('hidden');
-
-      await this.renderAnalytics();
+    if (this.analyticsController) {
+      this.analyticsController.notes = this.notes;
+      this.analyticsController.folders = this.folders;
+      await this.analyticsController.toggleStats();
+      this.statsOpen = this.analyticsController.statsOpen;
+      return;
     }
   }
 
@@ -4439,112 +4674,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Render analytics charts and stats
    */
   async renderAnalytics() {
-    if (typeof Analytics === 'undefined') return;
-
-    // Show loading state or refresh counts
-    const stats = await Analytics.getGlobalStats();
-    document.getElementById('stat-total-notes').textContent = stats.totalNotes;
-    document.getElementById('stat-total-words').textContent = stats.totalWords.toLocaleString();
-
-    const dailyNotes = this.notes.filter(n => n.name && /^\d{4}-\d{2}-\d{2}$/.test(n.name));
-    document.getElementById('stat-daily-notes').textContent = dailyNotes.length;
-
-    const allText = this.notes.map(n => n.name).join(' ');
-    const tags = Analytics.extractTags(allText); // Just a rough count for now
-    document.getElementById('stat-active-tags').textContent = tags.length;
-
-    // Destroy existing charts to prevent memory leaks/overlap
-    Object.values(this.charts).forEach(chart => chart.destroy());
-
-    // 1. Activity Chart
-    const activityData = await Analytics.getActivityData(30);
-    this.charts.activity = new Chart(document.getElementById('activity-chart'), {
-      type: 'line',
-      data: {
-        labels: activityData.map(d => d.date),
-        datasets: [{
-          label: 'Updates',
-          data: activityData.map(d => d.updated),
-          borderColor: '#4d9eff',
-          backgroundColor: 'rgba(77, 158, 255, 0.1)',
-          fill: true,
-          tension: 0.4
-        }, {
-          label: 'Created',
-          data: activityData.map(d => d.created),
-          borderColor: '#8e44ad',
-          backgroundColor: 'rgba(142, 68, 173, 0.1)',
-          fill: true,
-          tension: 0.4
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'bottom' } },
-        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
-      }
-    });
-
-    // 2. Content Type Chart
-    const typeBreakdown = await Analytics.getContentTypeBreakdown();
-    this.charts.type = new Chart(document.getElementById('content-chart'), {
-      type: 'doughnut',
-      data: {
-        labels: Object.keys(typeBreakdown),
-        datasets: [{
-          data: Object.values(typeBreakdown),
-          backgroundColor: ['#4d9eff', '#27ae60', '#f1c40f', '#e67e22', '#e74c3c', '#95a5a6', '#34495e']
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { position: 'right' } }
-      }
-    });
-
-    // 3. Tags Chart
-    const topTags = await Analytics.getTagDistribution();
-    this.charts.tags = new Chart(document.getElementById('tags-chart'), {
-      type: 'bar',
-      data: {
-        labels: topTags.map(t => t[0]),
-        datasets: [{
-          label: 'Usage Count',
-          data: topTags.map(t => t[1]),
-          backgroundColor: '#4d9eff'
-        }]
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } }
-      }
-    });
-
-    // 4. Folders Chart
-    const folderStats = this.folders.map(f => ({
-      name: f.name,
-      count: this.notes.filter(n => n.folderId === f.id).length
-    })).sort((a, b) => b.count - a.count).slice(0, 7);
-
-    this.charts.folders = new Chart(document.getElementById('folders-chart'), {
-      type: 'polarArea',
-      data: {
-        labels: folderStats.map(f => f.name),
-        datasets: [{
-          data: folderStats.map(f => f.count),
-          backgroundColor: ['rgba(77, 158, 255, 0.6)', 'rgba(46, 204, 113, 0.6)', 'rgba(231, 76, 60, 0.6)', 'rgba(241, 196, 15, 0.6)']
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { position: 'right' } }
-      }
-    });
+    if (this.analyticsController) {
+      this.analyticsController.notes = this.notes;
+      this.analyticsController.folders = this.folders;
+      await this.analyticsController.renderAnalytics();
+      return;
+    }
   }
 
   /**
@@ -4560,7 +4695,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       await this.openNoteById(note.id);
     } else {
       // Note doesn't exist - create a new one?
-      if (confirm(`Note "${name}" does not exist. Create it?`)) {
+      if (await confirmDialog({ title: 'Create Note', message: `Note "${name}" does not exist. Create it?` })) {
         const newNote = await Storage.createNote(name);
         this.notes.unshift(newNote);
         await this.refreshNotesList();
@@ -4609,7 +4744,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // For assistant messages, render markdown; for user messages, use plain text
     if (type === 'assistant') {
-      contentEl.innerHTML = Utils.parseMarkdown(content);
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
     } else {
       contentEl.textContent = content;
     }
@@ -4791,14 +4926,14 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   /**
    * Handle a generated title from AI
    */
-  handleGeneratedTitle(response) {
+  async handleGeneratedTitle(response) {
     // Clean up the response - take first line, remove quotes
     let title = response.split('\n')[0].trim();
     title = title.replace(/^["']|["']$/g, '').trim();
 
     if (title && title.length < 100) {
       // Ask user if they want to apply the title
-      const apply = confirm(`Apply this title to your note?\n\n"${title}"`);
+      const apply = await confirmDialog({ title: 'Apply Title', message: `Apply this title to your note?\n\n"${title}"` });
       if (apply) {
         this.applyGeneratedTitle(title);
       }
@@ -4922,6 +5057,33 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       });
     }
 
+    // API key reveal toggle (Req 38.3)
+    document.querySelectorAll('.api-key-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = btn.closest('.api-key-input-group');
+        const input = group?.querySelector('input');
+        if (!input) return;
+        const isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+        btn.title = isPassword ? 'Hide API key' : 'Show API key';
+        btn.querySelector('.eye-icon')?.classList.toggle('hidden', isPassword);
+        btn.querySelector('.eye-off-icon')?.classList.toggle('hidden', !isPassword);
+      });
+    });
+
+    // Clear API key button (Req 38.2)
+    document.querySelectorAll('.api-key-clear-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const group = btn.closest('.api-key-input-group');
+        const input = group?.querySelector('input');
+        if (!input || !input.value) return;
+        await LLM.setApiKey('');
+        document.querySelectorAll('#llm-api-key').forEach(el => { el.value = ''; });
+        this.updateAISidebarState();
+        Utils.showToast('API key cleared', 'success');
+      });
+    });
+
     // Auto-title settings
     const autoTitleEnabled = document.getElementById('auto-title-enabled');
     const autoTitleInterval = document.getElementById('auto-title-interval');
@@ -4997,7 +5159,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Update LLM settings visibility based on provider
    */
   updateLLMSettingsVisibility(provider) {
-    const apiKeyRow = document.querySelector('.llm-api-key-row');
+    const apiKeyRows = document.querySelectorAll('.llm-api-key-row');
     const modelRow = document.querySelector('.llm-model-row');
     const ollamaUrlRow = document.querySelector('.llm-ollama-url-row');
     const ollamaHint = document.querySelector('.llm-ollama-hint');
@@ -5012,15 +5174,15 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const isOllama = provider === 'ollama';
 
     if (provider === 'none') {
-      apiKeyRow.classList.add('hidden');
+      apiKeyRows.forEach(el => el.classList.add('hidden'));
       modelRow.classList.add('hidden');
       if (ollamaUrlRow) ollamaUrlRow.classList.add('hidden');
     } else if (isOllama) {
-      apiKeyRow.classList.add('hidden');
+      apiKeyRows.forEach(el => el.classList.add('hidden'));
       modelRow.classList.remove('hidden');
       if (ollamaUrlRow) ollamaUrlRow.classList.remove('hidden');
     } else {
-      apiKeyRow.classList.remove('hidden');
+      apiKeyRows.forEach(el => el.classList.remove('hidden'));
       modelRow.classList.remove('hidden');
       if (ollamaUrlRow) ollamaUrlRow.classList.add('hidden');
     }
@@ -5154,6 +5316,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Apply font
    */
   async applyFont() {
+    if (this.settingsController) {
+      await this.settingsController.applyFont();
+      return;
+    }
     const font = await Storage.getSetting('font', 'default');
     document.documentElement.dataset.font = font;
   }
@@ -5162,6 +5328,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Apply editor width
    */
   async applyWidth() {
+    if (this.settingsController) {
+      await this.settingsController.applyWidth();
+      return;
+    }
     const width = await Storage.getSetting('width', 'default');
     document.documentElement.dataset.width = width;
     this.updateWidthSelectorPill(width);
@@ -5176,104 +5346,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Setup Theme Builder UI and logic
    */
   setupThemeBuilder() {
-    const modal = document.getElementById('theme-builder-modal');
-    if (!modal) return;
-
-    const closeBtn = modal.querySelector('.close-btn');
-    const cancelBtn = document.getElementById('theme-builder-cancel');
-    const saveBtn = document.getElementById('theme-builder-save');
-    const nameInput = document.getElementById('theme-builder-name');
-
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => {
-        modal.classList.add('hidden');
-        this.applyTheme(); // Reset preview
-      });
-    }
-
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => {
-        modal.classList.add('hidden');
-        this.applyTheme(); // Reset preview
-      });
-    }
-
-    if (saveBtn) {
-      saveBtn.addEventListener('click', async () => {
-        const name = (nameInput && nameInput.value.trim()) || 'Custom Theme';
-        const theme = {
-          name: name,
-          properties: this.tempThemeProperties
-        };
-        const savedTheme = await Storage.saveCustomTheme(theme);
-        await Storage.setSetting('theme', savedTheme.id);
-        await this.applyTheme();
-        modal.classList.add('hidden');
-        Utils.showToast('Theme saved!', 'success');
-      });
-    }
+    if (this.themeBuilderController) return; // Handled by ThemeBuilderController
   }
 
   /**
    * Open Theme Builder modal
    */
   async openThemeBuilder() {
-    const modal = document.getElementById('theme-builder-modal');
-    const controls = document.getElementById('theme-color-controls');
-    const nameInput = document.getElementById('theme-builder-name');
-
-    if (!modal || !controls) return;
-
-    modal.classList.remove('hidden');
-    controls.innerHTML = '';
-
-    // Start with current properties
-    const currentThemeId = await Storage.getSetting('theme', 'light');
-    const options = await Themes.getThemeOptions();
-    const currentTheme = options.find(o => o.id === currentThemeId);
-
-    // Determine base properties to start from
-    let baseProps = { ...Themes.defaultProperties };
-    if (currentThemeId === 'dark' || (currentThemeId === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      baseProps = { ...Themes.darkProperties };
-    }
-
-    // If current is custom, use its name and props
-    if (currentTheme && currentTheme.isCustom) {
-      const allCustom = await Storage.getCustomThemes();
-      const fullTheme = allCustom.find(t => t.id === currentThemeId);
-      if (fullTheme) {
-        baseProps = { ...fullTheme.properties };
-        if (nameInput) nameInput.value = fullTheme.name;
-      }
-    } else {
-      if (nameInput) nameInput.value = '';
-    }
-
-    this.tempThemeProperties = { ...baseProps };
-
-    // Create color pickers for each property
-    for (const [prop, value] of Object.entries(this.tempThemeProperties)) {
-      // Create control row
-      const row = document.createElement('div');
-      row.className = 'setting-row';
-
-      const label = document.createElement('label');
-      // Humanize label: --bg-primary -> Background Primary
-      label.textContent = prop.replace('--', '').split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-
-      const picker = document.createElement('input');
-      picker.type = 'color';
-      picker.value = this.colorToHex(value);
-
-      picker.addEventListener('input', (e) => {
-        this.tempThemeProperties[prop] = e.target.value;
-        Themes.injectProperties(this.tempThemeProperties); // Live preview
-      });
-
-      row.appendChild(label);
-      row.appendChild(picker);
-      controls.appendChild(row);
+    if (this.themeBuilderController) {
+      await this.themeBuilderController.openThemeBuilder();
+      return;
     }
   }
 
@@ -5281,16 +5363,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Helper to convert various color formats to hex for <input type="color">
    */
   colorToHex(color) {
-    if (!color) return '#000000';
-    if (color.startsWith('#')) return color.substring(0, 7);
-    if (color.startsWith('rgba') || color.startsWith('rgb')) {
-      const parts = color.match(/[\d.]+/g);
-      if (parts && parts.length >= 3) {
-        const r = parseInt(parts[0]);
-        const g = parseInt(parts[1]);
-        const b = parseInt(parts[2]);
-        return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-      }
+    if (this.themeBuilderController) {
+      return this.themeBuilderController.colorToHex(color);
     }
     return '#000000';
   }
@@ -5300,149 +5374,43 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Listens for settings changes from other tabs and applies them
    */
   setupSettingsSync() {
-    Storage.onSettingsChange(async (changes) => {
-      // Apply theme changes
-      if (changes.theme) {
-        await this.applyTheme();
-      }
-
-      // Apply font changes
-      if (changes.font) {
-        await this.applyFont();
-      }
-
-      // Apply width changes
-      if (changes.width) {
-        await this.applyWidth();
-      }
-
-      // Apply sidebar state changes
-      if (changes.sidebarOpen !== undefined) {
-        this.sidebarOpen = changes.sidebarOpen.newValue;
-        this.updateSidebarState();
-      }
-
-      if (changes.sidebarWidth) {
-        this.sidebarWidth = changes.sidebarWidth.newValue;
-        this.applySidebarWidth();
-      }
-
-      if (changes.sidebarViewMode) {
-        this.sidebarViewMode = changes.sidebarViewMode.newValue;
-        this.applySidebarViewMode();
-      }
-
-      if (changes.sidebarSortMode) {
-        this.sidebarSortMode = changes.sidebarSortMode.newValue;
-        const sortSelect = document.getElementById('sidebar-sort');
-        if (sortSelect) {
-          sortSelect.value = this.sidebarSortMode;
-        }
-        await this.renderNotesList();
-      }
-
-      // Apply AI sidebar width changes
-      if (changes.aiSidebarWidth) {
-        this.aiSidebarWidth = changes.aiSidebarWidth.newValue;
-        const aiSidebar = document.getElementById('ai-sidebar');
-        if (aiSidebar && this.aiSidebarOpen) {
-          aiSidebar.style.width = this.aiSidebarWidth + 'px';
-        }
-      }
-
-      // Reinitialize LLM if provider settings changed
-      if (changes.llmProvider || changes.llmApiKey || changes.llmModel || changes.ollamaUrl) {
-        await LLM.init();
-        this.updateAISidebarState();
-      }
-
-      if (changes.aiPromptTemplates) {
-        this.aiPromptTemplates = this.sanitizeAIPromptTemplates(changes.aiPromptTemplates.newValue);
-        this.renderAIPromptSuggestions();
-        this.renderAIPromptTemplateSettings();
-      }
-
-      // Update auto-title settings
-      if (changes.autoTitleEnabled !== undefined || changes.autoTitleInterval) {
-        this.setupAutoTitle();
-      }
-
-      // Update insights settings
-      if (changes.insightsEnabled !== undefined || changes.insightsInterval) {
-        this.setupInsightsExtraction();
-      }
-    });
+    if (this.settingsController) return; // Handled by SettingsController
   }
 
   /**
    * Setup header width selector
    */
   setupWidthSelectorPill() {
-    const widthSelector = document.getElementById('width-selector-header');
-    if (!widthSelector) return;
-
-    widthSelector.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.width-option');
-      if (!btn) return;
-
-      const width = btn.dataset.width;
-      await Storage.setSetting('width', width);
-      this.applyWidth();
-
-      // Also update the settings modal select if it's open
-      const widthSelect = document.getElementById('width-select');
-      if (widthSelect) {
-        widthSelect.value = width;
-      }
-    });
+    if (this.settingsController) return; // Handled by SettingsController
   }
 
   /**
    * Update width selector active state
    */
   updateWidthSelectorPill(width) {
-    const widthSelector = document.getElementById('width-selector-header');
-    if (!widthSelector) return;
-
-    widthSelector.querySelectorAll('.width-option').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.width === width);
-    });
+    if (this.settingsController) {
+      this.settingsController.updateWidthSelectorPill(width);
+      return;
+    }
   }
 
   /**
    * Delete current note
    */
   async deleteCurrentNote() {
-    if (!confirm('Move this note to trash?')) {
+    if (this.settingsController) {
+      await this.settingsController.deleteCurrentNote();
       return;
     }
-
-    const currentId = this.editor.noteId;
-    await Storage.deleteNote(currentId);
-    await this.closeTabForNote(currentId);
-    await this.refreshNotesList();
-    await this.handleNoteRemoved(currentId);
-
-    // Close settings modal
-    document.getElementById('settings-modal').classList.add('hidden');
-
-    Utils.showToast('Note moved to trash', 'success');
   }
 
   /**
    * Export all data
    */
   async exportAll() {
-    try {
-      const data = await Storage.exportAll();
-      const json = JSON.stringify(data, null, 2);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-export-${timestamp}.json`);
-      Utils.showToast('All notes exported as JSON', 'success');
-      await Storage.setSetting('lastBackupAt', Date.now());
-    } catch (error) {
-      console.error('Export failed:', error);
-      Utils.showToast('Export failed', 'error');
+    if (this.settingsController) {
+      await this.settingsController.exportAll();
+      return;
     }
   }
 
@@ -5450,47 +5418,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Export all notes as a ZIP file containing Markdown files
    */
   async exportAllAsMarkdown() {
-    try {
-      const zip = new JSZip();
-      const folder = zip.folder("NewTabNote-Export");
-
-      const notes = await Storage.getAllNotes();
-
-      for (const note of notes) {
-        if (note.isTrash) continue;
-
-        const blocks = await Storage.getElementsByNote(note.id);
-        const sortedBlocks = blocks.sort((a, b) => (a.order || 0) - (b.order || 0));
-
-        let markdown = `# ${note.name || 'Untitled'}\n\n`;
-        for (const block of sortedBlocks) {
-          markdown += this.blockToMarkdown(block);
-        }
-
-        const safeName = (note.name || 'Untitled')
-          .replace(/[^a-z0-9\s-]/gi, '')
-          .replace(/\s+/g, '-')
-          .toLowerCase() || 'note-' + note.id;
-
-        folder.file(`${safeName}.md`, markdown);
-      }
-
-      const content = await zip.generateAsync({ type: "blob" });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `new-tab-note-markdown-${timestamp}.zip`;
-
-      const url = URL.createObjectURL(content);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
-
-      Utils.showToast('All notes exported as ZIP', 'success');
-      await Storage.setSetting('lastBackupAt', Date.now());
-    } catch (error) {
-      console.error('ZIP export failed:', error);
-      Utils.showToast('Export failed', 'error');
+    if (this.settingsController) {
+      await this.settingsController.exportAllAsMarkdown();
+      return;
     }
   }
 
@@ -5498,31 +5428,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Export current note only
    */
   async exportCurrentNote() {
-    try {
-      if (!this.editor.noteId) {
-        Utils.showToast('No note selected', 'error');
-        return;
-      }
-
-      const note = await Storage.getNote(this.editor.noteId);
-      const blocks = await Storage.getElementsByNote(this.editor.noteId);
-
-      const data = {
-        version: 1,
-        exportType: 'single-note',
-        exportedAt: new Date().toISOString(),
-        note: note,
-        blocks: blocks,
-      };
-
-      const json = JSON.stringify(data, null, 2);
-      const noteName = (note.name || 'Untitled').replace(/[^a-z0-9]/gi, '-').toLowerCase();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-note-${noteName}-${timestamp}.json`);
-      Utils.showToast('Note exported', 'success');
-    } catch (error) {
-      console.error('Export current note failed:', error);
-      Utils.showToast('Export failed', 'error');
+    if (this.settingsController) {
+      await this.settingsController.exportCurrentNote();
+      return;
     }
   }
 
@@ -5530,21 +5438,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Create timestamped backup of all data
    */
   async createBackup() {
-    try {
-      const data = await Storage.exportAll();
-
-      // Add backup metadata
-      data.backupType = 'full-backup';
-      data.backupCreatedAt = new Date().toISOString();
-      data.backupVersion = 1;
-
-      const json = JSON.stringify(data, null, 2);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-backup-${timestamp}.json`);
-      Utils.showToast('Backup created', 'success');
-    } catch (error) {
-      console.error('Backup failed:', error);
-      Utils.showToast('Backup failed', 'error');
+    if (this.settingsController) {
+      await this.settingsController.createBackup();
+      return;
     }
   }
 
@@ -5552,29 +5448,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Import from file
    */
   async importFromFile(file) {
-    try {
-      const text = await Utils.readFileAsText(file);
-      const data = JSON.parse(text);
-
-      if (!data.version || !data.canvases) {
-        throw new Error('Invalid backup file');
-      }
-
-      const merge = confirm(
-        'Merge with existing data?\n\nOK = Merge\nCancel = Replace all'
-      );
-
-      await Storage.importData(data, merge);
-
-      Utils.showToast('Import complete', 'success');
-
-      // Reload
-      const notes = await Storage.getAllNotes();
-      await this.editor.loadNote(notes[0].id);
-      await this.refreshNotesList();
-    } catch (error) {
-      console.error('Import failed:', error);
-      Utils.showToast('Import failed: ' + error.message, 'error');
+    if (this.settingsController) {
+      await this.settingsController.importFromFile(file);
+      return;
     }
   }
 
@@ -5582,6 +5458,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Import a single note from file (.md, .txt, or .json)
    */
   async importNote(file) {
+    if (this.notesManager) {
+      await this.notesManager.importNote(file);
+      return;
+    }
     try {
       const text = await Utils.readFileAsText(file);
       const filename = file.name;
@@ -5657,13 +5537,22 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Show error state
    */
   showErrorState(error) {
-    document.getElementById('app').innerHTML = `
-      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; color: #666;">
-        <h2>Failed to initialize</h2>
-        <p>${error.message}</p>
-        <button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; cursor: pointer;">Reload</button>
-      </div>
-    `;
+    const appEl = document.getElementById('app');
+    appEl.innerHTML = '';
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; color: #666;';
+    const heading = document.createElement('h2');
+    heading.textContent = 'Failed to initialize';
+    wrapper.appendChild(heading);
+    const msg = document.createElement('p');
+    msg.textContent = error.message;
+    wrapper.appendChild(msg);
+    const btn = document.createElement('button');
+    btn.textContent = 'Reload';
+    btn.style.cssText = 'margin-top: 20px; padding: 10px 20px; cursor: pointer;';
+    btn.addEventListener('click', () => location.reload());
+    wrapper.appendChild(btn);
+    appEl.appendChild(wrapper);
   }
 
   // ============ Auto-Title Feature ============
@@ -5686,6 +5575,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Setup auto-title feature
    */
   async setupAutoTitle() {
+    if (this.notesManager) {
+      await this.notesManager.setupAutoTitle();
+      return;
+    }
     const enabled = await Storage.getSetting('autoTitleEnabled', false);
     const interval = await Storage.getSetting('autoTitleInterval', 15);
 
@@ -5708,7 +5601,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // If last run was more than 1 hour ago, run immediately
     if (lastRunTimestamp && (Date.now() - lastRunTimestamp) > oneHourMs) {
-      console.log('Missed auto-title window, running catch-up');
+      this.logger.debug('App', 'Missed auto-title window, running catch-up');
       await this.runAutoTitle(true); // Force run for catch-up
     }
   }
@@ -5730,7 +5623,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       this.runAutoTitle();
     }, intervalMs);
 
-    console.log(`Auto-title started with ${intervalMinutes} minute interval`);
+    this.logger.info('App', `Auto-title started with ${intervalMinutes} minute interval`);
   }
 
   /**
@@ -5740,7 +5633,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.autoTitleIntervalId) {
       clearInterval(this.autoTitleIntervalId);
       this.autoTitleIntervalId = null;
-      console.log('Auto-title stopped');
+      this.logger.debug('App', 'Auto-title stopped');
     }
   }
 
@@ -5750,13 +5643,13 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   async runAutoTitle(isCatchUp = false) {
     // Prevent concurrent runs
     if (this.autoTitleRunning) {
-      console.log('Auto-title already running, skipping');
+      this.logger.debug('App', 'Auto-title already running, skipping');
       return;
     }
 
     // Check if LLM is configured
     if (!LLM.isConfigured()) {
-      console.log('LLM not configured, skipping auto-title');
+      this.logger.debug('App', 'LLM not configured, skipping auto-title');
       return;
     }
 
@@ -5806,7 +5699,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         }
 
         try {
-          console.log(`Generating title for note: ${note.id}`);
+          this.logger.debug('App', `Generating title for note: ${note.id}`);
 
           // Show loading state
           const isCurrentNote = this.editor && this.editor.noteId === note.id;
@@ -5854,7 +5747,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
             // Update sidebar
             this.renderNotesList();
 
-            console.log(`Auto-title generated: "${newTitle}" for note ${note.id}`);
+            this.logger.info('App', `Auto-title generated: "${newTitle}" for note ${note.id}`);
           }
         } catch (error) {
           console.error(`Failed to generate title for note ${note.id}:`, error);
@@ -6000,6 +5893,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Setup insights extraction feature
    */
   async setupInsightsExtraction() {
+    if (this.notesManager) {
+      await this.notesManager.setupInsightsExtraction();
+      return;
+    }
     const enabled = await Storage.getSetting('insightsEnabled', false);
     const interval = await Storage.getSetting('insightsInterval', 360);
 
@@ -6021,7 +5918,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // If last run was more than the interval ago, run immediately
     if (lastRunTimestamp && (Date.now() - lastRunTimestamp) > intervalMs) {
-      console.log('Missed insights extraction window, running catch-up');
+      this.logger.debug('App', 'Missed insights extraction window, running catch-up');
       await this.runInsightsExtraction(true);
     }
   }
@@ -6043,7 +5940,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       this.runInsightsExtraction();
     }, intervalMs);
 
-    console.log(`Insights extraction started with ${intervalMinutes} minute interval`);
+    this.logger.info('App', `Insights extraction started with ${intervalMinutes} minute interval`);
   }
 
   /**
@@ -6053,7 +5950,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.insightsIntervalId) {
       clearInterval(this.insightsIntervalId);
       this.insightsIntervalId = null;
-      console.log('Insights extraction stopped');
+      this.logger.debug('App', 'Insights extraction stopped');
     }
   }
 
@@ -6063,13 +5960,13 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   async runInsightsExtraction(isCatchUp = false) {
     // Prevent concurrent runs
     if (this.insightsRunning) {
-      console.log('Insights extraction already running, skipping');
+      this.logger.debug('App', 'Insights extraction already running, skipping');
       return;
     }
 
     // Check if LLM is configured
     if (!LLM.isConfigured()) {
-      console.log('LLM not configured, skipping insights extraction');
+      this.logger.debug('App', 'LLM not configured, skipping insights extraction');
       return;
     }
 
@@ -6111,7 +6008,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         }
 
         try {
-          console.log(`Extracting insights for note: ${note.id} (${note.name || 'Untitled'})`);
+          this.logger.debug('App', `Extracting insights for note: ${note.id} (${note.name || 'Untitled'})`);
 
           const insights = await LLM.extractInsights(content, note.name);
 
@@ -6130,7 +6027,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
             }
 
             extractedCount++;
-            console.log(`Insights extracted for note: ${note.name || 'Untitled'}`);
+            this.logger.debug('App', `Insights extracted for note: ${note.name || 'Untitled'}`);
           }
         } catch (error) {
           const errorMsg = (error.message || '').toLowerCase();
@@ -6171,7 +6068,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       }
 
       if (extractedCount > 0) {
-        console.log(`Insights extraction complete: ${extractedCount} note(s) updated`);
+        this.logger.info('App', `Insights extraction complete: ${extractedCount} note(s) updated`);
       }
     } catch (error) {
       console.error('Insights extraction run failed:', error);
@@ -6210,6 +6107,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Check if target folder is a child of parent folder
    */
   isChildFolder(parentId, targetId) {
+    if (this.sidebarController) return this.sidebarController.isChildFolder(parentId, targetId);
     if (parentId === targetId) return true;
     const children = this.folders.filter(f => f.parentId === parentId);
     for (const child of children) {
@@ -6222,6 +6120,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Show folder context menu
    */
   async showFolderContextMenu(e, folder) {
+    if (this.sidebarController) {
+      await this.sidebarController.showFolderContextMenu(e, folder);
+      return;
+    }
     const menu = document.createElement('div');
     menu.className = 'context-menu';
     menu.style.left = `${e.pageX}px`;
@@ -6232,7 +6134,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         label: 'Rename',
         icon: 'pencil',
         action: async () => {
-          const newName = prompt('New folder name:', folder.name);
+          const newName = await promptDialog({ title: 'Rename Folder', message: 'New folder name:', defaultValue: folder.name });
           if (newName && newName !== folder.name) {
             folder.name = newName;
             await Storage.updateFolder(folder);
@@ -6244,7 +6146,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         label: 'Delete Folder',
         icon: 'trash',
         action: async () => {
-          if (confirm(`Are you sure you want to delete "${folder.name}"? Notes inside will be moved to root.`)) {
+          if (await confirmDialog({ title: 'Delete Folder', message: `Are you sure you want to delete "${folder.name}"? Notes inside will be moved to root.`, confirmText: 'Delete', danger: true })) {
             await Storage.deleteFolder(folder.id);
             await this.refreshNotesList();
           }
@@ -6304,53 +6206,19 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Toggle between single and split view
    */
   async toggleSplitView() {
-    this.splitViewEnabled = !this.splitViewEnabled;
-    const workspace = document.getElementById('workspace-container');
-    const secondaryPane = document.getElementById('secondary-editor-container');
-    const splitBtn = document.getElementById('split-view-toggle');
-
-    if (this.splitViewEnabled) {
-      workspace.classList.add('split-mode');
-      secondaryPane.classList.remove('hidden');
-      splitBtn.classList.add('active');
-
-      // If secondary editor has no note, load a blank one or last open
-      if (!this.secondaryEditor.noteId) {
-        // Find a note that's not open in the primary editor
-        const otherNote = this.notes.find(n => n.id !== this.editor.noteId);
-        if (otherNote) {
-          await this.secondaryEditor.loadNote(otherNote.id);
-        }
-      }
-    } else {
-      workspace.classList.remove('split-mode');
-      secondaryPane.classList.add('hidden');
-      splitBtn.classList.remove('active');
-      this.setActiveEditorSide('left');
+    if (this.tabController) {
+      await this.tabController.toggleSplitView();
+      return;
     }
-
-    // Resize observers/centering update
-    if (this.editor) this.editor.updateWideContentCentering();
-    if (this.secondaryEditor) this.secondaryEditor.updateWideContentCentering();
   }
 
   /**
    * Set the active editor side
    */
   setActiveEditorSide(side) {
-    if (this.activeEditorSide === side) return;
-
-    this.activeEditorSide = side;
-
-    const leftPane = document.getElementById('editor-container');
-    const rightPane = document.getElementById('secondary-editor-container');
-
-    if (side === 'left') {
-      leftPane.classList.add('active');
-      rightPane.classList.remove('active');
-    } else {
-      rightPane.classList.add('active');
-      leftPane.classList.remove('active');
+    if (this.tabController) {
+      this.tabController.setActiveEditorSide(side);
+      return;
     }
   }
 
@@ -6358,6 +6226,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Get the editor instance for a side
    */
   getEditor(side = null) {
+    if (this.tabController) {
+      return this.tabController.getEditor(side);
+    }
     const targetSide = side || this.activeEditorSide;
     return targetSide === 'left' ? this.editor : this.secondaryEditor;
   }
@@ -6366,108 +6237,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Open the current note in a Document Picture-in-Picture window
    */
   async openNoteInPiP(noteId) {
-    if (!('documentPictureInPicture' in window)) {
-      console.error('Document Picture-in-Picture API not supported');
+    if (this.tabController) {
+      await this.tabController.openNoteInPiP(noteId);
       return;
-    }
-
-    // Close existing PiP if any
-    if (this.pipWindow) {
-      this.pipWindow.close();
-    }
-
-    try {
-      // Request a PiP window
-      this.pipWindow = await documentPictureInPicture.requestWindow({
-        width: 500,
-        height: 600,
-      });
-
-      // Copy stylesheets to the PiP window
-      [...document.styleSheets].forEach((styleSheet) => {
-        try {
-          if (styleSheet.href) {
-            const link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = styleSheet.href;
-            this.pipWindow.document.head.appendChild(link);
-          } else {
-            const style = document.createElement('style');
-            for (const rule of styleSheet.cssRules) {
-              style.appendChild(document.createTextNode(rule.cssText));
-            }
-            this.pipWindow.document.head.appendChild(style);
-          }
-        } catch (e) {
-          console.error('Could not copy stylesheet to PiP window:', e);
-        }
-      });
-
-      // Add common styles
-      const customStyle = document.createElement('style');
-      customStyle.textContent = `
-        body { margin: 0; padding: 0; background: var(--bg-primary); color: var(--text-primary); }
-        .pip-editor-wrapper { height: 100vh; overflow-y: auto; padding: 20px; }
-        /* Hide UI elements that don't make sense in PiP */
-        .slash-menu { z-index: 2000; }
-      `;
-      this.pipWindow.document.head.appendChild(customStyle);
-
-      // Create editor structure
-      const wrapper = document.createElement('div');
-      wrapper.className = 'pip-editor-wrapper editor-pane active';
-      wrapper.id = 'pip-editor-container';
-      wrapper.innerHTML = `
-        <div class="editor">
-          <div class="page-title" contenteditable="true" data-placeholder="Untitled" spellcheck="false"></div>
-          <div class="page-timestamp"></div>
-          <div class="blocks-container"></div>
-          <div class="add-block-hint">
-            <span>Press Enter to add a new block, or type / for commands</span>
-          </div>
-          
-          <div class="backlinks-panel hidden">
-            <div class="backlinks-header"><span>Backlinks</span></div>
-            <div class="backlinks-list"></div>
-          </div>
-
-          <div class="slash-menu hidden">
-            <div class="slash-menu-header">Basic blocks</div>
-            <div class="slash-menu-items"></div>
-          </div>
-
-          <div class="wiki-menu slash-menu hidden">
-            <div class="slash-menu-header">Link to note</div>
-            <div class="slash-menu-items"></div>
-          </div>
-
-          <div class="template-menu slash-menu hidden">
-            <div class="slash-menu-header">Insert template</div>
-            <div class="slash-menu-items"></div>
-          </div>
-        </div>
-      `;
-      this.pipWindow.document.body.appendChild(wrapper);
-
-      // Copy theme properties from main document
-      this.pipWindow.document.documentElement.style.cssText = document.documentElement.style.cssText;
-      this.pipWindow.document.documentElement.className = document.documentElement.className;
-
-      // Initialize editor in PiP window
-      this.pipEditor = new BlockEditor({
-        root: wrapper
-      });
-
-      await this.pipEditor.loadNote(noteId);
-
-      // Handle PiP window closing
-      this.pipWindow.addEventListener('pagehide', () => {
-        this.pipWindow = null;
-        this.pipEditor = null;
-      });
-
-    } catch (e) {
-      console.error('Failed to open PiP window:', e);
     }
   }
 
@@ -6475,6 +6247,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Initialize embeddings and load existing vectors
    */
   async initEmbeddings() {
+    if (this.notesManager) {
+      await this.notesManager.initEmbeddings();
+      return;
+    }
     if (typeof Embeddings === 'undefined') return;
 
     // Load existing vectors into search engine
@@ -6489,6 +6265,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Initialize search indexer
    */
   initIndexer() {
+    if (this.notesManager) {
+      this.notesManager.initIndexer();
+      return;
+    }
     if (typeof Worker === 'undefined') return;
     try {
       this.indexerWorker = new Worker('js/workers/indexer.js');
@@ -6509,6 +6289,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Rebuild the search index
    */
   async rebuildSearchIndex() {
+    if (this.notesManager) {
+      await this.notesManager.rebuildSearchIndex();
+      return;
+    }
     if (!this.indexerWorker) return;
     const blocksByNote = {};
     for (const note of this.notes) {
@@ -6536,7 +6320,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     if (notesToEmbed.length === 0) return;
 
-    console.log(`Embeddings: Found ${notesToEmbed.length} notes needing updates`);
+    this.logger.debug('App', `Embeddings: Found ${notesToEmbed.length} notes needing updates`);
 
     // Process in small batches to avoid blocking
     for (let i = 0; i < notesToEmbed.length; i++) {
@@ -6564,13 +6348,17 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     // Refresh vectors in engine after update
     const updatedVectors = await Storage.getAllVectors();
     this.searchEngine.setVectors(updatedVectors);
-    console.log('Embeddings: Background indexing complete');
+    this.logger.debug('App', 'Embeddings: Background indexing complete');
   }
 
   /**
    * Proactively update smart suggestions based on current note content
    */
   async updateSmartSuggestions(force = false) {
+    if (this.aiChatController) {
+      await this.aiChatController.updateSmartSuggestions(force);
+      return;
+    }
     if (this.aiActiveTab !== 'smart' && !force) return;
 
     const editor = this.getEditor();
@@ -6608,13 +6396,13 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         // If content hasn't changed, use stored insights
         if (!storedContentHash || storedContentHash === currentContentHash) {
           insights = note.insights;
-          console.log('Using stored insights from note');
+          this.logger.debug('App', 'Using stored insights from note');
         }
       }
       
       // 3. Only extract new insights if we don't have valid stored ones
       if (!insights) {
-        console.log('Extracting new insights via LLM');
+        this.logger.debug('App', 'Extracting new insights via LLM');
         insights = await LLM.extractInsights(text, editor.titleEl?.textContent || '');
       }
 
@@ -6671,16 +6459,19 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         items.forEach(item => {
           const el = document.createElement('div');
           el.className = 'ai-action-item';
-          el.innerHTML = `
-            <div class="ai-action-icon">
+          const iconDiv = document.createElement('div');
+          iconDiv.className = 'ai-action-icon';
+          iconDiv.innerHTML = `
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 ${item.icon === 'check-square' ? '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><polyline points="9 11 12 14 22 4"></polyline>' :
               item.icon === 'calendar' ? '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line>' :
                 '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>'}
               </svg>
-            </div>
-            <span>${item.text}</span>
           `;
+          el.appendChild(iconDiv);
+          const textSpan = document.createElement('span');
+          textSpan.textContent = item.text;
+          el.appendChild(textSpan);
           actionContainer.appendChild(el);
         });
       } else {
@@ -6702,8 +6493,11 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
               <polyline points="14 2 14 8 20 8"></polyline>
             </svg>
-            <span class="ai-related-title">${note?.name || 'Untitled'}</span>
           `;
+          const titleSpan = document.createElement('span');
+          titleSpan.className = 'ai-related-title';
+          titleSpan.textContent = note?.name || 'Untitled';
+          el.appendChild(titleSpan);
           el.addEventListener('click', () => this.openNoteById(res.id));
           relatedContainer.appendChild(el);
         });
@@ -6717,29 +6511,17 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Check if a backup is due and remind the user
    */
   async checkBackupStatus() {
-    const enabled = await Storage.getSetting('autoBackupEnabled', false);
-    if (!enabled) return;
-
-    const frequency = await Storage.getSetting('autoBackupFrequency', 7);
-    const lastBackup = await Storage.getSetting('lastBackupAt', 0);
-    const now = Date.now();
-    const daysSinceBackup = (now - lastBackup) / (1000 * 60 * 60 * 24);
-
-    if (daysSinceBackup >= frequency) {
-      Utils.showToast('Backup Reminder: It has been a while since your last backup! Click to Export.', 'info', 10000, () => {
-        document.getElementById('settings-btn').click();
-        // Wait for modal to open
-        setTimeout(() => {
-          document.getElementById('export-zip-btn')?.classList.add('feature-highlight-pulse');
-        }, 500);
-      });
-    }
+    if (this.settingsController) return; // Handled by SettingsController
   }
 
   /**
    * Setup global keyboard shortcuts
    */
   setupShortcuts() {
+    if (this.shortcutsManager) {
+      // Already initialized via initShortcutsManager
+      return;
+    }
     this.updateShortcutLabels();
 
     window.addEventListener('keydown', async (e) => {
@@ -6800,6 +6582,28 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
           e.preventDefault();
           this.toggleFocusMode();
           return;
+        case 'daily-note':
+          e.preventDefault();
+          {
+            const note = await Storage.ensureDailyNote();
+            if (note) {
+              await this.refreshNotesList();
+              await this.openNoteInNewTab(note.id);
+            }
+          }
+          return;
+        case 'next-tab':
+          e.preventDefault();
+          if (this.tabController) this.tabController.cycleTab(1);
+          return;
+        case 'prev-tab':
+          e.preventDefault();
+          if (this.tabController) this.tabController.cycleTab(-1);
+          return;
+        case 'close-tab':
+          e.preventDefault();
+          if (this.tabController) await this.tabController.closeCurrentTab();
+          return;
         default:
           return;
       }
@@ -6830,6 +6634,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Toggle the Shortcuts Help modal
    */
   toggleShortcutsModal(force) {
+    if (this.settingsController) {
+      this.settingsController.toggleShortcutsModal(force);
+      return;
+    }
     const modal = document.getElementById('shortcuts-modal');
     if (!modal) return;
 
@@ -6848,6 +6656,14 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     document.querySelectorAll('.context-menu').forEach(m => m.classList.add('hidden'));
 
+    // Clean up focus traps
+    if (this.settingsController) {
+      if (this.settingsController._settingsFocusTrapCleanup) { this.settingsController._settingsFocusTrapCleanup(); this.settingsController._settingsFocusTrapCleanup = null; }
+      if (this.settingsController._shortcutsFocusTrapCleanup) { this.settingsController._shortcutsFocusTrapCleanup(); this.settingsController._shortcutsFocusTrapCleanup = null; }
+    }
+    if (this.themeBuilderController && this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
+    if (this.shortcutsManager && this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
+
     // Also close slash menu if open in active editor
     this.getEditor()?.hideSlashMenu();
     this.getEditor()?.hideWikiMenu();
@@ -6857,6 +6673,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Enter multi-selection mode
    */
   enterSelectionMode(noteId) {
+    if (this.sidebarController) {
+      this.sidebarController.enterSelectionMode(noteId);
+      return;
+    }
     this.selectionMode = true;
     this.selectedNoteIds.clear();
     if (noteId) {
@@ -6877,6 +6697,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Exit multi-selection mode
    */
   exitSelectionMode() {
+    if (this.sidebarController) {
+      this.sidebarController.exitSelectionMode();
+      return;
+    }
     this.selectionMode = false;
     this.selectedNoteIds.clear();
 
@@ -6929,6 +6753,15 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Perform a bulk action on selected notes
    */
   async performBulkAction(action) {
+    if (this.sidebarController) {
+      await this.sidebarController.performBulkAction(action);
+      // Sync data back
+      this.notes = this.sidebarController.notes;
+      this.archivedNotes = this.sidebarController.archivedNotes;
+      this.trashedNotes = this.sidebarController.trashedNotes;
+      this.templates = this.sidebarController.templates;
+      return;
+    }
     const ids = Array.from(this.selectedNoteIds);
     if (ids.length === 0) return;
 
@@ -6939,7 +6772,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       case 'delete': confirmMsg = `Permanently delete ${ids.length} notes? This cannot be undone.`; break;
     }
 
-    if (confirmMsg && !confirm(confirmMsg)) return;
+    if (confirmMsg && !await confirmDialog({ title: 'Confirm', message: confirmMsg, confirmText: action === 'delete' ? 'Delete' : 'OK', danger: action === 'delete' })) return;
 
     try {
       await Storage.bulkNoteAction(ids, action);
@@ -6964,5 +6797,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 document.addEventListener('DOMContentLoaded', () => {
   const app = new App();
   window.app = app; // Make globally available for editor callbacks
-  app.init();
+  app.init().catch(error => {
+    console.error('App initialization failed:', error);
+  });
 });

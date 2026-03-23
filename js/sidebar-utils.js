@@ -2,6 +2,11 @@
   const DEFAULT_PREVIEW_LENGTH = 120;
   const MAX_TAGS = 3;
 
+  /**
+   * Strip HTML tags from a string.
+   * @param {string} [value=''] - HTML string
+   * @returns {string} Plain text
+   */
   function stripHtml(value = '') {
     return String(value)
       .replace(/<br\s*\/?>/gi, ' ')
@@ -11,6 +16,12 @@
       .trim();
   }
 
+  /**
+   * Truncate text to a maximum length with ellipsis.
+   * @param {string} value - Text to truncate
+   * @param {number} [maxLength=120] - Maximum length
+   * @returns {string} Truncated text
+   */
   function truncateText(value, maxLength = DEFAULT_PREVIEW_LENGTH) {
     if (!value || value.length <= maxLength) {
       return value || '';
@@ -19,6 +30,11 @@
     return `${value.slice(0, maxLength - 1).trimEnd()}…`;
   }
 
+  /**
+   * Extract plain text from a block object.
+   * @param {Object} [block={}] - Block data
+   * @returns {string} Extracted text
+   */
   function extractBlockText(block = {}) {
     if (!block || typeof block !== 'object') {
       return '';
@@ -51,6 +67,11 @@
     return stripHtml(block.content);
   }
 
+  /**
+   * Build save-time metadata (preview text, todo progress) from blocks.
+   * @param {Array<Object>} [blocks=[]] - Array of block objects
+   * @returns {{preview: string, todoProgress: {completed: number, total: number}|null}} Metadata
+   */
   function buildNoteSaveMetadata(blocks = []) {
     let preview = '';
     let completed = 0;
@@ -106,10 +127,22 @@
     return compareNames(a, b);
   }
 
+  /**
+   * Sort notes by the given sort mode, with pinned notes first.
+   * @param {Array<Object>} [notes=[]] - Array of note objects
+   * @param {string} [sortMode='updated'] - Sort mode ('updated', 'created', 'alphabetical')
+   * @returns {Array<Object>} Sorted copy of the notes array
+   */
   function sortNotes(notes = [], sortMode = 'updated') {
     return [...notes].sort((a, b) => compareNotes(a, b, sortMode));
   }
 
+  /**
+   * Get a human-readable relative time label (e.g. "2h ago").
+   * @param {number} timestamp - Unix timestamp in milliseconds
+   * @param {{now?: number}} [options={}] - Options with optional current time
+   * @returns {string} Relative time label
+   */
   function getRelativeTimeLabel(timestamp, { now = Date.now() } = {}) {
     if (!timestamp) {
       return '';
@@ -140,6 +173,12 @@
     return `${Math.floor(diff / week)}w ago`;
   }
 
+  /**
+   * Build a view model for a sidebar note item.
+   * @param {Object} [note={}] - Note object
+   * @param {Object} [options={}] - Options with optional searchIndexEntry and now
+   * @returns {{title: string, preview: string, relativeTime: string, tags: string[], todoSummary: string, isPinned: boolean}} View model
+   */
   function buildSidebarNoteModel(note = {}, options = {}) {
     const previewSource = note.preview || options.searchIndexEntry?.content || '';
     const tags = Array.isArray(note.insights?.tags)

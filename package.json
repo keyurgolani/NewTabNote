@@ -1,6 +1,6 @@
 {
   "name": "new-tab-note",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "A rich block-based note editor Chrome extension that replaces your new tab page with AI-powered features",
   "private": true,
   "scripts": {
@@ -8,13 +8,15 @@
     "build:dev": "node scripts/build.js --dev",
     "clean": "rm -rf dist",
     "test": "node --test test/*.test.js",
+    "typecheck": "npx tsc --project jsconfig.json",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package"
   },
   "devDependencies": {
+    "archiver": "^7.0.1",
     "clean-css": "^5.3.3",
     "terser": "^5.31.0",
-    "archiver": "^7.0.1"
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=18.0.0"

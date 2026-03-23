@@ -118,14 +118,22 @@ jobs:
           fi
           
           echo "Getting access token..."
-          ACCESS_TOKEN=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
+          TOKEN_RESPONSE=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
             -d "client_id=${CHROME_CLIENT_ID}" \
             -d "client_secret=${CHROME_CLIENT_SECRET}" \
             -d "refresh_token=${CHROME_REFRESH_TOKEN}" \
-            -d "grant_type=refresh_token" | jq -r '.access_token')
+            -d "grant_type=refresh_token")
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
           
           if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
-            echo "Failed to get access token"
+            echo "::error::Failed to get Chrome Web Store access token. The refresh token is likely expired."
+            echo "Token response: $(echo "$TOKEN_RESPONSE" | jq -r '.error_description // .error // "unknown error"')"
+            echo ""
+            echo "To refresh the token:"
+            echo "1. Go to https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=\${CHROME_CLIENT_ID}&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
+            echo "2. Authorize and copy the code"
+            echo "3. Exchange it: curl -s -X POST https://oauth2.googleapis.com/token -d 'client_id=CLIENT_ID&client_secret=CLIENT_SECRET&code=AUTH_CODE&grant_type=authorization_code&redirect_uri=urn:ietf:wg:oauth:2.0:oob'"
+            echo "4. Update the CHROME_REFRESH_TOKEN secret in repo Settings > Secrets"
             exit 1
           fi
           
