@@ -10,13 +10,14 @@ class EmbeddingManager {
     }
 
     /**
-     * Initialize the embedding pipeline
+     * Initialize the embedding pipeline.
+     * @returns {Promise<void>}
      */
     async init() {
         if (this.pipeline || this.isLoading) return;
 
         this.isLoading = true;
-        console.log('Embeddings: Loading model...', this.modelName);
+        console.debug('Embeddings: Loading model...', this.modelName);
 
         try {
             const { env, pipeline } = transformers;
@@ -28,7 +29,7 @@ class EmbeddingManager {
             env.backends.onnx.wasm.numThreads = 1;
             this.pipeline = await pipeline('feature-extraction', this.modelName);
             this.isReady = true;
-            console.log('Embeddings: Model loaded successfully');
+            console.debug('Embeddings: Model loaded successfully');
         } catch (error) {
             console.error('Embeddings: Failed to load model:', error);
         } finally {
@@ -37,7 +38,9 @@ class EmbeddingManager {
     }
 
     /**
-     * Generate embedding for a given text
+     * Generate embedding for a given text.
+     * @param {string} text - Text to embed
+     * @returns {Promise<Array<number>|null>} Embedding vector or null on failure
      */
     async generateEmbedding(text) {
         if (!this.isReady) await this.init();
@@ -54,7 +57,10 @@ class EmbeddingManager {
     }
 
     /**
-     * Calculate cosine similarity between two vectors
+     * Calculate cosine similarity between two vectors.
+     * @param {Array<number>} vecA - First vector
+     * @param {Array<number>} vecB - Second vector
+     * @returns {number} Cosine similarity (0-1)
      */
     cosineSimilarity(vecA, vecB) {
         if (!vecA || !vecB || vecA.length !== vecB.length) return 0;

@@ -75,7 +75,9 @@ class LLMService {
   }
 
   /**
-   * Get the default endpoint ID for a provider
+   * Get the default endpoint ID for a provider.
+   * @param {string} provider - Provider name
+   * @returns {string} Default endpoint ID
    */
   getDefaultEndpointForProvider(provider) {
     // Default to international/non-China endpoints
@@ -98,14 +100,17 @@ class LLMService {
   }
 
   /**
-   * Get available endpoints for a provider
+   * Get available endpoints for a provider.
+   * @param {string} provider - Provider name
+   * @returns {Array<{id: string, name: string, baseUrl: string}>} Available endpoints
    */
   getEndpointsForProvider(provider) {
     return PROVIDER_ENDPOINTS[provider] || [];
   }
 
   /**
-   * Get the base URL for the current provider and endpoint selection
+   * Get the base URL for the current provider and endpoint selection.
+   * @returns {string} Base URL
    */
   getBaseUrl() {
     const endpoints = PROVIDER_ENDPOINTS[this.provider];
@@ -116,13 +121,19 @@ class LLMService {
   }
 
   /**
-   * Set the endpoint for the current provider
+   * Set the endpoint for the current provider.
+   * @param {string} endpointId - Endpoint identifier
+   * @returns {Promise<void>}
    */
   async setEndpoint(endpointId) {
     this.endpoint = endpointId;
     await Storage.setSetting('llmEndpoint', endpointId);
   }
 
+  /**
+   * Check if the LLM service is configured with a provider and API key.
+   * @returns {boolean} True if configured
+   */
   isConfigured() {
     if (this.provider === 'none') return false;
     if (this.provider === 'ollama') return true; // Ollama doesn't need API key
@@ -130,8 +141,11 @@ class LLMService {
   }
 
   /**
-   * Make an API request via the background service worker to bypass CORS
-   * Falls back to direct fetch if background worker is unavailable
+   * Make an API request via the background service worker to bypass CORS.
+   * Falls back to direct fetch if background worker is unavailable.
+   * @param {string} url - Request URL
+   * @param {Object} [options={}] - Fetch options (method, headers, body)
+   * @returns {Promise<{ok: boolean, status: number, data: *}>} Response object
    */
   async fetchViaBackground(url, options = {}) {
     // Check if chrome.runtime is available (extension context)
@@ -674,6 +688,11 @@ class LLMService {
     delete this.cachedModels['ollama'];
   }
 
+  /**
+   * Send a chat message to the configured LLM provider.
+   * @param {Array<{role: string, content: string}>} messages - Chat messages
+   * @returns {Promise<string>} AI response text
+   */
   async chat(messages) {
     if (!this.isConfigured()) {
       throw new Error('LLM not configured. Please set up API key in settings.');
@@ -1051,6 +1070,357 @@ class LLMService {
     return response.data.message.content;
   }
 
+  /**
+   * Stream a chat response from the configured LLM provider.
+   * Yields tokens as they arrive via SSE or NDJSON streaming.
+   * @param {Array<{role: string, content: string}>} messages - Chat messages
+   * @returns {AsyncGenerator<string>} Yields tokens as they arrive
+   */
+  async *chatStream(messages) {
+    if (!this.isConfigured()) {
+      throw new Error('LLM not configured. Please set up API key in settings.');
+    }
+    if (!this.model) {
+      throw new Error('No model selected. Please select a model in settings.');
+    }
+
+    this.streamAbortController = new AbortController();
+    const signal = this.streamAbortController.signal;
+
+    try {
+      if (this.provider === 'anthropic') {
+        yield* this._streamAnthropic(messages, signal);
+      } else if (this.provider === 'gemini') {
+        yield* this._streamGemini(messages, signal);
+      } else if (this.provider === 'ollama') {
+        yield* this._streamOllama(messages, signal);
+      } else {
+        // OpenAI-compatible: openai, openrouter, xai, deepseek, mistral, groq, qwen, glm, kimi, minimax
+        yield* this._streamOpenAICompatible(messages, signal);
+      }
+    } finally {
+      this.streamAbortController = null;
+    }
+  }
+
+  /**
+   * Abort an in-progress stream.
+   */
+  abortStream() {
+    if (this.streamAbortController) {
+      this.streamAbortController.abort();
+      this.streamAbortController = null;
+    }
+  }
+
+  /**
+   * Build the URL and headers for an OpenAI-compatible streaming request.
+   * @param {string} provider
+   * @returns {{url: string, headers: Object}}
+   * @private
+   */
+  _getOpenAICompatibleConfig(provider) {
+    const baseUrl = this.getBaseUrl();
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+    };
+
+    switch (provider) {
+      case 'openai':
+        return { url: 'https://api.openai.com/v1/chat/completions', headers };
+      case 'openrouter':
+        return {
+          url: 'https://openrouter.ai/api/v1/chat/completions',
+          headers: {
+            ...headers,
+            'HTTP-Referer': 'chrome-extension://new-tab-note',
+            'X-Title': 'New Tab Note',
+          },
+        };
+      case 'xai':
+        return { url: 'https://api.x.ai/v1/chat/completions', headers };
+      case 'deepseek':
+        return { url: 'https://api.deepseek.com/chat/completions', headers };
+      case 'mistral':
+        return { url: 'https://api.mistral.ai/v1/chat/completions', headers };
+      case 'groq':
+        return { url: 'https://api.groq.com/openai/v1/chat/completions', headers };
+      case 'minimax':
+        return { url: `${baseUrl}/text/chatcompletion_v2`, headers };
+      default:
+        // qwen, glm, kimi all use baseUrl + /chat/completions
+        return { url: `${baseUrl}/chat/completions`, headers };
+    }
+  }
+
+  /**
+   * Stream from OpenAI-compatible providers (SSE with data: lines).
+   * @param {Array<{role: string, content: string}>} messages
+   * @param {AbortSignal} signal
+   * @returns {AsyncGenerator<string>}
+   * @private
+   */
+  async *_streamOpenAICompatible(messages, signal) {
+    const { url, headers } = this._getOpenAICompatibleConfig(this.provider);
+
+    const body = {
+      model: this.model,
+      messages: this.provider === 'minimax'
+        ? messages.map(m => ({ role: m.role === 'system' ? 'system' : (m.role === 'assistant' ? 'assistant' : 'user'), content: m.content }))
+        : messages,
+      stream: true,
+      max_tokens: 2000,
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || errorData.base_resp?.status_msg || `${this.provider} API error (${response.status})`);
+    }
+
+    yield* this._parseSSEStream(response.body, signal);
+  }
+
+  /**
+   * Stream from Anthropic (SSE with event: content_block_delta).
+   * @param {Array<{role: string, content: string}>} messages
+   * @param {AbortSignal} signal
+   * @returns {AsyncGenerator<string>}
+   * @private
+   */
+  async *_streamAnthropic(messages, signal) {
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const userMessages = messages.filter(m => m.role !== 'system');
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: 2000,
+        stream: true,
+        system: systemMessage,
+        messages: userMessages.map(m => ({ role: m.role, content: m.content })),
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `Anthropic API error (${response.status})`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            if (jsonStr === '[DONE]') return;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+                yield parsed.delta.text;
+              }
+            } catch { /* skip malformed JSON */ }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Stream from Gemini (SSE via streamGenerateContent).
+   * @param {Array<{role: string, content: string}>} messages
+   * @param {AbortSignal} signal
+   * @returns {AsyncGenerator<string>}
+   * @private
+   */
+  async *_streamGemini(messages, signal) {
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const userMessages = messages.filter(m => m.role !== 'system');
+
+    const contents = userMessages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+    const model = this.model || 'gemini-2.0-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: systemMessage ? { parts: [{ text: systemMessage }] } : undefined,
+        generationConfig: { maxOutputTokens: 2000 },
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `Gemini API error (${response.status})`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (text) yield text;
+            } catch { /* skip malformed JSON */ }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Stream from Ollama (NDJSON stream, not SSE).
+   * @param {Array<{role: string, content: string}>} messages
+   * @param {AbortSignal} signal
+   * @returns {AsyncGenerator<string>}
+   * @private
+   */
+  async *_streamOllama(messages, signal) {
+    const response = await fetch(`${this.ollamaUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.model || 'llama3.2',
+        messages,
+        stream: true,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      if (response.status === 403) {
+        throw new Error(
+          'Ollama blocked the request (403 Forbidden). ' +
+          'To fix this, restart Ollama with: OLLAMA_ORIGINS=chrome-extension://* ollama serve'
+        );
+      }
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Ollama API error (${response.status})`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.message?.content) {
+              yield parsed.message.content;
+            }
+            if (parsed.done) return;
+          } catch { /* skip malformed JSON */ }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Parse an SSE stream for OpenAI-compatible responses.
+   * Extracts tokens from `data:` lines with `choices[0].delta.content`.
+   * @param {ReadableStream} body - Response body stream
+   * @param {AbortSignal} signal - Abort signal
+   * @returns {AsyncGenerator<string>}
+   * @private
+   */
+  async *_parseSSEStream(body, signal) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        if (signal.aborted) break;
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === '[DONE]') return;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const token = parsed.choices?.[0]?.delta?.content;
+              if (token) yield token;
+            } catch { /* skip malformed JSON */ }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Summarize note content.
+   * @param {string} content - Note content to summarize
+   * @returns {Promise<string>} Summary text
+   */
   async summarize(content) {
     const messages = [
       {
@@ -1065,6 +1435,11 @@ class LLMService {
     return this.chat(messages);
   }
 
+  /**
+   * Expand note content with additional details.
+   * @param {string} content - Note content to expand
+   * @returns {Promise<string>} Expanded text
+   */
   async expand(content) {
     const messages = [
       {
@@ -1079,6 +1454,12 @@ class LLMService {
     return this.chat(messages);
   }
 
+  /**
+   * Ask a question about note content.
+   * @param {string} content - Note content as context
+   * @param {string} question - Question to answer
+   * @returns {Promise<string>} Answer text
+   */
   async ask(content, question) {
     const messages = [
       {
@@ -1094,8 +1475,9 @@ class LLMService {
   }
 
   /**
-   * Generate a title for a note based on its content
-   * Returns a concise, descriptive title (max 50 chars)
+   * Generate a title for a note based on its content.
+   * @param {string} content - Note content
+   * @returns {Promise<string|null>} Generated title or null if content is too short
    */
   async generateTitle(content) {
     if (!content || content.trim().length < 10) {
@@ -1191,7 +1573,7 @@ Return JSON in this exact format:
       }
       
       // Log raw response for debugging
-      console.log('LLM raw response for insights:', response);
+      console.debug('LLM raw response for insights:', response);
       
       // Parse JSON from response (handle potential markdown code blocks and surrounding text)
       let jsonStr = response.trim();
@@ -1215,7 +1597,7 @@ Return JSON in this exact format:
       }
       
       // Log extracted JSON string for debugging
-      console.log('Extracted JSON string:', jsonStr);
+      console.debug('Extracted JSON string:', jsonStr);
       
       let insights;
       try {
@@ -1253,11 +1635,11 @@ Return JSON in this exact format:
                         result.tags.length > 0;
       
       if (!hasContent) {
-        console.log('No meaningful insights extracted from response');
+        console.debug('No meaningful insights extracted from response');
         return null;
       }
       
-      console.log('Successfully extracted insights:', result);
+      console.debug('Successfully extracted insights:', result);
       return result;
     } catch (error) {
       console.error('Failed to extract insights:', error);

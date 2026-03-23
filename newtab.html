@@ -6,18 +6,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>New Tab Note</title>
   <link rel="stylesheet" href="css/editor.css">
+  <link rel="stylesheet" href="css/premium-chat.css">
   <link rel="stylesheet" href="css/stats.css">
 </head>
 
 <body>
+  <a href="#editor-container" class="skip-to-content" id="skip-to-content">Skip to content</a>
   <div id="app">
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
         <div id="sidebar-toggle-container" class="sidebar-toggle-container"></div>
-        <div class="sidebar-tabs">
-          <button id="sidebar-tab-notes" class="sidebar-tab active">Notes</button>
-          <button id="sidebar-tab-templates" class="sidebar-tab">Templates</button>
+        <div class="sidebar-tabs" role="tablist" aria-label="Sidebar navigation">
+          <button id="sidebar-tab-notes" class="sidebar-tab active" role="tab" aria-selected="true" aria-controls="sidebar-notes-list">Notes <span id="notes-count" class="sidebar-tab-badge hidden">0</span></button>
+          <button id="sidebar-tab-templates" class="sidebar-tab" role="tab" aria-selected="false">Templates</button>
+          <button id="sidebar-tab-archive" class="sidebar-tab" role="tab" aria-selected="false">Archive <span id="archive-count" class="sidebar-tab-badge hidden">0</span></button>
+          <button id="sidebar-tab-trash" class="sidebar-tab" role="tab" aria-selected="false">Trash <span id="trash-count" class="sidebar-tab-badge hidden">0</span></button>
         </div>
       </div>
       <div class="sidebar-search">
@@ -33,7 +37,7 @@
           <option value="alphabetical">A-Z</option>
         </select>
         <div class="sidebar-view-toggle">
-          <button id="sidebar-view-list" class="sidebar-view-btn active" title="List View">
+          <button id="sidebar-view-list" class="sidebar-view-btn active" title="List View" aria-label="List View">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="9" y1="6" x2="20" y2="6"></line>
               <line x1="9" y1="12" x2="20" y2="12"></line>
@@ -43,7 +47,7 @@
               <circle cx="5" cy="18" r="1.5" fill="currentColor"></circle>
             </svg>
           </button>
-          <button id="sidebar-view-cards" class="sidebar-view-btn" title="Cards View">
+          <button id="sidebar-view-cards" class="sidebar-view-btn" title="Cards View" aria-label="Cards View">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="7" height="7" rx="1"></rect>
               <rect x="14" y="3" width="7" height="7" rx="1"></rect>
@@ -60,7 +64,7 @@
             <line x1="5" y1="12" x2="19" y2="12"></line>
           </svg>
         </button>
-        <button id="sidebar-daily-note" class="sidebar-action-btn" title="Today's Daily Note">
+        <button id="sidebar-daily-note" class="sidebar-action-btn" title="Today's Daily Note" aria-label="Today's Daily Note">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
             <line x1="16" y1="2" x2="16" y2="6"></line>
@@ -68,14 +72,14 @@
             <line x1="3" y1="10" x2="21" y2="10"></line>
           </svg>
         </button>
-        <button id="sidebar-new-folder" class="sidebar-action-btn" title="New Folder">
+        <button id="sidebar-new-folder" class="sidebar-action-btn" title="New Folder" aria-label="New Folder">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             <line x1="12" y1="11" x2="12" y2="17"></line>
             <line x1="9" y1="14" x2="15" y2="14"></line>
           </svg>
         </button>
-        <button id="sidebar-import-note" class="sidebar-action-btn" title="Import Note">
+        <button id="sidebar-import-note" class="sidebar-action-btn" title="Import Note" aria-label="Import Note">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
@@ -85,18 +89,18 @@
       </div>
       <div id="sidebar-calendar" class="sidebar-calendar">
         <div class="calendar-header">
-          <button id="calendar-prev" class="calendar-nav" title="Previous month">
+          <button id="calendar-prev" class="calendar-nav" title="Previous month" aria-label="Previous month">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 18 9 12 15 6"></polyline>
             </svg>
           </button>
           <span id="calendar-month-label" class="calendar-month-label"></span>
-          <button id="calendar-next" class="calendar-nav" title="Next month">
+          <button id="calendar-next" class="calendar-nav" title="Next month" aria-label="Next month">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
           </button>
-          <button id="calendar-today" class="calendar-nav calendar-today-btn" title="Go to today">
+          <button id="calendar-today" class="calendar-nav calendar-today-btn" title="Go to today" aria-label="Go to today">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"></circle>
             </svg>
@@ -125,27 +129,21 @@
         <button id="empty-trash-btn" class="danger-btn-small">Empty Trash</button>
       </div>
       <div class="sidebar-footer">
-        <button id="sidebar-tab-archive" class="sidebar-footer-btn" title="Archive">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="21 8 21 21 3 21 3 8"></polyline>
-            <rect x="1" y="3" width="22" height="5"></rect>
-            <line x1="10" y1="12" x2="14" y2="12"></line>
-          </svg>
-          <span id="archive-count" class="sidebar-tab-badge hidden">0</span>
-        </button>
-        <button id="sidebar-tab-trash" class="sidebar-footer-btn" title="Trash">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-          </svg>
-          <span id="trash-count" class="sidebar-tab-badge hidden">0</span>
-        </button>
-        <div class="sidebar-footer-separator"></div>
         <button id="sidebar-stats" class="sidebar-footer-btn" title="Analytics & Stats" aria-label="Analytics & Stats">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="20" x2="18" y2="10"></line>
             <line x1="12" y1="20" x2="12" y2="4"></line>
             <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+        </button>
+        <button id="sidebar-graph" class="sidebar-footer-btn" title="Graph View" aria-label="Graph View">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="6" cy="6" r="3"></circle>
+            <circle cx="18" cy="6" r="3"></circle>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="18" r="3"></circle>
+            <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
+            <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
           </svg>
         </button>
         <button id="shortcuts-btn" class="sidebar-footer-btn" title="Keyboard Shortcuts (?)" aria-label="Open Keyboard Shortcuts helper">
@@ -160,15 +158,22 @@
     </aside>
 
     <!-- Note Context Menu -->
-    <div id="note-context-menu" class="context-menu hidden">
-      <button id="ctx-select-note" class="context-menu-item">
+    <div id="note-context-menu" class="context-menu hidden" role="menu" aria-label="Note actions">
+      <button id="ctx-select-note" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
           <polyline points="9 11 12 14 22 4"></polyline>
         </svg>
         Select
       </button>
-      <button id="ctx-open-note" class="context-menu-item">
+      <button id="ctx-pin-note" class="context-menu-item" role="menuitem">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 17v5"></path>
+          <path d="M5 3h14l-3 7v4l-4-2-4 2v-4z"></path>
+        </svg>
+        Pin Note
+      </button>
+      <button id="ctx-open-note" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
           <polyline points="15 3 21 3 21 9"></polyline>
@@ -176,7 +181,7 @@
         </svg>
         Open in New Tab
       </button>
-      <button id="ctx-generate-title" class="context-menu-item">
+      <button id="ctx-generate-title" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path
             d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
@@ -185,7 +190,7 @@
         </svg>
         Generate Title
       </button>
-      <button id="ctx-export-note" class="context-menu-item">
+      <button id="ctx-export-note" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
           <polyline points="7 10 12 15 17 10"></polyline>
@@ -193,7 +198,7 @@
         </svg>
         Export Note
       </button>
-      <button id="ctx-extract-insights" class="context-menu-item">
+      <button id="ctx-extract-insights" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path
             d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
@@ -203,7 +208,7 @@
         </svg>
         Extract Insights
       </button>
-      <button id="ctx-archive-note" class="context-menu-item">
+      <button id="ctx-archive-note" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="21 8 21 21 3 21 3 8"></polyline>
           <rect x="1" y="3" width="22" height="5"></rect>
@@ -211,28 +216,28 @@
         </svg>
         Archive
       </button>
-      <button id="ctx-convert-template" class="context-menu-item">
+      <button id="ctx-convert-template" class="context-menu-item" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
         </svg>
         Convert to Template
       </button>
-      <button id="ctx-back-to-note" class="context-menu-item hidden">
+      <button id="ctx-back-to-note" class="context-menu-item hidden" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
         </svg>
         Back to Note
       </button>
-      <button id="ctx-unarchive-note" class="context-menu-item hidden">
+      <button id="ctx-unarchive-note" class="context-menu-item hidden" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"></polyline>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
         </svg>
         Restore from Archive
       </button>
-      <button id="ctx-restore-note" class="context-menu-item hidden">
+      <button id="ctx-restore-note" class="context-menu-item hidden" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"></polyline>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
@@ -240,14 +245,14 @@
         Restore from Trash
       </button>
       <div class="context-menu-divider"></div>
-      <button id="ctx-delete-note" class="context-menu-item danger">
+      <button id="ctx-delete-note" class="context-menu-item danger" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="3 6 5 6 21 6"></polyline>
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
         </svg>
         Move to Trash
       </button>
-      <button id="ctx-delete-permanent" class="context-menu-item danger hidden">
+      <button id="ctx-delete-permanent" class="context-menu-item danger hidden" role="menuitem">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="3 6 5 6 21 6"></polyline>
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -263,19 +268,19 @@
       <!-- Header -->
       <header id="header">
         <div class="header-left">
-          <button id="sidebar-toggle" class="icon-btn sidebar-toggle-btn active" title="Toggle Sidebar">
+          <button id="sidebar-toggle" class="icon-btn sidebar-toggle-btn active" title="Toggle Sidebar" aria-label="Toggle Sidebar">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
               <line x1="9" y1="3" x2="9" y2="21"></line>
             </svg>
           </button>
-          <button id="split-view-toggle" class="icon-btn" title="Toggle Split View">
+          <button id="split-view-toggle" class="icon-btn" title="Toggle Split View" aria-label="Toggle Split View">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
               <line x1="12" y1="3" x2="12" y2="21"></line>
             </svg>
           </button>
-          <button id="pip-toggle" class="icon-btn" title="Pop out note">
+          <button id="pip-toggle" class="icon-btn" title="Pop out note" aria-label="Pop out note">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
               <polyline points="14 3 21 3 21 10"></polyline>
@@ -290,7 +295,7 @@
         </div>
 
         <div class="header-center">
-          <button id="new-tab-btn" class="icon-btn" title="New Tab">
+          <button id="new-tab-btn" class="icon-btn" title="New Tab" aria-label="New Tab">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -299,7 +304,17 @@
         </div>
 
         <div class="header-right">
-          <span id="save-status" class="save-status">Saved</span>
+          <span id="save-status" class="save-status" aria-live="polite">Saved</span>
+          <span id="sync-status-indicator" class="sync-status-indicator hidden" aria-live="polite" title="Sync status">
+            <span class="sync-status-icon idle"></span>
+            <span class="sync-status-text">Not synced</span>
+          </span>
+          <button id="version-history-btn" class="icon-btn" title="Version History" aria-label="Version History">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </button>
           <div id="width-selector-header" class="width-selector-header">
             <button class="width-option" data-width="narrow" title="Narrow (540px)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -322,7 +337,13 @@
               </svg>
             </button>
           </div>
-          <button id="settings-btn" class="icon-btn" title="Settings">
+          <button id="focus-mode-btn" class="icon-btn" title="Focus Mode (Ctrl+Shift+F11)" aria-label="Toggle Focus Mode">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <circle cx="12" cy="12" r="4"></circle>
+            </svg>
+          </button>
+          <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"></circle>
               <path
@@ -440,7 +461,7 @@
       <div id="stats-dashboard" class="stats-container hidden">
         <div class="stats-header">
           <h1>Analytics & Insights</h1>
-          <button id="stats-close-btn" class="stats-back-btn">
+          <button id="stats-close-btn" class="stats-back-btn" aria-label="Back to Editor">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
@@ -496,6 +517,23 @@
         </div>
       </div>
 
+      <!-- Graph View Panel -->
+      <div id="graph-view-panel" class="stats-container hidden">
+        <div class="stats-header">
+          <h1>Graph View</h1>
+          <button id="graph-close-btn" class="stats-back-btn" aria-label="Back to Editor">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+            Back to Editor
+          </button>
+        </div>
+        <div class="graph-canvas-container">
+          <canvas id="graph-canvas"></canvas>
+        </div>
+      </div>
+
     </div>
 
     <!-- AI Chat Sidebar -->
@@ -512,7 +550,7 @@
           </svg>
           AI Chat
         </span>
-        <button id="ai-sidebar-close" class="icon-btn" title="Close AI Chat">
+        <button id="ai-sidebar-close" class="icon-btn" title="Close AI Chat" aria-label="Close AI Chat">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -521,14 +559,14 @@
       </div>
 
       <!-- Chat Mode Tabs -->
-      <div class="ai-chat-tabs">
-        <button id="ai-tab-note" class="ai-chat-tab active" title="Chat about current note">This Note</button>
-        <button id="ai-tab-all" class="ai-chat-tab" title="Search across all notes">All Notes</button>
-        <button id="ai-tab-smart" class="ai-chat-tab" title="Proactive insights and related notes">Insights</button>
+      <div class="ai-chat-tabs" role="tablist" aria-label="AI chat modes">
+        <button id="ai-tab-note" class="ai-chat-tab active" role="tab" aria-selected="true" aria-controls="ai-panel-note" title="Chat about current note">This Note</button>
+        <button id="ai-tab-all" class="ai-chat-tab" role="tab" aria-selected="false" aria-controls="ai-panel-all" title="Search across all notes">All Notes</button>
+        <button id="ai-tab-smart" class="ai-chat-tab" role="tab" aria-selected="false" aria-controls="ai-panel-smart" title="Proactive insights and related notes">Insights</button>
       </div>
 
       <!-- Note Chat Panel -->
-      <div id="ai-panel-note" class="ai-chat-panel active">
+      <div id="ai-panel-note" class="ai-chat-panel active" role="tabpanel" aria-labelledby="ai-tab-note">
         <div id="ai-sticky-suggestions" class="ai-sticky-suggestions hidden">
           <div id="ai-sticky-template-buttons" class="ai-sticky-template-buttons"></div>
           <button class="ai-sticky-btn ai-extract-insights-btn" data-action="extract-insights" title="Extract insights"
@@ -540,7 +578,7 @@
             </svg>
           </button>
         </div>
-        <div id="ai-chat-messages" class="ai-chat-messages">
+        <div id="ai-chat-messages" class="ai-chat-messages" aria-live="polite">
           <div class="ai-chat-welcome">
             <p>Chat with AI about your current note. Ask questions, request summaries, expand content, and more.</p>
             <div class="ai-chat-suggestions">
@@ -556,13 +594,13 @@
         </div>
         <div class="ai-chat-input-area">
           <textarea id="ai-chat-input" placeholder="Ask anything about your note..." rows="1"></textarea>
-          <button id="ai-chat-clear" class="ai-chat-clear-btn" title="Clear chat">
+          <button id="ai-chat-clear" class="ai-chat-clear-btn" title="Clear chat" aria-label="Clear chat">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
           </button>
-          <button id="ai-chat-send" class="ai-chat-send-btn" title="Send">
+          <button id="ai-chat-send" class="ai-chat-send-btn" title="Send" aria-label="Send message">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="22" y1="2" x2="11" y2="13"></line>
               <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -572,8 +610,8 @@
       </div>
 
       <!-- All Notes Chat Panel -->
-      <div id="ai-panel-all" class="ai-chat-panel">
-        <div id="global-chat-messages" class="ai-chat-messages">
+      <div id="ai-panel-all" class="ai-chat-panel" role="tabpanel" aria-labelledby="ai-tab-all">
+        <div id="global-chat-messages" class="ai-chat-messages" aria-live="polite">
           <div class="ai-chat-welcome global-chat-welcome">
             <p>Search across all your notes. AI will find relevant notes and answer based on their content.</p>
             <div class="ai-chat-suggestions">
@@ -588,13 +626,13 @@
         </div>
         <div class="ai-chat-input-area">
           <textarea id="global-chat-input" placeholder="Ask anything across all your notes..." rows="1"></textarea>
-          <button id="global-chat-clear" class="ai-chat-clear-btn" title="Clear chat">
+          <button id="global-chat-clear" class="ai-chat-clear-btn" title="Clear chat" aria-label="Clear chat">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
           </button>
-          <button id="global-chat-send" class="ai-chat-send-btn" title="Send">
+          <button id="global-chat-send" class="ai-chat-send-btn" title="Send" aria-label="Send message">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="22" y1="2" x2="11" y2="13"></line>
               <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -604,7 +642,7 @@
       </div>
 
       <!-- Smart Insights Panel -->
-      <div id="ai-panel-smart" class="ai-chat-panel">
+      <div id="ai-panel-smart" class="ai-chat-panel" role="tabpanel" aria-labelledby="ai-tab-smart">
         <div class="ai-smart-content">
           <div id="ai-smart-empty" class="ai-smart-empty">
             <p>Start writing to see smart suggestions, related notes, and extracted tasks.</p>
@@ -650,7 +688,7 @@
     </aside>
 
     <!-- Floating AI Chat Button -->
-    <button id="ai-floating-btn" class="ai-floating-btn" title="AI Chat">
+    <button id="ai-floating-btn" class="ai-floating-btn" title="AI Chat" aria-label="Open AI Chat">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path
           d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z">
@@ -663,278 +701,379 @@
 
     <!-- Settings Modal -->
     <div id="settings-modal" class="modal hidden">
-      <div class="modal-content">
+      <div class="modal-content settings-modal-content" role="dialog" aria-modal="true" aria-label="Settings">
         <div class="modal-header">
           <h2>Settings</h2>
+          <div class="settings-search-wrapper">
+            <svg class="settings-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="settings-search" placeholder="Search settings..." />
+          </div>
           <button class="close-btn">&times;</button>
         </div>
-        <div class="modal-body">
-          <div class="settings-grid">
-            <div class="settings-section">
-              <h3>Appearance</h3>
-              <div class="setting-row">
-                <label>Theme</label>
-                <div class="theme-select-wrapper">
-                  <select id="theme-select">
-                    <option value="light">Light</option>
-                    <option value="dark">Dark</option>
-                    <option value="system">System</option>
-                    <!-- Custom themes populated dynamically -->
-                  </select>
-                  <button id="open-theme-builder-btn" class="secondary-btn-small">Builder</button>
-                </div>
-              </div>
-              <div class="setting-row">
-                <label>Font</label>
-                <select id="font-select">
-                  <option value="default">System Default</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Monospace</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label>Editor Width</label>
-                <select id="width-select">
-                  <option value="narrow">Narrow (540px)</option>
-                  <option value="default">Default (720px)</option>
-                  <option value="wide">Wide (900px)</option>
-                  <option value="full">Full Width</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3>Daily Notes</h3>
-              <div class="setting-row">
-                <label>Daily Note Template</label>
-                <select id="daily-note-template-select">
-                  <option value="">No template</option>
-                  <!-- Populated dynamically from templates -->
-                </select>
-              </div>
-              <p class="setting-hint">
-                New daily notes will automatically be initialized with this template.
-              </p>
+        <div class="settings-layout">
+          <!-- Settings Sidebar Navigation -->
+          <nav id="settings-nav" class="settings-nav" aria-label="Settings categories">
+            <button class="settings-nav-item active" data-category="general">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              General
+            </button>
+            <button class="settings-nav-item" data-category="appearance">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a7 7 0 0 0 0 20 4 4 0 0 1 0-8 4 4 0 0 0 0-8"></path></svg>
+              Appearance
+            </button>
+            <button class="settings-nav-item" data-category="editor">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              Editor
+            </button>
+            <button class="settings-nav-item" data-category="ai">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path><circle cx="8" cy="14" r="1"></circle><circle cx="16" cy="14" r="1"></circle></svg>
+              AI Configuration
+            </button>
+            <button class="settings-nav-item" data-category="data">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Data &amp; Backup
+            </button>
+            <button class="settings-nav-item" data-category="advanced">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+              Advanced
+            </button>
+          </nav>
+
+          <!-- Settings Content Area -->
+          <div class="settings-content">
+            <div id="settings-no-results" class="settings-no-results hidden">
+              <p>No settings match your search.</p>
             </div>
 
-            <div class="settings-section">
-              <h3>AI Chat (LLM)</h3>
-              <div class="setting-row">
-                <label>Provider</label>
-                <select id="llm-provider-select">
-                  <option value="none">None (Disabled)</option>
-                  <optgroup label="Major Providers">
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="gemini">Google Gemini</option>
-                    <option value="xai">xAI (Grok)</option>
-                  </optgroup>
-                  <optgroup label="Open Source / Budget">
-                    <option value="deepseek">Deepseek</option>
-                    <option value="mistral">Mistral AI</option>
-                    <option value="groq">Groq</option>
-                  </optgroup>
-                  <optgroup label="Chinese Providers">
-                    <option value="qwen">Qwen (Alibaba)</option>
-                    <option value="glm">GLM (Zhipu)</option>
-                    <option value="kimi">Kimi (Moonshot)</option>
-                    <option value="minimax">MiniMax</option>
-                  </optgroup>
-                  <optgroup label="Aggregators">
-                    <option value="openrouter">OpenRouter</option>
-                  </optgroup>
-                  <optgroup label="Local">
-                    <option value="ollama">Ollama (Local)</option>
-                  </optgroup>
-                </select>
-              </div>
-              <div class="setting-row llm-api-key-row hidden">
-                <label>API Key</label>
-                <input type="password" id="llm-api-key" placeholder="Enter API key..." />
-              </div>
-              <div class="setting-row llm-ollama-url-row hidden">
-                <label>Ollama URL</label>
-                <input type="text" id="ollama-url" placeholder="http://localhost:11434" />
-              </div>
-              <p class="setting-hint llm-ollama-hint hidden">
-                <strong>Important:</strong> Start Ollama with CORS enabled:<br>
-                <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
-              </p>
-              <div class="setting-row llm-model-row hidden">
-                <label>Model</label>
-                <div class="model-select-wrapper">
-                  <select id="llm-model-select">
-                    <!-- Populated dynamically from API -->
+            <!-- General Category -->
+            <div class="settings-category active" data-category="general">
+              <div class="settings-section" data-setting-label="daily note template" data-setting-desc="template for new daily notes">
+                <h3>Daily Notes</h3>
+                <div class="setting-row">
+                  <label>Daily Note Template</label>
+                  <select id="daily-note-template-select">
+                    <option value="">No template</option>
                   </select>
-                  <button id="refresh-models-btn" class="icon-btn refresh-btn" title="Refresh models">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="23 4 23 10 17 10"></polyline>
-                      <polyline points="1 20 1 14 7 14"></polyline>
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                    </svg>
-                  </button>
                 </div>
-              </div>
-              <div class="setting-row llm-auto-title-row hidden">
-                <label>Auto-generate titles</label>
-                <div class="toggle-switch-wrapper">
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="auto-title-enabled">
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
-              <div class="setting-row llm-auto-title-interval-row hidden">
-                <label>Auto-title interval</label>
-                <select id="auto-title-interval">
-                  <option value="5">Every 5 minutes</option>
-                  <option value="15">Every 15 minutes</option>
-                  <option value="30">Every 30 minutes</option>
-                  <option value="60">Every hour</option>
-                  <option value="1440">Every day</option>
-                  <option value="7200">Every 5 days</option>
-                  <option value="10080">Every week</option>
-                  <option value="20160">Every 2 weeks</option>
-                  <option value="43200">Every month</option>
-                </select>
-              </div>
-              <p class="setting-hint llm-auto-title-hint hidden">
-                Automatically generates titles for "Untitled" notes when content changes.
-              </p>
-              <div class="setting-row llm-insights-row hidden">
-                <label>Extract insights</label>
-                <div class="toggle-switch-wrapper">
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="insights-enabled">
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
-              <div class="setting-row llm-insights-interval-row hidden">
-                <label>Extraction interval</label>
-                <select id="insights-interval">
-                  <option value="60">Every hour</option>
-                  <option value="360">Every 6 hours</option>
-                  <option value="720">Every 12 hours</option>
-                  <option value="1440">Every day</option>
-                  <option value="10080">Every week</option>
-                </select>
-              </div>
-              <p class="setting-hint llm-insights-hint hidden">
-                Periodically extracts action items, reminders, deadlines, and key points from your notes.
-              </p>
-              <div class="ai-prompt-templates-settings">
-                <div class="ai-prompt-templates-header">
-                  <h4>AI Prompt Templates</h4>
-                  <div class="ai-prompt-templates-toolbar">
-                    <button id="ai-template-add-btn" class="secondary-btn-small" type="button">Add</button>
-                    <button id="ai-template-reset-btn" class="secondary-btn-small" type="button">Reset defaults</button>
-                  </div>
-                </div>
-                <p class="setting-hint">Customize the note-chat and all-notes suggestion chips.</p>
-                <div id="ai-prompt-template-list" class="ai-prompt-template-list"></div>
-                <div id="ai-prompt-template-empty" class="ai-prompt-template-empty hidden">
-                  No prompt templates yet. Add one or restore the defaults.
-                </div>
-                <form id="ai-prompt-template-form" class="ai-prompt-template-form hidden">
-                  <input type="hidden" id="ai-prompt-template-edit-id">
-                  <div class="setting-row">
-                    <label for="ai-prompt-template-label">Label</label>
-                    <input type="text" id="ai-prompt-template-label" placeholder="Summarize note" maxlength="40">
-                  </div>
-                  <div class="setting-row">
-                    <label for="ai-prompt-template-scope">Show in</label>
-                    <select id="ai-prompt-template-scope">
-                      <option value="note">This Note</option>
-                      <option value="global">All Notes</option>
-                      <option value="both">Both</option>
-                    </select>
-                  </div>
-                  <div class="setting-row">
-                    <label for="ai-prompt-template-behavior">Action</label>
-                    <select id="ai-prompt-template-behavior">
-                      <option value="send">Send immediately</option>
-                      <option value="prefill">Insert into input</option>
-                    </select>
-                  </div>
-                  <div class="setting-row ai-prompt-template-textarea-row">
-                    <label for="ai-prompt-template-prompt">Prompt</label>
-                    <textarea id="ai-prompt-template-prompt" rows="3"
-                      placeholder="Summarize the main ideas from this note"></textarea>
-                  </div>
-                  <div class="ai-prompt-template-form-actions">
-                    <button id="ai-template-cancel-btn" class="secondary-btn" type="button">Cancel</button>
-                    <button id="ai-template-save-btn" class="primary-btn" type="submit">Save template</button>
-                  </div>
-                </form>
+                <p class="setting-hint">New daily notes will automatically be initialized with this template.</p>
               </div>
             </div>
-            <div class="settings-section">
-              <h3>Trash</h3>
-              <div class="setting-row">
-                <label>Auto-delete after</label>
-                <select id="trash-retention-select">
-                  <option value="7">7 days</option>
-                  <option value="14">14 days</option>
-                  <option value="30">30 days</option>
-                  <option value="60">60 days</option>
-                  <option value="90">90 days</option>
-                  <option value="0">Never (manual only)</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3>Data</h3>
-              <div class="setting-row">
-                <button id="export-current-btn" class="secondary-btn">Export Current Note</button>
-                <button id="export-all-btn" class="secondary-btn">Export JSON</button>
-              </div>
-              <div class="setting-row" style="margin-top: 8px;">
-                <button id="export-zip-btn" class="secondary-btn">Export All (ZIP/MD)</button>
-                <button id="backup-btn" class="secondary-btn">Create Backup</button>
-              </div>
-            </div>
-            <div class="setting-row">
-              <button id="import-btn" class="secondary-btn">Import / Restore</button>
-              <div style="flex: 1"></div>
-            </div>
-          </div>
 
-          <div class="settings-section">
-            <h3>Auto Backup</h3>
-            <div class="settings-row">
-              <div class="settings-label">
-                <span class="settings-title">Automatic Reminders</span>
-                <span class="settings-desc">Remind you to backup periodically</span>
+            <!-- Appearance Category -->
+            <div class="settings-category" data-category="appearance">
+              <div class="settings-section" data-setting-label="theme" data-setting-desc="color scheme light dark system custom">
+                <h3>Theme</h3>
+                <div class="setting-row">
+                  <label>Theme</label>
+                  <div class="theme-select-wrapper">
+                    <select id="theme-select">
+                      <option value="light">Light</option>
+                      <option value="dark">Dark</option>
+                      <option value="system">System</option>
+                    </select>
+                    <button id="open-theme-builder-btn" class="secondary-btn-small">Builder</button>
+                  </div>
+                </div>
+                <div id="theme-preview" class="theme-preview">
+                  <div class="theme-preview-sidebar">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-bar short"></div>
+                    <div class="theme-preview-bar"></div>
+                  </div>
+                  <div class="theme-preview-editor">
+                    <div class="theme-preview-title"></div>
+                    <div class="theme-preview-line"></div>
+                    <div class="theme-preview-line short"></div>
+                    <div class="theme-preview-line"></div>
+                  </div>
+                </div>
               </div>
-              <label class="switch">
-                <input type="checkbox" id="auto-backup-toggle">
-                <span class="slider round"></span>
-              </label>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">
-                <span class="settings-title">Frequency</span>
+              <div class="settings-section" data-setting-label="font" data-setting-desc="typeface serif monospace system default">
+                <h3>Font</h3>
+                <div class="setting-row">
+                  <label>Font</label>
+                  <select id="font-select">
+                    <option value="default">System Default</option>
+                    <option value="serif">Serif</option>
+                    <option value="mono">Monospace</option>
+                  </select>
+                </div>
               </div>
-              <select id="backup-frequency-select" class="settings-input">
-                <option value="7">Every week</option>
-                <option value="14">Every 2 weeks</option>
-                <option value="30">Every month</option>
-              </select>
             </div>
-          </div>
-          <div class="settings-section">
-            <h3>Current Note</h3>
-            <div id="pages-list"></div>
-            <button id="delete-page-btn" class="danger-btn">Delete Current Note</button>
+
+            <!-- Editor Category -->
+            <div class="settings-category" data-category="editor">
+              <div class="settings-section" data-setting-label="editor width" data-setting-desc="narrow default wide full width">
+                <h3>Editor Width</h3>
+                <div class="setting-row">
+                  <label>Editor Width</label>
+                  <select id="width-select">
+                    <option value="narrow">Narrow (540px)</option>
+                    <option value="default">Default (720px)</option>
+                    <option value="wide">Wide (900px)</option>
+                    <option value="full">Full Width</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- AI Configuration Category -->
+            <div class="settings-category" data-category="ai">
+              <div class="settings-section" data-setting-label="ai provider model api key" data-setting-desc="openai anthropic gemini ollama llm chat">
+                <h3>AI Chat (LLM)</h3>
+                <div class="setting-row">
+                  <label>Provider</label>
+                  <select id="llm-provider-select">
+                    <option value="none">None (Disabled)</option>
+                    <optgroup label="Major Providers">
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                      <option value="gemini">Google Gemini</option>
+                      <option value="xai">xAI (Grok)</option>
+                    </optgroup>
+                    <optgroup label="Open Source / Budget">
+                      <option value="deepseek">Deepseek</option>
+                      <option value="mistral">Mistral AI</option>
+                      <option value="groq">Groq</option>
+                    </optgroup>
+                    <optgroup label="Chinese Providers">
+                      <option value="qwen">Qwen (Alibaba)</option>
+                      <option value="glm">GLM (Zhipu)</option>
+                      <option value="kimi">Kimi (Moonshot)</option>
+                      <option value="minimax">MiniMax</option>
+                    </optgroup>
+                    <optgroup label="Aggregators">
+                      <option value="openrouter">OpenRouter</option>
+                    </optgroup>
+                    <optgroup label="Local">
+                      <option value="ollama">Ollama (Local)</option>
+                    </optgroup>
+                  </select>
+                </div>
+                <div class="setting-row llm-api-key-row hidden">
+                  <label>API Key</label>
+                  <div class="api-key-input-group">
+                    <input type="password" id="llm-api-key" placeholder="Enter API key..." />
+                    <button type="button" class="icon-btn api-key-toggle-btn" title="Show API key" aria-label="Toggle API key visibility">
+                      <svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                      <svg class="eye-off-icon hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                      </svg>
+                    </button>
+                    <button type="button" class="icon-btn api-key-clear-btn" title="Clear API key" aria-label="Clear API key">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="setting-hint api-key-warning llm-api-key-row hidden">
+                  ⚠️ API keys are stored in the browser's IndexedDB. They are accessible to this extension but are not encrypted at rest. Avoid using keys with broad permissions.
+                </p>
+                <div class="setting-row llm-ollama-url-row hidden">
+                  <label>Ollama URL</label>
+                  <input type="text" id="ollama-url" placeholder="http://localhost:11434" />
+                </div>
+                <p class="setting-hint llm-ollama-hint hidden">
+                  <strong>Important:</strong> Start Ollama with CORS enabled:<br>
+                  <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
+                </p>
+                <div class="setting-row llm-model-row hidden">
+                  <label>Model</label>
+                  <div class="model-select-wrapper">
+                    <select id="llm-model-select"></select>
+                    <button id="refresh-models-btn" class="icon-btn refresh-btn" title="Refresh models">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <polyline points="1 20 1 14 7 14"></polyline>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-section" data-setting-label="auto title generate" data-setting-desc="automatically generate note titles">
+                <h3>Auto Title</h3>
+                <div class="setting-row llm-auto-title-row hidden">
+                  <label>Auto-generate titles</label>
+                  <div class="toggle-switch-wrapper">
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="auto-title-enabled">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row llm-auto-title-interval-row hidden">
+                  <label>Auto-title interval</label>
+                  <select id="auto-title-interval">
+                    <option value="5">Every 5 minutes</option>
+                    <option value="15">Every 15 minutes</option>
+                    <option value="30">Every 30 minutes</option>
+                    <option value="60">Every hour</option>
+                    <option value="1440">Every day</option>
+                    <option value="7200">Every 5 days</option>
+                    <option value="10080">Every week</option>
+                    <option value="20160">Every 2 weeks</option>
+                    <option value="43200">Every month</option>
+                  </select>
+                </div>
+                <p class="setting-hint llm-auto-title-hint hidden">
+                  Automatically generates titles for "Untitled" notes when content changes.
+                </p>
+              </div>
+              <div class="settings-section" data-setting-label="insights extraction" data-setting-desc="extract action items reminders deadlines">
+                <h3>Insights</h3>
+                <div class="setting-row llm-insights-row hidden">
+                  <label>Extract insights</label>
+                  <div class="toggle-switch-wrapper">
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="insights-enabled">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row llm-insights-interval-row hidden">
+                  <label>Extraction interval</label>
+                  <select id="insights-interval">
+                    <option value="60">Every hour</option>
+                    <option value="360">Every 6 hours</option>
+                    <option value="720">Every 12 hours</option>
+                    <option value="1440">Every day</option>
+                    <option value="10080">Every week</option>
+                  </select>
+                </div>
+                <p class="setting-hint llm-insights-hint hidden">
+                  Periodically extracts action items, reminders, deadlines, and key points from your notes.
+                </p>
+              </div>
+              <div class="settings-section" data-setting-label="ai prompt templates" data-setting-desc="custom prompt suggestion chips">
+                <h3>Prompt Templates</h3>
+                <div class="ai-prompt-templates-settings">
+                  <div class="ai-prompt-templates-header">
+                    <h4>AI Prompt Templates</h4>
+                    <div class="ai-prompt-templates-toolbar">
+                      <button id="ai-template-add-btn" class="secondary-btn-small" type="button">Add</button>
+                      <button id="ai-template-reset-btn" class="secondary-btn-small" type="button">Reset defaults</button>
+                    </div>
+                  </div>
+                  <p class="setting-hint">Customize the note-chat and all-notes suggestion chips.</p>
+                  <div id="ai-prompt-template-list" class="ai-prompt-template-list"></div>
+                  <div id="ai-prompt-template-empty" class="ai-prompt-template-empty hidden">
+                    No prompt templates yet. Add one or restore the defaults.
+                  </div>
+                  <form id="ai-prompt-template-form" class="ai-prompt-template-form hidden">
+                    <input type="hidden" id="ai-prompt-template-edit-id">
+                    <div class="setting-row">
+                      <label for="ai-prompt-template-label">Label</label>
+                      <input type="text" id="ai-prompt-template-label" placeholder="Summarize note" maxlength="40">
+                    </div>
+                    <div class="setting-row">
+                      <label for="ai-prompt-template-scope">Show in</label>
+                      <select id="ai-prompt-template-scope">
+                        <option value="note">This Note</option>
+                        <option value="global">All Notes</option>
+                        <option value="both">Both</option>
+                      </select>
+                    </div>
+                    <div class="setting-row">
+                      <label for="ai-prompt-template-behavior">Action</label>
+                      <select id="ai-prompt-template-behavior">
+                        <option value="send">Send immediately</option>
+                        <option value="prefill">Insert into input</option>
+                      </select>
+                    </div>
+                    <div class="setting-row ai-prompt-template-textarea-row">
+                      <label for="ai-prompt-template-prompt">Prompt</label>
+                      <textarea id="ai-prompt-template-prompt" rows="3" maxlength="1000"
+                        placeholder="Summarize the main ideas from this note"></textarea>
+                    </div>
+                    <div class="ai-prompt-template-form-actions">
+                      <button id="ai-template-cancel-btn" class="secondary-btn" type="button">Cancel</button>
+                      <button id="ai-template-save-btn" class="primary-btn" type="submit">Save template</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <!-- Data & Backup Category -->
+            <div class="settings-category" data-category="data">
+              <div class="settings-section" data-setting-label="export import" data-setting-desc="export notes json zip markdown backup restore">
+                <h3>Export &amp; Import</h3>
+                <div class="setting-row">
+                  <button id="export-current-btn" class="secondary-btn">Export Current Note</button>
+                  <button id="export-all-btn" class="secondary-btn">Export JSON</button>
+                </div>
+                <div class="setting-row" style="margin-top: 8px;">
+                  <button id="export-zip-btn" class="secondary-btn">Export All (ZIP/MD)</button>
+                  <button id="backup-btn" class="secondary-btn">Create Backup</button>
+                </div>
+                <div class="setting-row" style="margin-top: 8px;">
+                  <button id="import-btn" class="secondary-btn">Import / Restore</button>
+                </div>
+              </div>
+              <div class="settings-section" data-setting-label="auto backup" data-setting-desc="automatic backup reminders frequency">
+                <h3>Auto Backup</h3>
+                <div class="setting-row">
+                  <label>Automatic Reminders</label>
+                  <div class="toggle-switch-wrapper">
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="auto-backup-toggle">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <p class="setting-hint">Remind you to backup periodically.</p>
+                <div class="setting-row">
+                  <label>Frequency</label>
+                  <select id="backup-frequency-select">
+                    <option value="7">Every week</option>
+                    <option value="14">Every 2 weeks</option>
+                    <option value="30">Every month</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Advanced Category -->
+            <div class="settings-category" data-category="advanced">
+              <div class="settings-section" data-setting-label="trash retention" data-setting-desc="auto delete trash notes days">
+                <h3>Trash</h3>
+                <div class="setting-row">
+                  <label>Auto-delete after</label>
+                  <select id="trash-retention-select">
+                    <option value="7">7 days</option>
+                    <option value="14">14 days</option>
+                    <option value="30">30 days</option>
+                    <option value="60">60 days</option>
+                    <option value="90">90 days</option>
+                    <option value="0">Never (manual only)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-section" data-setting-label="current note delete" data-setting-desc="manage delete current note">
+                <h3>Current Note</h3>
+                <div id="pages-list"></div>
+                <button id="delete-page-btn" class="danger-btn">Delete Current Note</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
   <!-- Theme Builder Modal -->
   <div id="theme-builder-modal" class="modal hidden">
-    <div class="modal-content theme-builder-content">
+    <div class="modal-content theme-builder-content" role="dialog" aria-modal="true" aria-label="Theme Builder">
       <div class="modal-header">
         <h2>Theme Builder</h2>
         <button class="close-btn">&times;</button>
@@ -966,7 +1105,7 @@
 
   <!-- Shortcuts Modal -->
   <div id="shortcuts-modal" class="modal hidden">
-    <div class="modal-content shortcuts-content">
+    <div class="modal-content shortcuts-content" role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts">
       <div class="modal-header">
         <h2>Keyboard Shortcuts</h2>
         <button class="close-btn" aria-label="Close modal">&times;</button>
@@ -1005,6 +1144,21 @@
           <div class="shortcut-item">
             <span class="shortcut-key"><kbd>?</kbd></span>
             <span class="shortcut-desc">Show Shortcuts (This help)</span>
+          </div>
+        </div>
+        <div class="shortcut-section">
+          <h3>Tabs</h3>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Tab</kbd></span>
+            <span class="shortcut-desc">Next Tab</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>Shift</kbd> + <kbd>Tab</kbd></span>
+            <span class="shortcut-desc">Previous Tab</span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-key"><kbd class="mod-key">Mod</kbd> + <kbd>W</kbd></span>
+            <span class="shortcut-desc">Close Tab</span>
           </div>
         </div>
         <div class="shortcut-section">
@@ -1086,30 +1240,11 @@
   <input type="file" id="image-input" accept="image/*" class="hidden">
   <input type="file" id="file-input" class="hidden">
 
-  <script src="js/utils.js"></script>
-  <script src="js/storage.js"></script>
-  <script src="js/theme-engine.js"></script>
-  <script src="js/virtual-scroller.js"></script>
-  <script src="js/block-placeholders.js"></script>
-  <script src="js/resizable-panel.js"></script>
-  <script src="js/sidebar-utils.js"></script>
-  <script src="js/shortcut-utils.js"></script>
-  <script src="js/command-palette-utils.js"></script>
-  <script src="js/ai-prompt-templates.js"></script>
-  <script src="js/ai-response-utils.js"></script>
   <script src="js/lib/fuse.js"></script>
   <script src="js/lib/jszip.min.js"></script>
-  <script src="js/search.js"></script>
-  <script src="js/image-compression.js"></script>
-  <script src="js/blocks.js"></script>
-  <script src="js/editor.js"></script>
-  <script src="js/llm.js"></script>
   <script src="js/lib/chart.js"></script>
-  <script src="js/analytics.js"></script>
   <script src="js/lib/transformers.js"></script>
-  <script src="js/embeddings.js"></script>
-  <script src="js/onboarding.js"></script>
-  <script src="js/app.js"></script>
+  <script type="module" src="js/main.js"></script>
 </body>
 
 </html>

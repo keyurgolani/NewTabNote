@@ -1,8 +1,26 @@
 (function (global) {
+  /**
+   * Clamp a value between min and max.
+   * @param {number} value
+   * @param {number} min
+   * @param {number} max
+   * @returns {number}
+   */
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
   }
 
+  /**
+   * Calculate the new panel width during a resize operation.
+   * @param {Object} params - Calculation parameters
+   * @param {number} params.startWidth - Width at drag start
+   * @param {number} params.startX - Mouse X at drag start
+   * @param {number} params.currentX - Current mouse X
+   * @param {number} params.min - Minimum width
+   * @param {number} params.max - Maximum width
+   * @param {'left'|'right'} [params.direction='right'] - Resize direction
+   * @returns {number} Clamped panel width
+   */
   function calculatePanelWidth({
     startWidth,
     startX,

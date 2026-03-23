@@ -12,10 +12,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+/**
+ * Handle an API request using XMLHttpRequest to bypass CORS.
+ * @param {{url: string, options: {method?: string, body?: string}}} request - Request details
+ * @returns {Promise<{ok: boolean, status: number, data: *}>} Response object
+ */
 async function handleApiRequest(request) {
   const { url, options } = request;
   
-  console.log('Offscreen: Making XHR request to', url);
+  console.debug('Offscreen: Making XHR request to', url);
   
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -27,7 +32,7 @@ async function handleApiRequest(request) {
     xhr.timeout = 60000; // 60 second timeout
     
     xhr.onload = function() {
-      console.log('Offscreen: XHR response status:', xhr.status);
+      console.debug('Offscreen: XHR response status:', xhr.status);
       
       let data;
       try {

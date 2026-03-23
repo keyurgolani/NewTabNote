@@ -37,7 +37,8 @@ class ThemeEngine {
     }
 
     /**
-     * Initialize and apply saved theme
+     * Initialize and apply the saved theme.
+     * @returns {Promise<void>}
      */
     async init() {
         const themeId = await Storage.getSetting('theme', 'light');
@@ -45,7 +46,9 @@ class ThemeEngine {
     }
 
     /**
-     * Apply a theme by ID
+     * Apply a theme by ID.
+     * @param {string} themeId - Theme identifier ('light', 'dark', 'system', or custom theme ID)
+     * @returns {Promise<void>}
      */
     async applyTheme(themeId) {
         let properties = {};
@@ -81,7 +84,9 @@ class ThemeEngine {
     }
 
     /**
-     * Inject CSS custom properties into :root
+     * Inject CSS custom properties into :root.
+     * @param {Object<string, string>} properties - CSS variable key-value pairs
+     * @returns {void}
      */
     injectProperties(properties) {
         const root = document.documentElement;
@@ -91,7 +96,9 @@ class ThemeEngine {
     }
 
     /**
-     * Helper to determine if a background color is dark
+     * Determine if a background color is dark.
+     * @param {string} hex - Hex color string
+     * @returns {boolean} True if the color is dark
      */
     isThemeDark(hex) {
         if (!hex || hex[0] !== '#') return false;

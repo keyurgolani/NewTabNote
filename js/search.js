@@ -18,21 +18,27 @@ class SearchEngine {
     }
 
     /**
-     * Initialize or update the index with new data
+     * Initialize or update the search index with new data.
+     * @param {Array<Object>} data - Array of indexable items
+     * @returns {Promise<void>}
      */
     async updateIndex(data) {
         this.fuse = new Fuse(data, this.options);
     }
 
     /**
-     * Set vectors for semantic search
+     * Set vectors for semantic search.
+     * @param {Array<{noteId: string, vector: Array<number>}>} vectors - Embedding vectors
+     * @returns {void}
      */
     setVectors(vectors) {
         this.vectors = vectors || [];
     }
 
     /**
-     * Perform hybrid search (Keyword + Semantic)
+     * Perform hybrid search combining keyword and semantic results.
+     * @param {string} query - Search query
+     * @returns {Promise<Array<{id: string, score: number, isSemantic?: boolean}>>} Ranked search results
      */
     async search(query) {
         if (!query) return [];

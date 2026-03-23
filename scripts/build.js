@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { minify: minifyJS } = require('terser');
 const CleanCSS = require('clean-css');
 
@@ -19,6 +20,14 @@ const isDev = process.argv.includes('--dev');
 // Files to process
 const JS_FILES = [
   'js/utils.js',
+  'js/core/storage-error.js',
+  'js/core/event-bus.js',
+  'js/core/dom-refs.js',
+  'js/core/logger.js',
+  'js/utils/sanitize.js',
+  'js/ui/confirm-dialog.js',
+  'js/ui/formatting-toolbar.js',
+  'js/ui/graph-view.js',
   'js/storage.js',
   'js/theme-engine.js',
   'js/virtual-scroller.js',
@@ -41,7 +50,21 @@ const JS_FILES = [
   'js/lib/transformers.js',
   'js/embeddings.js',
   'js/onboarding.js',
+  'js/services/sync-service.js',
+  'js/stream-renderer.js',
+  'js/scroll-state-machine.js',
+  'js/chat-ui-components.js',
+  'js/controllers/sidebar-controller.js',
+  'js/controllers/tab-controller.js',
+  'js/controllers/ai-chat-controller.js',
+  'js/controllers/settings-controller.js',
+  'js/controllers/theme-builder-controller.js',
+  'js/controllers/analytics-controller.js',
+  'js/controllers/notes-manager.js',
+  'js/controllers/shortcuts-manager.js',
+  'js/controllers/export-import-service.js',
   'js/app.js',
+  'js/main.js',
   'js/popup.js',
   'js/background.js',
   'js/offscreen.js',
@@ -49,6 +72,7 @@ const JS_FILES = [
 
 const CSS_FILES = [
   'css/editor.css',
+  'css/premium-chat.css',
   'css/stats.css',
 ];
 
@@ -161,7 +185,10 @@ async function minifyJSFile(srcPath, destPath) {
   }
 
   try {
-    const result = await minifyJS(code, TERSER_OPTIONS);
+    // Detect ES module files (contain import/export statements)
+    const isModule = /^\s*(import\s|export\s)/m.test(code);
+    const options = isModule ? { ...TERSER_OPTIONS, module: true } : TERSER_OPTIONS;
+    const result = await minifyJS(code, options);
     ensureDir(path.dirname(destPath));
     fs.writeFileSync(destPath, result.code);
     return { original: code.length, minified: result.code.length };
@@ -188,7 +215,15 @@ function minifyCSSFile(srcPath, destPath) {
   }
 
   const cleanCSS = new CleanCSS(CLEANCSS_OPTIONS);
-  const result = cleanCSS.minify(code);
+  let result;
+  try {
+    result = cleanCSS.minify(code);
+  } catch (e) {
+    // Level-2 optimization can crash on some CSS features; fall back to level-1
+    console.warn(`  ⚠️  Level-2 minification failed for ${path.basename(srcPath)}, falling back to level-1`);
+    const fallbackCSS = new CleanCSS({ level: 1 });
+    result = fallbackCSS.minify(code);
+  }
 
   if (result.errors.length > 0) {
     console.error(`Error minifying ${srcPath}:`, result.errors);
@@ -319,6 +354,25 @@ async function build() {
 
     copyDir(srcPath, destPath);
     console.log(`  ✓ ${dir}/`);
+  }
+
+  // Run JSDoc type checking (warning-only, does not block build)
+  console.log('\n🔍 Running JSDoc type check...');
+  try {
+    execSync('npx tsc --project jsconfig.json', { cwd: ROOT_DIR, stdio: 'pipe' });
+    console.log('  ✓ No type errors found');
+  } catch (error) {
+    const output = (error.stdout || '').toString().trim();
+    const lines = output ? output.split('\n') : [];
+    const errorCount = lines.filter(l => /error TS\d+/.test(l)).length;
+    console.warn(`  ⚠️  ${errorCount} type warning(s) found (non-blocking)`);
+    if (lines.length > 0) {
+      // Show first few warnings
+      lines.slice(0, 10).forEach(line => console.warn(`     ${line}`));
+      if (lines.length > 10) {
+        console.warn(`     ... and ${lines.length - 10} more`);
+      }
+    }
   }
 
   // Summary

@@ -152,6 +152,7 @@ class Block {
     this.rows = options.rows || 2;
     this.cols = options.cols || 2;
     this.tableData = options.tableData || null;
+    this.hasHeaderRow = options.hasHeaderRow !== undefined ? options.hasHeaderRow : true;
     // Bookmark properties
     this.url = options.url || '';
     this.title = options.title || '';
@@ -387,11 +388,14 @@ class Block {
       }
     }
 
+    // Default hasHeaderRow to true for backward compatibility
+    const useHeader = this.hasHeaderRow !== false;
+
     // Create table rows
     this.tableData.forEach((rowData, rowIndex) => {
       const tr = document.createElement('tr');
       rowData.forEach((cellData, colIndex) => {
-        const cell = rowIndex === 0 ? document.createElement('th') : document.createElement('td');
+        const cell = (useHeader && rowIndex === 0) ? document.createElement('th') : document.createElement('td');
         cell.contentEditable = true;
         cell.textContent = cellData;
         cell.dataset.row = rowIndex;
@@ -700,6 +704,7 @@ class Block {
       data.rows = this.rows;
       data.cols = this.cols;
       data.tableData = this.tableData;
+      data.hasHeaderRow = this.hasHeaderRow;
     }
 
     if (this.type === 'bookmark') {
