@@ -147,6 +147,17 @@ html, body {
   align-items: center;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+}
+
+.sidebar-toggle-container {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-container .sidebar-toggle-btn {
+  margin: 0;
 }
 
 /* Sidebar View Toggle */
@@ -2201,6 +2212,10 @@ html, body {
   flex-shrink: 0;
 }
 
+.header-left:empty {
+  display: none;
+}
+
 .header-center {
   display: flex;
   align-items: center;
@@ -2354,6 +2369,52 @@ html, body {
 
 .ai-sidebar-title svg {
   color: var(--accent-color);
+}
+
+/* AI Chat Tabs */
+.ai-chat-tabs {
+  display: flex;
+  padding: 8px 12px;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.ai-chat-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.ai-chat-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.ai-chat-tab.active {
+  background: var(--bg-primary);
+  color: var(--accent-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* AI Chat Panels */
+.ai-chat-panel {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.ai-chat-panel.active {
+  display: flex;
 }
 
 /* Sticky Suggestions Bar */
@@ -2603,6 +2664,28 @@ html, body {
   transform: none;
 }
 
+/* Clear Chat Button */
+.ai-chat-clear-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.ai-chat-clear-btn:hover {
+  background: var(--bg-hover);
+  color: var(--danger-color);
+  border-color: var(--danger-color);
+}
+
 /* AI Not Configured State */
 .ai-not-configured-sidebar {
   position: absolute;
@@ -2657,6 +2740,56 @@ html, body {
 
 .ai-floating-btn.hidden {
   display: none;
+}
+
+/* Global Chat specific styles */
+.global-chat-suggestion {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.global-chat-suggestion:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+/* RAG source notes indicator */
+.global-chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.global-chat-sources-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.global-chat-source-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.global-chat-source-tag:hover {
+  background: var(--accent-color);
+  color: white;
 }
 
 /* Responsive AI Sidebar */
@@ -2787,6 +2920,39 @@ html, body {
   list-style-type: decimal;
 }
 
+.ai-message-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.ai-message-content table th,
+.ai-message-content table td {
+  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+}
+
+.ai-message-content table th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-message-content table td {
+  background: var(--bg-primary);
+}
+
+.ai-message-content table tr:nth-child(even) td {
+  background: var(--bg-secondary);
+}
+
+.ai-message-content hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 16px 0;
+}
+
 .ai-message-content a {
   color: var(--accent-color);
   text-decoration: underline;
@@ -2845,4 +3011,251 @@ html, body {
 
 [data-theme="dark"] .ai-message-content blockquote {
   background: #1a1a1a;
+}
+
+/* Note Insights Section */
+.note-insights {
+  margin: 16px 0 24px 0;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* Insights Loading State */
+.note-insights.insights-loading {
+  padding: 12px 16px;
+}
+
+.note-insights.insights-loading .note-insights-header {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.insights-loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.insights-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: insights-spin 0.8s linear infinite;
+}
+
+@keyframes insights-spin {
+  to { transform: rotate(360deg); }
+}
+
+.note-insights-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.note-insights-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.note-insights-title svg {
+  color: var(--accent-color);
+}
+
+.note-insights-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.note-insights-refresh {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.note-insights-refresh:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.note-insights-refresh.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.note-insights-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.note-insights-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-color);
+  border-radius: 12px;
+  cursor: default;
+  transition: all 0.15s ease;
+}
+
+.note-insights-tag:hover {
+  background: var(--accent-color);
+  color: white;
+}
+
+.note-insights-section {
+  margin-bottom: 12px;
+}
+
+.note-insights-section:last-child {
+  margin-bottom: 0;
+}
+
+.note-insights-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.note-insights-section-title .icon {
+  font-size: 14px;
+}
+
+.note-insights-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.note-insights-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.note-insights-list li::before {
+  content: '•';
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.note-insights-list.deadlines li::before {
+  content: '📅';
+}
+
+.note-insights-list.todos li::before {
+  content: '☐';
+  color: var(--accent-color);
+}
+
+.note-insights-list.reminders li::before {
+  content: '💡';
+}
+
+.note-insights-list.highlights li::before {
+  content: '⭐';
+}
+
+.deadline-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.deadline-date.today {
+  background: var(--danger-color);
+  color: white;
+}
+
+.deadline-date.soon {
+  background: #f59e0b;
+  color: white;
+}
+
+.deadline-date.overdue {
+  background: #dc2626;
+  color: white;
+}
+
+.deadline-date.upcoming {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.deadline-actual-date {
+  opacity: 0.75;
+  font-size: 10px;
+}
+
+.note-insights-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+  text-align: center;
+  padding: 8px;
+}
+
+/* Collapsed insights */
+.note-insights.collapsed .note-insights-content {
+  display: none;
+}
+
+.note-insights-toggle {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: transform var(--transition);
+}
+
+.note-insights-toggle:hover {
+  color: var(--text-primary);
+}
+
+.note-insights.collapsed .note-insights-toggle {
+  transform: rotate(-90deg);
 }

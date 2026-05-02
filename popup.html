@@ -5,6 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>New Tab Note</title>
   <style>
+    :root {
+      --bg-primary: #ffffff;
+      --bg-secondary: #fafbfc;
+      --bg-tertiary: #f9fafb;
+      --bg-hover: #f3f4f6;
+      --text-primary: #111827;
+      --text-secondary: #374151;
+      --text-muted: #6b7280;
+      --text-faint: #9ca3af;
+      --border-color: #e5e7eb;
+      --border-hover: #d1d5db;
+      --accent-color: #6366f1;
+      --accent-dark: #4f46e5;
+      --accent-darker: #4338ca;
+      --summary-bg: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+      --summary-border: #c7d2fe;
+      --summary-category-bg: rgba(255, 255, 255, 0.7);
+      --scrollbar-thumb: #d1d5db;
+      --scrollbar-hover: #9ca3af;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: #1f2937;
+        --bg-secondary: #111827;
+        --bg-tertiary: #374151;
+        --bg-hover: #4b5563;
+        --text-primary: #f9fafb;
+        --text-secondary: #e5e7eb;
+        --text-muted: #9ca3af;
+        --text-faint: #6b7280;
+        --border-color: #374151;
+        --border-hover: #4b5563;
+        --accent-color: #818cf8;
+        --accent-dark: #6366f1;
+        --accent-darker: #4f46e5;
+        --summary-bg: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+        --summary-border: #4338ca;
+        --summary-category-bg: rgba(0, 0, 0, 0.3);
+        --scrollbar-thumb: #4b5563;
+        --scrollbar-hover: #6b7280;
+      }
+    }
+
     * {
       box-sizing: border-box;
       margin: 0;
@@ -13,168 +57,394 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      width: 280px;
-      padding: 16px;
-      background: #fff;
-      color: #1a1a1a;
+      width: 800px;
+      height: 600px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 15px;
     }
 
+    /* Header - Sticky */
     .header {
       display: flex;
       align-items: center;
-      gap: 12px;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #e8e8e8;
+      gap: 14px;
+      padding: 16px 20px;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
     }
 
     .header img {
-      width: 32px;
-      height: 32px;
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
     }
 
-    .header h1 {
-      font-size: 16px;
+    .header-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-text h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 1px;
+    }
+
+    .header-text .tagline {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .header .btn-open {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
       font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      background: linear-gradient(135deg, var(--accent-dark) 0%, var(--accent-color) 100%);
+      color: white;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      flex-shrink: 0;
     }
 
-    .header span {
-      font-size: 11px;
-      color: #999;
-      margin-left: auto;
+    .header .btn-open:hover {
+      background: linear-gradient(135deg, var(--accent-darker) 0%, var(--accent-dark) 100%);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+      transform: translateY(-1px);
     }
 
+    .header .btn-open svg {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    /* Main Layout - Two Columns with independent scroll */
+    .main-content {
+      display: flex;
+      gap: 16px;
+      flex: 1;
+      min-height: 0;
+      padding: 16px 20px;
+    }
+
+    .column-left {
+      flex: 7;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .column-right {
+      flex: 3;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Section Styling */
     .section {
-      margin-bottom: 16px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-shrink: 0;
+    }
+
+    .section-header svg {
+      color: var(--accent-color);
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
     }
 
     .section-title {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 12px;
+      font-weight: 700;
       text-transform: uppercase;
-      color: #999;
-      margin-bottom: 8px;
+      color: var(--text-secondary);
       letter-spacing: 0.5px;
     }
 
+    .section-content {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    /* Daily Summary Section */
+    .daily-summary {
+      background: var(--summary-bg);
+      border: 1px solid var(--summary-border);
+    }
+
+    .daily-summary.hidden {
+      display: none;
+    }
+
+    .daily-summary .section-header svg {
+      color: var(--accent-dark);
+    }
+
+    .daily-summary .section-title {
+      color: var(--accent-darker);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .daily-summary .section-title {
+        color: var(--accent-color);
+      }
+    }
+
+    .summary-category {
+      background: var(--summary-category-bg);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+
+    .summary-category:last-child {
+      margin-bottom: 0;
+    }
+
+    .summary-category-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .summary-category-title .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .summary-category-title .dot.deadlines { background: #ef4444; }
+    .summary-category-title .dot.todos { background: #3b82f6; }
+    .summary-category-title .dot.reminders { background: #f59e0b; }
+
+    .summary-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .summary-list li {
+      font-size: 13px;
+      color: var(--text-secondary);
+      padding: 4px 0;
+      padding-left: 14px;
+      position: relative;
+      line-height: 1.4;
+      border-bottom: 1px solid rgba(128, 128, 128, 0.1);
+      word-wrap: break-word;
+    }
+
+    .summary-list li:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .summary-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--text-faint);
+    }
+
+    .summary-list.deadlines li::before { background: #ef4444; }
+    .summary-list.deadlines li.today::before {
+      background: #dc2626;
+      box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.2);
+    }
+    .summary-list.todos li::before { background: #3b82f6; }
+    .summary-list.reminders li::before { background: #f59e0b; }
+
+    .deadline-date {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-left: 4px;
+      font-weight: 500;
+    }
+
+    .deadline-date.today {
+      color: #dc2626;
+      font-weight: 700;
+    }
+
+    .deadline-date.soon {
+      color: #f59e0b;
+      font-weight: 600;
+    }
+
+    .summary-empty {
+      font-size: 13px;
+      color: var(--text-faint);
+      text-align: center;
+      padding: 16px 8px;
+      font-style: italic;
+    }
+
+    /* Recent Pages Section */
     .page-list {
       display: flex;
       flex-direction: column;
       gap: 4px;
-      max-height: 200px;
-      overflow-y: auto;
     }
 
     .page-item {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-direction: column;
+      gap: 2px;
       padding: 8px 10px;
-      background: #f5f5f5;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
       border-radius: 6px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: all 0.15s ease;
     }
 
     .page-item:hover {
-      background: #e8e8e8;
+      background: var(--bg-hover);
+      border-color: var(--border-hover);
     }
 
     .page-item .name {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 500;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .page-item .date {
-      font-size: 11px;
-      color: #999;
-    }
-
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 10px;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    .btn-primary {
-      background: #2383e2;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #1a6fc4;
-    }
-
-    .btn-secondary {
-      background: #f5f5f5;
-      color: #1a1a1a;
-      margin-top: 8px;
-    }
-
-    .btn-secondary:hover {
-      background: #e8e8e8;
-    }
-
-    .shortcuts {
       font-size: 12px;
-      color: #666;
-      line-height: 1.6;
+      color: var(--text-faint);
     }
 
-    .shortcuts .shortcut {
-      display: flex;
-      justify-content: space-between;
-      padding: 3px 0;
-    }
-
-    .shortcuts kbd {
-      font-family: monospace;
-      background: #f0f0f0;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 11px;
-    }
-
+    /* Empty State */
     .empty {
       text-align: center;
-      padding: 20px;
-      color: #999;
-      font-size: 13px;
+      padding: 20px 12px;
+      color: var(--text-faint);
+      font-size: 14px;
+    }
+
+    /* When no summary, make recent pages full width */
+    .main-content.no-summary {
+      display: block;
+    }
+
+    .main-content.no-summary .column-left {
+      display: none;
+    }
+
+    .main-content.no-summary .column-right {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-hover);
     }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="icons/icon48.png" alt="New Tab Note">
-    <h1>New Tab Note</h1>
-    <span>v1.0.0</span>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Recent Pages</div>
-    <div id="page-list" class="page-list">
-      <div class="empty">Loading...</div>
+    <div class="header-text">
+      <h1>New Tab Note</h1>
+      <span class="tagline">Your thoughts, organized</span>
     </div>
+    <button id="open-tab" class="btn-open">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <line x1="10" y1="14" x2="21" y2="3"></line>
+      </svg>
+      Open Notes
+    </button>
   </div>
 
-  <button id="open-tab" class="btn btn-primary">Open New Tab</button>
-  <button id="new-page" class="btn btn-secondary">Create New Page</button>
+  <!-- Main Content - Two Columns -->
+  <div id="main-content" class="main-content">
+    <!-- Daily Summary (70%) -->
+    <div class="column-left">
+      <div id="daily-summary" class="section daily-summary hidden">
+        <div class="section-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          </svg>
+          <span class="section-title">Today's Summary</span>
+        </div>
+        <div id="summary-content" class="section-content"></div>
+      </div>
+    </div>
 
-  <div class="section" style="margin-top: 16px;">
-    <div class="section-title">Quick Tips</div>
-    <div class="shortcuts">
-      <div class="shortcut"><span>Commands</span><kbd>/</kbd></div>
-      <div class="shortcut"><span>Heading 1</span><kbd># </kbd></div>
-      <div class="shortcut"><span>Bullet list</span><kbd>- </kbd></div>
-      <div class="shortcut"><span>To-do</span><kbd>[] </kbd></div>
-      <div class="shortcut"><span>Quote</span><kbd>> </kbd></div>
-      <div class="shortcut"><span>Code</span><kbd>``` </kbd></div>
+    <!-- Recent Pages (30%) -->
+    <div class="column-right">
+      <div class="section">
+        <div class="section-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+          <span class="section-title">Recent</span>
+        </div>
+        <div id="page-list" class="page-list section-content">
+          <div class="empty">Loading...</div>
+        </div>
+      </div>
     </div>
   </div>
 

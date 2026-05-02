@@ -532,7 +532,254 @@ Rules:
       return null;
     }
   }
+
+  /**
+   * Extract actionable insights from note content
+   * Returns structured data with todos, reminders, deadlines, highlights, and tags
+   */
+  async extractInsights(content, noteTitle = '') {
+    if (!content || content.trim().length < 20) {
+      return null;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    
+    const messages = [
+      {
+        role: 'system',
+        content: `You are an assistant that extracts actionable insights from notes. Today's date is ${today}.
+
+Analyze the note and extract:
+1. **todos**: Action items or tasks to complete (things to do)
+2. **reminders**: Things to remember or keep in mind
+3. **deadlines**: Important dates, deadlines, or time-sensitive items (include the date if mentioned)
+4. **highlights**: Key information, important facts, or notable points
+5. **tags**: Relevant topic tags or categories for this note (e.g., "work", "personal", "meeting", "project-x", "finance")
+
+Rules:
+- Only extract items that are clearly stated or strongly implied
+- For deadlines, always try to include the specific date in YYYY-MM-DD format if mentioned
+- Keep each item concise (max 100 characters)
+- Maximum 5 items per category
+- For tags: generate 2-5 short, lowercase tags (no spaces, use hyphens for multi-word tags)
+- Tags should reflect the main topics, projects, or categories of the note
+- If a category has no items, return an empty array
+- Return ONLY valid JSON, no markdown or explanation
+
+Return JSON in this exact format:
+{
+  "todos": ["item1", "item2"],
+  "reminders": ["item1", "item2"],
+  "deadlines": [{"text": "description", "date": "YYYY-MM-DD"}],
+  "highlights": ["item1", "item2"],
+  "tags": ["tag1", "tag2", "tag3"]
+}`,
+      },
+      {
+        role: 'user',
+        content: `Note title: ${noteTitle || 'Untitled'}\n\nNote content:\n${content.substring(0, 4000)}`,
+      },
+    ];
+
+    try {
+      const response = await this.chat(messages);
+      
+      // Parse JSON from response (handle potential markdown code blocks)
+      let jsonStr = response.trim();
+      if (jsonStr.startsWith('```')) {
+        jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+      
+      const insights = JSON.parse(jsonStr);
+      
+      // Validate and sanitize the response
+      return {
+        todos: Array.isArray(insights.todos) ? insights.todos.slice(0, 5).map(s => String(s).substring(0, 100)) : [],
+        reminders: Array.isArray(insights.reminders) ? insights.reminders.slice(0, 5).map(s => String(s).substring(0, 100)) : [],
+        deadlines: Array.isArray(insights.deadlines) ? insights.deadlines.slice(0, 5).map(d => ({
+          text: String(d.text || d).substring(0, 100),
+          date: d.date || null
+        })) : [],
+        highlights: Array.isArray(insights.highlights) ? insights.highlights.slice(0, 5).map(s => String(s).substring(0, 100)) : [],
+        tags: Array.isArray(insights.tags) ? insights.tags.slice(0, 5).map(t => String(t).toLowerCase().replace(/\s+/g, '-').substring(0, 30)) : [],
+        extractedAt: Date.now()
+      };
+    } catch (error) {
+      console.error('Failed to extract insights:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Generate a daily summary from multiple notes' insights
+   */
+  async generateDailySummary(notesWithInsights) {
+    if (!notesWithInsights || notesWithInsights.length === 0) {
+      return null;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+
+    // Compile all insights
+    const allTodos = [];
+    const allReminders = [];
+    const allDeadlines = [];
+    
+    for (const note of notesWithInsights) {
+      if (!note.insights) continue;
+      
+      const prefix = note.name ? `[${note.name}] ` : '';
+      
+      if (note.insights.todos) {
+        allTodos.push(...note.insights.todos.map(t => prefix + t));
+      }
+      if (note.insights.reminders) {
+        allReminders.push(...note.insights.reminders.map(r => prefix + r));
+      }
+      if (note.insights.deadlines) {
+        allDeadlines.push(...note.insights.deadlines.map(d => ({
+          ...d,
+          text: prefix + d.text,
+          noteId: note.id
+        })));
+      }
+    }
+
+    // Filter deadlines for today and upcoming
+    const todayDeadlines = allDeadlines.filter(d => d.date === today);
+    const upcomingDeadlines = allDeadlines.filter(d => d.date && d.date > today && d.date <= nextWeek);
+
+    return {
+      date: today,
+      todayDeadlines,
+      upcomingDeadlines,
+      todos: allTodos.slice(0, 10),
+      reminders: allReminders.slice(0, 10),
+      generatedAt: Date.now()
+    };
+  }
+
+  /**
+   * RAG Step 1: Analyze user query and determine which notes to retrieve
+   * Returns note IDs, tags to filter by, and the follow-up prompt
+   */
+  async ragAnalyzeQuery(userQuery, notesMetadata) {
+    if (!userQuery || !notesMetadata || notesMetadata.length === 0) {
+      return null;
+    }
+
+    const notesListStr = notesMetadata.map(n => 
+      `- ID: "${n.id}", Title: "${n.title || 'Untitled'}", Tags: [${(n.tags || []).join(', ')}]`
+    ).join('\n');
+
+    const allTags = [...new Set(notesMetadata.flatMap(n => n.tags || []))];
+    const tagsListStr = allTags.length > 0 ? allTags.join(', ') : '(no tags)';
+
+    const messages = [
+      {
+        role: 'system',
+        content: `You are an intelligent assistant that helps users find information across their notes.
+
+The user has a collection of notes. Your task is to:
+1. Analyze the user's query
+2. Determine which notes are most likely to contain relevant information based on their titles and tags
+3. Return a structured response indicating which notes to retrieve
+
+Available notes:
+${notesListStr}
+
+All available tags: ${tagsListStr}
+
+Rules:
+- Select only notes that are likely relevant to the query (max 5 notes)
+- If the query is general or unclear, select notes with the most relevant titles/tags
+- Also specify any tags that might help filter relevant content
+- Create a follow-up prompt that will be used with the full note content to answer the user's query
+- Return ONLY valid JSON, no markdown or explanation
+
+Return JSON in this exact format:
+{
+  "noteIds": ["id1", "id2"],
+  "relevantTags": ["tag1", "tag2"],
+  "followUpPrompt": "Based on the following notes, [specific instruction to answer the user's query]",
+  "reasoning": "Brief explanation of why these notes were selected"
+}`
+      },
+      {
+        role: 'user',
+        content: userQuery
+      }
+    ];
+
+    try {
+      const response = await this.chat(messages);
+      
+      let jsonStr = response.trim();
+      if (jsonStr.startsWith('```')) {
+        jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+      
+      const result = JSON.parse(jsonStr);
+      
+      return {
+        noteIds: Array.isArray(result.noteIds) ? result.noteIds : [],
+        relevantTags: Array.isArray(result.relevantTags) ? result.relevantTags : [],
+        followUpPrompt: result.followUpPrompt || 'Answer the user query based on the following notes.',
+        reasoning: result.reasoning || ''
+      };
+    } catch (error) {
+      console.error('RAG analysis failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * RAG Step 2: Answer the user query using the retrieved note content
+   */
+  async ragAnswerQuery(userQuery, followUpPrompt, notesContent) {
+    if (!userQuery || !notesContent || notesContent.length === 0) {
+      return null;
+    }
+
+    const notesStr = notesContent.map(n => 
+      `=== Note: ${n.title || 'Untitled'} ===\n${n.content}\n`
+    ).join('\n');
+
+    const messages = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant answering questions based on the user's notes.
+
+${followUpPrompt}
+
+Notes content:
+${notesStr}
+
+Rules:
+- Answer based ONLY on the information in the provided notes
+- If the information is not in the notes, say so clearly
+- Be concise but thorough
+- If referencing specific notes, mention their titles
+- Format your response clearly with paragraphs or bullet points as appropriate`
+      },
+      {
+        role: 'user',
+        content: userQuery
+      }
+    ];
+
+    try {
+      return await this.chat(messages);
+    } catch (error) {
+      console.error('RAG answer failed:', error);
+      throw error;
+    }
+  }
 }
 
-// Create global instance
-window.LLM = new LLMService();
+
+// Global LLM instance
+const LLM = new LLMService();
+window.LLM = LLM;

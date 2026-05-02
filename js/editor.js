@@ -99,6 +99,9 @@ class BlockEditor {
     // Set timestamp
     this.updateTimestampDisplay();
 
+    // Render insights section if available
+    this.renderInsights();
+
     // Load blocks
     const blocksData = await Storage.getElementsByNote(noteId);
     this.blocks = blocksData
@@ -138,6 +141,279 @@ class BlockEditor {
         editorContainer.scrollTop = 0;
       }
     }, 50);
+  }
+
+  /**
+   * Render the insights section for the current note
+   */
+  renderInsights() {
+    // Remove existing insights section
+    const existingInsights = document.getElementById('note-insights');
+    if (existingInsights) {
+      existingInsights.remove();
+    }
+
+    // Check if note has insights
+    if (!this.noteData || !this.noteData.insights) {
+      return;
+    }
+
+    const insights = this.noteData.insights;
+    const hasContent = (insights.todos && insights.todos.length > 0) ||
+                       (insights.reminders && insights.reminders.length > 0) ||
+                       (insights.deadlines && insights.deadlines.length > 0) ||
+                       (insights.highlights && insights.highlights.length > 0) ||
+                       (insights.tags && insights.tags.length > 0);
+
+    if (!hasContent) {
+      return;
+    }
+
+    // Create insights container
+    const insightsEl = document.createElement('div');
+    insightsEl.id = 'note-insights';
+    insightsEl.className = 'note-insights';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'note-insights-header';
+    
+    const titleContainer = document.createElement('div');
+    titleContainer.className = 'note-insights-title';
+    titleContainer.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+      </svg>
+      <span>AI Insights</span>
+    `;
+    
+    const meta = document.createElement('div');
+    meta.className = 'note-insights-meta';
+    if (insights.extractedAt) {
+      meta.textContent = `Updated ${this.formatRelativeTime(insights.extractedAt)}`;
+    }
+    
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'note-insights-refresh';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.addEventListener('click', () => this.refreshInsights());
+    
+    header.appendChild(titleContainer);
+    header.appendChild(meta);
+    header.appendChild(refreshBtn);
+    insightsEl.appendChild(header);
+
+    // Tags section (displayed at top as pills)
+    if (insights.tags && insights.tags.length > 0) {
+      const tagsContainer = document.createElement('div');
+      tagsContainer.className = 'note-insights-tags';
+      
+      insights.tags.forEach(tag => {
+        const tagEl = document.createElement('span');
+        tagEl.className = 'note-insights-tag';
+        tagEl.textContent = tag;
+        tagsContainer.appendChild(tagEl);
+      });
+      
+      insightsEl.appendChild(tagsContainer);
+    }
+
+    // Content container
+    const content = document.createElement('div');
+    content.className = 'note-insights-content';
+
+    // Deadlines section
+    if (insights.deadlines && insights.deadlines.length > 0) {
+      content.appendChild(this.createInsightsSection('Deadlines', insights.deadlines, 'deadlines'));
+    }
+
+    // Todos section
+    if (insights.todos && insights.todos.length > 0) {
+      content.appendChild(this.createInsightsSection('Action Items', insights.todos, 'todos'));
+    }
+
+    // Reminders section
+    if (insights.reminders && insights.reminders.length > 0) {
+      content.appendChild(this.createInsightsSection('Reminders', insights.reminders, 'reminders'));
+    }
+
+    // Highlights section
+    if (insights.highlights && insights.highlights.length > 0) {
+      content.appendChild(this.createInsightsSection('Key Points', insights.highlights, 'highlights'));
+    }
+
+    insightsEl.appendChild(content);
+
+    // Insert after timestamp
+    const timestamp = document.getElementById('page-timestamp');
+    if (timestamp) {
+      timestamp.after(insightsEl);
+    } else {
+      this.titleEl.after(insightsEl);
+    }
+  }
+
+  /**
+   * Create an insights section
+   */
+  createInsightsSection(title, items, type) {
+    const section = document.createElement('div');
+    section.className = 'note-insights-section';
+
+    const sectionTitle = document.createElement('div');
+    sectionTitle.className = 'note-insights-section-title';
+    sectionTitle.textContent = title;
+    section.appendChild(sectionTitle);
+
+    const list = document.createElement('ul');
+    list.className = `note-insights-list ${type}`;
+
+    items.forEach(item => {
+      const li = document.createElement('li');
+      
+      if (type === 'deadlines' && typeof item === 'object') {
+        const textSpan = document.createElement('span');
+        textSpan.textContent = item.text;
+        li.appendChild(textSpan);
+        
+        if (item.date) {
+          const dateInfo = this.getRelativeDateInfo(item.date);
+          const dateSpan = document.createElement('span');
+          dateSpan.className = 'deadline-date';
+          if (dateInfo.urgency) {
+            dateSpan.classList.add(dateInfo.urgency);
+          }
+          
+          // Show relative date with actual date in parentheses
+          if (dateInfo.relative !== dateInfo.formatted) {
+            dateSpan.innerHTML = `${dateInfo.relative} <span class="deadline-actual-date">(${dateInfo.formatted})</span>`;
+          } else {
+            dateSpan.textContent = dateInfo.formatted;
+          }
+          li.appendChild(dateSpan);
+        }
+      } else {
+        li.textContent = typeof item === 'object' ? item.text : item;
+      }
+      
+      list.appendChild(li);
+    });
+
+    section.appendChild(list);
+    return section;
+  }
+
+  /**
+   * Get relative date info for deadline display
+   */
+  getRelativeDateInfo(dateStr) {
+    if (!dateStr) return { relative: '', formatted: '', urgency: null };
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const targetDate = new Date(dateStr + 'T00:00:00');
+    const diffTime = targetDate.getTime() - today.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    const formatted = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    
+    let relative = '';
+    let urgency = null;
+    
+    if (diffDays < -1) {
+      relative = `${Math.abs(diffDays)} days ago`;
+      urgency = 'overdue';
+    } else if (diffDays === -1) {
+      relative = 'Yesterday';
+      urgency = 'overdue';
+    } else if (diffDays === 0) {
+      relative = 'Today';
+      urgency = 'today';
+    } else if (diffDays === 1) {
+      relative = 'Tomorrow';
+      urgency = 'soon';
+    } else if (diffDays <= 3) {
+      relative = `In ${diffDays} days`;
+      urgency = 'soon';
+    } else if (diffDays <= 7) {
+      relative = `In ${diffDays} days`;
+      urgency = 'upcoming';
+    } else {
+      relative = formatted;
+      urgency = null;
+    }
+    
+    return { relative, formatted, urgency };
+  }
+
+  /**
+   * Format date for display
+   */
+  formatDate(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  /**
+   * Format relative time
+   */
+  formatRelativeTime(timestamp) {
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
+  }
+
+  /**
+   * Refresh insights for current note
+   */
+  async refreshInsights() {
+    if (!this.noteId || !window.LLM || !window.LLM.isConfigured()) {
+      Utils.showToast('AI not configured', 'error');
+      return;
+    }
+
+    const refreshBtn = document.querySelector('.note-insights-refresh');
+    if (refreshBtn) {
+      refreshBtn.classList.add('loading');
+      refreshBtn.textContent = 'Extracting...';
+    }
+
+    try {
+      const content = this.getAllBlocksTextContent();
+      if (content.trim().length < 20) {
+        Utils.showToast('Not enough content to extract insights', 'error');
+        return;
+      }
+
+      const insights = await window.LLM.extractInsights(content, this.noteData.name);
+      
+      if (insights) {
+        this.noteData.insights = insights;
+        this.noteData.lastInsightsExtractedAt = Date.now();
+        await Storage.updateNote(this.noteData);
+        this.renderInsights();
+        Utils.showToast('Insights updated', 'success');
+      } else {
+        Utils.showToast('No insights found', 'info');
+      }
+    } catch (error) {
+      console.error('Failed to refresh insights:', error);
+      Utils.showToast('Failed to extract insights', 'error');
+    } finally {
+      if (refreshBtn) {
+        refreshBtn.classList.remove('loading');
+        refreshBtn.textContent = 'Refresh';
+      }
+    }
   }
 
   /**

@@ -20,6 +20,9 @@ class App {
     // Auto-title
     this.autoTitleIntervalId = null;
     this.autoTitleRunning = false;
+    // Insights extraction
+    this.insightsIntervalId = null;
+    this.insightsRunning = false;
     // AI Chat sidebar
     this.aiSidebarOpen = false;
     this.aiSidebarWidth = 360;
@@ -50,11 +53,12 @@ class App {
       this.setupPageSelector(this.notes);
       this.setupSettings();
       this.setupSidebar();
-      this.setupAI();
+      await this.setupAI();
       this.setupWidthSelectorPill();
       this.setupTabs();
       this.setupEmptyState();
       this.setupAutoTitle();
+      this.setupInsightsExtraction();
       this.applyTheme();
       this.applyFont();
       this.applyWidth();
@@ -353,59 +357,75 @@ class App {
 
     // Context menu actions
     document.getElementById('ctx-open-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.openNoteInNewTab(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.openNoteInNewTab(noteId);
+      }
     });
 
     document.getElementById('ctx-generate-title').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.generateTitleForNote(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.generateTitleForNote(noteId);
+      }
     });
 
     document.getElementById('ctx-export-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.exportNoteById(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.exportNoteById(noteId);
+      }
+    });
+
+    document.getElementById('ctx-extract-insights').addEventListener('click', async () => {
+      const noteId = this.contextMenuNoteId;
+      contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.extractInsightsForNote(noteId);
+      }
     });
 
     document.getElementById('ctx-archive-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.archiveNote(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.archiveNote(noteId);
+      }
     });
 
     document.getElementById('ctx-unarchive-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.unarchiveNote(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.unarchiveNote(noteId);
+      }
     });
 
     document.getElementById('ctx-delete-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.trashNoteById(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.trashNoteById(noteId);
+      }
     });
 
     document.getElementById('ctx-restore-note').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.restoreNoteById(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.restoreNoteById(noteId);
+      }
     });
 
     document.getElementById('ctx-delete-permanent').addEventListener('click', async () => {
-      if (this.contextMenuNoteId) {
-        await this.permanentlyDeleteNoteById(this.contextMenuNoteId);
-      }
+      const noteId = this.contextMenuNoteId;
       contextMenu.classList.add('hidden');
+      if (noteId) {
+        await this.permanentlyDeleteNoteById(noteId);
+      }
     });
   }
 
@@ -515,6 +535,7 @@ class App {
     const openBtn = document.getElementById('ctx-open-note');
     const generateTitleBtn = document.getElementById('ctx-generate-title');
     const exportBtn = document.getElementById('ctx-export-note');
+    const extractInsightsBtn = document.getElementById('ctx-extract-insights');
     const archiveBtn = document.getElementById('ctx-archive-note');
     const unarchiveBtn = document.getElementById('ctx-unarchive-note');
     const restoreBtn = document.getElementById('ctx-restore-note');
@@ -531,6 +552,7 @@ class App {
     openBtn.classList.toggle('hidden', isTrash);
     generateTitleBtn.classList.toggle('hidden', isTrash);
     exportBtn.classList.toggle('hidden', isTrash);
+    extractInsightsBtn.classList.toggle('hidden', isTrash);
     archiveBtn.classList.toggle('hidden', !isNotes);
     unarchiveBtn.classList.toggle('hidden', !isArchive);
     restoreBtn.classList.toggle('hidden', !isTrash);
@@ -629,6 +651,136 @@ class App {
       if (updatedSidebarItem) {
         updatedSidebarItem.classList.remove('generating');
       }
+    }
+  }
+
+  /**
+   * Extract insights for a note by ID
+   */
+  async extractInsightsForNote(noteId) {
+    // Check if LLM is configured
+    if (!LLM.isConfigured()) {
+      Utils.showToast('AI not configured. Please set up in Settings.', 'error');
+      return;
+    }
+
+    // Show loading state on sidebar item
+    const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
+    if (sidebarItem) {
+      sidebarItem.classList.add('generating');
+    }
+
+    // Show loading state in insights section if this is the current note
+    const isCurrentNote = this.editor && this.editor.noteId === noteId;
+    if (isCurrentNote) {
+      this.showInsightsLoading();
+    }
+
+    try {
+      // Get note and its content
+      const note = await Storage.getNote(noteId);
+      if (!note) {
+        Utils.showToast('Note not found', 'error');
+        return;
+      }
+
+      const blocks = await Storage.getElementsByNote(noteId);
+      const content = blocks
+        .sort((a, b) => (a.order || 0) - (b.order || 0))
+        .map(b => this.extractBlockText(b))
+        .filter(t => t.trim())
+        .join('\n\n');
+
+      if (content.trim().length < 20) {
+        Utils.showToast('Not enough content to extract insights', 'error');
+        return;
+      }
+
+      const insights = await LLM.extractInsights(content, note.name);
+
+      if (!insights) {
+        Utils.showToast('No insights found in this note', 'info');
+        return;
+      }
+
+      // Update note with insights
+      note.insights = insights;
+      note.lastInsightsExtractedAt = Date.now();
+      note.lastInsightsContentHash = this.generateContentHash(content);
+      await Storage.updateNote(note);
+
+      // Update UI if this note is currently open in editor
+      if (isCurrentNote) {
+        this.editor.noteData = note;
+        this.editor.renderInsights();
+      }
+
+      // Count extracted items
+      const itemCount = (insights.todos?.length || 0) + 
+                       (insights.reminders?.length || 0) + 
+                       (insights.deadlines?.length || 0) + 
+                       (insights.highlights?.length || 0);
+
+      Utils.showToast(`Extracted ${itemCount} insight${itemCount !== 1 ? 's' : ''}`, 'success');
+    } catch (error) {
+      console.error('Failed to extract insights:', error);
+      Utils.showToast('Failed to extract insights: ' + error.message, 'error');
+      // Remove loading state from insights on error
+      if (isCurrentNote) {
+        this.hideInsightsLoading();
+      }
+    } finally {
+      // Remove loading state
+      const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
+      if (updatedSidebarItem) {
+        updatedSidebarItem.classList.remove('generating');
+      }
+    }
+  }
+
+  /**
+   * Show loading indicator in insights section
+   */
+  showInsightsLoading() {
+    // Remove existing insights section
+    const existingInsights = document.getElementById('note-insights');
+    if (existingInsights) {
+      existingInsights.remove();
+    }
+
+    // Create loading placeholder
+    const loadingEl = document.createElement('div');
+    loadingEl.id = 'note-insights';
+    loadingEl.className = 'note-insights insights-loading';
+    loadingEl.innerHTML = `
+      <div class="note-insights-header">
+        <div class="note-insights-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          </svg>
+          <span>AI Insights</span>
+        </div>
+        <div class="insights-loading-indicator">
+          <div class="insights-spinner"></div>
+          <span>Extracting...</span>
+        </div>
+      </div>
+    `;
+
+    // Insert after timestamp
+    const timestamp = document.getElementById('page-timestamp');
+    if (timestamp) {
+      timestamp.after(loadingEl);
+    }
+  }
+
+  /**
+   * Hide loading indicator in insights section
+   */
+  hideInsightsLoading() {
+    const loadingEl = document.getElementById('note-insights');
+    if (loadingEl && loadingEl.classList.contains('insights-loading')) {
+      loadingEl.remove();
     }
   }
 
@@ -762,13 +914,23 @@ class App {
   updateSidebarState() {
     const sidebar = document.getElementById('sidebar');
     const toggleBtn = document.getElementById('sidebar-toggle');
+    const headerLeft = document.querySelector('.header-left');
+    const sidebarToggleContainer = document.getElementById('sidebar-toggle-container');
     
     if (this.sidebarOpen) {
       sidebar.classList.remove('collapsed');
       toggleBtn.classList.add('active');
+      // Move toggle button into sidebar
+      if (sidebarToggleContainer && toggleBtn.parentElement !== sidebarToggleContainer) {
+        sidebarToggleContainer.appendChild(toggleBtn);
+      }
     } else {
       sidebar.classList.add('collapsed');
       toggleBtn.classList.remove('active');
+      // Move toggle button back to header
+      if (headerLeft && toggleBtn.parentElement !== headerLeft) {
+        headerLeft.appendChild(toggleBtn);
+      }
     }
   }
 
@@ -1351,6 +1513,23 @@ class App {
     // Update auto-title interval visibility based on enabled state
     this.updateAutoTitleIntervalVisibility(autoTitleEnabled);
 
+    // Insights extraction settings
+    const insightsEnabled = await Storage.getSetting('insightsEnabled', false);
+    const insightsInterval = await Storage.getSetting('insightsInterval', 360);
+    
+    const insightsEnabledCheckbox = document.getElementById('insights-enabled');
+    const insightsIntervalSelect = document.getElementById('insights-interval');
+    
+    if (insightsEnabledCheckbox) {
+      insightsEnabledCheckbox.checked = insightsEnabled;
+    }
+    if (insightsIntervalSelect) {
+      insightsIntervalSelect.value = insightsInterval.toString();
+    }
+    
+    // Update insights interval visibility based on enabled state
+    this.updateInsightsIntervalVisibility(insightsEnabled);
+
     // Trash retention
     const trashRetention = await Storage.getSetting('trashRetention', 30);
     const trashRetentionSelect = document.getElementById('trash-retention-select');
@@ -1396,7 +1575,7 @@ class App {
   /**
    * Setup AI chat sidebar functionality
    */
-  setupAI() {
+  async setupAI() {
     const aiSidebar = document.getElementById('ai-sidebar');
     const aiFloatingBtn = document.getElementById('ai-floating-btn');
     const aiCloseBtn = document.getElementById('ai-sidebar-close');
@@ -1404,12 +1583,21 @@ class App {
     const chatSendBtn = document.getElementById('ai-chat-send');
     const settingsBtn = document.getElementById('ai-sidebar-open-settings');
     
+    // Tab elements
+    const tabNote = document.getElementById('ai-tab-note');
+    const tabAll = document.getElementById('ai-tab-all');
+    const panelNote = document.getElementById('ai-panel-note');
+    const panelAll = document.getElementById('ai-panel-all');
+    
     if (!aiSidebar) return;
 
-    // Initialize chat history
-    this.aiChatHistory = [];
+    // Initialize chat state
     this.aiSidebarOpen = false;
-    this.aiSidebarWidth = 360;
+    this.aiSidebarWidth = await Storage.getSetting('aiSidebarWidth', 360);
+    this.aiActiveTab = 'note';
+
+    // Load persisted chat history
+    await this.loadChatHistory();
 
     // Toggle AI sidebar from floating button
     aiFloatingBtn?.addEventListener('click', () => {
@@ -1421,7 +1609,16 @@ class App {
       this.closeAISidebar();
     });
 
-    // Send message
+    // Tab switching
+    tabNote?.addEventListener('click', () => {
+      this.switchAITab('note');
+    });
+    
+    tabAll?.addEventListener('click', () => {
+      this.switchAITab('all');
+    });
+
+    // Send message (note chat)
     chatSendBtn?.addEventListener('click', () => {
       this.sendAIChatMessage();
     });
@@ -1443,6 +1640,11 @@ class App {
     // Suggestion buttons (welcome area)
     document.querySelectorAll('.ai-suggestion-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'extract-insights') {
+          this.extractInsightsFromChat();
+          return;
+        }
         const prompt = btn.dataset.prompt;
         if (prompt) {
           chatInput.value = prompt;
@@ -1454,6 +1656,11 @@ class App {
     // Sticky suggestion buttons
     document.querySelectorAll('.ai-sticky-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'extract-insights') {
+          this.extractInsightsFromChat();
+          return;
+        }
         const prompt = btn.dataset.prompt;
         if (prompt) {
           chatInput.value = prompt;
@@ -1468,14 +1675,49 @@ class App {
       this.updateSettingsUI();
     });
 
+    // Clear note chat button
+    const clearNoteBtn = document.getElementById('ai-chat-clear');
+    clearNoteBtn?.addEventListener('click', () => {
+      this.clearNoteChat();
+    });
+
     // Setup sidebar resize
     this.setupAISidebarResize();
+
+    // Setup Global Chat
+    this.setupGlobalChat();
 
     // Setup LLM settings
     this.setupLLMSettings();
 
     // Update visibility based on LLM configuration
     this.updateAISidebarState();
+  }
+
+  /**
+   * Switch between AI chat tabs
+   */
+  switchAITab(tab) {
+    const tabNote = document.getElementById('ai-tab-note');
+    const tabAll = document.getElementById('ai-tab-all');
+    const panelNote = document.getElementById('ai-panel-note');
+    const panelAll = document.getElementById('ai-panel-all');
+    
+    this.aiActiveTab = tab;
+    
+    if (tab === 'note') {
+      tabNote?.classList.add('active');
+      tabAll?.classList.remove('active');
+      panelNote?.classList.add('active');
+      panelAll?.classList.remove('active');
+      document.getElementById('ai-chat-input')?.focus();
+    } else {
+      tabNote?.classList.remove('active');
+      tabAll?.classList.add('active');
+      panelNote?.classList.remove('active');
+      panelAll?.classList.add('active');
+      document.getElementById('global-chat-input')?.focus();
+    }
   }
 
   /**
@@ -1583,6 +1825,145 @@ class App {
     }
     
     this.aiSidebarOpen = false;
+  }
+
+  /**
+   * Load chat history from storage and restore UI
+   */
+  async loadChatHistory() {
+    // Load note chat history
+    this.aiChatHistory = await Storage.getSetting('aiChatHistory', []);
+    this.noteChatMessages = await Storage.getSetting('noteChatMessages', []);
+    
+    // Load global chat history
+    this.globalChatHistory = await Storage.getSetting('globalChatHistory', []);
+    this.globalChatMessages = await Storage.getSetting('globalChatMessages', []);
+    
+    // Restore note chat UI
+    if (this.noteChatMessages.length > 0) {
+      const messagesContainer = document.getElementById('ai-chat-messages');
+      const welcome = messagesContainer?.querySelector('.ai-chat-welcome');
+      const stickySuggestions = document.getElementById('ai-sticky-suggestions');
+      
+      if (welcome) {
+        welcome.style.display = 'none';
+      }
+      if (stickySuggestions) {
+        stickySuggestions.classList.remove('hidden');
+      }
+      
+      // Restore messages
+      this.noteChatMessages.forEach(msg => {
+        this.addChatMessage(msg.content, msg.type, false);
+      });
+    }
+    
+    // Restore global chat UI
+    if (this.globalChatMessages.length > 0) {
+      const messagesContainer = document.getElementById('global-chat-messages');
+      const welcome = messagesContainer?.querySelector('.global-chat-welcome');
+      
+      if (welcome) {
+        welcome.style.display = 'none';
+      }
+      
+      // Restore messages
+      this.globalChatMessages.forEach(msg => {
+        this.addGlobalChatMessage(msg.content, msg.type, msg.sourceNotes, false);
+      });
+    }
+  }
+
+  /**
+   * Save note chat history to storage
+   */
+  async saveNoteChatHistory() {
+    await Storage.setSetting('aiChatHistory', this.aiChatHistory);
+    await Storage.setSetting('noteChatMessages', this.noteChatMessages);
+  }
+
+  /**
+   * Save global chat history to storage
+   */
+  async saveGlobalChatHistory() {
+    await Storage.setSetting('globalChatHistory', this.globalChatHistory);
+    await Storage.setSetting('globalChatMessages', this.globalChatMessages);
+  }
+
+  /**
+   * Clear the note chat history and UI
+   */
+  async clearNoteChat() {
+    // Clear chat history
+    this.aiChatHistory = [];
+    this.noteChatMessages = [];
+    
+    // Save cleared state
+    await this.saveNoteChatHistory();
+    
+    // Clear messages from UI (keep welcome message)
+    const messagesContainer = document.getElementById('ai-chat-messages');
+    if (messagesContainer) {
+      // Remove all messages except welcome
+      const messages = messagesContainer.querySelectorAll('.ai-chat-message');
+      messages.forEach(msg => msg.remove());
+      
+      // Show welcome message again
+      const welcome = messagesContainer.querySelector('.ai-chat-welcome');
+      if (welcome) {
+        welcome.style.display = '';
+      }
+    }
+    
+    // Hide sticky suggestions
+    const stickySuggestions = document.getElementById('ai-sticky-suggestions');
+    if (stickySuggestions) {
+      stickySuggestions.classList.add('hidden');
+    }
+    
+    // Clear and reset input
+    const input = document.getElementById('ai-chat-input');
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+    }
+    
+    Utils.showToast('Chat cleared', 'success');
+  }
+
+  /**
+   * Clear the global chat history and UI
+   */
+  async clearGlobalChat() {
+    // Clear chat history
+    this.globalChatHistory = [];
+    this.globalChatMessages = [];
+    
+    // Save cleared state
+    await this.saveGlobalChatHistory();
+    
+    // Clear messages from UI (keep welcome message)
+    const messagesContainer = document.getElementById('global-chat-messages');
+    if (messagesContainer) {
+      // Remove all messages except welcome
+      const messages = messagesContainer.querySelectorAll('.ai-chat-message');
+      messages.forEach(msg => msg.remove());
+      
+      // Show welcome message again
+      const welcome = messagesContainer.querySelector('.global-chat-welcome');
+      if (welcome) {
+        welcome.style.display = '';
+      }
+    }
+    
+    // Clear and reset input
+    const input = document.getElementById('global-chat-input');
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+    }
+    
+    Utils.showToast('Chat cleared', 'success');
   }
 
   /**
@@ -1697,11 +2078,412 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   /**
+   * Extract insights from the current note via AI Chat button
+   */
+  async extractInsightsFromChat() {
+    if (!this.editor || !this.editor.noteId) {
+      Utils.showToast('No note selected', 'error');
+      return;
+    }
+
+    if (!LLM.isConfigured()) {
+      Utils.showToast('AI not configured. Please set up in Settings.', 'error');
+      return;
+    }
+
+    // Hide welcome message if visible and show sticky suggestions
+    const welcome = document.querySelector('.ai-chat-welcome');
+    const stickySuggestions = document.getElementById('ai-sticky-suggestions');
+    if (welcome) {
+      welcome.style.display = 'none';
+    }
+    if (stickySuggestions) {
+      stickySuggestions.classList.remove('hidden');
+    }
+
+    // Add user message to chat
+    this.addChatMessage('Extract insights from this note', 'user');
+
+    // Show loading
+    const loading = document.getElementById('ai-chat-loading');
+    loading?.classList.remove('hidden');
+
+    // Disable send button
+    const sendBtn = document.getElementById('ai-chat-send');
+    if (sendBtn) sendBtn.disabled = true;
+
+    try {
+      const noteContent = this.getNoteContent();
+      
+      if (!noteContent || noteContent.trim().length < 20) {
+        this.addChatMessage('Not enough content in this note to extract insights. Please add more content first.', 'assistant');
+        return;
+      }
+
+      const insights = await LLM.extractInsights(noteContent, this.editor.noteData?.name);
+
+      if (!insights) {
+        this.addChatMessage('Could not extract any insights from this note. The content may not contain actionable items, reminders, or deadlines.', 'assistant');
+        return;
+      }
+
+      // Update note with insights
+      if (this.editor.noteData) {
+        this.editor.noteData.insights = insights;
+        this.editor.noteData.lastInsightsExtractedAt = Date.now();
+        await Storage.updateNote(this.editor.noteData);
+        this.editor.renderInsights();
+      }
+
+      // Build response message
+      let response = '✅ **Insights extracted and saved to note!**\n\n';
+
+      if (insights.tags && insights.tags.length > 0) {
+        response += '**🏷️ Tags:** ' + insights.tags.join(', ') + '\n\n';
+      }
+      
+      if (insights.deadlines && insights.deadlines.length > 0) {
+        response += '**📅 Deadlines:**\n';
+        insights.deadlines.forEach(d => {
+          const dateStr = d.date ? ` (${d.date})` : '';
+          response += `- ${d.text}${dateStr}\n`;
+        });
+        response += '\n';
+      }
+
+      if (insights.todos && insights.todos.length > 0) {
+        response += '**✓ Action Items:**\n';
+        insights.todos.forEach(t => response += `- ${t}\n`);
+        response += '\n';
+      }
+
+      if (insights.reminders && insights.reminders.length > 0) {
+        response += '**💡 Reminders:**\n';
+        insights.reminders.forEach(r => response += `- ${r}\n`);
+        response += '\n';
+      }
+
+      if (insights.highlights && insights.highlights.length > 0) {
+        response += '**⭐ Key Points:**\n';
+        insights.highlights.forEach(h => response += `- ${h}\n`);
+      }
+
+      this.addChatMessage(response.trim(), 'assistant');
+      Utils.showToast('Insights extracted', 'success');
+
+    } catch (error) {
+      console.error('Extract insights error:', error);
+      this.addChatMessage('Error extracting insights: ' + error.message, 'error');
+    } finally {
+      loading?.classList.add('hidden');
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+
+  /**
+   * Setup Global Chat (RAG across all notes)
+   */
+  setupGlobalChat() {
+    const chatInput = document.getElementById('global-chat-input');
+    const sendBtn = document.getElementById('global-chat-send');
+    
+    if (!chatInput) return;
+
+    // Note: globalChatHistory and globalChatMessages are loaded in loadChatHistory()
+
+    // Send message
+    sendBtn?.addEventListener('click', () => {
+      this.sendGlobalChatMessage();
+    });
+
+    // Handle Enter key
+    chatInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        this.sendGlobalChatMessage();
+      }
+    });
+
+    // Auto-resize textarea
+    chatInput?.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+    });
+
+    // Suggestion buttons
+    document.querySelectorAll('.global-chat-suggestion').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const prompt = btn.dataset.prompt;
+        if (prompt) {
+          chatInput.value = prompt;
+          if (prompt.endsWith('...')) {
+            chatInput.focus();
+          } else {
+            this.sendGlobalChatMessage();
+          }
+        }
+      });
+    });
+
+    // Clear global chat button
+    const clearGlobalBtn = document.getElementById('global-chat-clear');
+    clearGlobalBtn?.addEventListener('click', () => {
+      this.clearGlobalChat();
+    });
+  }
+
+  /**
+   * Send a message in Global Chat (RAG flow)
+   */
+  async sendGlobalChatMessage() {
+    const input = document.getElementById('global-chat-input');
+    const message = input?.value.trim();
+    
+    if (!message) return;
+    
+    // Clear input
+    input.value = '';
+    input.style.height = 'auto';
+    
+    // Hide welcome message
+    const welcome = document.querySelector('.global-chat-welcome');
+    if (welcome) {
+      welcome.style.display = 'none';
+    }
+    
+    // Add user message to chat
+    this.addGlobalChatMessage(message, 'user');
+    
+    // Show loading
+    const loading = document.getElementById('global-chat-loading');
+    const loadingText = document.getElementById('global-chat-loading-text');
+    loading?.classList.remove('hidden');
+    if (loadingText) loadingText.textContent = 'Analyzing query...';
+    
+    // Disable send button
+    const sendBtn = document.getElementById('global-chat-send');
+    if (sendBtn) sendBtn.disabled = true;
+
+    try {
+      // Step 1: Get all notes metadata
+      const allNotes = await Storage.getAllNotes();
+      
+      if (allNotes.length === 0) {
+        this.addGlobalChatMessage('You don\'t have any notes yet. Create some notes first to search across them.', 'assistant');
+        return;
+      }
+
+      // Build notes metadata for RAG analysis
+      const notesMetadata = allNotes.map(note => ({
+        id: note.id,
+        title: note.name || 'Untitled',
+        tags: note.insights?.tags || []
+      }));
+
+      // Step 2: RAG Analysis - determine which notes to retrieve
+      if (loadingText) loadingText.textContent = 'Finding relevant notes...';
+      
+      const analysis = await LLM.ragAnalyzeQuery(message, notesMetadata);
+      
+      if (!analysis || analysis.noteIds.length === 0) {
+        this.addGlobalChatMessage('I couldn\'t find any notes that seem relevant to your question. Try rephrasing your query or make sure your notes have descriptive titles.', 'assistant');
+        return;
+      }
+
+      // Step 3: Retrieve full content of selected notes
+      if (loadingText) loadingText.textContent = 'Reading notes...';
+      
+      const notesContent = [];
+      for (const noteId of analysis.noteIds) {
+        const note = allNotes.find(n => n.id === noteId);
+        if (note) {
+          const blocks = await Storage.getElementsByNote(noteId);
+          const content = blocks
+            .sort((a, b) => (a.order || 0) - (b.order || 0))
+            .map(b => this.extractBlockText(b))
+            .filter(t => t.trim())
+            .join('\n\n');
+          
+          if (content.trim()) {
+            notesContent.push({
+              id: noteId,
+              title: note.name || 'Untitled',
+              content: content
+            });
+          }
+        }
+      }
+
+      // Also include notes matching relevant tags
+      if (analysis.relevantTags && analysis.relevantTags.length > 0) {
+        for (const note of allNotes) {
+          if (notesContent.find(n => n.id === note.id)) continue; // Already included
+          
+          const noteTags = note.insights?.tags || [];
+          const hasMatchingTag = analysis.relevantTags.some(tag => 
+            noteTags.some(nt => nt.toLowerCase().includes(tag.toLowerCase()))
+          );
+          
+          if (hasMatchingTag) {
+            const blocks = await Storage.getElementsByNote(note.id);
+            const content = blocks
+              .sort((a, b) => (a.order || 0) - (b.order || 0))
+              .map(b => this.extractBlockText(b))
+              .filter(t => t.trim())
+              .join('\n\n');
+            
+            if (content.trim()) {
+              notesContent.push({
+                id: note.id,
+                title: note.name || 'Untitled',
+                content: content
+              });
+            }
+          }
+        }
+      }
+
+      if (notesContent.length === 0) {
+        this.addGlobalChatMessage('The selected notes appear to be empty. Please add content to your notes first.', 'assistant');
+        return;
+      }
+
+      // Step 4: RAG Answer - get final response using note content
+      if (loadingText) loadingText.textContent = 'Generating answer...';
+      
+      const answer = await LLM.ragAnswerQuery(message, analysis.followUpPrompt, notesContent);
+      
+      if (!answer) {
+        this.addGlobalChatMessage('I couldn\'t generate an answer based on your notes. Please try a different question.', 'assistant');
+        return;
+      }
+
+      // Add response with source notes
+      this.addGlobalChatMessage(answer, 'assistant', notesContent.map(n => ({ id: n.id, title: n.title })));
+
+    } catch (error) {
+      console.error('Global chat error:', error);
+      this.addGlobalChatMessage('Error: ' + error.message, 'error');
+    } finally {
+      loading?.classList.add('hidden');
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+
+  /**
+   * Add a message to the Global Chat UI
+   */
+  addGlobalChatMessage(content, type, sourceNotes = null, persist = true) {
+    const messagesContainer = document.getElementById('global-chat-messages');
+    if (!messagesContainer) return;
+    
+    // Save to messages array for persistence
+    if (persist) {
+      if (!this.globalChatMessages) this.globalChatMessages = [];
+      this.globalChatMessages.push({ content, type, sourceNotes });
+      this.saveGlobalChatHistory();
+    }
+    
+    const messageEl = document.createElement('div');
+    messageEl.className = `ai-chat-message ${type}`;
+    
+    const contentEl = document.createElement('div');
+    contentEl.className = 'ai-message-content';
+    
+    if (type === 'assistant') {
+      contentEl.innerHTML = Utils.parseMarkdown(content);
+    } else {
+      contentEl.textContent = content;
+    }
+    messageEl.appendChild(contentEl);
+    
+    // Add source notes indicator for assistant messages
+    if (type === 'assistant' && sourceNotes && sourceNotes.length > 0) {
+      const sourcesEl = document.createElement('div');
+      sourcesEl.className = 'global-chat-sources';
+      
+      const labelEl = document.createElement('span');
+      labelEl.className = 'global-chat-sources-label';
+      labelEl.textContent = 'Sources:';
+      sourcesEl.appendChild(labelEl);
+      
+      sourceNotes.forEach(note => {
+        const tagEl = document.createElement('span');
+        tagEl.className = 'global-chat-source-tag';
+        tagEl.textContent = note.title;
+        tagEl.addEventListener('click', () => this.openNoteById(note.id));
+        sourcesEl.appendChild(tagEl);
+      });
+      
+      messageEl.appendChild(sourcesEl);
+    }
+    
+    // Add action buttons for assistant messages
+    if (type === 'assistant') {
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'ai-message-actions';
+      
+      // Copy button
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'ai-message-action-btn';
+      copyBtn.title = 'Copy to clipboard';
+      copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>`;
+      copyBtn.addEventListener('click', () => this.copyAIResponse(content, copyBtn));
+      actionsEl.appendChild(copyBtn);
+      
+      // Create new note button
+      const newNoteBtn = document.createElement('button');
+      newNoteBtn.className = 'ai-message-action-btn';
+      newNoteBtn.title = 'Create new note from this';
+      newNoteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <line x1="12" y1="18" x2="12" y2="12"></line>
+        <line x1="9" y1="15" x2="15" y2="15"></line>
+      </svg>`;
+      newNoteBtn.addEventListener('click', () => this.createNoteFromAIResponse(content));
+      actionsEl.appendChild(newNoteBtn);
+      
+      messageEl.appendChild(actionsEl);
+    }
+    
+    messagesContainer.appendChild(messageEl);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  /**
+   * Open a note by ID (for clicking source tags)
+   */
+  async openNoteById(noteId) {
+    // Check if note is already open in a tab
+    const existingTab = this.openTabs.find(t => t.noteId === noteId);
+    if (existingTab) {
+      await this.switchToTab(noteId);
+    } else {
+      await this.openNoteInNewTab(noteId);
+    }
+    
+    // Switch to note chat tab and close sidebar
+    this.switchAITab('note');
+    this.closeAISidebar();
+  }
+
+  /**
    * Add a message to the chat UI
    */
-  addChatMessage(content, type) {
+  addChatMessage(content, type, persist = true) {
     const messagesContainer = document.getElementById('ai-chat-messages');
     if (!messagesContainer) return;
+    
+    // Save to messages array for persistence
+    if (persist) {
+      if (!this.noteChatMessages) this.noteChatMessages = [];
+      this.noteChatMessages.push({ content, type });
+      this.saveNoteChatHistory();
+    }
     
     const messageEl = document.createElement('div');
     messageEl.className = `ai-chat-message ${type}`;
@@ -2061,6 +2843,31 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         }
       });
     }
+
+    // Insights extraction settings
+    const insightsEnabled = document.getElementById('insights-enabled');
+    const insightsInterval = document.getElementById('insights-interval');
+
+    if (insightsEnabled) {
+      insightsEnabled.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        const interval = parseInt(insightsInterval?.value || '360');
+        await this.updateInsightsSettings(enabled, interval);
+        this.updateInsightsIntervalVisibility(enabled);
+      });
+    }
+
+    if (insightsInterval) {
+      insightsInterval.addEventListener('change', async (e) => {
+        const interval = parseInt(e.target.value);
+        const enabled = insightsEnabled?.checked || false;
+        if (enabled) {
+          await this.updateInsightsSettings(enabled, interval);
+        } else {
+          await Storage.setSetting('insightsInterval', interval);
+        }
+      });
+    }
   }
 
   /**
@@ -2068,6 +2875,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    */
   updateAutoTitleIntervalVisibility(enabled) {
     const intervalRow = document.querySelector('.llm-auto-title-interval-row');
+    if (intervalRow) {
+      intervalRow.classList.toggle('hidden', !enabled);
+    }
+  }
+
+  /**
+   * Update insights interval row visibility
+   */
+  updateInsightsIntervalVisibility(enabled) {
+    const intervalRow = document.querySelector('.llm-insights-interval-row');
     if (intervalRow) {
       intervalRow.classList.toggle('hidden', !enabled);
     }
@@ -2084,6 +2901,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const autoTitleRow = document.querySelector('.llm-auto-title-row');
     const autoTitleIntervalRow = document.querySelector('.llm-auto-title-interval-row');
     const autoTitleHint = document.querySelector('.llm-auto-title-hint');
+    const insightsRow = document.querySelector('.llm-insights-row');
+    const insightsIntervalRow = document.querySelector('.llm-insights-interval-row');
+    const insightsHint = document.querySelector('.llm-insights-hint');
 
     const isConfigured = provider !== 'none';
     const isOllama = provider === 'ollama';
@@ -2119,6 +2939,20 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const autoTitleEnabled = document.getElementById('auto-title-enabled');
     if (autoTitleIntervalRow) {
       autoTitleIntervalRow.classList.toggle('hidden', !isConfigured || !autoTitleEnabled?.checked);
+    }
+
+    // Show/hide insights settings based on provider
+    if (insightsRow) {
+      insightsRow.classList.toggle('hidden', !isConfigured);
+    }
+    if (insightsHint) {
+      insightsHint.classList.toggle('hidden', !isConfigured);
+    }
+
+    // Insights interval visibility depends on both provider and enabled state
+    const insightsEnabled = document.getElementById('insights-enabled');
+    if (insightsIntervalRow) {
+      insightsIntervalRow.classList.toggle('hidden', !isConfigured || !insightsEnabled?.checked);
     }
   }
 
@@ -2758,6 +3592,183 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     } else {
       this.stopAutoTitleInterval();
     }
+  }
+
+  // ============ Insights Extraction ============
+
+  /**
+   * Setup insights extraction feature
+   */
+  async setupInsightsExtraction() {
+    const enabled = await Storage.getSetting('insightsEnabled', false);
+    const interval = await Storage.getSetting('insightsInterval', 360);
+
+    if (enabled && LLM.isConfigured()) {
+      // Check if we missed any extractions while browser was closed
+      await this.checkMissedInsightsExtraction(interval);
+      
+      // Start the regular interval
+      this.startInsightsInterval(interval);
+    }
+  }
+
+  /**
+   * Check for missed insights extractions (browser was closed)
+   */
+  async checkMissedInsightsExtraction(intervalMinutes) {
+    const lastRunTimestamp = await Storage.getSetting('lastInsightsRun', 0);
+    const intervalMs = intervalMinutes * 60 * 1000;
+    
+    // If last run was more than the interval ago, run immediately
+    if (lastRunTimestamp && (Date.now() - lastRunTimestamp) > intervalMs) {
+      console.log('Missed insights extraction window, running catch-up');
+      await this.runInsightsExtraction(true);
+    }
+  }
+
+  /**
+   * Start the insights extraction interval
+   */
+  startInsightsInterval(intervalMinutes) {
+    // Clear existing interval if any
+    this.stopInsightsInterval();
+
+    // Convert minutes to milliseconds
+    const intervalMs = intervalMinutes * 60 * 1000;
+
+    // Run immediately on start, then at intervals
+    this.runInsightsExtraction();
+
+    this.insightsIntervalId = setInterval(() => {
+      this.runInsightsExtraction();
+    }, intervalMs);
+
+    console.log(`Insights extraction started with ${intervalMinutes} minute interval`);
+  }
+
+  /**
+   * Stop the insights extraction interval
+   */
+  stopInsightsInterval() {
+    if (this.insightsIntervalId) {
+      clearInterval(this.insightsIntervalId);
+      this.insightsIntervalId = null;
+      console.log('Insights extraction stopped');
+    }
+  }
+
+  /**
+   * Run insights extraction for all notes
+   */
+  async runInsightsExtraction(isCatchUp = false) {
+    // Prevent concurrent runs
+    if (this.insightsRunning) {
+      console.log('Insights extraction already running, skipping');
+      return;
+    }
+
+    // Check if LLM is configured
+    if (!LLM.isConfigured()) {
+      console.log('LLM not configured, skipping insights extraction');
+      return;
+    }
+
+    this.insightsRunning = true;
+
+    try {
+      // Record this run timestamp
+      await Storage.setSetting('lastInsightsRun', Date.now());
+      
+      const notes = await Storage.getAllNotes();
+      let extractedCount = 0;
+
+      for (const note of notes) {
+        // Get note content
+        const blocks = await Storage.getElementsByNote(note.id);
+        const content = blocks
+          .sort((a, b) => (a.order || 0) - (b.order || 0))
+          .map(b => this.extractBlockText(b))
+          .filter(t => t.trim())
+          .join('\n\n');
+
+        // Skip if not enough content
+        if (content.trim().length < 50) {
+          continue;
+        }
+
+        // Generate content hash to check if content changed
+        const contentHash = this.generateContentHash(content);
+        
+        // Skip if content hasn't changed since last extraction
+        if (note.lastInsightsContentHash && note.lastInsightsContentHash === contentHash) {
+          continue;
+        }
+
+        try {
+          console.log(`Extracting insights for note: ${note.id} (${note.name || 'Untitled'})`);
+          
+          const insights = await LLM.extractInsights(content, note.name);
+
+          if (insights) {
+            // Update note with insights
+            note.insights = insights;
+            note.lastInsightsExtractedAt = Date.now();
+            note.lastInsightsContentHash = contentHash;
+            await Storage.updateNote(note);
+
+            // Update UI if this note is currently open
+            const isCurrentNote = this.editor && this.editor.noteId === note.id;
+            if (isCurrentNote) {
+              this.editor.noteData = note;
+              this.editor.renderInsights();
+            }
+
+            extractedCount++;
+            console.log(`Insights extracted for note: ${note.name || 'Untitled'}`);
+          }
+        } catch (error) {
+          console.error(`Failed to extract insights for note ${note.id}:`, error);
+          // Continue with other notes even if one fails
+        }
+
+        // Small delay between API calls to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+
+      if (extractedCount > 0) {
+        console.log(`Insights extraction complete: ${extractedCount} note(s) updated`);
+      }
+    } catch (error) {
+      console.error('Insights extraction run failed:', error);
+    } finally {
+      this.insightsRunning = false;
+    }
+  }
+
+  /**
+   * Update insights settings and restart interval if needed
+   */
+  async updateInsightsSettings(enabled, interval) {
+    await Storage.setSetting('insightsEnabled', enabled);
+    await Storage.setSetting('insightsInterval', interval);
+
+    if (enabled && LLM.isConfigured()) {
+      this.startInsightsInterval(interval);
+    } else {
+      this.stopInsightsInterval();
+    }
+  }
+
+  /**
+   * Get all notes with their insights for daily summary
+   */
+  async getNotesWithInsights() {
+    const notes = await Storage.getAllNotes();
+    return notes.filter(note => note.insights && (
+      (note.insights.todos && note.insights.todos.length > 0) ||
+      (note.insights.reminders && note.insights.reminders.length > 0) ||
+      (note.insights.deadlines && note.insights.deadlines.length > 0)
+    ));
   }
 }
 

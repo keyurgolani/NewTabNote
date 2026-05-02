@@ -450,8 +450,60 @@ const Utils = {
   },
 
   /**
+   * Parse markdown tables into HTML
+   * @param {string} text - Text containing potential tables
+   * @returns {string} - Text with tables converted to HTML
+   */
+  parseMarkdownTables(text) {
+    // Match table pattern: header row, separator row, and data rows
+    const tableRegex = /^(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/gm;
+    
+    return text.replace(tableRegex, (match, headerRow, separatorRow, bodyRows) => {
+      // Parse alignment from separator row
+      const alignments = separatorRow
+        .split('|')
+        .filter(cell => cell.trim())
+        .map(cell => {
+          const trimmed = cell.trim();
+          if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'center';
+          if (trimmed.endsWith(':')) return 'right';
+          return 'left';
+        });
+
+      // Parse header cells
+      const headerCells = headerRow
+        .split('|')
+        .filter(cell => cell.trim() !== '')
+        .map((cell, i) => {
+          const align = alignments[i] || 'left';
+          return `<th style="text-align: ${align}">${cell.trim()}</th>`;
+        })
+        .join('');
+
+      // Parse body rows
+      const bodyRowsHtml = bodyRows
+        .trim()
+        .split('\n')
+        .map(row => {
+          const cells = row
+            .split('|')
+            .filter(cell => cell.trim() !== '')
+            .map((cell, i) => {
+              const align = alignments[i] || 'left';
+              return `<td style="text-align: ${align}">${cell.trim()}</td>`;
+            })
+            .join('');
+          return `<tr>${cells}</tr>`;
+        })
+        .join('');
+
+      return `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRowsHtml}</tbody></table>`;
+    });
+  },
+
+  /**
    * Parse markdown text to HTML
-   * Supports: headers, bold, italic, code blocks, inline code, lists, blockquotes, links, hr, paragraphs
+   * Supports: headers, bold, italic, code blocks, inline code, lists, blockquotes, links, hr, tables, paragraphs
    * @param {string} text - Markdown text to parse
    * @returns {string} - HTML string
    */
@@ -493,6 +545,9 @@ const Utils = {
     // Merge consecutive blockquotes
     result = result.replace(/<\/blockquote>\n<blockquote>/g, '\n');
 
+    // Tables
+    result = this.parseMarkdownTables(result);
+
     // Unordered lists (- item or * item)
     result = result.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
     // Wrap consecutive <li> items in <ul> (for unordered)
@@ -525,7 +580,7 @@ const Utils = {
 
     // Paragraphs - wrap text blocks separated by double newlines
     // Split by double newlines, wrap non-block elements in <p>
-    const blockTags = ['<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<blockquote>', '<pre>', '<hr>', '\x00CODEBLOCK'];
+    const blockTags = ['<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<blockquote>', '<pre>', '<hr>', '<table>', '\x00CODEBLOCK'];
     const paragraphs = result.split(/\n\n+/);
     result = paragraphs.map(para => {
       para = para.trim();

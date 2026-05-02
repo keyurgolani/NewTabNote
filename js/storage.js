@@ -193,6 +193,8 @@ class StorageManager {
       archivedAt: null,
       titleManuallySet: false, // Track if user manually set the title
       lastAutoTitleAt: null, // Track when auto-title last ran
+      insights: null, // AI-extracted insights (todos, reminders, deadlines, highlights)
+      lastInsightsExtractedAt: null, // Track when insights were last extracted
       viewport: {
         scale: 1,
         offsetX: 0,
