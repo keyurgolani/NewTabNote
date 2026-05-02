@@ -667,6 +667,9 @@ class App {
       return;
     }
 
+    // Mark extraction as in progress (persisted across page refreshes)
+    await Storage.setSetting(`insightsExtracting_${noteId}`, Date.now());
+
     // Show loading state on sidebar item
     const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
     if (sidebarItem) {
@@ -699,10 +702,11 @@ class App {
         return;
       }
 
+      console.log('Extracting insights for note content length:', content.length);
       const insights = await LLM.extractInsights(content, note.name);
 
       if (!insights) {
-        Utils.showToast('No insights found in this note', 'info');
+        Utils.showToast('Could not extract insights. Check console for details.', 'info');
         return;
       }
 
@@ -733,6 +737,9 @@ class App {
         this.hideInsightsLoading();
       }
     } finally {
+      // Clear extraction state
+      await Storage.setSetting(`insightsExtracting_${noteId}`, null);
+      
       // Remove loading state
       const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
       if (updatedSidebarItem) {

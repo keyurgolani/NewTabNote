@@ -447,11 +447,29 @@
                 <label>Provider</label>
                 <select id="llm-provider-select">
                   <option value="none">None (Disabled)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="gemini">Google Gemini</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama (Local)</option>
+                  <optgroup label="Major Providers">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="xai">xAI (Grok)</option>
+                  </optgroup>
+                  <optgroup label="Open Source / Budget">
+                    <option value="deepseek">Deepseek</option>
+                    <option value="mistral">Mistral AI</option>
+                    <option value="groq">Groq</option>
+                  </optgroup>
+                  <optgroup label="Chinese Providers">
+                    <option value="qwen">Qwen (Alibaba)</option>
+                    <option value="glm">GLM (Zhipu)</option>
+                    <option value="kimi">Kimi (Moonshot)</option>
+                    <option value="minimax">MiniMax</option>
+                  </optgroup>
+                  <optgroup label="Aggregators">
+                    <option value="openrouter">OpenRouter</option>
+                  </optgroup>
+                  <optgroup label="Local">
+                    <option value="ollama">Ollama (Local)</option>
+                  </optgroup>
                 </select>
               </div>
               <div class="setting-row llm-api-key-row hidden">

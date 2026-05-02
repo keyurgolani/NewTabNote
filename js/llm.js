@@ -1,7 +1,7 @@
 /**
  * LLM Service for AI-powered features
- * Supports OpenAI, Anthropic, OpenRouter, Gemini, and Ollama providers
- * with dynamic model loading from APIs
+ * Supports OpenAI, Anthropic, OpenRouter, Gemini, xAI, Deepseek, Mistral, Groq,
+ * Qwen, GLM, Kimi, MiniMax, and Ollama providers with dynamic model loading from APIs
  */
 
 class LLMService {
@@ -94,25 +94,90 @@ class LLMService {
       openai: [
         { id: 'gpt-4o', name: 'GPT-4o' },
         { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+        { id: 'o1', name: 'o1' },
+        { id: 'o1-mini', name: 'o1 Mini' },
+        { id: 'o1-preview', name: 'o1 Preview' },
         { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
         { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
       ],
       anthropic: [
         { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
         { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
+        { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku' },
         { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
         { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' },
       ],
       gemini: [
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+        { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
         { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
         { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
         { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
       ],
+      xai: [
+        { id: 'grok-3', name: 'Grok 3' },
+        { id: 'grok-3-fast', name: 'Grok 3 Fast' },
+        { id: 'grok-2', name: 'Grok 2' },
+        { id: 'grok-2-mini', name: 'Grok 2 Mini' },
+        { id: 'grok-beta', name: 'Grok Beta' },
+      ],
+      deepseek: [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat (V3)' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (R1)' },
+      ],
+      mistral: [
+        { id: 'mistral-large-latest', name: 'Mistral Large' },
+        { id: 'mistral-medium-latest', name: 'Mistral Medium' },
+        { id: 'mistral-small-latest', name: 'Mistral Small' },
+        { id: 'codestral-latest', name: 'Codestral' },
+        { id: 'open-mixtral-8x22b', name: 'Mixtral 8x22B' },
+        { id: 'open-mixtral-8x7b', name: 'Mixtral 8x7B' },
+        { id: 'open-mistral-7b', name: 'Mistral 7B' },
+      ],
+      groq: [
+        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
+        { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
+        { id: 'llama3-70b-8192', name: 'Llama 3 70B' },
+        { id: 'llama3-8b-8192', name: 'Llama 3 8B' },
+        { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+        { id: 'gemma2-9b-it', name: 'Gemma 2 9B' },
+      ],
+      qwen: [
+        { id: 'qwen-max', name: 'Qwen Max' },
+        { id: 'qwen-plus', name: 'Qwen Plus' },
+        { id: 'qwen-turbo', name: 'Qwen Turbo' },
+        { id: 'qwen-long', name: 'Qwen Long' },
+        { id: 'qwen2.5-72b-instruct', name: 'Qwen 2.5 72B' },
+        { id: 'qwen2.5-32b-instruct', name: 'Qwen 2.5 32B' },
+        { id: 'qwen2.5-14b-instruct', name: 'Qwen 2.5 14B' },
+        { id: 'qwen2.5-7b-instruct', name: 'Qwen 2.5 7B' },
+      ],
+      glm: [
+        { id: 'glm-4-plus', name: 'GLM-4 Plus' },
+        { id: 'glm-4-air', name: 'GLM-4 Air' },
+        { id: 'glm-4-airx', name: 'GLM-4 AirX' },
+        { id: 'glm-4-long', name: 'GLM-4 Long' },
+        { id: 'glm-4-flash', name: 'GLM-4 Flash' },
+        { id: 'glm-4', name: 'GLM-4' },
+      ],
+      kimi: [
+        { id: 'moonshot-v1-128k', name: 'Moonshot 128K' },
+        { id: 'moonshot-v1-32k', name: 'Moonshot 32K' },
+        { id: 'moonshot-v1-8k', name: 'Moonshot 8K' },
+      ],
+      minimax: [
+        { id: 'abab6.5s-chat', name: 'ABAB 6.5s Chat' },
+        { id: 'abab6.5-chat', name: 'ABAB 6.5 Chat' },
+        { id: 'abab5.5s-chat', name: 'ABAB 5.5s Chat' },
+        { id: 'abab5.5-chat', name: 'ABAB 5.5 Chat' },
+      ],
       openrouter: [
         { id: 'openai/gpt-4o', name: 'GPT-4o' },
+        { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini' },
         { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
-        { id: 'google/gemini-pro-1.5', name: 'Gemini Pro 1.5' },
-        { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B' },
+        { id: 'anthropic/claude-3.5-haiku', name: 'Claude 3.5 Haiku' },
+        { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash' },
+        { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B' },
       ],
       ollama: [],
     };
@@ -143,6 +208,22 @@ class LLMService {
           return await this.fetchGeminiModels(apiKey);
         case 'openrouter':
           return await this.fetchOpenRouterModels(apiKey);
+        case 'xai':
+          return await this.fetchXAIModels(apiKey);
+        case 'deepseek':
+          return await this.fetchDeepseekModels(apiKey);
+        case 'mistral':
+          return await this.fetchMistralModels(apiKey);
+        case 'groq':
+          return await this.fetchGroqModels(apiKey);
+        case 'qwen':
+          return await this.fetchQwenModels(apiKey);
+        case 'glm':
+          return await this.fetchGLMModels(apiKey);
+        case 'kimi':
+          return await this.fetchKimiModels(apiKey);
+        case 'minimax':
+          return await this.fetchMiniMaxModels(apiKey);
         default:
           return this.getFallbackModels(provider);
       }
@@ -153,60 +234,223 @@ class LLMService {
   }
 
   async fetchOpenAIModels(apiKey) {
-    const response = await fetch('https://api.openai.com/v1/models', {
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-    });
-    
-    if (!response.ok) throw new Error('Failed to fetch OpenAI models');
-    
-    const data = await response.json();
-    const chatModels = data.data
-      .filter(m => m.id.includes('gpt') && !m.id.includes('instruct'))
-      .sort((a, b) => b.created - a.created)
-      .slice(0, 10)
-      .map(m => ({ id: m.id, name: this.formatModelName(m.id) }));
-    
-    return chatModels.length > 0 ? chatModels : this.getFallbackModels('openai');
+    try {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch OpenAI models, using fallback list');
+        return this.getFallbackModels('openai');
+      }
+      
+      const data = await response.json();
+      const chatModels = (data.data || [])
+        .filter(m => m.id.startsWith('gpt') || m.id.startsWith('o1') || m.id.startsWith('o3'))
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map(m => ({ id: m.id, name: m.id }));
+      
+      return chatModels.length > 0 ? chatModels : this.getFallbackModels('openai');
+    } catch (error) {
+      console.warn('OpenAI models fetch error:', error);
+      return this.getFallbackModels('openai');
+    }
   }
 
   async fetchAnthropicModels(apiKey) {
-    // Anthropic doesn't have a public models endpoint, use fallback
-    return this.getFallbackModels('anthropic');
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/models', {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch Anthropic models, using fallback list');
+        return this.getFallbackModels('anthropic');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        name: m.display_name || m.id,
+      }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('anthropic');
+    } catch (error) {
+      console.warn('Anthropic models fetch error:', error);
+      return this.getFallbackModels('anthropic');
+    }
   }
 
   async fetchGeminiModels(apiKey) {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
-    );
-    
-    if (!response.ok) throw new Error('Failed to fetch Gemini models');
-    
-    const data = await response.json();
-    const chatModels = data.models
-      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-      .map(m => ({
-        id: m.name.replace('models/', ''),
-        name: m.displayName || this.formatModelName(m.name),
-      }));
-    
-    return chatModels.length > 0 ? chatModels : this.getFallbackModels('gemini');
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      );
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch Gemini models, using fallback');
+        return this.getFallbackModels('gemini');
+      }
+      
+      const data = await response.json();
+      const chatModels = (data.models || [])
+        .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+        .map(m => ({
+          id: m.name.replace('models/', ''),
+          name: m.displayName || m.name.replace('models/', ''),
+        }))
+        // Sort to show newer models first (gemini-2.x before gemini-1.x)
+        .sort((a, b) => b.id.localeCompare(a.id));
+      
+      return chatModels.length > 0 ? chatModels : this.getFallbackModels('gemini');
+    } catch (error) {
+      console.warn('Gemini models fetch error:', error);
+      return this.getFallbackModels('gemini');
+    }
   }
 
   async fetchOpenRouterModels(apiKey) {
-    const response = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-    });
-    
-    if (!response.ok) throw new Error('Failed to fetch OpenRouter models');
-    
-    const data = await response.json();
-    const models = data.data
-      .filter(m => m.context_length > 0)
-      .sort((a, b) => (b.top_provider?.max_completion_tokens || 0) - (a.top_provider?.max_completion_tokens || 0))
-      .slice(0, 30)
-      .map(m => ({ id: m.id, name: m.name || m.id }));
-    
-    return models.length > 0 ? models : this.getFallbackModels('openrouter');
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch OpenRouter models');
+        return this.getFallbackModels('openrouter');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || [])
+        .slice(0, 100)
+        .map(m => ({ 
+          id: m.id, 
+          name: m.name || m.id 
+        }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('openrouter');
+    } catch (error) {
+      console.warn('OpenRouter models fetch error:', error);
+      return this.getFallbackModels('openrouter');
+    }
+  }
+
+  async fetchXAIModels(apiKey) {
+    try {
+      const response = await fetch('https://api.x.ai/v1/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch xAI models, using fallback');
+        return this.getFallbackModels('xai');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || [])
+        .filter(m => m.id.startsWith('grok'))
+        .map(m => ({ id: m.id, name: m.id }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('xai');
+    } catch (error) {
+      console.warn('xAI models fetch error:', error);
+      return this.getFallbackModels('xai');
+    }
+  }
+
+  async fetchDeepseekModels(apiKey) {
+    try {
+      const response = await fetch('https://api.deepseek.com/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch Deepseek models, using fallback');
+        return this.getFallbackModels('deepseek');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        name: m.id,
+      }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('deepseek');
+    } catch (error) {
+      console.warn('Deepseek models fetch error:', error);
+      return this.getFallbackModels('deepseek');
+    }
+  }
+
+  async fetchMistralModels(apiKey) {
+    try {
+      const response = await fetch('https://api.mistral.ai/v1/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch Mistral models, using fallback');
+        return this.getFallbackModels('mistral');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        name: m.id,
+      }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('mistral');
+    } catch (error) {
+      console.warn('Mistral models fetch error:', error);
+      return this.getFallbackModels('mistral');
+    }
+  }
+
+  async fetchGroqModels(apiKey) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch Groq models, using fallback');
+        return this.getFallbackModels('groq');
+      }
+      
+      const data = await response.json();
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        name: m.id,
+      }));
+      
+      return models.length > 0 ? models : this.getFallbackModels('groq');
+    } catch (error) {
+      console.warn('Groq models fetch error:', error);
+      return this.getFallbackModels('groq');
+    }
+  }
+
+  async fetchQwenModels(apiKey) {
+    // Qwen (DashScope) doesn't have a public models list API, use fallback
+    return this.getFallbackModels('qwen');
+  }
+
+  async fetchGLMModels(apiKey) {
+    // GLM (Zhipu) doesn't have a public models list API, use fallback
+    return this.getFallbackModels('glm');
+  }
+
+  async fetchKimiModels(apiKey) {
+    // Kimi (Moonshot) doesn't have a public models list API, use fallback
+    return this.getFallbackModels('kimi');
+  }
+
+  async fetchMiniMaxModels(apiKey) {
+    // MiniMax doesn't have a public models list API, use fallback
+    return this.getFallbackModels('minimax');
   }
 
   async fetchOllamaModels() {
@@ -251,7 +495,15 @@ class LLMService {
     const defaults = {
       openai: 'gpt-4o-mini',
       anthropic: 'claude-3-5-sonnet-20241022',
-      gemini: 'gemini-1.5-flash',
+      gemini: 'gemini-2.0-flash',
+      xai: 'grok-2',
+      deepseek: 'deepseek-chat',
+      mistral: 'mistral-small-latest',
+      groq: 'llama-3.3-70b-versatile',
+      qwen: 'qwen-turbo',
+      glm: 'glm-4-flash',
+      kimi: 'moonshot-v1-8k',
+      minimax: 'abab6.5s-chat',
       openrouter: 'openai/gpt-4o-mini',
       ollama: 'llama3.2',
     };
@@ -293,6 +545,10 @@ class LLMService {
     if (!this.isConfigured()) {
       throw new Error('LLM not configured. Please set up API key in settings.');
     }
+    
+    if (!this.model) {
+      throw new Error('No model selected. Please select a model in settings.');
+    }
 
     switch (this.provider) {
       case 'openai':
@@ -303,6 +559,22 @@ class LLMService {
         return this.chatGemini(messages);
       case 'openrouter':
         return this.chatOpenRouter(messages);
+      case 'xai':
+        return this.chatXAI(messages);
+      case 'deepseek':
+        return this.chatDeepseek(messages);
+      case 'mistral':
+        return this.chatMistral(messages);
+      case 'groq':
+        return this.chatGroq(messages);
+      case 'qwen':
+        return this.chatQwen(messages);
+      case 'glm':
+        return this.chatGLM(messages);
+      case 'kimi':
+        return this.chatKimi(messages);
+      case 'minimax':
+        return this.chatMiniMax(messages);
       case 'ollama':
         return this.chatOllama(messages);
       default:
@@ -417,6 +689,197 @@ class LLMService {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error?.message || 'OpenRouter API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatXAI(messages) {
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'grok-2',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'xAI API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatDeepseek(messages) {
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'deepseek-chat',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Deepseek API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatMistral(messages) {
+    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'mistral-small-latest',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Mistral API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatGroq(messages) {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'llama-3.3-70b-versatile',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Groq API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatQwen(messages) {
+    // Qwen uses DashScope API (Alibaba Cloud)
+    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'qwen-turbo',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Qwen API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatGLM(messages) {
+    // GLM uses Zhipu AI API
+    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'glm-4-flash',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'GLM API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatKimi(messages) {
+    // Kimi uses Moonshot API
+    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'moonshot-v1-8k',
+        messages: messages,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Kimi API error');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async chatMiniMax(messages) {
+    // MiniMax API
+    const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model || 'abab6.5s-chat',
+        messages: messages.map(m => ({
+          role: m.role === 'system' ? 'system' : (m.role === 'assistant' ? 'assistant' : 'user'),
+          content: m.content,
+        })),
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.base_resp?.status_msg || 'MiniMax API error');
     }
 
     const data = await response.json();
@@ -584,16 +1047,44 @@ Return JSON in this exact format:
     try {
       const response = await this.chat(messages);
       
-      // Parse JSON from response (handle potential markdown code blocks)
+      // Log raw response for debugging
+      console.log('LLM raw response for insights:', response);
+      
+      // Parse JSON from response (handle potential markdown code blocks and surrounding text)
       let jsonStr = response.trim();
-      if (jsonStr.startsWith('```')) {
-        jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      
+      // Try to extract JSON from markdown code blocks first
+      const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1].trim();
+      } else {
+        // Try to find JSON object directly (starts with { and ends with })
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[0];
+        }
       }
       
-      const insights = JSON.parse(jsonStr);
+      // Log extracted JSON string for debugging
+      console.log('Extracted JSON string:', jsonStr);
+      
+      let insights;
+      try {
+        insights = JSON.parse(jsonStr);
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        console.error('Failed to parse JSON string:', jsonStr);
+        return null;
+      }
+      
+      // Validate that we got an object
+      if (!insights || typeof insights !== 'object') {
+        console.error('Parsed insights is not an object:', insights);
+        return null;
+      }
       
       // Validate and sanitize the response
-      return {
+      const result = {
         todos: Array.isArray(insights.todos) ? insights.todos.slice(0, 5).map(s => String(s).substring(0, 100)) : [],
         reminders: Array.isArray(insights.reminders) ? insights.reminders.slice(0, 5).map(s => String(s).substring(0, 100)) : [],
         deadlines: Array.isArray(insights.deadlines) ? insights.deadlines.slice(0, 5).map(d => ({
@@ -604,6 +1095,21 @@ Return JSON in this exact format:
         tags: Array.isArray(insights.tags) ? insights.tags.slice(0, 5).map(t => String(t).toLowerCase().replace(/\s+/g, '-').substring(0, 30)) : [],
         extractedAt: Date.now()
       };
+      
+      // Check if we actually extracted anything meaningful
+      const hasContent = result.todos.length > 0 || 
+                        result.reminders.length > 0 || 
+                        result.deadlines.length > 0 || 
+                        result.highlights.length > 0 ||
+                        result.tags.length > 0;
+      
+      if (!hasContent) {
+        console.log('No meaningful insights extracted from response');
+        return null;
+      }
+      
+      console.log('Successfully extracted insights:', result);
+      return result;
     } catch (error) {
       console.error('Failed to extract insights:', error);
       return null;

@@ -21,6 +21,7 @@ class BlockEditor {
     this.isAutoTitleUpdate = false; // Flag to track programmatic title updates
     this.hasReceivedFirstContent = false; // Track if note has received content
     this.pendingAutoTitle = false; // Prevent duplicate auto-title calls
+    this.insightsPollingId = null; // Polling interval for insights extraction completion
 
     this.setupEventListeners();
     this.buildSlashMenu();
@@ -85,6 +86,12 @@ class BlockEditor {
    * Load a note
    */
   async loadNote(noteId) {
+    // Clear any existing insights polling
+    if (this.insightsPollingId) {
+      clearInterval(this.insightsPollingId);
+      this.insightsPollingId = null;
+    }
+
     this.noteId = noteId;
     this.noteData = await Storage.getNote(noteId);
 
@@ -99,8 +106,11 @@ class BlockEditor {
     // Set timestamp
     this.updateTimestampDisplay();
 
-    // Render insights section if available
-    this.renderInsights();
+    // Render insights section if available (async - checks for extraction state)
+    await this.renderInsights();
+
+    // Start polling if extraction is in progress
+    await this.startInsightsPollingIfNeeded();
 
     // Load blocks
     const blocksData = await Storage.getElementsByNote(noteId);
@@ -144,17 +154,67 @@ class BlockEditor {
   }
 
   /**
+   * Start polling for insights extraction completion if needed
+   */
+  async startInsightsPollingIfNeeded() {
+    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
+    if (!extractingTimestamp) {
+      return;
+    }
+
+    // Check if extraction started within the last 5 minutes
+    const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+    if (extractingTimestamp <= fiveMinutesAgo) {
+      return;
+    }
+
+    // Poll every 2 seconds to check if extraction completed
+    this.insightsPollingId = setInterval(async () => {
+      const stillExtracting = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
+      
+      if (!stillExtracting) {
+        // Extraction completed - reload note data and render insights
+        clearInterval(this.insightsPollingId);
+        this.insightsPollingId = null;
+        
+        // Reload note data to get updated insights
+        this.noteData = await Storage.getNote(this.noteId);
+        await this.renderInsights();
+      }
+    }, 2000);
+  }
+
+  /**
    * Render the insights section for the current note
    */
-  renderInsights() {
+  async renderInsights() {
     // Remove existing insights section
     const existingInsights = document.getElementById('note-insights');
     if (existingInsights) {
       existingInsights.remove();
     }
 
+    if (!this.noteData) {
+      return;
+    }
+
+    // Check if extraction is in progress for this note
+    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
+    if (extractingTimestamp) {
+      // Check if extraction started within the last 5 minutes (timeout protection)
+      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+      if (extractingTimestamp > fiveMinutesAgo) {
+        // Show loading state
+        this.showInsightsLoadingInEditor();
+        return;
+      } else {
+        // Extraction timed out, clear the stale state
+        await Storage.setSetting(`insightsExtracting_${this.noteId}`, null);
+      }
+    }
+
     // Check if note has insights
-    if (!this.noteData || !this.noteData.insights) {
+    if (!this.noteData.insights) {
       return;
     }
 
@@ -370,6 +430,42 @@ class BlockEditor {
     if (hours < 24) return `${hours}h ago`;
     if (days < 7) return `${days}d ago`;
     return new Date(timestamp).toLocaleDateString();
+  }
+
+  /**
+   * Show loading indicator in insights section (called from editor)
+   */
+  showInsightsLoadingInEditor() {
+    // Remove existing insights section
+    const existingInsights = document.getElementById('note-insights');
+    if (existingInsights) {
+      existingInsights.remove();
+    }
+
+    // Create loading placeholder
+    const loadingEl = document.createElement('div');
+    loadingEl.id = 'note-insights';
+    loadingEl.className = 'note-insights insights-loading';
+    loadingEl.innerHTML = `
+      <div class="note-insights-header">
+        <div class="note-insights-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          </svg>
+          <span>AI Insights</span>
+        </div>
+        <div class="insights-loading-indicator">
+          <div class="insights-spinner"></div>
+          <span>Extracting...</span>
+        </div>
+      </div>
+    `;
+
+    // Insert after timestamp
+    const timestamp = document.getElementById('page-timestamp');
+    if (timestamp) {
+      timestamp.after(loadingEl);
+    }
   }
 
   /**
