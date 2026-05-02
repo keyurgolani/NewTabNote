@@ -126,7 +126,7 @@ jobs:
           ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
           
           if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
-            echo "::error::Failed to get Chrome Web Store access token. The refresh token is likely expired."
+            echo "::warning::Failed to get Chrome Web Store access token. The refresh token is likely expired."
             echo "Token response: $(echo "$TOKEN_RESPONSE" | jq -r '.error_description // .error // "unknown error"')"
             echo ""
             echo "To refresh the token:"
@@ -134,7 +134,8 @@ jobs:
             echo "2. Authorize and copy the code"
             echo "3. Exchange it: curl -s -X POST https://oauth2.googleapis.com/token -d 'client_id=CLIENT_ID&client_secret=CLIENT_SECRET&code=AUTH_CODE&grant_type=authorization_code&redirect_uri=urn:ietf:wg:oauth:2.0:oob'"
             echo "4. Update the CHROME_REFRESH_TOKEN secret in repo Settings > Secrets"
-            exit 1
+            echo "Skipping Chrome Web Store upload so GitHub release artifacts remain available."
+            exit 0
           fi
           
           echo "Uploading to Chrome Web Store..."
