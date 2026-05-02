@@ -38,6 +38,7 @@ const JS_FILES = [
   'js/command-palette-utils.js',
   'js/ai-prompt-templates.js',
   'js/ai-response-utils.js',
+  'js/insights-summary.js',
   'js/lib/fuse.js',
   'js/lib/jszip.min.js',
   'js/search.js',
@@ -66,6 +67,7 @@ const JS_FILES = [
   'js/app.js',
   'js/main.js',
   'js/popup.js',
+  'js/sidepanel.js',
   'js/background.js',
   'js/offscreen.js',
 ];
@@ -79,6 +81,7 @@ const CSS_FILES = [
 const HTML_FILES = [
   'newtab.html',
   'popup.html',
+  'sidepanel.html',
   'offscreen.html',
 ];
 

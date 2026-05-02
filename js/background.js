@@ -17,6 +17,38 @@ let storageReady = Storage.init().catch(e => {
 
 let creatingOffscreen;
 
+function supportsSidePanel() {
+  return Boolean(chrome.sidePanel && chrome.sidePanel.open);
+}
+
+async function enableSidePanelAction() {
+  if (!chrome.sidePanel?.setPanelBehavior) return;
+
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch (error) {
+    console.warn('Failed to enable side panel action behavior:', error.message);
+  }
+}
+
+async function openFallbackPage() {
+  await chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+}
+
+async function openExtensionSidePanel(tab) {
+  if (!supportsSidePanel()) {
+    await openFallbackPage();
+    return;
+  }
+
+  try {
+    await chrome.sidePanel.open({ windowId: tab.windowId });
+  } catch (error) {
+    console.warn('Failed to open side panel, opening fallback page:', error.message);
+    await openFallbackPage();
+  }
+}
+
 /**
  * Ensure the offscreen document exists for API proxying.
  * @returns {Promise<void>}
@@ -142,6 +174,8 @@ async function handleApiRequest(request) {
  * Handle extension installation/update
  */
 chrome.runtime.onInstalled.addListener(() => {
+  enableSidePanelAction();
+
   // Create context menu items
   chrome.contextMenus.create({
     id: 'capture-page',
@@ -154,6 +188,14 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Add selection to today\'s note',
     contexts: ['selection']
   });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  enableSidePanelAction();
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  openExtensionSidePanel(tab);
 });
 
 /**
