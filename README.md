@@ -11,21 +11,19 @@
 ## 🚀 Key Features
 
 ### 📝 Advanced Block-Based Editor
-![Your New Tab, Reimagined.](assets/promo_1.png)
+![Slash command block menu](docs/screenshots/02-slash-menu.png)
 - **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
 - **Slash Commands**: Type `/` to instantly access any block type.
 - **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
 - **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
 ### 🤖 Your Personal AI Assistant
-![AI-Powered Insights.](assets/promo_2.png)
 - **Smart Summarization**: Get the gist of long notes in seconds.
 - **Content Expansion**: Let AI help you flesh out ideas and add detail.
 - **Auto-Titling**: Never see "Untitled" again—AI generates relevant titles based on your content.
 - **Multi-Provider Support**: Connect to OpenAI (GPT-4o), Anthropic (Claude 3.5), Google Gemini, or even local models via Ollama.
 
 ### 📂 Professional Organization
-![Organize Your Thoughts.](assets/promo_3.png)
 - **Unlimited Notes & Folders**: Organize your life without limits.
 - **Fuzzy Search**: Find any note instantly by searching titles or content.
 - **Tabbed Interface**: Work on multiple notes simultaneously with a familiar tabbed view.
@@ -39,7 +37,13 @@
 ---
 
 ## 🎨 Customization
-- **Themes**: Light, Dark, and System modes.
+
+<p align="center">
+  <img src="docs/screenshots/04-editor-light.png" alt="Light theme" width="49%" />
+  <img src="docs/screenshots/05-editor-dark.png" alt="Dark theme" width="49%" />
+</p>
+
+- **Themes**: Light, Dark, and System modes (plus a theme builder).
 - **Typography**: Choose between System, Serif, or Monospace fonts.
 - **Layout**: Adjustable editor width (Narrow to Full Width) and resizable sidebar.
 

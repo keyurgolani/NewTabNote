@@ -30,6 +30,17 @@ Tune the experience across General, Appearance, Editor, AI Configuration, Data &
 
 ---
 
+## 🌗 Light & Dark Themes
+
+The editor in both light and dark modes — dark mode is built for nighttime use.
+
+<p align="center">
+  <img src="docs/screenshots/04-editor-light.png" alt="Light theme" width="49%" />
+  <img src="docs/screenshots/05-editor-dark.png" alt="Dark theme" width="49%" />
+</p>
+
+---
+
 ## ✨ At a Glance
 
 | Capability | Detail |
