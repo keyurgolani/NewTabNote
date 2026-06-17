@@ -4,6 +4,10 @@
 
 **NewTabNote** replaces your blank new tab page with a professional, block-based editor inspired by Notion and Obsidian. Whether you're capturing quick ideas, managing complex projects, or using AI to summarize your thoughts, NewTabNote is designed for speed, privacy, and productivity.
 
+![NewTabNote new tab](docs/screenshots/01-newtab-overview.png)
+
+> 📸 **[See the full visual showcase »](SHOWCASE.md)** — the block editor, slash-command menu, and settings, captured live.
+
 ## 🚀 Key Features
 
 ### 📝 Advanced Block-Based Editor
