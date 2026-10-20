@@ -82,7 +82,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * A version 1 entry. #35 (background coordinator) sets `journaled` on its content saves, note
- * creation, appends, and captures.
+ * creation, appends, and captures. A command moved to a new version keeps a step from the
+ * last one in contracts/upcast.js, so a journal entry written before the move still replays.
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {Aggregate} aggregate
  * @param {Surface[]} surfaces
