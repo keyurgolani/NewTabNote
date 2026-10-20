@@ -64,6 +64,9 @@
       "color-literal": 2,
       "theme-branching": 2
     },
+    "js/kernel/core/domain/note.js": {
+      "color-literal": 1
+    },
     "js/storage.js": {
       "color-literal": 1
     },
