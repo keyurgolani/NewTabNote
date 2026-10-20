@@ -81,37 +81,40 @@ jobs:
     timeout-minutes: 10
     outputs:
       excerpt: ${{ steps.excerpt.outputs.excerpt }}
+      # pr-gate prints it as the kernel job's local command
+      command: ${{ steps.ledger-base.outputs.command }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # HEAD^1 too: on a pull request, whose HEAD is the merge commit, it's the base
-          # branch check:boundaries compares with (scripts/ci/ledger-base.js)
+          # HEAD^1 too, which check:boundaries compares with on a pull request (whose HEAD
+          # is the merge commit) and on a push with no before (scripts/ci/ledger-base.js)
           fetch-depth: 2
       - name: Set up Node from .nvmrc
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
+      # First, so pr-gate has the local command even when a later step fails
+      - name: Fetch the ledger check:boundaries compares with
+        id: ledger-base
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/ci/ledger-base.js 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm ci --ignore-scripts
         run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run test:kernel
         run: npm run test:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run typecheck:kernel
         run: npm run typecheck:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
-      # The pull request's base branch, or what the branch held before the push
-      - name: Fetch the ledger check:boundaries compares with
-        id: ledger-base
-        env:
-          EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: node scripts/ci/ledger-base.js 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # No --base when ledger-base.js found no parent commit to compare with
       - name: npm run check:boundaries
         env:
           BASE: ${{ steps.ledger-base.outputs.base }}
-        run: npm run check:boundaries -- --base "$BASE" 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+        run: npm run check:boundaries -- ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()
@@ -211,15 +214,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # The kernel job's local command compares with the pull request's base branch, or
-      # with what the branch held before the push, as scripts/ci/ledger-base.js does in CI
+      # The kernel job passes on its check:boundaries command from scripts/ci/ledger-base.js,
+      # which picks the commit the job compared with
       - name: Require every job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
           COMMANDS: >-
             {"unit": "npm test",
             "typecheck": "npm run typecheck:ratchet",
-            "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && npm run check:boundaries -- --base {0}', github.base_ref && format('origin/{0}', github.base_ref) || github.event.before != '0000000000000000000000000000000000000000' && github.event.before || format('origin/{0}', github.event.repository.default_branch))) }},
+            "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && {0}', needs.kernel.outputs.command || 'npm run check:boundaries')) }},
             "build": "npm run build -- --strict && npm run check:dist && npm run package && npm run check:notices",
             "extension": "npm run build -- --strict && npm run test:extension"}
         run: |

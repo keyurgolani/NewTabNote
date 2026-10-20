@@ -2,13 +2,19 @@
 
 /**
  * Pick the commit whose docs/architecture/kernel-ledger.json the kernel job's
- * `check:boundaries --base` compares with, fetch it, and write it to GITHUB_OUTPUT as `base`:
+ * check:boundaries compares with, fetch it, and write two GITHUB_OUTPUT values: `base`, the
+ * ref for --base (empty for none), and `command`, the same check to run locally, which
+ * pr-gate prints.
  * - a pull request: HEAD^1, the base branch, since a pull request's HEAD is its merge commit
  * - a push: github.event.before, what the branch held before the push, so every pushed
  *   commit counts. A push that creates its branch or tag has no before (all zeros), and it,
- *   like a before that can't be fetched, compares with the default branch.
+ *   like a before that can't be fetched, compares with HEAD^1, the pushed commit's parent,
+ *   which the checkout has at fetch-depth 2. release.yml runs pr-checks for a v* tag that
+ *   way, and the tag may sit on an older milestone than any branch tip.
+ * A commit with no parent gets no --base, so check:boundaries only matches the ledger to
+ * the hits.
  *
- *   EVENT=push BEFORE=<sha> DEFAULT_BRANCH=main node scripts/ci/ledger-base.js
+ *   EVENT=push BEFORE=<sha> BASE_REF= node scripts/ci/ledger-base.js
  */
 
 const fs = require('fs');
@@ -16,52 +22,64 @@ const { execFileSync } = require('child_process');
 
 const SHA = /^[0-9a-f]{40}$/;
 const NEW_REF = /^0{40}$/;
+const CHECK = 'npm run check:boundaries';
 
-function defaultBranchBase(defaultBranch) {
-  return { base: `origin/${defaultBranch}`, fetch: `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}` };
+/**
+ * The ref to compare with, and the commit to fetch first (null when the checkout has it)
+ */
+function pickBase({ eventName, before }) {
+  if (eventName === 'push' && SHA.test(before || '') && !NEW_REF.test(before)) return { base: before, fetch: before };
+  return { base: 'HEAD^1', fetch: null };
 }
 
 /**
- * The ref to compare with, and the ref to fetch first (null when the checkout has it)
+ * Runs git and returns what it printed
  */
-function pickBase({ eventName, before, defaultBranch }) {
-  if (eventName !== 'push') return { base: 'HEAD^1', fetch: null };
-  if (SHA.test(before || '') && !NEW_REF.test(before)) return { base: before, fetch: before };
-  return defaultBranchBase(defaultBranch);
-}
-
 function runGit(args) {
-  execFileSync('git', args, { stdio: ['ignore', 'inherit', 'inherit'] });
+  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 }
 
 /**
  * Returns the exit code
  */
 function main({ env = process.env, git = runGit, log = console.log } = {}) {
-  const { EVENT: eventName = '', BEFORE: before = '', DEFAULT_BRANCH: defaultBranch = '', GITHUB_OUTPUT: output } = env;
+  const { EVENT: eventName = '', BEFORE: before = '', BASE_REF: baseRef = '', GITHUB_OUTPUT: output } = env;
   if (!output) {
     log('ledger-base: GITHUB_OUTPUT is not set, so there is nowhere to write the base');
     return 1;
   }
-  let choice = pickBase({ eventName, before, defaultBranch });
-  if (choice.fetch) {
-    if (!defaultBranch) {
-      log('ledger-base: DEFAULT_BRANCH is not set, so a push has nothing to fall back to');
-      return 1;
-    }
-    const fetch = refspec => git(['fetch', '--no-tags', '--depth=1', 'origin', refspec]);
+  let { base, fetch } = pickBase({ eventName, before });
+  if (fetch) {
     try {
-      fetch(choice.fetch);
-    } catch (error) {
-      const fallback = defaultBranchBase(defaultBranch);
-      if (choice.base === fallback.base) throw error;
-      log(`::warning::Couldn't fetch ${choice.base}, the commit before this push, so check:boundaries compares with ${fallback.base} instead`);
-      choice = fallback;
-      fetch(choice.fetch);
+      git(['fetch', '--no-tags', '--depth=1', 'origin', fetch]);
+    } catch {
+      log(`::warning::Couldn't fetch ${fetch}, the commit before this push, so check:boundaries compares with HEAD^1, the pushed commit's parent, instead`);
+      base = 'HEAD^1';
     }
   }
-  fs.appendFileSync(output, `base=${choice.base}\n`);
-  log(`ledger-base: check:boundaries compares with ${choice.base}`);
+
+  let command = `git fetch origin ${base} && ${CHECK} -- --base ${base}`;
+  if (base === 'HEAD^1') {
+    let parent = '';
+    try {
+      parent = git(['rev-parse', '--verify', '--quiet', 'HEAD^1^{commit}']).trim();
+    } catch {
+      // A root commit, which has no parent
+    }
+    if (!parent) {
+      base = '';
+      command = CHECK;
+    } else if (eventName === 'pull_request' && baseRef) {
+      command = `${CHECK} -- --base origin/${baseRef}`;
+    } else {
+      command = `git fetch origin ${parent} && ${CHECK} -- --base ${parent}`;
+    }
+  }
+
+  fs.appendFileSync(output, `base=${base}\ncommand=${command}\n`);
+  log(base
+    ? `ledger-base: check:boundaries compares with ${base}`
+    : 'ledger-base: HEAD has no parent to compare with, so check:boundaries runs without --base');
   return 0;
 }
 

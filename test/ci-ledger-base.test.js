@@ -1,7 +1,8 @@
 'use strict';
 
 // scripts/ci/ledger-base.js: which commit's kernel ledger the kernel job's check:boundaries
-// compares with, for each event pr-checks.yml runs on, and the workflow lines that use it.
+// compares with, for each event pr-checks.yml runs on, the command pr-gate prints to
+// reproduce it, and the workflow lines that use both.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,74 +14,110 @@ const { pickBase, main } = require('../scripts/ci/ledger-base.js');
 
 const WORKFLOW = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'pr-checks.yml'), 'utf8');
 const BEFORE = '0123456789abcdef0123456789abcdef01234567';
+const PARENT = 'fedcba9876543210fedcba9876543210fedcba98';
 const NEW_REF = '0'.repeat(40);
 
 test("a pull request compares with HEAD^1, its merge commit's base-branch parent", () => {
-  assert.deepEqual(pickBase({ eventName: 'pull_request', before: '', defaultBranch: 'main' }), { base: 'HEAD^1', fetch: null });
+  assert.deepEqual(pickBase({ eventName: 'pull_request', before: '' }), { base: 'HEAD^1', fetch: null });
 });
 
 test('a push compares with what the branch held before it, so every pushed commit counts', () => {
-  assert.deepEqual(pickBase({ eventName: 'push', before: BEFORE, defaultBranch: 'main' }), { base: BEFORE, fetch: BEFORE });
+  assert.deepEqual(pickBase({ eventName: 'push', before: BEFORE }), { base: BEFORE, fetch: BEFORE });
 });
 
-test('a push that creates its branch or tag compares with the default branch', () => {
-  const fallback = { base: 'origin/main', fetch: '+refs/heads/main:refs/remotes/origin/main' };
-  assert.deepEqual(pickBase({ eventName: 'push', before: NEW_REF, defaultBranch: 'main' }), fallback);
-  assert.deepEqual(pickBase({ eventName: 'push', before: '', defaultBranch: 'main' }), fallback);
-  assert.deepEqual(pickBase({ eventName: 'push', before: 'not-a-sha', defaultBranch: 'main' }), fallback);
+test("a tag push, as release.yml's workflow_call runs pr-checks, compares with the tagged commit's parent", () => {
+  // A patch tag on release/R<n> is cut at an older milestone than main's tip, so main's
+  // ledger, which #12 lowers every milestone, isn't the base
+  assert.deepEqual(pickBase({ eventName: 'push', before: NEW_REF }), { base: 'HEAD^1', fetch: null });
 });
 
-function runMain(env, failFetch = () => false) {
+test('the push that creates a release/** branch compares with its first commit\'s parent', () => {
+  assert.deepEqual(pickBase({ eventName: 'push', before: NEW_REF }), { base: 'HEAD^1', fetch: null });
+  assert.deepEqual(pickBase({ eventName: 'push', before: '' }), { base: 'HEAD^1', fetch: null });
+  assert.deepEqual(pickBase({ eventName: 'push', before: 'not-a-sha' }), { base: 'HEAD^1', fetch: null });
+});
+
+/**
+ * Run main with a fake git: `fetchFails(ref)` makes a fetch fail, and `parent` is what
+ * HEAD^1 resolves to, or null for a root commit
+ */
+function runMain(env, { fetchFails = () => false, parent = PARENT } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-ledger-base-'));
   const output = path.join(dir, 'output');
   fs.writeFileSync(output, '');
-  const fetched = [];
+  const calls = [];
   const lines = [];
   try {
     const code = main({
       env: { GITHUB_OUTPUT: output, ...env },
       git: args => {
-        fetched.push(args[args.length - 1]);
-        if (failFetch(args[args.length - 1])) throw new Error('fatal: remote error: upload-pack: not our ref');
+        calls.push(args.join(' '));
+        if (args[0] === 'fetch' && fetchFails(args[args.length - 1])) throw new Error('fatal: remote error: upload-pack: not our ref');
+        if (args[0] === 'rev-parse') {
+          if (parent === null) throw new Error('fatal: Needed a single revision');
+          return `${parent}\n`;
+        }
+        return '';
       },
       log: line => lines.push(line),
     });
-    return { code, written: fs.readFileSync(output, 'utf8'), fetched, log: lines.join('\n') };
+    return { code, written: fs.readFileSync(output, 'utf8'), calls, log: lines.join('\n') };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-test('main fetches the base it picked and writes it to GITHUB_OUTPUT', () => {
-  const { code, written, fetched, log } = runMain({ EVENT: 'push', BEFORE, DEFAULT_BRANCH: 'main' });
+const KERNEL = 'npm run check:boundaries';
+
+test("a pull request writes HEAD^1 as the base and its base branch in the local command", () => {
+  const { code, written, calls } = runMain({ EVENT: 'pull_request', BEFORE: '', BASE_REF: 'release/R1' });
   assert.equal(code, 0);
-  assert.deepEqual(fetched, [BEFORE]);
-  assert.equal(written, `base=${BEFORE}\n`);
+  assert.equal(written, `base=HEAD^1\ncommand=${KERNEL} -- --base origin/release/R1\n`);
+  assert.ok(!calls.some(call => call.startsWith('fetch')), calls.join('; '));
+});
+
+test('a push fetches its before commit, compares with it, and the local command fetches it too', () => {
+  const { code, written, calls, log } = runMain({ EVENT: 'push', BEFORE });
+  assert.equal(code, 0);
+  assert.ok(calls.includes(`fetch --no-tags --depth=1 origin ${BEFORE}`), calls.join('; '));
+  assert.equal(written, `base=${BEFORE}\ncommand=git fetch origin ${BEFORE} && ${KERNEL} -- --base ${BEFORE}\n`);
   assert.match(log, new RegExp(`compares with ${BEFORE}`));
-
-  const pr = runMain({ EVENT: 'pull_request', BEFORE: '', DEFAULT_BRANCH: 'main' });
-  assert.deepEqual(pr.fetched, []);
-  assert.equal(pr.written, 'base=HEAD^1\n');
 });
 
-test("main falls back to the default branch when the push's before commit can't be fetched", () => {
-  const { code, written, fetched, log } = runMain({ EVENT: 'push', BEFORE, DEFAULT_BRANCH: 'main' }, ref => ref === BEFORE);
+test('a tag push writes HEAD^1, and names the parent commit in the local command', () => {
+  const { code, written, calls } = runMain({ EVENT: 'push', BEFORE: NEW_REF });
   assert.equal(code, 0);
-  assert.deepEqual(fetched, [BEFORE, '+refs/heads/main:refs/remotes/origin/main']);
-  assert.equal(written, 'base=origin/main\n');
-  assert.match(log, /::warning::/);
+  assert.ok(!calls.some(call => call.startsWith('fetch')), calls.join('; '));
+  assert.equal(written, `base=HEAD^1\ncommand=git fetch origin ${PARENT} && ${KERNEL} -- --base ${PARENT}\n`);
 });
 
-test('the kernel job compares with the base ledger-base.js picks', () => {
+test("a push whose before commit can't be fetched falls back to HEAD^1, not another branch", () => {
+  const { code, written, log } = runMain({ EVENT: 'push', BEFORE }, { fetchFails: ref => ref === BEFORE });
+  assert.equal(code, 0);
+  assert.equal(written, `base=HEAD^1\ncommand=git fetch origin ${PARENT} && ${KERNEL} -- --base ${PARENT}\n`);
+  assert.match(log, /::warning::Couldn't fetch/);
+  assert.doesNotMatch(written, /origin\/main/);
+});
+
+test('a root commit has no HEAD^1, so check:boundaries runs without --base', () => {
+  const { code, written, log } = runMain({ EVENT: 'push', BEFORE: NEW_REF }, { parent: null });
+  assert.equal(code, 0);
+  assert.equal(written, `base=\ncommand=${KERNEL}\n`);
+  assert.match(log, /without --base/);
+});
+
+test('the kernel job compares with the base ledger-base.js picks, and passes on its local command', () => {
   assert.match(WORKFLOW, /node scripts\/ci\/ledger-base\.js/);
+  assert.match(WORKFLOW, /BASE_REF: \$\{\{ github\.base_ref \}\}/);
   assert.match(WORKFLOW, /BASE: \$\{\{ steps\.ledger-base\.outputs\.base \}\}/);
-  assert.match(WORKFLOW, /npm run check:boundaries -- --base "\$BASE"/);
+  assert.match(WORKFLOW, /command: \$\{\{ steps\.ledger-base\.outputs\.command \}\}/);
+  assert.doesNotMatch(WORKFLOW, /DEFAULT_BRANCH|default_branch/);
   assert.doesNotMatch(WORKFLOW, /check:boundaries -- --base HEAD\^1/);
 });
 
-test("pr-gate's local command for the kernel job names the pull request's base branch", () => {
+test("pr-gate prints the kernel job's own local command instead of working out the base again", () => {
   const kernel = WORKFLOW.split('\n').find(line => /"kernel":/.test(line));
   assert.ok(kernel, 'no "kernel" entry in pr-gate COMMANDS');
-  assert.match(kernel, /github\.base_ref/);
-  assert.doesNotMatch(kernel, /--base origin\/next/);
+  assert.match(kernel, /needs\.kernel\.outputs\.command/);
+  assert.doesNotMatch(kernel, /github\.event\.before|github\.base_ref|--base/);
 });
