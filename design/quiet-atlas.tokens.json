@@ -92,10 +92,19 @@
       "about": "A --focus-width outline in --focus-ring, offset --focus-offset, with an inner ring of --focus-ring-inner filling the offset. Focus Blue is under 3:1 on slate, sage, and every dark surface, so there the inner ring carries the contrast. A focus pair passes when the outer ring reaches 3:1 on the surface, or the inner ring reaches 3:1 against both the outer ring and the surface."
     },
     "forcedColors": {
-      "focus": { "token": "--focus-ring", "value": "Highlight" },
+      "focus": { "token": "--focus-ring", "value": "Highlight", "surfaces": ["Canvas"] },
       "boundaries": ["--seam", "--seam-strong", "--control-boundary"],
       "border": "1px solid transparent",
-      "about": "Planes, cards, inputs, and selected states get a 1px solid transparent border or outline, which forced colors paint. The static check covers token values; whether components draw that border needs rendered DOM (#24)."
+      "pairs": {
+        "Canvas": ["CanvasText", "LinkText", "VisitedText", "ActiveText", "GrayText", "ButtonBorder"],
+        "ButtonFace": ["ButtonText"],
+        "Field": ["FieldText"],
+        "Mark": ["MarkText"],
+        "Highlight": ["HighlightText"],
+        "SelectedItem": ["SelectedItemText"],
+        "AccentColor": ["AccentColorText"]
+      },
+      "about": "Every pair is one of the legible system pairs in CSS Color 4 section 6.2, its foreground listed for its background, so a component that keeps its colors with forced-color-adjust: none stays readable. Focus is Highlight, drawn against Canvas: on a Canvas surface, or on the Canvas inner ring over any other. The focus ring isn't registered with @property, because a registered <color> computes Highlight to a fixed color and forced colors then repaint the outline. Planes, cards, inputs, and selected states get a 1px solid transparent border or outline, which forced colors paint. The static check covers token values; whether components draw that border needs rendered DOM (#24)."
     },
     "disabled": {
       "state": "disabled",
@@ -161,8 +170,13 @@
     },
     "--text-on-sage": {
       "type": "color", "axis": "color", "status": "approved", "overridable": false,
-      "role": "Paper text on sage fills and destructive fills",
-      "values": { "light": "#FFFFFF", "dark": { "value": "#FFFFFF", "legacy": "white text on accent and danger fills" }, "forced": "CanvasText" }
+      "role": "Paper text on sage fills, such as the active nav field",
+      "values": { "light": "#FFFFFF", "dark": { "value": "#FFFFFF", "legacy": "white text on accent and danger fills" }, "forced": "SelectedItemText" }
+    },
+    "--text-on-action": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Paper text on action fills: the primary and destructive buttons, as DESIGN.md gives the primary button paper text",
+      "values": { "light": "#FFFFFF", "dark": { "value": "#FFFFFF", "legacy": "white text on accent and danger fills" }, "forced": "ButtonText" }
     },
     "--text-link": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
@@ -174,10 +188,15 @@
       "role": "Deep Slate: the one primary action",
       "values": { "light": "#253443", "dark": { "value": "#253443", "note": "Anchors stay fills." }, "forced": "ButtonFace" }
     },
+    "--action-destructive": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Destructive fills: the danger color as a fill under --text-on-action",
+      "values": { "light": { "ref": "--state-danger" }, "dark": { "ref": "--state-danger" }, "forced": "ButtonFace" }
+    },
     "--state-local": {
       "type": "color", "axis": "color", "status": "approved", "overridable": false,
-      "role": "Private Sage: local or private state, success, trusted actions, intelligence ownership, the active nav field",
-      "values": { "light": "#526F69", "dark": { "value": "#526F69", "note": "Anchors stay fills." }, "forced": "CanvasText" }
+      "role": "Private Sage: local or private state, success, trusted actions, intelligence ownership, the active nav field. Forced colors paint the field as a selected item.",
+      "values": { "light": "#526F69", "dark": { "value": "#526F69", "note": "Anchors stay fills." }, "forced": "SelectedItem" }
     },
     "--state-info": {
       "type": "color", "axis": "color", "status": "approved", "overridable": false,
@@ -196,7 +215,7 @@
     },
     "--state-danger": {
       "type": "color", "axis": "color", "status": "approved", "overridable": true,
-      "role": "Danger text and destructive fills",
+      "role": "Danger text and markers. Destructive fills take --action-destructive, so forced colors can pair each.",
       "values": { "light": "#934F47", "dark": { "value": "#E03E3E", "legacy": "--danger-color" }, "forced": "CanvasText" }
     },
     "--ink-local": {
@@ -262,6 +281,8 @@
     },
     "--focus-ring": {
       "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "registered": false,
+      "about": "Not registered with @property: a registered <color> computes Highlight to a fixed color, and forced colors then repaint the outline in their own default. Unregistered, outline-color gets the Highlight keyword. It isn't overridable, so it doesn't need the fallback registration gives an invalid value.",
       "role": "Focus Blue: focus only",
       "values": { "light": "#315F8A", "dark": { "value": "#315F8A", "note": "2.62:1 on #191919, so dark focus relies on the inner ring." }, "forced": "Highlight" }
     },
@@ -272,13 +293,23 @@
     },
     "--selection-bg": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": true,
-      "role": "Selection and selected states: mist at 30%. Selected text takes --text-primary.",
+      "role": "Selection and selected states: mist at 30%. Selected text takes --text-on-selection.",
       "values": { "light": "#7184A34D", "dark": { "value": "#2383E240", "legacy": "--selection-bg" }, "forced": "Highlight" }
+    },
+    "--text-on-selection": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Selected text: --text-primary, and HighlightText in forced colors",
+      "values": { "light": { "ref": "--text-primary" }, "dark": { "ref": "--text-primary" }, "forced": "HighlightText" }
     },
     "--mark-bg": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
-      "role": "mark on the sand fill",
+      "role": "mark on the sand fill, with --text-on-mark",
       "values": { "light": "#DED7BA", "dark": { "value": "#4A4000", "legacy": "dark .block-content mark" }, "forced": "Mark" }
+    },
+    "--text-on-mark": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Text in a mark: --text-primary, and MarkText in forced colors",
+      "values": { "light": { "ref": "--text-primary" }, "dark": { "ref": "--text-primary" }, "forced": "MarkText" }
     },
     "--scrim": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
@@ -418,16 +449,16 @@
     { "id": "tone-urgent/rest/on-app", "kind": "text", "fg": "--ink-urgent", "bg": "--surface-app" },
     { "id": "tone-pending/rest/on-paper", "kind": "text", "fg": "--ink-pending", "bg": "--surface-paper" },
     { "id": "tone-pending/rest/on-app", "kind": "text", "fg": "--ink-pending", "bg": "--surface-app" },
-    { "id": "selection/rest/on-paper", "kind": "text", "fg": "--text-primary", "bg": "--selection-bg", "over": "--surface-paper" },
-    { "id": "selection/rest/on-app", "kind": "text", "fg": "--text-primary", "bg": "--selection-bg", "over": "--surface-app" },
-    { "id": "selection/rest/on-collection", "kind": "text", "fg": "--text-primary", "bg": "--selection-bg", "over": "--surface-collection" },
-    { "id": "selection/rest/on-intelligence", "kind": "text", "fg": "--text-primary", "bg": "--selection-bg", "over": "--surface-intelligence" },
-    { "id": "mark/rest/text", "kind": "text", "fg": "--text-primary", "bg": "--mark-bg" },
+    { "id": "selection/rest/on-paper", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-paper" },
+    { "id": "selection/rest/on-app", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-app" },
+    { "id": "selection/rest/on-collection", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-collection" },
+    { "id": "selection/rest/on-intelligence", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-intelligence" },
+    { "id": "mark/rest/text", "kind": "text", "fg": "--text-on-mark", "bg": "--mark-bg" },
     { "id": "nav-item/rest/label", "kind": "text", "fg": "--text-on-dark", "bg": "--surface-navigation" },
     { "id": "nav-item/active/label", "kind": "text", "fg": "--text-on-sage", "bg": "--state-local" },
     { "id": "nav-item/active/marker", "kind": "non-text", "fg": "--text-on-sage", "bg": "--state-local" },
-    { "id": "button-primary/rest/label", "kind": "text", "fg": "--text-on-dark", "bg": "--action-primary" },
-    { "id": "button-primary/disabled/label", "kind": "text", "fg": "--text-on-dark", "bg": "--action-primary", "over": "--surface-paper" },
+    { "id": "button-primary/rest/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-primary" },
+    { "id": "button-primary/disabled/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-primary", "over": "--surface-paper" },
     { "id": "button-secondary/rest/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
     { "id": "button-secondary/rest/boundary-on-paper", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper" },
     { "id": "button-secondary/rest/boundary-on-app", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-app" },
@@ -440,8 +471,8 @@
     { "id": "button-quiet/rest/label-on-intelligence", "kind": "text", "fg": "--text-primary", "bg": "--surface-intelligence" },
     { "id": "button-quiet/hover/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-muted" },
     { "id": "button-quiet/disabled/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper", "over": "--surface-paper" },
-    { "id": "button-destructive/rest/label", "kind": "text", "fg": "--text-on-sage", "bg": "--state-danger" },
-    { "id": "button-destructive/disabled/label", "kind": "text", "fg": "--text-on-sage", "bg": "--state-danger", "over": "--surface-paper" },
+    { "id": "button-destructive/rest/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-destructive" },
+    { "id": "button-destructive/disabled/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-destructive", "over": "--surface-paper" },
     { "id": "chip-neutral/rest/label", "kind": "text", "fg": "--text-secondary", "bg": "--surface-muted" },
     { "id": "chip-neutral/rest/marker", "kind": "non-text", "fg": "--text-secondary", "bg": "--surface-muted" },
     { "id": "chip-local/rest/label", "kind": "text", "fg": "--ink-local", "bg": "--tint-local" },

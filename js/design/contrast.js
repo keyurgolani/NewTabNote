@@ -33,6 +33,7 @@
  * @property {string} axis
  * @property {string} status
  * @property {boolean} overridable
+ * @property {boolean} [registered] Colors: whether the generated CSS registers it as a <color>
  * @property {string} [role]
  * @property {Record<string, string>} values Resolved value per cell
  * @property {ReadonlyArray<string>} [candidateCells] Cells whose value is a candidate though the token is approved
@@ -102,7 +103,7 @@ export const STATIC_LIMITS = Object.freeze([
   'Rendered contrast of each component on each surface, in every state (#24\'s theme matrix).',
   'Every interactive element\'s rendered box is at least 44 by 44 CSS px.',
   'No component animates transform, translation, scaling, or scrolling under reduced motion.',
-  'Planes, cards, inputs, and selected states draw a 1px solid transparent border or outline in forced colors, and focus renders in Highlight.',
+  'Planes, cards, inputs, and selected states draw a 1px solid transparent border or outline in forced colors, focus renders in Highlight, and a component that sets forced-color-adjust: none paints its declared pair.',
   'Focus rings draw the inner ring wherever Focus Blue alone is under 3:1: on slate and sage, and on every dark surface.',
 ]);
 
@@ -451,13 +452,48 @@ function measure(colors, opacity) {
   return { ratio: Math.max(outer, Math.min(innerOnOuter, innerOnSurface)), outer, innerOnOuter, innerOnSurface };
 }
 
+/** The tokens a pair reads, by part */
+const PAIR_PARTS = /** @type {const} */ (['fg', 'bg', 'over', 'inner']);
+
+/**
+ * A pair's parsed colors in a set of values, null for a part the pair doesn't
+ * have. `missing` is true when a token has no value; `unparsed` names the tokens
+ * whose value isn't a color.
+ * @param {PairRecord} pair
+ * @param {Record<string, string>} values
+ * @returns {{colors: Record<string, Rgba | null>, missing: boolean, unparsed: string[]}}
+ */
+function pairColors(pair, values) {
+  /** @type {Record<string, Rgba | null>} */
+  const colors = {};
+  let missing = false;
+  /** @type {string[]} */
+  const unparsed = [];
+  for (const part of PAIR_PARTS) {
+    const token = pair[part];
+    if (token === undefined) {
+      colors[part] = null;
+      continue;
+    }
+    if (values[token] === undefined) {
+      missing = true;
+      continue;
+    }
+    const color = parseColor(values[token]);
+    if (!color) unparsed.push(token);
+    colors[part] = color;
+  }
+  return { colors, missing, unparsed };
+}
+
 /**
  * @param {DesignTokenData} data
  * @param {Variant} variant
  * @param {Record<string, string>} values
+ * @param {Record<string, string>} base The variant's values without overrides
  * @param {Report} report
  */
-function checkPairs(data, variant, values, report) {
+function checkPairs(data, variant, values, base, report) {
   const name = report.variant;
   const opacityText = values[data.rules.disabled.opacity];
   const opacity = Number(opacityText);
@@ -468,35 +504,16 @@ function checkPairs(data, variant, values, report) {
     return;
   }
   const legacy = data.legacyDark.schemes.includes(variant.scheme);
-  const unparsed = new Set();
+  const reportedUnparsed = new Set();
   for (const pair of data.pairs) {
-    const tokens = { fg: pair.fg, bg: pair.bg, over: pair.over, inner: pair.inner };
-    /** @type {Record<string, Rgba | null>} */
-    const colors = {};
-    let complete = true;
-    for (const [part, token] of Object.entries(tokens)) {
-      if (token === undefined) {
-        colors[part] = null;
-        continue;
-      }
-      if (values[token] === undefined) {
-        complete = false;
-        continue;
-      }
-      const color = parseColor(values[token]);
-      if (!color) {
-        complete = false;
-        if (!unparsed.has(token)) {
-          unparsed.add(token);
-          report.failures.push(finding('invalid-value', name, `${token} ${JSON.stringify(values[token])} isn't a color the validator can measure`, {
-            token, measured: values[token], required: 'a color',
-          }));
-        }
-        continue;
-      }
-      colors[part] = color;
+    const { colors, missing, unparsed } = pairColors(pair, values);
+    for (const token of unparsed.filter(t => !reportedUnparsed.has(t))) {
+      reportedUnparsed.add(token);
+      report.failures.push(finding('invalid-value', name, `${token} ${JSON.stringify(values[token])} isn't a color the validator can measure`, {
+        token, measured: values[token], required: 'a color',
+      }));
     }
-    if (!complete) continue;
+    if (missing || unparsed.length) continue;
     const disabled = pair.state === data.rules.disabled.state;
     const needsBackdrop = disabled || colors.bg.a < 1;
     if (needsBackdrop && (!colors.over || colors.over.a < 1)) {
@@ -518,12 +535,38 @@ function checkPairs(data, variant, values, report) {
     const detail = result.innerOnOuter === null ? '' : ` (outer ring ${format(result.outer)}:1 on the surface, inner ring ${format(result.innerOnOuter)}:1 on the outer ring and ${format(result.innerOnSurface)}:1 on the surface)`;
     const message = `${what} fails ${pair.kind} contrast: ${format(result.ratio)}:1${detail}, needs ${required}:1`;
     const rule = `${pair.kind}-contrast`;
-    if (legacy && data.legacyDark.pairs.includes(pair.id)) {
+    if (!(legacy && data.legacyDark.pairs.includes(pair.id))) {
+      report.failures.push(finding(rule, name, message, fields));
+      continue;
+    }
+    // A legacy pair is excused at its legacy ratio. An override that touches it
+    // may raise that ratio but not lower it.
+    const legacyRatio = legacyRatioOf(pair, base, result.ratio, values);
+    if (legacyRatio !== null && result.ratio >= legacyRatio) {
       report.reported.push(finding(rule, name, `${message}. A legacy dark pair, reported until the owner's dark values land.`, fields));
     } else {
-      report.failures.push(finding(rule, name, message, fields));
+      const below = legacyRatio === null ? 'and its legacy ratio can\'t be measured' : `below its legacy ${format(legacyRatio)}:1`;
+      report.failures.push(finding(rule, name, `${message}. An override takes this legacy dark pair ${below}.`, fields));
     }
   }
+}
+
+/**
+ * The ratio a legacy pair has without overrides: `ratio` itself when no override
+ * changes its tokens, or null when the unmodified pair can't be measured
+ * @param {PairRecord} pair
+ * @param {Record<string, string>} base
+ * @param {number} ratio
+ * @param {Record<string, string>} values
+ * @returns {number | null}
+ */
+function legacyRatioOf(pair, base, ratio, values) {
+  const touched = PAIR_PARTS.some(part => pair[part] !== undefined && values[pair[part]] !== base[pair[part]]);
+  if (!touched) return ratio;
+  const { colors, missing, unparsed } = pairColors(pair, base);
+  if (missing || unparsed.length > 0) return null;
+  if (colors.bg.a < 1 && (!colors.over || colors.over.a < 1)) return null;
+  return measure({ fg: colors.fg, bg: colors.bg, over: colors.over, inner: colors.inner }, 1).ratio;
 }
 
 /**
@@ -548,6 +591,14 @@ function checkForcedColors(data, values, report) {
       token: rules.focus.token, measured: focus === undefined ? null : focus, required: rules.focus.value,
     }));
   }
+  // What paints: a registered <color> computes the keyword to a fixed color, and
+  // forced colors repaint an outline in a fixed color with their own default
+  const focusRecord = data.tokens[rules.focus.token];
+  if (focusRecord && focusRecord.registered !== false) {
+    report.failures.push(finding('forced-colors', name, `${rules.focus.token} is registered as <color>, so its ${rules.focus.value} computes to a fixed color and forced colors repaint the outline. Leave it unregistered so outline-color gets the keyword.`, {
+      token: rules.focus.token, measured: 'registered', required: 'unregistered',
+    }));
+  }
   for (const token of rules.boundaries) {
     const value = values[token];
     if (value === undefined) continue;
@@ -556,6 +607,52 @@ function checkForcedColors(data, values, report) {
         token, measured: value, required: 'a visible system color',
       }));
     }
+  }
+}
+
+/**
+ * Forced colors paint each pair in system colors, so a pair has to be one CSS
+ * Color 4 calls legible: its foreground listed for its background. A focus ring
+ * is drawn against the focus surfaces: on one of them, or with an inner ring in
+ * one of them between it and any other surface. A pair with a token that isn't a
+ * system color is left to checkForcedColors.
+ * @param {DesignTokenData} data
+ * @param {Record<string, string>} values
+ * @param {Report} report
+ */
+function checkForcedPairs(data, values, report) {
+  const name = report.variant;
+  const rules = data.rules.forcedColors;
+  const same = (/** @type {string} */ a, /** @type {string} */ b) => a.toLowerCase() === b.toLowerCase();
+  const legible = Object.entries(rules.pairs);
+  const surfaces = rules.focus.surfaces.join(' or ');
+  const isSurface = (/** @type {string} */ color) => rules.focus.surfaces.some((/** @type {string} */ surface) => same(surface, color));
+  for (const pair of data.pairs) {
+    const fg = values[pair.fg];
+    const bg = values[pair.bg];
+    const inner = pair.inner === undefined ? undefined : values[pair.inner];
+    if (fg === undefined || bg === undefined || ![fg, bg, inner].every(value => value === undefined || isSystemColor(value))) continue;
+    const fields = { token: pair.fg, background: pair.bg, pair: pair.id, state: pair.state };
+    const what = `${pair.fg} on ${pair.bg} (${pair.id}) in ${name}, ${pair.state}`;
+    if (pair.kind === 'focus') {
+      // A ring that isn't the focus color fails checkForcedColors already
+      if (!same(fg, rules.focus.value)) continue;
+      if (isSurface(bg) && !same(fg, bg)) continue;
+      if (inner !== undefined && isSurface(inner) && !same(inner, bg)) continue;
+      const measured = `${fg} on ${bg}${inner === undefined ? '' : `, inner ring ${inner}`}`;
+      report.failures.push(finding('forced-colors-pair', name, `${what} is ${measured} in forced colors: ${rules.focus.value} focus is drawn against ${surfaces}, so it needs ${surfaces} as the surface or the inner ring`, {
+        ...fields, measured, required: `${rules.focus.value} on ${surfaces}, or an inner ring in ${surfaces}`,
+      }));
+      continue;
+    }
+    const entry = legible.find(([background]) => same(background, bg));
+    if (entry && entry[1].some((/** @type {string} */ color) => same(color, fg))) continue;
+    const why = entry ? `${entry[0]} takes ${entry[1].join(' or ')}` : `${bg} isn't a background in CSS Color 4's legible pairs`;
+    report.failures.push(finding('forced-colors-pair', name, `${what} is ${fg} on ${bg} in forced colors, not a legible system pair: ${why}`, {
+      ...fields,
+      measured: `${fg} on ${bg}`,
+      required: entry ? `${entry[1].join(' or ')} on ${entry[0]}` : `one of ${legible.map(([background]) => background).join(', ')} as the background`,
+    }));
   }
 }
 
@@ -713,8 +810,13 @@ export function validate(data, options = {}) {
   if (failures.length > 0) return report;
   const resolved = resolveTokens(data, variant, options.overrides);
   report.failures.push(...resolved.failures);
-  if (isForced(data, variant)) checkForcedColors(data, resolved.values, report);
-  else checkPairs(data, variant, resolved.values, report);
+  if (isForced(data, variant)) {
+    checkForcedColors(data, resolved.values, report);
+    checkForcedPairs(data, resolved.values, report);
+  } else {
+    const base = options.overrides ? resolveTokens(data, variant).values : resolved.values;
+    checkPairs(data, variant, resolved.values, base, report);
+  }
   checkTypography(data, resolved.values, report);
   checkTargets(data, resolved.values, report);
   checkMotion(data, variant, resolved.values, report);

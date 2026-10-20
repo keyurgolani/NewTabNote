@@ -60,6 +60,10 @@ const PINNED = {
   '--seam-strong': '#AAB9B4',
   '--focus-ring': '#315F8A',
   '--state-danger': '#934F47',
+  // Destructive fills take the approved danger value; their label is paper, as
+  // DESIGN.md gives the primary button's
+  '--action-destructive': '#934F47',
+  '--text-on-action': '#FFFFFF',
   '--focus-ring-inner': '#FFFFFF',
   '--focus-width': { light: '2px', dark: '2px', more: '3px', darkMore: '3px' },
   '--focus-offset': '2px',
@@ -133,6 +137,10 @@ const CANDIDATES = {
   '--chart-2': '#3B5065',
   '--chart-3': '#536C86',
   '--chart-4': '#7089A2',
+  // Text on the candidate mark and selection fills: --text-primary, with its own
+  // forced-colors partner
+  '--text-on-mark': '#253443',
+  '--text-on-selection': '#253443',
 };
 
 // "Required states": until owner input 2, each dark token takes the legacy dark
@@ -160,6 +168,8 @@ const DARK = {
   '--focus-ring-inner': '#E0E0E0',
   '--surface-navigation': '#253443',
   '--action-primary': '#253443',
+  '--action-destructive': '#E03E3E',
+  '--text-on-action': '#FFFFFF',
   '--state-local': '#526F69',
   '--state-info': '#7184A3',
   '--state-urgent': '#B78E76',
@@ -279,9 +289,11 @@ describe('design/quiet-atlas.tokens.json and its generated output', () => {
     }
     assert.equal(DATA.tokens['--focus-ring'].values.forced, 'Highlight');
     for (const name of DATA.rules.forcedColors.boundaries) assert.notEqual(DATA.tokens[name].values.forced, 'Canvas', name);
+    const forcedBlock = /@media \(forced-colors: active\) \{\n {2}:root \{\n([\s\S]*?)\n {2}\}/.exec(committedCss)[1];
+    assert.match(forcedBlock, /^ {4}--focus-ring: Highlight !important;$/m);
   });
 
-  it('registers every color with @property: <color>, inherited, the light value as its initial value', () => {
+  it('registers every color but the focus ring with @property: <color>, inherited, the light value as its initial value', () => {
     const registered = {};
     walk(parse(committedCss), node => {
       if (node.type === 'at-rule' && node.name === 'property') {
@@ -289,10 +301,19 @@ describe('design/quiet-atlas.tokens.json and its generated output', () => {
       }
     });
     const colors = Object.entries(DATA.tokens).filter(([, record]) => record.type === 'color');
-    assert.equal(Object.keys(registered).length, colors.length);
+    // A registered <color> computes Highlight to a fixed color, which forced colors
+    // then repaint, so the focus ring stays unregistered and outline-color gets the keyword
+    assert.deepEqual(colors.filter(([, record]) => record.registered === false).map(([name]) => name), ['--focus-ring']);
+    assert.equal(Object.keys(registered).length, colors.length - 1);
     for (const [name, record] of colors) {
+      if (record.registered === false) {
+        assert.equal(registered[name], undefined, name);
+        continue;
+      }
+      assert.equal(record.registered, true, name);
       assert.deepEqual(registered[name], { syntax: '"<color>"', inherits: 'true', 'initial-value': record.values.light }, name);
     }
+    assert.ok(Object.values(DATA.tokens).every(record => record.type === 'color' || record.registered === undefined));
   });
 
   it('records each legacy alias once, sorted, and none of them is a token', () => {
@@ -433,13 +454,13 @@ function attributeCombinations() {
 // Whitespace around commas carries no meaning in these values; CleanCSS drops it
 const compact = value => (value === undefined ? value : value.replace(/\s*,\s*/g, ',').replace(/\s+/g, ' ').trim());
 
-function assertCascadeMatches(cssText, label, normalize = value => value) {
+function assertCascadeMatches(cssText, label, { normalize = value => value, data = DATA } = {}) {
   const sheet = compileSheet(cssText);
   let checked = 0;
   for (const attrs of attributeCombinations()) {
     for (const media of mediaCombinations()) {
       const variant = expectedVariant(attrs, media);
-      const expected = design.resolveTokens(DATA, variant).values;
+      const expected = design.resolveTokens(data, variant).values;
       const actual = computeRoot(sheet, attrs, media);
       const where = `${label} with ${JSON.stringify(attrs)} under ${JSON.stringify(media)}`;
       assert.equal(actual['color-scheme'], variant.scheme, `${where}: color-scheme`);
@@ -456,6 +477,15 @@ describe('the generated CSS applies each variant', () => {
   it('lands every root attribute and media combination on the variant the issue describes', () => {
     const checked = assertCascadeMatches(committedCss, generator.CSS_PATH);
     assert.ok(checked > 500, `${checked} combinations`);
+  });
+
+  it('follows the OS contrast setting when only dark has contrast-more values', () => {
+    const source = structuredClone(generator.readSource());
+    for (const token of Object.values(source.tokens)) delete token.values.more;
+    source.tokens['--text-secondary'].values.darkMore = '#C8C8C8';
+    const fixture = generator.generate(source, design);
+    assert.equal(fixture.model.tokens['--text-secondary'].values.more, fixture.model.tokens['--text-secondary'].values.light);
+    assertCascadeMatches(fixture.css, 'a source with darkMore values only', { data: fixture.model });
   });
 
   it('applies light with no attribute whatever the OS, and only data-scheme="system" follows prefers-color-scheme', () => {
@@ -519,7 +549,7 @@ describe('the build\'s CSS minifier keeps the token output intact', () => {
   });
 
   it('applies every variant exactly as the source does', () => {
-    assertCascadeMatches(minified, 'the minified CSS', compact);
+    assertCascadeMatches(minified, 'the minified CSS', { normalize: compact });
   });
 });
 
@@ -553,6 +583,16 @@ describe('scripts/build-design-tokens.js refuses a malformed source', () => {
     ['a scheme with no values', s => { delete s.dimensions.scheme.values; }, /dimensions\.scheme: values missing/],
     ['a dark and contrast-more literal with no darkMore', s => { s.tokens['--seam-strong'].values.more = '#778179'; }, /needs a darkMore value/],
     ['a pair naming a missing token', s => { s.pairs[0].fg = '--nope'; }, /fg --nope isn't a color token/],
+    ['a pair with no background', s => { delete s.pairs[0].bg; }, /pairs\[0\] plane-paper\/rest\/text-primary: bg missing/],
+    ['a pair with no foreground', s => { delete s.pairs[0].fg; }, /pairs\[0\] plane-paper\/rest\/text-primary: fg missing/],
+    ['a target minimum that isn\'t px', s => { s.rules.targets.minimum = '2.75rem'; }, /rules\.targets\.minimum: "2\.75rem" isn't a px length/],
+    ['a focus width minimum that isn\'t px', s => { s.rules.focus.minimumWidth.more = '0.2rem'; }, /rules\.focus\.minimumWidth\.more: "0\.2rem" isn't a px length/],
+    ['a contrast value with no focus width minimum', s => { delete s.rules.focus.minimumWidth.more; }, /rules\.focus\.minimumWidth\.more: missing/],
+    ['a focus offset minimum that isn\'t px', s => { s.rules.focus.minimumOffset = 'thin'; }, /rules\.focus\.minimumOffset: "thin" isn't a px length/],
+    ['a registered flag on a non-color', s => { s.tokens['--space-region'].registered = false; }, /--space-region: only colors are registered/],
+    ['a registered flag that isn\'t true or false', s => { s.tokens['--focus-ring'].registered = 'no'; }, /--focus-ring: registered must be true or false/],
+    ['a forced pair table naming a non-system color', s => { s.rules.forcedColors.pairs.Canvas.push('#000000'); }, /rules\.forcedColors\.pairs\.Canvas: #000000 isn't a system color/],
+    ['a forced focus surface that isn\'t a system color', s => { s.rules.forcedColors.focus.surfaces = ['white']; }, /rules\.forcedColors\.focus\.surfaces: white isn't a system color/],
     ['a duplicate pair id', s => { s.pairs[1].id = s.pairs[0].id; }, /duplicate id/],
     ['a translucent background with no backdrop', s => { delete s.pairs.find(p => p.id === 'selection/rest/on-paper').over; }, /needs an opaque over/],
     ['a focus pair with no inner ring', s => { delete s.pairs.find(p => p.kind === 'focus').inner; }, /focus pairs name their inner ring/],

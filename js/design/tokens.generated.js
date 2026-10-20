@@ -214,6 +214,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Mineral Ground: the application field",
       "values": {
         "light": "#f4f6f3",
@@ -232,6 +233,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Deep Slate: navigation and structural anchors",
       "values": {
         "light": "#253443",
@@ -250,6 +252,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Paper Canvas: active note and task surfaces, the brightest and quietest plane",
       "values": {
         "light": "#ffffff",
@@ -268,6 +271,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Collection plane, sage-tinted",
       "values": {
         "light": "#e7edeb",
@@ -286,6 +290,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Intelligence plane, mist-tinted",
       "values": {
         "light": "#e9edf3",
@@ -304,6 +309,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Quiet fills, such as a quiet button's hover",
       "values": {
         "light": "#e8ecea",
@@ -322,6 +328,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": true,
+      "registered": true,
       "role": "Code blocks and inline code",
       "values": {
         "light": "#f4f6f3",
@@ -336,6 +343,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Deep Slate: primary text",
       "values": {
         "light": "#253443",
@@ -354,6 +362,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Secondary text",
       "values": {
         "light": "#52616a",
@@ -376,6 +385,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Text on slate",
       "values": {
         "light": "#f7f9f8",
@@ -394,13 +404,33 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
-      "role": "Paper text on sage fills and destructive fills",
+      "registered": true,
+      "role": "Paper text on sage fills, such as the active nav field",
       "values": {
         "light": "#ffffff",
         "dark": "#ffffff",
         "more": "#ffffff",
         "darkMore": "#ffffff",
-        "forced": "CanvasText"
+        "forced": "SelectedItemText"
+      },
+      "candidateCells": [
+        "dark",
+        "darkMore"
+      ]
+    },
+    "--text-on-action": {
+      "type": "color",
+      "axis": "color",
+      "status": "approved",
+      "overridable": false,
+      "registered": true,
+      "role": "Paper text on action fills: the primary and destructive buttons, as DESIGN.md gives the primary button paper text",
+      "values": {
+        "light": "#ffffff",
+        "dark": "#ffffff",
+        "more": "#ffffff",
+        "darkMore": "#ffffff",
+        "forced": "ButtonText"
       },
       "candidateCells": [
         "dark",
@@ -412,6 +442,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Links, underlined",
       "values": {
         "light": "#253443",
@@ -432,6 +463,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Deep Slate: the one primary action",
       "values": {
         "light": "#253443",
@@ -445,18 +477,44 @@ export const DESIGN_TOKENS = freeze({
         "darkMore"
       ]
     },
+    "--action-destructive": {
+      "type": "color",
+      "axis": "color",
+      "status": "approved",
+      "overridable": true,
+      "registered": true,
+      "role": "Destructive fills: the danger color as a fill under --text-on-action",
+      "values": {
+        "light": "#934f47",
+        "dark": "#e03e3e",
+        "more": "#934f47",
+        "darkMore": "#e03e3e",
+        "forced": "ButtonFace"
+      },
+      "candidateCells": [
+        "dark",
+        "darkMore"
+      ],
+      "refs": {
+        "light": "--state-danger",
+        "dark": "--state-danger",
+        "more": "--state-danger",
+        "darkMore": "--state-danger"
+      }
+    },
     "--state-local": {
       "type": "color",
       "axis": "color",
       "status": "approved",
       "overridable": false,
-      "role": "Private Sage: local or private state, success, trusted actions, intelligence ownership, the active nav field",
+      "registered": true,
+      "role": "Private Sage: local or private state, success, trusted actions, intelligence ownership, the active nav field. Forced colors paint the field as a selected item.",
       "values": {
         "light": "#526f69",
         "dark": "#526f69",
         "more": "#526f69",
         "darkMore": "#526f69",
-        "forced": "CanvasText"
+        "forced": "SelectedItem"
       },
       "candidateCells": [
         "dark",
@@ -468,6 +526,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Collection Mist: linked context, collection surfaces, secondary information, non-urgent intelligence. Never a fill under text.",
       "values": {
         "light": "#7184a3",
@@ -486,6 +545,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Urgency Clay: explicit deadlines, attention, recoverable warnings. Never text, and never a fill under text.",
       "values": {
         "light": "#b78e76",
@@ -504,6 +564,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "Supporting Sand: pending, supporting, resurfaced",
       "values": {
         "light": "#ded7ba",
@@ -522,7 +583,8 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
-      "role": "Danger text and destructive fills",
+      "registered": true,
+      "role": "Danger text and markers. Destructive fills take --action-destructive, so forced colors can pair each.",
       "values": {
         "light": "#934f47",
         "dark": "#e03e3e",
@@ -540,6 +602,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Local ink: text and sole-cue markers in the local tone",
       "values": {
         "light": "#526f69",
@@ -554,6 +617,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Info ink: text and sole-cue markers in the info tone",
       "values": {
         "light": "#425b7d",
@@ -568,6 +632,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Urgent ink: text and sole-cue markers in the urgent tone",
       "values": {
         "light": "#604c34",
@@ -582,6 +647,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Pending ink: text and sole-cue markers in the pending tone",
       "values": {
         "light": "#68624b",
@@ -596,6 +662,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Local tint, the board's --surface-proposed",
       "values": {
         "light": "#edf2ef",
@@ -610,6 +677,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Info tint",
       "values": {
         "light": "#f2f4f8",
@@ -624,6 +692,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Urgent tint",
       "values": {
         "light": "#f6eee9",
@@ -638,6 +707,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Pending tint",
       "values": {
         "light": "#f7f4e8",
@@ -652,6 +722,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": true,
+      "registered": true,
       "role": "Quiet Seam: 1px plane registration and toggle guides",
       "values": {
         "light": "#cbd5d1",
@@ -675,6 +746,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "The 1px inline-start rule on quote blocks, snapshot quotes, and AI blockquotes",
       "values": {
         "light": "#aab9b4",
@@ -693,6 +765,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Boundary of inputs and controls, 3.39:1 or better on every light surface",
       "values": {
         "light": "#778179",
@@ -707,6 +780,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": false,
       "role": "Focus Blue: focus only",
       "values": {
         "light": "#315f8a",
@@ -725,6 +799,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "approved",
       "overridable": false,
+      "registered": true,
       "role": "The focus ring's inner ring: paper in light, --text-on-dark in dark",
       "values": {
         "light": "#ffffff",
@@ -749,7 +824,8 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": true,
-      "role": "Selection and selected states: mist at 30%. Selected text takes --text-primary.",
+      "registered": true,
+      "role": "Selection and selected states: mist at 30%. Selected text takes --text-on-selection.",
       "values": {
         "light": "#7184a34d",
         "dark": "#2383e240",
@@ -758,12 +834,34 @@ export const DESIGN_TOKENS = freeze({
         "forced": "Highlight"
       }
     },
+    "--text-on-selection": {
+      "type": "color",
+      "axis": "color",
+      "status": "candidate",
+      "overridable": false,
+      "registered": true,
+      "role": "Selected text: --text-primary, and HighlightText in forced colors",
+      "values": {
+        "light": "#253443",
+        "dark": "#e0e0e0",
+        "more": "#253443",
+        "darkMore": "#e0e0e0",
+        "forced": "HighlightText"
+      },
+      "refs": {
+        "light": "--text-primary",
+        "dark": "--text-primary",
+        "more": "--text-primary",
+        "darkMore": "--text-primary"
+      }
+    },
     "--mark-bg": {
       "type": "color",
       "axis": "color",
       "status": "candidate",
       "overridable": false,
-      "role": "mark on the sand fill",
+      "registered": true,
+      "role": "mark on the sand fill, with --text-on-mark",
       "values": {
         "light": "#ded7ba",
         "dark": "#4a4000",
@@ -772,11 +870,33 @@ export const DESIGN_TOKENS = freeze({
         "forced": "Mark"
       }
     },
+    "--text-on-mark": {
+      "type": "color",
+      "axis": "color",
+      "status": "candidate",
+      "overridable": false,
+      "registered": true,
+      "role": "Text in a mark: --text-primary, and MarkText in forced colors",
+      "values": {
+        "light": "#253443",
+        "dark": "#e0e0e0",
+        "more": "#253443",
+        "darkMore": "#e0e0e0",
+        "forced": "MarkText"
+      },
+      "refs": {
+        "light": "--text-primary",
+        "dark": "--text-primary",
+        "more": "--text-primary",
+        "darkMore": "--text-primary"
+      }
+    },
     "--scrim": {
       "type": "color",
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Scrim behind dialogs: slate at 40%",
       "values": {
         "light": "#25344366",
@@ -791,6 +911,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Chart scale step 1",
       "values": {
         "light": "#253443",
@@ -805,6 +926,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Chart scale step 2",
       "values": {
         "light": "#3b5065",
@@ -819,6 +941,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Chart scale step 3",
       "values": {
         "light": "#536c86",
@@ -833,6 +956,7 @@ export const DESIGN_TOKENS = freeze({
       "axis": "color",
       "status": "candidate",
       "overridable": false,
+      "registered": true,
       "role": "Chart scale step 4",
       "values": {
         "light": "#7089a2",
@@ -1627,7 +1751,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "on-paper",
       "kind": "text",
-      "fg": "--text-primary",
+      "fg": "--text-on-selection",
       "bg": "--selection-bg",
       "over": "--surface-paper"
     },
@@ -1637,7 +1761,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "on-app",
       "kind": "text",
-      "fg": "--text-primary",
+      "fg": "--text-on-selection",
       "bg": "--selection-bg",
       "over": "--surface-app"
     },
@@ -1647,7 +1771,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "on-collection",
       "kind": "text",
-      "fg": "--text-primary",
+      "fg": "--text-on-selection",
       "bg": "--selection-bg",
       "over": "--surface-collection"
     },
@@ -1657,7 +1781,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "on-intelligence",
       "kind": "text",
-      "fg": "--text-primary",
+      "fg": "--text-on-selection",
       "bg": "--selection-bg",
       "over": "--surface-intelligence"
     },
@@ -1667,7 +1791,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "text",
       "kind": "text",
-      "fg": "--text-primary",
+      "fg": "--text-on-mark",
       "bg": "--mark-bg"
     },
     {
@@ -1703,7 +1827,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "label",
       "kind": "text",
-      "fg": "--text-on-dark",
+      "fg": "--text-on-action",
       "bg": "--action-primary"
     },
     {
@@ -1712,7 +1836,7 @@ export const DESIGN_TOKENS = freeze({
       "state": "disabled",
       "part": "label",
       "kind": "text",
-      "fg": "--text-on-dark",
+      "fg": "--text-on-action",
       "bg": "--action-primary",
       "over": "--surface-paper"
     },
@@ -1832,8 +1956,8 @@ export const DESIGN_TOKENS = freeze({
       "state": "rest",
       "part": "label",
       "kind": "text",
-      "fg": "--text-on-sage",
-      "bg": "--state-danger"
+      "fg": "--text-on-action",
+      "bg": "--action-destructive"
     },
     {
       "id": "button-destructive/disabled/label",
@@ -1841,8 +1965,8 @@ export const DESIGN_TOKENS = freeze({
       "state": "disabled",
       "part": "label",
       "kind": "text",
-      "fg": "--text-on-sage",
-      "bg": "--state-danger",
+      "fg": "--text-on-action",
+      "bg": "--action-destructive",
       "over": "--surface-paper"
     },
     {
@@ -2325,14 +2449,45 @@ export const DESIGN_TOKENS = freeze({
     "forcedColors": {
       "focus": {
         "token": "--focus-ring",
-        "value": "Highlight"
+        "value": "Highlight",
+        "surfaces": [
+          "Canvas"
+        ]
       },
       "boundaries": [
         "--seam",
         "--seam-strong",
         "--control-boundary"
       ],
-      "border": "1px solid transparent"
+      "border": "1px solid transparent",
+      "pairs": {
+        "Canvas": [
+          "CanvasText",
+          "LinkText",
+          "VisitedText",
+          "ActiveText",
+          "GrayText",
+          "ButtonBorder"
+        ],
+        "ButtonFace": [
+          "ButtonText"
+        ],
+        "Field": [
+          "FieldText"
+        ],
+        "Mark": [
+          "MarkText"
+        ],
+        "Highlight": [
+          "HighlightText"
+        ],
+        "SelectedItem": [
+          "SelectedItemText"
+        ],
+        "AccentColor": [
+          "AccentColorText"
+        ]
+      }
     },
     "disabled": {
       "state": "disabled",

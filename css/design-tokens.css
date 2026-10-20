@@ -3,6 +3,7 @@
  * design/quiet-atlas.tokens.json. Don't edit: change the source and regenerate.
  */
 
+/* Left unregistered, so a forced system color stays a keyword: --focus-ring */
 @property --surface-app {
   syntax: "<color>";
   inherits: true;
@@ -69,6 +70,12 @@
   initial-value: #ffffff;
 }
 
+@property --text-on-action {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #ffffff;
+}
+
 @property --text-link {
   syntax: "<color>";
   inherits: true;
@@ -79,6 +86,12 @@
   syntax: "<color>";
   inherits: true;
   initial-value: #253443;
+}
+
+@property --action-destructive {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #934f47;
 }
 
 @property --state-local {
@@ -177,12 +190,6 @@
   initial-value: #778179;
 }
 
-@property --focus-ring {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #315f8a;
-}
-
 @property --focus-ring-inner {
   syntax: "<color>";
   inherits: true;
@@ -195,10 +202,22 @@
   initial-value: #7184a34d;
 }
 
+@property --text-on-selection {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #253443;
+}
+
 @property --mark-bg {
   syntax: "<color>";
   inherits: true;
   initial-value: #ded7ba;
+}
+
+@property --text-on-mark {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #253443;
 }
 
 @property --scrim {
@@ -244,8 +263,10 @@
   --text-secondary: #52616a;
   --text-on-dark: #f7f9f8;
   --text-on-sage: #ffffff;
+  --text-on-action: #ffffff;
   --text-link: #253443;
   --action-primary: #253443;
+  --action-destructive: #934f47;
   --state-local: #526f69;
   --state-info: #7184a3;
   --state-urgent: #b78e76;
@@ -265,7 +286,9 @@
   --focus-ring: #315f8a;
   --focus-ring-inner: #ffffff;
   --selection-bg: #7184a34d;
+  --text-on-selection: #253443;
   --mark-bg: #ded7ba;
+  --text-on-mark: #253443;
   --scrim: #25344366;
   --chart-1: #253443;
   --chart-2: #3b5065;
@@ -333,6 +356,7 @@
   --text-secondary: #9b9b9b;
   --text-on-dark: #e0e0e0;
   --text-link: #e0e0e0;
+  --action-destructive: #e03e3e;
   --state-danger: #e03e3e;
   --ink-local: #e0e0e0;
   --ink-info: #e0e0e0;
@@ -347,7 +371,9 @@
   --control-boundary: #9b9b9b;
   --focus-ring-inner: #e0e0e0;
   --selection-bg: #2383e240;
+  --text-on-selection: #e0e0e0;
   --mark-bg: #4a4000;
+  --text-on-mark: #e0e0e0;
   --scrim: #00000099;
   --chart-1: #e0e0e0;
   --chart-2: #9b9b9b;
@@ -383,6 +409,7 @@
     --text-secondary: #9b9b9b;
     --text-on-dark: #e0e0e0;
     --text-link: #e0e0e0;
+    --action-destructive: #e03e3e;
     --state-danger: #e03e3e;
     --ink-local: #e0e0e0;
     --ink-info: #e0e0e0;
@@ -397,7 +424,9 @@
     --control-boundary: #9b9b9b;
     --focus-ring-inner: #e0e0e0;
     --selection-bg: #2383e240;
+    --text-on-selection: #e0e0e0;
     --mark-bg: #4a4000;
+    --text-on-mark: #e0e0e0;
     --scrim: #00000099;
     --chart-1: #e0e0e0;
     --chart-2: #9b9b9b;
@@ -448,10 +477,12 @@
     --text-primary: CanvasText !important;
     --text-secondary: CanvasText !important;
     --text-on-dark: CanvasText !important;
-    --text-on-sage: CanvasText !important;
+    --text-on-sage: SelectedItemText !important;
+    --text-on-action: ButtonText !important;
     --text-link: LinkText !important;
     --action-primary: ButtonFace !important;
-    --state-local: CanvasText !important;
+    --action-destructive: ButtonFace !important;
+    --state-local: SelectedItem !important;
     --state-info: CanvasText !important;
     --state-urgent: CanvasText !important;
     --state-pending: CanvasText !important;
@@ -470,7 +501,9 @@
     --focus-ring: Highlight !important;
     --focus-ring-inner: Canvas !important;
     --selection-bg: Highlight !important;
+    --text-on-selection: HighlightText !important;
     --mark-bg: Mark !important;
+    --text-on-mark: MarkText !important;
     --scrim: Canvas !important;
     --chart-1: CanvasText !important;
     --chart-2: CanvasText !important;

@@ -260,6 +260,92 @@ describe('dark on legacy values (AC7)', () => {
     assert.ok(report.failures.find(f => f.pair === 'error-text/rest/on-paper'));
     assert.deepEqual(report.reported, []);
   });
+
+  it('blocks a listed pair once an override makes it worse than its legacy ratio, and keeps reporting one that improves', () => {
+    const variant = { scheme: 'dark' };
+    const id = 'error-text/rest/on-paper';
+    const legacy = C.validate(DATA, { variant }).reported.find(r => r.pair === id);
+    assert.ok(legacy);
+
+    // A lighter paper drops danger text further below 4.5:1
+    const worse = C.validate(DATA, { variant, overrides: { '--surface-paper': '#3A3A3A' } });
+    const failure = worse.failures.find(f => f.pair === id);
+    assert.ok(failure, 'the worse override is blocked');
+    assert.equal(failure.rule, 'text-contrast');
+    assert.ok(failure.measured < legacy.measured);
+    assert.match(failure.message, new RegExp(`below its legacy ${legacy.measured.toFixed(2)}:1`));
+    assert.ok(!worse.reported.find(r => r.pair === id));
+
+    // A darker paper still misses 4.5:1 but beats legacy, so it stays reported
+    const better = C.validate(DATA, { variant, overrides: { '--surface-paper': '#101010' } });
+    assert.ok(!better.failures.find(f => f.pair === id));
+    const reported = better.reported.find(r => r.pair === id);
+    assert.ok(reported && reported.measured > legacy.measured && reported.measured < 4.5);
+  });
+});
+
+describe('forced colors', () => {
+  const forced = { forcedColors: 'active' };
+  const forcedPair = (data, id) => {
+    const { values } = C.resolveTokens(data, { ...data.variants.default, ...forced });
+    const pair = data.pairs.find(p => p.id === id);
+    return `${values[pair.fg]} on ${values[pair.bg]}`;
+  };
+
+  it('puts each text-bearing fill on its CSS Color 4 partner', () => {
+    assert.equal(forcedPair(DATA, 'nav-item/active/label'), 'SelectedItemText on SelectedItem');
+    assert.equal(forcedPair(DATA, 'nav-item/active/marker'), 'SelectedItemText on SelectedItem');
+    assert.equal(forcedPair(DATA, 'button-primary/rest/label'), 'ButtonText on ButtonFace');
+    assert.equal(forcedPair(DATA, 'button-destructive/rest/label'), 'ButtonText on ButtonFace');
+    assert.equal(forcedPair(DATA, 'mark/rest/text'), 'MarkText on Mark');
+    assert.equal(forcedPair(DATA, 'selection/rest/on-paper'), 'HighlightText on Highlight');
+    assert.equal(forcedPair(DATA, 'link/rest/on-paper'), 'LinkText on Canvas');
+    assert.equal(forcedPair(DATA, 'error-text/rest/on-paper'), 'CanvasText on Canvas');
+  });
+
+  it('rejects a pair that isn\'t a legible system pair, naming the token, pair, variant, state, and both colors', () => {
+    const data = fixture(d => {
+      d.tokens['--state-local'].values.forced = 'CanvasText';
+      d.tokens['--text-on-sage'].values.forced = 'CanvasText';
+      d.tokens['--surface-muted'].values.forced = 'ButtonFace';
+    });
+    const failures = C.validate(data, { variant: forced }).failures.filter(f => f.rule === 'forced-colors-pair');
+    assert.deepEqual(failures.map(f => [f.pair, f.measured]), [
+      ['plane-muted/rest/text-primary', 'CanvasText on ButtonFace'],
+      ['plane-muted/rest/text-secondary', 'CanvasText on ButtonFace'],
+      ['nav-item/active/label', 'CanvasText on CanvasText'],
+      ['nav-item/active/marker', 'CanvasText on CanvasText'],
+      ['button-quiet/hover/label', 'CanvasText on ButtonFace'],
+      ['chip-neutral/rest/label', 'CanvasText on ButtonFace'],
+      ['chip-neutral/rest/marker', 'CanvasText on ButtonFace'],
+      ['chip-danger/rest/label', 'CanvasText on ButtonFace'],
+      ['chip-danger/rest/marker', 'CanvasText on ButtonFace'],
+    ]);
+    const nav = failures.find(f => f.pair === 'nav-item/active/label');
+    assert.deepEqual([nav.token, nav.background, nav.variant, nav.state], ['--text-on-sage', '--state-local', 'light, forcedColors=active', 'active']);
+    assert.match(nav.message, /isn't a background in CSS Color 4's legible pairs/);
+    const quiet = failures.find(f => f.pair === 'button-quiet/hover/label');
+    assert.equal(quiet.required, 'ButtonText on ButtonFace');
+  });
+
+  it('needs the focus ring unregistered, so Highlight reaches outline-color as a keyword', () => {
+    assert.equal(DATA.tokens['--focus-ring'].registered, false);
+    const data = fixture(d => { d.tokens['--focus-ring'].registered = true; });
+    const failure = C.validate(data, { variant: forced }).failures.find(f => f.rule === 'forced-colors' && f.token === '--focus-ring');
+    assert.ok(failure, 'a registered focus ring is rejected');
+    assert.match(failure.message, /registered as <color>/);
+    assert.equal(C.validate(data).ok, true, 'registration only matters in forced colors');
+  });
+
+  it('draws Highlight focus against Canvas: a Canvas surface, or a Canvas inner ring on any other', () => {
+    assert.equal(forcedPair(DATA, 'focus-ring/focus/on-sage'), 'Highlight on SelectedItem');
+    assert.equal(C.validate(DATA, { variant: forced }).ok, true);
+    const data = fixture(d => { d.tokens['--focus-ring-inner'].values.forced = 'SelectedItem'; });
+    const failures = C.validate(data, { variant: forced }).failures.filter(f => f.rule === 'forced-colors-pair');
+    assert.deepEqual(failures.map(f => [f.pair, f.measured, f.required]), [
+      ['focus-ring/focus/on-sage', 'Highlight on SelectedItem, inner ring SelectedItem', 'Highlight on Canvas, or an inner ring in Canvas'],
+    ]);
+  });
 });
 
 describe('focus', () => {
@@ -327,8 +413,7 @@ describe('static checks', () => {
       d.tokens['--focus-ring'].values.forced = 'CanvasText';
       d.tokens['--control-boundary'].values.forced = 'Canvas';
     });
-    const failures = C.validate(data, { variant: { forcedColors: 'active' } }).failures;
-    assert.ok(failures.every(f => f.rule === 'forced-colors'));
+    const failures = C.validate(data, { variant: { forcedColors: 'active' } }).failures.filter(f => f.rule === 'forced-colors');
     assert.deepEqual(failures.map(f => [f.token, f.measured]), [
       ['--surface-paper', '#ffffff'],
       ['--focus-ring', 'CanvasText'],
@@ -341,9 +426,10 @@ describe('static checks', () => {
     const disabled = report.advisories.filter(a => a.rule === 'disabled-contrast');
     assert.deepEqual(disabled.map(a => a.pair).sort(), DATA.pairs.filter(p => p.state === 'disabled').map(p => p.id).sort());
     const opacity = Number(DATA.tokens['--disabled-opacity'].values.light);
-    const paper = C.parseColor('#ffffff');
-    const fade = color => C.compositeOver({ ...color, a: opacity }, paper);
-    const expected = C.contrastRatio(fade(C.parseColor('#f7f9f8')), fade(C.parseColor('#253443')));
+    const pair = DATA.pairs.find(p => p.id === 'button-primary/disabled/label');
+    const light = token => C.parseColor(DATA.tokens[token].values.light);
+    const fade = color => C.compositeOver({ ...color, a: opacity }, light(pair.over));
+    const expected = C.contrastRatio(fade(light(pair.fg)), fade(light(pair.bg)));
     const primary = disabled.find(a => a.pair === 'button-primary/disabled/label');
     assert.equal(primary.measured, Math.floor(expected * 100) / 100);
     assert.ok(primary.measured < 4.5, 'disabled labels fade below active contrast');
