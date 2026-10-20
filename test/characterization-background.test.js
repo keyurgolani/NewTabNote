@@ -9,26 +9,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadBackground, readTodaysDailyNote } = require('./helpers/load-background');
-const { waitFor } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 /**
- * Today's Daily Note once it holds `count` blocks
+ * The fields a capture sets, per block in today's Daily Note. Nothing there throws a plain
+ * Error rather than failing an assertion, so an expected failure can't hide it.
  */
-function dailyNoteWith(worker, count) {
-  return waitFor(async () => {
-    const day = await readTodaysDailyNote(worker);
-    return day && day.blocks.length >= count ? day : null;
-  }, { message: `today's Daily Note with ${count} block(s)` });
-}
-
-/**
- * The fields a capture sets, per block
- */
-function captured(blocks) {
-  return blocks.map(block => (block.type === 'bookmark'
+async function capturedToday(worker) {
+  const day = await readTodaysDailyNote(worker);
+  if (!day) throw new Error("Nothing landed in today's Daily Note");
+  return day.blocks.map(block => (block.type === 'bookmark'
     ? { type: block.type, url: block.url, title: block.title }
     : { type: block.type, content: block.content }));
+}
+
+async function selectionMenuSavesText(worker) {
+  await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-selection', selectionText: 'Quoted words' }, worker.tab);
+  assert.deepEqual(await capturedToday(worker), [{ type: 'text', content: `Quoted words (Source: ${worker.tab.url})` }]);
+}
+
+async function pageMenuSavesBookmark(worker) {
+  await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: worker.tab.url }, worker.tab);
+  assert.deepEqual(await capturedToday(worker), [{ type: 'bookmark', url: worker.tab.url, title: worker.tab.title }]);
+}
+
+async function pageCommandSavesBookmark(worker) {
+  await worker.dispatch('commands.onCommand', 'capture-page');
+  assert.deepEqual(await capturedToday(worker), [{ type: 'bookmark', url: worker.tab.url, title: worker.tab.title }]);
 }
 
 test('the worker listens to messages, install, startup, the toolbar action, its context menus, and commands', async () => {
@@ -54,29 +61,43 @@ test('installing creates the page and selection context menus', async () => {
 });
 
 test("the selection menu saves the selected text and its page to today's Daily Note as a text block", async () => {
-  const worker = await loadBackground();
-  await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-selection', selectionText: 'Quoted words' }, worker.tab);
-  const day = await dailyNoteWith(worker, 1);
-  assert.deepEqual(captured(day.blocks), [{ type: 'text', content: `Quoted words (Source: ${worker.tab.url})` }]);
+  await selectionMenuSavesText(await loadBackground());
 });
 
 test("the capture-page menu saves the page to today's Daily Note as a bookmark block", async () => {
-  const worker = await loadBackground();
-  await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: worker.tab.url }, worker.tab);
-  const day = await dailyNoteWith(worker, 1);
-  assert.deepEqual(captured(day.blocks), [{ type: 'bookmark', url: worker.tab.url, title: worker.tab.title }]);
+  await pageMenuSavesBookmark(await loadBackground());
 });
 
 test("the capture-page command saves the active tab to today's Daily Note as a bookmark block", async () => {
-  const worker = await loadBackground();
-  await worker.dispatch('commands.onCommand', 'capture-page');
-  const day = await dailyNoteWith(worker, 1);
-  assert.deepEqual(captured(day.blocks), [{ type: 'bookmark', url: worker.tab.url, title: worker.tab.title }]);
+  await pageCommandSavesBookmark(await loadBackground());
 });
 
 expectFailure("KD-002 the capture-selection command saves the selected text and its source to today's Daily Note", async () => {
   const worker = await loadBackground();
   await worker.dispatch('commands.onCommand', 'capture-selection');
-  const day = await dailyNoteWith(worker, 1);
-  assert.deepEqual(captured(day.blocks), [{ type: 'text', content: `${worker.selection.text} (Source: ${worker.selection.url})` }]);
+  assert.deepEqual(await capturedToday(worker), [{ type: 'text', content: `${worker.selection.text} (Source: ${worker.selection.url})` }]);
 });
+
+// Self-tests: the capture checks fail on a worker that writes more than one capture's worth
+const CAPTURE_CHECKS = [selectionMenuSavesText, pageMenuSavesBookmark, pageCommandSavesBookmark];
+
+function saveEachBlockTwice(worker) {
+  const save = worker.Storage.saveElement.bind(worker.Storage);
+  worker.Storage.saveElement = async element => {
+    await save(element);
+    return save({ ...element, id: `${element.id}-again` });
+  };
+}
+
+function captureTwice(worker) {
+  const capture = worker.captureToDailyNote;
+  worker.captureToDailyNote = item => capture(item).then(() => capture(item));
+}
+
+for (const [mutant, mutate] of [['saves each block twice', saveEachBlockTwice], ['captures each time twice', captureTwice]]) {
+  test(`the capture checks fail on a worker that ${mutant}`, async () => {
+    for (const check of CAPTURE_CHECKS) {
+      await assert.rejects(check(await loadBackground({ mutate })), assert.AssertionError, `${check.name} passed`);
+    }
+  });
+}

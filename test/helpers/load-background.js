@@ -21,6 +21,8 @@ const { createLegacyEnv, dumpDatabase, recordsOf, plain } = require('./legacy-en
 const ROOT = path.join(__dirname, '..', '..');
 // #27 adds it; then every row has to take its release-build value here
 const DEFINE_ALLOWLIST = path.join(ROOT, 'build', 'define-allowlist.json');
+// Rounds of queued work a capture may take before the worker counts as stuck
+const DRAIN_LIMIT = 10_000;
 
 // The tab chrome.tabs.query reports as active, and the selection chrome.scripting reads from it
 const TAB = Object.freeze({ id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' });
@@ -45,7 +47,28 @@ function eventFakes(api, prefix = '') {
 }
 
 /**
+ * Let the worker finish everything it has queued. fake-indexeddb and the chrome.* fakes
+ * run their callbacks through setImmediate, and the worker's timers are legacy-env's fake
+ * clock, so once no setImmediate callback is pending nothing else will run. Unlike a fixed
+ * number of settle() rounds, this also waits out a capture that takes longer, or a second
+ * one a listener started.
+ */
+async function drain() {
+  if (typeof process.getActiveResourcesInfo !== 'function') {
+    throw new Error('process.getActiveResourcesInfo() is missing; load-background.js needs it to know when the worker is idle');
+  }
+  for (let round = 0; round < DRAIN_LIMIT; round++) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (!process.getActiveResourcesInfo().includes('Immediate')) return;
+  }
+  throw new Error(`The worker still had work queued after ${DRAIN_LIMIT} rounds`);
+}
+
+/**
  * Start js/background.js on an empty profile and wait for its startup Storage.init().
+ * `mutate`, for the self-tests that check these assertions catch a broken worker, gets the
+ * worker's global once it has started, to break something in it.
+ * @param {{mutate?: (worker: any) => void}} [options]
  * @returns {Promise<{
  *   tab: {id: number, windowId: number, url: string, title: string},
  *   selection: {text: string, title: string, url: string},
@@ -55,7 +78,7 @@ function eventFakes(api, prefix = '') {
  *   indexedDB: any,
  * }>}
  */
-async function loadBackground() {
+async function loadBackground({ mutate } = {}) {
   if (fs.existsSync(DEFINE_ALLOWLIST)) {
     throw new Error(`${path.relative(ROOT, DEFINE_ALLOWLIST)} exists: set each of its rows to its release-build value in test/helpers/load-background.js before loading the worker`);
   }
@@ -74,6 +97,7 @@ async function loadBackground() {
   env.load('js/background.js');
   // background.js keeps its startup Storage.init() as storageReady; captures await it too
   await env.get('storageReady');
+  if (mutate) mutate(env.global);
 
   const events = eventFakes(env.chrome.api);
   return {
@@ -87,7 +111,8 @@ async function loadBackground() {
     contextMenus: () => menus.map(menu => ({ ...menu })),
     /**
      * Fire a chrome.* event at the worker's listeners, as Chrome would, and wait for what
-     * they return. A listener that starts a capture without awaiting it returns first.
+     * they return. A listener that starts a capture without awaiting it returns first;
+     * readTodaysDailyNote waits for the capture.
      */
     async dispatch(name, ...args) {
       const event = events.get(name);
@@ -99,10 +124,12 @@ async function loadBackground() {
 }
 
 /**
- * Today's Daily Note in IndexedDB, as { note, blocks } with its blocks in order, or null
- * while there is none. Today is the UTC date, as Storage.ensureDailyNote() keys it.
+ * Today's Daily Note in IndexedDB once the worker is idle, as { note, blocks } with its
+ * blocks in order, or null when there is none. Today is the UTC date, as
+ * Storage.ensureDailyNote() keys it.
  */
 async function readTodaysDailyNote(worker) {
+  await drain();
   const dump = await dumpDatabase(worker.indexedDB);
   const today = new Date().toISOString().slice(0, 10);
   const notes = Object.values(recordsOf(dump, 'canvases')).filter(note => note.isDaily && note.dateStr === today && !note.trashed);
