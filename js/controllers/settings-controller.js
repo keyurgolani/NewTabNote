@@ -21,7 +21,8 @@ class SettingsController {
     this.onOpenThemeBuilder = null;
     this.onCloseAllModals = null;
     this.onRefreshNotesList = null;
-    this.onOpenNoteInNewTab = null;
+    /** @type {((noteId: string) => Promise<void>)|null} After Merge: open a note it imported, unless a pane can't take it */
+    this.onOpenImportedNote = null;
     this.getEditor = null;
     /** @type {(() => Promise<void>)|null} Hold and flush every open editor before an import commits */
     this.onFlushEditors = null;
@@ -812,10 +813,12 @@ class SettingsController {
     if (!result) return;
 
     Utils.showToast(this._importSummary(result), 'success', 6000);
-    // The first note opens in a tab, so the tab bar and the editor agree
+    // Merge opens the first note it imported, in a tab. Replace all already left the panes on
+    // active notes, with the active pane's note on the active tab (onReloadEditors).
     const opened = await this._afterImport(async () => {
-      const notes = await this.storage.getAllNotes();
-      if (notes.length > 0 && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(notes[0].id);
+      if (result.mode !== 'merge' || !this.onOpenImportedNote) return;
+      const noteId = await this._firstActiveNote(result.importedIds);
+      if (noteId) await this.onOpenImportedNote(noteId);
     });
     const listed = await this._afterImport(async () => {
       if (this.onRefreshNotesList) await this.onRefreshNotesList();
@@ -823,6 +826,19 @@ class SettingsController {
     if (!resumed || !opened || !listed) {
       Utils.showToast("Your notes were imported, but this page didn't finish updating. Reload it to see them.", 'error', 6000);
     }
+  }
+
+  /**
+   * The first of `ids` that is an active note: not archived, not a template, not in trash.
+   * @param {Array<string>} ids
+   * @returns {Promise<string|null>}
+   */
+  async _firstActiveNote(ids) {
+    for (const id of ids) {
+      const note = await this.storage.getNote(id);
+      if (note && !note.archived && !note.isTemplate && !note.trashed) return id;
+    }
+    return null;
   }
 
   /**

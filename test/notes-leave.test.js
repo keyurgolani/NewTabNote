@@ -9,7 +9,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, runUntil, bootNewTab, shownTabs,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, runUntil, bootNewTab,
+  shownTabs,
 } = require('./helpers/legacy-env');
 
 const NAMES = { A: 'Alpha', B: 'Beta', C: 'Gamma', D: 'Delta' };
@@ -30,9 +31,12 @@ async function createProfile(factory, active = ['A', 'B', 'C', 'D']) {
   });
 }
 
-/** A new tab with `open` in tabs (the last one shown), and the split view when `split`. */
-async function openPage(env, { open = ['A'], split = false } = {}) {
-  const page = await bootNewTab(env);
+/**
+ * A new tab with `open` in tabs (the last one shown), and the split view when
+ * `split`. With `ready: false` it is still starting up (see bootNewTab).
+ */
+async function openPage(env, { open = ['A'], split = false, ready = true } = {}) {
+  const page = await bootNewTab(env, { ready });
   for (const noteId of open) await page.tabs.openNoteInNewTab(noteId);
   if (split) await page.tabs.toggleSplitView();
   page.toasts = [];
@@ -138,7 +142,87 @@ describe('a note leaving the active set, in this new tab', () => {
     assert.equal(page.tabs.splitViewEnabled, false);
     assert.equal(page.tabs.activeEditorSide, 'left');
     assert.equal(page.tabs.editor.noteId, 'A');
+    assert.equal(page.tabs.secondaryEditor.noteId, null, 'the hidden pane keeps no note');
     assert.equal(env.chrome.local.setting_splitViewEnabled, false);
+  });
+
+  it("when split view closes onto the right pane's note, the hidden pane keeps no copy to save over it", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB, ['A', 'B']);
+    env.global.navigator.platform = 'MacIntel';
+    const page = await openPage(env, { split: true });
+    const { editor: left, secondaryEditor: right } = page.tabs;
+    // An edit in the right pane, with its undo entry, already saved
+    const before = right.snapshotBlock(right.blocks[0]);
+    right.blocks[0].content = 'Beta edited on the right';
+    right.pushUndo({ type: 'content', blockId: 'b1', before, after: right.snapshotBlock(right.blocks[0]) });
+    right.scheduleSave();
+    await runUntil(env, right.flushSave());
+    const notes = page.wire(controllers.notes(env, page.Storage));
+
+    await runUntil(env, notes.trashNoteById('A'));
+    assert.equal(page.tabs.splitViewEnabled, false);
+    assert.equal(left.noteId, 'B');
+    assert.equal(right.noteId, null, 'the hidden pane shows no note');
+    assert.equal(right.blocks.length, 0);
+    assert.equal(right.undoStack.length, 0);
+
+    // Typing on the left, then Cmd+Z: the document runs both panes' listeners
+    type(left, 'typed on the left');
+    const undo = { type: 'keydown', key: 'z', metaKey: true, target: left.container, preventDefault() {} };
+    for (const editor of [left, right]) editor.onGlobalKeyDown(undo);
+    env.clock.tick(500);
+    await runUntil(env, Promise.all([left.flushSave(), right.flushSave()]));
+    assert.equal((await stored(env)).elements.find((el) => el.id === 'b1').content, 'typed on the left');
+  });
+
+  it("an edit in the right pane's debounce goes with its note when split view closes onto it", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB, ['A', 'B']);
+    const page = await openPage(env, { split: true });
+    const { editor: left, secondaryEditor: right } = page.tabs;
+    type(right, 'typed on the right');
+    const notes = page.wire(controllers.notes(env, page.Storage));
+
+    await runUntil(env, notes.trashNoteById('A'));
+    assert.equal(left.noteId, 'B');
+    assert.equal(left.blocks[0].content, 'typed on the right', 'the left pane read the note with the edit');
+
+    type(left, `${left.blocks[0].content}, then on the left`);
+    env.clock.tick(500);
+    await runUntil(env, Promise.all([left.flushSave(), right.flushSave()]));
+    assert.equal((await stored(env)).elements.find((el) => el.id === 'b1').content, 'typed on the right, then on the left');
+  });
+
+  it('keys and pastes on the shared document reach one pane: the one they came from, else the active one', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    env.global.navigator.platform = 'MacIntel';
+    const page = await openPage(env, { split: true });
+    const { editor: left, secondaryEditor: right } = page.tabs;
+    const handled = [];
+    for (const [name, editor] of [['left', left], ['right', right]]) {
+      editor.undo = () => handled.push(`${name} undo`);
+      editor.handleFiles = () => handled.push(`${name} paste`);
+    }
+    const press = (target) => {
+      const event = { type: 'keydown', key: 'z', metaKey: true, target, preventDefault() {} };
+      for (const editor of [left, right]) editor.onGlobalKeyDown(event);
+    };
+    const paste = (target) => {
+      const image = { type: 'image/png', getAsFile: () => ({ name: 'shot.png' }) };
+      const event = { type: 'paste', target, clipboardData: { items: [image], getData: () => '' }, preventDefault() {} };
+      for (const editor of [left, right]) editor.onPaste(event);
+    };
+
+    press(right.container);
+    paste(right.container);
+    press(env.document.body); // outside both panes: the active pane, the left one
+    page.tabs.setActiveEditorSide('right');
+    paste(env.document.body);
+    await page.tabs.toggleSplitView(); // split view off: the left pane is active, the right one hidden
+    press(env.document.body);
+    assert.deepEqual(handled, ['right undo', 'right paste', 'left undo', 'right paste', 'left undo']);
   });
 
   it('archiving the open note: the left pane takes a note the right pane does not show, and the right pane stays', async () => {
@@ -258,6 +342,50 @@ describe('a note leaving the active set, in this new tab', () => {
     assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['C']);
   });
 
+  it("turning split view off and on keeps the right pane's unsaved text from a deleted note", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { split: true });
+    const right = page.tabs.secondaryEditor;
+    type(right, 'typed into B');
+    await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+    await runUntil(env, right.flushSave());
+    assert.equal(right.noteGone, true);
+
+    await runUntil(env, page.tabs.toggleSplitView());
+    await runUntil(env, page.tabs.toggleSplitView());
+
+    assert.equal(page.tabs.splitViewEnabled, true);
+    assert.equal(right.noteId, 'B');
+    assert.equal(right.blocks[0].content, 'typed into B');
+    assert.ok(right.root.querySelector('.note-gone-notice'), 'the notice stays');
+  });
+
+  for (const [label, pick] of [
+    ['a click on another tab', (tabs) => tabs.switchToTab(0)],
+    ['a note opened in a new tab', (tabs) => tabs.openNoteInNewTab('C')],
+    ['a note opened in this tab', (tabs) => tabs.openNoteWithModifier('C', null)],
+  ]) {
+    it(`${label} that the editor refuses leaves the tab bar and the saved tabs on the note on screen`, async () => {
+      const env = createLegacyEnv();
+      await createProfile(env.indexedDB);
+      const page = await openPage(env, { open: ['A', 'B'] });
+      const editor = page.tabs.editor;
+      type(editor, 'typed into B');
+      await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+
+      await runUntil(env, pick(page.tabs));
+
+      assert.equal(editor.noteId, 'B', 'the text stays on screen');
+      assert.equal(editor.noteGone, true);
+      assert.deepEqual(tabIds(page.tabs), ['A', 'B']);
+      assert.equal(page.tabs.activeTabIndex, 1);
+      assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A', 'B']);
+      assert.equal(env.chrome.local.setting_activeTabIndex, 1);
+      assert.equal(env.chrome.local.lastOpenedNoteId, 'B');
+    });
+  }
+
   it('typing in the right pane after its note was trashed, then emptying trash, loses nothing', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
@@ -289,6 +417,56 @@ describe('a note leaving the active set in another new tab', () => {
     const second = createLegacyEnv({ indexedDB: first.indexedDB, chrome: first.chrome, channels: first.channels });
     return { first, second };
   }
+
+  it('a tab that shows none of the notes leaves the saved workspace alone', async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['C'] });
+    const one = await openPage(first, { open: ['A', 'B'] }); // the tab in use, saved last
+    const refreshes = two.page.refreshes;
+    const notes = one.wire(controllers.notes(first, one.Storage));
+
+    await runUntil(first, notes.trashNoteById('D'));
+    await runUntil(second, waitFor(() => two.page.refreshes > refreshes, { message: 'the other tab to hear of it' }));
+
+    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A', 'B']);
+    assert.equal(first.chrome.local.setting_activeTabIndex, 1);
+    assert.equal(first.chrome.local.lastOpenedNoteId, 'B');
+    assert.deepEqual(tabIds(two.tabs), ['C']);
+  });
+
+  it('a tab still starting up holds the messages until it has restored the saved workspace', async () => {
+    const { first, second } = await twoPages();
+    const one = await openPage(first, { open: ['A', 'B'] });
+    const two = await bootNewTab(second, { ready: false });
+    const notes = one.wire(controllers.notes(first, one.Storage));
+
+    await runUntil(first, notes.trashNoteById('B'));
+    await runUntil(second, settle(40)); // the message reaches the second tab
+    assert.equal(first.channels.sent.length, 1);
+    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A'], "the saved workspace is the first tab's");
+
+    await runUntil(second, two.tabs.loadSavedTabs());
+    assert.deepEqual(tabIds(two.tabs), ['A']);
+    assert.equal(two.tabs.editor.noteId, 'A');
+    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A']);
+  });
+
+  it('trash retention deleting a note tells the other tabs, which move off it', async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['A', 'TR'] }); // opened from the Trash view
+    assert.equal(two.tabs.editor.noteId, 'TR');
+    const one = await openPage(first, { open: ['C'] });
+    const sidebar = one.wire(controllers.sidebar(first, one.Storage));
+    sidebar.logger = { info() {} };
+    sidebar.refreshNotesList = async () => {};
+
+    await runUntil(first, sidebar.runTrashCleanup());
+    await runUntil(second, waitFor(() => two.tabs.editor.noteId !== 'TR', { message: 'the other tab to move' }));
+
+    assert.equal((await stored(first)).notes.TR, undefined, 'TR is deleted');
+    assert.deepEqual(tabIds(two.tabs), ['A']);
+    assert.equal(two.tabs.editor.noteId, 'A');
+  });
 
   it('this tab drops its tab, moves its pane off it, and refreshes the list', async () => {
     const { first, second } = await twoPages();

@@ -858,8 +858,9 @@ function block(id, canvasId, order, content = `Block ${id}`, fields = {}) {
 
 /**
  * A BlockEditor without its DOM constructor: real persistence and Storage,
- * render methods stubbed. Its root holds the writing column (`.editor`) with
- * the title and the blocks container, where the editor puts its own notices.
+ * render methods stubbed. Its root is a pane (`.editor-pane`) holding the
+ * writing column (`.editor`) with the title and the blocks container, where
+ * the editor puts its own notices.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {FakeDocument} [doc] - Its own document, as the PiP window has
  */
@@ -867,6 +868,7 @@ function makeEditor(env, doc = env.document) {
   const BlockEditor = env.get('BlockEditor');
   const editor = Object.create(BlockEditor.prototype);
   const root = doc.createElement('div');
+  root.className = 'editor-pane';
   const column = root.appendChild(doc.createElement('div'));
   column.className = 'editor';
   const titleEl = column.appendChild(doc.createElement('div'));
@@ -939,11 +941,12 @@ const NEW_TAB_FILES = [
  * bar and split view touch, and a TabController with both panes, wired the way
  * App wires it. `page.notes` stands in for App's list of active notes, which
  * onRefreshNotesList refreshes. `wire(controller)` gives a controller that takes
- * notes out of the active set App's hooks for it.
+ * notes out of the active set App's hooks for it. With `ready: false` the tab
+ * is still starting up: messages from other tabs wait for `tabs.workspaceReady()`.
  * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {{files?: Array<string>}} [options]
+ * @param {{files?: Array<string>, ready?: boolean}} [options]
  */
-async function bootNewTab(env, { files = NEW_TAB_FILES } = {}) {
+async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
@@ -967,12 +970,14 @@ async function bootNewTab(env, { files = NEW_TAB_FILES } = {}) {
   // As App sets window.app, where an editor finds the tab controller
   env.global.app = { tabController: tabs };
   await tabs.init();
+  if (ready) tabs.workspaceReady();
   const wire = (controller) => Object.assign(controller, {
     onNotesLeaving: (ids) => tabs.forgetNotes(ids),
     onNotesLeft: (ids) => tabs.announceNotesLeft(ids),
     onRefreshNotesList: tabs.onRefreshNotesList,
     onUpdateEmptyState: () => {},
     onOpenNoteInNewTab: (noteId) => tabs.openNoteInNewTab(noteId),
+    onOpenImportedNote: (noteId) => tabs.openImportedNote(noteId),
     getEditor: () => tabs.getEditor(),
   });
   return { Storage, tabs, page, wire };

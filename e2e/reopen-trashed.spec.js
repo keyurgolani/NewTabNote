@@ -29,13 +29,15 @@ function backup() {
 
 /**
  * A new tab on an onboarded profile, once it has opened its first note: caching the
- * last-opened note is the last thing it writes.
+ * last-opened note is the last thing it writes, and the editor moves the focus to the
+ * first block a moment after it loads the note.
  */
 async function openFirstNewTab(extension) {
   const page = await extension.openSurface('newtab');
   await expect(page.locator('#page-title')).toHaveText('Untitled');
   await expect.poll(() => page.evaluate(async () => (await chrome.storage.local.get('lastOpenedNoteId')).lastOpenedNoteId || null))
     .not.toBeNull();
+  await expect(page.locator('#editor-container .block-content').first()).toBeFocused();
   return page;
 }
 

@@ -232,7 +232,9 @@ class BlockEditor {
    * Reloading the open note reads it again after any edit typed during the reads
    * is written, so the reads never replace a newer edit.
    * @param {string} noteId - Note ID to load
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} Whether the editor shows that note now; false when the
+   *   load was superseded, refused to keep a deleted note's unsaved text on screen, or
+   *   found no such note
    */
   async loadNote(noteId) {
     const loadSeq = ++this._loadSeq;
@@ -241,19 +243,19 @@ class BlockEditor {
 
     // An import holds saves until it commits; the old note's edits go in after it.
     if (this._holdReleased) await this._holdReleased;
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return false;
     // "Save as a new note" finishes first, so the text it saves goes with it.
     if (this._savingAsNew) await this._savingAsNew;
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return false;
 
     const knewGone = this.noteGone;
     await this.flushSave();
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return false;
     // The note it shows turned out deleted with edits it couldn't save: it stays, with
     // the text and the notice, so they aren't lost unseen.
     if (this.noteGone && !knewGone && noteId !== this.noteId) {
       this._resumeNoteTimers();
-      return;
+      return false;
     }
 
     let noteData = null;
@@ -262,7 +264,7 @@ class BlockEditor {
     for (let round = 0; ; round++) {
       noteData = await Storage.getNote(noteId);
       blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
-      if (loadSeq !== this._loadSeq) return;
+      if (loadSeq !== this._loadSeq) return false;
       // Switching notes, or nothing written since the reads started: they are current.
       if (noteId !== this.noteId || !this._hasPendingSave()) break;
       // Edits keep arriving during the reads: the editor's copy is the newest one.
@@ -272,14 +274,14 @@ class BlockEditor {
       }
       this._writePendingNow();
       await this._waitForWrites();
-      if (loadSeq !== this._loadSeq) return;
+      if (loadSeq !== this._loadSeq) return false;
     }
 
     if (!noteData) {
       // Keep the note that is loaded rather than pointing the editor at nothing.
       console.error('Note not found:', noteId);
       this._resumeNoteTimers();
-      return;
+      return this.noteId === noteId;
     }
 
     // Edits typed into the old note while the reads ran still belong to it.
@@ -287,7 +289,7 @@ class BlockEditor {
 
     if (keepEditorCopy) {
       this._resumeNoteTimers();
-      return;
+      return true;
     }
 
     this._clearNoteGone();
@@ -361,10 +363,43 @@ class BlockEditor {
 
     // Render insights section if available (async - checks for extraction state)
     await this.renderInsights();
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return this.noteId === noteId;
 
     // Start polling if extraction is in progress
     await this.startInsightsPollingIfNeeded();
+    return this.noteId === noteId;
+  }
+
+  /**
+   * Show no note, as a hidden pane does once split view closes: what's
+   * pending is written first, then the note, its blocks, undo history, and
+   * selection go, so the pane keeps no stale copy of a note another pane
+   * shows. A pane keeping a deleted note's unsaved text on screen keeps it.
+   * @returns {Promise<boolean>} Whether the editor now shows no note
+   */
+  async unload() {
+    const loadSeq = ++this._loadSeq;
+    this._stopInsightsPolling();
+    this._stopSnapshotInterval();
+    if (this._holdReleased) await this._holdReleased;
+    if (this._savingAsNew) await this._savingAsNew;
+    await this.flushSave();
+    if (loadSeq !== this._loadSeq) return false;
+    if (this.noteGone) {
+      this._resumeNoteTimers();
+      return false;
+    }
+    this.noteId = null;
+    this.noteData = null;
+    this.blocks = [];
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._contentUndoPending = {};
+    this.clearBlockSelection();
+    this._snapshotDirty = false;
+    this.titleEl.textContent = '';
+    this.renderBlocks();
+    return true;
   }
 
   /**
@@ -2547,6 +2582,16 @@ class BlockEditor {
   }
 
   /**
+   * Whether a keydown or paste on the document is this editor's to handle
+   * (see _takesTypedKey).
+   * @param {Event} e
+   * @returns {boolean}
+   */
+  _ownsDocumentEvent(e) {
+    return this._takesTypedKey(/** @type {any} */ (e && e.target));
+  }
+
+  /**
    * Handle global keydown. Both panes' editors listen on one document, and only
    * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
    * deleting a block selection happen in one pane. A text field outside the
@@ -3025,6 +3070,8 @@ class BlockEditor {
    * @param {ClipboardEvent} e
    */
   onPaste(e) {
+    if (!this._ownsDocumentEvent(e)) return;
+
     // Only handle if not in an input/textarea (unless it's our blocks)
     const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
     const isBlock = e.target.closest('.block-content');

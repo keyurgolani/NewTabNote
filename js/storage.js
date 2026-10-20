@@ -70,6 +70,7 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
  * @property {number} skippedMedia
  * @property {Array<string>} trashedIds - Local notes Replace all moved to trash
  * @property {number} trashedAt
+ * @property {Array<string>} importedIds - The new IDs of the notes it added, in backup order
  */
 
 class DatabaseManager {
@@ -1300,6 +1301,8 @@ class DatabaseManager {
 
   /**
    * Clean up old trashed notes (auto-delete after retention period)
+   * @param {number} [retentionDays=30]
+   * @returns {Promise<Array<string>>} The IDs of the notes it deleted
    */
   async cleanupTrash(retentionDays = 30) {
     const trashedNotes = await this.getTrashedNotes();
@@ -1313,7 +1316,7 @@ class DatabaseManager {
       await this.permanentlyDeleteNote(note.id);
     }
 
-    return expiredNotes.length;
+    return expiredNotes.map((note) => note.id);
   }
 
   /**
@@ -2299,6 +2302,7 @@ class DatabaseManager {
         skippedMedia: plan.skippedMedia,
         trashedIds: [],
         trashedAt: now,
+        importedIds: plan.notes.map((n) => plan.noteIds.get(n.id)),
       };
       /** @type {*} */
       let failure = null;

@@ -294,6 +294,8 @@ class App {
         }
         await this.tabController.loadSavedTabs();
       }
+      // The other new tabs' "notes left" messages wait until this tab has its first note
+      this.tabController.workspaceReady();
 
       this.updateEmptyState();
       this.updateBadgeCounts();
@@ -709,7 +711,7 @@ class App {
     };
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
     this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
-    this.settingsController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
     this.settingsController.onNotesLeaving = (ids) => this.notesLeaving(ids);
     this.settingsController.onNotesLeft = (ids) => this.notesLeft(ids);
     this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
@@ -2310,9 +2312,11 @@ class App {
     if (appStorage().missingStores.length > 0) return;
     const retentionDays = await Storage.getSetting('trashRetention', 30);
     if (retentionDays > 0) {
-      const deletedCount = await Storage.cleanupTrash(retentionDays);
-      if (deletedCount > 0) {
-        this.logger.info('App', `Auto-deleted ${deletedCount} expired note(s) from trash`);
+      const ids = await Storage.cleanupTrash(retentionDays);
+      if (ids.length > 0) {
+        this.logger.info('App', `Auto-deleted ${ids.length} expired note(s) from trash`);
+        if (this.notesLeaving) await this.notesLeaving(ids);
+        if (this.notesLeft) this.notesLeft(ids);
         await this.refreshNotesList();
       }
     }
