@@ -255,4 +255,22 @@ describe('typecheck ratchet', () => {
     assert.equal(run(['--fix'], TODAY).code, 2);
     assert.equal(run(['--init', '--update'], TODAY).code, 2);
   });
+
+  it('drops diagnostics in js/kernel/, which typecheck:kernel owns, in every mode', () => {
+    const kernel = [
+      "js/kernel/composition/background.js(4,1): error TS2304: Cannot find name 'chrome'.",
+      "js/kernel/core/notes.js(9,3): error TS7006: Parameter 'id' implicitly has an 'any' type.",
+    ].join('\n');
+    const { code, output } = run(['--init'], `${TODAY}\n${kernel}`);
+    assert.equal(code, 0, output);
+    assert.deepEqual(Object.keys(readBaseline()), ['js/a.js', 'js/b.js', 'js/c.js']);
+
+    assert.equal(run([], `${kernel}\n${TODAY}\n${kernel}`).code, 0);
+    // A run whose only diagnostics are the kernel's is still a trusted run, with none to count
+    const fixed = run(['--update'], kernel);
+    assert.equal(fixed.code, 0, fixed.output);
+    assert.deepEqual(readBaseline(), {});
+    // A file that only starts with the same letters is still counted
+    assert.equal(run([], "js/kernelish.js(1,1): error TS2304: Cannot find name 'x'.").code, 1);
+  });
 });

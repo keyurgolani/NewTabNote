@@ -1,0 +1,10 @@
+# Prettier formats only js/kernel/ and test/kernel/ (docs/adr/0001-kernel-stack.md,
+# decision 3), so an editor that formats on save leaves the legacy files alone. #29 (PR CI)
+# widens this to every first-party file in one mechanical commit.
+/*
+!/js/
+/js/*
+!/js/kernel/
+!/test/
+/test/*
+!/test/kernel/
