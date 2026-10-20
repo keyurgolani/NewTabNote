@@ -5,8 +5,9 @@
 // open once it has. Escape (App.closeAllModals) closes the editors' menus in both panes
 // along with a block's menu, Turn into, and a table's menu; a click outside closes the
 // link and template menus as it does the slash menu; Keyboard Shortcuts takes focus when
-// it opens and gives it back when it closes; and a note that loads under an open overlay,
-// as the welcome note does under onboarding's walkthrough, leaves focus in the overlay.
+// it opens and gives it back when it closes, unless something moved it out; and a note
+// that loads closes the menus left on the note before and focuses its first block, unless
+// focus is in an open overlay, as on onboarding's walkthrough over the welcome note.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -156,9 +157,27 @@ describe('Keyboard Shortcuts takes focus when it opens and gives it back when it
     assert.equal(modal.classList.contains('hidden'), true);
     assert.equal(which(doc.activeElement), which(opener));
   });
+
+  it('leaves focus where a shortcut moved it, as Mod+K does to the search box', () => {
+    const { env, doc, controller } = shortcuts();
+    const search = add(doc.getElementById('sidebar'), 'input', { id: 'sidebar-search' });
+    controller.toggleShortcutsModal(true);
+    search.focus();
+    env.get('App').prototype.closeAllModals.call({ settingsController: controller, editor: null, secondaryEditor: null, getEditor: () => null });
+    assert.equal(which(doc.activeElement), which(search));
+  });
+
+  it('opened with nothing focused, takes focus off its hidden close button when it closes', () => {
+    const { doc, modal, close, controller } = shortcuts();
+    doc.body.focus();
+    controller.toggleShortcutsModal(true);
+    assert.equal(which(doc.activeElement), which(close));
+    controller.toggleShortcutsModal(false);
+    assert.equal(modal.contains(doc.activeElement), false, `focus is on ${which(doc.activeElement)}`);
+  });
 });
 
-describe('a note that loads under an open overlay leaves focus in it', () => {
+describe('a note that loads focuses its first block, unless focus is in an open overlay', () => {
   /**
    * A BlockEditor without its DOM constructor, as test/editor-save.test.js builds one, on
    * note N, stored, whose first block is in its pane; rendering is stubbed
@@ -200,6 +219,26 @@ describe('a note that loads under an open overlay leaves focus in it', () => {
 
   it('with nothing open, focuses the first block as before', async () => {
     const { env, doc, editor, firstBlock } = await loading();
+    await editor.loadNote('N');
+    env.clock.tick(50);
+    assert.equal(which(doc.activeElement), which(firstBlock));
+  });
+
+  it("closes the menus left open on the note it leaves, and focuses the new note's first block", async () => {
+    const { env, doc, editor, firstBlock } = await loading();
+    const slash = add(editor.root, 'div', { id: 'slash-menu', class: 'slash-menu' });
+    const link = add(editor.root, 'div', { id: 'wiki-menu', class: 'slash-menu' });
+    Object.assign(editor, { slashMenu: slash, slashMenuVisible: true, wikiMenu: link, wikiMenuVisible: true });
+    await editor.loadNote('N');
+    env.clock.tick(50);
+    assert.deepEqual([slash, link].map((menu) => menu.classList.contains('hidden')), [true, true]);
+    assert.equal(which(doc.activeElement), which(firstBlock));
+  });
+
+  it("with a menu open outside the note but focus on the page, as when Alt+D opens the day's note, focuses its first block", async () => {
+    const { env, doc, editor, firstBlock } = await loading();
+    add(doc.body, 'div', { id: 'note-context-menu', class: 'context-menu', role: 'menu' });
+    doc.body.focus();
     await editor.loadNote('N');
     env.clock.tick(50);
     assert.equal(which(doc.activeElement), which(firstBlock));

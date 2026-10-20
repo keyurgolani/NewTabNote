@@ -572,7 +572,9 @@ class SettingsController {
   /**
    * Open or close Keyboard Shortcuts. It opens on ? as well as from its
    * button, so focus moves into it, where the keys pressed while it's open
-   * stay, and goes back where it was when it closes.
+   * stay. Closing it puts focus back where it was, if focus is still in it
+   * (a shortcut such as Mod+K may have moved it out), and otherwise off the
+   * hidden close button.
    * @param {boolean} [force] - Open (true) or close (false); toggles without it
    * @returns {void}
    */
@@ -594,7 +596,10 @@ class SettingsController {
       if (this._shortcutsFocusTrapCleanup) { this._shortcutsFocusTrapCleanup(); this._shortcutsFocusTrapCleanup = null; }
       const previous = this._shortcutsReturnFocus;
       this._shortcutsReturnFocus = null;
+      const focused = /** @type {HTMLElement|null} */ (document.activeElement);
+      if (!focused || !modal.contains(focused)) return;
       if (previous && previous !== document.body && previous.isConnected) previous.focus();
+      else focused.blur();
     }
   }
 

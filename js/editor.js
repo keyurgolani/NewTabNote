@@ -293,6 +293,8 @@ class BlockEditor {
 
     // Clear multi-block selection
     this.clearBlockSelection();
+    // The menus opened on the note being left close with it
+    this.hideMenus();
 
     // Reset snapshot tracking for new note (Req 31.1)
     this._snapshotDirty = false;
@@ -328,12 +330,13 @@ class BlockEditor {
     // Set editor width
     const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
 
-    // Focus first block, then ensure scroll is at top. Not while a modal, menu,
-    // or dialog is open: focus stays in it, as on the onboarding walkthrough's
-    // button over the welcome note, so keys typed there don't edit the note
+    // Focus first block, then ensure scroll is at top. Not while focus is in an
+    // open modal, menu, or dialog: it stays there, as on the onboarding
+    // walkthrough's button over the welcome note, so keys typed there don't
+    // edit the note
     setTimeout(() => {
       const firstContent = this.container.querySelector('.block-content');
-      if (firstContent && !this._overlayOpen()) {
+      if (firstContent && !this._focusInOverlay()) {
         firstContent.focus();
         this.placeCaretAtEnd(firstContent);
       }
@@ -2669,7 +2672,8 @@ class BlockEditor {
     if (target.closest('input, textarea, select, [contenteditable], summary, details, audio[controls], video[controls]')) return true;
     if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
     if (this._overlayOpen()) return true;
-    if (BlockEditor.isAppShortcut(e)) return true;
+    // Only the new tab's window has the app's shortcuts; in Picture-in-Picture a ? is typed
+    if (this.doc === document && BlockEditor.isAppShortcut(e)) return true;
     return e.key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
   }
 
@@ -2703,6 +2707,16 @@ class BlockEditor {
    */
   _overlayOpen() {
     return Array.from(this.doc.querySelectorAll(OPEN_OVERLAYS)).some((element) => !element.closest('.hidden'));
+  }
+
+  /**
+   * Whether focus is in an open modal, menu, or dialog (see _overlayOpen)
+   * @returns {boolean}
+   */
+  _focusInOverlay() {
+    const focused = this.doc.activeElement;
+    const overlay = focused && typeof focused.closest === 'function' ? focused.closest(OPEN_OVERLAYS) : null;
+    return Boolean(overlay) && !overlay.closest('.hidden');
   }
 
   // ============ Slash Menu ============
@@ -2756,7 +2770,7 @@ class BlockEditor {
    * Hide slash menu
    */
   hideSlashMenu() {
-    this.slashMenu.classList.add('hidden');
+    if (this.slashMenu) this.slashMenu.classList.add('hidden');
     this.slashMenuVisible = false;
   }
 

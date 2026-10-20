@@ -310,3 +310,96 @@ test('during the first-run walkthrough, focus is on its Next button and letters 
   await driver.skipOnboarding(page);
   await expectNoUncaught(extension, page);
 });
+
+test('with Keyboard Shortcuts open, Mod+K moves focus to the search box, and after Escape the search keeps it and the next letter', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+
+  await page.getByRole('tab', { name: /^Notes/ }).focus();
+  await page.keyboard.press('?');
+  const shortcuts = page.getByRole('dialog', { name: 'Keyboard Shortcuts' });
+  await expect(shortcuts).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+KeyK');
+  const search = page.getByPlaceholder('Search notes...');
+  await expect(search).toBeFocused();
+  await page.keyboard.type('mil');
+  await page.keyboard.press('Escape');
+  await expect(shortcuts).toBeHidden();
+  await page.keyboard.type('k');
+
+  await expect(search).toHaveValue('milk');
+  expect(await driver.blocks(page)).toEqual([{ type: 'text', text: 'milk' }]);
+  expect(await driver.savedBlocks(page)).toEqual(['milk']);
+  await expectNoUncaught(extension, page);
+});
+
+test('Keyboard Shortcuts opened with nothing focused takes focus off its hidden close button when it closes, so the next letter reaches the note', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.press('?');
+  await expect(page.getByRole('dialog', { name: 'Keyboard Shortcuts' })).toBeVisible();
+
+  // Escape's close, then a key in the same task, before the browser would move focus off a hidden element
+  const after = await page.evaluate(() => {
+    app.closeAllModals();
+    const onCloseButton = document.activeElement.classList.contains('close-btn');
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true, cancelable: true }));
+    return { onCloseButton, inNote: Boolean(document.activeElement.closest('#blocks-container')) };
+  });
+  expect(after).toEqual({ onCloseButton: false, inNote: true });
+  await expectNoUncaught(extension, page);
+});
+
+/** Each menu a note can be left with, opened on Groceries */
+for (const [menu, open] of [
+  ['the slash menu', async page => {
+    await page.locator('#blocks-container > .block .block-content').last().click();
+    await page.keyboard.press('/');
+    await expect(page.locator('#slash-menu')).toBeVisible();
+  }],
+  ['the link menu', async page => {
+    await driver.clickBlock(page, 0);
+    await page.keyboard.type('[[');
+    await expect(page.locator('#wiki-menu')).toBeVisible();
+  }],
+  ["the note's menu", page => driver.openNoteMenu(page, 'Groceries')],
+]) {
+  test(`with ${menu} open, Alt+D opens the day's note with focus in it, and what is typed goes there`, async ({ extension }) => {
+    await extension.seedOnboarded();
+    await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'milk' }, { type: 'text', content: '' }] }]);
+    const page = await driver.openNewTab(extension);
+    await open(page);
+
+    await page.keyboard.press('Alt+KeyD');
+    await expect(page.locator('#page-title')).toHaveText(/^Daily Note - /);
+    await driver.afterEditorFocus(page);
+    await page.keyboard.type('hello');
+    await expect.poll(async () => (await driver.blocks(page)).map(block => block.text).join(' | ')).toContain('hello');
+    expect((await driver.savedBlocks(page)).join(' | ')).toContain('hello');
+    await expectNoUncaught(extension, page);
+  });
+}
+
+test('in Picture-in-Picture, ? typed with focus outside the note goes into the note', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+  const [pip] = await Promise.all([extension.context.waitForEvent('page'), page.locator('#pip-toggle').click()]);
+  await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.noteId))).toBe(true);
+  await driver.afterEditorFocus(page);
+
+  // Nothing in the PiP window has focus, as after a click beside the note
+  await pip.evaluate(() => document.activeElement && document.activeElement.blur());
+  await pip.keyboard.press('?');
+  await expect.poll(() => pip.locator('.blocks-container .block-content').last().textContent()).toBe('milk?');
+  const stored = await page.evaluate(async () => {
+    const editor = app.tabController.pipEditor;
+    await editor.flushSave();
+    return (await Storage.getElementsByNote(editor.noteId)).map(element => element.content);
+  });
+  expect(stored).toEqual(['milk?']);
+  await expectNoUncaught(extension, page);
+});

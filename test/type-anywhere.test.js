@@ -425,6 +425,16 @@ describe('one editor acts on each key', () => {
     assert.deepEqual(press(pipDoc.body, 'Backspace'), [['deleteSelectedBlocks']]);
   });
 
+  it('in Picture-in-Picture, ? from outside the note goes to it, since only the new tab opens Keyboard Shortcuts', () => {
+    const { env } = setup();
+    const pipDoc = new FakeDocument();
+    const root = add(pipDoc.body, 'div', { class: 'pip-editor-wrapper editor-pane active' });
+    const reached = [];
+    const pip = stubEditor(env, pipDoc, root, [{ id: 'p1' }], reached);
+    pip.onGlobalKeyDown(keydown(pipDoc.body, '?', { shiftKey: true }));
+    assert.deepEqual(reached, [['focusBlock', 'p1', true]]);
+  });
+
   /** The note's keys onGlobalKeyDown handles besides typing */
   const NOTE_KEYS = [['z', UNDO, 'undo'], ['Z', REDO, 'redo'], ['Backspace', {}, 'Backspace'], ['Delete', {}, 'Delete']];
   /** No pane acts, and the browser's own undo, redo, and delete, which would edit a note through its caret, don't run */
