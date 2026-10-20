@@ -56,6 +56,19 @@ const invalid = () => rejected('validation', 'invalid-command');
 const noteNotFound = () => rejected('not-found', 'note-not-found');
 
 /**
+ * What a bulk command is refused for before any of it runs: an action it doesn't know, or
+ * notes that aren't a list of ids. The kernel asks before the adapter recalls the command,
+ * which reserves a bulk command's key, so a refused one leaves no record and the corrected
+ * one can run under the same commandId.
+ * @param {{action: unknown, noteIds: unknown}} command
+ * @returns {Rejected | undefined}
+ */
+export function bulkRefusal({ action, noteIds }) {
+  if (typeof action !== 'string' || !Object.hasOwn(BULK_ACTIONS, action) || !isIdList(noteIds)) return invalid();
+  return undefined;
+}
+
+/**
  * @param {string} noteId
  * @returns {() => {store: StoreName, key: string}}
  */
@@ -411,8 +424,9 @@ export const noteCommands = {
   },
 
   async runBulkAction(command, { run }) {
+    const refused = bulkRefusal(command);
+    if (refused) return refused;
     const { action, noteIds } = command;
-    if (typeof action !== 'string' || !Object.hasOwn(BULK_ACTIONS, action) || !isIdList(noteIds)) return invalid();
     const type = BULK_ACTIONS[action];
     /** @type {BulkItem[]} */
     const items = [];

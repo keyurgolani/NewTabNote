@@ -26,7 +26,7 @@ import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
 import { folderCommands, folderQueries } from './folders.js';
 import { maintenanceCommands } from './maintenance.js';
-import { noteCommands, noteQueries } from './notes.js';
+import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
 import { sessionCommands, sessionQueries } from './session.js';
 
@@ -241,7 +241,11 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
       /** @type {(command: Command, context: UseCaseContext) => UseCaseResult | PromiseLike<UseCaseResult>} */ (
         COMMAND_HANDLERS[command.type]
       );
-    const { aggregate } = COMMANDS[command.type];
+    const { aggregate, bulk } = COMMANDS[command.type];
+    // recall reserves a bulk command's key, so one refused for its action or notes is refused
+    // first, and leaves no record
+    const refused = bulk ? bulkRefusal(/** @type {RunBulkAction} */ (command)) : undefined;
+    if (refused) return Promise.resolve(refused);
     /** @type {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>} */
     let pending;
     try {

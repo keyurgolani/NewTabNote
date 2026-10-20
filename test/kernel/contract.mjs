@@ -1161,6 +1161,18 @@ export function runContractSuite(fixture) {
         assert.equal(committedOf(await kernel.execute({ ...orphan, parentId: null })).code, 'folder-created');
       });
 
+      it('a bulk command refused for its action or its notes leaves no record, so the corrected one runs', async () => {
+        await createNote({ noteId: 'a', name: 'A' });
+        const typo = cmd('runBulkAction', /** @type {any} */ ({ action: 'archiv', noteIds: ['a'] }));
+        assertRejected(await kernel.execute(typo), 'validation', 'invalid-command');
+        const archived = await kernel.execute({ ...typo, action: 'archive' });
+        assert.deepEqual(archived.kind === 'bulk' && archived.committedIds, ['a']);
+        const noNotes = cmd('runBulkAction', /** @type {any} */ ({ action: 'unarchive', noteIds: 'a' }));
+        assertRejected(await kernel.execute(noNotes), 'validation', 'invalid-command');
+        const unarchived = await kernel.execute({ ...noNotes, noteIds: ['a'] });
+        assert.deepEqual(unarchived.kind === 'bulk' && unarchived.committedIds, ['a']);
+      });
+
       it('a bulk command none of whose notes committed runs them again when resent, so one that can commit now does', async () => {
         const archive = cmd('runBulkAction', { action: 'archive', noteIds: ['a'] });
         const first = await kernel.execute(archive);

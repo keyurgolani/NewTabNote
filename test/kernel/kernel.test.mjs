@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
-import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
+import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -108,7 +108,9 @@ describe('the kernel', () => {
         `${type}: ${JSON.stringify(outcome)}`,
       );
       assert.equal(log[0], `authorize ${type}`);
-      assert.equal(log[1], 'recall');
+      // recall would reserve a bulk command's key, so one with no action or notes is refused
+      // before it, and leaves no record
+      assert.deepEqual(log.slice(1, 2), COMMANDS[type].bulk ? [] : ['recall'], type);
     }
   });
 

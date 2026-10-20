@@ -140,7 +140,9 @@ export const STORES = Object.freeze({
  * @property {(command: Command) => Outcome | undefined} recall
  *   What the command's commandId already answered, when it has a record (see `idempotency`),
  *   or undefined. A bulk command with no record gets one here, its fingerprint, before any of
- *   its items runs. Synchronous, so a save can still open its transaction in the calling task.
+ *   its items runs. The kernel refuses a bulk command for its action or its notes before it
+ *   asks, so a refused one gets none. Synchronous, so a save can still open its transaction
+ *   in the calling task.
  * @property {(work: Work) => Promise<CommitResult>} commit
  *   Opens the first transaction before it returns. It never rejects: a failure is an
  *   `unavailable` outcome.
