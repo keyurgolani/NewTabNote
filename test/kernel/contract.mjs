@@ -415,12 +415,17 @@ export function runContractSuite(fixture) {
         // Another tab's pane can stay on a note trashed elsewhere, and its typing isn't lost
         await createNote({ noteId: 'n1', name: 'Plan' });
         await run(cmd('trashNote', { noteId: 'n1' }));
+        const trashedAt = (await noteOf('n1'))?.trashedAt;
+        ctx.clock.advance();
         const typed = [{ ...someBlocks('n1', 1)[0], content: 'Typed after the trash' }];
         const outcome = await run(cmd('saveNoteContent', { noteId: 'n1', blocks: typed, preview: 'A late save' }));
         assert.deepEqual([outcome.code, outcome.changedIds], ['content-saved', ['n1']]);
         assert.deepEqual(await blocksOf('n1'), typed);
         assert.equal((await noteOf('n1'))?.preview, 'A late save');
         assert.equal((await noteOf('n1'))?.trashed, true);
+        // A save doesn't restamp trashedAt, which would restart the trash's retention
+        assert.equal(typeof trashedAt, 'number');
+        assert.equal((await noteOf('n1'))?.trashedAt, trashedAt);
         assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [['n1'], []]);
       });
 
