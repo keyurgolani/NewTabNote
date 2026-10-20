@@ -677,6 +677,9 @@ describe('Merge and the tab bar', () => {
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
     // The right pane's note is the newest one, saved after the PiP's; Merge keeps the backup's older dates
     await runUntil(env, tabs.pipEditor.flushSave());
+    // updatedAt is the wall clock's millisecond, and two saves can share one: the right pane saves in a later one
+    const pipSavedAt = (await Storage.getNote('E')).updatedAt;
+    while (Date.now() <= pipSavedAt) await new Promise((resolve) => setTimeout(resolve, 1));
     typeInto(editors.secondary, 'daily, edited just now');
     env.clock.tick(500);
     await runUntil(env, editors.secondary.flushSave());
