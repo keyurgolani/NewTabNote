@@ -3,31 +3,77 @@
  * fresh profile, takes the extension ID from its service worker, and opens its pages.
  * It holds no product logic: specs make the assertions.
  *
+ * It loads a temporary copy of the build whose manifest starts the service worker through
+ * a bootstrap that installs worker-hooks.js before the extension's own worker script, so
+ * the worker's uncaught exceptions are seen from its first line, after every restart, and
+ * inside chrome.* listeners and callbacks. The extension ID follows the copy's path, so it
+ * changes from one launch to the next.
+ *
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
- * requests it blocked or that failed. The `extension` fixture (index.js) attaches that
- * log to a failed test.
+ * requests it blocked or that failed. The `extension` fixture (index.js) attaches that log
+ * to a failed test.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { installWorkerHooks } = require('./worker-hooks');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const SURFACES = ['newtab', 'popup', 'sidepanel'];
 const VIEWPORT = { width: 1280, height: 800 };
 const WORKER_TIMEOUT_MS = 10_000;
+const ACTIVATION_TIMEOUT_MS = 10_000;
+const WORKER_READ_TIMEOUT_MS = 5_000;
 const LOCALE = 'en-US';
 const TIME_ZONE = 'UTC';
-// Playwright doesn't report a service worker's uncaught exceptions, so the harness hooks
-// the worker, which logs each one as a console error starting with this tag
+// worker-hooks.js logs each report as a console error that starts with this
 const WORKER_UNCAUGHT_TAG = '[ntn-harness:uncaught]';
+// Written next to the worker script, so its relative imports resolve as before. Chrome
+// refuses extension files whose names start with "_".
+const BOOTSTRAP_FILE = 'ntn-harness-worker.js';
+const HOOKS_FILE = 'ntn-harness-hooks.js';
+// A page's chrome.* listener or callback that throws doesn't reach pageerror: Chrome catches
+// it and logs a console error with one of these prefixes
+const BINDING_ERRORS = [
+  ['Error in event handler: ', 'chrome.* event listener'],
+  ['Error handling response: ', 'chrome.* API callback'],
+];
 
 /**
  * The built extension under test: NTN_DIST, or dist/ at the repository root
  */
 function resolveDist() {
   return process.env.NTN_DIST ? path.resolve(process.env.NTN_DIST) : path.join(REPO_ROOT, 'dist');
+}
+
+/**
+ * Copy the build to `dir` and start its service worker through the harness bootstrap, which
+ * loads the hooks and then the worker script the manifest names, the way the manifest would:
+ * importScripts for a classic worker, import for "type": "module".
+ */
+function prepareExtension(dist, dir) {
+  fs.cpSync(dist, dir, { recursive: true });
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const script = manifest.background && manifest.background.service_worker;
+  if (typeof script !== 'string') {
+    throw new Error(`${path.join(dist, 'manifest.json')} names no background.service_worker for the harness to hook`);
+  }
+  const folder = path.posix.dirname(script);
+  for (const file of [BOOTSTRAP_FILE, HOOKS_FILE]) {
+    if (fs.existsSync(path.join(dir, folder, file))) {
+      throw new Error(`${path.posix.join(folder, file)} already exists in ${dist}; the harness writes a file by that name`);
+    }
+  }
+  const entry = `./${path.posix.basename(script)}`;
+  fs.writeFileSync(path.join(dir, folder, HOOKS_FILE), `(${installWorkerHooks})(${JSON.stringify(WORKER_UNCAUGHT_TAG)});\n`);
+  fs.writeFileSync(path.join(dir, folder, BOOTSTRAP_FILE), manifest.background.type === 'module'
+    ? `import './${HOOKS_FILE}';\nimport ${JSON.stringify(entry)};\n`
+    : `importScripts('${HOOKS_FILE}', ${JSON.stringify(entry)});\n`);
+  manifest.background.service_worker = path.posix.join(folder, BOOTSTRAP_FILE);
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 function isExtensionWorker(worker) {
@@ -52,26 +98,79 @@ function requestSource(request) {
   }
 }
 
+/**
+ * The exception in a console error Chrome logs when a page's chrome.* listener or callback
+ * throws, as { where, message, stack }, or null for any other text. After the prefix comes
+ * the exception's stack ("TypeError: message" and its frames), or "Uncaught <value>" for a
+ * thrown non-Error; the message drops that name or "Uncaught " so it reads as error.message.
+ */
+function bindingError(text) {
+  const binding = BINDING_ERRORS.find(([prefix]) => text.startsWith(prefix));
+  if (!binding) return null;
+  const [prefix, where] = binding;
+  const stack = text.slice(prefix.length);
+  const frames = stack.search(/\n\s+at /);
+  const header = frames < 0 ? stack : stack.slice(0, frames);
+  const named = header.match(/^(?:[A-Za-z_$][\w$]*: |Uncaught )([\s\S]*)$/);
+  return { where, message: named ? named[1] : header, stack };
+}
+
+/**
+ * Settle a promise within `ms`, or reject with `message`
+ */
+function withTimeout(promise, ms, message) {
+  let timer;
+  promise.catch(() => {});
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The state a newly started worker settles in: 'activated', or 'redundant' when its script
+ * threw while starting. A redundant worker still shows up and still runs what Playwright
+ * evaluates in it, but it never handles an event.
+ */
+function activationState(worker) {
+  const settled = worker.evaluate(ms => new Promise(resolve => {
+    const current = self.serviceWorker;
+    if (!current) {
+      resolve('unknown');
+      return;
+    }
+    const settle = () => {
+      if (current.state === 'activated' || current.state === 'redundant') resolve(current.state);
+    };
+    current.addEventListener('statechange', settle);
+    settle();
+    setTimeout(() => resolve(current.state), ms);
+  }), ACTIVATION_TIMEOUT_MS);
+  return withTimeout(settled, ACTIVATION_TIMEOUT_MS + WORKER_READ_TIMEOUT_MS, 'The service worker stopped answering while it started');
+}
+
 class ExtensionSession {
-  constructor(context, { dist, profileDir }) {
+  constructor(context, { dist, root, extensionDir }) {
     this.context = context;
     this.dist = dist;
     this.extensionId = null;
-    this._profileDir = profileDir;
+    this._root = root;
+    this._extensionDir = extensionDir;
     this._startedAt = Date.now();
     this._lines = [];
     this._uncaught = [];
+    this._workerReports = new Set();
     this._blocked = new WeakSet();
     this._workers = new WeakSet();
     this._worker = null;
-    this._hooking = null;
     // The about:blank page a persistent context opens with, reused for the first surface
     this._blankPage = context.pages().find(page => page.url() === 'about:blank') || null;
     this._surfaceOpened = false;
   }
 
   /**
-   * The extension's running service worker (a new one after a restart)
+   * The extension's service worker. Playwright keeps the same Worker across a restart of
+   * the worker; the bootstrap reinstalls the hooks in the new global.
    */
   get worker() {
     return this._worker;
@@ -106,22 +205,32 @@ class ExtensionSession {
   }
 
   /**
-   * Uncaught exceptions so far, from every page and the worker, as { source, message, stack }
+   * Uncaught exceptions so far, from every page and the worker, as { source, where, message,
+   * stack }. Reads the worker's own record first (see _readWorker), and fails if the worker
+   * runs without the hooks or doesn't answer.
    */
-  uncaught() {
+  async uncaught() {
+    await this._readWorker();
     return this._uncaught.map(error => ({ ...error }));
   }
 
   log() {
-    return [`dist: ${this.dist}`, `extension: ${this.extensionId || '(not found)'}`, '', ...this._lines, ''].join('\n');
+    return [
+      `dist: ${this.dist}`,
+      `loaded from: ${this._extensionDir}`,
+      `extension: ${this.extensionId || '(not found)'}`,
+      '',
+      ...this._lines,
+      '',
+    ].join('\n');
   }
 
   /**
    * Attach the log as a file. Playwright copies it under the test's output directory,
-   * which CI uploads; the source goes away with the profile.
+   * which CI uploads; the source goes away with the session's temp directory.
    */
   async attachLog(testInfo) {
-    const file = path.join(this._profileDir, 'extension-log.txt');
+    const file = path.join(this._root, 'extension-log.txt');
     await fs.promises.writeFile(file, this.log());
     await testInfo.attach('extension-log', { path: file, contentType: 'text/plain' });
   }
@@ -131,7 +240,7 @@ class ExtensionSession {
       await this.context.unrouteAll({ behavior: 'ignoreErrors' });
       await this.context.close();
     } finally {
-      fs.rmSync(this._profileDir, { recursive: true, force: true, maxRetries: 3 });
+      fs.rmSync(this._root, { recursive: true, force: true, maxRetries: 3 });
     }
   }
 
@@ -145,10 +254,17 @@ class ExtensionSession {
     }
     if (!this._worker) {
       throw new Error(`No extension service worker started within ${WORKER_TIMEOUT_MS / 1000} seconds of loading ${this.dist}. `
-        + "Check that the build is complete and that its manifest's background.service_worker loads.");
+        + "Check that the build is complete and that its manifest's background.service_worker exists.");
     }
     this.extensionId = new URL(this._worker.url()).host;
-    await this._hooking;
+
+    const state = await activationState(this._worker);
+    await this._readWorker();
+    if (state !== 'activated') {
+      const thrown = this._uncaught.filter(error => error.source === 'service worker').map(error => error.stack || error.message);
+      throw new Error(`The service worker never activated (state: ${state}); its script probably threw while starting`
+        + (thrown.length > 0 ? `:\n${thrown.join('\n')}` : ''));
+    }
 
     const [language, timeZone] = await this._worker.evaluate(() => [navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone]);
     if (language !== LOCALE || timeZone !== TIME_ZONE) {
@@ -156,14 +272,45 @@ class ExtensionSession {
     }
   }
 
+  /**
+   * Collect the reports the worker holds. Its console lines usually arrive too, but one it
+   * logs before the harness subscribes (the worker normally starts just after the launch
+   * resolves) would be lost. Fails when the worker runs without the hooks, or doesn't answer
+   * (stopped).
+   */
+  async _readWorker() {
+    let harness;
+    try {
+      harness = await withTimeout(
+        this._worker.evaluate(() => (self.__ntnHarness ? { instance: self.__ntnHarness.instance, reports: self.__ntnHarness.reports } : null)),
+        WORKER_READ_TIMEOUT_MS,
+        `it didn't answer within ${WORKER_READ_TIMEOUT_MS / 1000} seconds, so it may be stopped`,
+      );
+    } catch (error) {
+      throw new Error(`Could not read the service worker's uncaught exceptions: ${error.message}`);
+    }
+    if (!harness) {
+      throw new Error('The service worker is running without the harness hooks (no self.__ntnHarness), so its uncaught exceptions would go unseen');
+    }
+    harness.reports.forEach(report => this._recordWorkerReport({ instance: harness.instance, ...report }));
+  }
+
   _record(line) {
     const seconds = ((Date.now() - this._startedAt) / 1000).toFixed(3);
     this._lines.push(`[+${seconds}s] ${line}`);
   }
 
-  _recordUncaught(source, message, stack) {
-    this._uncaught.push({ source, message, stack });
-    this._record(`${source} uncaught: ${stack || message}`);
+  _recordUncaught(source, message, stack, where = '') {
+    this._uncaught.push({ source, where, message, stack });
+    this._record(`${source} uncaught${where ? ` (${where})` : ''}: ${stack || message}`);
+  }
+
+  // A worker report arrives as a console error and again when _readWorker reads the worker
+  _recordWorkerReport({ instance, seq, where, message, stack }) {
+    const key = `${instance}:${seq}`;
+    if (this._workerReports.has(key)) return;
+    this._workerReports.add(key);
+    this._recordUncaught('service worker', message, stack, where);
   }
 
   _watch() {
@@ -172,11 +319,15 @@ class ExtensionSession {
       const text = message.text();
       if (worker && text.startsWith(WORKER_UNCAUGHT_TAG)) {
         try {
-          const error = JSON.parse(text.slice(WORKER_UNCAUGHT_TAG.length));
-          this._recordUncaught('service worker', error.message, error.stack);
+          this._recordWorkerReport(JSON.parse(text.slice(WORKER_UNCAUGHT_TAG.length)));
         } catch {
           this._recordUncaught('service worker', text, undefined);
         }
+        return;
+      }
+      const caught = !worker && message.type() === 'error' ? bindingError(text) : null;
+      if (caught) {
+        this._recordUncaught(pageLabel(message.page()), caught.message, caught.stack, caught.where);
         return;
       }
       this._record(`${worker ? 'service worker' : pageLabel(message.page())} console.${message.type()}: ${text}`);
@@ -209,35 +360,19 @@ class ExtensionSession {
     });
   }
 
-  /**
-   * Track a newly started extension worker and hook its uncaught exceptions. Exceptions
-   * it throws while starting, before the hook is in, are missed; one thrown at the top
-   * level stops it from registering, which _start reports.
-   */
   _adoptWorker(worker) {
     if (!isExtensionWorker(worker) || this._workers.has(worker)) return;
     this._workers.add(worker);
     this._worker = worker;
     this._record(`service worker running: ${worker.url()}`);
-    this._hooking = worker.evaluate(tag => {
-      if (self.__ntnHarnessHooked) return;
-      self.__ntnHarnessHooked = true;
-      const report = (error, fallback) => console.error(tag, JSON.stringify(error instanceof Error
-        ? { message: error.message, stack: error.stack }
-        : { message: fallback === undefined ? String(error) : fallback }));
-      self.addEventListener('error', event => report(event.error, event.message));
-      self.addEventListener('unhandledrejection', event => report(event.reason));
-    }, WORKER_UNCAUGHT_TAG);
-    // The first worker's hook is awaited by _start; a restarted worker's failure is logged
-    this._hooking.catch(error => this._record(`could not hook the service worker: ${error.message}`));
   }
 }
 
 /**
- * Launch Chromium with the built extension on a fresh profile. Resolves once the
- * extension's service worker is running and hooked.
+ * Launch Chromium with a hooked copy of the built extension on a fresh profile. Resolves
+ * once the extension's service worker has activated.
  *
- *   dist      the built extension directory (default: resolveDist())
+ *   dist      the built extension directory (default: resolveDist()); never modified
  *   headless  default true
  *   chromium  the Playwright browser type; the fixture passes its own
  */
@@ -247,15 +382,17 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
       + 'never makes one: run `npm run build` first, or set NTN_DIST to a built extension directory.');
   }
 
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-profile-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-'));
+  const extensionDir = path.join(root, 'extension');
   let context;
   try {
-    context = await chromium.launchPersistentContext(profileDir, {
+    prepareExtension(dist, extensionDir);
+    context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
       // Branded Chrome ignores --load-extension since Chrome 137, and the headless shell
       // can't run extensions, so headless runs use Playwright's own Chromium build
       ...(headless ? { channel: 'chromium' } : {}),
       headless,
-      args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, `--lang=${LOCALE}`],
+      args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, `--lang=${LOCALE}`],
       // Pages get locale and timezoneId emulation; the worker takes the process's TZ and,
       // on Linux, LANGUAGE
       env: { ...process.env, TZ: TIME_ZONE, LANGUAGE: LOCALE.replace('-', '_') },
@@ -264,11 +401,11 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
       viewport: VIEWPORT,
     });
   } catch (error) {
-    fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
     throw error;
   }
 
-  const session = new ExtensionSession(context, { dist, profileDir });
+  const session = new ExtensionSession(context, { dist, root, extensionDir });
   try {
     await session._start();
   } catch (error) {

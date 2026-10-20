@@ -1,8 +1,8 @@
 /**
  * Smoke: each extension page loads on a fresh profile and its root renders. Each test
- * fails on an uncaught exception, in a page or the service worker, that no entry in
- * test/known-defects.json lists under `uncaught`, and the last test fails when a listed
- * message never occurred.
+ * fails on an uncaught exception, in a page or the service worker, chrome.* listeners and
+ * callbacks included, that no entry in test/known-defects.json lists under `uncaught`, and
+ * the last test fails when a listed message never occurred.
  */
 
 const { test, expect } = require('./harness');
@@ -28,11 +28,11 @@ function smoke(title, body) {
     // Startup work the page deferred to an idle callback runs before errors are read
     await page.evaluate(() => new Promise(resolve => requestIdleCallback(() => resolve(), { timeout: 2000 })));
 
-    const uncaught = extension.uncaught();
+    const uncaught = await extension.uncaught();
     uncaught.forEach(({ message }) => observed.add(message));
     const unexpected = uncaught.filter(({ message }) => !TOLERATED.has(message));
     expect(
-      unexpected.map(({ source, message, stack }) => `${source}: ${stack || message}`),
+      unexpected.map(({ source, where, message, stack }) => `${source}${where ? ` (${where})` : ''}: ${stack || message}`),
       'uncaught exceptions that no test/known-defects.json entry lists under `uncaught`',
     ).toEqual([]);
     passed.add(title);
