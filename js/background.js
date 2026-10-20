@@ -12,8 +12,27 @@ try {
 
 // Global Storage instance for background (instantiated in storage.js)
 let storageReady = Storage.init().catch(e => {
-  console.error('Storage init failed in background:', e);
+  if (e && (e.code === 'NEWER_SCHEMA' || e.code === 'MISSING_CORE_STORES')) {
+    console.warn('Storage not opened in background:', e.message);
+  } else {
+    console.error('Storage init failed in background:', e);
+  }
 });
+
+/**
+ * The shared DatabaseManager from storage.js. The bare `Storage` global also
+ * names the DOM's Web Storage type, so typed reads go through this.
+ * @returns {DatabaseManager}
+ */
+function workerStorage() {
+  return /** @type {any} */ (self).Storage;
+}
+
+/** Why a capture can't be saved, by Storage.openState (same reason the new tab shows). */
+const CAPTURE_REFUSALS = {
+  'newer-version': "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
+  'missing-core-stores': "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+};
 
 let creatingOffscreen;
 
@@ -242,11 +261,27 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 /**
- * Capture content to daily note
+ * Show the outcome of a capture.
+ * @param {string} title
+ * @param {string} message
+ * @returns {void}
+ */
+function notifyCapture(title, message) {
+  chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title, message });
+}
+
+/**
+ * Capture content to daily note. Saved, refused (the database can't be
+ * opened safely), and failed captures each end with a notification.
  */
 async function captureToDailyNote(item) {
   try {
     await storageReady;
+    const openState = workerStorage().openState;
+    if (openState !== 'open') {
+      notifyCapture('Not captured', CAPTURE_REFUSALS[openState] || "NewTabNote couldn't open your notes, so nothing was saved.");
+      return;
+    }
     const note = await Storage.ensureDailyNote();
 
     // Create new block
@@ -274,14 +309,10 @@ async function captureToDailyNote(item) {
     await Storage.saveElement(blockData);
 
     // Notify user
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title: 'Captured to New Tab Note',
-      message: item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text'
-    });
+    notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
 
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
+    notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
   }
 }

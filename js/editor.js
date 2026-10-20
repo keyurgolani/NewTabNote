@@ -4548,6 +4548,8 @@ class BlockEditor {
    */
   _startSnapshotInterval() {
     this._stopSnapshotInterval();
+    // Version history is off while the snapshots store is missing.
+    if (!editorStorage().hasStore('snapshots')) return;
     this._snapshotInterval = setInterval(() => this._autoSnapshot(), 5 * 60 * 1000);
   }
 
@@ -4566,6 +4568,7 @@ class BlockEditor {
    */
   async _autoSnapshot() {
     if (!this._snapshotDirty || !this.noteId || !this.noteData) return;
+    if (!editorStorage().hasStore('snapshots')) return;
     this._snapshotDirty = false;
 
     try {

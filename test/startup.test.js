@@ -1,0 +1,459 @@
+'use strict';
+
+// AC6: startup never deletes the database or its records, keeps a version-8
+// database with stores missing (one recovery copy, features off), and the
+// integrity check is read-only.
+// AC7: a version-9 database stays byte-identical on every surface, with no
+// chrome.storage.local writes, and each surface shows the guard.
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
+} = require('./helpers/legacy-env');
+
+const TEST_KEY = 'test-only-api-key';
+const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
+const APP_FILES = [
+  'js/utils.js', 'js/core/storage-error.js', 'js/core/event-bus.js', 'js/core/dom-refs.js', 'js/core/logger.js',
+  'js/storage.js', 'js/search.js', 'js/app.js',
+];
+const GUARD_TITLE = 'Your notes were upgraded by a newer NewTabNote version';
+const GUARD_BODY = "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.";
+
+/** Rows for every v8 store, including orphans the old sweep deleted and a plaintext key in `settings`. */
+function allRecords() {
+  return {
+    canvases: [
+      note('n1', { name: 'Kept' }),
+      note('expired', { name: 'Expired in trash', trashed: true, trashedAt: 1000 }),
+    ],
+    elements: [
+      block('b1', 'n1', 0, 'hello'),
+      block('b-expired', 'expired', 0, 'trashed body'),
+      block('b-orphan', 'ghost', 0, 'orphan block'),
+    ],
+    settings: [{ key: 'llmApiKey', value: TEST_KEY }],
+    media: [
+      { id: 'm1', canvasId: 'n1', blob: new Blob(['png bytes'], { type: 'image/png' }), type: 'image/png', createdAt: 1 },
+      { id: 'm-orphan', canvasId: 'ghost', blob: new Blob(['x'], { type: 'text/plain' }), type: 'text/plain', createdAt: 1 },
+    ],
+    search_index: [{ noteId: 'n1', name: 'Kept', content: 'hello', updatedAt: 1 }, { noteId: 'ghost', name: 'Gone', updatedAt: 1 }],
+    folders: [{ id: 'f1', name: 'Folder', parentId: null, createdAt: 1, updatedAt: 1 }],
+    links: [{ id: 'l1', fromNoteId: 'n1', toNoteId: 'ghost', createdAt: 1 }],
+    themes: [{ id: 't1', name: 'My theme', updatedAt: 1 }],
+    vectors: [{ id: 'n1', noteId: 'n1', vector: [0.1, 0.2] }, { id: 'ghost', noteId: 'ghost', vector: [0.3] }],
+    snapshots: [{ id: 's1', noteId: 'ghost', timestamp: 1, blocks: [], title: 'Gone' }],
+  };
+}
+
+/** A database from raw indexedDB.open calls: version 8 with `omit` left out, or version 9 with a meta store. */
+async function fixture(factory, { version = 8, omit = [] } = {}) {
+  const records = allRecords();
+  for (const store of omit) delete records[store];
+  const extraStores = {};
+  if (version >= 9) {
+    extraStores.meta = { keyPath: null, indexes: [] };
+    records.meta = [{ key: 'schemaVersion', value: 9 }, { key: 'migratedAt', value: 1760000000000 }];
+  }
+  await createDatabase(factory, { version, omit, extraStores, records });
+}
+
+function recoveryCopies(env) {
+  return Object.entries(env.chrome.local).filter(([key]) => key.startsWith('recovery_backup_'));
+}
+
+async function startStorage(env) {
+  env.load(...STORAGE_FILES);
+  const Storage = env.get('Storage');
+  let error = null;
+  try {
+    await Storage.init();
+  } catch (e) {
+    error = e;
+  }
+  return { Storage, error };
+}
+
+describe('startup: complete version-8 database', () => {
+  it('opens, writes no recovery copy, and the integrity check deletes nothing', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB);
+    const before = await dumpDatabase(env.indexedDB);
+    const { Storage, error } = await startStorage(env);
+
+    assert.equal(error, null);
+    assert.equal(Storage.openState, 'open');
+    assert.deepEqual(plain(Storage.missingStores), []);
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before, 'orphans and expired trash still there');
+    assert.equal(recoveryCopies(env).length, 0);
+    assert.ok(env.logs.some((l) => l.level === 'info' && String(l.args[0]).includes('Integrity check')));
+  });
+
+  it('validateDatabase counts orphans in every auxiliary store, including snapshots and media', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB);
+    const { Storage } = await startStorage(env);
+    assert.deepEqual(plain(await Storage.validateDatabase()), {
+      orphanedElements: 1,
+      orphanedSearchIndex: 1,
+      orphanedLinks: 1,
+      orphanedVectors: 1,
+      orphanedSnapshots: 1,
+      orphanedMedia: 1,
+      missingStores: [],
+    });
+  });
+
+  it('no file under js/ calls indexedDB.deleteDatabase (AC6)', () => {
+    const offenders = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.m?js$/.test(entry.name) && fs.readFileSync(full, 'utf8').includes('deleteDatabase')) offenders.push(full);
+      }
+    };
+    walk(path.join(__dirname, '..', 'js'));
+    assert.deepEqual(offenders, []);
+  });
+});
+
+describe('startup: version 8 without themes (AC6)', () => {
+  it('keeps every record and writes exactly one recovery copy of every readable store except settings', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    const before = await dumpDatabase(env.indexedDB);
+    const { Storage, error } = await startStorage(env);
+
+    assert.equal(error, null);
+    assert.equal(Storage.openState, 'open');
+    assert.deepEqual(plain(Storage.missingStores), ['themes']);
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+
+    const copies = recoveryCopies(env);
+    assert.equal(copies.length, 1);
+    const [key, copy] = copies[0];
+    assert.match(key, /^recovery_backup_\d+$/);
+    assert.equal(copy.recoveryBackup, true);
+    assert.equal(copy.reason, 'missing-stores');
+    assert.deepEqual(copy.missingStores, ['themes']);
+    assert.equal(typeof copy.timestamp, 'number');
+    for (const store of ['canvases', 'elements', 'media', 'search_index', 'folders', 'links', 'vectors', 'snapshots']) {
+      assert.deepEqual(copy[store].map((r) => r.id || r.noteId).sort(),
+        recordsOf(before, store) && Object.keys(recordsOf(before, store)).sort(), `${store} copied`);
+    }
+    assert.equal(copy.settings, undefined, 'settings left out');
+    assert.ok(!JSON.stringify(copy).includes(TEST_KEY), 'no plaintext key in the copy');
+    const media = copy.media.find((m) => m.id === 'm1');
+    assert.equal(media.blob, `data:image/png;base64,${Buffer.from('png bytes').toString('base64')}`, 'Blob as data URL');
+  });
+
+  it('a second start does not write a second copy for the same missing stores', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    await startStorage(env);
+    const again = createLegacyEnv({ indexedDB: env.indexedDB });
+    Object.assign(again.chrome.local, JSON.parse(JSON.stringify(env.chrome.local)));
+    await startStorage(again);
+    assert.equal(recoveryCopies(again).length, 1);
+  });
+
+  it('the service worker never writes the copy', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    env.load(...STORAGE_FILES);
+    await env.get('Storage').init();
+    assert.equal(recoveryCopies(env).length, 0);
+  });
+
+  it('runs without custom themes: reads are empty, a write reaches its error', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    const { Storage } = await startStorage(env);
+    assert.deepEqual(plain(await Storage.getCustomThemes()), []);
+    await assert.rejects(Storage.saveCustomTheme({ name: 'New' }), { code: 'STORE_UNAVAILABLE' });
+    const created = await Storage.createNote('Still works');
+    assert.ok(await Storage.getNote(created.id));
+  });
+
+  it('the new tab names the features that are off and points to Export', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes', 'settings'] });
+    env.load(...APP_FILES);
+    await env.get('Storage').init();
+    const toasts = [];
+    env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
+    env.get('App').prototype.reportMissingStores.call({});
+    assert.deepEqual(toasts, [{
+      message: 'Your notes database is incomplete, so these are off: custom themes. Export a copy from Settings > Data & Backup.',
+      kind: 'error',
+    }]);
+  });
+
+  it('a missing settings store alone shows no toast', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['settings'] });
+    env.load(...APP_FILES);
+    await env.get('Storage').init();
+    const toasts = [];
+    env.get('Utils').showToast = (message) => toasts.push(message);
+    env.get('App').prototype.reportMissingStores.call({});
+    assert.deepEqual(toasts, []);
+  });
+});
+
+describe('startup: version 8 without media, with an expired trashed note', () => {
+  async function start() {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['media'] });
+    env.load(...APP_FILES, 'js/controllers/sidebar-controller.js');
+    const Storage = env.get('Storage');
+    await Storage.init();
+    return { env, Storage };
+  }
+
+  it('skips trash cleanup in App and SidebarController, so the expired note keeps its blocks', async () => {
+    const { env, Storage } = await start();
+    const before = await dumpDatabase(env.indexedDB);
+    const logger = { info() {}, warn() {}, error() {}, debug() {} };
+    const refreshed = [];
+    await env.get('App').prototype.runTrashCleanup.call({ logger, refreshNotesList: async () => refreshed.push('app') });
+    const SidebarController = env.get('SidebarController');
+    await SidebarController.prototype.runTrashCleanup.call({ storage: Storage, logger, refreshNotesList: async () => refreshed.push('sidebar') });
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(refreshed, []);
+  });
+
+  it('runs: export works without media, and media imports are refused before any change', async () => {
+    const { env, Storage } = await start();
+    const exported = plain(await Storage.exportAll());
+    assert.deepEqual(exported.media, []);
+    assert.deepEqual(exported.canvases.map((n) => n.id), ['n1']);
+
+    const before = await dumpDatabase(env.indexedDB);
+    const withMedia = {
+      version: 1,
+      canvases: [note('p1')],
+      elements: [],
+      media: [{ id: 'pm', canvasId: 'p1', blob: 'data:text/plain;base64,', type: 'text/plain' }],
+    };
+    await assert.rejects(Storage.importData(withMedia, 'merge'), { code: 'IMPORT_INVALID', message: "this profile's media store is missing" });
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    const result = plain(await Storage.importData({ version: 1, canvases: [note('p2')], elements: [] }, 'merge'));
+    assert.equal(result.notes, 1);
+  });
+
+  it('a missing auxiliary store does not stop note and block writes', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['search_index', 'links', 'snapshots'] });
+    const { Storage } = await startStorage(env);
+    const created = await Storage.createNote('Indexed later');
+    await Storage.saveNoteWithBlocks(created, [block('nb', created.id, 0, 'body')]);
+    await Storage.updateNoteNameInSearchIndex(created.id, 'Renamed');
+    await Storage.updateNoteLinks(created.id, ['Kept']);
+    assert.deepEqual(plain(await Storage.getSearchIndex()), []);
+    assert.deepEqual(plain(await Storage.getBacklinks('n1')), []);
+    assert.deepEqual(plain(await Storage.getSnapshots('n1')), []);
+    assert.equal((await Storage.getElementsByNote(created.id)).length, 1);
+  });
+});
+
+describe('startup: version 8 without elements', () => {
+  it('refuses with MISSING_CORE_STORES, changes nothing, and saves a recovery copy', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['elements'] });
+    const before = await dumpDatabase(env.indexedDB);
+    const { Storage, error } = await startStorage(env);
+
+    assert.equal(error.code, 'MISSING_CORE_STORES');
+    assert.equal(Storage.openState, 'missing-core-stores');
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    const copies = recoveryCopies(env);
+    assert.equal(copies.length, 1);
+    assert.deepEqual(copies[0][1].missingStores, ['elements']);
+    assert.ok(copies[0][1].canvases.length === 2);
+    assert.deepEqual(env.chrome.writes().map((w) => w.method), ['set'], 'only the recovery copy; no default settings');
+  });
+
+  it('the new tab shows "Your notes database is incomplete" with Export and Reload', async () => {
+    const { env, app } = await startApp({ omit: ['elements'] });
+    const guard = env.document.querySelector('.storage-guard');
+    assert.equal(guard.querySelector('h1').textContent, 'Your notes database is incomplete');
+    assert.deepEqual(guard.querySelectorAll('button').map((b) => b.textContent), ['Export', 'Reload']);
+    assert.ok(app);
+  });
+});
+
+describe('a version-9 database (AC7)', () => {
+  it('Storage.init refuses with NEWER_SCHEMA and changes nothing', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { version: 9 });
+    const before = await dumpDatabase(env.indexedDB);
+    const { Storage, error } = await startStorage(env);
+
+    assert.equal(error.code, 'NEWER_SCHEMA');
+    assert.equal(error.constructor.name, 'Error', 'a plain Error the service worker can build');
+    assert.equal(Storage.openState, 'newer-version');
+    assert.equal(Storage.onDiskVersion, 9);
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it('a VersionError from open(name, 8) maps to the same state', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { version: 9 });
+    env.load(...STORAGE_FILES);
+    const Storage = env.get('Storage');
+    Storage.checkAndRepairDatabase = async () => {}; // as if a newer build upgraded right after the check
+    await assert.rejects(Storage.init(), { code: 'NEWER_SCHEMA' });
+    assert.equal(Storage.openState, 'newer-version');
+    assert.equal(Storage.onDiskVersion, 9);
+  });
+
+  it('the new tab shows the guard, and Export downloads every store except settings', async () => {
+    const { env, before, downloads } = await startApp({ version: 9 });
+    const guard = env.document.querySelector('.storage-guard');
+    assert.equal(guard.querySelector('h1').textContent, GUARD_TITLE);
+    assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
+    const buttons = guard.querySelectorAll('button');
+    assert.deepEqual(buttons.map((b) => [b.textContent, b.type]), [['Export', 'button'], ['Reload', 'button']]);
+    assert.equal(env.document.activeElement, buttons[0]);
+
+    buttons[0].click();
+    await waitFor(() => downloads.length > 0, { message: 'raw export download' });
+    const [{ data, filename }] = downloads;
+    assert.match(filename, /^newtabnote-raw-v9-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$/);
+    const raw = JSON.parse(data);
+    assert.equal(raw.rawExport, true);
+    assert.equal(raw.onDiskVersion, 9);
+    assert.equal(typeof raw.exportedAt, 'number');
+    assert.deepEqual(Object.keys(raw.stores).sort(),
+      ['canvases', 'elements', 'folders', 'links', 'media', 'meta', 'search_index', 'snapshots', 'themes', 'vectors']);
+    assert.deepEqual(raw.stores.meta, [{ key: 'migratedAt', value: 1760000000000 }, { key: 'schemaVersion', value: 9 }],
+      'a store without a key path keeps its keys');
+    assert.ok(raw.stores.media.find((m) => m.id === 'm1').blob.startsWith('data:image/png;base64,'));
+    assert.ok(!data.includes(TEST_KEY));
+
+    buttons[1].click();
+    assert.equal(env.global.__reloads, 1);
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it('the popup shows the guard with one Open new tab button and disables quick note', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { version: 9 });
+    const before = await dumpDatabase(env.indexedDB);
+    const els = env.document.stub([
+      { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
+      'main-content', 'daily-summary', 'summary-content', 'page-list',
+    ]);
+    env.load('js/popup.js');
+    await Promise.all(env.document.fire('DOMContentLoaded'));
+
+    const guard = els['main-content'].querySelector('.storage-guard');
+    assert.equal(guard.querySelector('h2').textContent, GUARD_TITLE);
+    assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
+    const buttons = guard.querySelectorAll('button');
+    assert.deepEqual(buttons.map((b) => b.textContent), ['Open new tab']);
+    buttons[0].click();
+    assert.deepEqual(env.chrome.tabsCreated, [{ url: 'newtab.html' }]);
+
+    assert.equal(els['quick-note-input'].disabled, true);
+    els['quick-note-input'].value = 'a quick note';
+    els['quick-note-input'].dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it('the side panel shows the guard with one Open new tab button', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { version: 9 });
+    const before = await dumpDatabase(env.indexedDB);
+    const els = env.document.stub(['open-notes', 'status', 'status-count', 'sections', 'empty-state']);
+    const openButton = env.document.createElement('button');
+    openButton.setAttribute('data-open-notes', '');
+    env.document.body.appendChild(openButton);
+    env.load('js/insights-summary.js', 'js/sidepanel.js');
+    await Promise.all(env.document.fire('DOMContentLoaded'));
+
+    const guard = els.sections.querySelector('.storage-guard');
+    assert.equal(guard.querySelector('h2').textContent, GUARD_TITLE);
+    assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
+    const buttons = guard.querySelectorAll('button');
+    assert.deepEqual(buttons.map((b) => b.textContent), ['Open new tab']);
+    buttons[0].click();
+    assert.deepEqual(env.chrome.tabsCreated, [{ url: 'chrome-extension://test-extension/newtab.html' }]);
+    assert.ok(els['empty-state'].classList.contains('hidden'));
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it('the context menu and keyboard command refuse with a "Not captured" notification', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB, { version: 9 });
+    const before = await dumpDatabase(env.indexedDB);
+    env.load('js/background.js');
+    const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
+
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' }, tab);
+    await env.chrome.api.commands.onCommand.listeners[0]('capture-page');
+    await waitFor(() => env.chrome.notifications.length === 3, { message: 'three notifications' });
+
+    for (const notification of env.chrome.notifications) {
+      assert.equal(notification.title, 'Not captured');
+      assert.match(notification.message, /^Your notes were upgraded by a newer NewTabNote version\./);
+    }
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+});
+
+describe('background capture on a version-8 database', () => {
+  it('saves to the daily note and notifies', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB);
+    env.load('js/background.js');
+    const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
+    assert.equal(env.chrome.notifications[0].title, 'Captured to New Tab Note');
+    const elements = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'));
+    assert.ok(elements.some((e) => e.type === 'bookmark' && e.url === 'https://example.test/page'));
+  });
+
+  it('a failed save notifies instead of failing silently', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB);
+    env.load('js/background.js');
+    await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
+    env.get('Storage').saveElement = async () => { throw new Error('disk full'); };
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
+      { url: 'https://example.test/', title: 'x' });
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'failure notification' });
+    assert.deepEqual(env.chrome.notifications[0], {
+      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: disk full",
+    });
+  });
+});
+
+/** Run App.init against a fixture with a stub #app element. */
+async function startApp(spec) {
+  const env = createLegacyEnv({ document: new FakeDocument() });
+  await fixture(env.indexedDB, spec);
+  const before = await dumpDatabase(env.indexedDB);
+  env.document.stub(['app']);
+  env.load(...APP_FILES);
+  const downloads = [];
+  env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
+  env.get('Utils').showToast = () => {};
+  const App = env.get('App');
+  const app = new App();
+  await app.init();
+  return { env, app, before, downloads };
+}

@@ -1,18 +1,40 @@
 /**
  * Side panel intelligence dashboard for New Tab Note.
  */
+
+/** Shown instead of the panel when a newer build upgraded the notes database. */
+const SIDEPANEL_GUARD_TEXT = {
+  title: 'Your notes were upgraded by a newer NewTabNote version',
+  body: "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.",
+};
+
 class SidePanelStorage {
   constructor() {
     this.dbName = 'CanvasTabDB';
+    /** The schema version this build writes (storage.js dbVersion). */
+    this.supportedVersion = 8;
     this.db = null;
   }
 
+  /**
+   * Open the database read-only. One a newer build upgraded is closed again
+   * without reading, and init rejects with code NEWER_SCHEMA.
+   * @returns {Promise<void>}
+   */
   async init() {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        this.db = request.result;
+        const db = request.result;
+        if (db.version > this.supportedVersion) {
+          db.close();
+          const error = /** @type {Error & {code: string}} */ (new Error(`Notes database version ${db.version} is newer than this build supports`));
+          error.code = 'NEWER_SCHEMA';
+          reject(error);
+          return;
+        }
+        this.db = db;
         resolve();
       };
     });
@@ -126,6 +148,42 @@ function renderSummary(summary) {
   }
 }
 
+/**
+ * Replace the panel's content with the newer-version guard: the new tab's
+ * text and one Open new tab button, which leads to Export.
+ * @returns {void}
+ */
+function renderStorageGuard() {
+  document.getElementById('status').classList.add('hidden');
+  document.getElementById('empty-state').classList.add('hidden');
+  const sections = document.getElementById('sections');
+  sections.innerHTML = '';
+
+  const guard = document.createElement('section');
+  guard.className = 'storage-guard';
+  guard.setAttribute('aria-labelledby', 'storage-guard-title');
+
+  const heading = document.createElement('h2');
+  heading.id = 'storage-guard-title';
+  heading.className = 'storage-guard-title';
+  heading.textContent = SIDEPANEL_GUARD_TEXT.title;
+  guard.appendChild(heading);
+
+  const body = document.createElement('p');
+  body.className = 'storage-guard-body';
+  body.textContent = SIDEPANEL_GUARD_TEXT.body;
+  guard.appendChild(body);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'storage-guard-btn';
+  button.textContent = 'Open new tab';
+  button.addEventListener('click', openNotes);
+  guard.appendChild(button);
+
+  sections.appendChild(guard);
+}
+
 async function init() {
   document.getElementById('open-notes').addEventListener('click', openNotes);
   document.querySelector('[data-open-notes]').addEventListener('click', openNotes);
@@ -137,6 +195,10 @@ async function init() {
     const summary = InsightsSummary.buildInsightsSummary(notes, { maxItems: 8 });
     renderSummary(summary);
   } catch (error) {
+    if (error && error.code === 'NEWER_SCHEMA') {
+      renderStorageGuard();
+      return;
+    }
     console.error('Failed to load side panel intelligence:', error);
     renderSummary(null);
   }

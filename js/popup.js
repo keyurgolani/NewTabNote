@@ -2,14 +2,23 @@
  * Popup script for New Tab Note extension
  */
 
+/** Shown instead of the popup when a newer build upgraded the notes database. */
+const POPUP_GUARD_TEXT = {
+  title: 'Your notes were upgraded by a newer NewTabNote version',
+  body: "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.",
+};
+
 class PopupStorage {
   constructor() {
     this.dbName = 'CanvasTabDB';
+    /** The schema version this build writes (storage.js dbVersion). */
+    this.supportedVersion = 8;
     this.db = null;
   }
 
   /**
-   * Initialize the database connection.
+   * Initialize the database connection. A database a newer build upgraded is
+   * closed again without reading or writing, and init rejects with code NEWER_SCHEMA.
    * @returns {Promise<void>}
    */
   async init() {
@@ -19,7 +28,15 @@ class PopupStorage {
       const request = indexedDB.open(this.dbName);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        this.db = request.result;
+        const db = request.result;
+        if (db.version > this.supportedVersion) {
+          db.close();
+          const error = /** @type {Error & {code: string}} */ (new Error(`Notes database version ${db.version} is newer than this build supports`));
+          error.code = 'NEWER_SCHEMA';
+          reject(error);
+          return;
+        }
+        this.db = db;
         resolve();
       };
     });
@@ -308,16 +325,59 @@ function renderRecentNotes(notes) {
     dateSpan.className = 'date';
     dateSpan.textContent = formatDate(note.updatedAt);
     item.appendChild(dateSpan);
-    item.addEventListener('click', () => {
-      chrome.tabs.create({ url: 'newtab.html' });
-    });
+    item.addEventListener('click', openNewTab);
     list.appendChild(item);
   }
+}
+
+/**
+ * Open the new tab page, where the notes (and Export) live.
+ * @returns {void}
+ */
+function openNewTab() {
+  chrome.tabs.create({ url: 'newtab.html' });
+}
+
+/**
+ * Replace the popup body with the newer-version guard: the new tab's text and
+ * one Open new tab button, which leads to Export. Nothing here reads or writes notes.
+ * @returns {void}
+ */
+function renderStorageGuard() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = '';
+  main.classList.add('no-summary');
+
+  const guard = document.createElement('section');
+  guard.className = 'storage-guard';
+  guard.setAttribute('aria-labelledby', 'storage-guard-title');
+
+  const heading = document.createElement('h2');
+  heading.id = 'storage-guard-title';
+  heading.className = 'storage-guard-title';
+  heading.textContent = POPUP_GUARD_TEXT.title;
+  guard.appendChild(heading);
+
+  const body = document.createElement('p');
+  body.className = 'storage-guard-body';
+  body.textContent = POPUP_GUARD_TEXT.body;
+  guard.appendChild(body);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'storage-guard-btn';
+  button.textContent = 'Open new tab';
+  button.addEventListener('click', openNewTab);
+  guard.appendChild(button);
+
+  main.appendChild(guard);
 }
 
 
 async function init() {
   const storage = new PopupStorage();
+  const quickNoteInput = /** @type {HTMLInputElement} */ (document.getElementById('quick-note-input'));
+  let guarded = false;
 
   try {
     await storage.init();
@@ -346,16 +406,24 @@ async function init() {
     const notes = await storage.getAllNotes();
     renderRecentNotes(notes);
   } catch (error) {
-    console.error('Failed to load notes:', error);
-    document.getElementById('page-list').innerHTML = '<div class="empty">Failed to load notes</div>';
+    if (error && error.code === 'NEWER_SCHEMA') {
+      guarded = true;
+      renderStorageGuard();
+    } else {
+      console.error('Failed to load notes:', error);
+      document.getElementById('page-list').innerHTML = '<div class="empty">Failed to load notes</div>';
+    }
   }
 
-  document.getElementById('open-tab').addEventListener('click', () => {
-    chrome.tabs.create({ url: 'newtab.html' });
-  });
+  document.getElementById('open-tab').addEventListener('click', openNewTab);
+
+  if (guarded) {
+    // A newer build owns the database: no quick notes until NewTabNote is updated.
+    quickNoteInput.disabled = true;
+    return;
+  }
 
   // Quick Note input — creates a new note on Enter
-  const quickNoteInput = document.getElementById('quick-note-input');
   quickNoteInput.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     const text = quickNoteInput.value.trim();
