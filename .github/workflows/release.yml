@@ -1,11 +1,12 @@
 name: Release
 
-# A v* tag push checks the tag against every version field, runs pr-checks.yml on the
-# tagged commit, and creates the GitHub Release from the dist/ that run built and tested.
-# It reads no store secret and makes no store call. Publishing to the Chrome Web Store is
-# a workflow_dispatch for an existing release tag, from main or release/**, that waits for
-# the maintainer's approval in the chrome-web-store environment. docs/release-plan.md has
-# the steps.
+# A v* tag push checks the tag against every version field and that it's on main or a
+# release/** branch, runs pr-checks.yml on the tagged commit, and creates the GitHub
+# Release from the dist/ that run built and tested, with a build provenance attestation
+# for the zip. It reads no store secret and makes no store call. Publishing to the Chrome
+# Web Store is a workflow_dispatch for an existing release tag, from main or release/**,
+# that waits for the maintainer's approval in the chrome-web-store environment and
+# verifies the zip's attestation first. docs/release-plan.md has the steps.
 on:
   push:
     tags: ['v*']
@@ -36,22 +37,39 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      TAG: ${{ github.ref_name }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every branch, to find the tagged commit on main or release/**
+          fetch-depth: 0
       - name: Set up Node from .nvmrc
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
       - name: Check the tag against every version field
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node scripts/release/check-version.mjs "$TAG"
+      - name: Check the tagged commit is on main or a release branch
+        run: |
+          set -euo pipefail
+          while read -r ref; do
+            case "$ref" in
+              refs/remotes/origin/main | refs/remotes/origin/release/*) ;;
+              *) continue ;;
+            esac
+            if git merge-base --is-ancestor "$GITHUB_SHA" "$ref"; then
+              echo "✓ $TAG ($GITHUB_SHA) is on ${ref#refs/remotes/origin/}"
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/)
+          echo "::error::$TAG points at $GITHUB_SHA, which isn't on main or any release/** branch. Tag a commit on main, or on release/R<n> for a patch."
+          exit 1
 
   checks:
     name: checks
@@ -67,9 +85,12 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # The only job that writes: it creates the GitHub Release
+    # The only job that writes. It creates the GitHub Release, and the attestation needs an
+    # OIDC token to sign with and permission to store it.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -100,11 +121,19 @@ jobs:
         run: |
           set -euo pipefail
           npm run package
+          npm run check:notices
           cd releases
           zip="new-tab-note-$TAG.zip"
           sha256sum "$zip" > "$zip.sha256"
           sha256sum --check --strict "$zip.sha256"
           echo "sha256=$(cut -d' ' -f1 "$zip.sha256")" >> "$GITHUB_OUTPUT"
+      # publish-store verifies this before it calls the store, so a zip swapped on the
+      # release later doesn't pass. attest-build-provenance v4 runs actions/attest v4.2.1
+      # (node24), pinned by SHA inside it.
+      - name: Attest the zip's build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: releases/new-tab-note-${{ github.ref_name }}.zip
       - name: Find the store listing the README links
         id: listing
         run: |
@@ -115,6 +144,15 @@ jobs:
             exit 1
           fi
           echo "url=${urls[0]}" >> "$GITHUB_OUTPUT"
+      - name: Decide whether this release is marked Latest
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          released=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName')
+          latest=$(printf '%s\n' "$released" | node scripts/release/is-latest.mjs "$TAG")
+          echo "make_latest=$latest" >> "$GITHUB_OUTPUT"
       - name: Create the GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -125,7 +163,7 @@ jobs:
 
             To load this release unpacked:
             1. Download `new-tab-note-${{ github.ref_name }}.zip` and `new-tab-note-${{ github.ref_name }}.zip.sha256`.
-            2. Check the zip with `sha256sum -c new-tab-note-${{ github.ref_name }}.zip.sha256`.
+            2. Check the zip with `sha256sum -c new-tab-note-${{ github.ref_name }}.zip.sha256`, or check its build provenance with `gh attestation verify new-tab-note-${{ github.ref_name }}.zip -R ${{ github.repository }}`.
             3. Extract it to a folder you keep, open `chrome://extensions`, turn on Developer mode, and click Load unpacked.
 
             SHA-256 of `new-tab-note-${{ github.ref_name }}.zip`: `${{ steps.package.outputs.sha256 }}`
@@ -134,8 +172,9 @@ jobs:
             releases/new-tab-note-${{ github.ref_name }}.zip.sha256
           fail_on_unmatched_files: true
           generate_release_notes: true
-          # A patch from release/R<n> doesn't take "latest" from a newer milestone
-          make_latest: legacy
+          # Latest only when no published release has a higher version (is-latest.mjs), so
+          # a patch tagged on release/R<n> after a newer milestone doesn't take Latest from it
+          make_latest: ${{ steps.latest.outputs.make_latest }}
           draft: false
           prerelease: false
 
@@ -146,6 +185,10 @@ jobs:
     # Up to 10 minutes of polling while the store processes the upload
     timeout-minutes: 20
     environment: chrome-web-store
+    # Reads the release and its attestations, nothing more
+    permissions:
+      contents: read
+      attestations: read
     env:
       TAG: ${{ inputs.tag }}
     steps:
@@ -153,11 +196,31 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The tags and history, to find the tag's commit on this branch
+          fetch-depth: 0
       - name: Set up Node from .nvmrc
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
+      - name: Check the tag input is a release tag
+        run: |
+          set -euo pipefail
+          node scripts/release/check-version.mjs "$TAG" --format-only
+      - name: Check the tag is on the dispatched branch
+        id: tag
+        run: |
+          set -euo pipefail
+          if ! commit=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}"); then
+            echo "::error::There is no tag $TAG."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" "$GITHUB_SHA"; then
+            echo "::error::$TAG ($commit) isn't on ${GITHUB_REF#refs/heads/}. Dispatch from the branch it was tagged on: main for a milestone, release/R<n> for a patch."
+            exit 1
+          fi
+          echo "✓ $TAG ($commit) is on ${GITHUB_REF#refs/heads/}"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Download the release zip and its checksum
         env:
           GH_TOKEN: ${{ github.token }}
@@ -169,7 +232,7 @@ jobs:
             --pattern "$zip" --pattern "$zip.sha256"
           for file in "$zip" "$zip.sha256"; do
             if [ ! -f "$RUNNER_TEMP/release/$file" ]; then
-              echo "::error::The $TAG release has no $file. Only a release this workflow created can be published."
+              echo "::error::The $TAG release has no $file. Re-run the $TAG Release run to upload it again."
               exit 1
             fi
           done
@@ -183,6 +246,20 @@ jobs:
             exit 1
           fi
           sha256sum --check --strict "$zip.sha256"
+      # The checksum sits on the same release as the zip, so it only catches a broken
+      # download. The attestation ties the zip to release.yml's run for this tag and commit.
+      - name: Verify the zip's build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "$RUNNER_TEMP/release/new-tab-note-$TAG.zip" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" \
+            --source-digest "$COMMIT" \
+            --deny-self-hosted-runners
       - name: Check the zip's manifest version against the tag
         run: |
           set -euo pipefail
