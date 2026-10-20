@@ -283,13 +283,34 @@ describe('eslint.config.mjs boundary rules', () => {
     append('js/resizable-panel.js', 'export const later = () => import(`./kernel/adapters/legacy/notes.js`);');
     // An import() whose specifier isn't a fixed string can't be checked, so it counts
     append('js/virtual-scroller.js', 'export const named = name => import(`./kernel/${name}.js`);');
+    // Other spellings Chrome resolves to the same file: %XX escapes, a scheme-relative URL,
+    // .. past the root, and backslashes, which a standard scheme's path reads as slashes
+    append('js/image-compression.js', "import './kern%65l/adapters/legacy/notes.js';");
+    append('js/stream-renderer.js', "import '/js/kern%65l/adapters/legacy/notes.js';");
+    append('js/scroll-state-machine.js', "import '//emildbpnneonfcanpfnafkphiflbddig/js/kernel/adapters/legacy/notes.js';");
+    append('js/chat-ui-components.js', "import '/../js/kernel/adapters/legacy/notes.js';");
+    append('js/ai-prompt-templates.js', "import '../../js/kernel/adapters/legacy/notes.js';");
+    append('js/utils/sanitize.js', "import './../kernel\\\\adapters\\\\legacy\\\\notes.js';");
+    // macOS and Windows open the file in any case
+    append('js/core/dom-refs.js', "import '/JS/Kernel/Adapters/legacy/notes.js';");
+    // A specifier that doesn't resolve counts, and a malformed one doesn't stop the lint
+    append('js/ai-response-utils.js', "import 'chrome-extension://emildbpnneonfcanpfnafkphiflbddig/js/%E0%A4%A.js';");
+    append('js/core/logger.js', "import 'kernel/adapters/legacy/notes.js';");
+    // A URL of another protocol names no file in the package, so it isn't an adapter
+    // import, though core may not import one either
+    append('js/core/event-bus.js', "import 'https://cdn.example.test/js/kernel/adapters/legacy/notes.js';");
     write('js/kernel/core/probe.js', [
       "import '../../storage.js';",
+      "import 'https://cdn.example.test/valibot.js';",
+      "import 'valibot';",
       // Allowed: core itself and the vendored Valibot, however the specifier is written
       "import { sibling } from './domain/sibling.js';",
       "import * as v from '../../lib/valibot/index.mjs';",
+      "import '/js/lib/valibot/index.mjs';",
       "import '/js/kernel/core/domain/sibling.js';",
+      "import 'chrome-extension://emildbpnneonfcanpfnafkphiflbddig/js/kernel/core/domain/sibling.js';",
       'export const lazy = () => import(`./domain/sibling.js`);',
+      'export const lazyValibot = () => import(`../../lib/valibot/index.mjs`);',
       'export const id = chrome.runtime.id;',
       'export const kind = typeof window;',
       'export const ok = [sibling, v, new Map(), Promise.resolve()];',
@@ -316,12 +337,21 @@ describe('eslint.config.mjs boundary rules', () => {
       'js/command-palette-utils.js: 1 adapter-import hit no ledger row covers',
       'js/resizable-panel.js: 1 adapter-import hit no ledger row covers',
       'js/virtual-scroller.js: 1 adapter-import hit no ledger row covers',
-      'js/kernel/core/probe.js: 1 core-import hit no ledger row covers',
+      'js/image-compression.js: 1 adapter-import hit no ledger row covers',
+      'js/stream-renderer.js: 1 adapter-import hit no ledger row covers',
+      'js/scroll-state-machine.js: 1 adapter-import hit no ledger row covers',
+      'js/chat-ui-components.js: 1 adapter-import hit no ledger row covers',
+      'js/ai-prompt-templates.js: 1 adapter-import hit no ledger row covers',
+      'js/utils/sanitize.js: 1 adapter-import hit no ledger row covers',
+      'js/core/dom-refs.js: 1 adapter-import hit no ledger row covers',
+      'js/ai-response-utils.js: 1 adapter-import hit no ledger row covers',
+      'js/core/logger.js: 1 adapter-import hit no ledger row covers',
+      'js/kernel/core/probe.js: 3 core-import hits no ledger row covers',
       'js/kernel/core/probe.js: 2 core-global hits no ledger row covers',
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
-    assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 12, output);
+    assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/core\/event-bus\.js/);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 21, output);
   });
 });

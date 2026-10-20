@@ -77,19 +77,41 @@ const APP_CALLBACK = {
 };
 
 /**
- * The repository path an import specifier names, resolved the way Chrome resolves it in an
- * extension: a leading / from the extension root, a chrome-extension:// URL by its path, and
- * ./ or ../ from the importing file's directory. Null for a bare specifier or any other URL,
- * which name nothing in the package.
+ * The package root as a URL. Chrome registers chrome-extension: as a standard scheme, so its
+ * URL parser reads a backslash in a path as a slash. Node's URL keeps the backslash, since
+ * chrome-extension: isn't special to it, but parses https: the way Chrome parses
+ * chrome-extension:.
  */
-const packagePath = (specifier, fileDir) => {
-  let target;
-  if (/^chrome-extension:\/\//i.test(specifier)) target = path.join(ROOT, decodeURIComponent(new URL(specifier).pathname));
-  else if (/^[a-z][a-z\d+.-]*:/i.test(specifier)) return null;
-  else if (specifier.startsWith('/')) target = path.join(ROOT, specifier);
-  else if (/^\.{1,2}\//.test(specifier)) target = path.resolve(fileDir, specifier);
-  else return null;
-  return path.relative(ROOT, target).split(path.sep).join('/');
+const PACKAGE = 'https://package.invalid/';
+
+/** A specifier that names a URL of another protocol, so no file in the package */
+const ELSEWHERE = Symbol('elsewhere');
+/** A bare specifier, which nothing resolves without an import map, or one that doesn't parse or decode */
+const UNRESOLVED = Symbol('unresolved');
+
+/**
+ * The package path an import specifier names, resolved the way Chrome resolves a module
+ * specifier in an extension: one that starts with /, ./, or ../ against the importing file's
+ * URL, and anything else as an absolute URL, which must be chrome-extension: to land in the
+ * package. Dot segments stop at the root, any extension ID counts as this one, and the path
+ * is percent-decoded once, as Chrome does before it opens the file.
+ */
+const resolveSpecifier = (specifier, fileUrl) => {
+  try {
+    let url;
+    if (/^\.{0,2}\//.test(specifier)) {
+      url = new URL(specifier, fileUrl);
+    } else {
+      if (new URL(specifier).protocol !== 'chrome-extension:') return ELSEWHERE;
+      // Parse it again as https:, after the URL parser's own cleanup: no leading or trailing
+      // C0 control or space, and no tab or newline anywhere
+      const clean = specifier.replace(/^[\u0000- ]+|[\u0000- ]+$/g, '').replace(/[\t\n\r]/g, '');
+      url = new URL(clean.replace(/^chrome-extension:/i, 'https:'));
+    }
+    return decodeURIComponent(url.pathname).slice(1);
+  } catch {
+    return UNRESOLVED;
+  }
 };
 
 /**
@@ -106,7 +128,10 @@ const specifierOf = source => {
  * Imports checked against where they land: `deny` lists directories nothing may import
  * from, and `allow`, when given, the only directories imports may come from. Static
  * imports, `export ... from`, and import() count. An import() whose specifier is built at
- * run time could name anything, so it always counts.
+ * run time could name anything, so it always counts, and so does a bare or malformed
+ * specifier. A URL of another protocol names nothing in the package, so `deny` lets it be
+ * (MV3's CSP won't load it anyway), and `allow` counts it. `deny` matches in any case,
+ * since macOS and Windows open a file however its path is cased.
  */
 const importsRule = {
   meta: {
@@ -128,19 +153,22 @@ const importsRule = {
   create(context) {
     const { rule, message, allow, deny = [] } = context.options[0];
     const inside = (file, dirs) => dirs.some(dir => file === dir.replace(/\/$/, '') || file.startsWith(dir));
-    const fileDir = realDir(path.dirname(context.filename));
+    const denied = file => inside(file.toLowerCase(), deny.map(dir => dir.toLowerCase()));
+    const file = path.join(realDir(path.dirname(context.filename)), path.basename(context.filename));
+    const fileUrl = new URL(path.relative(ROOT, file).split(path.sep).map(encodeURIComponent).join('/'), PACKAGE);
     const check = (node, source) => {
       if (!source) return;
+      const report = (why = '') => context.report({ node, message: `[${rule}] ${message}${why}` });
       const specifier = specifierOf(source);
       if (specifier === null) {
-        context.report({ node, message: `[${rule}] ${message} This import() builds its specifier at run time, so it can't be checked.` });
+        report(" This import() builds its specifier at run time, so it can't be checked.");
         return;
       }
-      const target = packagePath(specifier, fileDir);
-      const blocked = target === null
-        ? Boolean(allow)
-        : inside(target, deny) || Boolean(allow && !inside(target, allow));
-      if (blocked) context.report({ node, message: `[${rule}] ${message}` });
+      const target = resolveSpecifier(specifier, fileUrl);
+      if (target === UNRESOLVED) report(" This specifier is bare or malformed, so it can't be checked.");
+      else if (target === ELSEWHERE) {
+        if (allow) report();
+      } else if (denied(target) || (allow && !inside(target, allow))) report();
     };
     return {
       ImportDeclaration: node => check(node, node.source),
