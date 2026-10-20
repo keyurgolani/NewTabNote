@@ -45,7 +45,9 @@ export const CALLERS = Object.freeze({
   newtab: Object.freeze({ surface: 'newtab', contextId: 'newtab-1' }),
   popup: Object.freeze({ surface: 'popup', contextId: 'popup-1' }),
   sidepanel: Object.freeze({ surface: 'sidepanel', contextId: 'sidepanel-1' }),
-  worker: Object.freeze({ surface: 'worker', contextId: 'worker-1' }),
+  offscreen: Object.freeze({ surface: 'offscreen', contextId: 'offscreen-1' }),
+  'worker-internal': Object.freeze({ surface: 'worker-internal', contextId: 'worker-1' }),
+  recovery: Object.freeze({ surface: 'recovery', contextId: 'recovery-1' }),
 });
 
 /**

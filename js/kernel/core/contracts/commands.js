@@ -2,16 +2,18 @@
  * The command catalog (#12, "Commands"). A command says what the user or a job meant,
  * never "put this whole record". Each carries a `commandId`, and every other id it needs (the
  * note to create, the block a capture adds) is chosen when the intent happens, so a retry
- * names the same things. Payloads are structured-clone safe.
+ * names the same things. Payloads are what contracts/clone.js copies.
  *
- * Slice 3 holds the commands the kernel core needs to prove itself, and later slices add
- * theirs as they route callers to the kernel. #13 (message contracts) adds versions and
- * validators to this file.
+ * Each entry names the command's aggregate and the surfaces allowed to run it, which the
+ * baseline policy reads. Slice 3 holds the commands the kernel core needs to prove itself,
+ * and later slices add theirs as they route callers to the kernel. #13 (message contracts)
+ * adds versions and validators to these entries.
  */
 
 /** @typedef {import('../domain/note.js').BlockInput} BlockInput */
 /** @typedef {import('../domain/note.js').Capture} Capture */
 /** @typedef {import('../domain/session.js').WorkspaceSession} WorkspaceSession */
+/** @typedef {import('./surfaces.js').Surface} Surface */
 
 /**
  * A note with the fields Storage.createNote has always written, plus its search entry.
@@ -104,28 +106,44 @@
 /** @typedef {'note' | 'folder' | 'preferences' | 'session' | 'system'} Aggregate */
 
 /**
- * Each command's aggregate, which names it in the commit feed. A bulk command returns an
- * outcome per item.
- * @type {Readonly<Record<CommandType, Readonly<{aggregate: Aggregate, bulk?: true}>>>}
+ * A command's catalog entry: its aggregate, which names it in the commit feed, and the
+ * surfaces allowed to run it. A bulk command returns an outcome per item.
+ * @typedef {Readonly<{aggregate: Aggregate, surfaces: readonly Surface[], bulk?: true}>} CommandEntry
+ */
+
+/**
+ * @param {Aggregate} aggregate
+ * @param {Surface[]} surfaces
+ * @param {{bulk?: true}} [options]
+ * @returns {CommandEntry}
+ */
+const entry = (aggregate, surfaces, options = {}) =>
+  Object.freeze({ aggregate, surfaces: Object.freeze(surfaces), ...options });
+
+/**
+ * What each surface could do before the kernel: everything from the new-tab page, a quick
+ * note from Popup, nothing from Side Panel, and capture plus startup maintenance from the
+ * service worker.
+ * @type {Readonly<Record<CommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
-  createNote: Object.freeze({ aggregate: 'note' }),
-  renameNote: Object.freeze({ aggregate: 'note' }),
-  setPinned: Object.freeze({ aggregate: 'note' }),
-  archiveNote: Object.freeze({ aggregate: 'note' }),
-  unarchiveNote: Object.freeze({ aggregate: 'note' }),
-  trashNote: Object.freeze({ aggregate: 'note' }),
-  restoreNote: Object.freeze({ aggregate: 'note' }),
-  saveNoteContent: Object.freeze({ aggregate: 'note' }),
-  applyDerivedTitle: Object.freeze({ aggregate: 'note' }),
-  attachInsights: Object.freeze({ aggregate: 'note' }),
-  captureToDailyNote: Object.freeze({ aggregate: 'note' }),
-  runBulkAction: Object.freeze({ aggregate: 'note', bulk: true }),
-  createFolder: Object.freeze({ aggregate: 'folder' }),
-  moveFolder: Object.freeze({ aggregate: 'folder' }),
-  setPreferences: Object.freeze({ aggregate: 'preferences' }),
-  saveWorkspaceSession: Object.freeze({ aggregate: 'session' }),
-  runStartupMaintenance: Object.freeze({ aggregate: 'system' }),
+  createNote: entry('note', ['newtab', 'popup']),
+  renameNote: entry('note', ['newtab']),
+  setPinned: entry('note', ['newtab']),
+  archiveNote: entry('note', ['newtab']),
+  unarchiveNote: entry('note', ['newtab']),
+  trashNote: entry('note', ['newtab']),
+  restoreNote: entry('note', ['newtab']),
+  saveNoteContent: entry('note', ['newtab']),
+  applyDerivedTitle: entry('note', ['newtab']),
+  attachInsights: entry('note', ['newtab']),
+  captureToDailyNote: entry('note', ['newtab', 'worker-internal']),
+  runBulkAction: entry('note', ['newtab'], { bulk: true }),
+  createFolder: entry('folder', ['newtab']),
+  moveFolder: entry('folder', ['newtab']),
+  setPreferences: entry('preferences', ['newtab']),
+  saveWorkspaceSession: entry('session', ['newtab']),
+  runStartupMaintenance: entry('system', ['newtab', 'worker-internal']),
 });
 
 /** @type {readonly CommandType[]} */

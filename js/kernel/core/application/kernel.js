@@ -6,6 +6,10 @@
  * own commands changed. Calls are async and take and return structured-clone-safe values, so
  * #35 can point the client at the background coordinator without changing a caller.
  *
+ * Each kernel has one fixed caller, its composition root's, and the policy checks it on every
+ * command and query. Nothing a payload says changes it, so #35's coordinator builds one kernel
+ * per principal #13 verified rather than one that takes the caller from a message.
+ *
  * execute() runs every command the same way: copy it, ask the policy, recall the outcome an
  * earlier run of its commandId got, run its use case, commit, and publish what changed. Once
  * the kernel is ready nothing before the commit is awaited, so saveNoteContent opens its
@@ -195,10 +199,10 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
       return Promise.resolve(rejected('validation', 'not-cloneable'));
     }
     if (!isRecord(copy)) return Promise.resolve(rejected('validation', 'invalid-command'));
+    if (!isCommandType(copy.type)) return Promise.resolve(rejected('policy', 'unknown-command'));
     const request = copy;
     const decision = decide(() => policy.authorize(request, caller));
     if (!decision.allowed) return Promise.resolve(rejected('policy', decision.code));
-    if (!isCommandType(copy.type)) return Promise.resolve(rejected('policy', 'unknown-command'));
     if (!isId(copy.commandId)) return Promise.resolve(rejected('validation', 'invalid-command'));
     const command = /** @type {Command} */ (copy);
 
@@ -253,10 +257,10 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
       return Promise.resolve(failed('validation', 'not-cloneable'));
     }
     if (!isRecord(copy)) return Promise.resolve(failed('validation', 'invalid-query'));
-    const request = copy;
-    const decision = decide(() => policy.authorizeQuery(request, caller));
-    if (!decision.allowed) return Promise.resolve(failed('policy', decision.code));
     if (!isQueryType(copy.type)) return Promise.resolve(failed('policy', 'unknown-query'));
+    const request = copy;
+    const decision = decide(() => policy.authorize(request, caller));
+    if (!decision.allowed) return Promise.resolve(failed('policy', decision.code));
     const handler = /** @type {(query: Query, context: UseCaseContext) => Promise<QueryState<QueryData[T]>>} */ (
       QUERY_HANDLERS[copy.type]
     );

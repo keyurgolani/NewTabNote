@@ -60,12 +60,8 @@ function spyPolicy(log, allow) {
   /** @type {import('../../js/kernel/core/ports/policy.js').Decision} */
   const decision = allow ? { allowed: true } : { allowed: false, code: 'test-deny' };
   return {
-    authorize: command => {
-      log.push(`authorize ${String(command.type)}`);
-      return decision;
-    },
-    authorizeQuery: query => {
-      log.push(`authorizeQuery ${String(query.type)}`);
+    authorize: request => {
+      log.push(`authorize ${String(request.type)}`);
       return decision;
     },
   };
@@ -95,7 +91,7 @@ describe('the kernel', () => {
         cause: 'policy',
         code: 'test-deny',
       });
-      assert.deepEqual(log, [`authorizeQuery ${type}`], type);
+      assert.deepEqual(log, [`authorize ${type}`], type);
     }
   });
 
@@ -189,7 +185,7 @@ describe('the kernel', () => {
     const broken = () => {
       throw new Error('policy bug');
     };
-    const closed = kernelWith({ policy: { authorize: broken, authorizeQuery: broken } });
+    const closed = kernelWith({ policy: { authorize: broken } });
     const denied = await closed.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
     assert.deepEqual(denied.kind === 'rejected' && [denied.reason, denied.code], ['policy', 'policy-failed']);
     assert.deepEqual(await closed.query({ type: 'listFolders' }), {

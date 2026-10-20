@@ -389,7 +389,7 @@ export function runContractSuite(fixture) {
       const page = /** @type {const} */ ({ type: 'bookmark', url: 'https://example.test/page', title: 'Example page' });
 
       it("creates today's Daily Note with its search entry, then adds each capture to it", async () => {
-        const worker = ctx.kernel(CALLERS.worker);
+        const worker = ctx.kernel(CALLERS['worker-internal']);
         const first = committedOf(
           await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: page })),
         );
@@ -434,7 +434,7 @@ export function runContractSuite(fixture) {
           blocks: [{ id: 't1', type: 'text', content: 'Notes for {{title}}', order: 0 }],
         });
         await run(cmd('setPreferences', { values: { dailyNoteTemplate: 'tpl' } }));
-        const worker = ctx.kernel(CALLERS.worker);
+        const worker = ctx.kernel(CALLERS['worker-internal']);
         committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: page })));
         const contents = (await blocksOf('d1')).map(block => block.content);
         assert.ok(contents.includes('Notes for Daily Note - Oct 20, 2026'), JSON.stringify(contents));
@@ -446,7 +446,7 @@ export function runContractSuite(fixture) {
       });
 
       it("doesn't reuse a trashed Daily Note, or one from another day", async () => {
-        const worker = ctx.kernel(CALLERS.worker);
+        const worker = ctx.kernel(CALLERS['worker-internal']);
         committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: page })));
         ctx.clock.advance(24 * 60 * 60 * 1000);
         committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd2', blockId: 'c2', capture: page })));
@@ -615,7 +615,7 @@ export function runContractSuite(fixture) {
         const defaults = await kernel.query({ type: 'getPreferences', keys: Object.keys(DEFAULT_PREFERENCES) });
         assert.deepEqual(defaults.kind === 'ready' && defaults.data, DEFAULT_PREFERENCES);
         await run(cmd('setPreferences', { values: { theme: 'dark' } }));
-        committedOf(await ctx.kernel(CALLERS.worker).execute(cmd('runStartupMaintenance', {})));
+        committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
         const theme = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
         assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'dark' });
       });
@@ -674,13 +674,26 @@ export function runContractSuite(fixture) {
         const panel = ctx.kernel(CALLERS.sidepanel);
         assertRejected(await panel.execute(cmd('createNote', { noteId: 'n1' })), 'policy', 'not-on-surface');
         assert.equal(await noteOf('n1'), undefined);
-        const worker = ctx.kernel(CALLERS.worker);
+        const worker = ctx.kernel(CALLERS['worker-internal']);
         assertRejected(await worker.execute(cmd('createNote', { noteId: 'n2' })), 'policy', 'not-on-surface');
         assert.deepEqual(await worker.query({ type: 'listNotes', view: 'active' }), {
           kind: 'failed',
           cause: 'policy',
           code: 'not-on-surface',
         });
+      });
+
+      it('lets the offscreen document and the recovery page run nothing until #13 and #35 add their entries', async () => {
+        for (const caller of [CALLERS.offscreen, CALLERS.recovery]) {
+          const other = ctx.kernel(caller);
+          assertRejected(await other.execute(cmd('createNote', { noteId: 'n1' })), 'policy', 'not-on-surface');
+          assert.deepEqual(await other.query({ type: 'listFolders' }), {
+            kind: 'failed',
+            cause: 'policy',
+            code: 'not-on-surface',
+          });
+        }
+        assert.equal(await noteOf('n1'), undefined);
       });
 
       it('rejects a command the catalog lacks, and a caller that is no surface', async () => {
@@ -758,7 +771,7 @@ export function runContractSuite(fixture) {
           await kernel.execute(
             cmd('saveNoteContent', { noteId: 'n1', blocks: [{ id: 'b1', content: secret }], preview: secret }),
           ),
-          await ctx.kernel(CALLERS.worker).execute(
+          await ctx.kernel(CALLERS['worker-internal']).execute(
             cmd('captureToDailyNote', {
               noteId: 'd1',
               blockId: 'c1',
