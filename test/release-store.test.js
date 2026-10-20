@@ -22,12 +22,12 @@ const ACCESS_TOKEN = 'ya29.ntn-test-access-token-31c8aa';
 const NEVER_PRINTED = [ACCESS_TOKEN, CREDENTIALS.CHROME_REFRESH_TOKEN, CREDENTIALS.CHROME_CLIENT_SECRET]
   .flatMap(value => [value, encodeURIComponent(value), new URLSearchParams({ value }).toString().slice('value='.length)]);
 
-// Divides the 60 s request timeout to 300 ms, the 5 s poll interval to 25 ms, and the
-// 10 min polling cap to 3 s
-const TIME_SCALE = 200;
-const TIMEOUT_MS = 60000 / TIME_SCALE;
-const INTERVAL_MS = 5000 / TIME_SCALE;
-const CAP_MS = 600000 / TIME_SCALE;
+// CWS_TEST_TIME_SCALE divides the 60 s request timeout, the 5 s poll interval, and the
+// 10 min polling cap. Most tests use 10, so a request gets 6 s even on a busy CI runner.
+// Tests that wait on the clock use 40: a 1.5 s timeout, 125 ms polls, and a 15 s cap.
+const SCALE = 10;
+const CLOCK_SCALE = 40;
+const CLOCK = { timeoutMs: 1500, timeout: '1.5 s', intervalMs: 125, interval: '125 ms', capMs: 15000, cap: '15 s' };
 
 const ITEM = `publishers/${CREDENTIALS.CHROME_PUBLISHER_ID}/items/${CREDENTIALS.CHROME_EXTENSION_ID}`;
 // Every request the script may make. Anything else is recorded as `unexpected`.
@@ -78,7 +78,7 @@ async function fakeGoogle(replies) {
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
-    req.on('end', async () => {
+    req.on('end', () => {
       const { pathname } = new URL(req.url, 'http://fake-google');
       const route = ROUTES[`${req.method} ${pathname}`] ?? 'unexpected';
       const request = { route, method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks), at: performance.now() };
@@ -133,7 +133,7 @@ function runScript(args, env) {
     const started = performance.now();
     const child = spawn(process.execPath, [SCRIPT, ...args], { env: childEnv });
     // A run that never ends fails its test instead of hanging the suite
-    const killer = setTimeout(() => child.kill('SIGKILL'), 20000);
+    const killer = setTimeout(() => child.kill('SIGKILL'), 60000);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
@@ -150,13 +150,13 @@ function runScript(args, env) {
  * Run publish-store.mjs against fake Google with the test credentials. `env` overrides
  * them, and an undefined value removes one.
  */
-async function publish(replies, { env = {}, args = [zipPath] } = {}) {
+async function publish(replies, { env = {}, args = [zipPath], scale = SCALE } = {}) {
   const google = await fakeGoogle(replies);
   try {
     const result = await runScript(args, {
       ...CREDENTIALS,
       CWS_TEST_BASE_URL: google.url,
-      CWS_TEST_TIME_SCALE: String(TIME_SCALE),
+      CWS_TEST_TIME_SCALE: String(scale),
       ...env,
     });
     return { ...result, google };
@@ -199,11 +199,13 @@ function assertFailed(result, subject, detail) {
   assert.deepEqual(result.google?.calls('unexpected') ?? [], []);
 }
 
+const routesOf = result => result.google.requests.map(r => r.route);
+
 describe('publish-store.mjs on success', () => {
   it('publishes a synchronous SUCCEEDED upload without calling :fetchStatus, and reports PENDING_REVIEW as submitted', async () => {
     const result = await publish(SYNC_UPLOAD);
     assertSucceeded(result);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload', 'publish']);
+    assert.deepEqual(routesOf(result), ['token', 'upload', 'publish']);
     assert.match(result.stdout, /^✓ Submitted, pending store review\./m);
     assert.doesNotMatch(result.output, /published/i);
   });
@@ -212,28 +214,6 @@ describe('publish-store.mjs on success', () => {
     const result = await publish({ ...SYNC_UPLOAD, publish: published('PUBLISHED') });
     assertSucceeded(result);
     assert.match(result.stdout, /^✓ Published\./m);
-  });
-
-  it('polls :fetchStatus every interval while an upload is IN_PROGRESS, then publishes once it SUCCEEDED', async () => {
-    const result = await publish({
-      ...ASYNC_UPLOAD,
-      fetchStatus: count => status(count < 3 ? 'IN_PROGRESS' : 'SUCCEEDED'),
-    });
-    assertSucceeded(result);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload', 'fetchStatus', 'fetchStatus', 'fetchStatus', 'publish']);
-    const times = result.google.requests.filter(r => r.route === 'upload' || r.route === 'fetchStatus').map(r => r.at);
-    for (let i = 1; i < times.length; i++) {
-      const gap = times[i] - times[i - 1];
-      assert.ok(gap >= INTERVAL_MS * 0.9, `poll ${i} came ${gap.toFixed(1)} ms after the previous request, under the ${INTERVAL_MS} ms interval`);
-    }
-    assert.match(result.stdout, /^✓ Submitted, pending store review\./m);
-  });
-
-  it('treats UPLOAD_IN_PROGRESS as in progress too', async () => {
-    const result = await publish({ ...ASYNC_UPLOAD, upload: uploaded('UPLOAD_IN_PROGRESS') });
-    assertSucceeded(result);
-    assert.equal(result.google.calls('fetchStatus').length, 1);
-    assert.equal(result.google.calls('publish').length, 1);
   });
 
   it('prints every warning in the :publish warningInfo', async () => {
@@ -280,6 +260,69 @@ describe('publish-store.mjs on success', () => {
   });
 });
 
+// Each call, the replies that reach it, and the routes called up to and including it
+const REACHING = {
+  token: [SYNC_UPLOAD, ['token']],
+  upload: [SYNC_UPLOAD, ['token', 'upload']],
+  fetchStatus: [ASYNC_UPLOAD, ['token', 'upload', 'fetchStatus']],
+  publish: [SYNC_UPLOAD, ['token', 'upload', 'publish']],
+};
+
+// These wait on the clock, so they run side by side
+describe('publish-store.mjs polling and timeouts', { concurrency: true }, () => {
+  const clocked = (replies, options = {}) => publish(replies, { ...options, scale: CLOCK_SCALE });
+
+  it('polls :fetchStatus every interval while an upload is IN_PROGRESS, then publishes once it SUCCEEDED', async () => {
+    const result = await clocked({ ...ASYNC_UPLOAD, fetchStatus: count => status(count < 3 ? 'IN_PROGRESS' : 'SUCCEEDED') });
+    assertSucceeded(result);
+    assert.deepEqual(routesOf(result), ['token', 'upload', 'fetchStatus', 'fetchStatus', 'fetchStatus', 'publish']);
+    const times = result.google.requests.filter(r => r.route === 'upload' || r.route === 'fetchStatus').map(r => r.at);
+    for (let i = 1; i < times.length; i++) {
+      const gap = times[i] - times[i - 1];
+      assert.ok(gap >= CLOCK.intervalMs * 0.9, `poll ${i} came ${gap.toFixed(1)} ms after the previous request, under the ${CLOCK.intervalMs} ms interval`);
+    }
+    assert.match(result.stdout, /^✓ Submitted, pending store review\./m);
+  });
+
+  it('treats UPLOAD_IN_PROGRESS as in progress too', async () => {
+    const result = await clocked({ ...ASYNC_UPLOAD, upload: uploaded('UPLOAD_IN_PROGRESS') });
+    assertSucceeded(result);
+    assert.deepEqual(routesOf(result), ['token', 'upload', 'fetchStatus', 'publish']);
+  });
+
+  it('exits 1 without :publish when :fetchStatus reports the upload ended anywhere but SUCCEEDED', async () => {
+    for (const state of ['FAILED', 'NOT_FOUND', 'UPLOAD_STATE_UNSPECIFIED', undefined]) {
+      const result = await clocked({ ...ASYNC_UPLOAD, fetchStatus: count => status(count < 2 ? 'IN_PROGRESS' : state) });
+      assertFailed(result, ':fetchStatus', new RegExp(`lastAsyncUploadState ${state ?? '\\(missing\\)'}, so the upload ended without SUCCEEDED`));
+      assert.deepEqual(routesOf(result), ['token', 'upload', 'fetchStatus', 'fetchStatus']);
+    }
+  });
+
+  it('exits 1 without :publish when the upload is still IN_PROGRESS at the polling cap', async () => {
+    const result = await clocked({ ...ASYNC_UPLOAD, fetchStatus: status('IN_PROGRESS') });
+    assertFailed(result, ':fetchStatus', new RegExp(`still reports IN_PROGRESS after ${CLOCK.cap} of polling every ${CLOCK.interval}`));
+    const polls = result.google.calls('fetchStatus').length;
+    assert.ok(polls >= 2 && polls <= CLOCK.capMs / CLOCK.intervalMs + 1, `${polls} polls`);
+    assert.ok(result.elapsed >= CLOCK.capMs, `gave up after ${result.elapsed.toFixed(0)} ms`);
+    assert.equal(result.google.calls('publish').length, 0);
+  });
+
+  for (const [route, [replies, routes]] of Object.entries(REACHING)) {
+    it(`exits 1 naming ${CALL_NAMES[route]} when it takes longer than the request timeout`, async () => {
+      const result = await clocked({ ...replies, [route]: { hang: true } });
+      assertFailed(result, CALL_NAMES[route], new RegExp(`no complete response within ${CLOCK.timeout}`));
+      assert.deepEqual(routesOf(result), routes);
+      assert.ok(result.elapsed >= CLOCK.timeoutMs, `exited after ${result.elapsed.toFixed(0)} ms`);
+    });
+  }
+
+  it('exits 1 naming :upload when its body stops arriving before the request timeout', async () => {
+    const result = await clocked({ ...SYNC_UPLOAD, upload: { stall: true } });
+    assertFailed(result, ':upload', new RegExp(`no complete response within ${CLOCK.timeout}`));
+    assert.ok(result.elapsed >= CLOCK.timeoutMs, `exited after ${result.elapsed.toFixed(0)} ms`);
+  });
+});
+
 describe('publish-store.mjs fails closed', () => {
   for (const name of Object.keys(CREDENTIALS)) {
     it(`exits 1 before any call without ${name}`, async () => {
@@ -312,50 +355,29 @@ describe('publish-store.mjs fails closed', () => {
   it('exits 1 on a token response without access_token', async () => {
     const result = await publish({ ...SYNC_UPLOAD, token: ok({ token_type: 'Bearer', expires_in: 3599 }) });
     assertFailed(result, 'OAuth token request', /without an access_token \(fields: token_type, expires_in\)/);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token']);
+    assert.deepEqual(routesOf(result), ['token']);
   });
 
   it('prints the OAuth error when the token endpoint refuses the refresh token', async () => {
     const token = { status: 400, body: { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' } };
     const result = await publish({ ...SYNC_UPLOAD, token });
     assertFailed(result, 'OAuth token request', /HTTP 400: invalid_grant: Token has been expired or revoked\./);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token']);
+    assert.deepEqual(routesOf(result), ['token']);
   });
-
-  // Each call, the replies that reach it, and the routes called up to and including it
-  const REACHING = {
-    token: [SYNC_UPLOAD, ['token']],
-    upload: [SYNC_UPLOAD, ['token', 'upload']],
-    fetchStatus: [ASYNC_UPLOAD, ['token', 'upload', 'fetchStatus']],
-    publish: [SYNC_UPLOAD, ['token', 'upload', 'publish']],
-  };
 
   for (const [route, [replies, routes]] of Object.entries(REACHING)) {
     it(`exits 1 naming ${CALL_NAMES[route]} on a non-2xx response`, async () => {
       const result = await publish({ ...replies, [route]: googleError(503, 'UNAVAILABLE', 'The service is currently unavailable.') });
       assertFailed(result, CALL_NAMES[route], /HTTP 503: UNAVAILABLE: The service is currently unavailable\./);
-      assert.deepEqual(result.google.requests.map(r => r.route), routes);
+      assert.deepEqual(routesOf(result), routes);
     });
 
     it(`exits 1 naming ${CALL_NAMES[route]} on a body that is not JSON`, async () => {
       const result = await publish({ ...replies, [route]: { status: 200, type: 'text/html', raw: '<html><body>Sorry</body></html>' } });
       assertFailed(result, CALL_NAMES[route], /isn't a JSON object: <html><body>Sorry<\/body><\/html>/);
-      assert.deepEqual(result.google.requests.map(r => r.route), routes);
-    });
-
-    it(`exits 1 naming ${CALL_NAMES[route]} when it takes longer than the request timeout`, async () => {
-      const result = await publish({ ...replies, [route]: { hang: true } });
-      assertFailed(result, CALL_NAMES[route], new RegExp(`no complete response within ${TIMEOUT_MS} ms`));
-      assert.deepEqual(result.google.requests.map(r => r.route), routes);
-      assert.ok(result.elapsed >= TIMEOUT_MS, `exited after ${result.elapsed.toFixed(0)} ms`);
+      assert.deepEqual(routesOf(result), routes);
     });
   }
-
-  it('exits 1 naming :upload when its body stops arriving before the request timeout', async () => {
-    const result = await publish({ ...SYNC_UPLOAD, upload: { stall: true } });
-    assertFailed(result, ':upload', new RegExp(`no complete response within ${TIMEOUT_MS} ms`));
-    assert.ok(result.elapsed >= TIMEOUT_MS, `exited after ${result.elapsed.toFixed(0)} ms`);
-  });
 
   it('exits 1 naming :upload when a JSON array or null comes back instead of an object', async () => {
     for (const raw of ['[]', 'null', '"SUCCEEDED"']) {
@@ -368,32 +390,15 @@ describe('publish-store.mjs fails closed', () => {
     const upload = googleError(400, 'FAILED_PRECONDITION', 'You may not edit or publish an item that is in review.');
     const result = await publish({ ...SYNC_UPLOAD, upload });
     assertFailed(result, ':upload', /HTTP 400: FAILED_PRECONDITION: You may not edit or publish an item that is in review\./);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload']);
+    assert.deepEqual(routesOf(result), ['token', 'upload']);
   });
 
   it('exits 1 without :publish when :upload ends anywhere but SUCCEEDED', async () => {
     for (const state of ['FAILED', 'NOT_FOUND', 'UPLOAD_STATE_UNSPECIFIED', undefined]) {
       const result = await publish({ ...SYNC_UPLOAD, upload: uploaded(state) });
       assertFailed(result, ':upload', new RegExp(`uploadState ${state ?? '\\(missing\\)'}, not SUCCEEDED`));
-      assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload']);
+      assert.deepEqual(routesOf(result), ['token', 'upload']);
     }
-  });
-
-  it('exits 1 without :publish when :fetchStatus reports the upload ended anywhere but SUCCEEDED', async () => {
-    for (const state of ['FAILED', 'NOT_FOUND', 'UPLOAD_STATE_UNSPECIFIED', undefined]) {
-      const result = await publish({ ...ASYNC_UPLOAD, fetchStatus: count => status(count < 2 ? 'IN_PROGRESS' : state) });
-      assertFailed(result, ':fetchStatus', new RegExp(`lastAsyncUploadState ${state ?? '\\(missing\\)'}, so the upload ended without SUCCEEDED`));
-      assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload', 'fetchStatus', 'fetchStatus']);
-    }
-  });
-
-  it('exits 1 without :publish when the upload is still IN_PROGRESS at the polling cap', async () => {
-    const result = await publish({ ...ASYNC_UPLOAD, fetchStatus: status('IN_PROGRESS') });
-    assertFailed(result, ':fetchStatus', new RegExp(`still reports IN_PROGRESS after ${CAP_MS / 1000} s of polling every ${INTERVAL_MS} ms`));
-    const polls = result.google.calls('fetchStatus').length;
-    assert.ok(polls >= 2 && polls <= CAP_MS / INTERVAL_MS + 1, `${polls} polls`);
-    assert.ok(result.elapsed >= CAP_MS, `gave up after ${result.elapsed.toFixed(0)} ms`);
-    assert.equal(result.google.calls('publish').length, 0);
   });
 
   it('exits 1 naming :publish on any state but PUBLISHED or PENDING_REVIEW', async () => {
@@ -407,7 +412,7 @@ describe('publish-store.mjs fails closed', () => {
     const upload = { status: 307, headers: { Location: '/elsewhere' }, body: {} };
     const result = await publish({ ...SYNC_UPLOAD, upload });
     assertFailed(result, ':upload', /:upload failed: unexpected redirect/);
-    assert.deepEqual(result.google.requests.map(r => r.route), ['token', 'upload']);
+    assert.deepEqual(routesOf(result), ['token', 'upload']);
   });
 
   it('never prints a secret, even when a response echoes one back', async () => {
