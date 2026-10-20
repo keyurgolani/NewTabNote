@@ -108,6 +108,16 @@ npm run design-tokens
 
 # npm test runs the design token scan, whose per-file counts only fall. Record a drop:
 npm run design-token-scan -- --update
+
+# Unit tests, the kernel's included; the kernel's tests alone; its strict type check
+npm test
+npm run test:kernel
+npm run typecheck:kernel
+
+# Kernel boundary rules against docs/architecture/kernel-ledger.json, and a check that
+# every script the build in dist/ names resolves (run npm run build first)
+npm run check:boundaries
+npm run check:dist
 ```
 
 ---

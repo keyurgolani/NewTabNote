@@ -197,6 +197,10 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
     // A classic script keeps its top-level names. offscreen.js comes after js/main.js, and
     // terser used to carry main.js's module: true over to it through the shared options.
     assert.match(fs.readFileSync(path.join(dist, 'js/offscreen.js'), 'utf8'), /function handleApiRequest\(/);
+
+    const lines = [];
+    const checked = require('../scripts/check-dist.js').main([dist], { log: l => lines.push(l), error: l => lines.push(l) });
+    assert.equal(checked, 0, lines.join('\n'));
   });
 
   it('refuses a file loaded both as a module and as a classic script, and a missing walked directory', async () => {

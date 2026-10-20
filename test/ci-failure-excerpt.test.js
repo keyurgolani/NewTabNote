@@ -73,6 +73,26 @@ test('starts an extension excerpt at an Error a failed load prints', () => {
   assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], 'Error: test/known-defects.json breaks the ledger format:');
 });
 
+test('starts a kernel excerpt at whichever of its three checks failed', () => {
+  const npm = (script) => ['', `> new-tab-note@1.4.1 ${script}`, ''];
+  const passedTests = [...npm('test:kernel'), ...numbered(30, '✔ kernel test'), 'ℹ pass 30', 'ℹ fail 0'];
+
+  const failedTest = [...npm('test:kernel'), ...numbered(30, '✔ kernel test'), '✖ failing tests:', '', 'test at test/kernel/a.test.mjs:4:1'];
+  assert.equal(excerpt(failedTest.join('\n'), MARKERS.kernel).split('\n')[0], '✖ failing tests:');
+
+  const tsc = [...passedTests, ...npm('typecheck:kernel'), '> tsc -p tsconfig.kernel.json', '',
+    "js/kernel/core/a.js(3,7): error TS7006: Parameter 'id' implicitly has an 'any' type.",
+    "js/kernel/core/b.js(9,1): error TS2304: Cannot find name 'x'."];
+  assert.match(excerpt(tsc.join('\n'), MARKERS.kernel).split('\n')[0], /^js\/kernel\/core\/a\.js\(3,7\): error TS7006/);
+
+  const boundaries = [...passedTests, ...npm('typecheck:kernel'), ...npm('check:boundaries -- --base HEAD^1'),
+    'check:boundaries failed: 1 problem against docs/architecture/kernel-ledger.json',
+    '  - js/search.js: 1 window.app hit no ledger row covers'];
+  const lines = excerpt(boundaries.join('\n'), MARKERS.kernel).split('\n');
+  assert.equal(lines[0], 'check:boundaries failed: 1 problem against docs/architecture/kernel-ledger.json');
+  assert.match(lines[1], /window\.app hit no ledger row covers/);
+});
+
 test('strips color codes and shortens very long lines', () => {
   const out = excerpt(`\u001b[31m✗ js/a.js: refused\u001b[39m\n${'x'.repeat(5000)}`, /^✗ /);
   assert.equal(out.split('\n')[0], '✗ js/a.js: refused');
