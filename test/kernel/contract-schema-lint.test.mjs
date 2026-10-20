@@ -5,7 +5,12 @@
 // - a generic operation, which is what a payload or frame field is when it's a URL outside
 //   content, a key the caller picks, a store or IndexedDB passthrough, an untyped value or a
 //   loose object outside content, or a string outside content with no bound;
-// - content in a frame or an outcome, which carry ids, codes, and times only.
+// - content in a frame or an outcome, which carry ids, codes, and times only, and a field
+//   named for what the user wrote, or a URL, outside content anywhere;
+// - a schema whose output differs from what it accepts: a transform, a default, a fallback,
+//   or an object or tuple that drops what it doesn't declare. checkRequest and checkResult
+//   (contracts/validate.js) pass on the value that arrived, not Valibot's output, which is
+//   only safe while the two are the same.
 // Content is a field marked with content() (contracts/fields.js): note text, titles,
 // previews, insights, and a captured page's URL and title travel there and nowhere else.
 
@@ -78,6 +83,49 @@ const URL_WORDS = new Set(['url', 'urls', 'uri', 'href', 'endpoint']);
 /** @param {string[]} name */
 const isUrlName = name => URL_WORDS.has(name[name.length - 1]);
 
+/**
+ * The last word of a field that holds what the user wrote: a note's or folder's name, a
+ * title, a preview, content, text, insights, or a capture's source. `contentHash` and
+ * `lastTitleContentHash` hold hashes. A URL is the URL rule's to judge.
+ */
+const CONTENT_WORDS = new Set([
+  'name',
+  'names',
+  'title',
+  'titles',
+  'preview',
+  'content',
+  'contents',
+  'text',
+  'body',
+  'insights',
+  'source',
+  'query',
+  'prompt',
+  'quote',
+  'selection',
+  'snippet',
+  'summary',
+  'description',
+  'caption',
+  'comment',
+  'comments',
+]);
+
+/** @param {string[]} name */
+const isContentName = name => CONTENT_WORDS.has(name[name.length - 1]);
+
+/**
+ * Schemas whose output drops what they don't declare: an object drops unknown keys, and a
+ * tuple drops items past its own
+ */
+const DROPPING = new Set(['object', 'tuple']);
+
+/**
+ * Transformations that change only a value's type, never the value: a brand and readonly
+ */
+const TYPE_ONLY = new Set(['brand', 'readonly']);
+
 const STORAGE_WORDS = new Set(['store', 'stores', 'indexeddb', 'idb', 'db', 'database', 'transaction', 'sql']);
 
 /**
@@ -138,12 +186,25 @@ export function lint(root, { role, carriesSecret = false, checkedElsewhere = [] 
     /** @param {string} rule */
     const add = rule => found.push({ rule, path: at });
     const credential = field.length > 0 && isCredential(field);
+    const storage = field.length > 0 && isStorageName(field);
     if (credential && !vaultRef && !carriesSecret) add('credential');
-    if (field.length > 0 && isStorageName(field)) add('storage-passthrough');
+    if (storage) add('storage-passthrough');
     if ((role === 'frame' || role === 'outcome') && contentHere) add('content-in-' + role);
-    if (!strict || contentHere || checkedElsewhere.includes(schema)) continue;
+    // What arrived is what passes on, so a schema's output must be what it accepted, content
+    // included: no transform, default, or fallback, and nothing it doesn't declare dropped
+    if (pipeActions(schema).some(action => action.kind === 'transformation' && !TYPE_ONLY.has(action.type))) {
+      add('transform');
+    }
+    if (/** @type {{default?: unknown}} */ (schema).default !== undefined) add('default');
+    if ('fallback' in schema) add('fallback');
+    if (DROPPING.has(schema.type)) add('drops-undeclared');
+    if (contentHere || checkedElsewhere.includes(schema)) continue;
+    // What the user wrote, and a URL, travel only in content, whatever the schema's role. A
+    // store's name is the storage rule's to judge.
+    if (field.length > 0 && isContentName(field) && !storage) add('content-unmarked');
     if (field.length > 0 && isUrlName(field)) add('url-outside-content');
     if (pipeActions(schema).some(action => action.type === 'url')) add('url-outside-content');
+    if (!strict) continue;
     // A key a caller sends names one of a closed list, never a store's or a setting's key of
     // its own choosing. A credential's name is the credential rule's to judge, and an answer's
     // messageKey is no key a caller picks.
@@ -178,6 +239,21 @@ const schemasIn = (/** @type {Record<string, unknown>} */ module) =>
     ([, value]) => typeof value === 'object' && value !== null && /** @type {any} */ (value).kind === 'schema',
   );
 
+/**
+ * Where `schema` marks content: each path a content() mark starts at, sorted
+ * @param {unknown} schema
+ * @returns {string[]}
+ */
+function contentPaths(schema) {
+  const paths = walk(schema)
+    .filter(isContent)
+    .map(visit => visit.path);
+  const starts = paths.filter(
+    path => !paths.some(other => other.length < path.length && other.every((key, index) => key === path[index])),
+  );
+  return [...new Set(starts.map(path => path.join('.') || '(root)'))].sort();
+}
+
 describe('the contract schema lint (#13, AC5)', () => {
   it('passes every operation payload', () => {
     assert.equal(operations.length, Object.keys(COMMANDS).length + Object.keys(QUERIES).length);
@@ -205,6 +281,35 @@ describe('the contract schema lint (#13, AC5)', () => {
     for (const [name, schema] of [...schemasIn(entities), ...schemasIn(settings)]) {
       assert.deepEqual(lint(schema, { role: 'result' }), [], name);
     }
+  });
+
+  it('marks content exactly where what the user wrote travels, so a mark removed or added shows', () => {
+    const marked = Object.fromEntries(
+      [
+        ...operations.map(({ name, payload }) => /** @type {[string, unknown]} */ ([name, payload])),
+        ...schemasIn(entities),
+        ...schemasIn(settings),
+      ]
+        .map(([name, schema]) => [name, contentPaths(schema)])
+        .filter(([, paths]) => paths.length > 0),
+    );
+    assert.deepEqual(marked, {
+      createNote: ['blocks.[]', 'name'],
+      renameNote: ['name'],
+      saveNoteContent: ['blocks.[]', 'preview'],
+      applyDerivedTitle: ['name'],
+      attachInsights: ['insights'],
+      captureToDailyNote: ['capture.content', 'capture.source', 'capture.title', 'capture.url'],
+      createFolder: ['name'],
+      saveWorkspaceSession: ['session.openTabs.[]'],
+      // A whole block is content, since any of its fields can hold what the user wrote
+      blockInput: ['(root)'],
+      blockRecord: ['(root)'],
+      changeRecord: ['ops'],
+      folderRecord: ['name'],
+      noteRecord: ['insights', 'name', 'preview'],
+      workspaceSession: ['openTabs.[]'],
+    });
   });
 
   it('refuses a field named for a credential, and leaves one that only sounds like it', () => {
@@ -301,6 +406,59 @@ describe('the contract schema lint (#13, AC5)', () => {
     assert.deepEqual(lint(v.strictObject({ frame: v.literal('hint'), note: v.string() }), { role: 'frame' }), [
       { rule: 'unbounded-string', path: 'note' },
     ]);
+  });
+
+  it('refuses a schema whose output differs from what it accepted, in content too, since what arrived passes on', () => {
+    const bounded = v.pipe(v.string(), v.maxLength(64));
+    for (const [name, fields, rule, path] of /** @type {const} */ ([
+      ['a trim in content', { name: content(v.pipe(v.string(), v.trim())) }, 'transform', 'name'],
+      ['a transform', { size: v.pipe(bounded, v.transform(Number)) }, 'transform', 'size'],
+      ['a default', { view: v.optional(v.picklist(['active', 'archived']), 'active') }, 'default', 'view'],
+      ['a nullable default', { parentId: v.nullable(entityId('folder'), 'f1') }, 'default', 'parentId'],
+      ['a fallback', { view: v.fallback(v.picklist(['active']), 'active') }, 'fallback', 'view'],
+      ['an object', { options: v.object({ size: count }) }, 'drops-undeclared', 'options'],
+      ['a tuple', { range: v.tuple([count, count]) }, 'drops-undeclared', 'range'],
+    ])) {
+      assert.deepEqual(lint(commandPayload('example', fields), { role: 'payload' }), [{ rule, path }], name);
+    }
+    // An answer or a record is held to the same
+    const record = v.looseObject({ id: entityId('note'), name: v.optional(content(v.string()), '') });
+    assert.deepEqual(lint(record, { role: 'result' }), [{ rule: 'default', path: 'name' }]);
+    // A brand or readonly changes only the type
+    const branded = { noteId: v.pipe(entityId('note'), v.brand('NoteId')), ids: v.pipe(v.array(id), v.readonly()) };
+    assert.deepEqual(lint(commandPayload('example', branded), { role: 'payload' }), []);
+  });
+
+  it('refuses what the user wrote outside content, in a payload, a frame, an answer, or a record', () => {
+    const bounded = v.pipe(v.string(), v.maxLength(256));
+    for (const name of ['name', 'title', 'pageTitle', 'preview', 'content', 'previewText', 'insights', 'source']) {
+      const found = lint(commandPayload('example', { [name]: v.optional(bounded) }), { role: 'payload' });
+      assert.deepEqual(found, [{ rule: 'content-unmarked', path: name }], name);
+    }
+    assert.deepEqual(lint(v.strictObject({ frame: v.literal('hint'), title: bounded }), { role: 'frame' }), [
+      { rule: 'content-unmarked', path: 'title' },
+    ]);
+    const note = v.looseObject({
+      id: entityId('note'),
+      name: v.optional(v.string()),
+      sourceUrl: v.optional(v.string()),
+    });
+    assert.deepEqual(lint(note, { role: 'result' }), [
+      { rule: 'content-unmarked', path: 'name' },
+      { rule: 'url-outside-content', path: 'sourceUrl' },
+    ]);
+    // Marked, or inside what's marked, it's content, and a hash of content isn't
+    const marked = v.looseObject({ id: entityId('note'), name: v.optional(content(v.string())) });
+    assert.deepEqual(lint(marked, { role: 'result' }), []);
+    assert.deepEqual(
+      lint(content(v.looseObject({ id: entityId('block'), title: v.string() })), { role: 'result' }),
+      [],
+    );
+    const hashes = {
+      contentHash: v.pipe(v.string(), v.maxLength(128)),
+      lastTitleContentHash: v.pipe(v.string(), v.maxLength(128)),
+    };
+    assert.deepEqual(lint(commandPayload('example', hashes), { role: 'payload' }), []);
   });
 
   it('refuses content in a frame or an outcome', () => {

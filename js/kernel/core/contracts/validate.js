@@ -113,7 +113,9 @@ export function readFrame(text) {
  * catalog's current version is served: a journaled command's older entry is upcast at replay
  * instead. The payload it passes on is the one that arrived, once its schema accepts it, not
  * Valibot's copy: that copy drops a `__proto__`, `constructor`, or `prototype` key a loose
- * object such as a block holds, and the kernel keeps such a key as data.
+ * object such as a block holds, and the kernel keeps such a key as data. That's safe because
+ * no contract schema transforms, defaults, or drops what it accepts, which
+ * test/kernel/contract-schema-lint.test.mjs holds them to.
  * @param {RequestFrame} request
  * @param {number} bytes
  * @param {(name: string) => Operation | undefined} lookup
