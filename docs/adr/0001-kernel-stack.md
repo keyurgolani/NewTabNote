@@ -13,9 +13,9 @@ At `3706d84` (1.4.0):
 - `newtab.html` boots from one module, [`js/main.js`][main], which is 41 side-effect imports that each publish a `window` global. Vendored libraries load before it as classic scripts ([`newtab.html` L1243-L1247][newtab-scripts]).
 - Popup and Side Panel load classic scripts ([`popup.html` L486][popup-script], [`sidepanel.html` L239-L240][sidepanel-scripts]). The service worker loads `utils.js` and `storage.js` with `importScripts` inside a try/catch ([`background.js` L7-L11][bg-import]).
 - `scripts/build.js` minifies each file in [`JS_FILES`][build-list] on its own, with no bundler. A listed file that's missing is skipped with a warning ([L278-L281][build-skip]), and a file nobody listed never reaches `dist/`.
-- [`jsconfig.json`][jsconfig] checks `js/` with `strict: false`, and the build only warns about the result ([L362-L379][build-tsc]). It reports 773 diagnostics.
+- [`jsconfig.json`][jsconfig] checks `js/` with `strict: false`, and the build only warns about the result ([L362-L379][build-tsc]). It reported 773 diagnostics at 1.4.0. Since #34 slice 1, the required PR check runs that program through `npm run typecheck:ratchet`, which fails on any new (file, code, message) key.
 - There's no linter or formatter. [`npm test`][npm-test] runs `node --test test/*.test.js` over 118 tests in CommonJS files, some of which stub browser globals.
-- Extension pages run under `script-src 'self' 'wasm-unsafe-eval'` ([`manifest.json` L68-L70][csp]), so there's no `eval`, no `new Function`, and no remote code.
+- Extension pages run under `script-src 'self' 'wasm-unsafe-eval'` ([`manifest.json` L68-L70][csp]), so there's no `eval` and no `new Function`, and scripts load only from the package. The CSP still lets transformers.js fetch and run ONNX WASM from `cdn.jsdelivr.net` (its `wasmPaths` default in `js/lib/transformers.js`) until [#9][i9] (local runtime) packages the runtime.
 
 ## Layout
 
@@ -35,7 +35,7 @@ js/kernel/
     sidepanel.js
     background.js
   package.json         "type": "module" for Node, not shipped
-js/lib/valibot/        vendored ESM build, .d.ts, and license
+js/lib/valibot/        vendored index.mjs, index.d.mts declarations, and license
 test/kernel/           *.test.mjs
 tsconfig.kernel.json   strict check over js/kernel and test/kernel
 eslint.config.mjs      lint and boundary rules
@@ -63,9 +63,9 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 
 ### 1. JavaScript ES modules with JSDoc types, checked strictly in the kernel
 
-**Context.** The kernel's catalog, outcome union, and ports need checked types from the first PR. The legacy run isn't strict and only warns, and 184 of its 773 diagnostics are reads of the legacy `Storage` global that TypeScript takes for the DOM's `Storage` interface. `.ts` sources would need a compile step the build doesn't have.
+**Context.** The kernel's catalog, outcome union, and ports need checked types from the first PR. The legacy program isn't strict, and the required check only ratchets it (no new diagnostic keys), and 184 of its 773 diagnostics are reads of the legacy `Storage` global that TypeScript takes for the DOM's `Storage` interface. `.ts` sources would need a compile step the build doesn't have.
 
-**Decision.** Kernel code is JavaScript ES modules with JSDoc types. A new `tsconfig.kernel.json` (`checkJs`, `strict`, `noEmit`) covers `js/kernel` and `test/kernel` with the existing `typescript` devDependency, and `npm run typecheck:kernel` must report zero diagnostics. `jsconfig.json` stays non-strict for the legacy files.
+**Decision.** Kernel code is JavaScript ES modules with JSDoc types. A new `tsconfig.kernel.json` (`checkJs`, `strict`, `noEmit`) covers `js/kernel` and `test/kernel` with the existing `typescript` devDependency, plus exact-pinned `@types/node` (for `node:test` and `node:assert`) and `@types/chrome` (for the adapters and composition roots), named in its `types` as `["node", "chrome"]`. `npm run typecheck:kernel` must report zero diagnostics. `jsconfig.json` stays non-strict for the legacy files and gets `"types": []`, so the new type packages never enter the legacy program or move its ratchet baseline.
 
 **Alternatives considered.**
 
@@ -77,13 +77,14 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 
 - The browser loads kernel files as they are, so no kernel slice needs a compile step.
 - No legacy file enters the strict program. Kernel code reaches legacy objects through hand-written declarations, and has to type the legacy `Storage` global explicitly, since TypeScript otherwise reads it as the DOM's `Storage`. #27 later applies the same rule to every strict project.
+- Kernel files sit in both programs. `jsconfig.json` includes `js/**/*.js`, and `tsc` follows imports from `js/main.js` and `js/background.js` into `js/kernel/`, so excluding the directory isn't enough. Slice 1 makes `typecheck:ratchet` drop diagnostics under `js/kernel/**` before it compares, since `typecheck:kernel` owns those files, until #27 turns `jsconfig.json`'s `include` into an explicit legacy list.
 - `typecheck:kernel` runs in [#34][i34]'s required PR check until [#29][i29] (PR CI) takes it over.
 
 ### 2. Valibot for schemas, vendored under `js/lib/valibot/`
 
 **Context.** #13, [#14][i14] (block registry), #17, [#18][i18] (backup and restore), and [#25][i25] (settings routes) validate data where it crosses a trust boundary: messages between contexts, repository reads, imports, and settings. The library has to run under the extension CSP, load without a bundler in pages and in the service worker, and give JSDoc-visible types from the schema itself.
 
-**Decision.** Valibot. Its ESM build, `.d.ts`, and license are vendored under `js/lib/valibot/` at one exact version, recorded in the PR that adds them. Types come from the schemas through JSDoc, with nothing generated. It's the only thing outside `js/kernel/core/` that core may import. The build ships the ESM build and the license, not the `.d.ts`.
+**Decision.** Valibot, 1.2 or later, at one exact version recorded in the PR that adds it. Its published `dist/index.mjs`, `dist/index.d.mts` declarations, and license are vendored under `js/lib/valibot/` with their published names: `.mjs` is ESM to Node without a `package.json` (the root one sets no `type`), and Chrome serves it as JavaScript. Types come from the schemas through JSDoc, with nothing generated. It's the only thing outside `js/kernel/core/` that core may import. The build ships `index.mjs` and the license, not the declarations.
 
 **Alternatives considered.**
 
@@ -136,9 +137,9 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 
 **Consequences and risks.**
 
-- The worker can use static imports only, because `import()` doesn't work in a service worker.
+- The worker can use static imports only, and no module it imports may use top-level `await`: `import()` doesn't work in a service worker, and Chrome won't start a module worker whose graph has top-level `await`.
 - The legacy globals still work in a module worker, because `utils.js` and `storage.js` assign `Utils` and `Storage` to `self` when there's no `window` ([`utils.js` L772-L773][utils-global], [`storage.js` L2006-L2007][storage-global]). A top-level declaration in a module is no longer a global, though, so anything another file reads has to be assigned to `self` explicitly.
-- A throw while any module the worker imports is evaluating stops the worker before its listeners register, and context menus and Alt+P/Alt+S disappear with no visible error. A static import has no try/catch around it the way today's `importScripts` does. Slice 1 is done only when `dist/` loads and the menus and commands register after install and after an update. It also updates #34's `test/helpers/load-background.js` so the characterization test loads the module worker.
+- A throw while any module the worker imports is evaluating stops the worker before its listeners register, and context menus and Alt+P/Alt+S disappear with no visible error. That failure mode isn't new: if `importScripts` fails today, the unguarded `Storage.init()` at [`background.js` L14][bg-init] throws a `ReferenceError` before the first listener registers. A static import has no try/catch either, so the guard is a check rather than code. Slice 1 is done only when `dist/` loads and the menus and commands register after install and after an update. It also updates #34's `test/helpers/load-background.js` so the characterization test loads the module worker.
 - A module worker's top-level functions aren't globals, so `js/background.js` sets `self.captureToDailyNote` for #34's harness, and slice 4 points that name at the kernel's `captureToDailyNote` command.
 - A kernel file missing from `dist/` breaks the module graph, and the new tab boots blank. The build walks the directories, so no hand-kept list can miss a file, and `check:dist` resolves every static import, `<script src>`, and the manifest's `service_worker` inside `dist/`. Removing a kernel file from `dist/` has to fail it.
 
@@ -198,6 +199,7 @@ Change a decision by amending this file in a PR that merges before the code that
 [i17]: https://github.com/keyurgolani/NewTabNote/issues/17
 [i18]: https://github.com/keyurgolani/NewTabNote/issues/18
 [i25]: https://github.com/keyurgolani/NewTabNote/issues/25
+[i9]: https://github.com/keyurgolani/NewTabNote/issues/9
 [i27]: https://github.com/keyurgolani/NewTabNote/issues/27
 [i29]: https://github.com/keyurgolani/NewTabNote/issues/29
 [i30]: https://github.com/keyurgolani/NewTabNote/issues/30
@@ -209,6 +211,7 @@ Change a decision by amending this file in a PR that merges before the code that
 [popup-script]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/popup.html#L486
 [sidepanel-scripts]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/sidepanel.html#L239-L240
 [bg-import]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/background.js#L7-L11
+[bg-init]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/background.js#L14-L16
 [build-list]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/scripts/build.js#L21-L73
 [build-skip]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/scripts/build.js#L278-L281
 [build-tsc]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/scripts/build.js#L362-L379
