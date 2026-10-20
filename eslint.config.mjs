@@ -94,7 +94,8 @@ const UNRESOLVED = Symbol('unresolved');
  * specifier in an extension: one that starts with /, ./, or ../ against the importing file's
  * URL, and anything else as an absolute URL, which must be chrome-extension: to land in the
  * package. Dot segments stop at the root, any extension ID counts as this one, and the path
- * is percent-decoded once, as Chrome does before it opens the file.
+ * is percent-decoded once, as Chrome does before it opens the file. Repeated slashes count
+ * as one, as they do when the file system opens the path.
  */
 const resolveSpecifier = (specifier, fileUrl) => {
   try {
@@ -108,7 +109,7 @@ const resolveSpecifier = (specifier, fileUrl) => {
       const clean = specifier.replace(/^[\u0000- ]+|[\u0000- ]+$/g, '').replace(/[\t\n\r]/g, '');
       url = new URL(clean.replace(/^chrome-extension:/i, 'https:'));
     }
-    return decodeURIComponent(url.pathname).slice(1);
+    return decodeURIComponent(url.pathname).replace(/\/{2,}/g, '/').replace(/^\//, '');
   } catch {
     return UNRESOLVED;
   }

@@ -291,6 +291,11 @@ describe('eslint.config.mjs boundary rules', () => {
     append('js/chat-ui-components.js', "import '/../js/kernel/adapters/legacy/notes.js';");
     append('js/ai-prompt-templates.js', "import '../../js/kernel/adapters/legacy/notes.js';");
     append('js/utils/sanitize.js', "import './../kernel\\\\adapters\\\\legacy\\\\notes.js';");
+    // Empty path segments, which the file system reads as one slash
+    append('js/blocks.js', "import './kernel//adapters/legacy/notes.js';");
+    append('js/embeddings.js', "import '/js//kernel/adapters/legacy/notes.js';");
+    append('js/core/storage-error.js', "import '/.//js/kernel/adapters/legacy/notes.js';");
+    append('js/utils.js', "import 'chrome-extension://emildbpnneonfcanpfnafkphiflbddig//js/kernel/adapters/legacy/notes.js';");
     // macOS and Windows open the file in any case
     append('js/core/dom-refs.js', "import '/JS/Kernel/Adapters/legacy/notes.js';");
     // A specifier that doesn't resolve counts, and a malformed one doesn't stop the lint
@@ -343,6 +348,10 @@ describe('eslint.config.mjs boundary rules', () => {
       'js/chat-ui-components.js: 1 adapter-import hit no ledger row covers',
       'js/ai-prompt-templates.js: 1 adapter-import hit no ledger row covers',
       'js/utils/sanitize.js: 1 adapter-import hit no ledger row covers',
+      'js/blocks.js: 1 adapter-import hit no ledger row covers',
+      'js/embeddings.js: 1 adapter-import hit no ledger row covers',
+      'js/core/storage-error.js: 1 adapter-import hit no ledger row covers',
+      'js/utils.js: 1 adapter-import hit no ledger row covers',
       'js/core/dom-refs.js: 1 adapter-import hit no ledger row covers',
       'js/ai-response-utils.js: 1 adapter-import hit no ledger row covers',
       'js/core/logger.js: 1 adapter-import hit no ledger row covers',
@@ -352,6 +361,6 @@ describe('eslint.config.mjs boundary rules', () => {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/core\/event-bus\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 21, output);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 25, output);
   });
 });
