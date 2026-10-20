@@ -38,14 +38,12 @@ class TabController {
     this.onGetNotes = null;          // () => Note[]
     this.onUpdateEmptyState = null;  // () => void
 
-    /** @type {BroadcastChannel|null} Tells the other new tabs which notes left the active set */
+    /** @type {BroadcastChannel|null} Tells the other new tabs which notes left the active set, so they refresh their lists */
     this.channel = null;
     /** @type {Promise<void>} forgetNotes calls run one at a time, in order */
     this._forgetQueue = Promise.resolve();
-    /** @type {Array<Array<string>>|null} Messages from other tabs that wait for workspaceReady */
-    this._heldMessages = [];
-    /** @type {Array<Array<string>>} Messages from other tabs that came while this one was hidden or out of focus */
-    this._awayMessages = [];
+    /** @type {boolean} Whether another tab's message refreshes the lists yet (see workspaceReady) */
+    this._refreshesLists = false;
   }
 
   /** Initialize tabs: wire DOM listeners. */
@@ -173,11 +171,11 @@ class TabController {
 
   /**
    * After an import (or a failed one, with no IDs): release the save hold, then
-   * every pane on a note Replace all trashed moves to another note, and the
-   * other new tabs do the same (forgetNotes), even when this one fails to. An
-   * edit typed during the commit still lands in its note, which keeps its
-   * stored trash flags. The panes stay where forgetNotes put them, and the
-   * active pane's note gets the active tab.
+   * every pane on a note Replace all trashed moves to another note
+   * (forgetNotes), and the other new tabs refresh their lists, even when this
+   * one fails to move. An edit typed during the commit still lands in its
+   * note, which keeps its stored trash flags. The panes stay where forgetNotes
+   * put them, and the active pane's note gets the active tab.
    * @param {Array<string>} [trashedIds=[]]
    * @param {number|null} [trashedAt=null]
    * @returns {Promise<void>}
@@ -231,7 +229,8 @@ class TabController {
 
   /**
    * Notes left the active set (trash, archive, permanent delete, Empty trash,
-   * trash retention, Replace all), in this new tab or another. Their tabs go. A
+   * trash retention, Replace all) in this new tab; another tab's change only
+   * refreshes this one's lists (_onNotesLeftElsewhere). Their tabs go. A
    * pane on one of them writes what it has pending, then moves
    * (_moveActivePane, _moveOtherPane); a pane whose note stays never moves,
    * and the two panes never show one note. PiP on one of them closes. A pane
@@ -398,9 +397,9 @@ class TabController {
   }
 
   /**
-   * Tell the other open new tabs which notes left the active set, so they run
-   * forgetNotes too. A page doesn't get its own messages. #13 replaces this
-   * with typed events.
+   * Tell the other open new tabs which notes left the active set, so they
+   * refresh their lists. A page doesn't get its own messages. #13 replaces
+   * this with typed events.
    * @param {Array<string>} ids
    * @returns {void}
    */
@@ -414,7 +413,7 @@ class TabController {
   }
 
   /**
-   * Listen for notes that left in another new tab (see _receiveNotesLeft).
+   * Listen for notes that left in another new tab (see _onNotesLeftElsewhere).
    * @returns {void}
    */
   _openNotesChannel() {
@@ -422,69 +421,35 @@ class TabController {
     this.channel = new BroadcastChannel('ntn-notes');
     this.channel.onmessage = (event) => {
       const ids = event && event.data && event.data.left;
-      if (Array.isArray(ids)) this._receiveNotesLeft(ids);
+      if (Array.isArray(ids)) this._onNotesLeftElsewhere();
     };
-    window.addEventListener('focus', () => this._takeAwayMessages());
-    document.addEventListener('visibilitychange', () => this._takeAwayMessages());
   }
 
   /**
-   * A message that notes left in another new tab. One that comes before this
-   * tab has its saved workspace waits for workspaceReady, so a tab still
-   * starting up can't save an empty workspace over the saved one. One that
-   * comes while this tab is hidden or out of focus waits until the user is
-   * back, as 1.4.0 left such a tab alone: its panes then move onto notes as
-   * they are by then, never onto a stale copy of a note another tab edits.
-   * @param {Array<string>} ids
-   * @returns {void}
-   */
-  _receiveNotesLeft(ids) {
-    if (this._heldMessages) this._heldMessages.push(ids);
-    else if (!TabController._inView()) this._awayMessages.push(ids);
-    else this._onNotesLeftElsewhere(ids);
-  }
-
-  /**
-   * @returns {boolean} Whether this page is visible and has focus
-   */
-  static _inView() {
-    return document.visibilityState === 'visible' && (typeof document.hasFocus !== 'function' || document.hasFocus());
-  }
-
-  /**
-   * Run the messages that came while this tab was away, once it's in view.
-   * @returns {void}
-   */
-  _takeAwayMessages() {
-    if (this._heldMessages || this._awayMessages.length === 0 || !TabController._inView()) return;
-    const away = this._awayMessages;
-    this._awayMessages = [];
-    away.forEach((ids) => this._onNotesLeftElsewhere(ids));
-  }
-
-  /**
-   * This tab has its workspace (loadSavedTabs, or App's first note): the
-   * messages that came while it started are taken now, and later ones as they come.
+   * This tab has its workspace (loadSavedTabs, or App's first note): from now
+   * on another tab's message refreshes its lists. One that came while it
+   * started needs nothing, since it read the lists as it started.
    * @returns {void}
    */
   workspaceReady() {
-    const held = this._heldMessages;
-    if (!held) return;
-    this._heldMessages = null;
-    held.forEach((ids) => this._receiveNotesLeft(ids));
+    this._refreshesLists = true;
   }
 
   /**
-   * @param {Array<string>} ids
+   * Another new tab trashed, archived, or deleted notes. This one refreshes
+   * its lists and counts and nothing else: its panes, tabs, and saved
+   * workspace stay as they are, as in 1.4.0. A pane on one of those notes
+   * keeps it, its saves keep the note's trash and archive state, and one on a
+   * note deleted for good shows the notice when it saves (#33). Keeping the
+   * copies other tabs hold in step is #6's and #17's.
    * @returns {Promise<void>}
    */
-  async _onNotesLeftElsewhere(ids) {
+  async _onNotesLeftElsewhere() {
+    if (!this._refreshesLists || !this.onRefreshNotesList) return;
     try {
-      await this.forgetNotes(ids);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
-      if (this.onUpdateEmptyState) this.onUpdateEmptyState();
+      await this.onRefreshNotesList({ listsOnly: true });
     } catch (error) {
-      console.error('Notes that left in another tab:', error);
+      console.error('Refreshing the lists after another tab changed notes:', error);
     }
   }
 
@@ -699,7 +664,8 @@ class TabController {
   /**
    * Switch to a specific tab. The tab bar and the saved tabs follow only a
    * load that happened, so a refused one leaves them on the note on screen.
-   * Leaving a deleted note's notice takes that note's tab away.
+   * Leaving a deleted note's notice takes that note's tab away, and so does
+   * clicking the tab of a note deleted elsewhere, with a toast.
    */
   async switchToTab(index) {
     if (index < 0 || index >= this.openTabs.length) return;
@@ -708,7 +674,8 @@ class TabController {
     const goneId = editor.noteGone ? editor.noteId : null;
 
     if (!(await editor.loadNote(tab.noteId))) {
-      this.renderTabs();
+      if (tab.noteId !== editor.noteId && !(await this.storage.getNote(tab.noteId))) await this._dropDeletedTab(tab);
+      else this.renderTabs();
       return;
     }
     this._dropGoneTab(goneId);
@@ -818,6 +785,21 @@ class TabController {
     if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs();
     this.cacheLastOpenedNoteId(next.noteId);
+  }
+
+  /**
+   * The tab of a note deleted in another tab, or by trash retention, goes
+   * when the user clicks it, with a toast. The pane on screen and its tab stay.
+   * @param {{noteId: string, name: string}} tab
+   * @returns {Promise<void>}
+   */
+  async _dropDeletedTab(tab) {
+    const active = this.openTabs[this.activeTabIndex];
+    this.openTabs = this.openTabs.filter((open) => open !== tab);
+    this.activeTabIndex = Math.max(0, this.openTabs.indexOf(active));
+    this.renderTabs();
+    await this.saveTabs();
+    Utils.showToast('That note was deleted, so its tab closed.', 'info');
   }
 
   /**
