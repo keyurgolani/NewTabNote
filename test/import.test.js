@@ -449,6 +449,41 @@ describe('Replace all (AC4)', () => {
     const elements = recordsOf(await dumpDatabase(env.indexedDB), 'elements');
     assert.equal(elements.a1.content, 'typed after import', 'edits still saved, to the trashed note');
   });
+
+  it('a page-hide write queued behind the commit cannot move a trashed note back to active', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    const controller = makeController(env, Storage);
+    controller.onFlushEditors = () => tabs.flushEditorsForImport();
+    controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
+
+    // Right after the commit's transaction opens, the user types and the tab is hidden.
+    const realTransaction = Storage.transaction.bind(Storage);
+    let hidden = false;
+    Storage.transaction = (stores, mode) => {
+      const tx = realTransaction(stores, mode);
+      if (!hidden && mode === 'readwrite' && [].concat(stores).includes('folders')) {
+        hidden = true;
+        typeInto(editors.primary, 'typed while the import commits');
+        env.clock.tick(500); // comes due while saves are held
+        env.document.visibilityState = 'hidden';
+        env.document.fire('visibilitychange');
+      }
+      return tx;
+    };
+    const done = controller.importFromFile(fileOf(sameProfileBackup()));
+    choose(await waitForDialog(env, 'Import backup'), 'replace');
+    confirmButton(await waitForDialog(env, 'Replace all notes?')).click();
+    await runUntil(env, done);
+    Storage.transaction = realTransaction;
+    assert.equal(hidden, true, 'the page hid during the commit');
+
+    const db = await dumpDatabase(env.indexedDB);
+    const notes = recordsOf(db, 'canvases');
+    assert.equal(notes.A.trashed, true, 'A stays in trash');
+    assert.equal(notes.A.archived, false);
+    assert.equal(editors.primary.noteData.trashed, true, 'the editor shows it trashed');
+    assert.equal(recordsOf(db, 'elements').a1.content, 'typed while the import commits', 'the edit is kept');
+  });
 });
 
 // ─── Editors for the AC4 test ───

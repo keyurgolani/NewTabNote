@@ -1371,6 +1371,10 @@ class DatabaseManager {
    * `elements`, so a note is never stored without the blocks the editor had for it.
    * Sets `updatedAt` like updateNote. The transaction opens synchronously, before
    * this returns, which lets pagehide and visibilitychange handlers use it.
+   *
+   * Trash and archive state stays as stored: the editor never sets it, and its
+   * copy of the note can be older than a trash, restore, or import Replace done
+   * meanwhile (in this tab or another). The stored values are copied onto `note`.
    * @param {Object} note - Note record (`updatedAt` is set on it)
    * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
    * @returns {Promise<Object>} The note, once the transaction completes
@@ -1382,18 +1386,44 @@ class DatabaseManager {
       tx.oncomplete = () => resolve(note);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
+      // A put that throws (for example DataCloneError) must not let the rest commit.
+      const fail = (error) => {
+        tx.abort();
+        reject(error);
+      };
       try {
-        tx.objectStore('canvases').put(note);
         const elementStore = tx.objectStore('elements');
         for (const element of elements) {
           elementStore.put(element);
         }
+        const canvases = tx.objectStore('canvases');
+        const read = canvases.get(note.id);
+        read.onsuccess = () => {
+          try {
+            this._keepStoredNoteState(note, read.result);
+            canvases.put(note);
+          } catch (error) {
+            fail(error);
+          }
+        };
       } catch (error) {
-        // A put that throws (for example DataCloneError) must not let the rest commit.
-        tx.abort();
-        reject(error);
+        fail(error);
       }
     });
+  }
+
+  /**
+   * Copy the stored trash and archive fields onto a note about to be written.
+   * @param {Object} note
+   * @param {Object|undefined} stored - The note as stored, if it is
+   * @returns {void}
+   */
+  _keepStoredNoteState(note, stored) {
+    if (!stored) return;
+    for (const field of ['trashed', 'trashedAt', 'archived', 'archivedAt']) {
+      if (field in stored) note[field] = stored[field];
+      else delete note[field];
+    }
   }
 
   /**

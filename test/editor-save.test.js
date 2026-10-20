@@ -592,6 +592,59 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 });
 
+describe('BlockEditor saves keep trash and archive state', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  /** Change the stored note the way another tab, trash, or an import does. */
+  async function storeFlags(flags) {
+    const stored = await Storage.getNote('A');
+    for (const [key, value] of Object.entries(flags)) {
+      if (value === undefined) delete stored[key];
+      else stored[key] = value;
+    }
+    await Storage.updateNote(stored);
+  }
+
+  async function saveEdit(text) {
+    type(editor, text);
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+    return Storage.getNote('A');
+  }
+
+  it('an older copy of the note in the editor cannot take it out of trash', async () => {
+    await storeFlags({ trashed: true, trashedAt: 42, archived: false, archivedAt: null });
+    const stored = await saveEdit('edited in an older copy');
+    assert.equal(stored.trashed, true);
+    assert.equal(stored.trashedAt, 42);
+    assert.equal(editor.noteData.trashed, true, 'the editor picks up the stored state');
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'edited in an older copy' });
+  });
+
+  it('or out of the archive', async () => {
+    await storeFlags({ archived: true, archivedAt: 7 });
+    const stored = await saveEdit('edited while archived elsewhere');
+    assert.equal(stored.archived, true);
+    assert.equal(stored.archivedAt, 7);
+  });
+
+  it('or back into trash after a restore', async () => {
+    editor.adoptNoteFlags({ trashed: true, trashedAt: 42, archived: false, archivedAt: null });
+    await storeFlags({ trashed: undefined, trashedAt: undefined });
+    const stored = await saveEdit('edited after a restore');
+    assert.equal(stored.trashed, undefined);
+    assert.equal(stored.trashedAt, undefined);
+  });
+});
+
 describe('BlockEditor save hold (import)', () => {
   let env;
   let Storage;
@@ -603,7 +656,7 @@ describe('BlockEditor save hold (import)', () => {
     await editor.loadNote('A');
   });
 
-  it('a save that comes due while held waits for release and keeps adopted flags', async () => {
+  it('a save that comes due while held waits for release and keeps the import\'s trash flags', async () => {
     const opened = spyTransactions(Storage);
     editor.holdSaves();
     type(editor, 'typed during import');
@@ -612,14 +665,20 @@ describe('BlockEditor save hold (import)', () => {
     await settle();
     assert.equal(writesOf(opened).length, 0, 'held');
 
-    editor.adoptNoteFlags({ trashed: true, trashedAt: 123, archived: false, archivedAt: null });
+    // The import commit trashes A, then the editor takes on the same flags.
+    const flags = { trashed: true, trashedAt: 123, archived: false, archivedAt: null };
+    await Storage.updateNote({ ...(await Storage.getNote('A')), ...flags });
+    const writesBeforeRelease = writesOf(opened).length;
+    editor.adoptNoteFlags(flags);
     editor.releaseSaves();
     env.frames();
     await editor.flushSave();
 
+    assert.ok(writesOf(opened).length > writesBeforeRelease, 'the held save ran after release');
     const stored = await Storage.getNote('A');
     assert.equal(stored.trashed, true);
     assert.equal(stored.trashedAt, 123);
+    assert.equal(editor.noteData.trashed, true);
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed during import' });
   });
 
