@@ -329,6 +329,21 @@ describe('the legacy adapter', () => {
     storage.transaction = transaction;
   });
 
+  it('lets only the connection openExisting() holds now mark it gone, not one it replaced', async () => {
+    const panel = context();
+    await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });
+    const { storage } = panel;
+    await storage.openExisting();
+    const first = /** @type {IDBDatabase} */ (storage.db);
+    await storage.openExisting();
+    assert.notEqual(storage.db, first);
+    /** @type {any} */ (first.onclose).call(first, new Event('close'));
+    assert.equal(storage.openState, 'open');
+    /** @type {any} */ (first.onversionchange).call(first, new Event('versionchange'));
+    assert.equal(storage.openState, 'open');
+    /** @type {IDBDatabase} */ (storage.db).close();
+  });
+
   it('answers reload-required once Chrome closes the connection itself, as it does when the database goes', async () => {
     const panel = context();
     await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });

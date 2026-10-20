@@ -258,13 +258,14 @@ class DatabaseManager {
       this.openState = 'newer-version';
       throw this._newerSchemaError();
     }
+    // Only the connection this holds says it's gone, not one a later openExisting() replaced
     db.onversionchange = () => {
       db.close();
-      this.openState = 'version-changed';
+      if (this.db === db) this.openState = 'version-changed';
     };
     // Chrome closes a connection itself when the database is deleted or its storage fails
     db.onclose = () => {
-      this.openState = 'closed-by-browser';
+      if (this.db === db) this.openState = 'closed-by-browser';
     };
     this.db = db;
     this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
