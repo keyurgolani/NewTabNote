@@ -85,9 +85,10 @@ class DatabaseManager {
     /**
      * 'closed' before init; 'open' after it (check missingStores for a degraded
      * database); 'newer-version' when a newer build upgraded the database;
-     * 'missing-core-stores'; 'failed'; or 'version-changed' once another
-     * context upgraded a database openExisting() opened.
-     * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'|'version-changed'}
+     * 'missing-core-stores'; 'failed'; 'version-changed' once another context
+     * upgraded a database openExisting() opened; or 'closed-by-browser' once
+     * Chrome closed that connection itself.
+     * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'|'version-changed'|'closed-by-browser'}
      */
     this.openState = 'closed';
     /** @type {number|null} Version of the database on disk, read before opening */
@@ -235,7 +236,8 @@ class DatabaseManager {
    * database missing stores opens anyway, and transaction() refuses the
    * missing ones. The connection closes when another context upgrades the
    * database, so it never blocks a new tab's open, and openState becomes
-   * 'version-changed': only a reload opens the database again.
+   * 'version-changed': only a reload opens the database again. A connection
+   * Chrome closes itself leaves openState 'closed-by-browser', the same way.
    * @returns {Promise<void>}
    */
   async openExisting() {
@@ -259,6 +261,10 @@ class DatabaseManager {
     db.onversionchange = () => {
       db.close();
       this.openState = 'version-changed';
+    };
+    // Chrome closes a connection itself when the database is deleted or its storage fails
+    db.onclose = () => {
+      this.openState = 'closed-by-browser';
     };
     this.db = db;
     this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));

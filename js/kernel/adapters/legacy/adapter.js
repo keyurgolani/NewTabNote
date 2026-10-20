@@ -18,8 +18,9 @@
  * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
  * whatever version is on disk, with no repair, upgrade, or maintenance. A database a newer
  * build upgraded is refused either way, as `unavailable` with cause `newer-schema`. Once
- * another context upgrades the database, an `existing` connection closes, and every IndexedDB
- * call answers `reload-required`, which no resend fixes: the page reloads to open it again.
+ * another context upgrades the database, or Chrome closes an `existing` connection itself,
+ * that connection is gone, and every IndexedDB call answers `reload-required`, which no
+ * resend fixes: the page reloads to open it again.
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
@@ -42,7 +43,7 @@ import { UnavailableError, unavailable, unavailableFrom } from '../../core/contr
  * @property {() => Promise<void>} open
  * @property {() => Promise<void>} openExisting
  * @property {() => Promise<void>} runStartupMaintenance
- * @property {string} openState - `version-changed` once another context upgraded a database openExisting opened
+ * @property {string} openState - `version-changed` or `closed-by-browser` once a connection openExisting opened is gone
  */
 
 /**
@@ -237,16 +238,24 @@ function runUnit(storage, unit) {
  */
 export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
   /**
-   * What a failed IndexedDB call means here. Once another context upgraded the database and
-   * this page's connection closed, only a reload opens it again (#17: pages ask for a reload),
-   * so every call answers `reload-required`, which no resend fixes.
+   * Whether this page's connection is gone for good: another context upgraded the database,
+   * or Chrome closed the connection itself. Only a reload opens it again (#17: pages ask for
+   * a reload), so every IndexedDB call answers `reload-required`, which no resend fixes. Each
+   * call checks first, since one that finds a store missing on the old connection would
+   * attempt no transaction to fail.
+   * @returns {boolean}
+   */
+  const reloadRequired = () => storage.openState === 'version-changed' || storage.openState === 'closed-by-browser';
+
+  const reloadError = () => new UnavailableError('storage', 'reload-required', false);
+
+  /**
+   * What a failed IndexedDB call means here: `reload-required` when the connection went
+   * while it ran
    * @param {unknown} error
    * @returns {UnavailableError}
    */
-  const databaseError = error =>
-    storage.openState === 'version-changed'
-      ? new UnavailableError('storage', 'reload-required', false)
-      : storageError(error);
+  const databaseError = error => (reloadRequired() ? reloadError() : storageError(error));
 
   /**
    * @param {Work} work
@@ -291,7 +300,10 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
 
     commit(work) {
       const { effect } = work;
-      if (effect.kind === 'units') return fresh(runUnits(work, effect.units));
+      if (effect.kind === 'units') {
+        if (reloadRequired()) return fresh(Promise.resolve(unavailableFrom(reloadError())));
+        return fresh(runUnits(work, effect.units));
+      }
       if (effect.kind === 'settings') {
         const items = Object.fromEntries(
           Object.entries(effect.values).map(([key, value]) => [settingKey(effect.area, key), value]),
@@ -319,6 +331,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
       for (const store of stores) {
         if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
       }
+      if (reloadRequired()) throw reloadError();
       try {
         const names = presentStores(storage, stores);
         const tx = names.length > 0 ? storage.transaction(names, 'readonly') : null;

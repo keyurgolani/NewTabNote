@@ -215,8 +215,10 @@ describe('the legacy adapter', () => {
 
   it('once another context upgrades the database, Popup and Side Panel answer reload-required, not retryable', async () => {
     const panel = context();
+    // A profile from before folders, which the upgrade adds
     await legacyEnv.createDatabase(panel.env.indexedDB, {
       version: 7,
+      omit: ['folders'],
       records: { canvases: [legacyEnv.note('n1', { name: 'Kept' })] },
     });
     const adapter = adapterFor(panel, 'existing');
@@ -246,6 +248,78 @@ describe('the legacy adapter', () => {
       );
     }
     assert.deepEqual(await popup.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'reload-required',
+    });
+    // The closed connection has no folders store, so no transaction would fail to say so: a
+    // read would find no folders, and a note filed in one would find its folder missing
+    assert.deepEqual(await popup.query({ type: 'listFolders' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'reload-required',
+    });
+    const filed = await popup.execute({ type: 'createNote', commandId: 'c9', noteId: 'n3', folderId: 'f1' });
+    assert.deepEqual(filed.kind === 'unavailable' && filed.code, 'reload-required');
+  });
+
+  it('answers reload-required when the connection goes while a command or a read runs', async () => {
+    const panel = context();
+    await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });
+    const adapter = adapterFor(panel, 'existing');
+    await adapter.open();
+    const { storage } = panel;
+    const transaction = storage.transaction;
+    /**
+     * Has the `call`th transaction from now find the connection gone, as when another context's
+     * upgrade lands between a command's units, which the legacy adapter commits one by one
+     * @param {number} call
+     */
+    const goneAt = call => {
+      let calls = 0;
+      storage.transaction = (/** @type {unknown[]} */ ...args) => {
+        if (++calls === call) {
+          storage.db.close();
+          storage.openState = 'version-changed';
+        }
+        return transaction.apply(storage, args);
+      };
+    };
+    // renameNote commits the note, then its search entry
+    const tab = kernelFor(adapter, runtime(), CALLERS.newtab);
+    goneAt(2);
+    const renamed = await tab.execute({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'Plan' });
+    assert.deepEqual(renamed.kind === 'unavailable' && [renamed.code, renamed.retryable], ['reload-required', false]);
+    storage.transaction = transaction;
+    storage.openState = 'open';
+    await adapter.open();
+    goneAt(1);
+    assert.deepEqual(await tab.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'reload-required',
+    });
+    storage.transaction = transaction;
+  });
+
+  it('answers reload-required once Chrome closes the connection itself, as it does when the database goes', async () => {
+    const panel = context();
+    await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });
+    const adapter = adapterFor(panel, 'existing');
+    await adapter.open();
+    const popup = kernelFor(adapter, runtime(), CALLERS.popup);
+    assert.equal((await popup.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+    // A close Chrome makes, with no versionchange first
+    const db = panel.storage.db;
+    db.onclose.call(db, new Event('close'));
+    db.close();
+    const quickNote = await popup.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
+    assert.deepEqual(quickNote.kind === 'unavailable' && [quickNote.cause, quickNote.code, quickNote.retryable], [
+      'storage',
+      'reload-required',
+      false,
+    ]);
+    assert.deepEqual(await popup.query({ type: 'listFolders' }), {
       kind: 'failed',
       cause: 'storage',
       code: 'reload-required',
