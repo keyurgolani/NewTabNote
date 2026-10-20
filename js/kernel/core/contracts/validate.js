@@ -131,11 +131,14 @@ export function checkRequest(request, bytes, lookup) {
 }
 
 /**
- * An answer checked against its operation's result schema
+ * An answer checked against its operation's result schema. The answer it passes on is the one
+ * given, once its schema accepts it, as checkRequest passes a payload on: Valibot's copy would
+ * drop a `__proto__`, `constructor`, or `prototype` key a loose object such as a block holds.
  * @param {Operation} operation
  * @param {unknown} result
  * @returns {Checked<unknown>}
  */
 export function checkResult(operation, result) {
-  return check(operation.result, result);
+  const checked = check(operation.result, result);
+  return checked.ok ? { ok: true, value: result } : checked;
 }

@@ -303,5 +303,13 @@ describe('the checks a request passes (#13, AC1 and AC4)', () => {
     const query = /** @type {Operation} */ (lookup('listNotes'));
     assert.equal(checkResult(query, { kind: 'ready', asOf: NOW, data: [{ id: 'n1', name: 'Plan' }] }).ok, true);
     assert.equal(checkResult(query, { kind: 'ready', asOf: NOW, data: [{ name: 'no id' }] }).ok, false);
+    // It passes on the answer it was given, not Valibot's copy, which drops a loose object's
+    // own __proto__ key, as a request's payload is passed on
+    const blocks = /** @type {Operation} */ (lookup('getNoteBlocks'));
+    const answer = { kind: 'ready', asOf: NOW, data: [JSON.parse('{"id":"b1","canvasId":"n1","__proto__":{"x":1}}')] };
+    const kept = checkResult(blocks, answer);
+    assert.equal(kept.ok && kept.value, answer);
+    const [block] = /** @type {{data: object[]}} */ (kept.ok && kept.value).data;
+    assert.ok(Object.hasOwn(block, '__proto__'));
   });
 });
