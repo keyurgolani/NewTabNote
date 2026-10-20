@@ -1,7 +1,8 @@
 name: PR checks
 
 # pr-gate is the required check (.github/rulesets/main.json). A job added here goes in
-# pr-gate's needs, and its local command in pr-gate's COMMANDS.
+# pr-gate's needs, its local command in pr-gate's COMMANDS, and the line where its
+# failure report starts in MARKERS in scripts/ci/failure-excerpt.js.
 on:
   pull_request:
     branches: [main, next, 'release/**']
@@ -45,8 +46,8 @@ jobs:
         run: npm test 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
-        if: failure()
-        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" '^✖ failing tests:'
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" unit
 
   typecheck:
     name: typecheck
@@ -70,8 +71,8 @@ jobs:
         run: npm run typecheck:ratchet 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
-        if: failure()
-        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" '^typecheck ratchet'
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" typecheck
 
   build:
     name: build
@@ -104,8 +105,8 @@ jobs:
           retention-days: 14
       - name: Record the failure for pr-gate
         id: excerpt
-        if: failure()
-        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" '✗ |^Build failed|^Packaging failed|^Error'
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" build
 
   pr-gate:
     name: pr-gate
