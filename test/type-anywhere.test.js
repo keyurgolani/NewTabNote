@@ -1,11 +1,12 @@
 'use strict';
 
 // Type anywhere (#1 AC2's rule, NTN-18 slice 0 item 9): when focus isn't in a
-// text control and no modal, menu, listbox, or dialog has it, a printable key
-// goes to the note, except Space on a button, which presses it, or on a link,
-// which keeps the browser's default. Both panes' editors listen on one
-// document: a key typed in a pane goes to that pane's note, any other to the
-// active pane's while it shows.
+// text control, no modal, menu, listbox, or dialog has it, and none is open, a
+// printable key goes to the note, except Space on a button, which presses it,
+// or on a link, which keeps the browser's default. Both panes' editors listen
+// on one document, and exactly one of them acts on each key, for typing, undo,
+// redo, and deleting a block selection alike: a key pressed in a pane is that
+// pane's, any other is the active pane's while it shows.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,26 +14,59 @@ const { createLegacyEnv, FakeDocument } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/editor.js'];
 
+/** The modals newtab.html has, each closed, with its dialog box inside */
+const MODALS = ['settings-modal', 'shortcuts-modal', 'theme-builder-modal', 'command-palette-modal', 'ai-insert-preview-modal'];
+
+/** Add a `tag` element with `attributes` (`class` as the class name) to `parent` */
+function add(parent, tag, attributes = {}) {
+  const element = parent.ownerDocument.createElement(tag);
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name === 'class') element.className = value; else element.setAttribute(name, value);
+  }
+  parent.appendChild(element);
+  return element;
+}
+
+/**
+ * An editor on `root` in `doc` whose focusBlock, addBlockAtEnd, undo, redo, and
+ * deleteSelectedBlocks only record, in `reached`, that the key went to its note
+ */
+function stubEditor(env, doc, root, noteBlocks, reached) {
+  const instance = Object.create(env.get('BlockEditor').prototype);
+  Object.assign(instance, {
+    root,
+    doc,
+    blocks: noteBlocks.slice(),
+    selectedBlockIds: new Set(),
+    focusBlock: (id, atEnd) => reached.push(['focusBlock', id, atEnd]),
+    addBlockAtEnd: () => reached.push(['addBlockAtEnd']),
+    undo: () => reached.push(['undo']),
+    redo: () => reached.push(['redo']),
+    deleteSelectedBlocks: () => reached.push(['deleteSelectedBlocks']),
+  });
+  return instance;
+}
+
+/** A keydown at `target` */
+function keydown(target, key, modifiers = {}) {
+  const event = {
+    type: 'keydown', key, target, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers,
+  };
+  if (!event.preventDefault) event.preventDefault = () => { event.defaultPrevented = true; };
+  return event;
+}
+
 /**
  * A page with a header, the left pane (title, the export notice, a block), split
- * view's right pane, the sidebar, Settings, and a menu, and an editor for each
- * pane whose focusBlock and addBlockAtEnd only record that the key went to its
- * note. `split` is 'closed' (the right pane hidden), 'left', or 'right' (open,
- * with that pane active).
+ * view's right pane, the sidebar, the modals and the note menu (closed, as
+ * newtab.html has them), and an editor for each pane. `split` is 'closed' (the
+ * right pane hidden), 'left', or 'right' (open, with that pane active).
  */
 function setup({ split = 'closed', blocks = [{ id: 'b1' }, { id: 'b2' }], rightBlocks = [{ id: 'r1' }] } = {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   env.load(...FILES);
   env.global.navigator.platform = 'MacIntel';
   const doc = env.document;
-  const add = (parent, tag, attributes = {}) => {
-    const element = doc.createElement(tag);
-    for (const [name, value] of Object.entries(attributes)) {
-      if (name === 'class') element.className = value; else element.setAttribute(name, value);
-    }
-    parent.appendChild(element);
-    return element;
-  };
   const header = add(doc.body, 'header');
   const leftPane = add(doc.body, 'div', { id: 'editor-container', class: `editor-pane${split === 'right' ? '' : ' active'}` });
   const editorColumn = add(leftPane, 'div', { id: 'editor', class: 'editor' });
@@ -44,8 +78,10 @@ function setup({ split = 'closed', blocks = [{ id: 'b1' }, { id: 'b2' }], rightB
   });
   const rightColumn = add(add(rightPane, 'div', { class: 'editor' }), 'div', { class: 'blocks-container' });
   const sidebar = add(doc.body, 'aside', { id: 'sidebar', class: 'sidebar' });
-  const settings = add(doc.body, 'div', { id: 'settings-modal', class: 'modal' });
-  const menu = add(doc.body, 'div', { id: 'note-context-menu', class: 'context-menu', role: 'menu' });
+  const modals = Object.fromEntries(MODALS.map((id) => [id, add(doc.body, 'div', { id, class: 'modal hidden' })]));
+  const dialogBoxes = Object.fromEntries(MODALS.map((id) => [id, add(modals[id], 'div', { class: 'modal-content', role: 'dialog', 'aria-modal': 'true' })]));
+  const noteMenu = add(doc.body, 'div', { id: 'note-context-menu', class: 'context-menu hidden', role: 'menu' });
+  const dialog = add(doc.body, 'div', { role: 'dialog', class: 'hidden' });
   const reply = add(doc.body, 'div', { class: 'ai-message-content' });
   const at = {
     body: doc.body,
@@ -61,51 +97,79 @@ function setup({ split = 'closed', blocks = [{ id: 'b1' }, { id: 'b2' }], rightB
     textarea: add(doc.body, 'textarea', { id: 'ai-chat-input' }),
     select: add(doc.body, 'select'),
     sidebarButton: add(sidebar, 'button', { id: 'sidebar-tab-archive', role: 'tab' }),
-    settingsButton: add(settings, 'button'),
-    menuItem: add(menu, 'button', { role: 'menuitem' }),
+    settingsButton: add(dialogBoxes['settings-modal'], 'button'),
+    menuItem: add(noteMenu, 'button', { role: 'menuitem' }),
     listboxOption: add(add(doc.body, 'div', { role: 'listbox' }), 'div', { role: 'option', tabindex: '0' }),
-    dialogButton: add(add(doc.body, 'div', { role: 'dialog' }), 'button'),
+    dialogButton: add(dialog, 'button'),
     summary: add(add(reply, 'details'), 'summary'),
     video: add(reply, 'video', { controls: '' }),
   };
 
   // The two editors App builds, listening in the order it builds them
-  const BlockEditor = env.get('BlockEditor');
   const reached = { left: [], right: [] };
-  const editor = (side, root, noteBlocks) => {
-    const instance = Object.create(BlockEditor.prototype);
-    Object.assign(instance, {
-      root,
-      doc,
-      blocks: noteBlocks.slice(),
-      selectedBlockIds: new Set(),
-      focusBlock: (id, atEnd) => reached[side].push(['focusBlock', id, atEnd]),
-      addBlockAtEnd: () => reached[side].push(['addBlockAtEnd']),
-      undo: () => reached[side].push(['undo']),
-      redo: () => reached[side].push(['redo']),
-    });
-    return instance;
-  };
-  const editors = [editor('left', leftPane, blocks), editor('right', rightPane, rightBlocks)];
+  const editors = [
+    stubEditor(env, doc, leftPane, blocks, reached.left),
+    stubEditor(env, doc, rightPane, rightBlocks, reached.right),
+  ];
 
   /** Press `key` with focus at `target`: what reached each note, and whether the default was prevented */
   const press = (target, key, modifiers = {}) => {
-    reached.left = [];
-    reached.right = [];
-    const event = {
-      type: 'keydown', key, target, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers,
-    };
-    if (!event.preventDefault) event.preventDefault = () => { event.defaultPrevented = true; };
+    reached.left.length = 0;
+    reached.right.length = 0;
+    const event = keydown(target, key, modifiers);
     editors.forEach((instance) => instance.onGlobalKeyDown(event));
-    return { left: reached.left, right: reached.right, prevented: Boolean(event.defaultPrevented) };
+    return { left: reached.left.slice(), right: reached.right.slice(), prevented: Boolean(event.defaultPrevented) };
   };
-  return { env, at, press, editors };
+  const show = (element) => {
+    element.classList.remove('hidden');
+    return () => element.classList.add('hidden');
+  };
+  const page = { body: doc.body, leftPane, modals, noteMenu, dialog, show };
+  return { env, doc, at, press, editors, page };
 }
 
 const TO_LEFT = { left: [['focusBlock', 'b2', true]], right: [], prevented: false };
 const TO_RIGHT = { left: [], right: [['focusBlock', 'r1', true]], prevented: false };
 const NOWHERE = { left: [], right: [], prevented: false };
 const label = (target) => target.id || target.className || target.getAttribute('role') || target.tagName;
+
+/** An overlay added to the page open; close() takes it away */
+const added = (parent, tag, attributes) => {
+  const element = add(parent, tag, attributes);
+  return () => element.remove();
+};
+
+/**
+ * Each overlay the new tab opens, opened. The modals leave focus on the button
+ * that opened them, and a right-click on a note leaves it where it was.
+ */
+const OVERLAYS = [
+  ['Settings', (page) => page.show(page.modals['settings-modal'])],
+  ['Keyboard Shortcuts', (page) => page.show(page.modals['shortcuts-modal'])],
+  ['Theme Builder', (page) => page.show(page.modals['theme-builder-modal'])],
+  ['the command palette', (page) => page.show(page.modals['command-palette-modal'])],
+  ['the AI insert preview', (page) => page.show(page.modals['ai-insert-preview-modal'])],
+  ["a snapshot's preview", (page) => added(page.body, 'div', { class: 'modal' })],
+  ["a note's menu", (page) => page.show(page.noteMenu)],
+  ["a folder's menu", (page) => added(page.body, 'div', { class: 'context-menu' })],
+  ['the slash menu', (page) => added(page.leftPane, 'div', { id: 'slash-menu', class: 'slash-menu' })],
+  ['the link menu', (page) => added(page.leftPane, 'div', { id: 'wiki-menu', class: 'slash-menu' })],
+  ['the template menu', (page) => added(page.leftPane, 'div', { id: 'template-menu', class: 'slash-menu' })],
+  ["a block's menu", (page) => added(page.body, 'div', { class: 'block-action-menu' })],
+  ['Turn into', (page) => added(page.body, 'div', { class: 'turn-into-menu' })],
+  ["a table's menu", (page) => added(page.body, 'div', { class: 'table-context-menu' })],
+  ['a confirm dialog', (page) => added(page.body, 'div', { class: 'confirm-dialog-overlay', role: 'dialog', 'aria-modal': 'true' })],
+  ['onboarding', (page) => {
+    const closeOverlay = added(page.body, 'div', { class: 'onboarding-overlay' });
+    const closeTooltip = added(page.body, 'div', { class: 'onboarding-tooltip', role: 'dialog' });
+    return () => { closeOverlay(); closeTooltip(); };
+  }],
+  ['a <dialog>', (page) => added(page.body, 'dialog', { open: '' })],
+  ['any other dialog', (page) => page.show(page.dialog)],
+  ['an alert dialog', (page) => added(page.body, 'div', { role: 'alertdialog' })],
+  ['anything aria-modal', (page) => added(page.body, 'div', { 'aria-modal': 'true' })],
+  ['any other menu', (page) => added(page.body, 'div', { role: 'menu' })],
+];
 
 describe('type anywhere', () => {
   it('Space on a button presses it, and on a link keeps the browser default; neither types into the note', () => {
@@ -149,11 +213,37 @@ describe('type anywhere', () => {
     }
   });
 
-  it('a modal, menu, listbox, or dialog keeps its keys', () => {
-    const { at, press } = setup();
+  it('a modal, menu, listbox, or dialog with focus in it keeps its keys', () => {
+    const { at, press, page } = setup();
+    page.show(page.modals['settings-modal']);
+    page.show(page.noteMenu);
+    page.show(page.dialog);
     for (const target of [at.settingsButton, at.menuItem, at.listboxOption, at.dialogButton]) {
       assert.deepEqual(press(target, 'a'), NOWHERE, label(target));
       assert.deepEqual(press(target, ' '), NOWHERE);
+    }
+  });
+
+  for (const [name, open] of OVERLAYS) {
+    it(`while ${name} is open, letters typed with focus outside it stay out of the note`, () => {
+      const { at, press, page } = setup();
+      const close = open(page);
+      for (const target of [at.headerButton, at.sidebarButton, at.noticeButton, at.body]) {
+        assert.deepEqual(press(target, 'a'), NOWHERE, label(target));
+        assert.deepEqual(press(target, ' '), NOWHERE, `${label(target)}, Space`);
+      }
+      close();
+      assert.deepEqual(press(at.headerButton, 'a'), TO_LEFT, 'once it closes');
+    });
+  }
+
+  it('closed overlays hold nothing: the modals\' dialog boxes, a menu or dialog with hidden, and a <dialog> without open', () => {
+    const { at, press, page } = setup();
+    add(page.body, 'dialog');
+    add(page.body, 'div', { class: 'context-menu hidden' });
+    add(page.body, 'div', { class: 'slash-menu hidden' });
+    for (const target of [at.headerButton, at.sidebarButton, at.body]) {
+      assert.deepEqual(press(target, 'a'), TO_LEFT, label(target));
     }
   });
 
@@ -198,6 +288,84 @@ describe('type anywhere', () => {
         assert.deepEqual(press(at.rightButton, 'a'), TO_RIGHT, `${split} active, a button in the right pane`);
       }
     });
+  });
+});
+
+describe('one editor acts on each key', () => {
+  const UNDO = { metaKey: true };
+  const REDO = { metaKey: true, shiftKey: true };
+
+  it('undo and redo act in the pane they are pressed in, and from outside both panes in the active one', () => {
+    for (const [split, outside] of [['left', 'left'], ['right', 'right']]) {
+      const { at, press } = setup({ split });
+      for (const [key, modifiers, action] of [['z', UNDO, 'undo'], ['Z', REDO, 'redo']]) {
+        const only = (side) => ({ left: side === 'left' ? [[action]] : [], right: side === 'right' ? [[action]] : [], prevented: true });
+        assert.deepEqual(press(at.blockText, key, modifiers), only('left'), `${split} active, ${action} in a left block`);
+        assert.deepEqual(press(at.title, key, modifiers), only('left'), `${split} active, ${action} in the left title`);
+        assert.deepEqual(press(at.rightBlockText, key, modifiers), only('right'), `${split} active, ${action} in a right block`);
+        for (const target of [at.headerButton, at.body]) {
+          assert.deepEqual(press(target, key, modifiers), only(outside), `${split} active, ${action} at ${label(target)}`);
+        }
+      }
+    }
+  });
+
+  it('split view closed: undo and redo act in the left pane only, wherever they are pressed', () => {
+    const { at, press } = setup({ split: 'closed' });
+    for (const target of [at.blockText, at.title, at.headerButton, at.sidebarButton, at.body]) {
+      assert.deepEqual(press(target, 'z', UNDO), { left: [['undo']], right: [], prevented: true }, label(target));
+      assert.deepEqual(press(target, 'Z', REDO), { left: [['redo']], right: [], prevented: true }, label(target));
+    }
+  });
+
+  it('Backspace or Delete deletes a block selection only in the pane it is pressed in', () => {
+    const { at, press, editors } = setup({ split: 'left' });
+    editors[1].selectedBlockIds.add('r1'); // Cmd-clicked in the right pane
+    for (const key of ['Backspace', 'Delete']) {
+      // In a left block the key edits the text there, and the right pane's selection stays
+      assert.deepEqual(press(at.blockText, key), NOWHERE, `${key} in a left block`);
+      assert.deepEqual(press(at.headerButton, key), NOWHERE, `${key} outside both, the left pane active`);
+      assert.deepEqual(press(at.rightBlockText, key), { left: [], right: [['deleteSelectedBlocks']], prevented: true }, `${key} in a right block`);
+    }
+    editors[0].selectedBlockIds.add('b1');
+    assert.deepEqual(press(at.blockText, 'Backspace'), { left: [['deleteSelectedBlocks']], right: [], prevented: true });
+  });
+
+  it('with the right pane active, Backspace outside both panes deletes its selection, not the left one\'s', () => {
+    const { at, press, editors } = setup({ split: 'right' });
+    editors[0].selectedBlockIds.add('b1');
+    editors[1].selectedBlockIds.add('r1');
+    assert.deepEqual(press(at.body, 'Backspace'), { left: [], right: [['deleteSelectedBlocks']], prevented: true });
+  });
+
+  it('split view closed: a selection left in the hidden right pane is never deleted', () => {
+    const { at, press, editors } = setup({ split: 'closed' });
+    editors[1].selectedBlockIds.add('r1');
+    for (const target of [at.blockText, at.headerButton, at.body]) {
+      assert.deepEqual(press(target, 'Backspace'), NOWHERE, label(target));
+    }
+  });
+
+  it('Picture-in-Picture\'s editor takes every key in its own window, whatever the new tab has open', () => {
+    const { env, page } = setup();
+    page.show(page.modals['settings-modal']); // in the new tab, not the PiP window
+    const pipDoc = new FakeDocument();
+    const root = add(pipDoc.body, 'div', { class: 'pip-editor-wrapper editor-pane active' });
+    const blockText = add(add(root, 'div', { class: 'block' }), 'div', { class: 'block-content', contenteditable: 'true' });
+    const reached = [];
+    const pip = stubEditor(env, pipDoc, root, [{ id: 'p1' }], reached);
+    const press = (target, key, modifiers) => {
+      reached.length = 0;
+      pip.onGlobalKeyDown(keydown(target, key, modifiers));
+      return reached.slice();
+    };
+    for (const target of [blockText, pipDoc.body]) {
+      assert.deepEqual(press(target, 'z', UNDO), [['undo']], `undo at ${label(target)}`);
+      assert.deepEqual(press(target, 'Z', REDO), [['redo']], `redo at ${label(target)}`);
+    }
+    assert.deepEqual(press(pipDoc.body, 'a'), [['focusBlock', 'p1', true]]);
+    pip.selectedBlockIds.add('p1');
+    assert.deepEqual(press(pipDoc.body, 'Backspace'), [['deleteSelectedBlocks']]);
   });
 });
 

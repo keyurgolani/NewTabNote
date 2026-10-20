@@ -1135,62 +1135,29 @@ class DatabaseManager {
   }
 
   /**
-   * Check if a note is empty (has no meaningful content)
+   * Whether a note holds nothing: every block is an empty text block (see
+   * isEmptyTextBlock), or it has none. trashNote deletes an untitled note like
+   * that for good instead of moving it to trash.
+   * @param {string} noteId
+   * @returns {Promise<boolean>}
    */
   async isNoteEmpty(noteId) {
     const elements = await this.getElementsByNote(noteId);
+    return elements.every((element) => this.isEmptyTextBlock(element));
+  }
 
-    // No elements means empty
-    if (elements.length === 0) {
-      return true;
-    }
-
-    // Check if all elements have no meaningful content
-    for (const el of elements) {
-      // Check text content
-      if (el.content) {
-        // Strip HTML tags and check for actual text
-        const textContent = el.content.replace(/<[^>]*>/g, '').trim();
-        if (textContent.length > 0) {
-          return false;
-        }
-      }
-
-      // Check for media content
-      if (el.imageUrl || el.fileData || el.videoUrl) {
-        return false;
-      }
-
-      // Check for table data
-      if (el.tableData && Array.isArray(el.tableData)) {
-        const hasContent = el.tableData.some(row =>
-          row.some(cell => cell && cell.trim() && !cell.startsWith('Header '))
-        );
-        if (hasContent) {
-          return false;
-        }
-      }
-
-      // Check for bookmark
-      if (el.url && el.title) {
-        return false;
-      }
-
-      // Check for toggle children content
-      if (el.children) {
-        const childContent = el.children.replace(/<[^>]*>/g, '').trim();
-        if (childContent.length > 0) {
-          return false;
-        }
-      }
-
-      // Check for equation
-      if (el.equation && el.equation.trim()) {
-        return false;
-      }
-    }
-
-    return true;
+  /**
+   * Whether a block holds nothing: a text block whose content is only spaces,
+   * line breaks, and non-breaking spaces. Any other block holds something, an
+   * image, a table, or a divider included, and so does a text block with any
+   * other markup, such as a pasted image. The one rule for an empty note, here
+   * and in the export notice.
+   * @param {Object} block - A block record
+   * @returns {boolean}
+   */
+  isEmptyTextBlock(block) {
+    if ((block.type || 'text') !== 'text') return false;
+    return String(block.content || '').replace(/<br\s*\/?>|&nbsp;/gi, '').trim() === '';
   }
 
   /**

@@ -321,6 +321,29 @@ function blocks(page) {
 }
 
 /**
+ * The open note's blocks' content as stored, once the editor has written what it has
+ * pending, in order
+ */
+function savedBlocks(page) {
+  return page.evaluate(async () => {
+    await app.editor.flushSave();
+    const elements = await Storage.getElementsByNote(app.editor.noteId);
+    return elements.sort((a, b) => a.order - b.order).map(element => element.content);
+  });
+}
+
+/**
+ * Right-click the sidebar's note named `name` and wait for its menu
+ */
+async function openNoteMenu(page, name) {
+  await showNotes(page);
+  await page.locator('#sidebar-notes-list .sidebar-note-item')
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .click({ button: 'right' });
+  await expect(page.getByRole('menu', { name: 'Note actions' })).toBeVisible();
+}
+
+/**
  * Type `query` into the sidebar's search box
  */
 async function searchNotes(page, query) {
@@ -793,6 +816,8 @@ module.exports = {
   openNote,
   noteTitle,
   blocks,
+  savedBlocks,
+  openNoteMenu,
   searchNotes,
   openTodaysDailyNote,
   todaysDailyNoteTitle,

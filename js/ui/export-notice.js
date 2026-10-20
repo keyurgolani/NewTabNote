@@ -113,8 +113,9 @@ class ExportNotice {
   }
 
   /**
-   * Whether the profile has a note outside trash with a title or any block
-   * besides an empty text one. Stops at the first.
+   * Whether the profile has a note outside trash with a title or a block that
+   * holds something, by the rule trash goes by (Storage.isNoteEmpty). Stops at
+   * the first.
    * @returns {Promise<boolean>}
    */
   async _holdsSomething() {
@@ -122,23 +123,9 @@ class ExportNotice {
     const notes = [...(await storage.getAllNotes(true)), ...(await storage.getTemplates())];
     for (const note of notes) {
       if (!storage.isNoteUntitled(note)) return true;
-      const blocks = await storage.getElementsByNote(note.id);
-      if (blocks.some((block) => !ExportNotice.isEmptyTextBlock(block))) return true;
+      if (!(await storage.isNoteEmpty(note.id))) return true;
     }
     return false;
-  }
-
-  /**
-   * Whether a block holds nothing: a text block whose content is only spaces
-   * and line breaks. Any other block counts, an image, a table, or a divider
-   * included, and so does a text block with any other markup, such as a
-   * pasted image.
-   * @param {Object} block
-   * @returns {boolean}
-   */
-  static isEmptyTextBlock(block) {
-    if ((block.type || 'text') !== 'text') return false;
-    return String(block.content || '').replace(/<br\s*\/?>|&nbsp;/gi, '').trim() === '';
   }
 
   /**

@@ -12,6 +12,20 @@ function editorStorage() {
 }
 
 /**
+ * What keeps typed keys out of the note while it's open (BlockEditor's
+ * _overlayOpen): the modals (Settings, Keyboard Shortcuts, Theme Builder, the
+ * command palette, the AI insert preview, a snapshot's preview), the note and
+ * folder menus, the slash, link, and template menus, the block, Turn into, and
+ * table menus, the confirm dialogs, onboarding, and any other dialog or menu.
+ * A <dialog> counts only with `open`.
+ */
+const OPEN_OVERLAYS = [
+  '.modal', '.context-menu', '.slash-menu', '.block-action-menu', '.turn-into-menu', '.table-context-menu',
+  '.confirm-dialog-overlay', '.onboarding-overlay', 'dialog[open]',
+  '[role="dialog"]', '[role="alertdialog"]', '[role="menu"]', '[aria-modal="true"]',
+].join(', ');
+
+/**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
  * before the transaction opens, so a block deleted in between isn't written back.
@@ -2508,9 +2522,13 @@ class BlockEditor {
   }
 
   /**
-   * Handle global keydown
+   * Handle global keydown. Both panes' editors listen on one document, and only
+   * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
+   * deleting a block selection happen in one pane.
    */
   onGlobalKeyDown(e) {
+    if (!this._takesTypedKey(e.target)) return;
+
     // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0) {
       e.preventDefault();
@@ -2534,14 +2552,14 @@ class BlockEditor {
     }
 
     // Type anywhere: a printable key goes to the note, moving focus there before
-    // the key types, unless something took it already or what has focus keeps it
+    // the key types, unless something took it already, what has focus keeps it,
+    // or a modal, menu, or dialog is open
     if (
       !e.defaultPrevented &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
       e.key.length === 1 &&
-      this._takesTypedKey(e.target) &&
       !this._keyStaysAt(e.target, e.key)
     ) {
       // Focus last block or create new one
@@ -2555,26 +2573,28 @@ class BlockEditor {
   }
 
   /**
-   * Whether a key typed at `target` is this editor's to send to its note. Both
-   * panes listen on one document, so a key typed in a pane is that pane's, and
-   * any other key is the active pane's while it shows.
+   * Whether a key pressed at `target` is this editor's. Both panes listen on
+   * one document, so a key pressed in a pane is that pane's, and any other key
+   * is the active pane's while it shows. Picture-in-Picture's pane is always
+   * active in its own window.
    * @param {Element} target - Where the key was pressed
    * @returns {boolean}
    */
   _takesTypedKey(target) {
-    const pane = target.closest('.editor-pane');
+    const pane = target && typeof target.closest === 'function' ? target.closest('.editor-pane') : null;
     if (pane) return pane === this.root;
-    return this.root.classList.contains('active') && !this.root.classList.contains('hidden');
+    const classes = this.root.classList;
+    return Boolean(classes) && classes.contains('active') && !classes.contains('hidden');
   }
 
   /**
    * Whether a printable key pressed at `target` stays there instead of going
    * to the note: a text control (input, textarea, select, editable text),
    * another control that takes keys itself (summary, details, media
-   * controls), or a modal, menu, listbox, or dialog has focus, or it's Space
-   * on a button, which presses it, or on a link, where the browser does what
-   * it does (links open on Enter). Enter isn't printable, so it never goes
-   * either.
+   * controls), or a modal, menu, listbox, or dialog has focus, one is open
+   * wherever focus is, or it's Space on a button, which presses it, or on a
+   * link, where the browser does what it does (links open on Enter). Enter
+   * isn't printable, so it never goes either.
    * @param {Element} target - Where the key was pressed
    * @param {string} key - KeyboardEvent.key
    * @returns {boolean}
@@ -2582,7 +2602,20 @@ class BlockEditor {
   _keyStaysAt(target, key) {
     if (target.closest('input, textarea, select, [contenteditable], summary, details, audio[controls], video[controls]')) return true;
     if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
+    if (this._overlayOpen()) return true;
     return key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
+  }
+
+  /**
+   * Whether a modal, menu, or dialog is open in this editor's window. The
+   * modals leave focus on the button that opened them, and a right-click
+   * leaves it where it was, so an open one keeps typed keys out of the note
+   * wherever focus is. Open means in the page with no `hidden` class on it or
+   * around it (see OPEN_OVERLAYS).
+   * @returns {boolean}
+   */
+  _overlayOpen() {
+    return Array.from(this.doc.querySelectorAll(OPEN_OVERLAYS)).some((element) => !element.closest('.hidden'));
   }
 
   // ============ Slash Menu ============
