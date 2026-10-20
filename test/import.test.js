@@ -506,7 +506,7 @@ describe('Replace all (AC4)', () => {
     });
   }
 
-  it('drops the notes it trashed from the tabs, and the saved workspace names none of them', async () => {
+  it("drops the notes it trashed from the tabs, keeps the archived note's tab, and moves the active pane to an active note", async () => {
     const { tabs, editors } = await openEditors(env, Storage);
     tabs._setSplitView(true);
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'AR', name: 'Old daily' }, { noteId: 'E', name: 'Untitled' });
@@ -519,17 +519,21 @@ describe('Replace all (AC4)', () => {
 
     await replaceAll(env, controller, sameProfileBackup());
 
-    assert.deepEqual(plain(tabs.openTabs), [{ noteId: 'AR', name: 'Old daily' }], 'the archived note keeps its tab');
-    assert.equal(editors.primary.noteId, 'AR', 'the active pane went to the surviving tab');
-    assert.deepEqual(shownTabs(env), ['Old daily']);
+    // Not the archived note's tab next to it: a pane moves only onto a note in use
+    const left = await Storage.getNote(editors.primary.noteId);
+    assert.ok(left && !left.trashed && !left.archived, 'the active pane went to an active note');
+    const kept = [{ noteId: 'AR', name: 'Old daily' }, { noteId: left.id, name: left.name }];
+    assert.deepEqual(plain(tabs.openTabs), kept, 'the archived note keeps its tab');
+    assert.equal(tabs.activeTabIndex, 1);
+    assert.deepEqual(shownTabs(env), ['Old daily', left.name]);
     const right = await Storage.getNote(editors.secondary.noteId);
-    assert.ok(right && !right.trashed && !right.archived && right.id !== 'AR', 'the right pane went to another active note');
+    assert.ok(right && !right.trashed && !right.archived && right.id !== left.id, 'the right pane went to another active note');
 
     const local = env.chrome.local;
-    assert.deepEqual(local.setting_openTabs, [{ noteId: 'AR', name: 'Old daily' }]);
-    assert.equal(local.setting_activeTabIndex, 0);
+    assert.deepEqual(local.setting_openTabs, kept);
+    assert.equal(local.setting_activeTabIndex, 1);
     assert.equal(local.setting_secondaryNoteId, right.id);
-    assert.equal(local.lastOpenedNoteId, 'AR');
+    assert.equal(local.lastOpenedNoteId, left.id);
   });
 
   it('opens the first note in a tab, and a reload opens no note in trash', async () => {

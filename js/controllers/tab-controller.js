@@ -44,6 +44,8 @@ class TabController {
     this._forgetQueue = Promise.resolve();
     /** @type {boolean} Whether another tab's message refreshes the lists yet (see workspaceReady) */
     this._refreshesLists = false;
+    /** @type {boolean} A message came before that, so workspaceReady refreshes them */
+    this._refreshPending = false;
   }
 
   /** Initialize tabs: wire DOM listeners. */
@@ -313,10 +315,12 @@ class TabController {
 
   /**
    * The active pane's note left. It shows the active tab's note, unless the
-   * other pane shows that one; else the first active note the other pane
-   * doesn't show, in a new tab when its own tab went; else the other pane's
-   * note, with split view closed; else a new note in a new tab. A load the
-   * editor refuses, to keep unsaved edits of a deleted note on screen, ends it.
+   * other pane shows that one or it isn't active (another tab trashed,
+   * archived, or deleted it; a deleted one's tab goes); else the first active
+   * note the other pane doesn't show, in a new tab when its own tab went; else
+   * the other pane's note, with split view closed; else a new note in a new
+   * tab. A load the editor refuses, to keep unsaved edits of a deleted note on
+   * screen, ends it.
    * @param {BlockEditor} active
    * @param {BlockEditor|null} other - The other pane, while split view is on
    * @param {Array<Object>} notes - Active notes, newest first, without the ones that left
@@ -327,12 +331,22 @@ class TabController {
   async _moveActivePane(active, other, notes, { activeTabLeft, staying }) {
     const otherId = other ? other.noteId : null;
     const tab = this.openTabs[this.activeTabIndex];
+    let skipped = false;
     if (tab && tab.noteId !== otherId && !staying.has(tab.noteId)) {
-      if ((await active.loadNote(tab.noteId)) || active.noteGone) return;
+      const record = await this.storage.getNote(tab.noteId);
+      if (record && !record.trashed && !record.archived) {
+        if ((await active.loadNote(tab.noteId)) || active.noteGone) return;
+      } else {
+        skipped = true;
+        if (!record) {
+          this.openTabs = this.openTabs.filter((open) => open !== tab);
+          this.activeTabIndex = Math.min(this.activeTabIndex, Math.max(0, this.openTabs.length - 1));
+        }
+      }
     }
     const next = notes.find((note) => note.id !== otherId);
     if (next) {
-      if ((await active.loadNote(next.id)) && (activeTabLeft || this.openTabs.length === 0)) this._pushTab(next);
+      if ((await active.loadNote(next.id)) && (activeTabLeft || skipped || this.openTabs.length === 0)) this._pushTab(next);
       return;
     }
     if (other && otherId && notes.some((note) => note.id === otherId)) {
@@ -362,8 +376,9 @@ class TabController {
 
   /**
    * The pane the tabs don't drive: an active note the active pane doesn't
-   * show, else split view closes. A load the editor refuses, to keep unsaved
-   * edits of a deleted note on screen, leaves the pane as it is.
+   * show, else split view closes, else, when it stays for a deleted note's
+   * text, a new note. A load the editor refuses, to keep unsaved edits of a
+   * deleted note on screen, leaves the pane as it is.
    * @param {BlockEditor} other
    * @param {Array<Object>} notes - Active notes, newest first, without the ones that left
    * @returns {Promise<void>}
@@ -373,6 +388,9 @@ class TabController {
     const pick = notes.find((note) => note.id !== shownId);
     if (pick && ((await other.loadNote(pick.id)) || other.noteGone)) return;
     await this._closeSplitKeeping(this.getEditor());
+    if (!this.splitViewEnabled) return;
+    const created = this.onCreateNote ? await this.onCreateNote() : null;
+    if (created) await other.loadNote(created.id);
   }
 
   /**
@@ -428,11 +446,14 @@ class TabController {
   /**
    * This tab has its workspace (loadSavedTabs, or App's first note): from now
    * on another tab's message refreshes its lists. One that came while it
-   * started needs nothing, since it read the lists as it started.
+   * started, maybe after it read the lists, refreshes them once now.
    * @returns {void}
    */
   workspaceReady() {
     this._refreshesLists = true;
+    if (!this._refreshPending) return;
+    this._refreshPending = false;
+    this._onNotesLeftElsewhere();
   }
 
   /**
@@ -445,7 +466,11 @@ class TabController {
    * @returns {Promise<void>}
    */
   async _onNotesLeftElsewhere() {
-    if (!this._refreshesLists || !this.onRefreshNotesList) return;
+    if (!this._refreshesLists) {
+      this._refreshPending = true;
+      return;
+    }
+    if (!this.onRefreshNotesList) return;
     try {
       await this.onRefreshNotesList({ listsOnly: true });
     } catch (error) {
@@ -754,8 +779,9 @@ class TabController {
    * Close a tab by index. Closing the active tab loads the next tab's note (or
    * the previous one's) first, and the tab goes only once that load happened,
    * so a load the editor refuses, to keep a deleted note's unsaved text on
-   * screen, leaves the tab bar on the note on screen. Closing another tab loads
-   * nothing.
+   * screen, leaves the tab bar on the note on screen. A neighbour whose note
+   * was deleted elsewhere goes with a toast, and the next one is tried.
+   * Closing another tab loads nothing.
    * @param {number} index
    * @returns {Promise<void>}
    */
@@ -771,12 +797,19 @@ class TabController {
       return;
     }
 
-    const next = this.openTabs[index + 1] || this.openTabs[index - 1];
     const editor = this.getEditor();
     const goneId = editor.noteGone ? editor.noteId : null;
-    if (!(await editor.loadNote(next.noteId))) {
-      this.renderTabs();
-      return;
+    let next;
+    for (;;) {
+      const at = this.openTabs.indexOf(closing);
+      next = this.openTabs[at + 1] || this.openTabs[at - 1];
+      if (!next) return;
+      if (await editor.loadNote(next.noteId)) break;
+      if (next.noteId === editor.noteId || (await this.storage.getNote(next.noteId))) {
+        this.renderTabs();
+        return;
+      }
+      await this._dropDeletedTab(next);
     }
     this.openTabs = this.openTabs.filter((tab) => tab !== closing);
     this._dropGoneTab(goneId);

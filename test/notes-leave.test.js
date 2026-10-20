@@ -366,6 +366,41 @@ describe('a note leaving the active set, in this new tab', () => {
     });
   }
 
+  it("trashing the open note next to a template's tab still opens the template, as before", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { open: ['B', 'A'] });
+    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), isTemplate: true });
+
+    await runUntil(env, page.wire(controllers.notes(env, page.Storage)).trashNoteById('A'));
+
+    assert.equal(page.tabs.editor.noteId, 'B');
+    assert.deepEqual(tabIds(page.tabs), ['B']);
+  });
+
+  it("with the right pane on a deleted note's notice and the left pane on the only active note, trashing that note moves the left pane to a new note", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB, ['A', 'B']);
+    const page = await openPage(env, { split: true });
+    page.tabs.setActiveEditorSide('right');
+    const right = page.tabs.secondaryEditor;
+    type(right, 'typed into B');
+    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await runUntil(env, right.flushSave());
+    assert.equal(right.noteGone, true);
+    const notes = page.wire(controllers.notes(env, page.Storage));
+
+    await runUntil(env, notes.trashNoteById('A'));
+
+    const left = page.tabs.editor;
+    assert.notEqual(left.noteId, 'A', 'the left pane leaves the trashed note');
+    const shown = (await stored(env)).notes[left.noteId];
+    assert.ok(shown && !shown.trashed && !shown.archived, 'for an active note');
+    assert.equal(page.tabs.splitViewEnabled, true, "split view stays for the deleted note's text");
+    assert.equal(right.noteGone, true);
+    assert.equal(right.blocks[0].content, 'typed into B');
+  });
+
   it('closing the tab of a note deleted with unsaved edits keeps the tab bar on it, and closing another tab loads nothing', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
@@ -718,6 +753,44 @@ describe('a note leaving the active set in another new tab', () => {
     assert.equal(editor.noteId, 'B', 'a tab whose note exists opens as before');
   });
 
+  for (const [what, act, kept] of [
+    ['trashed', (one, first) => one.wire(controllers.notes(first, one.Storage)).trashNoteById('A'), ['A', 'B']],
+    ['archived', (one, first) => one.wire(controllers.notes(first, one.Storage)).archiveNote('A'), ['A', 'B']],
+    ['deleted for good', (one) => one.Storage.permanentlyDeleteNote('A'), ['B']],
+  ]) {
+    it(`trashing the open note never moves the pane onto the tab of a note another tab ${what}: it goes to the newest active note`, async () => {
+      const { first, second } = await twoPages();
+      const two = await openPage(second, { open: ['A', 'C'] }); // Gamma on screen, next to Alpha's tab
+      const one = await openPage(first, { open: ['D'] });
+      await runUntil(first, act(one, first));
+      await runUntil(second, settle(40)); // its message, if any, reaches this tab
+
+      await runUntil(second, two.wire(controllers.notes(second, two.Storage)).trashNoteById('C'));
+
+      const editor = two.tabs.editor;
+      assert.equal(editor.noteId, 'B', 'Beta, the newest active note');
+      assert.deepEqual(tabIds(two.tabs), kept, `Alpha's tab ${what === 'deleted for good' ? 'goes' : 'stays'}`);
+      assert.equal(two.tabs.openTabs[two.tabs.activeTabIndex].noteId, 'B');
+      await typeAndSave(second, editor, 'typed into B');
+      assert.deepEqual(await blocksOf(first, 'B'), ['typed into B']);
+    });
+  }
+
+  it('closing the active tab next to a tab whose note another tab deleted drops that tab with a toast and opens the one after it', async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['A', 'B', 'C'] });
+    await runUntil(second, two.tabs.switchToTab(0)); // Alpha on screen, Beta's tab next to it
+    const one = await openPage(first, { open: ['D'] });
+    await one.Storage.permanentlyDeleteNote('B');
+
+    await runUntil(second, two.tabs.closeTab(0));
+
+    assert.equal(two.tabs.editor.noteId, 'C');
+    assert.deepEqual(tabIds(two.tabs), ['C']);
+    assert.deepEqual(savedTabs(first), ['C']);
+    assert.deepEqual(two.toasts, [{ message: 'That note was deleted, so its tab closed.', kind: 'info' }]);
+  });
+
   it("clicking the tab of a note trashed or archived in another tab opens it, as 1.4.0 did, and its saves keep that", async () => {
     const { first, second } = await twoPages();
     const two = await openPage(second, { open: ['A', 'B', 'C'] }); // Gamma on screen
@@ -754,7 +827,7 @@ describe('a note leaving the active set in another new tab', () => {
     assert.deepEqual(tabIds(two.tabs), ['C']);
   });
 
-  it('a tab still starting up refreshes nothing for a message, and starts on the notes as they are stored', async () => {
+  it('a tab still starting up refreshes its lists once it is ready for a message that came meanwhile, and starts on the notes as they are stored', async () => {
     const { first, second } = await twoPages();
     const one = await openPage(first, { open: ['A', 'B'] });
     const two = await bootNewTab(second, { ready: false });
@@ -763,10 +836,17 @@ describe('a note leaving the active set in another new tab', () => {
     await runUntil(first, notes.trashNoteById('B'));
     await runUntil(second, settle(40)); // the message reaches the second tab
     assert.equal(first.channels.sent.length, 1);
-    assert.equal(two.page.refreshes, 0);
+    assert.equal(two.page.refreshes, 0, 'nothing refreshes while it starts');
 
     await runUntil(second, two.tabs.loadSavedTabs());
     assert.deepEqual(tabIds(two.tabs), ['A'], 'Beta, in trash, stays closed at startup');
     assert.equal(two.tabs.editor.noteId, 'A');
+
+    // It read its lists before the message came, so they refresh once, as it gets its workspace
+    two.tabs.workspaceReady();
+    await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the refresh for the message' }));
+    two.tabs.workspaceReady();
+    await runUntil(second, settle(20));
+    assert.equal(two.page.listsOnly, 1, 'once');
   });
 });
