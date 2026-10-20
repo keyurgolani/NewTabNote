@@ -1,10 +1,12 @@
 'use strict';
 
 // NTN-33 follow-up: a note that leaves the active set (trash, archive, delete,
-// Empty trash) leaves every pane and tab, in this new tab and the others, and
-// the two panes never end up on one note. Edits typed into it land first. A
-// pane whose note was deleted with edits it couldn't save keeps them on
-// screen, says so, and offers "Save as a new note".
+// Empty trash) leaves every pane and tab in this new tab, and the two panes
+// never end up on one note. Edits typed into it land first. The other new tabs
+// refresh their lists and keep their panes and tabs, as 1.4.0 did: their saves
+// keep a note's trash and archive state. A pane whose note was deleted with
+// edits it couldn't save keeps them on screen, says so, and offers "Save as a
+// new note".
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -533,121 +535,105 @@ describe('a note leaving the active set, in this new tab', () => {
 });
 
 describe('a note leaving the active set in another new tab', () => {
-  async function twoPages() {
+  /** Two new tabs on one profile, sharing IndexedDB, chrome.storage, and the BroadcastChannel unless `channel` is false */
+  async function twoPages({ channel = true } = {}) {
     const first = createLegacyEnv();
     await createProfile(first.indexedDB);
-    const second = createLegacyEnv({ indexedDB: first.indexedDB, chrome: first.chrome, channels: first.channels });
+    const second = createLegacyEnv({ indexedDB: first.indexedDB, chrome: first.chrome, ...(channel ? { channels: first.channels } : {}) });
     return { first, second };
   }
 
-  for (const [label, leave, comeBack] of [
-    ['out of focus', (env) => { env.document.focused = false; }, (env) => { env.document.focused = true; env.window.fire('focus'); }],
-    ['hidden', (env) => { env.document.visibilityState = 'hidden'; env.document.focused = false; env.document.fire('visibilitychange'); },
-      (env) => { env.document.visibilityState = 'visible'; env.document.focused = true; env.document.fire('visibilitychange'); }],
-  ]) {
-    it(`a tab ${label} stays where it is, then moves onto the notes as they are once the user is back`, async () => {
+  /** Type into `page`'s pane and wait for its save */
+  async function typeAndSave(env, editor, text) {
+    type(editor, text);
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+  }
+
+  const savedTabs = (env) => env.chrome.local.setting_openTabs.map((tab) => tab.noteId);
+  const blocksOf = async (env, noteId) => (await stored(env)).elements.filter((el) => el.canvasId === noteId).map((el) => el.content);
+
+  /** Ways another tab moves Alpha out of the active set while keeping it, and the flag Alpha's saves then keep */
+  const KEPT = [
+    ['trashes it', 'trashed', (one, first) => one.wire(controllers.notes(first, one.Storage)).trashNoteById('A')],
+    ['archives it', 'archived', (one, first) => one.wire(controllers.notes(first, one.Storage)).archiveNote('A')],
+    ['runs Replace all', 'trashed', async (one) => {
+      const backup = { version: 1, exportedAt: 1, canvases: [note('R', { name: 'Imported' })], elements: [block('r1', 'R', 0, 'imported')] };
+      await one.tabs.flushEditorsForImport();
+      const result = await one.Storage.importData(backup, 'replace');
+      await one.tabs.reloadEditorsAfterImport(result.trashedIds, result.trashedAt);
+    }],
+  ];
+
+  for (const [what, flag, act] of KEPT) {
+    it(`when another tab ${what}, this one keeps its pane and tabs on it, refreshes its lists, and its saves keep it ${flag}`, async () => {
       const { first, second } = await twoPages();
-      // The background tab has Beta and Alpha open, Alpha on screen
-      const two = await openPage(second, { open: ['B', 'A'] });
-      leave(second);
-      const one = await openPage(first, { open: ['B'] });
-      const notes = one.wire(controllers.notes(first, one.Storage));
+      const two = await openPage(second, { open: ['C', 'A'] }); // Alpha on screen
+      const one = await openPage(first, { open: ['B'] }); // the tab in use, saved last
 
-      await runUntil(first, notes.trashNoteById('A'));
-      await runUntil(second, settle(40)); // the message reaches the background tab
-      assert.equal(first.channels.sent.length, 1);
-      assert.equal(two.tabs.editor.noteId, 'A', 'it stays on Alpha, as 1.4.0 did');
-      assert.deepEqual(tabIds(two.tabs), ['B', 'A']);
-      assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['B'], "the saved workspace is the first tab's");
+      await runUntil(first, act(one, first));
+      await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the lists to refresh' }));
+      assert.equal(two.tabs.editor.noteId, 'A', 'the pane stays, as 1.4.0 did');
+      assert.deepEqual(tabIds(two.tabs), ['C', 'A']);
+      assert.equal(two.tabs.activeTabIndex, 1);
+      assert.equal(two.page.refreshes, 1, 'lists only, nothing else');
+      assert.ok(!two.page.notes.some((n) => n.id === 'A'), 'the list no longer shows Alpha');
+      const workspace = savedTabs(first);
+      assert.ok(!workspace.includes('C'), "the saved workspace is the first tab's");
 
-      // The user keeps editing Beta in the first tab
-      type(one.tabs.editor, 'Beta, edited in the first tab');
-      first.clock.tick(500);
-      await runUntil(first, one.tabs.editor.flushSave());
-
-      comeBack(second);
-      await runUntil(second, waitFor(() => two.tabs.editor.noteId === 'B', { message: 'the background tab to move' }));
-      assert.equal(two.tabs.editor.blocks[0].content, 'Beta, edited in the first tab', 'Beta as it is now');
-      assert.deepEqual(tabIds(two.tabs), ['B']);
-
-      // Typing there keeps the first tab's edit
-      two.tabs.editor.blocks[0].content += ', and more from the second tab';
-      two.tabs.editor.scheduleSave();
-      second.clock.tick(500);
-      await runUntil(second, two.tabs.editor.flushSave());
-      const beta = (await stored(first)).elements.filter((el) => el.canvasId === 'B').map((el) => el.content);
-      assert.deepEqual(beta, ['Beta, edited in the first tab, and more from the second tab']);
+      await typeAndSave(second, two.tabs.editor, 'typed after it left');
+      const { notes: records } = await stored(first);
+      assert.equal(records.A[flag], true, `Alpha stays ${flag}`);
+      assert.deepEqual(await blocksOf(first, 'A'), ['typed after it left']);
+      assert.deepEqual(savedTabs(first), workspace, 'and this tab wrote no workspace');
     });
   }
 
-  it('a tab that shows none of the notes leaves the saved workspace alone', async () => {
-    const { first, second } = await twoPages();
-    const two = await openPage(second, { open: ['C'] });
-    const one = await openPage(first, { open: ['A', 'B'] }); // the tab in use, saved last
-    const refreshes = two.page.refreshes;
-    const notes = one.wire(controllers.notes(first, one.Storage));
+  /** Ways another tab deletes the note in trash (TR) for good */
+  const DELETED = [
+    ['empties trash', async (one, first) => {
+      const sidebar = sidebarOf(first, one);
+      await sidebar.refreshNotesList();
+      const emptied = sidebar.emptyTrash();
+      await confirmIn(first, 'Empty Trash');
+      await emptied;
+    }],
+    ['deletes it for good', async (one, first) => {
+      const deleted = one.wire(controllers.notes(first, one.Storage)).permanentlyDeleteNoteById('TR');
+      await confirmIn(first, 'Delete Permanently');
+      await deleted;
+    }],
+    ['runs trash retention', async (one, first) => {
+      const sidebar = one.wire(controllers.sidebar(first, one.Storage));
+      sidebar.logger = { info() {} };
+      sidebar.refreshNotesList = async () => {};
+      await sidebar.runTrashCleanup();
+    }],
+  ];
 
-    await runUntil(first, notes.trashNoteById('D'));
-    await runUntil(second, waitFor(() => two.page.refreshes > refreshes, { message: 'the other tab to hear of it' }));
+  for (const [what, act] of DELETED) {
+    it(`when another tab ${what}, this one keeps its pane on the deleted note, and typing there shows the notice and keeps the text`, async () => {
+      const { first, second } = await twoPages();
+      const two = await openPage(second, { open: ['A', 'TR'] }); // opened from the Trash view
+      const one = await openPage(first, { open: ['C'] });
 
-    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A', 'B']);
-    assert.equal(first.chrome.local.setting_activeTabIndex, 1);
-    assert.equal(first.chrome.local.lastOpenedNoteId, 'B');
-    assert.deepEqual(tabIds(two.tabs), ['C']);
-  });
+      await runUntil(first, act(one, first));
+      assert.equal((await stored(first)).notes.TR, undefined, 'deleted');
+      await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the lists to refresh' }));
+      const editor = two.tabs.editor;
+      assert.equal(editor.noteId, 'TR', 'the pane stays');
+      assert.deepEqual(tabIds(two.tabs), ['A', 'TR']);
+      assert.equal(editor.noteGone, false, 'no notice until it saves');
 
-  it('a tab still starting up holds the messages until it has restored the saved workspace', async () => {
-    const { first, second } = await twoPages();
-    const one = await openPage(first, { open: ['A', 'B'] });
-    const two = await bootNewTab(second, { ready: false });
-    const notes = one.wire(controllers.notes(first, one.Storage));
-
-    await runUntil(first, notes.trashNoteById('B'));
-    await runUntil(second, settle(40)); // the message reaches the second tab
-    assert.equal(first.channels.sent.length, 1);
-    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A'], "the saved workspace is the first tab's");
-
-    await runUntil(second, two.tabs.loadSavedTabs());
-    assert.deepEqual(tabIds(two.tabs), ['A']);
-    assert.equal(two.tabs.editor.noteId, 'A');
-    assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A']);
-  });
-
-  it('trash retention deleting a note tells the other tabs, which move off it', async () => {
-    const { first, second } = await twoPages();
-    const two = await openPage(second, { open: ['A', 'TR'] }); // opened from the Trash view
-    assert.equal(two.tabs.editor.noteId, 'TR');
-    const one = await openPage(first, { open: ['C'] });
-    const sidebar = one.wire(controllers.sidebar(first, one.Storage));
-    sidebar.logger = { info() {} };
-    sidebar.refreshNotesList = async () => {};
-
-    // As App.init runs it, after workspaceReady. e2e/notes-leave-across-tabs.spec.js starts a real new tab for that order.
-    await runUntil(first, sidebar.runTrashCleanup());
-    await runUntil(second, waitFor(() => two.tabs.editor.noteId !== 'TR', { message: 'the other tab to move' }));
-
-    assert.equal((await stored(first)).notes.TR, undefined, 'TR is deleted');
-    assert.deepEqual(tabIds(two.tabs), ['A']);
-    assert.equal(two.tabs.editor.noteId, 'A');
-  });
-
-  it('this tab drops its tab, moves its pane off it, and refreshes the list', async () => {
-    const { first, second } = await twoPages();
-    const one = await openPage(first, { open: ['C'] });
-    const two = await openPage(second, { open: ['A'], split: true });
-    assert.equal(two.tabs.secondaryEditor.noteId, 'B');
-    const refreshes = two.page.refreshes;
-    const notes = one.wire(controllers.notes(first, one.Storage));
-
-    await runUntil(first, notes.trashNoteById('A'));
-    await runUntil(second, waitFor(() => two.page.refreshes > refreshes, { message: 'the other tab to refresh' }));
-
-    assert.deepEqual(tabIds(two.tabs), ['C']);
-    assert.equal(two.tabs.editor.noteId, 'C', 'not B, which the right pane shows');
-    assert.equal(two.tabs.secondaryEditor.noteId, 'B');
-    assert.ok(!two.page.notes.some((n) => n.id === 'A'), 'the list no longer shows A');
-    assert.deepEqual(tabIds(one.tabs), ['C'], 'the tab that trashed it is unchanged');
-  });
+      await typeAndSave(second, editor, 'typed after it was deleted');
+      assert.equal(editor.noteGone, true);
+      assert.equal(editor.noteId, 'TR');
+      assert.equal(editor.blocks[0].content, 'typed after it was deleted');
+      const notice = editor.root.querySelector('.note-gone-notice');
+      assert.equal(notice.querySelector('.note-gone-text').textContent, "This note was deleted, so these changes aren't saved.");
+      assert.equal((await stored(first)).notes.TR, undefined, 'and stays deleted');
+    });
+  }
 
   it('Empty trash right after trash, with typing still unsaved there: the text stays, and "Save as a new note" keeps it', async () => {
     const { first, second } = await twoPages();
@@ -658,7 +644,7 @@ describe('a note leaving the active set in another new tab', () => {
     const notes = one.wire(controllers.notes(first, one.Storage));
     const sidebar = sidebarOf(first, one);
 
-    // The first tab trashes B and empties trash before the second one paints a frame
+    // The first tab trashes B and empties trash before the second one saves
     await runUntil(first, notes.trashNoteById('B'));
     await sidebar.refreshNotesList();
     const emptied = sidebar.emptyTrash();
@@ -666,17 +652,15 @@ describe('a note leaving the active set in another new tab', () => {
     await runUntil(first, emptied);
     assert.equal((await stored(first)).notes.B, undefined, 'B is deleted');
 
-    // The second tab paints: its save finds B deleted, and the text stays on screen
+    // The second tab's save finds B deleted, and the text stays on screen
+    second.clock.tick(500);
     await runUntil(second, waitFor(() => editor.noteGone, { message: 'the notice' }));
-    await runUntil(second, waitFor(() => two.page.refreshes >= 2, { message: 'both messages handled' }));
     assert.equal(editor.noteId, 'B');
     assert.equal(editor.blocks[0].content, 'typed in the other tab');
-    const notice = editor.root.querySelector('.note-gone-notice');
-    assert.equal(notice.querySelector('.note-gone-text').textContent, "This note was deleted, so these changes aren't saved.");
     assert.deepEqual(tabIds(two.tabs), ['C', 'B'], 'its tab stays');
     assert.deepEqual(two.toasts, []);
 
-    notice.querySelector('.note-gone-btn').click();
+    editor.root.querySelector('.note-gone-notice').querySelector('.note-gone-btn').click();
     await runUntil(second, waitFor(() => !editor._savingAsNew && editor.noteId !== 'B', { message: 'the new note' }));
 
     const copyId = editor.noteId;
@@ -689,5 +673,100 @@ describe('a note leaving the active set in another new tab', () => {
     assert.equal(two.tabs.activeTabIndex, 1);
     assert.deepEqual(shownTabs(second), ['Gamma', 'Beta']);
     assert.equal(editor.root.querySelector('.note-gone-notice'), null);
+  });
+
+  it('with no message between the tabs at all, a save keeps the trash flag, and a note deleted for good shows the notice', async () => {
+    const { first, second } = await twoPages({ channel: false });
+    const two = await openPage(second, { open: ['A'], split: true }); // Alpha left, Beta right
+    const one = await openPage(first, { open: ['C'] });
+    const notes = one.wire(controllers.notes(first, one.Storage));
+
+    await runUntil(first, notes.trashNoteById('A'));
+    await one.Storage.permanentlyDeleteNote('B');
+    await runUntil(second, settle(40));
+    assert.equal(first.channels.sent.length, 1, 'the first tab posts');
+    assert.equal(two.page.refreshes, 0, 'and the second never hears');
+
+    await typeAndSave(second, two.tabs.editor, 'left pane, after the trash');
+    assert.equal((await stored(first)).notes.A.trashed, true);
+    assert.deepEqual(await blocksOf(first, 'A'), ['left pane, after the trash']);
+
+    const right = two.tabs.secondaryEditor;
+    await typeAndSave(second, right, 'right pane, after the delete');
+    assert.equal(right.noteGone, true);
+    assert.equal(right.blocks[0].content, 'right pane, after the delete');
+    assert.ok(right.root.querySelector('.note-gone-notice'));
+  });
+
+  it("clicking the tab of a note deleted in another tab drops that tab with a toast and keeps the pane", async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['A', 'B', 'C'] }); // Gamma on screen
+    const one = await openPage(first, { open: ['D'] });
+    const editor = two.tabs.editor;
+    const gamma = (await stored(first)).notes.C;
+    await one.Storage.permanentlyDeleteNote('A');
+
+    await runUntil(second, two.tabs.switchToTab(0));
+    assert.equal(editor.noteId, 'C', 'the pane stays');
+    assert.deepEqual(tabIds(two.tabs), ['B', 'C']);
+    assert.equal(two.tabs.activeTabIndex, 1);
+    assert.deepEqual(shownTabs(second), ['Beta', 'Gamma']);
+    assert.deepEqual(two.toasts, [{ message: 'That note was deleted, so its tab closed.', kind: 'info' }]);
+    assert.deepEqual((await stored(first)).notes.C, gamma, 'Gamma is not written');
+
+    await runUntil(second, two.tabs.switchToTab(0));
+    assert.equal(editor.noteId, 'B', 'a tab whose note exists opens as before');
+  });
+
+  it("clicking the tab of a note trashed or archived in another tab opens it, as 1.4.0 did, and its saves keep that", async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['A', 'B', 'C'] }); // Gamma on screen
+    const one = await openPage(first, { open: ['D'] });
+    const notes = one.wire(controllers.notes(first, one.Storage));
+    await runUntil(first, notes.trashNoteById('A'));
+    await runUntil(first, notes.archiveNote('B'));
+    await runUntil(second, waitFor(() => two.page.listsOnly === 2, { message: 'both refreshes' }));
+    assert.deepEqual(tabIds(two.tabs), ['A', 'B', 'C']);
+
+    for (const [index, noteId, flag] of [[0, 'A', 'trashed'], [1, 'B', 'archived']]) {
+      await runUntil(second, two.tabs.switchToTab(index));
+      assert.equal(two.tabs.editor.noteId, noteId);
+      await typeAndSave(second, two.tabs.editor, `typed into ${noteId}`);
+      const record = (await stored(first)).notes[noteId];
+      assert.equal(record[flag], true, `${noteId} stays ${flag}`);
+      assert.deepEqual(await blocksOf(first, noteId), [`typed into ${noteId}`]);
+    }
+    assert.deepEqual(two.toasts, []);
+  });
+
+  it('a tab that shows none of the notes leaves the saved workspace alone', async () => {
+    const { first, second } = await twoPages();
+    const two = await openPage(second, { open: ['C'] });
+    const one = await openPage(first, { open: ['A', 'B'] }); // the tab in use, saved last
+    const notes = one.wire(controllers.notes(first, one.Storage));
+
+    await runUntil(first, notes.trashNoteById('D'));
+    await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the other tab to hear of it' }));
+
+    assert.deepEqual(savedTabs(first), ['A', 'B']);
+    assert.equal(first.chrome.local.setting_activeTabIndex, 1);
+    assert.equal(first.chrome.local.lastOpenedNoteId, 'B');
+    assert.deepEqual(tabIds(two.tabs), ['C']);
+  });
+
+  it('a tab still starting up refreshes nothing for a message, and starts on the notes as they are stored', async () => {
+    const { first, second } = await twoPages();
+    const one = await openPage(first, { open: ['A', 'B'] });
+    const two = await bootNewTab(second, { ready: false });
+    const notes = one.wire(controllers.notes(first, one.Storage));
+
+    await runUntil(first, notes.trashNoteById('B'));
+    await runUntil(second, settle(40)); // the message reaches the second tab
+    assert.equal(first.channels.sent.length, 1);
+    assert.equal(two.page.refreshes, 0);
+
+    await runUntil(second, two.tabs.loadSavedTabs());
+    assert.deepEqual(tabIds(two.tabs), ['A'], 'Beta, in trash, stays closed at startup');
+    assert.equal(two.tabs.editor.noteId, 'A');
   });
 });

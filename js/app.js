@@ -159,7 +159,7 @@ class App {
   }
 
   /**
-   * Notes left the active set: the other new tabs move off them too.
+   * Notes left the active set: the other new tabs refresh their lists.
    * @param {Array<string>} ids
    * @returns {void}
    */
@@ -294,9 +294,9 @@ class App {
         }
         await this.tabController.loadSavedTabs();
       }
-      // The other new tabs' "notes left" messages wait until this tab has its first note
+      // From here on, another new tab's trash, archive, or delete refreshes this one's lists
       this.tabController.workspaceReady();
-      // Trash retention once this tab's panes and tabs can move off what it deletes, and tell the other tabs
+      // Trash retention once this tab's panes and tabs can move off what it deletes; the other tabs refresh their lists
       await this.sidebarController.runTrashCleanup().catch((error) => this.logger.error('App', 'Trash cleanup failed', error));
 
       this.updateEmptyState();
@@ -628,7 +628,7 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => Storage.createNote('Untitled');
-    this.tabController.onRefreshNotesList = () => this.refreshNotesList();
+    this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
     this.tabController.onGetNotes = () => this.notes;
     this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
@@ -2389,9 +2389,12 @@ class App {
   }
 
   /**
-   * Refresh notes list from storage
+   * Refresh notes list from storage. With `listsOnly`, as for another tab's
+   * change, the lists and counts refresh and the editor area stays as it is.
+   * @param {{listsOnly?: boolean}} [options]
+   * @returns {Promise<void>}
    */
-  async refreshNotesList() {
+  async refreshNotesList({ listsOnly = false } = {}) {
     this.notes = await Storage.getAllNotes();
     this.archivedNotes = await Storage.getArchivedNotes();
     this.trashedNotes = await Storage.getTrashedNotes();
@@ -2429,7 +2432,7 @@ class App {
     }
 
     this.refreshPageSelector();
-    this.updateEmptyState();
+    if (!listsOnly) this.updateEmptyState();
     if (this.shortcutsManager) {
       if (this.shortcutsManager.isCommandPaletteOpen()) {
         this.shortcutsManager.refreshCommandPaletteResults();

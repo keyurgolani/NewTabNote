@@ -333,14 +333,11 @@ class FakeDocument {
     this.body = this.documentElement.appendChild(new FakeElement('body', this));
     this.activeElement = this.body;
     this.visibilityState = 'visible';
-    /** What hasFocus() answers: set false for a page in front of which another window or tab has focus */
-    this.focused = true;
     this.listeners = {};
     /** Window-like target for `pagehide`; set by createLegacyEnv. */
     this.defaultView = null;
   }
 
-  hasFocus() { return this.focused; }
   createElement(tag) { return new FakeElement(tag, this); }
   createTextNode(text) {
     const node = new FakeElement('#text', this);
@@ -946,7 +943,8 @@ const NEW_TAB_FILES = [
  * App wires it. `page.notes` stands in for App's list of active notes, which
  * onRefreshNotesList refreshes. `wire(controller)` gives a controller that takes
  * notes out of the active set App's hooks for it. With `ready: false` the tab
- * is still starting up: messages from other tabs wait for `tabs.workspaceReady()`.
+ * is still starting up: other tabs' messages refresh nothing until `tabs.workspaceReady()`.
+ * `page.refreshes` counts the refreshes, and `page.listsOnly` the ones that asked for lists only.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {{files?: Array<string>, ready?: boolean}} [options]
  */
@@ -965,12 +963,13 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
   tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
   tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
-  const page = { notes: await Storage.getAllNotes(), refreshes: 0 };
+  const page = { notes: await Storage.getAllNotes(), refreshes: 0, listsOnly: 0 };
   tabs.onGetNotes = () => page.notes;
   tabs.onCreateNote = () => Storage.createNote('Untitled');
-  tabs.onRefreshNotesList = async () => {
+  tabs.onRefreshNotesList = async ({ listsOnly = false } = {}) => {
     page.notes = await Storage.getAllNotes();
     page.refreshes += 1;
+    if (listsOnly) page.listsOnly += 1;
   };
   tabs.onRenderNotesList = async () => {};
   tabs.onUpdateEmptyState = () => {};

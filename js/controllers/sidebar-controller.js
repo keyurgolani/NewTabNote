@@ -94,7 +94,7 @@ class SidebarController {
     this.setupNoteContextMenu();
     this._bindBulkActions();
     this._bindSidebarDropHandlers();
-    // Trash retention runs from App.init once the tabs are ready, so the other new tabs hear of it
+    // Trash retention runs from App.init once the tabs are ready, so this tab's panes move off what it deletes
   }
 
   /** Tear down listeners and resizer. */
