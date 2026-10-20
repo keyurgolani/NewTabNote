@@ -86,8 +86,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # HEAD^1 too, for check:boundaries --base: the base branch on a pull request,
-          # whose HEAD is the merge commit, and the previous commit on a push
+          # HEAD^1 too: on a pull request, whose HEAD is the merge commit, it's the base
+          # branch check:boundaries compares with (scripts/ci/ledger-base.js)
           fetch-depth: 2
       - name: Set up Node from .nvmrc
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -100,8 +100,18 @@ jobs:
         run: npm run test:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run typecheck:kernel
         run: npm run typecheck:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # The pull request's base branch, or what the branch held before the push
+      - name: Fetch the ledger check:boundaries compares with
+        id: ledger-base
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node scripts/ci/ledger-base.js 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run check:boundaries
-        run: npm run check:boundaries -- --base HEAD^1 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+        env:
+          BASE: ${{ steps.ledger-base.outputs.base }}
+        run: npm run check:boundaries -- --base "$BASE" 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()
@@ -201,13 +211,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # The kernel job's local command compares with the pull request's base branch, or
+      # with what the branch held before the push, as scripts/ci/ledger-base.js does in CI
       - name: Require every job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
           COMMANDS: >-
             {"unit": "npm test",
             "typecheck": "npm run typecheck:ratchet",
-            "kernel": "npm run test:kernel && npm run typecheck:kernel && npm run check:boundaries -- --base origin/next",
+            "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && npm run check:boundaries -- --base {0}', github.base_ref && format('origin/{0}', github.base_ref) || github.event.before != '0000000000000000000000000000000000000000' && github.event.before || format('origin/{0}', github.event.repository.default_branch))) }},
             "build": "npm run build -- --strict && npm run check:dist && npm run package && npm run check:notices",
             "extension": "npm run build -- --strict && npm run test:extension"}
         run: |
