@@ -62,10 +62,17 @@ function runBuild(dir, args = []) {
   });
 }
 
+// The build output lines worth reading in a failure message, or its last lines
+function brief(output) {
+  const lines = output.trimEnd().split('\n');
+  const notable = lines.filter(line => /✗|⚠️|Error|failed/.test(line));
+  return (notable.length > 0 ? notable : lines.slice(-15)).join('\n');
+}
+
 function assertRefused({ code, output }, file, refusal) {
-  assert.equal(code, 1, output);
+  assert.equal(code, 1, brief(output));
   const line = output.split('\n').find(l => l.includes(`✗ ${file}: --strict`));
-  assert.ok(line, `no refusal line for ${file} in:\n${output}`);
+  assert.ok(line, `no refusal line for ${file} in:\n${brief(output)}`);
   assert.ok(line.includes(refusal), `"${refusal}" missing from: ${line}`);
   assert.match(output, /Strict build failed: refused \d+ fallback/);
   assert.doesNotMatch(output, /Build complete/);
@@ -81,8 +88,8 @@ function listFiles(dir, prefix = '') {
 describe('scripts/build.js --strict', { concurrency: true }, () => {
   it('builds today\'s tree, with the same dist as a build without the flag', async () => {
     const [strict, plain] = await Promise.all([runBuild(tree(), ['--strict']), runBuild(tree())]);
-    assert.equal(strict.code, 0, strict.output);
-    assert.equal(plain.code, 0, plain.output);
+    assert.equal(strict.code, 0, brief(strict.output));
+    assert.equal(plain.code, 0, brief(plain.output));
     assert.doesNotMatch(strict.output, /✗|Level-2 minification failed|not found, skipping|Error minifying/);
 
     const files = listFiles(strict.dist);
@@ -129,7 +136,7 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
       append(OTHER_LEVEL_2_CSS, LEVEL_2_CRASH);
     });
     const { code, output, dist } = await runBuild(dir);
-    assert.equal(code, 0, output);
+    assert.equal(code, 0, brief(output));
     assert.match(output, new RegExp(`${missingJs} not found, skipping`));
     assert.match(output, /Level-2 minification failed for .*falling back to level-1/);
     assert.equal(fs.existsSync(path.join(dist, missingJs)), false);
