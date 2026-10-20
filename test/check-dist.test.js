@@ -99,6 +99,18 @@ describe('scripts/check-dist.js', () => {
     assert.equal(run(packageCopy({ 'js/search.js': text => `${text}\nawait Promise.resolve();\n` })).code, 0);
   });
 
+  it('reads a module with no import or export as a module, so await (x) and await [x] count, and catches self.importScripts()', () => {
+    // As a script, await (x) parses as a call to a function named await
+    const result = run(packageCopy({
+      'js/kernel/composition/background.js': text => `${text}\nawait (Promise.resolve());\nawait [1];\nself.later = async () => { await (1); };\n`,
+      'js/storage.js': text => `${text}\nif (false) self.importScripts('utils.js');\n`,
+    }));
+    assertFails(result,
+      'js/kernel/composition/background.js uses top-level await at',
+      'js/storage.js calls importScripts() at');
+    assert.equal(result.output.match(/uses top-level await/g).length, 2, result.output);
+  });
+
   it('fails on a bare specifier, a URL, a path outside the package, and import syntax in a classic script', () => {
     assertFails(run(packageCopy({ 'js/main.js': text => `import 'valibot';\n${text}` })),
       'js/main.js imports "valibot": a bare specifier, which nothing resolves without a bundler or an import map');

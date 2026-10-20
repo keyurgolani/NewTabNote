@@ -59,11 +59,29 @@ function scriptTags(html) {
 }
 
 /**
- * What a script's syntax tree says about loading: its static imports, and the calls and
- * awaits that matter in a service worker, each with its line:col
+ * A call of importScripts, bare or through self or globalThis
  */
-function inspect(text, file) {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
+function isImportScripts(callee) {
+  const globalObject = node => ts.isIdentifier(node) && (node.text === 'self' || node.text === 'globalThis');
+  if (ts.isIdentifier(callee)) return callee.text === 'importScripts';
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text === 'importScripts' && globalObject(callee.expression);
+  if (ts.isElementAccessExpression(callee)) {
+    return ts.isStringLiteralLike(callee.argumentExpression) && callee.argumentExpression.text === 'importScripts' && globalObject(callee.expression);
+  }
+  return false;
+}
+
+/**
+ * What a script's syntax tree says about loading: its static imports, and the calls and
+ * awaits that matter in a service worker, each with its line:col. `module` parses it as
+ * the ES module it's loaded as, even with no import or export: as a script, await (x) is a
+ * call to a function named await.
+ */
+function inspect(text, file, { module = false } = {}) {
+  const options = module
+    ? { languageVersion: ts.ScriptTarget.Latest, setExternalModuleIndicator: sourceFile => { sourceFile.externalModuleIndicator = true; } }
+    : ts.ScriptTarget.Latest;
+  const source = ts.createSourceFile(file, text, options, false, ts.ScriptKind.JS);
   const at = node => {
     const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
     return `${line + 1}:${character + 1}`;
@@ -85,7 +103,7 @@ function inspect(text, file) {
     }
     if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) found.dynamicImports.push(at(node));
-      if (ts.isIdentifier(node.expression) && node.expression.text === 'importScripts') {
+      if (isImportScripts(node.expression)) {
         found.importScripts.push({
           at: at(node),
           names: node.arguments.map(arg => (ts.isStringLiteralLike(arg) ? arg.text : null)),
@@ -141,11 +159,13 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
   // Modules followed from a page; graph.workerFiles holds those followed from the worker
   const pageModules = new Set();
 
-  const read = file => {
-    if (!inspected.has(file)) {
-      inspected.set(file, inspect(fs.readFileSync(path.join(root, file), 'utf8'), file));
+  // A file is read as a module or as a classic script, the way it's loaded
+  const read = (file, module) => {
+    const key = `${module ? 'module' : 'classic'}:${file}`;
+    if (!inspected.has(key)) {
+      inspected.set(key, inspect(fs.readFileSync(path.join(root, file), 'utf8'), file, { module }));
     }
-    return inspected.get(file);
+    return inspected.get(key);
   };
 
   /**
@@ -184,7 +204,7 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
     followed.add(file);
     graph.modules.add(file);
 
-    const found = read(file);
+    const found = read(file, true);
     found.syntaxErrors.forEach(error => problem(file, `${file} doesn't parse: ${error}`));
     if (inWorker) {
       found.topLevelAwait.forEach(at => problem(file, `${file} uses top-level await at ${at}; Chrome won't start a module service worker whose graph has it`));
@@ -201,7 +221,7 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
     if (graph.workerFiles.has(file)) return;
     graph.workerFiles.add(file);
     graph.classic.add(file);
-    const found = read(file);
+    const found = read(file, false);
     found.syntaxErrors.forEach(error => problem(file, `${file} doesn't parse: ${error}`));
     if (found.imports.length > 0) problem(file, `${file} is a classic service worker script but has import or export statements`);
     for (const { at, names } of found.importScripts) {
@@ -258,7 +278,7 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
         followModule(file, false);
       } else {
         graph.classic.add(file);
-        if (inspectClassic && read(file).imports.length > 0) {
+        if (inspectClassic && read(file, false).imports.length > 0) {
           problem(page, `${page} loads ${file} as a classic script, but it has import or export statements`);
         }
       }
