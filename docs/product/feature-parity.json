@@ -27,6 +27,7 @@
     { "id": "notes-list", "home": { "kind": "collection-view", "id": "by-placement" }, "owner": [3, 17], "status": "owner-question" },
     { "id": "new-note", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
     { "id": "sidebar-toggle", "home": { "kind": "collection-view", "id": "toggle" }, "owner": [3], "status": "mapped" },
+    { "id": "ai-inspector-toggle", "home": { "kind": "inspector", "id": "toggle" }, "owner": [3, 11], "status": "mapped" },
 
     { "id": "resizable-sidebar", "home": { "kind": "collection-view", "id": "width" }, "owner": [3], "status": "mapped" },
     { "id": "resizable-ai-sidebar", "home": { "kind": "inspector", "id": "width" }, "owner": [3], "status": "mapped" },
@@ -81,8 +82,8 @@
     { "id": "import-note-markdown", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
 
     { "id": "onboarding-walkthrough", "home": { "kind": "moment", "id": "tips" }, "owner": [23], "status": "mapped" },
-    { "id": "welcome-note", "home": { "kind": "moment", "id": "tips" }, "owner": [23], "status": "mapped" },
     { "id": "quick-start-prompt", "home": { "kind": "moment", "id": "tips" }, "owner": [23], "status": "mapped" },
+    { "id": "welcome-note", "home": { "kind": "moment", "id": "sample-content" }, "owner": [23], "status": "mapped" },
 
     { "id": "popup-quick-note", "home": { "kind": "popup", "id": "popup-quick-note" }, "owner": [4], "status": "mapped" },
     { "id": "popup-daily-summary", "home": { "kind": "popup", "id": "popup-daily-summary" }, "owner": [4], "status": "mapped" },

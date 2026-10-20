@@ -79,6 +79,7 @@ Every baseline feature keeps exactly one home.
 | [Save status][save-status] | Both apertures: Moment's save proof and the Workspace top line | [#2][i2], #3 |
 | Folders; pin, sort, list or cards, bulk actions; drag a block to the sidebar | Projects collection; collection headers and item actions; drops use the two verbs | #3 |
 | [Notes view][notes-view]; [new note][new-note]; [sidebar show and hide][sidebar-toggle] | Inbox, Daily, or a Projects collection by placement (open, Q2); collection header; collection toggle on `Mod+Shift+E` | #3, [#17][i17]; #3; #3 |
+| [AI sidebar show and hide][ai-toggle] (`Alt+A`, the floating AI button, the palette command) | Inspector toggle | #3, #11 |
 | Resizable sidebar, AI sidebar | Collection width; inspector width | #3 |
 | Archive; Trash, retention, empty trash | Collection views (Trash: open, Q4); retention is a job | #3, [#35][i35] (job host) |
 | Version history, backlinks; graph, analytics | Inspectors; Workspace routes | #3, [#22][i22] (search) |
@@ -93,12 +94,13 @@ Every baseline feature keeps exactly one home.
 | Full export (JSON, Markdown ZIP, backup), full import, auto-backup | `settings/data` route | [#18][i18] (backup), #25 |
 | Partial WebDAV sync | `settings/sync` route | [#19][i19] (sync), #25 |
 | Single-note export; single-note import | Note menu; collection header | #3 |
-| Onboarding walkthrough, [welcome note][welcome-note], quick-start prompt | Three Moment tips | #23 (activation) |
+| Onboarding walkthrough, quick-start prompt | Three Moment tips | #23 (activation) |
+| [Welcome note][welcome-note] | Opt-in sample content, "Try sample content" in Moment. It isn't a tip | #23 |
 | Popup [`quickNoteInput`][popup-quick], [`renderDailySummary`][popup-daily], [`renderRecentNotes`][popup-recent]; Side Panel [`renderSummary`][sp-summary]; [context menus][bg-menus] and [`Alt+P`/`Alt+S`][m-commands] ([handler][bg-commands]) | `popup`: `popup-quick-note`, `popup-daily-summary`, `popup-recent-notes`; `side-panel`: `sidepanel-insights`; `background`: `capture-page`, `capture-selection` | #4; #5; #5, #35 |
 
 Smart paste and the rest of the editor core from [#14][i14] (block registry) work in both apertures. The offscreen Ollama proxy ([`background.js` L114-L130][bg-ollama]) is transport and gets no entry, since `settings/intelligence` covers Ollama. The capture notification belongs to the capture entries, and its click is new.
 
-Slice 3 checked the table against the 1.4.0 code and added the save status, the Notes view, new note, the sidebar toggle, Generate title, the in-note AI Insights, and the welcome note. Entry points (the toolbar click, and the Popup and Side Panel Open buttons) are in [Entry points](#entry-points), keyboard shortcuts stay with their commands in #15's registry, and the sync status indicator belongs to the sync entry.
+Slice 3 checked the table against the 1.4.0 code and added the save status, the Notes view, new note, the sidebar and AI sidebar toggles, Generate title, the in-note AI Insights, and the welcome note, which becomes opt-in sample content rather than a tip. Entry points (the toolbar click, and the Popup and Side Panel Open buttons) are in [Entry points](#entry-points), keyboard shortcuts stay with their commands in #15's registry, and the sync status indicator belongs to the sync entry.
 
 ## Routes and history
 
@@ -361,3 +363,4 @@ Shell, settings, toolbar, and storage code are out of scope here. The consumers 
 [ctx-title]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/controllers/sidebar-controller.js#L637-L641
 [note-insights]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/editor.js#L304-L428
 [welcome-note]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/app.js#L260-L276
+[ai-toggle]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/app.js#L3977-L3988

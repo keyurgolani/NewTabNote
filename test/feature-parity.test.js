@@ -23,6 +23,7 @@ const REQUIRED_IDS = [
   'save-status',
   'folders', 'pin', 'sort', 'list-or-cards', 'bulk-actions', 'drag-block-to-sidebar',
   'notes-list', 'new-note', 'sidebar-toggle',
+  'ai-inspector-toggle',
   'resizable-sidebar', 'resizable-ai-sidebar',
   'archive', 'trash', 'trash-retention', 'empty-trash',
   'version-history', 'backlinks', 'graph', 'analytics',
@@ -37,7 +38,8 @@ const REQUIRED_IDS = [
   'export-json', 'export-markdown-zip', 'export-backup', 'import-json', 'auto-backup',
   'webdav-sync',
   'export-note-json', 'export-note-markdown', 'import-note-json', 'import-note-markdown',
-  'onboarding-walkthrough', 'welcome-note', 'quick-start-prompt',
+  'onboarding-walkthrough', 'quick-start-prompt',
+  'welcome-note',
   'popup-quick-note', 'popup-daily-summary', 'popup-recent-notes',
   'sidepanel-insights',
   'capture-page', 'capture-selection',
@@ -148,6 +150,14 @@ test('every home kind in the closed list has a feature, and owner-question entri
   const waiting = inventory.features.filter(entry => entry.status === 'owner-question').map(entry => entry.id).sort();
   // Q2: Unfiled and folders under Projects. Q4: Picture-in-Picture, Trash, "Ask across notes".
   assert.deepEqual(waiting, ['empty-trash', 'folders', 'global-chat', 'notes-list', 'picture-in-picture', 'trash']);
+});
+
+test('only the onboarding tour is replaced: the welcome note becomes opt-in sample content, not a tip', () => {
+  const inventory = committedInventory();
+  const at = (kind, id) => inventory.features.filter(entry => entry.home.kind === kind && entry.home.id === id).map(entry => entry.id);
+  assert.deepEqual(at('moment', 'tips'), ['onboarding-walkthrough', 'quick-start-prompt']);
+  assert.deepEqual(at('moment', 'sample-content'), ['welcome-note']);
+  assert.deepEqual(at('inspector', 'toggle'), ['ai-inspector-toggle']);
 });
 
 test('fails on an absent requiredIds entry', () => {
