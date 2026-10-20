@@ -1810,26 +1810,24 @@ class DatabaseManager {
   // ============ Export/Import ============
 
   /**
-   * Export all data
+   * Export every note outside trash (active, archived, and templates) with
+   * its blocks and media, plus all folders. Export JSON, Create Backup,
+   * auto-backup, and the Replace all recovery copy use this. `version` stays
+   * 1 so 1.4.0 can still import the file.
+   * @returns {Promise<Object>} {version, exportedAt, canvases, elements, media, folders}
    */
   async exportAll() {
-    const notes = await this.getAllNotes();
+    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
+    const noteIds = new Set(notes.map((note) => note.id));
     const allElements = [];
-    const allMedia = [];
 
     for (const note of notes) {
       const elements = await this.getElementsByNote(note.id);
       allElements.push(...elements);
     }
 
-    // Get all media
-    const mediaStore = this.getStore('media');
-    const mediaRequest = await new Promise((resolve, reject) => {
-      const request = mediaStore.getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    allMedia.push(...mediaRequest);
+    // Only media whose note is exported (1.4.0 exported the whole store)
+    const allMedia = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
 
     // Convert blobs to base64 for export
     const mediaWithBase64 = await Promise.all(
@@ -1849,7 +1847,20 @@ class DatabaseManager {
       canvases: notes,
       elements: allElements,
       media: mediaWithBase64,
+      folders: await this.getAllFolders(),
     };
+  }
+
+  /**
+   * Every media row.
+   * @returns {Promise<Array<Object>>}
+   */
+  async _getAllMedia() {
+    return new Promise((resolve, reject) => {
+      const request = this.getStore('media').getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
   }
 
   /**
