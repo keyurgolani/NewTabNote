@@ -228,19 +228,24 @@ class DatabaseManager {
 
   /**
    * Open the database at whatever version it has, with no repair, upgrade, or
-   * maintenance, the way Popup and Side Panel open it. One a newer build
-   * upgraded is closed again, and this rejects with code NEWER_SCHEMA. A
+   * maintenance, the way Popup and Side Panel open it. On a profile with no
+   * database this makes none and rejects with code NO_DATABASE. One a newer
+   * build upgraded is closed again, and this rejects with code NEWER_SCHEMA. A
    * database missing stores opens anyway, and transaction() refuses the
-   * missing ones.
+   * missing ones. The connection closes when another context upgrades the
+   * database, so it never blocks a new tab's open.
    * @returns {Promise<void>}
    */
   async openExisting() {
     this.openState = 'closed';
     this.onDiskVersion = null;
     this.missingStores = [];
-    const db = await this._openUnversioned();
+    const { db, error } = await this._openWithoutCreating();
     if (!db) {
       this.openState = 'failed';
+      if (error && error.name === 'AbortError') {
+        throw this._codedError('NO_DATABASE', 'There is no notes database yet');
+      }
       throw this._codedError('OPEN_FAILED', 'Notes database could not be opened');
     }
     this.onDiskVersion = db.version;
@@ -249,9 +254,28 @@ class DatabaseManager {
       this.openState = 'newer-version';
       throw this._newerSchemaError();
     }
+    db.onversionchange = () => {
+      db.close();
+      this.openState = 'closed';
+    };
     this.db = db;
     this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
     this.openState = 'open';
+  }
+
+  /**
+   * Open the database at whatever version it has, for openExisting(). With no
+   * database, the open would create an empty one at version 1, so the upgrade
+   * is aborted and the open fails with AbortError, leaving none.
+   * @returns {Promise<{db: IDBDatabase|null, error: DOMException|null}>}
+   */
+  _openWithoutCreating() {
+    return new Promise((resolve) => {
+      const request = indexedDB.open(this.dbName);
+      request.onupgradeneeded = () => request.transaction.abort();
+      request.onsuccess = () => resolve({ db: request.result, error: null });
+      request.onerror = () => resolve({ db: null, error: request.error });
+    });
   }
 
   /**

@@ -90,8 +90,62 @@ describe('the legacy adapter', () => {
     assert.deepEqual(settingWrites(page), []);
   });
 
+  it('opens no database for Popup and Side Panel on a profile that has none, and makes none', async () => {
+    const page = context();
+    const adapter = adapterFor(page, 'existing');
+    const ready = adapter.open();
+    await assert.rejects(ready, error => {
+      const { unavailableCause, code } = /** @type {any} */ (error);
+      return unavailableCause === 'storage' && code === 'no-database';
+    });
+    const popup = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.popup,
+      ids: testIds(),
+      clock: testClock(),
+      ready,
+    });
+    const quickNote = await popup.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Quick' });
+    // Nothing opens it again before Popup reloads, so it isn't retryable
+    assert.deepEqual(quickNote.kind === 'unavailable' && [quickNote.cause, quickNote.code, quickNote.retryable], [
+      'storage',
+      'no-database',
+      false,
+    ]);
+    assert.deepEqual(await popup.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'no-database',
+    });
+    assert.deepEqual(await page.env.indexedDB.databases(), []);
+  });
+
+  it("never blocks a new tab's upgrade from the database Popup or Side Panel holds open", async () => {
+    for (const version of [7, 8]) {
+      const panel = context();
+      await legacyEnv.createDatabase(panel.env.indexedDB, {
+        version,
+        records: { canvases: [legacyEnv.note('n1', { name: 'Kept' })] },
+      });
+      await adapterFor(panel, 'existing').open();
+      // A new tab upgrading to this build's version, or a newer build's tab past it
+      const upgrade =
+        version === 7
+          ? adapterFor(context(panel.env)).open()
+          : legacyEnv
+              .requestToPromise(panel.env.indexedDB.open('CanvasTabDB', 9))
+              .then((/** @type {IDBDatabase} */ db) => db.close());
+      /** @type {Promise<string>} */
+      const blocked = new Promise(resolve => setTimeout(() => resolve('blocked'), 1000).unref());
+      assert.equal(await Promise.race([upgrade.then(() => 'opened'), blocked]), 'opened', `version ${version}`);
+      assert.equal(panel.storage.openState, 'closed', `version ${version}`);
+    }
+  });
+
   it('never runs startup maintenance on a database opened as it is', async () => {
     const page = context();
+    await legacyEnv.createDatabase(page.env.indexedDB, { version: 8 });
     const adapter = adapterFor(page, 'existing');
     await adapter.open();
     // The policy already keeps Popup and Side Panel from asking, so ask from a new-tab caller

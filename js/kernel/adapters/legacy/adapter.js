@@ -90,6 +90,8 @@ function storageError(error) {
   if (code === 'MISSING_CORE_STORES') return new UnavailableError('storage', 'missing-core-stores', false);
   if (code === 'STORE_UNAVAILABLE') return new UnavailableError('storage', 'store-unavailable', false);
   if (code === 'OPEN_FAILED') return new UnavailableError('storage', 'open-failed', true);
+  // Popup or Side Panel opened before any new tab made the database
+  if (code === 'NO_DATABASE') return new UnavailableError('storage', 'no-database', true);
   if (name === 'QuotaExceededError' || /quota/i.test(String(message))) {
     return new UnavailableError('quota', 'quota-exceeded', false);
   }
