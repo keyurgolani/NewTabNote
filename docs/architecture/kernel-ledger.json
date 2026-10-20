@@ -178,6 +178,38 @@
       "verify": "npm run check:boundaries"
     },
     {
+      "file": "js/kernel/adapters/legacy/adapter.js",
+      "rule": "declared-gap",
+      "count": 1,
+      "owner": 17,
+      "removeWhen": "#17's IndexedDB adapter passes the atomicMultiStore check: a command's stores commit together or not at all",
+      "verify": "npm run test:kernel: the atomicMultiStore check in test/kernel/contract.mjs"
+    },
+    {
+      "file": "js/kernel/adapters/legacy/adapter.js",
+      "rule": "declared-gap",
+      "count": 1,
+      "owner": 17,
+      "removeWhen": "#17's IndexedDB adapter passes the idempotency check: a resent commandId gets its first outcome and writes nothing",
+      "verify": "npm run test:kernel: the idempotency check in test/kernel/contract.mjs"
+    },
+    {
+      "file": "js/kernel/adapters/legacy/adapter.js",
+      "rule": "declared-gap",
+      "count": 1,
+      "owner": 17,
+      "removeWhen": "#17's IndexedDB adapter passes the revisions check: a save from a stale revision is a conflict that writes nothing",
+      "verify": "npm run test:kernel: the revisions check in test/kernel/contract.mjs"
+    },
+    {
+      "file": "js/kernel/adapters/legacy/adapter.js",
+      "rule": "declared-gap",
+      "count": 1,
+      "owner": 17,
+      "removeWhen": "#17's IndexedDB adapter passes the two contexts check: when two contexts save one note's blocks from the revision they loaded, the later save is a conflict",
+      "verify": "npm run test:kernel: the two contexts check in test/kernel/contract.mjs"
+    },
+    {
       "file": "js/llm.js",
       "rule": "LLM",
       "count": 1,
