@@ -123,38 +123,50 @@ export function closeAll(contexts) {
   for (const { storage } of contexts) if (storage.db) storage.db.close();
 }
 
+/**
+ * A contract-suite context over a fresh profile, or over a version-8 database without
+ * `missing`'s stores.
+ * @param {StoreName[]} missing
+ * @returns {ReturnType<ContractFixture['start']>}
+ */
+async function startLegacy(missing) {
+  const first = legacyContext();
+  if (missing.length > 0) {
+    await legacyEnv.createDatabase(first.env.indexedDB, { omit: missing.map(store => IDB_STORES[store]) });
+  }
+  const adapter = adapterFor(first);
+  await adapter.open();
+  /** @type {LegacyContext[]} */
+  const contexts = [first];
+  const clock = testClock();
+  const ids = testIds();
+  return {
+    adapter,
+    clock,
+    ids,
+    kernel: (caller = CALLERS.newtab) => kernelFor(adapter, { ids, clock }, caller),
+    async secondContext() {
+      const second = legacyContext(first.env);
+      const secondAdapter = adapterFor(second);
+      await secondAdapter.open();
+      contexts.push(second);
+      return {
+        kernel: (caller = CALLERS.newtab) =>
+          kernelFor(secondAdapter, { ids, clock }, { ...caller, contextId: `${caller.contextId}-second` }),
+      };
+    },
+    failNextWrite: target => {
+      if (target === 'preferences' || target === 'session') first.env.chrome.failNextSet();
+      else first.failing.push(target);
+    },
+    close: async () => closeAll(contexts),
+  };
+}
+
 /** @type {ContractFixture} */
 export const legacyFixture = {
   name: 'legacy',
   flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false }),
-  async start() {
-    const first = legacyContext();
-    const adapter = adapterFor(first);
-    await adapter.open();
-    /** @type {LegacyContext[]} */
-    const contexts = [first];
-    const clock = testClock();
-    const ids = testIds();
-    return {
-      adapter,
-      clock,
-      ids,
-      kernel: (caller = CALLERS.newtab) => kernelFor(adapter, { ids, clock }, caller),
-      async secondContext() {
-        const second = legacyContext(first.env);
-        const secondAdapter = adapterFor(second);
-        await secondAdapter.open();
-        contexts.push(second);
-        return {
-          kernel: (caller = CALLERS.newtab) =>
-            kernelFor(secondAdapter, { ids, clock }, { ...caller, contextId: `${caller.contextId}-second` }),
-        };
-      },
-      failNextWrite: target => {
-        if (target === 'preferences' || target === 'session') first.env.chrome.failNextSet();
-        else first.failing.push(target);
-      },
-      close: async () => closeAll(contexts),
-    };
-  },
+  start: () => startLegacy([]),
+  startWithout: startLegacy,
 };

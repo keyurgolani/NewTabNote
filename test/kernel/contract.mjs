@@ -334,6 +334,42 @@ export function runContractSuite(fixture) {
         );
       });
 
+      it(
+        'on a database without the search index, media, vectors, or snapshots, notes are made, renamed, trashed, and deleted as Storage does',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          for (const missing of /** @type {const} */ (['searchIndex', 'media', 'vectors', 'snapshots'])) {
+            const other = await startWithout([missing]);
+            try {
+              const tab = other.kernel();
+              /** @param {Command} command */
+              const codeOf = async command => {
+                const outcome = await tab.execute(command);
+                assert.equal(outcome.kind, 'committed', `without ${missing}: ${JSON.stringify(outcome)}`);
+                return /** @type {Committed} */ (outcome).code;
+              };
+              const blocks = someBlocks('kept', 1);
+              assert.equal(
+                await codeOf(newCommand(other.ids, 'createNote', { noteId: 'kept', name: 'Plan', blocks })),
+                'note-created',
+              );
+              assert.equal(
+                await codeOf(newCommand(other.ids, 'renameNote', { noteId: 'kept', name: 'Renamed' })),
+                'note-renamed',
+              );
+              assert.equal(await codeOf(newCommand(other.ids, 'trashNote', { noteId: 'kept' })), 'note-trashed');
+              assert.equal(await codeOf(newCommand(other.ids, 'createNote', { noteId: 'empty' })), 'note-created');
+              assert.equal(await codeOf(newCommand(other.ids, 'trashNote', { noteId: 'empty' })), 'note-deleted');
+              const trashed = await tab.query({ type: 'listNotes', view: 'trashed' });
+              assert.deepEqual(trashed.kind === 'ready' && trashed.data.map(note => note.name), ['Renamed'], missing);
+            } finally {
+              await other.close();
+            }
+          }
+        },
+      );
+
       it("commands on a note that doesn't exist are rejected with not-found", async () => {
         for (const command of [
           cmd('renameNote', { noteId: 'gone', name: 'X' }),
@@ -371,6 +407,18 @@ export function runContractSuite(fixture) {
           updatedAt: NOW + 1000,
         });
         assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 2));
+      });
+
+      it('a save never takes a note out of the trash (#33)', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        ctx.clock.advance();
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        const trashed = await noteOf('n1');
+        ctx.clock.advance();
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'A late save' }));
+        const saved = await noteOf('n1');
+        assert.deepEqual([saved?.trashed, saved?.trashedAt, saved?.preview], [true, trashed?.trashedAt, 'A late save']);
+        assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [['n1'], []]);
       });
 
       it('a save that carries no preview or todoProgress keeps the ones stored', async () => {

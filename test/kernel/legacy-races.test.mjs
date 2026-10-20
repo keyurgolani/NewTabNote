@@ -122,6 +122,66 @@ describe('races on the legacy adapter', () => {
     assert.deepEqual(await namesIn(tabB, 'active'), ['n1']);
   });
 
+  it('trashing an empty untitled note while another tab saves into it never deletes the saved note or orphans its blocks', async () => {
+    /** @param {string} noteId */
+    const save = noteId => ({
+      type: /** @type {const} */ ('saveNoteContent'),
+      commandId: `save-${noteId}`,
+      noteId,
+      blocks: [{ id: `typed-${noteId}`, type: 'text', content: '<p>Milk</p>' }],
+    });
+    /** @param {string} noteId */
+    const trash = noteId => ({ type: /** @type {const} */ ('trashNote'), commandId: `trash-${noteId}`, noteId });
+    /**
+     * @param {Kernel} kernel
+     * @param {string} noteId
+     */
+    const blockIdsOf = async (kernel, noteId) => {
+      const state = await kernel.query({ type: 'getNoteBlocks', noteId });
+      return state.kind === 'ready' ? state.data.map(block => block.id) : [];
+    };
+
+    // Tab B's save lands just after tab A's first transaction over the blocks commits. A trash
+    // that decided in one transaction and deleted the note in a later one left B's block there.
+    const { tabA, tabB, first } = await twoTabs();
+    await tabA.execute({ type: 'createNote', commandId: 'create-late', noteId: 'late' });
+    /** @type {Promise<Outcome | BulkOutcome> | undefined} */
+    let saving;
+    const { transaction } = first.storage;
+    first.storage.transaction = (/** @type {string | string[]} */ names, /** @type {IDBTransactionMode} */ mode) => {
+      const tx = transaction(names, mode);
+      if (!saving && mode === 'readwrite' && [names].flat().includes('elements')) {
+        tx.addEventListener('complete', () => {
+          saving = tabB.execute(save('late'));
+        });
+      }
+      return tx;
+    };
+    const trashedLate = await tabA.execute(trash('late'));
+    first.storage.transaction = transaction;
+    const savedLate = await saving;
+    assert.deepEqual(
+      [
+        trashedLate.kind === 'committed' && trashedLate.code,
+        savedLate && savedLate.kind === 'rejected' && savedLate.code,
+      ],
+      ['note-deleted', 'note-not-found'],
+    );
+    assert.deepEqual([await noteOf(tabB, 'late'), await blockIdsOf(tabB, 'late')], [undefined, []]);
+
+    // Saved first, the note has content, so the trash keeps it in the trash instead
+    await tabA.execute({ type: 'createNote', commandId: 'create-early', noteId: 'early' });
+    const [savedEarly, trashedEarly] = await Promise.all([tabB.execute(save('early')), tabA.execute(trash('early'))]);
+    assert.deepEqual(
+      [savedEarly.kind, trashedEarly.kind === 'committed' && trashedEarly.code],
+      ['committed', 'note-trashed'],
+    );
+    assert.deepEqual(
+      [(await noteOf(tabA, 'early'))?.trashed, await blockIdsOf(tabA, 'early')],
+      [true, ['typed-early']],
+    );
+  });
+
   it('pinning a note open in an editor survives that editor saving at the same moment, in one tab or two', async () => {
     const { tabA, tabB } = await twoTabs();
     for (const [noteId, sidebar] of /** @type {const} */ ([
