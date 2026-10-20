@@ -12,12 +12,12 @@ function editorStorage() {
 }
 
 /**
- * What keeps typed keys out of the note while it's open (BlockEditor's
- * _overlayOpen): the modals (Settings, Keyboard Shortcuts, Theme Builder, the
- * command palette, the AI insert preview, a snapshot's preview), the note and
- * folder menus, the slash, link, and template menus, the block, Turn into, and
- * table menus, the confirm dialogs, onboarding, and any other dialog or menu.
- * A <dialog> counts only with `open`.
+ * What keeps keys pressed outside the note off it while it's open
+ * (BlockEditor's _overlayOpen): the modals (Settings, Keyboard Shortcuts,
+ * Theme Builder, the command palette, the AI insert preview, a snapshot's
+ * preview), the note and folder menus, the slash, link, and template menus,
+ * the block, Turn into, and table menus, the confirm dialogs, onboarding, and
+ * any other dialog or menu. A <dialog> counts only with `open`.
  */
 const OPEN_OVERLAYS = [
   '.modal', '.context-menu', '.slash-menu', '.block-action-menu', '.turn-into-menu', '.table-context-menu',
@@ -2529,11 +2529,17 @@ class BlockEditor {
    * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
    * deleting a block selection happen in one pane. A text field outside the
    * note keeps its keys (see _inTextField), so Backspace, Delete, and undo
-   * there edit the field.
+   * there edit the field. While a modal, menu, or dialog is open (see
+   * _overlayOpen), only a key pressed in this editor's own pane is the note's.
    */
   onGlobalKeyDown(e) {
     if (!this._takesTypedKey(e.target)) return;
     if (this._inTextField(e.target)) return;
+    if (!this._inOwnPane(e.target) && this._overlayOpen()) {
+      // The browser's own undo, redo, and delete would still edit the note through the caret left in it
+      if (BlockEditor.editsThroughCaret(e)) e.preventDefault();
+      return;
+    }
 
     // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0) {
@@ -2594,6 +2600,31 @@ class BlockEditor {
   }
 
   /**
+   * Whether the browser's default for a key edits the page through its caret
+   * or its undo history, wherever focus is: Backspace, Delete, undo, and redo.
+   * A caret left in a block when focus moved to a button still takes them.
+   * @param {KeyboardEvent} e
+   * @returns {boolean}
+   */
+  static editsThroughCaret(e) {
+    if (e.key === 'Backspace' || e.key === 'Delete') return true;
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    return modKey && !e.altKey && (e.key === 'z' || e.key === 'Z' || (!isMac && e.key === 'y'));
+  }
+
+  /**
+   * Whether `target` is in this editor's own pane: its title, its blocks, or
+   * anything else the pane holds. Picture-in-Picture's pane is its window's
+   * editor.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _inOwnPane(target) {
+    return Boolean(target) && typeof this.root.contains === 'function' && this.root.contains(target);
+  }
+
+  /**
    * Whether `target` is in a text field that handles its own keys: an input
    * that takes text, a textarea, or a select, anywhere (a bookmark's URL input
    * included), or editable text that isn't this editor's own title or blocks.
@@ -2635,8 +2666,9 @@ class BlockEditor {
   /**
    * Whether a modal, menu, or dialog is open in this editor's window. The
    * modals leave focus on the button that opened them, and a right-click
-   * leaves it where it was, so an open one keeps typed keys out of the note
-   * wherever focus is. Open means in the page with no `hidden` class on it or
+   * leaves it where it was, so while one is open typed letters stay out of
+   * the note wherever focus is, and undo, redo, and delete act on it only
+   * from its own pane. Open means in the page with no `hidden` class on it or
    * around it (see OPEN_OVERLAYS).
    * @returns {boolean}
    */

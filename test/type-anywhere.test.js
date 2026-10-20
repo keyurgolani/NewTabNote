@@ -10,7 +10,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, FakeDocument } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, note, block,
+} = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/editor.js'];
 
@@ -412,6 +414,160 @@ describe('one editor acts on each key', () => {
     assert.deepEqual(press(pipDoc.body, 'a'), [['focusBlock', 'p1', true]]);
     pip.selectedBlockIds.add('p1');
     assert.deepEqual(press(pipDoc.body, 'Backspace'), [['deleteSelectedBlocks']]);
+  });
+
+  /** The note's keys onGlobalKeyDown handles besides typing */
+  const NOTE_KEYS = [['z', UNDO, 'undo'], ['Z', REDO, 'redo'], ['Backspace', {}, 'Backspace'], ['Delete', {}, 'Delete']];
+  /** No pane acts, and the browser's own undo, redo, and delete, which would edit a note through its caret, don't run */
+  const HELD = { left: [], right: [], prevented: true };
+
+  for (const [name, open] of OVERLAYS) {
+    it(`while ${name} is open, undo, redo, Backspace, and Delete from outside the note leave both panes alone`, () => {
+      const { at, press, editors, page } = setup({ split: 'left' });
+      editors[0].selectedBlockIds.add('b1');
+      editors[1].selectedBlockIds.add('r1');
+      open(page);
+      for (const target of [at.headerButton, at.sidebarCheckbox, at.body]) {
+        for (const [key, modifiers, what] of NOTE_KEYS) {
+          assert.deepEqual(press(target, key, modifiers), HELD, `${what} at ${label(target)}`);
+        }
+        assert.deepEqual(press(target, 'y', { ctrlKey: true }), NOWHERE, 'Ctrl+Y is no redo on a Mac');
+      }
+    });
+  }
+
+  it('while a modal is open, Ctrl+Y outside the note is held too where it redoes, off a Mac', () => {
+    const { env, at, press, page } = setup({ split: 'left' });
+    env.global.navigator.platform = 'Win32';
+    page.show(page.modals['settings-modal']);
+    assert.deepEqual(press(at.headerButton, 'y', { ctrlKey: true }), HELD);
+    assert.deepEqual(press(at.headerButton, 'z', { ctrlKey: true }), HELD);
+  });
+
+  it('while a modal is open, the same keys in a pane\'s own editor still act there', () => {
+    const { at, press, editors, page } = setup({ split: 'left' });
+    page.show(page.modals['settings-modal']);
+    editors[0].selectedBlockIds.add('b1');
+    editors[1].selectedBlockIds.add('r1');
+    for (const target of [at.blockText, at.title]) {
+      assert.deepEqual(press(target, 'z', UNDO), { left: [['undo']], right: [], prevented: true }, `undo at ${label(target)}`);
+      assert.deepEqual(press(target, 'Z', REDO), { left: [['redo']], right: [], prevented: true }, `redo at ${label(target)}`);
+      assert.deepEqual(press(target, 'Backspace'), { left: [['deleteSelectedBlocks']], right: [], prevented: true }, `Backspace at ${label(target)}`);
+    }
+    assert.deepEqual(press(at.rightBlockText, 'Delete'), { left: [], right: [['deleteSelectedBlocks']], prevented: true });
+  });
+
+  it('in Picture-in-Picture, a menu open in its window keeps keys from outside its editor off the note, and its blocks still take them', () => {
+    const { env } = setup();
+    const pipDoc = new FakeDocument();
+    const root = add(pipDoc.body, 'div', { class: 'pip-editor-wrapper editor-pane active' });
+    const blockText = add(add(root, 'div', { class: 'block' }), 'div', { class: 'block-content', contenteditable: 'true' });
+    add(root, 'div', { class: 'slash-menu' }); // open
+    const reached = [];
+    const pip = stubEditor(env, pipDoc, root, [{ id: 'p1' }], reached);
+    pip.selectedBlockIds.add('p1');
+    const press = (target, key, modifiers) => {
+      reached.length = 0;
+      const event = keydown(target, key, modifiers);
+      pip.onGlobalKeyDown(event);
+      return reached.length > 0 ? reached.slice() : { held: Boolean(event.defaultPrevented) };
+    };
+    for (const [key, modifiers, what] of NOTE_KEYS) {
+      assert.deepEqual(press(pipDoc.body, key, modifiers), { held: true }, `${what} at the PiP window's page`);
+    }
+    assert.deepEqual(press(blockText, 'z', UNDO), [['undo']]);
+    assert.deepEqual(press(blockText, 'Backspace'), [['deleteSelectedBlocks']]);
+  });
+});
+
+describe('with Settings open, keys pressed outside the note leave it and what is stored alone', () => {
+  /**
+   * A new tab with one real editor on note N (eggs, milk), stored, with an edit
+   * it can undo (milk to "milk and bread"), one it can redo (eggs to "eggs and
+   * ham"), both blocks selected, and Settings open from the header, where focus
+   * stays
+   */
+  async function realPage() {
+    const env = createLegacyEnv({ document: new FakeDocument() });
+    await createDatabase(env.indexedDB, {
+      records: { canvases: [note('N', { name: 'Groceries' })], elements: [block('n1', 'N', 0, 'eggs'), block('n2', 'N', 1, 'milk')] },
+    });
+    env.load(...FILES);
+    env.global.navigator.platform = 'MacIntel';
+    await env.get('Storage').init();
+    const doc = env.document;
+    const at = { body: doc.body, headerButton: add(add(doc.body, 'header'), 'button', { id: 'settings-btn' }) };
+    const pane = add(doc.body, 'div', { id: 'editor-container', class: 'editor-pane active' });
+    at.blockText = add(add(pane, 'div', { class: 'block' }), 'div', { class: 'block-content', contenteditable: 'true' });
+    const settings = add(doc.body, 'div', { id: 'settings-modal', class: 'modal hidden' });
+    at.checkbox = add(add(settings, 'div', { class: 'modal-content', role: 'dialog', 'aria-modal': 'true' }), 'input', { type: 'checkbox' });
+
+    // A BlockEditor without its DOM constructor, as test/editor-save.test.js builds one: real saves, rendering stubbed
+    const editor = Object.create(env.get('BlockEditor').prototype);
+    const noop = () => {};
+    Object.assign(editor, {
+      root: pane, doc, noteId: null, noteData: null, blocks: [], titleEl: { textContent: '' },
+      container: { querySelector: () => null, querySelectorAll: () => [] }, insightsPollingId: null,
+      undoStack: [], redoStack: [], _contentUndoPending: {}, selectedBlockIds: new Set(), _snapshotDirty: false,
+      _snapshotInterval: null, hasReceivedFirstContent: false, pendingAutoTitle: false,
+    });
+    editor._initPersistenceState();
+    Object.assign(editor, {
+      renderBlocks: noop, renderBacklinks: noop, updateTimestampDisplay: noop, updateSaveStatus: noop, clearBlockSelection: noop,
+      placeCaretAtEnd: noop, renderInsights: async () => {}, startInsightsPollingIfNeeded: async () => {},
+      stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
+    });
+    await editor.loadNote('N');
+
+    const saved = async () => {
+      env.clock.tick(500);
+      env.frames();
+      await editor.flushSave();
+      await settle();
+      const rows = recordsOf(await dumpDatabase(env.indexedDB), 'elements');
+      return Object.fromEntries(Object.entries(rows).map(([id, row]) => [id, row.content]));
+    };
+    const [eggs, milk] = editor.blocks;
+    const before = editor.snapshotBlock(milk);
+    milk.content = 'milk and bread';
+    editor.pushUndo({ type: 'content', blockId: milk.id, before, after: editor.snapshotBlock(milk) });
+    editor.scheduleSave();
+    assert.deepEqual(await saved(), { n1: 'eggs', n2: 'milk and bread' });
+    editor.redoStack.push({ type: 'content', blockId: eggs.id, before: editor.snapshotBlock(eggs), after: { ...editor.snapshotBlock(eggs), content: 'eggs and ham' } });
+    editor.selectedBlockIds.add('n1');
+    editor.selectedBlockIds.add('n2');
+    settings.classList.remove('hidden');
+
+    const press = (target, key, modifiers = {}) => {
+      const event = keydown(target, key, modifiers);
+      editor.onGlobalKeyDown(event);
+      return Boolean(event.defaultPrevented);
+    };
+    return { editor, at, press, saved };
+  }
+
+  it('Cmd+Z, Cmd+Shift+Z, Backspace, and Delete with focus on a Settings checkbox, the header button that opened it, or the page', async () => {
+    const { editor, at, press, saved } = await realPage();
+    const passed = [];
+    for (const target of [at.checkbox, at.headerButton, at.body]) {
+      for (const [key, modifiers] of [['z', { metaKey: true }], ['Z', { metaKey: true, shiftKey: true }], ['Backspace'], ['Delete']]) {
+        if (!press(target, key, modifiers)) passed.push(`${key} at ${label(target)}`);
+      }
+    }
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['eggs', 'milk and bread']);
+    assert.deepEqual(await saved(), { n1: 'eggs', n2: 'milk and bread' }, 'what is stored');
+    assert.equal(editor.selectedBlockIds.size, 2, 'both blocks still selected');
+    assert.equal(editor.undoStack.length, 1);
+    assert.equal(editor.redoStack.length, 1);
+    // The browser's own undo and delete would edit the note through the caret it left there
+    assert.deepEqual(passed, [], 'no key reaches the browser either');
+  });
+
+  it('Cmd+Z in the note itself still undoes there, and saves', async () => {
+    const { editor, at, press, saved } = await realPage();
+    assert.equal(press(at.blockText, 'z', { metaKey: true }), true);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['eggs', 'milk']);
+    assert.deepEqual(await saved(), { n1: 'eggs', n2: 'milk' });
   });
 });
 

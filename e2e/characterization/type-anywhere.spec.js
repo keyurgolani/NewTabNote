@@ -232,3 +232,28 @@ test('in the sidebar search box with a block selected, Backspace and undo edit t
   expect(await driver.savedBlocks(page)).toEqual(note.map(block => block.text));
   await expectNoUncaught(extension, page);
 });
+
+test('with Settings open from the header and a block selected, undo, redo, Backspace, and Delete leave the note alone', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'eggs' }, { type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+  // An edit the note could undo, and a selected block
+  await driver.clickBlock(page, 1);
+  await page.keyboard.type(' and bread');
+  await untilUndoable(page, 'left');
+  const firstBlock = page.locator('#blocks-container > .block').first();
+  await firstBlock.locator('.block-content').click({ modifiers: ['ControlOrMeta'] });
+  await expect(firstBlock).toHaveClass(/block-selected/);
+  const note = [{ type: 'text', text: 'eggs' }, { type: 'text', text: 'milk and bread' }];
+
+  // Focus stays on the header's button
+  await page.locator('#header').getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  for (const key of ['ControlOrMeta+z', 'ControlOrMeta+Shift+KeyZ', 'Backspace', 'Delete']) await page.keyboard.press(key);
+
+  expect(await driver.blocks(page)).toEqual(note);
+  await expect(firstBlock, 'still selected').toHaveClass(/block-selected/);
+  expect(await driver.savedBlocks(page)).toEqual(note.map(block => block.text));
+  await driver.closeSettings(page);
+  await expectNoUncaught(extension, page);
+});
