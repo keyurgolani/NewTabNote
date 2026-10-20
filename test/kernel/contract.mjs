@@ -6,9 +6,11 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -850,6 +852,68 @@ export function runContractSuite(fixture) {
         committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
         const kept = await kernel.query({ type: 'getWorkspaceSession' });
         assert.deepEqual(kept.kind === 'ready' && kept.data, session);
+      });
+
+      /**
+       * A kernel the way the new-tab and service-worker roots build it: startup maintenance
+       * runs once `ready` settles, before any command or query
+       * @param {PromiseLike<unknown>} ready
+       */
+      const maintainingRoot = ready =>
+        createKernel({
+          adapter: ctx.adapter,
+          policy: createBaselinePolicy(),
+          caller: CALLERS.newtab,
+          ids: ctx.ids,
+          clock: ctx.clock,
+          ready,
+          maintainOnOpen: true,
+        });
+
+      it("on a root that maintains as it opens, what's set once it's ready survives the next maintenance", async () => {
+        const root = maintainingRoot(Promise.resolve());
+        committedOf(await root.execute(cmd('setPreferences', { values: { theme: 'dark', sidebarWidth: 300 } })));
+        committedOf(
+          await root.execute(cmd('saveWorkspaceSession', { session: { activeTabIndex: 2, lastOpenedNoteId: 'n1' } })),
+        );
+        committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
+        const preferences = await root.query({ type: 'getPreferences', keys: ['theme', 'sidebarWidth', 'font'] });
+        assert.deepEqual(preferences.kind === 'ready' && preferences.data, {
+          theme: 'dark',
+          sidebarWidth: 300,
+          font: 'default',
+        });
+        const session = await root.query({ type: 'getWorkspaceSession' });
+        assert.deepEqual(session.kind === 'ready' && [session.data.activeTabIndex, session.data.lastOpenedNoteId], [
+          2,
+          'n1',
+        ]);
+      });
+
+      it('on a root that maintains as it opens, a command sent before ready waits, then commits over the defaults', async () => {
+        /** @type {() => void} */
+        let open = () => {};
+        const root = maintainingRoot(
+          new Promise(resolve => {
+            open = () => resolve(undefined);
+          }),
+        );
+        let settled = false;
+        const setting = root.execute(cmd('setPreferences', { values: { theme: 'dark' } })).then(outcome => {
+          settled = true;
+          return outcome;
+        });
+        assert.deepEqual(await root.query({ type: 'getPreferences' }), { kind: 'loading' });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false);
+        assert.equal((await kernel.query({ type: 'getPreferences' })).kind, 'empty');
+        open();
+        committedOf(await setting);
+        const preferences = await root.query({ type: 'getPreferences' });
+        assert.deepEqual(preferences.kind === 'ready' && preferences.data, {
+          ...STORAGE_DEFAULT_PREFERENCES,
+          theme: 'dark',
+        });
       });
     });
 

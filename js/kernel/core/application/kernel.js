@@ -21,6 +21,7 @@ import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS, isCommandType } from '../contracts/commands.js';
 import {
+  UnavailableError,
   failed,
   failedFrom,
   isOutcome,
@@ -107,6 +108,12 @@ const QUERY_HANDLERS = Object.freeze({ ...noteQueries, ...folderQueries, ...pref
  *   fails, every command is `unavailable` and every query `failed`, with its cause and code.
  *   Nothing opens it again before the page reloads, so no such answer is retryable, whatever
  *   the adapter's error said: sending a command again can't get past it.
+ * @property {boolean} [maintainOnOpen]
+ *   Run startup maintenance once `ready` settles, before any command or query, as
+ *   Storage.init() did before the app ran anything. The new-tab and service-worker roots set
+ *   it, and Popup and Side Panel never do. Until it's done queries are `loading` and commands
+ *   wait, and if it fails they're `unavailable` and `failed` with cause storage, and not
+ *   retryable, as when opening fails.
  */
 
 /**
@@ -167,23 +174,45 @@ function commitResultOf(value) {
  * @param {KernelOptions} options
  * @returns {Kernel}
  */
-export function createKernel({ adapter, policy, caller, ids, clock = systemClock, logger = silentLogger, ready }) {
+export function createKernel({
+  adapter,
+  policy,
+  caller,
+  ids,
+  clock = systemClock,
+  logger = silentLogger,
+  ready,
+  maintainOnOpen = false,
+}) {
   const feed = createCommitFeed(logger);
   /** @type {'opening' | 'ready' | 'failed'} */
-  let status = ready === undefined ? 'ready' : 'opening';
+  let status = ready === undefined && !maintainOnOpen ? 'ready' : 'opening';
   /** @type {Unavailable} */
   let failure = unavailableFrom(null);
-  const opened = Promise.resolve(ready).then(
-    () => {
-      status = 'ready';
-    },
-    error => {
-      status = 'failed';
-      // Its cause and code, and never retryable, since nothing opens it again
-      const { cause, code } = unavailableFrom(error);
-      failure = unavailable(cause, code, false);
-    },
-  );
+
+  /**
+   * Startup maintenance, run as the command the policy checks, before anything else
+   * @returns {Promise<void>}
+   */
+  const maintain = async () => {
+    const outcome = await dispatch({ type: 'runStartupMaintenance', commandId: ids.next() });
+    if (outcome.kind !== 'committed') throw new UnavailableError('storage', 'maintenance-failed', false);
+  };
+
+  const opened = Promise.resolve(ready)
+    .then(() => (maintainOnOpen ? maintain() : undefined))
+    .then(
+      () => {
+        status = 'ready';
+      },
+      error => {
+        status = 'failed';
+        // Its cause and code, and never retryable, since nothing opens or maintains storage
+        // again before the page reloads
+        const { cause, code } = unavailableFrom(error);
+        failure = unavailable(cause, code, false);
+      },
+    );
 
   /** @type {UseCaseContext} */
   const context = {

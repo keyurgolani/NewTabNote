@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
-import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -167,6 +167,59 @@ describe('the kernel', () => {
     assert.deepEqual(stored.kind === 'ready' && stored.data.map(block => [block.id, block.content]), [
       ['b1', 'Typed before the save'],
     ]);
+  });
+
+  it('maintains as it opens even with no adapter opening to wait for', async () => {
+    const kernel = createKernel({
+      adapter: createMemoryAdapter(),
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+      maintainOnOpen: true,
+    });
+    assert.deepEqual(await kernel.query({ type: 'getPreferences', keys: ['theme'] }), { kind: 'loading' });
+    assert.equal((await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' })).kind, 'committed');
+    const theme = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
+    assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'system' });
+  });
+
+  it('when startup maintenance fails as a root opens, commands are unavailable and queries failed, not retryable', async () => {
+    const memory = createMemoryAdapter();
+    /** @type {KernelAdapter} */
+    const failing = {
+      ...memory,
+      commit: work =>
+        work.effect.kind === 'maintenance'
+          ? Promise.resolve({ outcome: unavailable('storage', 'write-failed', true), replayed: false })
+          : memory.commit(work),
+    };
+    for (const [adapter, caller] of /** @type {const} */ ([
+      [failing, CALLERS.newtab],
+      // A root that isn't allowed to maintain fails the same way
+      [memory, CALLERS.popup],
+    ])) {
+      const kernel = createKernel({
+        adapter,
+        policy: createBaselinePolicy(),
+        caller,
+        ids: testIds(),
+        clock: testClock(),
+        ready: Promise.resolve(),
+        maintainOnOpen: true,
+      });
+      const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+      assert.deepEqual(
+        outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+        ['storage', 'maintenance-failed', false],
+        caller.surface,
+      );
+      assert.deepEqual(
+        await kernel.query({ type: 'listNotes', view: 'active' }),
+        { kind: 'failed', cause: 'storage', code: 'maintenance-failed' },
+        caller.surface,
+      );
+    }
   });
 
   it("when storage can't open, commands are unavailable and queries failed, with the cause", async () => {

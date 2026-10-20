@@ -12,10 +12,12 @@
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  *
  * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
- * older database to version 8 as Storage.init always has. Popup and Side Panel open it
- * `existing`: whatever version is on disk, with no repair, upgrade, or maintenance. A
- * database a newer build upgraded is refused either way, as `unavailable` with cause
- * `newer-schema`.
+ * older database to version 8 as Storage.init always has. Their kernels set
+ * `maintainOnOpen`, so Storage's startup maintenance runs before any command does, as
+ * Storage.init ran it before the app did anything; its first run writes every default over
+ * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
+ * whatever version is on disk, with no repair, upgrade, or maintenance. A database a newer
+ * build upgraded is refused either way, as `unavailable` with cause `newer-schema`.
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
