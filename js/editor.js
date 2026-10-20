@@ -206,6 +206,8 @@ class BlockEditor {
    * The note being left is saved first, and the next note is read into locals
    * and swapped in with one synchronous step, so no save can pair one note's ID
    * with another note's blocks. A load superseded by a later call drops its result.
+   * Reloading the open note reads it again after any edit typed during the reads
+   * is written, so the reads never replace a newer edit.
    * @param {string} noteId - Note ID to load
    * @returns {Promise<void>}
    */
@@ -221,9 +223,24 @@ class BlockEditor {
     await this.flushSave();
     if (loadSeq !== this._loadSeq) return;
 
-    const noteData = await Storage.getNote(noteId);
-    const blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
-    if (loadSeq !== this._loadSeq) return;
+    let noteData = null;
+    let blocksData = [];
+    let keepEditorCopy = false;
+    for (let round = 0; ; round++) {
+      noteData = await Storage.getNote(noteId);
+      blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
+      if (loadSeq !== this._loadSeq) return;
+      // Switching notes, or nothing written since the reads started: they are current.
+      if (noteId !== this.noteId || !this._hasPendingSave()) break;
+      // Edits keep arriving during the reads: the editor's copy is the newest one.
+      if (round === 2) {
+        keepEditorCopy = true;
+        break;
+      }
+      this._writePendingNow();
+      await this._waitForWrites();
+      if (loadSeq !== this._loadSeq) return;
+    }
 
     if (!noteData) {
       // Keep the note that is loaded rather than pointing the editor at nothing.
@@ -234,6 +251,11 @@ class BlockEditor {
 
     // Edits typed into the old note while the reads ran still belong to it.
     this._writePendingNow();
+
+    if (keepEditorCopy) {
+      this._resumeNoteTimers();
+      return;
+    }
 
     this.noteId = noteId;
     this.noteData = noteData;
@@ -3537,6 +3559,23 @@ class BlockEditor {
    */
   _activeSaves() {
     return Array.from(this._inFlightSaves).filter(({ state }) => state.written || !this._isSuperseded(state));
+  }
+
+  /**
+   * @returns {boolean} True when a save is pending, waiting to retry, or in flight
+   */
+  _hasPendingSave() {
+    return this.saveTimeout !== null || this._heldSaveDue || this._retryCopies.size > 0
+      || this._activeSaves().length > 0;
+  }
+
+  /**
+   * Wait for the saves whose transactions are open.
+   * @returns {Promise<void>}
+   */
+  async _waitForWrites() {
+    const writing = Array.from(this._inFlightSaves).filter(({ state }) => state.written);
+    await Promise.all(writing.map((entry) => entry.promise));
   }
 
   /**

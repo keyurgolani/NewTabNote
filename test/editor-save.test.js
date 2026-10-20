@@ -592,6 +592,57 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 });
 
+describe('BlockEditor reloading the open note', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+    // Another writer adds a block, as the AI insert does before it reloads the note.
+    await Storage.saveElements([block('ai1', 'A', 5, 'from AI')]);
+  });
+
+  it('keeps an edit typed while the reload reads the note', async () => {
+    const reload = editor.loadNote('A');
+    type(editor, 'typed during reload');
+    await runUntil(env, reload);
+
+    assert.deepEqual(editor.blocks.map((b) => b.id), ['a1', 'a2', 'ai1'], 'the added block is loaded');
+    assert.equal(editor.blocks[0].content, 'typed during reload', 'the edit is still in the editor');
+
+    type(editor, 'alpha two edited', 1);
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+    const rows = await elementsById(env);
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'typed during reload' }, 'the next save keeps it');
+    assert.deepEqual(rows.a2, { canvasId: 'A', content: 'alpha two edited' });
+    assert.deepEqual(rows.ai1, { canvasId: 'A', content: 'from AI' });
+  });
+
+  it('keeps the blocks in the editor when edits keep racing the reads', async () => {
+    const realRead = Storage.getElementsByNote.bind(Storage);
+    let races = 0;
+    Storage.getElementsByNote = async (id) => {
+      const rows = await realRead(id);
+      races += 1;
+      type(editor, `race ${races}`);
+      return rows;
+    };
+    const reload = editor.loadNote('A');
+    await runUntil(env, reload);
+    Storage.getElementsByNote = realRead;
+
+    assert.equal(editor.blocks[0].content, `race ${races}`, 'the newest edit is still in the editor');
+    await runUntil(env, editor.flushSave());
+    const rows = await elementsById(env);
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: `race ${races}` });
+    assert.deepEqual(rows.ai1, { canvasId: 'A', content: 'from AI' }, 'the added block stays stored');
+  });
+});
+
 describe('BlockEditor saves keep trash and archive state', () => {
   let env;
   let Storage;
