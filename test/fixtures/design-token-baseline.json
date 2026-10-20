@@ -7,7 +7,7 @@
     "inline-style-block": "Inline <style> blocks in HTML",
     "style-attribute": "style= attributes in HTML and markup strings, and setAttribute('style')",
     "undefined-var": "var() of a property no production file or token defines, with no fallback",
-    "unregistered-read": "getPropertyValue() of anything but a color token, the properties the token output registers",
+    "unregistered-read": "getPropertyValue() of a custom property the token output doesn't register (it registers the color tokens), or of a computed name",
     "gradient-text": "Gradient text: a rule with background-clip: text",
     "backdrop-filter": "backdrop-filter",
     "hard-shadow": "box-shadow with a nonzero offset and zero blur",

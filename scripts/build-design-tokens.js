@@ -136,7 +136,7 @@ function compile(source, design) {
   }
   const scheme = source.dimensions.scheme || {};
   if (!scheme.system || !scheme.attribute) fail('dimensions.scheme: needs an attribute and a system entry');
-  else if (JSON.stringify(scheme.values.filter(value => value !== scheme.system.value)) !== JSON.stringify(['light', 'dark'])) {
+  else if (!Array.isArray(scheme.values) || JSON.stringify(scheme.values.filter(value => value !== scheme.system.value)) !== JSON.stringify(['light', 'dark'])) {
     fail('dimensions.scheme: values must be light, dark, and the system value');
   }
   for (const name of ['contrast', 'forcedColors']) {
@@ -150,11 +150,19 @@ function compile(source, design) {
   // Tokens: shape first, then every cell through refs
   const tokens = source.tokens;
   const names = Object.keys(tokens);
-  const cellsOf = name => {
-    const token = tokens[name];
-    if (token.axis === COLOR_AXIS) return token.type === 'color' ? [...COLOR_CELLS, FORCED_CELL] : COLOR_CELLS;
+  // A token's cells: the ones the output has, the keys its source may use, and the
+  // keys it must use. Color-axis tokens have a cell per scheme and contrast (colors
+  // add forced); the other axes have one per value of their dimension, written as
+  // `default` plus the values that differ.
+  const cellsOf = token => {
+    if (token.axis === COLOR_AXIS) {
+      const output = token.type === 'color' ? [...COLOR_CELLS, FORCED_CELL] : COLOR_CELLS;
+      return { output, source: output, required: token.type === 'color' ? ['light', 'dark', FORCED_CELL] : ['light'] };
+    }
     const dimension = axisDimension[token.axis];
-    return dimension ? variantValues[dimension] : [BASE_CELL];
+    const output = dimension ? variantValues[dimension] : [BASE_CELL];
+    const others = dimension ? output.filter(value => value !== defaults[dimension]) : [];
+    return { output, source: [BASE_CELL, ...others], required: [BASE_CELL] };
   };
   for (const name of names) {
     const token = tokens[name];
@@ -174,16 +182,13 @@ function compile(source, design) {
       fail(`${where}: values missing`);
       continue;
     }
+    if (!source.axes[token.axis]) continue;
     const isColorAxis = token.axis === COLOR_AXIS;
-    const dimension = axisDimension[token.axis];
-    const allowed = isColorAxis
-      ? (token.type === 'color' ? [...COLOR_CELLS, FORCED_CELL] : COLOR_CELLS)
-      : [BASE_CELL, ...(dimension ? variantValues[dimension].filter(value => value !== defaults[dimension]) : [])];
+    const cells = cellsOf(token);
     for (const key of Object.keys(token.values)) {
-      if (!allowed.includes(key)) fail(`${where}: unknown cell ${key} (allowed: ${allowed.join(', ')})`);
+      if (!cells.source.includes(key)) fail(`${where}: unknown cell ${key} (allowed: ${cells.source.join(', ')})`);
     }
-    const required = isColorAxis ? (token.type === 'color' ? ['light', 'dark', FORCED_CELL] : ['light']) : [BASE_CELL];
-    for (const key of required) {
+    for (const key of cells.required) {
       if (token.values[key] === undefined) fail(`${where}: ${key} value missing`);
     }
     if (isColorAxis && token.values.more !== undefined && token.values.dark !== undefined
@@ -242,23 +247,26 @@ function compile(source, design) {
   const resolve = (name, cell) => {
     const key = `${name}@${cell}`;
     if (resolved[key]) return resolved[key];
-    if (resolving.has(key)) throw new Error(`tokens.${name}: ref cycle through ${[...resolving].join(' -> ')}`);
+    if (resolving.has(key)) throw new Error(`tokens.${name}: ref cycle through ${[...resolving, key].join(' -> ')}`);
     resolving.add(key);
-    const entry = entryFor(name, cell);
-    const token = tokens[name];
-    let status = entry.status || (pendingCell(name, cell) ? 'candidate' : token.status);
-    let value;
-    if (entry.ref !== undefined) {
-      const target = resolve(entry.ref, cell);
-      value = target.value;
-      if (target.status === 'candidate') status = 'candidate';
-    } else {
-      value = entry.value;
+    try {
+      const entry = entryFor(name, cell);
+      const token = tokens[name];
+      let status = entry.status || (pendingCell(name, cell) ? 'candidate' : token.status);
+      let value;
+      if (entry.ref !== undefined) {
+        const target = resolve(entry.ref, cell);
+        value = target.value;
+        if (target.status === 'candidate') status = 'candidate';
+      } else {
+        value = entry.value;
+      }
+      if (token.type === 'color' && cell !== FORCED_CELL) value = design.formatHex(design.parseColor(value));
+      resolved[key] = { value, status, ref: entry.ref, legacy: entry.legacy };
+      return resolved[key];
+    } finally {
+      resolving.delete(key);
     }
-    if (token.type === 'color' && cell !== FORCED_CELL) value = design.formatHex(design.parseColor(value));
-    resolving.delete(key);
-    resolved[key] = { value, status, ref: entry.ref, legacy: entry.legacy };
-    return resolved[key];
   };
 
   const outTokens = {};
@@ -269,7 +277,7 @@ function compile(source, design) {
     record.values = {};
     const candidateCells = [];
     const refs = {};
-    for (const cell of cellsOf(name)) {
+    for (const cell of cellsOf(token).output) {
       let result;
       try {
         result = resolve(name, cell);
@@ -285,6 +293,8 @@ function compile(source, design) {
     if (Object.keys(refs).length) record.refs = refs;
     outTokens[name] = record;
   }
+  // Pairs read resolved cells, so stop here when any cell didn't resolve
+  if (errors.length) throw new Error(errors.join('\n'));
 
   // Pairs
   const ids = new Set();
@@ -313,10 +323,10 @@ function compile(source, design) {
     if (pair.inner) out.inner = pair.inner;
     const disabled = state === (source.rules.disabled && source.rules.disabled.state);
     if (colorToken(pair.bg)) {
-      const translucent = COLOR_CELLS.some(cell => outTokens[pair.bg].values[cell].length === 9);
+      const translucent = COLOR_CELLS.some(cell => (outTokens[pair.bg].values[cell] || '').length === 9);
       if ((translucent || disabled) && !pair.over) fail(`${where}: a translucent or disabled pair needs an opaque over`);
     }
-    if (pair.over && colorToken(pair.over) && COLOR_CELLS.some(cell => outTokens[pair.over].values[cell].length === 9)) {
+    if (pair.over && colorToken(pair.over) && COLOR_CELLS.some(cell => (outTokens[pair.over].values[cell] || '').length === 9)) {
       fail(`${where}: over ${pair.over} must be opaque`);
     }
     return out;

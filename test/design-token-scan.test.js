@@ -104,6 +104,20 @@ describe('what the scanner counts', () => {
     assert.equal(html['style-attribute'], 1);
   });
 
+  it('counts each color in a JS string once, whatever the string holds, and skips selector arguments', () => {
+    assert.equal(countsOf('js/x.js', 'el.innerHTML = \'<svg fill="#ffffff" stroke="white"></svg>\';')['color-literal'], 2);
+    assert.equal(countsOf('js/x.js', 'const message = `Hello {name}: use #ff0000 here`;')['color-literal'], 1);
+    assert.equal(countsOf('js/x.js', 'document.querySelector(\'#add\'); el.closest(`#bad`);')['color-literal'], undefined);
+    assert.equal(countsOf('js/x.js', 'const accent = \'#add\';')['color-literal'], 1);
+  });
+
+  it('reads inline <script> bodies in HTML, at their own lines', () => {
+    const { occurrences } = scanFixtures({
+      'x.html': '<body>\n<script src="js/x.js"></script>\n<script>\ndocument.body.style.background = \'#fff\';\nif (t === \'dark\') {}\n</script>\n</body>',
+    });
+    assert.deepEqual(occurrences.map(o => [o.pattern, o.line]), [['color-literal', 4], ['theme-branching', 5]]);
+  });
+
   it('counts CSS inside a markup string once', () => {
     const counts = countsOf('js/x.js', `el.innerHTML = '<style>@media (prefers-color-scheme: dark) { [data-theme="dark"] .a { color: #000 } }</style>'
       + '<p style="color: #fff; font-size: 12px">x</p>';`);

@@ -545,7 +545,12 @@ describe('scripts/build-design-tokens.js refuses a malformed source', () => {
     ['a ref cycle', s => {
       s.tokens['--text-link'].values.light = { ref: '--focus-ring-inner' };
       s.tokens['--focus-ring-inner'].values.light = { ref: '--text-link' };
-    }, /ref cycle/],
+    }, /ref cycle through --text-link@light -> --focus-ring-inner@light -> --text-link@light/],
+    ['a ref cycle through a pair\'s background, without crashing on the pairs', s => {
+      s.tokens['--surface-paper'].values.dark = { ref: '--text-primary' };
+      s.tokens['--text-primary'].values.dark = { ref: '--surface-paper' };
+    }, /^tokens\.--surface-paper: ref cycle through --surface-paper@dark -> --text-primary@dark -> --surface-paper@dark$/m],
+    ['a scheme with no values', s => { delete s.dimensions.scheme.values; }, /dimensions\.scheme: values missing/],
     ['a dark and contrast-more literal with no darkMore', s => { s.tokens['--seam-strong'].values.more = '#778179'; }, /needs a darkMore value/],
     ['a pair naming a missing token', s => { s.pairs[0].fg = '--nope'; }, /fg --nope isn't a color token/],
     ['a duplicate pair id', s => { s.pairs[1].id = s.pairs[0].id; }, /duplicate id/],

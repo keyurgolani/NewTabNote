@@ -39,7 +39,7 @@ const PATTERNS = {
   'inline-style-block': 'Inline <style> blocks in HTML',
   'style-attribute': 'style= attributes in HTML and markup strings, and setAttribute(\'style\')',
   'undefined-var': 'var() of a property no production file or token defines, with no fallback',
-  'unregistered-read': 'getPropertyValue() of anything but a color token, the properties the token output registers',
+  'unregistered-read': 'getPropertyValue() of a custom property the token output doesn\'t register (it registers the color tokens), or of a computed name',
   'gradient-text': 'Gradient text: a rule with background-clip: text',
   'backdrop-filter': 'backdrop-filter',
   'hard-shadow': 'box-shadow with a nonzero offset and zero blur',
@@ -133,63 +133,80 @@ function readDesign(root = ROOT_DIR) {
 // ---------- Units: the CSS and markup inside each file ----------
 
 /**
- * Line number of an offset in a text
+ * The line of an offset in a text, by binary search over its line starts
  */
-function lineAt(text, offset, startLine = 1) {
-  let line = startLine;
-  for (let i = 0; i < offset && i < text.length; i++) if (text[i] === '\n') line++;
-  return line;
+function lineIndex(text, startLine = 1) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+  return offset => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (starts[mid] <= offset) low = mid;
+      else high = mid - 1;
+    }
+    return startLine + low;
+  };
 }
 
 /**
  * Collect what a file holds, without counting yet: stylesheets, declaration lists,
- * markup, plain strings, and the JS facts the counts need.
+ * markup, strings, and the JS facts the counts need. `fromJs` marks what came out
+ * of a JS string, whose hex and function colors are counted on the string itself.
  */
 function collect(file, text) {
   const unit = { file, sheets: [], declarationLists: [], strings: [], markup: [], js: [], links: [] };
   if (file.endsWith('.css')) {
-    unit.sheets.push({ nodes: css.parse(text), base: path.posix.dirname(file) });
+    unit.sheets.push({ nodes: css.parse(text), base: path.posix.dirname(file), fromJs: false });
   } else if (file.endsWith('.html')) {
-    collectHtml(unit, text, 1, path.posix.dirname(file), true);
+    collectHtml(unit, text, 1, path.posix.dirname(file), false);
   } else {
-    collectJs(unit, text);
+    collectJs(unit, text, 1);
   }
   return unit;
 }
 
+const COLOR_ATTRIBUTES = ['fill', 'stroke', 'color', 'bgcolor', 'stop-color', 'flood-color', 'lighting-color'];
+
 /**
- * Markup: <style> blocks, style= attributes, color attributes, and <link> hrefs
+ * Markup: <style> blocks, style= attributes, color attributes, <link> hrefs, and
+ * inline <script> bodies. Blanking keeps offsets, so line numbers stay right.
  */
-function collectHtml(unit, text, startLine, base, isFile) {
-  const source = text.replace(/<!--[\s\S]*?-->/g, match => match.replace(/[^\n]/g, ' '));
+function collectHtml(unit, text, startLine, base, fromJs) {
+  const blank = value => value.replace(/[^\n]/g, ' ');
+  let source = text.replace(/<!--[\s\S]*?-->/g, blank);
+  const lineOf = lineIndex(source, startLine);
   const styleBlock = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
   let match;
   while ((match = styleBlock.exec(source))) {
-    const line = lineAt(source, match.index, startLine);
     // A markup string's <style is counted once, as runtime style, by addJsString
-    if (isFile) unit.markup.push({ kind: 'inline-style-block', line });
+    if (!fromJs) unit.markup.push({ kind: 'inline-style-block', line: lineOf(match.index) });
     const contentStart = match.index + match[0].indexOf('>') + 1;
-    unit.sheets.push({ nodes: css.parse(match[1], lineAt(source, contentStart, startLine)), base });
+    unit.sheets.push({ nodes: css.parse(match[1], lineOf(contentStart)), base, fromJs });
   }
-  const withoutStyles = source.replace(styleBlock, block => block.replace(/[^\n]/g, ' '));
-  const withoutScripts = withoutStyles.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi,
-    (block, open, body, close) => open + body.replace(/[^\n]/g, ' ') + close);
+  source = source.replace(styleBlock, blank);
+  const script = /(<script\b[^>]*>)([\s\S]*?)<\/script\s*>/gi;
+  while ((match = script.exec(source))) {
+    // The extension's CSP blocks inline scripts, but count them if they appear
+    if (!fromJs && match[2].trim() && !/\ssrc\s*=/i.test(match[1])) collectJs(unit, match[2], lineOf(match.index + match[1].length));
+  }
+  source = source.replace(script, (block, open, body) => open + blank(body) + block.slice(open.length + body.length));
   const tag = /<([a-zA-Z][\w-]*)((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/g;
-  while ((match = tag.exec(withoutScripts))) {
-    const attributes = match[2];
-    const line = lineAt(withoutScripts, match.index, startLine);
+  while ((match = tag.exec(source))) {
+    const line = lineOf(match.index);
     const attribute = /([^\s=>/]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g;
     let attr;
     const found = {};
-    while ((attr = attribute.exec(attributes))) {
+    while ((attr = attribute.exec(match[2]))) {
       const name = attr[1].toLowerCase();
       const raw = attr[2] === undefined ? '' : attr[2].replace(/^["']|["']$/g, '');
       found[name] = raw;
       if (name === 'style') {
         unit.markup.push({ kind: 'style-attribute', line });
-        unit.declarationLists.push({ declarations: css.parseDeclarations(raw, line), line });
-      } else if (['fill', 'stroke', 'color', 'bgcolor', 'stop-color', 'flood-color', 'lighting-color'].includes(name)) {
-        unit.strings.push({ text: raw, line, attribute: true });
+        unit.declarationLists.push({ declarations: css.parseDeclarations(raw, line), line, fromJs });
+      } else if (COLOR_ATTRIBUTES.includes(name)) {
+        unit.strings.push({ text: raw, line, attribute: true, fromJs });
       }
     }
     if (match[1].toLowerCase() === 'link' && found.href !== undefined && /^(?:https?:)?\/\//i.test(found.href)) {
@@ -204,29 +221,31 @@ function isCssDeclarationList(text) {
 }
 
 /**
- * Sort one JS string into a stylesheet, a declaration list, markup, or a plain string
+ * Sort one JS string into a stylesheet, a declaration list, markup, a selector, or
+ * plain text. Every one is also kept as a string, for the counts that read it whole.
  */
 function addJsString(unit, text, line, extra = {}) {
-  if (/<[a-z][\w-]*[\s>/]/i.test(text)) {
-    unit.markup.push(...[...text.matchAll(/<style\b/gi)].map(() => ({ kind: 'runtime-style', line })));
-    collectHtml(unit, text, line, '', false);
-    unit.strings.push({ text, line, markup: true, ...extra });
-    return;
+  const string = { text, line, fromJs: true, ...extra };
+  if (extra.selector) {
+    unit.strings.push(string);
+  } else if (/<[a-z][\w-]*[\s>/]/i.test(text)) {
+    for (let i = (text.match(/<style\b/gi) || []).length; i > 0; i--) unit.markup.push({ kind: 'runtime-style', line });
+    collectHtml(unit, text, line, '', true);
+    unit.strings.push({ ...string, markup: true });
+  } else if (/\{[^{}]*:[^{}]*\}/.test(text)) {
+    unit.sheets.push({ nodes: css.parse(text, line), base: '', fromJs: true });
+    unit.strings.push({ ...string, css: true });
+  } else if (isCssDeclarationList(text)) {
+    unit.declarationLists.push({ declarations: css.parseDeclarations(text, line), line, rule: true, fromJs: true });
+    unit.strings.push({ ...string, css: true });
+  } else {
+    unit.strings.push(string);
   }
-  if (text.includes('{') && text.includes('}') && text.includes(':')) {
-    unit.sheets.push({ nodes: css.parse(text, line), base: '' });
-    unit.strings.push({ text, line, css: true, ...extra });
-    return;
-  }
-  if (isCssDeclarationList(text)) {
-    unit.declarationLists.push({ declarations: css.parseDeclarations(text, line), line, rule: true });
-    unit.strings.push({ text, line, css: true, ...extra });
-    return;
-  }
-  unit.strings.push({ text, line, ...extra });
 }
 
 const PLACEHOLDER = '\u0000';
+// DOM methods whose string argument is a selector, where '#add' is an id
+const SELECTOR_METHODS = ['querySelector', 'querySelectorAll', 'closest', 'matches', 'webkitMatchesSelector'];
 
 function templateText(node) {
   if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isStringLiteral(node)) return node.text;
@@ -248,10 +267,11 @@ function propertyName(node) {
   return null;
 }
 
-function collectJs(unit, text) {
+function collectJs(unit, text, startLine) {
   const source = ts.createSourceFile(unit.file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const lineOf = node => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+  const lineOf = node => source.getLineAndCharacterOfPosition(node.getStart(source)).line + startLine;
   const consumed = new Set();
+  const selectors = new Set();
   const fact = (kind, node, detail = {}) => unit.js.push({ kind, line: lineOf(node), ...detail });
 
   const visit = node => {
@@ -261,14 +281,15 @@ function collectJs(unit, text) {
       const joined = node.elements.map(element => element.text).join('\n');
       if (joined.includes('{') && joined.includes('}')) {
         node.elements.forEach(element => consumed.add(element));
-        addJsString(unit, joined, lineOf(node.elements[0]), { lines: true });
+        addJsString(unit, joined, lineOf(node.elements[0]));
       }
     }
-    if (isStringish(node) && !consumed.has(node)) addJsString(unit, templateText(node), lineOf(node));
+    if (isStringish(node) && !consumed.has(node)) addJsString(unit, templateText(node), lineOf(node), { selector: selectors.has(node) });
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const method = node.expression.name.text;
       const first = node.arguments[0];
       const firstValue = stringValue(first);
+      if (SELECTOR_METHODS.includes(method) && first && isStringish(first)) selectors.add(first);
       if (method === 'createElement' && firstValue && firstValue.toLowerCase() === 'style') fact('runtime-style', node);
       if (method === 'setAttribute' && firstValue && firstValue.toLowerCase() === 'style') fact('style-attribute', node);
       if (method === 'getPropertyValue') fact('read', node, { name: firstValue });
@@ -330,10 +351,14 @@ function namedColors(value) {
   return (bare.match(/[a-z]+(?![\w-]*\()/gi) || []).filter(word => NAMED_COLORS.has(word.toLowerCase())).length;
 }
 
-function colorsInDeclaration(declaration) {
+/**
+ * Colors in one declaration. `named` counts named colors only, for CSS from a JS
+ * string, whose hex and function colors the string's own count has.
+ */
+function colorsInDeclaration(declaration, mode) {
   // Strings are text, as in content: "#1"
   const value = declaration.value.replace(/(["'])(?:\\.|(?!\1).)*\1/g, ' ').replace(/url\([^)]*\)/gi, ' ');
-  let count = hexColors(value).length + colorFunctions(value);
+  let count = mode === 'named' ? 0 : hexColors(value).length + colorFunctions(value);
   if (COLOR_PROPERTY.test(declaration.property)) count += namedColors(value);
   return count;
 }
@@ -415,9 +440,9 @@ function isTransitionAll(property, value) {
 /**
  * Count the CSS checks over one declaration
  */
-function countDeclaration(add, declaration, context, options = {}) {
+function countDeclaration(add, declaration, context, colors = 'all') {
   const { property, value } = declaration;
-  if (options.colors !== false) add('color-literal', colorsInDeclaration(declaration), declaration.line, `${property}: ${value}`);
+  if (colors !== 'none') add('color-literal', colorsInDeclaration(declaration, colors), declaration.line, `${property}: ${value}`);
   if (/^(?:-webkit-)?backdrop-filter$/.test(property) && !/^none$/i.test(value)) add('backdrop-filter', 1, declaration.line, value);
   if (property === 'box-shadow' && isHardShadow(value)) add('hard-shadow', 1, declaration.line, value);
   if (ONE_SIDE.test(property)) {
@@ -455,7 +480,7 @@ function countSheet(add, sheet, context) {
       if (branches) add('theme-branching', branches, node.line, node.prelude);
       countRuleLike(add, node.declarations, node.line);
     }
-    node.declarations.forEach(declaration => countDeclaration(add, declaration, context));
+    node.declarations.forEach(declaration => countDeclaration(add, declaration, context, sheet.fromJs ? 'named' : 'all'));
   });
 }
 
@@ -500,33 +525,38 @@ function countUnit(unit, text, design, defined) {
   unit.sheets.forEach(sheet => countSheet(add, sheet, context));
   unit.declarationLists.forEach(list => {
     if (list.rule) countRuleLike(add, list.declarations, list.line);
-    list.declarations.forEach(declaration => countDeclaration(add, declaration, context));
+    list.declarations.forEach(declaration => countDeclaration(add, declaration, context, list.fromJs ? 'named' : 'all'));
   });
   unit.markup.forEach(item => add(item.kind, 1, item.line, item.kind));
   unit.links.forEach(link => context.fail('remote-url', link.line, `<link href="${link.href}">`));
 
-  // JS strings: colors outside the CSS the parser already counted
+  // var() in CSS and HTML; JS strings are read whole below
+  const declarationVars = list => list.forEach(d => countVars(add, d.value, d.line, design, defined));
+  unit.sheets.filter(sheet => !sheet.fromJs).forEach(sheet => css.walk(sheet.nodes, node => declarationVars(node.declarations)));
+  unit.declarationLists.filter(list => !list.fromJs).forEach(list => declarationVars(list.declarations));
+
   for (const string of unit.strings) {
-    if (!string.css && !string.markup) {
-      add('color-literal', hexColors(string.text).length + colorFunctions(string.text), string.line, string.text);
-      if (NAMED_COLORS.has(string.text.trim()) && (string.attribute || string.text.trim() === string.text.trim().toLowerCase())) {
-        add('color-literal', 1, string.line, string.text);
-      }
-      if (REMOTE_URL.test(string.text)) context.fail('remote-url', string.line, string.text);
+    const named = NAMED_COLORS.has(string.text.trim().toLowerCase());
+    if (string.attribute) {
+      // An HTML color attribute; in a JS string, its hex is in the string's count
+      const raw = string.fromJs ? 0 : hexColors(string.text).length + colorFunctions(string.text);
+      add('color-literal', raw + (named ? 1 : 0), string.line, string.text);
+      continue;
     }
-    // Markup: the <style> blocks and style attributes inside were parsed as CSS
-    const plain = string.markup
+    // Every JS string: hex and function colors, once, wherever they sit
+    if (!string.selector) add('color-literal', hexColors(string.text).length + colorFunctions(string.text), string.line, string.text);
+    const plainText = !string.css && !string.markup && !string.selector;
+    if (plainText && named && string.text.trim() === string.text.trim().toLowerCase()) add('color-literal', 1, string.line, string.text);
+    if (plainText && REMOTE_URL.test(string.text)) context.fail('remote-url', string.line, string.text);
+    // Theme branching outside the CSS the parser already counted
+    const outsideCss = string.markup
       ? string.text.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*')/gi, ' ').replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ')
       : string.text;
-    if (string.markup) add('color-literal', hexColors(plain).length + colorFunctions(plain), string.line, string.text);
-    if (!string.css) add('theme-branching', (plain.match(/prefers-color-scheme/gi) || []).length, string.line, string.text);
-    if (/^data-(?:theme|scheme)$/.test(string.text) || (/\[data-(?:theme|scheme)\b/.test(plain) && !string.css)) add('theme-branching', 1, string.line, string.text);
+    if (!string.css) add('theme-branching', (outsideCss.match(/prefers-color-scheme/gi) || []).length, string.line, string.text);
+    if (/^data-(?:theme|scheme)$/.test(string.text) || (!string.css && /\[data-(?:theme|scheme)\b/.test(outsideCss))) {
+      add('theme-branching', 1, string.line, string.text);
+    }
     countVars(add, string.text, string.line, design, defined);
-  }
-  if (!unit.file.endsWith('.js') && !unit.file.endsWith('.mjs')) {
-    // CSS and HTML: var() in declaration values
-    unit.sheets.forEach(sheet => css.walk(sheet.nodes, node => node.declarations.forEach(d => countVars(add, d.value, d.line, design, defined))));
-    unit.declarationLists.forEach(list => list.declarations.forEach(d => countVars(add, d.value, d.line, design, defined)));
   }
 
   for (const f of unit.js) {
@@ -534,15 +564,17 @@ function countUnit(unit, text, design, defined) {
     if (f.kind === 'style-attribute') add('style-attribute', 1, f.line, 'setAttribute(\'style\')');
     if (f.kind === 'theme-compare') add('theme-branching', 1, f.line, 'comparison with \'dark\' or \'light\'');
     if (f.kind === 'theme-dataset') add('theme-branching', 1, f.line, 'dataset.theme');
-    if (f.kind === 'read' && !(f.name && design.registered.has(f.name)) && !(f.name && !f.name.startsWith('--'))) {
+    // Standard properties aren't registered or unregistered; a custom one is
+    // registered only when the token output registers it
+    if (f.kind === 'read' && !(f.name && (design.registered.has(f.name) || !f.name.startsWith('--')))) {
       add('unregistered-read', 1, f.line, f.name === null ? 'a computed name' : f.name);
     }
     if (f.kind === 'canvas-font' && PX.test(f.value)) add('px-font-size', 1, f.line, f.value);
     if (f.kind === 'chart-font-size') add('px-font-size', 1, f.line, 'Chart.js font size');
-    // A style write's string is counted as a string already: here only the
-    // property-specific checks, and cssText is parsed as a declaration list
+    // A style write's string has its colors counted already; cssText is parsed as
+    // a declaration list
     if (f.kind === 'style-write' && f.property !== 'css-text') {
-      countDeclaration(add, { property: f.property, value: f.value, line: f.line }, context, { colors: false });
+      countDeclaration(add, { property: f.property, value: f.value, line: f.line }, context, 'none');
     }
   }
   return { occurrences, failures };
