@@ -465,6 +465,22 @@ describe('Replace all (AC4)', () => {
     assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, tabs.getEditor().noteId, "the active tab is the active pane's note");
   });
 
+  it('with the active pane on a note it keeps, Replace all leaves that pane alone and gives it the active tab', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    await runUntil(env, editors.primary.loadNote('AR')); // archived: Replace all keeps it
+    tabs._setSplitView(true);
+    tabs.openTabs.push({ noteId: 'D', name: 'Daily' }); // the right pane's note, which Replace all trashes
+    const controller = wireImport(makeController(env, Storage), tabs);
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    assert.equal(editors.primary.noteId, 'AR', 'the left pane keeps its note');
+    const right = await Storage.getNote(editors.secondary.noteId);
+    assert.ok(right && !right.trashed && !right.archived, 'the right pane moved to an active note');
+    assert.notEqual(editors.secondary.noteId, editors.primary.noteId);
+    assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, 'AR', "the active tab is the left pane's note");
+  });
+
   for (const [label, backup] of [
     ['no notes', { version: 1, exportedAt: 1, canvases: [], elements: [] }],
     ['only archived notes', {
@@ -654,6 +670,49 @@ describe('Merge and the tab bar', () => {
     assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, first.id, 'the active tab is the note on screen');
     assert.deepEqual(shownTabs(env), ['Alpha', 'Newer note']);
   });
+
+  it("Merge with split view opens the first note it imported, not the newest note, which the other pane shows", async () => {
+    const { env, Storage } = await setup();
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs._setSplitView(true);
+    tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
+    // The right pane's note is the newest one, saved after the PiP's; Merge keeps the backup's older dates
+    await runUntil(env, tabs.pipEditor.flushSave());
+    typeInto(editors.secondary, 'daily, edited just now');
+    env.clock.tick(500);
+    await runUntil(env, editors.secondary.flushSave());
+    assert.equal(plain(await Storage.getAllNotes())[0].id, 'D');
+    const controller = wireImport(makeController(env, Storage), tabs);
+
+    const done = controller.importFromFile(fileOf(backup140()));
+    choose(await waitForDialog(env, 'Import backup'), 'merge');
+    await runUntil(env, done);
+
+    assert.notEqual(editors.primary.noteId, editors.secondary.noteId, 'never one note in both panes');
+    const shown = await Storage.getNote(editors.primary.noteId);
+    assert.equal(shown.name, 'From 1.4.0', 'the first note in the backup');
+    assert.equal(editors.secondary.noteId, 'D', 'the right pane keeps its note');
+    assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, shown.id);
+  });
+
+  it("Merge doesn't load a note over a pane's unsaved text from a deleted note", async () => {
+    const { env, Storage } = await setup();
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
+    typeInto(editors.primary, 'typed into Alpha');
+    await Storage.permanentlyDeleteNote('A'); // another tab
+    await runUntil(env, editors.primary.flushSave());
+    assert.equal(editors.primary.noteGone, true);
+    const controller = wireImport(makeController(env, Storage), tabs);
+
+    const done = controller.importFromFile(fileOf(backup140()));
+    choose(await waitForDialog(env, 'Import backup'), 'merge');
+    await runUntil(env, done);
+
+    assert.equal(editors.primary.noteId, 'A');
+    assert.equal(editors.primary.blocks[0].content, 'typed into Alpha');
+    assert.ok(editors.primary.root.querySelector('.note-gone-notice'));
+  });
 });
 
 describe('The import file input', () => {
@@ -688,12 +747,12 @@ function typeInto(editor, text) {
   editor.scheduleSave();
 }
 
-/** Wire an import the way App does: hold and flush the editors, then reopen and refresh. */
+/** Wire an import the way App does: hold and flush the editors, then move panes and open what Merge added. */
 function wireImport(controller, tabs) {
   controller.getEditor = () => tabs.getEditor();
   controller.onFlushEditors = () => tabs.flushEditorsForImport();
   controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
-  controller.onOpenNoteInNewTab = (noteId) => tabs.openNoteInNewTab(noteId);
+  controller.onOpenImportedNote = (noteId) => tabs.openImportedNote(noteId);
   return controller;
 }
 

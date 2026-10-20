@@ -42,6 +42,8 @@ class TabController {
     this.channel = null;
     /** @type {Promise<void>} forgetNotes calls run one at a time, in order */
     this._forgetQueue = Promise.resolve();
+    /** @type {Array<Array<string>>|null} Messages from other tabs that wait for workspaceReady */
+    this._heldMessages = [];
   }
 
   /** Initialize tabs: wire DOM listeners. */
@@ -172,7 +174,8 @@ class TabController {
    * every pane on a note Replace all trashed moves to another note, and the
    * other new tabs do the same (forgetNotes), even when this one fails to. An
    * edit typed during the commit still lands in its note, which keeps its
-   * stored trash flags.
+   * stored trash flags. The panes stay where forgetNotes put them, and the
+   * active pane's note gets the active tab.
    * @param {Array<string>} [trashedIds=[]]
    * @param {number|null} [trashedAt=null]
    * @returns {Promise<void>}
@@ -184,22 +187,57 @@ class TabController {
       if (editor.noteId && trashed.has(editor.noteId)) editor.adoptNoteFlags(flags);
       editor.releaseSaves();
     }
+    if (trashed.size === 0) return;
     try {
       await this.forgetNotes(trashedIds);
+      await this._tabForActivePane();
     } finally {
       this.announceNotesLeft(trashedIds);
     }
   }
 
   /**
-   * Notes left the active set (trash, archive, permanent delete, Replace all),
-   * in this new tab or another. Their tabs go. A pane on one of them writes
-   * what it has pending, then moves (_moveActivePane, _moveOtherPane); a pane
-   * whose note stays never moves, and the two panes never show one note. PiP on
-   * one of them closes. A pane whose note turned out deleted with edits it
-   * couldn't save keeps them on screen, with the editor's "Save as a new note",
-   * and keeps its tab. The tab bar keeps a tab for the note on screen, and tabs
-   * are saved once, at the end. Calls run one at a time, in order.
+   * After Merge: open a note it imported in the active pane, in a tab, unless
+   * that pane keeps a deleted note's unsaved text on screen or the other pane
+   * already shows the note.
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
+  async openImportedNote(noteId) {
+    const active = this.getEditor();
+    if (!active || active.noteGone) return;
+    const other = active === this.editor ? this.secondaryEditor : this.editor;
+    if (this.splitViewEnabled && other && other.noteId === noteId) return;
+    await this.openNoteInNewTab(noteId);
+  }
+
+  /**
+   * Give the active pane's note the active tab, opening a tab for it when it
+   * has none, and save the tabs when that changed them.
+   * @returns {Promise<void>}
+   */
+  async _tabForActivePane() {
+    const active = this.getEditor();
+    if (!active || !active.noteId) return;
+    const current = this.openTabs[this.activeTabIndex];
+    if (current && current.noteId === active.noteId) return;
+    this._pushTab({ id: active.noteId, name: active.noteData && active.noteData.name });
+    this.renderTabs();
+    await this.saveTabs();
+    this.cacheLastOpenedNoteId(active.noteId);
+  }
+
+  /**
+   * Notes left the active set (trash, archive, permanent delete, Empty trash,
+   * trash retention, Replace all), in this new tab or another. Their tabs go. A
+   * pane on one of them writes what it has pending, then moves
+   * (_moveActivePane, _moveOtherPane); a pane whose note stays never moves,
+   * and the two panes never show one note. PiP on one of them closes. A pane
+   * whose note turned out deleted with edits it couldn't save keeps them on
+   * screen, with the editor's "Save as a new note", and keeps its tab. The tab
+   * bar keeps a tab for the note on screen. Tabs are saved only when this tab
+   * dropped a tab or moved a pane, so a tab that shows none of the notes leaves
+   * the saved workspace alone. Calls run one at a time, in order.
    * @param {Array<string>} ids
    * @returns {Promise<void>}
    */
@@ -219,6 +257,8 @@ class TabController {
     if (gone.size === 0) return;
     /** @param {BlockEditor|null} editor */
     const onGone = (editor) => Boolean(editor && editor.noteId && gone.has(editor.noteId));
+    const shows = this.openTabs.some((tab) => gone.has(tab.noteId)) || this.getOpenEditors().some(onGone);
+    if (!shows) return;
 
     // Edits typed into a leaving note land in it, or show the pane that it's deleted.
     await Promise.all(this.getOpenEditors().filter(onGone).map((editor) => editor.flushSave()));
@@ -227,13 +267,20 @@ class TabController {
     /** @param {BlockEditor|null} editor */
     const moves = (editor) => onGone(editor) && !editor.noteGone;
     const staying = new Set(this.getOpenEditors().filter(stays).map((editor) => editor.noteId));
+    let changed = false;
 
-    if (this.pipWindow && moves(this.pipEditor)) this.pipWindow.close();
+    if (this.pipWindow && moves(this.pipEditor)) {
+      this.pipWindow.close();
+      changed = true;
+    }
 
     const activeTab = this.openTabs[this.activeTabIndex];
     const kept = this.openTabs.map((tab) => !gone.has(tab.noteId) || staying.has(tab.noteId));
-    this.activeTabIndex = TabController.keptActiveIndex(kept, this.activeTabIndex);
-    this.openTabs = this.openTabs.filter((tab, index) => kept[index]);
+    if (kept.includes(false)) {
+      this.activeTabIndex = TabController.keptActiveIndex(kept, this.activeTabIndex);
+      this.openTabs = this.openTabs.filter((tab, index) => kept[index]);
+      changed = true;
+    }
     const activeTabLeft = Boolean(activeTab) && !this.openTabs.includes(activeTab);
 
     const notes = (await this.storage.getAllNotes()).filter((note) => !gone.has(note.id));
@@ -241,16 +288,20 @@ class TabController {
     const other = active === this.editor ? this.secondaryEditor : this.editor;
     if (moves(active)) {
       await this._moveActivePane(active, this.splitViewEnabled ? other : null, notes, { activeTabLeft, staying });
+      changed = true;
     }
     if (this.splitViewEnabled && !stays(other) && (moves(other) || !other.noteId || other.noteId === active.noteId)) {
       await this._moveOtherPane(other, notes);
+      changed = true;
     }
 
     const shown = this.getEditor();
     if (this.openTabs.length === 0 && shown && shown.noteId) {
       this.openTabs.push({ noteId: shown.noteId, name: (shown.noteData && shown.noteData.name) || 'Untitled' });
       this.activeTabIndex = 0;
+      changed = true;
     }
+    if (!changed) return;
     this.renderTabs();
     await this.saveTabs();
     if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
@@ -273,28 +324,21 @@ class TabController {
     const otherId = other ? other.noteId : null;
     const tab = this.openTabs[this.activeTabIndex];
     if (tab && tab.noteId !== otherId && !staying.has(tab.noteId)) {
-      await active.loadNote(tab.noteId);
-      if (active.noteId === tab.noteId || active.noteGone) return;
+      if ((await active.loadNote(tab.noteId)) || active.noteGone) return;
     }
     const next = notes.find((note) => note.id !== otherId);
     if (next) {
-      await active.loadNote(next.id);
-      if (active.noteId === next.id && (activeTabLeft || this.openTabs.length === 0)) this._pushTab(next);
+      if ((await active.loadNote(next.id)) && (activeTabLeft || this.openTabs.length === 0)) this._pushTab(next);
       return;
     }
     if (other && otherId && notes.some((note) => note.id === otherId)) {
       // The other pane has the only active note left: it stays in view, and split view closes.
-      if (active === this.editor) {
-        await this.editor.loadNote(otherId);
-        if (this.editor.noteId !== otherId) return;
-      }
-      this._setSplitView(false);
+      await this._closeSplitKeeping(other);
       return;
     }
     const created = this.onCreateNote ? await this.onCreateNote() : null;
     if (!created) return;
-    await active.loadNote(created.id);
-    if (active.noteId === created.id) this._pushTab(created);
+    if (await active.loadNote(created.id)) this._pushTab(created);
   }
 
   /**
@@ -323,25 +367,28 @@ class TabController {
   async _moveOtherPane(other, notes) {
     const shownId = (other === this.editor ? this.secondaryEditor : this.editor).noteId;
     const pick = notes.find((note) => note.id !== shownId);
-    if (pick) {
-      await other.loadNote(pick.id);
-      if (other.noteId === pick.id || other.noteGone) return;
-    }
-    await this._closeSplit();
+    if (pick && ((await other.loadNote(pick.id)) || other.noteGone)) return;
+    await this._closeSplitKeeping(this.getEditor());
   }
 
   /**
-   * Turn split view off with the active pane's note in the left pane, the one
-   * that stays visible.
+   * Turn split view off with `keep`'s note in view, in the left pane. The right
+   * pane writes what it has pending before the left one reads that note, and
+   * then shows no note, so no hidden copy of it is left to save over the left
+   * pane's edits.
+   * @param {BlockEditor} keep - The pane whose note stays in view
    * @returns {Promise<void>}
    */
-  async _closeSplit() {
-    const active = this.getEditor();
-    if (active === this.secondaryEditor && active.noteId && this.editor.noteId !== active.noteId) {
-      await active.flushSave();
-      await this.editor.loadNote(active.noteId);
+  async _closeSplitKeeping(keep) {
+    const left = this.editor;
+    const right = this.secondaryEditor;
+    if (keep === right && right.noteId && left.noteId !== right.noteId) {
+      await right.flushSave();
+      // The left pane keeps a deleted note's unsaved text on screen: split view stays
+      if (!(await left.loadNote(right.noteId))) return;
     }
     if (this.splitViewEnabled) this._setSplitView(false);
+    await right.unload();
   }
 
   /**
@@ -361,7 +408,9 @@ class TabController {
   }
 
   /**
-   * Listen for notes that left in another new tab.
+   * Listen for notes that left in another new tab. A message that comes
+   * before this tab has its saved workspace waits for workspaceReady, so a tab
+   * still starting up can't save an empty workspace over the saved one.
    * @returns {void}
    */
   _openNotesChannel() {
@@ -369,8 +418,22 @@ class TabController {
     this.channel = new BroadcastChannel('ntn-notes');
     this.channel.onmessage = (event) => {
       const ids = event && event.data && event.data.left;
-      if (Array.isArray(ids)) this._onNotesLeftElsewhere(ids);
+      if (!Array.isArray(ids)) return;
+      if (this._heldMessages) this._heldMessages.push(ids);
+      else this._onNotesLeftElsewhere(ids);
     };
+  }
+
+  /**
+   * This tab has its workspace (loadSavedTabs, or App's first note): the
+   * messages that came while it started run now, and later ones right away.
+   * @returns {void}
+   */
+  workspaceReady() {
+    const held = this._heldMessages;
+    if (!held) return;
+    this._heldMessages = null;
+    held.forEach((ids) => this._onNotesLeftElsewhere(ids));
   }
 
   /**
@@ -484,6 +547,7 @@ class TabController {
 
     this.renderTabs();
     await this.saveTabs();
+    this.workspaceReady();
   }
 
   /**
@@ -595,15 +659,19 @@ class TabController {
   }
 
   /**
-   * Switch to a specific tab.
+   * Switch to a specific tab. The tab bar and the saved tabs follow only a
+   * load that happened, so a refused one leaves them on the note on screen.
    */
   async switchToTab(index) {
     if (index < 0 || index >= this.openTabs.length) return;
-
-    this.activeTabIndex = index;
     const tab = this.openTabs[index];
 
-    await this.getEditor().loadNote(tab.noteId);
+    if (!(await this.getEditor().loadNote(tab.noteId))) {
+      this.renderTabs();
+      return;
+    }
+    const at = this.openTabs.indexOf(tab);
+    if (at !== -1) this.activeTabIndex = at;
     this.renderTabs();
     if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs();
@@ -613,7 +681,8 @@ class TabController {
   }
 
   /**
-   * Open a note in a new tab (or focus existing).
+   * Open a note in a new tab (or focus existing). The tab opens once the note
+   * is loaded.
    */
   async openNoteInNewTab(noteId) {
     const note = await this.storage.getNote(noteId);
@@ -626,11 +695,8 @@ class TabController {
       return;
     }
 
-    // Add new tab
-    this.openTabs.push({ noteId: note.id, name: note.name || 'Untitled' });
-    this.activeTabIndex = this.openTabs.length - 1;
-
-    await this.getEditor().loadNote(noteId);
+    if (!(await this.getEditor().loadNote(noteId))) return;
+    this._pushTab(note);
     this.renderTabs();
     if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs();
@@ -722,12 +788,12 @@ class TabController {
       // Ctrl/Cmd+click opens in new tab
       await this.openNoteInNewTab(noteId);
     } else {
-      // Regular click opens in current tab
+      // Regular click opens in current tab, once the note is loaded
       const note = await this.storage.getNote(noteId);
       if (!note) return;
 
+      if (!(await this.getEditor().loadNote(noteId))) return;
       this.openTabs[this.activeTabIndex] = { noteId: note.id, name: note.name || 'Untitled' };
-      await this.getEditor().loadNote(noteId);
       this.renderTabs();
       if (this.onRenderNotesList) await this.onRenderNotesList();
       await this.saveTabs();
@@ -742,6 +808,8 @@ class TabController {
   async toggleSplitView() {
     if (this.splitViewEnabled) {
       this._setSplitView(false);
+      // Written now, so a note the hidden pane holds can open on the left with its last edit
+      await this.secondaryEditor.flushSave();
       return;
     }
     // A right pane without a note would take typing and save none of it
@@ -754,23 +822,26 @@ class TabController {
 
   /**
    * Give the right pane a note the left pane doesn't show: `preferredId` when
-   * it can reopen, else the right pane's own note when it still can, else the
-   * first other active note.
+   * it can reopen, else the right pane's own note when it still can, read
+   * again since the left pane may have changed it meanwhile, else the first
+   * other active note. A right pane keeping a deleted note's unsaved text on
+   * screen keeps it.
    * @param {*} [preferredId=null]
    * @returns {Promise<boolean>} false when there's no such note
    */
   async _fillRightPane(preferredId = null) {
     const right = this.secondaryEditor;
+    if (right.noteGone) return true;
     const leftId = this.editor.noteId;
     for (const id of [preferredId, right.noteId]) {
       if (!id || id === leftId || !(await this._restorableNote(id))) continue;
-      if (right.noteId !== id) await right.loadNote(id);
-      if (right.noteId === id) return true;
+      if ((await right.loadNote(id)) || right.noteGone) return true;
     }
     const other = (await this.storage.getAllNotes()).find((note) => note.id !== leftId);
-    if (!other) return false;
-    await right.loadNote(other.id);
-    return right.noteId === other.id;
+    if (other && ((await right.loadNote(other.id)) || right.noteGone)) return true;
+    // No note for it: no hidden copy of the left pane's note either
+    if (right.noteId && right.noteId === leftId) await right.unload();
+    return false;
   }
 
   /**

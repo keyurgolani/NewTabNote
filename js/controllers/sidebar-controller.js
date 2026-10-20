@@ -787,9 +787,12 @@ class SidebarController {
     if (this.storage.missingStores && this.storage.missingStores.length > 0) return;
     const retentionDays = await this.storage.getSetting('trashRetention', 30);
     if (retentionDays > 0) {
-      const deletedCount = await this.storage.cleanupTrash(retentionDays);
-      if (deletedCount > 0) {
-        this.logger.info('SidebarController', `Auto-deleted ${deletedCount} expired note(s) from trash`);
+      const ids = await this.storage.cleanupTrash(retentionDays);
+      if (ids.length > 0) {
+        this.logger.info('SidebarController', `Auto-deleted ${ids.length} expired note(s) from trash`);
+        // After the delete, so a pane with unsaved text on one of them keeps it, with "Save as a new note"
+        if (this.onNotesLeaving) await this.onNotesLeaving(ids);
+        if (this.onNotesLeft) this.onNotesLeft(ids);
         await this.refreshNotesList();
       }
     }
