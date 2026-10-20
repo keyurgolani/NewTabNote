@@ -8,6 +8,7 @@ const CleanCSS = require('clean-css');
 
 const ROOT = path.join(__dirname, '..');
 const build = require('../scripts/build.js');
+const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 
 const LISTS = [build.JS_FILES, build.CSS_FILES, build.HTML_FILES, build.STATIC_FILES, build.STATIC_DIRS];
 
@@ -125,6 +126,34 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
     );
     const result = await runBuild(tree(({ append }) => append(LEVEL_2_CSS, LEVEL_2_CRASH)), ['--strict']);
     assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error');
+  });
+
+  it('lists every refusal with its detail, and pr-gate\'s build excerpt starts there', async () => {
+    const result = await runBuild(tree(({ append }) => {
+      append(MINIFIED_JS, TERSER_ERROR);
+      append(LEVEL_2_CSS, LEVEL_2_CRASH);
+    }), ['--strict']);
+    assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error');
+    assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error');
+
+    // terser's location, with the column counted from 1 like an editor
+    const source = fs.readFileSync(path.join(ROOT, MINIFIED_JS), 'utf8') + TERSER_ERROR;
+    const offset = source.lastIndexOf('const = ;');
+    const location = `${MINIFIED_JS}:${source.slice(0, offset).split('\n').length}:${'const '.length + 1}`;
+
+    let crash = '';
+    try {
+      new CleanCSS(build.CLEANCSS_OPTIONS).minify(fs.readFileSync(path.join(ROOT, LEVEL_2_CSS), 'utf8') + LEVEL_2_CRASH);
+    } catch (e) {
+      crash = e.message;
+    }
+    assert.ok(crash, 'the level-2 fixture no longer makes CleanCSS throw');
+
+    const lines = excerpt(result.output, MARKERS.build).split('\n');
+    const shown = lines.join('\n');
+    assert.equal(lines[0], '✗ Strict build failed: refused 2 fallbacks', shown);
+    assert.ok(lines.includes(`   ${MINIFIED_JS}: refused to copy it unminified after a terser error: Name expected (${location})`), shown);
+    assert.ok(lines.includes(`   ${LEVEL_2_CSS}: refused the level-1 retry after a CleanCSS level-2 error: ${crash}`), shown);
   });
 
   it('without --strict, falls back as before and exits 0', async () => {

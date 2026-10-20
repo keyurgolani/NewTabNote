@@ -158,7 +158,7 @@ const CLEANCSS_OPTIONS = {
 // Level-1 options, for CSS_LEVEL_1 files and the level-2 retry
 const CLEANCSS_LEVEL_1_OPTIONS = { level: 1 };
 
-// Fallbacks --strict refuses, recorded as { file, refusal }
+// Fallbacks --strict refuses, recorded as { file, message }
 const refused = [];
 
 /**
@@ -167,8 +167,9 @@ const refused = [];
  */
 function refuse(file, refusal, detail) {
   if (!isStrict) return false;
-  refused.push({ file, refusal });
-  console.error(`  ✗ ${file}: --strict ${refusal}${detail ? `: ${detail}` : ''}`);
+  const message = `${refusal}${detail ? `: ${detail}` : ''}`;
+  refused.push({ file, message });
+  console.error(`  ✗ ${file}: --strict ${message}`);
   return true;
 }
 
@@ -250,7 +251,9 @@ async function minifyJSFile(file, srcPath, destPath) {
     fs.writeFileSync(destPath, result.code);
     return { original: code.length, minified: result.code.length };
   } catch (error) {
-    if (refuse(file, 'refused to copy it unminified after a terser error', error.message)) {
+    // terser's col is 0-based; print file:line:col the way editors count
+    const at = Number.isInteger(error.line) && Number.isInteger(error.col) ? ` (${file}:${error.line}:${error.col + 1})` : '';
+    if (refuse(file, 'refused to copy it unminified after a terser error', `${error.message}${at}`)) {
       return { refused: true };
     }
     console.error(`Error minifying ${srcPath}:`, error.message);
@@ -436,7 +439,7 @@ async function build() {
 
   if (refused.length > 0) {
     console.error(`\n✗ Strict build failed: refused ${refused.length} fallback${refused.length === 1 ? '' : 's'}`);
-    refused.forEach(({ file, refusal }) => console.error(`   ${file}: ${refusal}`));
+    refused.forEach(({ file, message }) => console.error(`   ${file}: ${message}`));
     console.error('');
     process.exitCode = 1;
     return;
