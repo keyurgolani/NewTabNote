@@ -57,10 +57,24 @@ describe('codec', () => {
     assert.equal(encode(bare), '{"a":1}');
   });
 
-  it('refuses undefined wherever it is, and every value JSON would change or drop', () => {
+  it('leaves out an object field whose value is undefined, as JSON does, so it arrives absent', () => {
+    // 1.4.x captures a page with no URL or title as a bookmark with both fields undefined
+    const block = { id: 'b1', type: 'bookmark', content: '', url: undefined, title: undefined, canvasId: 'd1' };
+    assert.equal(encode(block), '{"id":"b1","type":"bookmark","content":"","canvasId":"d1"}');
+    const back = /** @type {Record<string, unknown>} */ (decode(encode({ blocks: [block], at: undefined })));
+    assert.deepEqual(back, { blocks: [{ id: 'b1', type: 'bookmark', content: '', canvasId: 'd1' }] });
+    const [item] = /** @type {Array<Record<string, unknown>>} */ (back.blocks);
+    assert.equal(Object.hasOwn(item, 'url') || Object.hasOwn(item, 'title') || Object.hasOwn(back, 'at'), false);
+    assert.equal(encode({ only: undefined }), '{}');
+  });
+
+  it('refuses undefined as the whole message or an array item, where JSON would send nothing or null', () => {
     assertRefused(() => encode(undefined), 'a value of type undefined', '');
-    assertRefused(() => encode({ title: undefined }), 'a value of type undefined', '/title');
     assertRefused(() => encode([1, undefined]), 'a value of type undefined', '/1');
+    assertRefused(() => encode({ ids: [undefined] }), 'a value of type undefined', '/ids/0');
+  });
+
+  it('refuses every value JSON would change or drop', () => {
     assertRefused(() => encode({ run: () => 1 }), 'a value of type function', '/run');
     assertRefused(() => encode({ s: Symbol('s') }), 'a value of type symbol', '/s');
     assertRefused(() => encode({ big: 10n }), 'a value of type bigint', '/big');
@@ -107,7 +121,7 @@ describe('codec', () => {
   });
 
   it('escapes the keys in a path as a JSON Pointer does', () => {
-    assertRefused(() => encode({ 'a/b': { 'c~d': undefined } }), 'a value of type undefined', '/a~1b/c~0d');
+    assertRefused(() => encode({ 'a/b': { 'c~d': 10n } }), 'a value of type bigint', '/a~1b/c~0d');
   });
 
   it('nests up to MAX_DEPTH objects and arrays, both ways, and no deeper', () => {
@@ -157,6 +171,8 @@ describe('codec', () => {
       '{"blocks":[{"canvasId":"n","id":"b"}],"commandId":"c1","noteId":"n","type":"createNote"}',
     );
     assert.equal(canonicalJson([3, 1, 2]), '[3,1,2]');
-    assertRefused(() => canonicalJson({ title: undefined }), 'a value of type undefined', '/title');
+    // An undefined field is left out, as encode() leaves it out
+    assert.equal(canonicalJson({ title: undefined, id: 'n1' }), '{"id":"n1"}');
+    assertRefused(() => canonicalJson([undefined]), 'a value of type undefined', '/0');
   });
 });

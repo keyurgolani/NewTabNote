@@ -2,14 +2,16 @@
  * The one JSON codec every transport uses, the in-process one included (#13, "Topology"), so a
  * message means the same thing however it travels. It encodes only what JSON carries without
  * changing it: plain objects (from any realm), arrays without holes, strings, booleans, null,
- * and finite numbers. It refuses `undefined` wherever it is, Dates, Maps, Sets, BigInts,
- * functions, symbols, binary data (ArrayBuffer, typed arrays, Blob), class instances, cycles,
- * symbol keys, getters, hidden properties, and nesting deeper than MAX_DEPTH. Timestamps are
- * integers, which the schemas check. -0 encodes as 0, as JSON has no negative zero.
+ * and finite numbers. It refuses Dates, Maps, Sets, BigInts, functions, symbols, binary data
+ * (ArrayBuffer, typed arrays, Blob), class instances, cycles, symbol keys, getters, hidden
+ * properties, and nesting deeper than MAX_DEPTH. Timestamps are integers, which the schemas
+ * check. -0 encodes as 0, as JSON has no negative zero.
  *
- * A caller leaves an optional field out rather than setting it to `undefined`: JSON would drop
- * the key, and the codec refuses it instead, so a sender and a receiver never disagree about
- * what was sent.
+ * An object field whose value is `undefined` is left out, as JSON leaves it out, so it arrives
+ * absent, which is what a schema's optional field takes it for. Stored records have such
+ * fields: 1.4.x captures a page with no URL or title as a bookmark with `url` and `title`
+ * undefined. `undefined` anywhere else is refused: JSON would send nothing for a whole
+ * message, and null for an array item.
  */
 
 import { MAX_DEPTH } from './limits.js';
@@ -83,6 +85,8 @@ function check(value, path, depth, open) {
       const descriptor = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(value, key));
       if (!('value' in descriptor)) throw new CodecError('a getter or setter', child(path, key));
       if (!descriptor.enumerable) throw new CodecError('a hidden property', child(path, key));
+      // Left out, as JSON leaves it out
+      if (descriptor.value === undefined) continue;
       check(descriptor.value, child(path, key), depth + 1, open);
     }
   } finally {
@@ -173,8 +177,9 @@ function sorted(value) {
 }
 
 /**
- * `value` as canonical JSON: what encode() writes, with every object's keys sorted, so two
- * copies of one command read the same. #17 hashes it for a command's payload hash.
+ * `value` as canonical JSON: what encode() writes, undefined fields left out, with every
+ * object's keys sorted, so two copies of one command read the same. #17 hashes it for a
+ * command's payload hash.
  * @param {unknown} value
  * @returns {string}
  * @throws {CodecError}

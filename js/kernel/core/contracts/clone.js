@@ -10,8 +10,8 @@
  * changing. A key is copied as data, so an own `__proto__` key that JSON.parse made stays a key
  * and never re-parents the copy. A field whose value is `undefined` is copied as it is, since
  * stored records have them (a page with no title captures as a bookmark with
- * `title: undefined`). #13's codec (contracts/codec.js) refuses one, so a message sent through
- * the router leaves such a field out instead.
+ * `title: undefined`). #13's codec (contracts/codec.js) leaves such a field out, as JSON does,
+ * so a message sent through the router arrives without it.
  */
 
 export class NotCloneableError extends Error {

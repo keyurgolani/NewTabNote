@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { ENTITY_TYPES } from '../../js/kernel/core/contracts/fields.js';
@@ -18,8 +19,10 @@ import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { entityTypesIn, walk } from './schema-walk.mjs';
-import { CALLERS, testClock, testIds } from './support.mjs';
+import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 
+/** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
+/** @typedef {import('../../js/kernel/core/contracts/queries.js').Query} Query */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').CommandType} CommandType */
 /** @typedef {import('../../js/kernel/core/contracts/queries.js').QueryType} QueryType */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').CommandEntry} CommandEntry */
@@ -99,6 +102,34 @@ const moduleOf = name => /** @type {SchemaModule} */ (modules.get(name));
 
 /** @param {string} name */
 const kebab = name => name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
+
+/**
+ * `value` without the object fields whose value is undefined, as JSON leaves them out
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function withoutUndefined(value) {
+  if (Array.isArray(value)) return value.map(withoutUndefined);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, field]) => field !== undefined)
+      .map(([key, field]) => [key, withoutUndefined(field)]),
+  );
+}
+
+/**
+ * How many object fields in `value` hold undefined
+ * @param {unknown} value
+ * @returns {number}
+ */
+function undefinedFields(value) {
+  if (value === null || typeof value !== 'object') return 0;
+  return Object.values(value).reduce(
+    (sum, field) => sum + (field === undefined ? 1 : undefinedFields(field)),
+    /** @type {number} */ (0),
+  );
+}
 
 /**
  * The relative modules `file` imports statically, as paths
@@ -313,5 +344,58 @@ describe('schema modules (#13, AC1)', () => {
       const checked = v.safeParse(moduleOf(type).result, state);
       assert.equal(checked.success, true, `${type}: ${JSON.stringify(state)}`);
     }
+  });
+
+  it('encode every answer the kernel gives, from a store holding captures of pages with no URL or title', async () => {
+    const kernel = createKernel({
+      adapter: createMemoryAdapter(),
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+    });
+    // 1.4.x's background.js stored a capture of a page with no URL or title as a bookmark with
+    // `url` and `title` undefined, and the kernel's own bookmark capture does the same
+    const seeded = await kernel.execute({
+      type: 'createNote',
+      commandId: 'c-seed',
+      noteId: 'n-old',
+      name: 'Captures',
+      blocks: [{ id: 'b-old', type: 'bookmark', content: '', url: undefined, title: undefined, order: NOW }],
+    });
+    assert.equal(seeded.kind, 'committed');
+    const captured = await kernel.execute({
+      type: 'captureToDailyNote',
+      commandId: 'c-capture',
+      noteId: 'd-old',
+      blockId: 'b-capture',
+      capture: { type: 'bookmark' },
+    });
+    assert.equal(captured.kind, 'committed');
+    /** @type {Array<[string, unknown]>} */
+    const answers = [];
+    for (const [type, fields] of Object.entries(COMMAND_SAMPLES)) {
+      answers.push([type, await kernel.execute(/** @type {Command} */ ({ ...fields, type, commandId: `c-${type}` }))]);
+    }
+    /** @type {Array<[string, object]>} */
+    const queries = [
+      ...Object.entries(QUERY_SAMPLES),
+      ['getNoteBlocks', { noteId: 'n-old' }],
+      ['getNoteBlocks', { noteId: 'd-old' }],
+      ['getNote', { noteId: 'n-old' }],
+      ['listNotes', { view: 'withArchived' }],
+    ];
+    for (const [type, fields] of queries) {
+      answers.push([type, await kernel.query(/** @type {Query} */ ({ ...fields, type }))]);
+    }
+    let seen = 0;
+    for (const [type, answer] of answers) {
+      seen += undefinedFields(answer);
+      const back = decode(encode(answer));
+      assert.deepEqual(back, withoutUndefined(answer), type);
+      assert.equal(v.safeParse(moduleOf(type).result, back).success, true, type);
+    }
+    // Both captures' url and title came back undefined, and the codec left them out
+    assert.ok(seen >= 4, String(seen));
   });
 });
