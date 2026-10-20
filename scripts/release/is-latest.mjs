@@ -19,7 +19,7 @@ import { compareVersions, TAG_FORM, versionFromTag } from './tag.mjs';
 
 async function main(argv) {
   if (argv.length !== 1) {
-    console.error("✗ Usage: git tag --list 'v*' | node scripts/release/is-latest.mjs <tag>");
+    console.error("✗ Usage: gh release list --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' | node scripts/release/is-latest.mjs <tag>");
     return 1;
   }
   const [tag] = argv;

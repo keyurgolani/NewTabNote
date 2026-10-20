@@ -38,6 +38,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      listing_url: ${{ steps.listing.outputs.url }}
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -71,6 +73,16 @@ jobs:
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/)
           echo "::error::$TAG points at $GITHUB_SHA, which isn't on main or any release/** branch. Tag a commit on main, or on release/R<n> for a patch."
           exit 1
+      - name: Find the store listing the README links (checked here so a bad README fails before anything is built)
+        id: listing
+        run: |
+          set -euo pipefail
+          mapfile -t urls < <(grep -oE 'https://chromewebstore\.google\.com/detail/[A-Za-z0-9._~-]+/[a-p]{32}' README.md | sort -u)
+          if [ "${#urls[@]}" -ne 1 ]; then
+            echo "::error file=README.md::README.md must link exactly one Chrome Web Store listing, and it links ${#urls[@]}"
+            exit 1
+          fi
+          echo "url=${urls[0]}" >> "$GITHUB_OUTPUT"
 
   checks:
     name: checks
@@ -178,13 +190,13 @@ jobs:
 
   release:
     name: release
-    needs: [package, attest]
+    needs: [preflight, package, attest]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The only job that writes: it creates the GitHub Release with the zip attest signed. It
-    # installs no npm package and holds no id-token. The checkout is for README.md and
-    # scripts/release, which use only Node's built-ins.
+    # installs no npm package and holds no id-token. The checkout is for scripts/release,
+    # which uses only Node's built-ins.
     permissions:
       contents: write
     env:
@@ -222,16 +234,6 @@ jobs:
           fi
           sha256sum --check --strict "$zip.sha256"
           echo "sha256=$(cut -d' ' -f1 "$zip.sha256")" >> "$GITHUB_OUTPUT"
-      - name: Find the store listing the README links
-        id: listing
-        run: |
-          set -euo pipefail
-          mapfile -t urls < <(grep -oE 'https://chromewebstore\.google\.com/detail/[A-Za-z0-9._~-]+/[a-p]{32}' README.md | sort -u)
-          if [ "${#urls[@]}" -ne 1 ]; then
-            echo "::error file=README.md::README.md must link exactly one Chrome Web Store listing, and it links ${#urls[@]}"
-            exit 1
-          fi
-          echo "url=${urls[0]}" >> "$GITHUB_OUTPUT"
       - name: Decide whether this release is marked Latest
         id: latest
         env:
@@ -247,7 +249,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: New Tab Note ${{ github.ref_name }}
           body: |
-            The Chrome Web Store update is a separate step that the maintainer approves after this release. Until that step and the store review finish, the [Chrome Web Store listing](${{ steps.listing.outputs.url }}) can still serve the previous version.
+            The Chrome Web Store update is a separate step that the maintainer approves after this release. Until that step and the store review finish, the [Chrome Web Store listing](${{ needs.preflight.outputs.listing_url }}) can still serve the previous version.
 
             To load this release unpacked:
             1. Download `new-tab-note-${{ github.ref_name }}.zip` and `new-tab-note-${{ github.ref_name }}.zip.sha256`.

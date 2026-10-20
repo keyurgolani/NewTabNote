@@ -35,7 +35,7 @@ Work merges into `next`. Nothing publishes from `next`. Tags go only on `main` a
 
 A failed publish is fixed and dispatched again for the same tag. A run cancelled while it waited in the queue is re-run. Neither gets a new tag, and a tag with a GitHub Release never moves.
 
-When `preflight`, `checks`, `package`, or `attest` fails, nothing was released and the tag has no GitHub Release. Re-run a job that failed by chance. Otherwise promote the fix to `main` (or merge it into `release/R<n>`), then delete the tag and tag the fixed commit. Under this program the fix merges into `next` first and the owner promotes it.
+When `preflight`, `checks`, `package`, `attest`, or `release` fails, nothing was published and the tag has no published GitHub Release. Re-run a job that failed by chance. Otherwise promote the fix to `main` (or merge it into `release/R<n>`), delete any draft release `release` left on the tag, then delete the tag and tag the fixed commit. Under this program the fix merges into `next` first and the owner promotes it.
 
 ### When publish-store fails
 
@@ -45,7 +45,7 @@ The job names the call that failed and prints the API's error. It makes no store
 |---|---|
 | `isn't on` followed by the branch | The tag's commit isn't on the branch you dispatched from. Dispatch from the branch it was tagged on. |
 | `There is no tag` | Check the tag you entered. |
-| `gh attestation verify` fails | If it couldn't reach GitHub or Sigstore, dispatch again. Otherwise the zip on the release isn't one the tag's Release run built and attested, so don't upload it by hand. Check the repository's audit log for who changed the release, then re-run that Release run to replace its files. |
+| `gh attestation verify` fails | If it couldn't reach GitHub or Sigstore, dispatch again. Otherwise the zip on the release isn't one the tag's Release run built and attested, so don't upload it by hand. See who uploaded each file with `gh api repos/keyurgolani/NewTabNote/releases/tags/<tag> --jq '.assets[] \| [.name, .uploader.login, .updated_at]'`. With immutable releases on, that release can't be repaired: ship the fix as the next patch version under a new tag. With them off, re-run that Release run to replace its files. |
 | `Missing CHROME_...` | Add that secret to the `chrome-web-store` environment, not to the repository. |
 | `has leading or trailing whitespace` | Save that secret again without the stray space or newline. |
 | `OAuth token request` with `invalid_grant` | The refresh token expired or was revoked. Mint a new one as [Rotating the refresh token](#rotating-the-refresh-token) describes. |
