@@ -1080,10 +1080,46 @@ export function runContractSuite(fixture) {
           ];
           const expected = flags.revisions ? [1, 1, 1, 1, 1, 2, 3, 3, 4, 4, 4] : revisions.map(() => undefined);
           assert.deepEqual(revisions, expected);
-          // A note deleted and made again under its id starts over
-          await revisionAfter(cmd('createNote', { noteId: 'n2' }));
+          // A note deleted and made again under its id carries on past its last revision, as
+          // #17's tombstone keeps it, so a save loaded before the delete is a conflict
+          const before = await revisionAfter(cmd('createNote', { noteId: 'n2' }));
           assert.equal((await run(cmd('trashNote', { noteId: 'n2' }))).code, 'note-deleted');
-          assert.equal(await revisionAfter(cmd('createNote', { noteId: 'n2' })), flags.revisions ? 1 : undefined);
+          const again = await revisionAfter(cmd('createNote', { noteId: 'n2', blocks: someBlocks('n2', 1) }));
+          const stale = await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n2',
+              blocks: [{ ...someBlocks('n2', 1)[0], content: 'Loaded before the delete' }],
+              expectedRevision: before ?? 1,
+            }),
+          );
+          if (flags.revisions) {
+            assert.ok(typeof before === 'number' && typeof again === 'number' && again > before, `${before}, ${again}`);
+            assert.equal(stale.kind, 'conflict', JSON.stringify(stale));
+            assert.equal((await blocksOf('n2'))[0].content, 'Line 0');
+          } else {
+            assert.deepEqual([before, again], [undefined, undefined]);
+            committedOf(stale);
+          }
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a title set to the one it has leaves the revision where it was, so the next save commits'
+          : 'no revisions: a title set to the one it has commits, with no revision',
+        async () => {
+          const created = await run(cmd('createNote', { noteId: 'n1', name: 'Plan' }));
+          const renamed = await run(cmd('renameNote', { noteId: 'n1', name: 'Plan' }));
+          const derived = await run(cmd('applyDerivedTitle', { noteId: 'n1', name: 'Plan' }));
+          assert.deepEqual([renamed.revision, derived.revision], [created.revision, created.revision]);
+          const save = await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: someBlocks('n1', 1),
+              expectedRevision: created.revision ?? 1,
+            }),
+          );
+          committedOf(save);
         },
       );
 

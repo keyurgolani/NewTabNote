@@ -200,16 +200,20 @@ export const noteCommands = {
     const { noteId, name, origin = 'typed' } = command;
     if (!isId(noteId) || typeof name !== 'string' || (origin !== 'typed' && origin !== 'generated')) return invalid();
     const now = clock.now();
-    const rename = changeNote(noteId, note =>
-      origin === 'typed'
-        ? { ...note, name, titleManuallySet: note.name !== name ? true : note.titleManuallySet, updatedAt: now }
-        : { ...note, name, lastAutoTitleAt: now, updatedAt: now },
-    );
+    // Only a title that changes moves the revision, so renaming to the same title never turns
+    // the editor's next save into a conflict
+    let renamed = false;
+    const rename = changeNote(noteId, note => {
+      renamed = note.name !== name;
+      return origin === 'typed'
+        ? { ...note, name, titleManuallySet: renamed ? true : note.titleManuallySet, updatedAt: now }
+        : { ...note, name, lastAutoTitleAt: now, updatedAt: now };
+    });
     return unitsWork(
       command,
       [rename, renameSearchEntry(noteId, name, now)],
       () => committed('note-renamed', [noteId]),
-      { primary: noteRecord(noteId), revised: contentChanged },
+      { primary: noteRecord(noteId), revised: () => renamed },
     );
   },
 
@@ -311,12 +315,14 @@ export const noteCommands = {
     if (!isId(noteId) || typeof name !== 'string' || !isOptionalString(contentHash)) return invalid();
     const now = clock.now();
     let kept = false;
+    let renamed = false;
     const derive = changeNote(noteId, note => {
       // A title set by hand stays, so the derived one is dropped
       if (note.titleManuallySet) {
         kept = true;
         return null;
       }
+      renamed = note.name !== name;
       /** @type {NoteRecord} */
       const next = { ...note, name, lastAutoTitleAt: now, updatedAt: now };
       if (contentHash !== undefined) next.lastTitleContentHash = contentHash;
@@ -326,7 +332,7 @@ export const noteCommands = {
       command,
       [derive, { ...renameSearchEntry(noteId, name, now), when: () => !kept }],
       () => (kept ? committed('title-kept', [], { severity: 'info' }) : committed('title-derived', [noteId])),
-      { primary: noteRecord(noteId), revised: () => !kept },
+      { primary: noteRecord(noteId), revised: () => renamed },
     );
   },
 

@@ -3,7 +3,8 @@
  * - atomicMultiStore: a command's units commit together, or nothing does
  * - revisions: a note has a content revision, which only a change to its title or blocks
  *   moves (Work.revised). Committed outcomes report it, and a stale `expectedRevision` is a
- *   conflict, after which the adapter keeps the command.
+ *   conflict, after which the adapter keeps the command. A note deleted and made again under
+ *   its id carries on past the revision it had.
  * - idempotency: a commandId sent again with the same command gets its committed or conflict
  *   outcome again, and nothing runs; sent with another command it's `idempotency-key-reuse`.
  *   Rejections and `unavailable` outcomes aren't kept, so sending the command again runs it.
@@ -277,14 +278,12 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         return stop;
       }
     }
+    // A deleted record's revision stays, as #17's tombstone keeps `lastRevision`, so a record
+    // made again under its key carries on past it, and a save loaded before the delete is a
+    // conflict
     for (const { store, key, record } of pending.values()) {
-      if (record === undefined) {
-        storeOf(store).delete(key);
-        // A record made again under this key starts over
-        revisions.delete(revisionKey(store, key));
-      } else {
-        storeOf(store).set(key, record);
-      }
+      if (record === undefined) storeOf(store).delete(key);
+      else storeOf(store).set(key, record);
     }
     return finish(work);
   };
