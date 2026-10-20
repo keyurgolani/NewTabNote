@@ -20,7 +20,15 @@
 import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS, isCommandType } from '../contracts/commands.js';
-import { failed, failedFrom, isOutcome, loading, rejected, unavailableFrom } from '../contracts/outcomes.js';
+import {
+  failed,
+  failedFrom,
+  isOutcome,
+  loading,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../contracts/outcomes.js';
 import { isQueryType } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
@@ -96,7 +104,9 @@ const QUERY_HANDLERS = Object.freeze({ ...noteQueries, ...folderQueries, ...pref
  * @property {Logger} [logger]
  * @property {PromiseLike<unknown>} [ready]
  *   The adapter opening. Until it settles a query is `loading` and a command waits. If it
- *   fails, every command is `unavailable` and every query `failed`, with its cause.
+ *   fails, every command is `unavailable` and every query `failed`, with its cause and code.
+ *   Nothing opens it again before the page reloads, so no such answer is retryable, whatever
+ *   the adapter's error said: sending a command again can't get past it.
  */
 
 /**
@@ -169,7 +179,9 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
     },
     error => {
       status = 'failed';
-      failure = unavailableFrom(error);
+      // Its cause and code, and never retryable, since nothing opens it again
+      const { cause, code } = unavailableFrom(error);
+      failure = unavailable(cause, code, false);
     },
   );
 

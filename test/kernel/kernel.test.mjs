@@ -184,6 +184,18 @@ describe('the kernel', () => {
     });
   });
 
+  it("answers a failed open as not retryable, though the adapter's error was, since nothing opens it again", async () => {
+    const kernel = kernelWith({ ready: Promise.reject(new UnavailableError('storage', 'no-database', true)) });
+    for (const commandId of ['c1', 'c2']) {
+      const outcome = await kernel.execute({ type: 'createNote', commandId, noteId: 'n1' });
+      assert.deepEqual(outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable], [
+        'storage',
+        'no-database',
+        false,
+      ]);
+    }
+  });
+
   it('tells the logger about a listener that threw with the aggregate, the ids, and the error, never the payload', async () => {
     /** @type {Array<{event: string, detail: Record<string, unknown>}>} */
     const warnings = [];
