@@ -184,21 +184,31 @@ describe('the kernel', () => {
     assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'system' });
   });
 
-  it('when startup maintenance fails as a root opens, commands are unavailable and queries failed, not retryable', async () => {
+  it('when startup maintenance fails as a root opens, commands and queries answer with its cause, not retryable, and it runs once', async () => {
     const memory = createMemoryAdapter();
-    /** @type {KernelAdapter} */
-    const failing = {
+    let maintenanceRuns = 0;
+    /**
+     * An adapter whose maintenance answers `outcome`
+     * @param {import('../../js/kernel/core/contracts/outcomes.js').Unavailable} outcome
+     * @returns {KernelAdapter}
+     */
+    const failingWith = outcome => ({
       ...memory,
-      commit: work =>
-        work.effect.kind === 'maintenance'
-          ? Promise.resolve({ outcome: unavailable('storage', 'write-failed', true), replayed: false })
-          : memory.commit(work),
-    };
-    for (const [adapter, caller] of /** @type {const} */ ([
-      [failing, CALLERS.newtab],
-      // A root that isn't allowed to maintain fails the same way
-      [memory, CALLERS.popup],
+      commit: work => {
+        if (work.effect.kind !== 'maintenance') return memory.commit(work);
+        maintenanceRuns++;
+        return Promise.resolve({ outcome, replayed: false });
+      },
+    });
+    for (const [adapter, caller, expected] of /** @type {const} */ ([
+      // Nothing runs maintenance again before the page reloads, so no resend can succeed, even
+      // after a write that failed once
+      [failingWith(unavailable('quota', 'quota-exceeded', false)), CALLERS.newtab, ['quota', 'quota-exceeded', false]],
+      [failingWith(unavailable('storage', 'write-failed', true)), CALLERS.newtab, ['storage', 'write-failed', false]],
+      // A root that isn't allowed to maintain fails as maintenance-failed
+      [memory, CALLERS.popup, ['storage', 'maintenance-failed', false]],
     ])) {
+      maintenanceRuns = 0;
       const kernel = createKernel({
         adapter,
         policy: createBaselinePolicy(),
@@ -208,17 +218,21 @@ describe('the kernel', () => {
         ready: Promise.resolve(),
         maintainOnOpen: true,
       });
-      const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
-      assert.deepEqual(
-        outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
-        ['storage', 'maintenance-failed', false],
-        caller.surface,
-      );
+      for (const commandId of ['c1', 'c2']) {
+        const outcome = await kernel.execute({ type: 'createNote', commandId, noteId: 'n1' });
+        assert.deepEqual(
+          outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+          expected,
+          `${caller.surface} ${expected[1]}`,
+        );
+      }
       assert.deepEqual(
         await kernel.query({ type: 'listNotes', view: 'active' }),
-        { kind: 'failed', cause: 'storage', code: 'maintenance-failed' },
-        caller.surface,
+        { kind: 'failed', cause: expected[0], code: expected[1] },
+        `${caller.surface} ${expected[1]}`,
       );
+      // Nothing runs it again: the root reports the failure until the page reloads
+      assert.equal(maintenanceRuns, adapter === memory ? 0 : 1);
     }
   });
 

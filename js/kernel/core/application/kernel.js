@@ -112,8 +112,9 @@ const QUERY_HANDLERS = Object.freeze({ ...noteQueries, ...folderQueries, ...pref
  *   Run startup maintenance once `ready` settles, before any command or query, as
  *   Storage.init() did before the app ran anything. The new-tab and service-worker roots set
  *   it, and Popup and Side Panel never do. Until it's done queries are `loading` and commands
- *   wait, and if it fails they're `unavailable` and `failed` with cause storage, and not
- *   retryable, as when opening fails.
+ *   wait. If storage fails it, they're `unavailable` and `failed` with its cause and code, and
+ *   if anything else stops it, with cause storage, `maintenance-failed`. Nothing runs it again
+ *   before the page reloads, so neither is retryable, as when opening fails.
  */
 
 /**
@@ -191,12 +192,17 @@ export function createKernel({
   let failure = unavailableFrom(null);
 
   /**
-   * Startup maintenance, run as the command the policy checks, before anything else
+   * Startup maintenance, run as the command the policy checks, before anything else. When
+   * storage fails it, its cause and code are what every command and query answer with from
+   * then on. Nothing runs it again before the page reloads, so no answer is retryable: sending
+   * a command again can't get past it.
    * @returns {Promise<void>}
    */
   const maintain = async () => {
     const outcome = await dispatch({ type: 'runStartupMaintenance', commandId: ids.next() });
-    if (outcome.kind !== 'committed') throw new UnavailableError('storage', 'maintenance-failed', false);
+    if (outcome.kind === 'committed') return;
+    if (outcome.kind === 'unavailable') throw new UnavailableError(outcome.cause, outcome.code, false);
+    throw new UnavailableError('storage', 'maintenance-failed', false);
   };
 
   const opened = Promise.resolve(ready)
