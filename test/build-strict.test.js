@@ -48,6 +48,11 @@ function tree(fixture = () => {}) {
     append: (file, text) => fs.appendFileSync(path.join(dir, file), text),
     prepend: (file, text) => fs.writeFileSync(path.join(dir, file), text + fs.readFileSync(path.join(dir, file), 'utf8')),
     remove: file => fs.rmSync(path.join(dir, file), { recursive: true }),
+    replace: (file, from, to) => {
+      const text = fs.readFileSync(path.join(dir, file), 'utf8');
+      if (!text.includes(from)) throw new Error(`${file} has no ${JSON.stringify(from)} to replace`);
+      fs.writeFileSync(path.join(dir, file), text.replace(from, to));
+    },
   });
   return dir;
 }
@@ -174,6 +179,48 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
       assert.equal(fs.readFileSync(path.join(dist, file), 'utf8'), fs.readFileSync(path.join(dir, file), 'utf8'), file);
     }
     assert.ok(fs.statSync(path.join(dist, OTHER_LEVEL_2_CSS)).size > 0);
+  });
+
+  it('ships every file under js/kernel/ but its package.json, and minifies each file the way it loads', async () => {
+    const { code, output, dist } = await runBuild(tree(), ['--strict']);
+    assert.equal(code, 0, brief(output));
+    assert.equal(fs.existsSync(path.join(dist, 'js/kernel/composition/background.js')), true);
+    assert.equal(fs.existsSync(path.join(dist, 'js/kernel/package.json')), false);
+
+    const line = file => output.split('\n').find(l => l.includes(` ${file}: `)) || '';
+    for (const file of ['js/popup.js', 'js/sidepanel.js', 'js/background.js', 'js/utils.js', 'js/app.js', 'js/kernel/composition/background.js']) {
+      assert.match(line(file), /saved, module\)$/, `${file} should be minified as an ES module`);
+    }
+    for (const file of ['js/offscreen.js', 'js/insights-summary.js']) {
+      assert.match(line(file), /saved\)$/, `${file} should be minified as a classic script`);
+    }
+    // A classic script keeps its top-level names. offscreen.js comes after js/main.js, and
+    // terser used to carry main.js's module: true over to it through the shared options.
+    assert.match(fs.readFileSync(path.join(dist, 'js/offscreen.js'), 'utf8'), /function handleApiRequest\(/);
+  });
+
+  it('refuses a file loaded both as a module and as a classic script, and a missing walked directory', async () => {
+    const result = await runBuild(tree(({ replace, remove }) => {
+      const entry = '<script type="module" src="js/popup.js">';
+      replace('popup.html', entry, `<script src="js/utils.js"></script>\n  ${entry}`);
+      remove('js/kernel');
+    }), ['--strict']);
+    assertRefused(result, 'js/utils.js', 'refused to minify a file loaded both as an ES module and as a classic script');
+    assertRefused(result, 'js/kernel/', 'refused to skip a missing listed file');
+  });
+});
+
+describe('terserOptions', () => {
+  it('gives each call its own copy, so a module minify leaves the next file alone', async () => {
+    const before = JSON.stringify(build.TERSER_OPTIONS);
+    const options = build.terserOptions(true);
+    assert.equal(options.module, true);
+    assert.equal(build.terserOptions(false).module, false);
+    options.compress.module = 'changed';
+    // terser writes module: true into the nested objects it's handed
+    await require('terser').minify('export const x = 1;', build.terserOptions(true));
+    assert.equal(JSON.stringify(build.TERSER_OPTIONS), before);
+    assert.equal(build.terserOptions(false).compress.module, undefined);
   });
 });
 
