@@ -97,7 +97,13 @@ function setup({ split = 'closed', blocks = [{ id: 'b1' }, { id: 'b2' }], rightB
     textarea: add(doc.body, 'textarea', { id: 'ai-chat-input' }),
     select: add(doc.body, 'select'),
     sidebarButton: add(sidebar, 'button', { id: 'sidebar-tab-archive', role: 'tab' }),
+    sidebarCheckbox: add(sidebar, 'input', { type: 'checkbox' }),
     settingsButton: add(dialogBoxes['settings-modal'], 'button'),
+    settingsField: add(dialogBoxes['settings-modal'], 'input', { id: 'settings-search', type: 'text' }),
+    settingsSelect: add(dialogBoxes['settings-modal'], 'select', { id: 'theme-select' }),
+    paletteInput: add(dialogBoxes['command-palette-modal'], 'input', { id: 'command-palette-input', type: 'text' }),
+    blockUrlInput: add(add(editorColumn, 'div', { class: 'block' }), 'input', { type: 'url', class: 'bookmark-input' }),
+    otherEditable: add(doc.body, 'div', { contenteditable: 'true' }),
     menuItem: add(noteMenu, 'button', { role: 'menuitem' }),
     listboxOption: add(add(doc.body, 'div', { role: 'listbox' }), 'div', { role: 'option', tabindex: '0' }),
     dialogButton: add(dialog, 'button'),
@@ -343,6 +349,46 @@ describe('one editor acts on each key', () => {
     editors[1].selectedBlockIds.add('r1');
     for (const target of [at.blockText, at.headerButton, at.body]) {
       assert.deepEqual(press(target, 'Backspace'), NOWHERE, label(target));
+    }
+  });
+
+  /** Text fields that handle their own keys, each with the modal it's in open */
+  const FIELDS = [
+    ['the sidebar search box', (at) => at.input],
+    ['a Settings field', (at, page) => { page.show(page.modals['settings-modal']); return at.settingsField; }],
+    ['a Settings select', (at, page) => { page.show(page.modals['settings-modal']); return at.settingsSelect; }],
+    ['the AI chat input', (at) => at.textarea],
+    ['the command palette input', (at, page) => { page.show(page.modals['command-palette-modal']); return at.paletteInput; }],
+    ["a bookmark block's URL input", (at) => at.blockUrlInput],
+    ['editable text outside the panes', (at) => at.otherEditable],
+  ];
+
+  for (const [name, focus] of FIELDS) {
+    it(`in ${name}, Backspace, Delete, undo, and redo are the field's, with blocks selected in both panes`, () => {
+      const { at, press, editors, page } = setup({ split: 'left' });
+      editors[0].selectedBlockIds.add('b1');
+      editors[1].selectedBlockIds.add('r1');
+      const target = focus(at, page);
+      for (const [key, modifiers, what] of [['Backspace', {}, 'Backspace'], ['Delete', {}, 'Delete'], ['z', UNDO, 'undo'], ['Z', REDO, 'redo']]) {
+        assert.deepEqual(press(target, key, modifiers), NOWHERE, what);
+      }
+    });
+  }
+
+  it('a checkbox or a button isn\'t a text field: undo with one focused still acts on the active pane', () => {
+    const { at, press } = setup({ split: 'left' });
+    for (const target of [at.sidebarCheckbox, at.headerButton]) {
+      assert.deepEqual(press(target, 'z', UNDO), { left: [['undo']], right: [], prevented: true }, label(target));
+    }
+  });
+
+  it('in the note, Backspace on a block selection, undo, and redo still work, in a block, in the title, and with nothing focused', () => {
+    const { at, press, editors } = setup({ split: 'closed' });
+    for (const target of [at.blockText, at.title, at.body]) {
+      editors[0].selectedBlockIds.add('b1');
+      assert.deepEqual(press(target, 'Backspace'), { left: [['deleteSelectedBlocks']], right: [], prevented: true }, label(target));
+      assert.deepEqual(press(target, 'z', UNDO), { left: [['undo']], right: [], prevented: true }, label(target));
+      assert.deepEqual(press(target, 'Z', REDO), { left: [['redo']], right: [], prevented: true }, label(target));
     }
   });
 

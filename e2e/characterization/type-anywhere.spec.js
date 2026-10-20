@@ -205,3 +205,30 @@ test('with split view open, Backspace in a left block edits it and leaves a bloc
   expect(stored, 'and still stored').toBe(right.length);
   await expectNoUncaught(extension, page);
 });
+
+test('in the sidebar search box with a block selected, Backspace and undo edit the search and leave the note alone', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'eggs' }, { type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+  // An edit the note could undo, and a selected block
+  await driver.clickBlock(page, 1);
+  await page.keyboard.type(' and bread');
+  await untilUndoable(page, 'left');
+  const firstBlock = page.locator('#blocks-container > .block').first();
+  await firstBlock.locator('.block-content').click({ modifiers: ['ControlOrMeta'] });
+  await expect(firstBlock).toHaveClass(/block-selected/);
+  const note = [{ type: 'text', text: 'eggs' }, { type: 'text', text: 'milk and bread' }];
+
+  const search = page.getByPlaceholder('Search notes...');
+  await search.click();
+  await page.keyboard.type('milk');
+  await page.keyboard.press('Backspace');
+  await expect(search).toHaveValue('mil');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(search, "the search box's own undo").toHaveValue('milk');
+
+  expect(await driver.blocks(page)).toEqual(note);
+  await expect(firstBlock, 'still selected').toHaveClass(/block-selected/);
+  expect(await driver.savedBlocks(page)).toEqual(note.map(block => block.text));
+  await expectNoUncaught(extension, page);
+});

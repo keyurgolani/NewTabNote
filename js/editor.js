@@ -25,6 +25,9 @@ const OPEN_OVERLAYS = [
   '[role="dialog"]', '[role="alertdialog"]', '[role="menu"]', '[aria-modal="true"]',
 ].join(', ');
 
+/** Input types that take no typed text, so an input of one isn't a text field (BlockEditor's _inTextField) */
+const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
+
 /**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
@@ -2524,10 +2527,13 @@ class BlockEditor {
   /**
    * Handle global keydown. Both panes' editors listen on one document, and only
    * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
-   * deleting a block selection happen in one pane.
+   * deleting a block selection happen in one pane. A text field outside the
+   * note keeps its keys (see _inTextField), so Backspace, Delete, and undo
+   * there edit the field.
    */
   onGlobalKeyDown(e) {
     if (!this._takesTypedKey(e.target)) return;
+    if (this._inTextField(e.target)) return;
 
     // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0) {
@@ -2585,6 +2591,26 @@ class BlockEditor {
     if (pane) return pane === this.root;
     const classes = this.root.classList;
     return Boolean(classes) && classes.contains('active') && !classes.contains('hidden');
+  }
+
+  /**
+   * Whether `target` is in a text field that handles its own keys: an input
+   * that takes text, a textarea, or a select, anywhere (a bookmark's URL input
+   * included), or editable text that isn't this editor's own title or blocks.
+   * The search box, Settings, the AI chat input, and the command palette are.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _inTextField(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    const control = /** @type {any} */ (target.closest('input, textarea, select'));
+    if (control) {
+      if (control.tagName !== 'INPUT') return true;
+      return !NON_TEXT_INPUTS.includes(String(control.type || control.getAttribute('type') || 'text').toLowerCase());
+    }
+    const editable = /** @type {any} */ (target).isContentEditable;
+    const isEditable = typeof editable === 'boolean' ? editable : Boolean(target.closest('[contenteditable]'));
+    return isEditable && !this.root.contains(target);
   }
 
   /**
