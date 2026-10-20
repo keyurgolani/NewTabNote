@@ -34,15 +34,20 @@ import {
 
 /**
  * What #17's migration has to fix on a note: a folderId naming no live folder,
- * or an isDaily note with no usable dateStr
- * @typedef {{code: 'stale-folder'} | {code: 'daily-without-date'}} MigrationFinding
+ * an isDaily note with no usable dateStr, or a Daily Note ensureDailyNote keyed
+ * by the UTC date when that wasn't the local date. localKey is the local one.
+ * @typedef {{code: 'stale-folder'} | {code: 'daily-without-date'}
+ *   | {code: 'daily-utc-key', localKey: string}} MigrationFinding
  */
 
 /**
  * placementOf's answer for one note. dailyKey is a Daily Note's date, also when
  * a folder holds it, for #17's dailyKey. Both it and a daily placement's
- * dateKey copy 1.4.0's dateStr, a UTC date, which #17's migration re-keys to
- * the local date.
+ * dateKey copy 1.4.0's dateStr, the date 1.4.0's calendar shows the note under.
+ * 1.4.0 wrote dateStr two ways: ensureDailyNote (the Daily button, Alt+D, the
+ * palette, and background capture) used the UTC date, and both calendars, through
+ * ensureDailyNoteForDate, the local date. A `daily-utc-key` finding marks the
+ * first kind when the two dates differed.
  * @typedef {object} NotePlacement
  * @property {Placement} placement
  * @property {NoteStates} states
@@ -57,6 +62,7 @@ import {
  * @property {unknown} [folderId]
  * @property {unknown} [isDaily]
  * @property {unknown} [dateStr]
+ * @property {unknown} [createdAt]
  * @property {unknown} [isTemplate]
  * @property {unknown} [archived]
  * @property {unknown} [trashed]
@@ -73,7 +79,9 @@ import {
  * Create: a new note placed in a destination.
  *
  * - A Moment capture goes to Inbox. A Daily Note isn't created here: the append
- *   verb's daily target finds or creates it, so a date never gets two.
+ *   verb's daily target finds or creates it, so a date never gets two. A date
+ *   with no Daily Note opens as an empty canvas bound to that date, and its first
+ *   input appends to the date's daily target.
  * - Identity is allocated at the first meaningful input, so a create carries
  *   that input's blocks, and no surface creates an empty note ahead of input.
  * - An untitled capture still empty when its EditorSession ends, or a create
@@ -99,6 +107,8 @@ import {
  * Note for a local date key, found or created, in one transaction.
  *
  * - The target's ID and placement never change.
+ * - A Daily Note the transaction creates gets the dailyNoteTemplate setting's
+ *   template first, as 1.4.0's ensureDailyNote does, and then the appended blocks.
  * - Undo in the appending surface removes exactly the blocks of that append.
  * - An open target receives the append as an external operation (#6).
  *
@@ -114,13 +124,19 @@ import {
  * @typedef {object} AppendOutcome
  * @property {string} noteId the target note, or the Daily Note found or created
  * @property {boolean} createdTarget whether the transaction created that Daily Note
- * @property {string[]} blockIds the appended blocks in order, which undo removes and nothing else
+ * @property {string[]} blockIds the appended blocks in order, which undo removes and nothing
+ *   else. A created Daily Note's template blocks aren't in it.
  */
 
 /** @type {ReadonlyArray<CaptureSurface>} */
 export const CAPTURE_SURFACES = Object.freeze(['moment', 'workspace', 'popup', 'side-panel', 'background']);
 
 const DATE_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+// ensureDailyNote's name, with the local date in en-US short form ("Daily Note - Jan 14, 2026")
+const DAILY_NAME = /^Daily Note - (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec) (\d{1,2}), (\d{4})$/;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// The largest timestamp a Date holds
+const MAX_TIME = 8.64e15;
 const UNTITLED = /^untitled\s*\d*$/;
 const CREATE_FIELDS = Object.freeze(['verb', 'surface', 'placement', 'blocks']);
 const APPEND_FIELDS = Object.freeze(['verb', 'surface', 'target', 'blocks']);
@@ -146,8 +162,8 @@ export function isDateKey(value) {
 
 /**
  * The local YYYY-MM-DD key for a moment in time, the key a Daily Note is found
- * by. 1.4.0 used the UTC date (toISOString), which names the wrong day near
- * midnight away from UTC.
+ * by. 1.4.0's ensureDailyNote used the UTC date (toISOString), which names the
+ * wrong day near midnight away from UTC.
  * @param {Date | number} when a Date or ms since the epoch
  * @returns {string}
  */
@@ -184,6 +200,13 @@ export function isNoteUntitled(note) {
  * A stale folderId, which 1.4.0's sidebar never shows, gives a `stale-folder`
  * finding whatever the placement. Templates take placement like any note, and
  * Inbox and Projects views leave them out, as getAllNotes does.
+ *
+ * A Daily Note whose dateStr is the UTC date of its createdAt came from
+ * ensureDailyNote. Its local date is the one its untouched 1.4.0 name gives, else
+ * the local date of createdAt in the current time zone, which stands in for the
+ * zone it was made in. When that differs from dateStr, a `daily-utc-key` finding
+ * carries it. #17 re-keys those notes to localKey when no other Daily Note holds
+ * that date, so a date never gets two, and keeps dateStr for every other note.
  * @param {LegacyNote} note
  * @param {Iterable<string>} liveFolderIds the IDs in the folders store
  * @returns {NotePlacement}
@@ -195,6 +218,8 @@ export function placementOf(note, liveFolderIds) {
 
   const dailyKey = note.isDaily && isDateKey(note.dateStr) ? note.dateStr : null;
   if (note.isDaily && dailyKey === null) findings.push({ code: 'daily-without-date' });
+  const localKey = dailyKey === null ? null : ensureDailyNoteLocalKey(note, dailyKey);
+  if (localKey !== null) findings.push({ code: 'daily-utc-key', localKey });
 
   // 1.4.0 files a note in a folder when folderId is truthy, as the sidebar does
   const filed = Boolean(note.folderId);
@@ -219,6 +244,35 @@ export function placementOf(note, liveFolderIds) {
     dailyKey,
     findings,
   };
+}
+
+/**
+ * The local date of a Daily Note ensureDailyNote keyed by a UTC date that wasn't
+ * the local one, or null for any other note
+ * @param {LegacyNote} note
+ * @param {string} dateStr its valid dateStr
+ * @returns {string | null}
+ */
+function ensureDailyNoteLocalKey(note, dateStr) {
+  const { createdAt } = note;
+  if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || Math.abs(createdAt) > MAX_TIME) return null;
+  if (new Date(createdAt).toISOString().slice(0, 10) !== dateStr) return null;
+  const localKey = nameDateKey(note.name) || localDateKey(createdAt);
+  return localKey === dateStr ? null : localKey;
+}
+
+/**
+ * The date in ensureDailyNote's name ("Daily Note - Jan 14, 2026") as a key, or
+ * null when the note was renamed
+ * @param {unknown} name
+ * @returns {string | null}
+ */
+function nameDateKey(name) {
+  const match = typeof name === 'string' ? DAILY_NAME.exec(name) : null;
+  if (match === null) return null;
+  const month = MONTHS.indexOf(match[1].slice(0, 3)) + 1;
+  const key = `${match[3]}-${String(month).padStart(2, '0')}-${match[2].padStart(2, '0')}`;
+  return isDateKey(key) ? key : null;
 }
 
 /**

@@ -394,7 +394,9 @@ test('resolveLaunch is table-driven over trigger, default, last used, URL, saved
               } else if (source === 'moment on session') {
                 expected = { ...validSession, aperture: 'moment' };
               } else if (source === 'url over session') {
-                expected = session('workspace', urlRoute, 'url-note', savedLayout);
+                // The session keeps its tabs, split view, and inspector, and the URL's note becomes the active tab
+                expected = session('workspace', urlRoute, 'url-note',
+                  layout(['session-tab', 'session-note', 'url-note'], 2, savedLayout.split, 'outline'));
                 if (urlKind === 'unknown route') notice = 'unknown-route';
               } else if (source === 'url') {
                 const entered = snapshotKind === 'valid'
@@ -444,11 +446,11 @@ test('popstate and back-forward to the bare first entry give Moment on the sessi
   assert.equal(result.history, 'none');
 });
 
-test('popstate across a one-pane collection-to-note step restores the pane and note and keeps the layout', () => {
+test('popstate across a one-pane collection-to-note step restores the pane and note, and the note stays the active tab', () => {
   const tabs = layout(['n1', 'n2'], 1);
   const live = deepFreeze(session('workspace', 'projects', 'n2', tabs));
   const back = T.resolveLaunch({ trigger: 'popstate', url: at('#/workspace/projects?note=n1'), pane: 'collection', savedSession: live });
-  assert.deepEqual(back, { session: session('workspace', 'projects', 'n1', tabs), pane: 'collection', notice: null, history: 'none' });
+  assert.deepEqual(back, { session: session('workspace', 'projects', 'n1', layout(['n1', 'n2'], 0)), pane: 'collection', notice: null, history: 'none' });
 
   const forward = T.resolveLaunch({ trigger: 'popstate', url: at('#/workspace/projects?note=n2'), pane: 'canvas', savedSession: back.session });
   assert.deepEqual(forward, { session: session('workspace', 'projects', 'n2', tabs), pane: 'canvas', notice: null, history: 'none' });
@@ -476,7 +478,7 @@ test('a URL note that differs from the session\'s: reload gives the session\'s w
     url: '#/workspace/projects?note=session-note',
   });
   assert.deepEqual(T.resolveLaunch({ trigger: 'popstate', url, savedSession: saved }), {
-    session: session('workspace', 'projects', 'url-note', tabs),
+    session: session('workspace', 'projects', 'url-note', layout(['session-note', 'url-note'], 1)),
     pane: null,
     notice: null,
     history: 'none',
@@ -513,7 +515,7 @@ test('a URL with no ?note= beside a session note: reload keeps the note, popstat
 test('boot with a valid URL and a stale saved session: the URL wins', () => {
   const stale = deepFreeze(session('moment', 'settings', 'old-capture', layout(['old-tab'], 0)));
   const workspace = T.resolveLaunch({ trigger: 'boot', url: at('#/workspace/trash?note=deep-link'), savedSession: stale });
-  assert.deepEqual(workspace.session, session('workspace', 'trash', 'deep-link', layout(['old-tab'], 0)));
+  assert.deepEqual(workspace.session, session('workspace', 'trash', 'deep-link', layout(['old-tab', 'deep-link'], 1)));
   assert.equal(workspace.history, 'none');
 
   const moment = T.resolveLaunch({ trigger: 'boot', url: at('#/moment?note=deep-link'), savedSession: stale });
@@ -534,6 +536,26 @@ test('boot with a valid URL and a stale saved session: the URL wins', () => {
     history: 'replace',
     url: '#/workspace/projects?note=snap-b',
   });
+});
+
+test('a Workspace URL naming a note makes it the active tab, over a saved session or a new instance (rule 6)', () => {
+  const tabs = layout(['note-a', 'note-b'], 0, { enabled: true, secondaryNoteId: 'note-b' }, 'history');
+  const url = at('#/workspace/inbox?note=note-x');
+  const withTabs = layout(['note-a', 'note-b', 'note-x'], 2, tabs.split, 'history');
+  for (const trigger of ['boot', 'back-forward', 'popstate']) {
+    const saved = deepFreeze(session('workspace', 'projects', 'note-a', tabs));
+    assert.deepEqual(T.resolveLaunch({ trigger, url, savedSession: saved }),
+      { session: session('workspace', 'inbox', 'note-x', withTabs), pane: null, notice: null, history: 'none' }, trigger);
+    const momentWithTabs = deepFreeze(session('moment', 'settings', 'note-a', tabs));
+    assert.deepEqual(T.resolveLaunch({ trigger, url, savedSession: momentWithTabs }).session,
+      session('workspace', 'inbox', 'note-x', withTabs), `${trigger} from Moment`);
+  }
+  // The same URL with no saved session starts a new instance from the snapshot
+  assert.deepEqual(T.resolveLaunch({ trigger: 'boot', url, layoutSnapshot: tabs }).session,
+    session('workspace', 'inbox', 'note-x', withTabs));
+  // An open note is activated where it is
+  const open = T.resolveLaunch({ trigger: 'popstate', url: at('#/workspace/inbox?note=note-b'), savedSession: session('workspace', 'inbox', 'note-a', tabs) });
+  assert.deepEqual(open.session.layout, layout(['note-a', 'note-b'], 1, tabs.split, 'history'));
 });
 
 test('a duplicated or restored tab gives the session\'s result under boot and back-forward', () => {
@@ -846,6 +868,21 @@ test('resolveOpenNote never matches a bare tab, another window, or an unknown ro
     null,
   ];
   assert.deepEqual(T.resolveOpenNote({ noteId: 'n1', windowId: 10, tabs }), { action: 'open', url: 'newtab.html#/moment?note=n1' });
+});
+
+test('resolveOpenNote skips a Workspace tab whose route destination covers the note', () => {
+  for (const route of ['insights', 'trust', 'settings', 'graph', 'analytics']) {
+    const hidden = { tabId: 1, windowId: 10, url: at(`#/workspace/${route}?note=n1`), lastAccessed: 999 };
+    const moment = { tabId: 2, windowId: 10, url: at('#/moment?note=n1'), lastAccessed: 100 };
+    assert.deepEqual(T.resolveOpenNote({ noteId: 'n1', windowId: 10, tabs: [hidden, moment] }), { action: 'activate', tabId: 2 }, route);
+    assert.deepEqual(T.resolveOpenNote({ noteId: 'n1', windowId: 10, tabs: [hidden] }), { action: 'open', url: 'newtab.html#/moment?note=n1' }, route);
+    // As a Workspace target with no note, the tab still counts
+    assert.deepEqual(T.resolveOpenNote({ windowId: 10, tabs: [hidden, moment] }), { action: 'activate', tabId: 1 }, route);
+  }
+  for (const route of T.NOTE_DESTINATIONS) {
+    const shown = { tabId: 3, windowId: 10, url: at(`#/workspace/${route}?note=n1`), lastAccessed: 5 };
+    assert.deepEqual(T.resolveOpenNote({ noteId: 'n1', windowId: 10, tabs: [shown] }), { action: 'activate', tabId: 3 }, route);
+  }
 });
 
 test('resolveOpenNote opens a new tab in the default aperture when no tab matches', () => {

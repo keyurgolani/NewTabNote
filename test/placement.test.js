@@ -105,11 +105,58 @@ test('a Daily Note in a live folder is that collection and keeps its date as dai
   assert.equal(P.homeRouteOf(result), 'projects');
 });
 
-test('a root Daily Note is daily, its dateStr copied as dateKey for #17 to re-key', () => {
+test('a root Daily Note is daily, keyed by its dateStr', () => {
   const result = P.placementOf(legacyNote({ name: 'Daily Note - Jan 28, 2026', isDaily: true, dateStr: '2026-01-28' }), []);
   assert.deepEqual(result.placement, { kind: 'daily', dateKey: '2026-01-28' });
   assert.equal(result.dailyKey, '2026-01-28');
+  assert.deepEqual(result.findings, []);
   assert.equal(P.homeRouteOf(result), 'daily');
+});
+
+test('a Daily Note keeps its dateStr, and one ensureDailyNote keyed by the UTC date across a date line gets daily-utc-key', () => {
+  // ensureDailyNote keys by the UTC date and names the note with the local date. Both
+  // calendars key by the local date, and ensureDailyNoteForDate names the note for that key.
+  const zone = process.env.TZ;
+  const check = (label, fields, localKey, folders = []) => {
+    const result = P.placementOf(legacyNote({ isDaily: true, ...fields }), folders);
+    if (folders.length === 0) assert.deepEqual(result.placement, { kind: 'daily', dateKey: fields.dateStr }, label);
+    assert.equal(result.dailyKey, fields.dateStr, label);
+    assert.deepEqual(result.findings, localKey ? [{ code: 'daily-utc-key', localKey }] : [], label);
+  };
+  try {
+    process.env.TZ = 'America/Los_Angeles';
+    const noon = Date.UTC(2026, 0, 14, 20, 0); // 12:00 on Jan 14 in Los Angeles
+    const evening = Date.UTC(2026, 0, 15, 4, 0); // 20:00 on Jan 14 in Los Angeles, already Jan 15 in UTC
+    const weekLater = Date.UTC(2026, 0, 20, 20, 0);
+    check('ensureDailyNote at noon', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-14', createdAt: noon }, null);
+    check('ensureDailyNote in the evening', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-15', createdAt: evening }, '2026-01-14');
+    check('ensureDailyNote in the evening, renamed', { name: 'Standup', dateStr: '2026-01-15', createdAt: evening }, '2026-01-14');
+    check('ensureDailyNote in the evening, in a folder',
+      { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-15', createdAt: evening, folderId: 'f-live' }, '2026-01-14', ['f-live']);
+    check('a calendar date, created a week later', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-14', createdAt: weekLater }, null);
+    // Re-keying from createdAt alone would move this note to Jan 20
+    check('a calendar date created a week later, renamed', { name: 'Standup', dateStr: '2026-01-14', createdAt: weekLater }, null);
+    check('the calendar\'s tomorrow, created in the evening', { name: 'Daily Note - Jan 15, 2026', dateStr: '2026-01-15', createdAt: evening }, null);
+    check('the calendar\'s today, created in the evening', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-14', createdAt: evening }, null);
+    check('no createdAt', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-15' }, null);
+    check('a createdAt out of range', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-15', createdAt: 9e15 }, null);
+    const september = Date.UTC(2026, 8, 30, 3, 0); // 20:00 on Sep 29 in Los Angeles
+    check('a short month name', { name: 'Daily Note - Sep 29, 2026', dateStr: '2026-09-30', createdAt: september }, '2026-09-29');
+    check('an older short month name', { name: 'Daily Note - Sept 29, 2026', dateStr: '2026-09-30', createdAt: september }, '2026-09-29');
+
+    // Made at noon in Los Angeles and read in Kolkata: the untouched name still gives the date
+    process.env.TZ = 'Asia/Kolkata';
+    check('ensureDailyNote at noon, read in another zone', { name: 'Daily Note - Jan 14, 2026', dateStr: '2026-01-14', createdAt: noon }, null);
+    // Here createdAt alone would read Sep 30, so only the name gives Sep 29
+    check('an older short month name, read in another zone',
+      { name: 'Daily Note - Sept 29, 2026', dateStr: '2026-09-30', createdAt: Date.UTC(2026, 8, 30, 3, 0) }, '2026-09-29');
+    // In Kolkata UTC is behind: ensureDailyNote at 02:00 on Jan 15 keys Jan 14
+    const earlyMorning = Date.UTC(2026, 0, 14, 20, 30);
+    check('ensureDailyNote early in the morning', { name: 'Daily Note - Jan 15, 2026', dateStr: '2026-01-14', createdAt: earlyMorning }, '2026-01-15');
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
 });
 
 test('a stale folderId is Unfiled with a migration finding, titled or not', () => {
@@ -206,7 +253,7 @@ test('isDateKey accepts real calendar dates only', () => {
   }
 });
 
-test('localDateKey uses the local date, which 1.4.0\'s UTC dateStr gets wrong near midnight', () => {
+test('localDateKey uses the local date, which ensureDailyNote\'s UTC key gets wrong near midnight', () => {
   const zone = process.env.TZ;
   try {
     process.env.TZ = 'America/Los_Angeles';
@@ -362,6 +409,8 @@ test('validateAppendOutcome: a note target keeps its ID and creates nothing, and
   for (const createdTarget of [true, false]) {
     assert.equal(P.validateAppendOutcome(toDaily, { noteId: 'daily-1', createdTarget, blockIds: ['b9'] }).ok, true, String(createdTarget));
   }
+  // A Daily Note the append creates gets the daily-note template first, and blockIds leaves its blocks out
+  assert.equal(P.validateAppendOutcome(toDaily, { noteId: 'daily-1', createdTarget: true, blockIds: ['template-1', 'b9'] }).ok, false);
   assert.equal(P.validateAppendOutcome(toDaily, { noteId: null, createdTarget: true, blockIds: ['b9'] }).ok, false);
 });
 

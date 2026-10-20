@@ -487,8 +487,9 @@ export function launchTriggerFor(navigationType) {
  * - `boot` with a valid URL, `back-forward`, and `popstate` apply a valid URL to
  *   the saved session under the popstate rules: no `?note=` means no note, a
  *   Moment URL keeps the session's route and layout, and a Workspace URL keeps
- *   its layout. `back-forward` and `popstate` with no URL give Moment on the
- *   session's note, with its route and layout kept.
+ *   its tabs, split view, and inspector, with the URL's note as the active tab.
+ *   `back-forward` and `popstate` with no URL give Moment on the session's note,
+ *   with its route and layout kept.
  * - With no valid session, a load applies a valid URL as a new instance, else
  *   follows the default (rule 1).
  *
@@ -551,7 +552,9 @@ function urlTarget(parsed) {
 
 /**
  * Apply a URL's route to the saved session under the popstate rules, or start a
- * new instance from it when there's no saved session
+ * new instance from it when there's no saved session. A Workspace URL keeps the
+ * session's tabs, split view, and inspector, and a note it names becomes the
+ * active tab, so the canvas note is always the active tab (rule 6).
  * @param {RouteTarget} target
  * @param {ProductSession | null} base
  * @param {WorkspaceLayout | null} snapshot
@@ -567,10 +570,10 @@ function applyRoute(target, base, snapshot) {
       layout: base ? base.layout : null,
     };
   }
-  if (base && base.layout) {
-    return { version: 1, aperture: 'workspace', route: target.route, noteId: target.noteId, layout: base.layout };
+  if (base && base.layout && target.noteId === null) {
+    return { version: 1, aperture: 'workspace', route: target.route, noteId: null, layout: base.layout };
   }
-  const entered = enterWorkspace(target.noteId, null, snapshot);
+  const entered = enterWorkspace(target.noteId, base ? base.layout : null, snapshot);
   return { version: 1, aperture: 'workspace', route: target.route, noteId: entered.noteId, layout: entered.layout };
 }
 
@@ -647,8 +650,9 @@ export function resolveTransition(session, event, layoutSnapshot = null, homeRou
 /**
  * Where Popup, Side Panel, a notification, or the open-workspace command opens a
  * note (Opening a note in a tab). A current-window tab whose URL names the note
- * is activated, the latest accessed when several do, and a tab with a bare URL
- * never matches. Else a new tab opens in the default aperture. With no note,
+ * is activated, the latest accessed when several do. A tab with a bare URL never
+ * matches, and neither does a Workspace tab on a route destination, whose outlet
+ * covers the canvas. Else a new tab opens in the default aperture. With no note,
  * the current window's latest Workspace tab is activated, else a new tab opens
  * at #/workspace/inbox.
  * @param {OpenNoteInput} input
@@ -666,6 +670,8 @@ export function resolveOpenNote(input) {
     const parsed = parseRoute(tab.url);
     if (parsed.kind !== 'route') continue;
     if (noteId === null ? parsed.aperture !== 'workspace' : parsed.noteId !== noteId) continue;
+    // A route destination's outlet covers the canvas, so that tab doesn't show the note
+    if (noteId !== null && parsed.aperture === 'workspace' && !isOneOf(NOTE_DESTINATIONS, parsed.route)) continue;
     if (latest === null || accessedAt(tab) > accessedAt(latest)) latest = tab;
   }
   if (latest !== null) return { action: 'activate', tabId: latest.tabId };
