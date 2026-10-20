@@ -31,9 +31,9 @@ function spyAdapter(inner, log) {
   return {
     name: 'spy',
     flags: inner.flags,
-    recall: commandId => {
+    recall: command => {
       log.push('recall');
-      return inner.recall(commandId);
+      return inner.recall(command);
     },
     commit: work => {
       log.push(`commit ${work.command.type}`);
@@ -143,6 +143,30 @@ describe('the kernel', () => {
     assert.equal((await kernel.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
   });
 
+  it('keeps a command as it was when execute was called, even while storage is still opening', async () => {
+    /** @type {() => void} */
+    let open = () => {};
+    const ready = new Promise(resolve => {
+      open = () => resolve(undefined);
+    });
+    const kernel = kernelWith({ ready });
+    const create = { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'First', blocks: [{ id: 'b1' }] };
+    const creating = kernel.execute(/** @type {Command} */ (create));
+    create.name = 'Changed while opening';
+    create.blocks.push({ id: 'b2' });
+    const blocks = [{ id: 'b1', type: 'text', content: 'Typed before the save' }];
+    const saving = kernel.execute({ type: 'saveNoteContent', commandId: 'c2', noteId: 'n1', blocks });
+    blocks[0].content = 'Typed after the save started';
+    open();
+    assert.deepEqual([(await creating).kind, (await saving).kind], ['committed', 'committed']);
+    const note = await kernel.query({ type: 'getNote', noteId: 'n1' });
+    assert.equal(note.kind === 'ready' && note.data.note.name, 'First');
+    const stored = await kernel.query({ type: 'getNoteBlocks', noteId: 'n1' });
+    assert.deepEqual(stored.kind === 'ready' && stored.data.map(block => [block.id, block.content]), [
+      ['b1', 'Typed before the save'],
+    ]);
+  });
+
   it("when storage can't open, commands are unavailable and queries failed, with the cause", async () => {
     const kernel = kernelWith({ ready: Promise.reject(new UnavailableError('newer-schema', 'newer-schema', false)) });
     const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
@@ -210,6 +234,58 @@ describe('the kernel', () => {
       cause: 'adapter',
       code: 'adapter-failed',
     });
+  });
+
+  it('answers with the committed outcome when a listener throws and so does the logger it reports to', async () => {
+    const kernel = kernelWith({
+      logger: {
+        warn: () => {
+          throw new Error('logger bug');
+        },
+      },
+    });
+    kernel.subscribe(() => {
+      throw new Error('listener bug');
+    });
+    const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+    assert.equal(outcome.kind, 'committed');
+  });
+
+  it('denies unless the policy answers allowed: true, whatever else it answers', async () => {
+    for (const answer of [undefined, null, 'yes', {}, { allowed: 'true' }, { allowed: 1 }]) {
+      const answers = () => /** @type {any} */ (answer);
+      const kernel = kernelWith({ policy: { authorize: answers } });
+      const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+      assert.deepEqual(
+        outcome.kind === 'rejected' && [outcome.reason, outcome.code],
+        ['policy', 'policy-failed'],
+        JSON.stringify(answer),
+      );
+      assert.deepEqual(
+        await kernel.query({ type: 'listFolders' }),
+        { kind: 'failed', cause: 'policy', code: 'policy-failed' },
+        JSON.stringify(answer),
+      );
+    }
+  });
+
+  it("answers with an outcome when the adapter's commit or recall hands back something else", async () => {
+    const memory = createMemoryAdapter();
+    for (const adapter of [
+      { ...memory, commit: () => undefined },
+      { ...memory, commit: () => 42 },
+      { ...memory, commit: () => Promise.resolve(undefined) },
+      { ...memory, commit: () => Promise.resolve({ kind: 'saved' }) },
+      { ...memory, recall: () => 'yes' },
+    ]) {
+      const kernel = kernelWith({ adapter: /** @type {any} */ (adapter) });
+      const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+      assert.deepEqual(
+        outcome.kind === 'unavailable' && [outcome.cause, outcome.code],
+        ['adapter', 'adapter-failed'],
+        JSON.stringify(outcome),
+      );
+    }
   });
 
   it('emits no note:saved event anywhere in js/kernel/', () => {

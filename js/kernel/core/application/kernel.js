@@ -10,16 +10,17 @@
  * command and query. Nothing a payload says changes it, so #35's coordinator builds one kernel
  * per principal #13 verified rather than one that takes the caller from a message.
  *
- * execute() runs every command the same way: copy it, ask the policy, recall the outcome an
- * earlier run of its commandId got, run its use case, commit, and publish what changed. Once
- * the kernel is ready nothing before the commit is awaited, so saveNoteContent opens its
- * transaction in the task that calls it.
+ * execute() copies a command as it's called, then runs it the same way every time: ask the
+ * policy, recall the outcome an earlier send of its commandId got, run its use case, commit,
+ * and publish what changed. Once the kernel is ready nothing before the commit is awaited, so
+ * saveNoteContent opens its transaction in the task that calls it. Whatever a policy, a use
+ * case, an adapter, a listener, or the logger does, execute() answers with an outcome.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS, isCommandType } from '../contracts/commands.js';
-import { failed, failedFrom, loading, rejected, unavailableFrom } from '../contracts/outcomes.js';
+import { failed, failedFrom, isOutcome, loading, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { isQueryType } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
@@ -32,6 +33,7 @@ import { sessionCommands, sessionQueries } from './session.js';
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/commands.js').CommandType} CommandType */
 /** @typedef {import('../contracts/commands.js').Aggregate} Aggregate */
+/** @typedef {import('../contracts/commands.js').RunBulkAction} RunBulkAction */
 /** @typedef {import('../contracts/queries.js').Query} Query */
 /** @typedef {import('../contracts/queries.js').QueryType} QueryType */
 /** @typedef {import('../contracts/queries.js').QueryData} QueryData */
@@ -40,8 +42,10 @@ import { sessionCommands, sessionQueries } from './session.js';
 /** @typedef {import('../contracts/outcomes.js').Unavailable} Unavailable */
 /** @typedef {import('../ports/policy.js').PolicyPort} PolicyPort */
 /** @typedef {import('../ports/policy.js').Caller} Caller */
+/** @typedef {import('../ports/policy.js').Decision} Decision */
 /** @typedef {import('../ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../ports/repository.js').AdapterFlags} AdapterFlags */
+/** @typedef {import('../ports/repository.js').CommitResult} CommitResult */
 /** @typedef {import('../ports/repository.js').Work} Work */
 /** @typedef {import('../ports/runtime.js').Clock} Clock */
 /** @typedef {import('../ports/runtime.js').Ids} Ids */
@@ -96,20 +100,29 @@ const QUERY_HANDLERS = Object.freeze({ ...noteQueries, ...folderQueries, ...pref
  */
 
 /**
- * A bulk command's BulkOutcome, or any other command's Outcome
- * @template C
- * @typedef {C extends {type: 'runBulkAction'} ? BulkOutcome : Outcome} OutcomeOf
+ * What execute() answers. A bulk command that ran answers with a BulkOutcome, and one that
+ * didn't (the policy refused it, its action was unknown, storage failed to open, or #13 lost
+ * the reply) with a plain Outcome. Every other command answers with an Outcome.
+ * @typedef {object} Execute
+ * @property {{
+ *   (command: RunBulkAction): Promise<BulkOutcome | Outcome>,
+ *   (command: Exclude<Command, RunBulkAction>): Promise<Outcome>,
+ *   (command: Command): Promise<BulkOutcome | Outcome>,
+ * }} execute
  */
 
 /**
  * The client a composition root hands out.
- * @typedef {object} KernelClient
- * @property {<C extends Command>(command: C) => Promise<OutcomeOf<C>>} execute
- * @property {<T extends QueryType>(query: QueryOf<T>) => Promise<QueryState<QueryData[T]>>} query
- * @property {(listener: CommitListener) => () => void} subscribe
+ * @typedef {Execute & {
+ *   query: <T extends QueryType>(query: QueryOf<T>) => Promise<QueryState<QueryData[T]>>,
+ *   subscribe: (listener: CommitListener) => () => void,
+ * }} KernelClient
  */
 
 /** @typedef {KernelClient & {flags: Readonly<AdapterFlags>, caller: Readonly<Caller>}} Kernel */
+
+/** @type {Decision} */
+const ALLOW = Object.freeze({ allowed: true });
 
 /**
  * @param {unknown} value
@@ -127,6 +140,17 @@ function isThenable(value) {
  */
 function isWork(result) {
   return 'effect' in result;
+}
+
+/**
+ * A commit's answer as the adapter port describes it, or a throw for anything else.
+ * @param {unknown} value
+ * @returns {CommitResult}
+ */
+function commitResultOf(value) {
+  const outcome = isRecord(value) ? value.outcome : undefined;
+  if (!isOutcome(outcome)) throw new TypeError('commit answered without an outcome');
+  return { outcome, replayed: /** @type {Record<string, unknown>} */ (value).replayed === true };
 }
 
 /**
@@ -154,27 +178,37 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
     adapter,
     clock,
     ids,
-    run: command => /** @type {Promise<Outcome>} */ (runCommand(command)),
+    // A bulk command's items are note commands, never another bulk command
+    run: command => /** @type {Promise<Outcome>} */ (dispatch(clone(command))),
   };
 
   /**
+   * Tells this context's projections what a commit changed. The feed reports a listener
+   * that fails, and nothing it does reaches the outcome.
    * @param {Aggregate} aggregate
    * @param {Outcome | BulkOutcome} outcome
    */
   const publish = (aggregate, outcome) => {
-    if (outcome.kind === 'committed' && outcome.changedIds.length > 0) {
+    if (outcome.kind !== 'committed' || outcome.changedIds.length === 0) return;
+    try {
       feed.publish({ aggregate, ids: outcome.changedIds });
+    } catch {
+      // The commit landed, so its outcome stands
     }
   };
 
   /**
-   * The policy's answer. A policy that throws denies, so a broken policy fails closed.
-   * @param {() => import('../ports/policy.js').Decision} ask
-   * @returns {import('../ports/policy.js').Decision}
+   * The policy's answer, which allows only when it says `allowed: true`. A policy that throws,
+   * or answers anything else, denies, so a broken policy fails closed.
+   * @param {Record<string, unknown>} request
+   * @returns {Decision}
    */
-  const decide = ask => {
+  const decide = request => {
     try {
-      return ask();
+      const decision = /** @type {unknown} */ (policy.authorize(request, caller));
+      if (isRecord(decision) && decision.allowed === true) return ALLOW;
+      const code = isRecord(decision) && decision.allowed === false && isId(decision.code) ? decision.code : null;
+      return { allowed: false, code: code || 'policy-failed' };
     } catch {
       return { allowed: false, code: 'policy-failed' };
     }
@@ -186,24 +220,19 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
    * @returns {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>}
    */
   const commitResult = result =>
-    isWork(result) ? adapter.commit(result) : Promise.resolve({ outcome: result, replayed: false });
+    isWork(result)
+      ? Promise.resolve(adapter.commit(result)).then(commitResultOf)
+      : Promise.resolve({ outcome: result, replayed: false });
 
   /**
-   * @param {unknown} input
+   * Runs a command the caller can no longer change.
+   * @param {unknown} copy
    * @returns {Promise<Outcome | BulkOutcome>}
    */
-  function runCommand(input) {
-    /** @type {unknown} */
-    let copy;
-    try {
-      copy = clone(input);
-    } catch {
-      return Promise.resolve(rejected('validation', 'not-cloneable'));
-    }
+  function dispatch(copy) {
     if (!isRecord(copy)) return Promise.resolve(rejected('validation', 'invalid-command'));
     if (!isCommandType(copy.type)) return Promise.resolve(rejected('policy', 'unknown-command'));
-    const request = copy;
-    const decision = decide(() => policy.authorize(request, caller));
+    const decision = decide(copy);
     if (!decision.allowed) return Promise.resolve(rejected('policy', decision.code));
     if (!isId(copy.commandId)) return Promise.resolve(rejected('validation', 'invalid-command'));
     const command = /** @type {Command} */ (copy);
@@ -212,20 +241,22 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
       /** @type {(command: Command, context: UseCaseContext) => UseCaseResult | PromiseLike<UseCaseResult>} */ (
         COMMAND_HANDLERS[command.type]
       );
+    const { aggregate } = COMMANDS[command.type];
     /** @type {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>} */
     let pending;
     try {
       const remembered = adapter.recall(command);
-      if (remembered) return Promise.resolve(remembered);
+      if (remembered !== undefined) {
+        if (!isOutcome(remembered)) throw new TypeError('recall answered without an outcome');
+        return Promise.resolve(remembered);
+      }
       const result = handler(command, context);
       pending = isThenable(result) ? Promise.resolve(result).then(commitResult) : commitResult(result);
     } catch (error) {
       pending = Promise.reject(error);
     }
-    const { aggregate } = COMMANDS[command.type];
     return pending.then(
       ({ outcome, replayed }) => {
-        // A send of the same command that committed first already published it
         if (!replayed) publish(aggregate, outcome);
         return outcome;
       },
@@ -235,13 +266,45 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
   }
 
   /**
-   * @param {Command} command
+   * @param {() => Promise<Outcome | BulkOutcome>} run
    * @returns {Promise<Outcome | BulkOutcome>}
    */
-  function execute(command) {
-    if (status === 'ready') return runCommand(command);
+  function whenOpen(run) {
+    if (status === 'ready') return run();
     if (status === 'failed') return Promise.resolve(clone(failure));
-    return opened.then(() => execute(command));
+    return opened.then(() => whenOpen(run));
+  }
+
+  /**
+   * @overload
+   * @param {RunBulkAction} command
+   * @returns {Promise<BulkOutcome | Outcome>}
+   */
+  /**
+   * @overload
+   * @param {Exclude<Command, RunBulkAction>} command
+   * @returns {Promise<Outcome>}
+   */
+  /**
+   * @overload
+   * @param {Command} command
+   * @returns {Promise<BulkOutcome | Outcome>}
+   */
+  /**
+   * @param {unknown} input
+   * @returns {Promise<Outcome | BulkOutcome>}
+   */
+  function execute(input) {
+    // The copy is taken now, so what the caller changes later can't reach the command, even
+    // while it waits for storage to open
+    /** @type {unknown} */
+    let copy;
+    try {
+      copy = clone(input);
+    } catch {
+      return Promise.resolve(rejected('validation', 'not-cloneable'));
+    }
+    return whenOpen(() => dispatch(copy));
   }
 
   /**
@@ -261,8 +324,7 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
     }
     if (!isRecord(copy)) return Promise.resolve(failed('validation', 'invalid-query'));
     if (!isQueryType(copy.type)) return Promise.resolve(failed('policy', 'unknown-query'));
-    const request = copy;
-    const decision = decide(() => policy.authorize(request, caller));
+    const decision = decide(copy);
     if (!decision.allowed) return Promise.resolve(failed('policy', decision.code));
     const handler = /** @type {(query: Query, context: UseCaseContext) => Promise<QueryState<QueryData[T]>>} */ (
       QUERY_HANDLERS[copy.type]
@@ -274,7 +336,7 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
   }
 
   return Object.freeze({
-    execute: /** @type {KernelClient['execute']} */ (execute),
+    execute,
     query,
     subscribe: feed.subscribe,
     flags: adapter.flags,

@@ -2,8 +2,9 @@
  * The commit feed (#12, "Commands", item 6). After a command commits, the kernel publishes
  * `{aggregate, ids}`, and this context's projections apply those ids. A listener that throws,
  * or returns a promise that rejects, is reported to the logger and never changes the
- * outcome. The feed carries ids only. The kernel emits no note:saved event on the legacy
- * EventBus: sync-service.js listens for one, and #19 decides when it may hear it.
+ * outcome, and neither does a logger that throws while it reports. The feed carries ids only.
+ * The kernel emits no note:saved event on the legacy EventBus: sync-service.js listens for
+ * one, and #19 decides when it may hear it.
  */
 
 /** @typedef {import('../contracts/commands.js').Aggregate} Aggregate */
@@ -42,7 +43,13 @@ export function createCommitFeed(logger) {
       /** @type {CommitEvent} */
       const event = Object.freeze({ aggregate, ids: Object.freeze([...ids]) });
       /** @param {unknown} error */
-      const report = error => logger.warn('commit-listener-failed', { aggregate, ids: [...ids], error });
+      const report = error => {
+        try {
+          logger.warn('commit-listener-failed', { aggregate, ids: [...ids], error });
+        } catch {
+          // A logger that fails has nowhere to report to, and the commit already landed
+        }
+      };
       for (const listener of [...listeners]) {
         try {
           const result = listener(event);

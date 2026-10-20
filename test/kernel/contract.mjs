@@ -6,7 +6,9 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
+import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -187,6 +189,32 @@ export function runContractSuite(fixture) {
         order: index,
       }));
 
+    /**
+     * Puts records no command writes (media, vectors, snapshots), through the adapter's own
+     * commit, so any adapter can run the cases that need them.
+     * @param {'media' | 'vectors' | 'snapshots'} store
+     * @param {Array<{id: string} & Record<string, unknown>>} records
+     */
+    const seed = async (store, records) => {
+      const seeding = /** @type {Command} */ ({ type: 'runStartupMaintenance', commandId: ctx.ids.next() });
+      const unit = {
+        stores: [store],
+        /** @param {import('../../js/kernel/core/ports/repository.js').Tx} tx */
+        async run(tx) {
+          for (const record of records) tx.put(store, record);
+        },
+      };
+      const { outcome } = await ctx.adapter.commit(unitsWork(seeding, [unit], () => committed('seeded', [])));
+      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+    };
+
+    /**
+     * @param {'media' | 'vectors' | 'snapshots'} store
+     * @returns {Promise<string[]>}
+     */
+    const idsInStore = async store =>
+      (await ctx.adapter.read([store], tx => tx.getAll(store))).map(record => record.id).sort();
+
     describe('notes', () => {
       it('createNote stores the record Storage.createNote has always written, and a search entry', async () => {
         const outcome = await run(cmd('createNote', { noteId: 'n1' }));
@@ -240,6 +268,14 @@ export function runContractSuite(fixture) {
         assert.deepEqual([note?.name, note?.titleManuallySet, note?.lastAutoTitleAt], ['Summary', false, NOW + 1000]);
       });
 
+      it('renameNote with a generated title keeps a title set by hand marked as set by hand', async () => {
+        await createNote({ noteId: 'n1', name: 'Draft' });
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Mine' }));
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Summary', origin: 'generated' }));
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.name, note?.titleManuallySet], ['Summary', true]);
+      });
+
       it('archive, unarchive, trash, and restore set their fields, and trashing takes a note out of the archive', async () => {
         await createNote({ noteId: 'n1', name: 'Keep' });
         ctx.clock.advance();
@@ -268,6 +304,26 @@ export function runContractSuite(fixture) {
         assert.deepEqual((await run(cmd('trashNote', { noteId: 'written' }))).code, 'note-trashed');
         assert.equal((await noteOf('written'))?.trashed, true);
         assert.equal((await blocksOf('written')).length, 1);
+      });
+
+      it("trashNote deletes an empty untitled note's media, vectors, and snapshots, and keeps a trashed note's", async () => {
+        await createNote({ noteId: 'empty' });
+        await createNote({ noteId: 'written', name: 'Plan' });
+        await seed('media', [
+          { id: 'm-empty', canvasId: 'empty' },
+          { id: 'm-written', canvasId: 'written' },
+        ]);
+        await seed('vectors', [{ id: 'empty' }, { id: 'written' }]);
+        await seed('snapshots', [
+          { id: 's-empty', noteId: 'empty', timestamp: NOW },
+          { id: 's-written', noteId: 'written', timestamp: NOW },
+        ]);
+        assert.equal((await run(cmd('trashNote', { noteId: 'empty' }))).code, 'note-deleted');
+        assert.equal((await run(cmd('trashNote', { noteId: 'written' }))).code, 'note-trashed');
+        assert.deepEqual(
+          [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
+          [['m-written'], ['written'], ['s-written']],
+        );
       });
 
       it("commands on a note that doesn't exist are rejected with not-found", async () => {
@@ -307,6 +363,22 @@ export function runContractSuite(fixture) {
           updatedAt: NOW + 1000,
         });
         assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 2));
+      });
+
+      it('a save that carries no preview or todoProgress keeps the ones stored', async () => {
+        await createNote({ noteId: 'n1' });
+        await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: someBlocks('n1', 1),
+            preview: 'Line 0',
+            todoProgress: { done: 0, total: 1 },
+          }),
+        );
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2) }));
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.preview, note?.todoProgress], ['Line 0', { done: 0, total: 1 }]);
+        assert.equal((await blocksOf('n1')).length, 2);
       });
 
       it('puts the blocks it carries and deletes none, so a block another writer added stays', async () => {
@@ -573,6 +645,20 @@ export function runContractSuite(fixture) {
         );
         assert.deepEqual(result.committedIds, ['b', 'c']);
         assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [['b', 'c'], ['a']]);
+      });
+
+      it("a bulk command that's refused answers with a plain outcome, with no items", async () => {
+        await createNote({ noteId: 'a', name: 'A' });
+        const popup = ctx.kernel(CALLERS.popup);
+        const refused = await popup.execute(cmd('runBulkAction', { action: 'archive', noteIds: ['a'] }));
+        assertRejected(refused, 'policy', 'not-on-surface');
+        // @ts-expect-error a bulk command's answer has items only once it ran
+        assert.equal(refused.items, undefined);
+        const unknownAction = /** @type {any} */ ({ action: 'shred', noteIds: ['a'] });
+        const invalid = await kernel.execute(cmd('runBulkAction', unknownAction));
+        assertRejected(invalid, 'validation', 'invalid-command');
+        assert.ok(!('items' in invalid) && !('committedIds' in invalid), JSON.stringify(invalid));
+        assert.deepEqual(await idsIn('active'), ['a']);
       });
 
       it('a bulk action reaches every listener on the commit feed, so a second list sees it too', async () => {
@@ -871,6 +957,23 @@ export function runContractSuite(fixture) {
         command.name = () => 'not data';
         assertRejected(await kernel.execute(command), 'validation', 'not-cloneable');
         assert.equal(await noteOf('n1'), undefined);
+      });
+
+      it("refuses what #13's JSON codec refuses: Dates, BigInts, and numbers JSON can't hold", async () => {
+        for (const name of [new Date(NOW), 10n, NaN, Infinity]) {
+          const command = /** @type {any} */ (cmd('createNote', { noteId: 'n1' }));
+          command.name = name;
+          assertRejected(await kernel.execute(command), 'validation', 'not-cloneable');
+        }
+        assert.equal(await noteOf('n1'), undefined);
+      });
+
+      it('keeps an own __proto__ key from JSON.parse as data, so the command commits as sent', async () => {
+        const sent = '{"openTabs":[{"__proto__":{"pinned":true},"noteId":"n1"}],"activeTabIndex":0}';
+        const session = JSON.parse(sent);
+        committedOf(await kernel.execute(cmd('saveWorkspaceSession', { session })));
+        const state = await kernel.query({ type: 'getWorkspaceSession' });
+        assert.equal(JSON.stringify(state.kind === 'ready' && state.data), sent);
       });
 
       it('every catalog command is one this suite runs', () => {

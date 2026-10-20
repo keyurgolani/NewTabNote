@@ -244,72 +244,30 @@ export const noteCommands = {
     const { noteId } = command;
     if (!isId(noteId)) return invalid();
     const now = clock.now();
-    let untitled = false;
     let deleting = false;
-    const whenDeleting = () => deleting;
-    /** @type {Unit[]} */
-    const units = [
-      {
-        stores: ['notes'],
-        mode: 'readonly',
-        async run(tx) {
-          const note = await tx.get('notes', noteId);
-          if (!note) return noteNotFound();
-          untitled = isUntitled(note);
-        },
-      },
-      // An untitled note with nothing in it is deleted, in Storage.permanentlyDeleteNote's order
-      {
-        stores: ['blocks'],
-        when: () => untitled,
-        async run(tx) {
-          const blocks = await tx.getAllByIndex('blocks', 'canvasId', noteId);
-          deleting = isEmpty(blocks);
-          if (deleting) for (const block of blocks) tx.delete('blocks', block.id);
-        },
-      },
-      {
-        stores: ['media'],
-        when: whenDeleting,
-        async run(tx) {
+    // One transaction decides and does it, so a title or a save that commits in between can't
+    // leave the decision stale on an adapter that commits each unit on its own
+    /** @type {Unit} */
+    const trash = {
+      stores: ['notes', 'blocks', 'media', 'vectors', 'snapshots'],
+      async run(tx) {
+        const note = await tx.get('notes', noteId);
+        if (!note) return noteNotFound();
+        const blocks = isUntitled(note) ? await tx.getAllByIndex('blocks', 'canvasId', noteId) : null;
+        // An untitled note with nothing in it is deleted, with what Storage.permanentlyDeleteNote deletes
+        deleting = blocks !== null && isEmpty(blocks);
+        if (deleting && blocks) {
+          for (const block of blocks) tx.delete('blocks', block.id);
           for (const key of await tx.getKeysByIndex('media', 'canvasId', noteId)) tx.delete('media', key);
-        },
-      },
-      {
-        stores: ['vectors'],
-        when: whenDeleting,
-        async run(tx) {
           tx.delete('vectors', noteId);
-        },
-      },
-      {
-        stores: ['snapshots'],
-        when: whenDeleting,
-        async run(tx) {
           for (const key of await tx.getKeysByIndex('snapshots', 'noteId', noteId)) tx.delete('snapshots', key);
-        },
+          tx.delete('notes', noteId);
+          return;
+        }
+        tx.put('notes', { ...note, trashed: true, trashedAt: now, archived: false, archivedAt: null, updatedAt: now });
       },
-      {
-        stores: ['notes'],
-        async run(tx) {
-          const note = await tx.get('notes', noteId);
-          if (deleting) {
-            if (note) tx.delete('notes', noteId);
-            return;
-          }
-          if (!note) return noteNotFound();
-          tx.put('notes', {
-            ...note,
-            trashed: true,
-            trashedAt: now,
-            archived: false,
-            archivedAt: null,
-            updatedAt: now,
-          });
-        },
-      },
-    ];
-    return unitsWork(command, units, () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]), {
+    };
+    return unitsWork(command, [trash], () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]), {
       primary: noteRecord(noteId),
     });
   },
