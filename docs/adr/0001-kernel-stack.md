@@ -53,9 +53,9 @@ Every new tab, the Popup, the Side Panel, and the service worker each host their
 The owner's spec (section 7.1) says a background coordinator serializes durable writes, and that stands. #35 builds it. Until it lands, each context commits on its own, and the gap is handled like this:
 
 1. Each command's field-scoped read and write run in one IndexedDB readwrite transaction per store, with no other `await` in between. `saveNoteContent` writes the note's fields and blocks in one transaction over `canvases` and `elements`.
-2. Two contexts writing one note's blocks can still race. That's a `declared-gap` row in the ledger, owned by [#17][i17] (repositories and migrations).
+2. Two contexts writing one note's blocks can still race. That's a `declared-gap` row in the ledger, owned by [#17][i17] (repositories and migrations). Two contexts creating today's Daily Note at the same moment can also each create one, as in 1.4.0, because [`ensureDailyNote`][ensure-daily] reads and creates in separate transactions. #17's daily index fixes that with one ensure-and-create transaction.
 3. A projection sees another context's commits on its next repository read, until [#13][i13] (message contracts) adds events. Nothing in `js/` uses `BroadcastChannel` today, so notes behave as they do in 1.4.0. Preferences keep their cross-tab propagation through `chrome.storage.local`.
-4. Startup maintenance runs from the new-tab and service-worker roots only, as today. Popup and Side Panel open the database unversioned, with no repair, upgrade, or maintenance, and a newer on-disk version returns `unavailable`.
+4. Startup maintenance (default settings, and the orphan sweep that [#33][i33] makes report-only) runs from the new-tab and service-worker roots only, as today. Popup and Side Panel open the database unversioned, with no repair, upgrade, or maintenance. They keep #33's `db.version` guard, so a newer on-disk version returns `unavailable`. No kernel slice changes the schema, and #17 owns `versionchange` handling for the first change that does.
 
 #35's acceptance criteria require every repository write to commit through the coordinator, with an architecture test that also covers the roots [#2][i2] (Moment) and [#3][i3] (Workspace) add later. Per-context kernels are the step before that.
 
@@ -137,6 +137,7 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 **Consequences and risks.**
 
 - The worker can use static imports only, because `import()` doesn't work in a service worker.
+- The legacy globals still work in a module worker, because `utils.js` and `storage.js` assign `Utils` and `Storage` to `self` when there's no `window` ([`utils.js` L772-L773][utils-global], [`storage.js` L2006-L2007][storage-global]). A top-level declaration in a module is no longer a global, though, so anything another file reads has to be assigned to `self` explicitly.
 - A throw while any module the worker imports is evaluating stops the worker before its listeners register, and context menus and Alt+P/Alt+S disappear with no visible error. A static import has no try/catch around it the way today's `importScripts` does. Slice 1 is done only when `dist/` loads and the menus and commands register after install and after an update. It also updates #34's `test/helpers/load-background.js` so the characterization test loads the module worker.
 - A module worker's top-level functions aren't globals, so `js/background.js` sets `self.captureToDailyNote` for #34's harness, and slice 4 points that name at the kernel's `captureToDailyNote` command.
 - A kernel file missing from `dist/` breaks the module graph, and the new tab boots blank. The build walks the directories, so no hand-kept list can miss a file, and `check:dist` resolves every static import, `<script src>`, and the manifest's `service_worker` inside `dist/`. Removing a kernel file from `dist/` has to fail it.
@@ -215,3 +216,6 @@ Change a decision by amending this file in a PR that merges before the code that
 [npm-test]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/package.json#L10
 [csp]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/manifest.json#L68-L70
 [bootstrap]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/app.js#L6797-L6803
+[ensure-daily]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/storage.js#L585-L603
+[utils-global]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/utils.js#L772-L773
+[storage-global]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/storage.js#L2006-L2007
