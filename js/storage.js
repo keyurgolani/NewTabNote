@@ -1145,6 +1145,36 @@ class DatabaseManager {
   }
 
   /**
+   * Write a note and its blocks in one readwrite transaction on `canvases` and
+   * `elements`, so a note is never stored without the blocks the editor had for it.
+   * Sets `updatedAt` like updateNote. The transaction opens synchronously, before
+   * this returns, which lets pagehide and visibilitychange handlers use it.
+   * @param {Object} note - Note record (`updatedAt` is set on it)
+   * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
+   * @returns {Promise<Object>} The note, once the transaction completes
+   */
+  saveNoteWithBlocks(note, elements) {
+    note.updatedAt = Date.now();
+    return new Promise((resolve, reject) => {
+      const tx = this.transaction(['canvases', 'elements'], 'readwrite');
+      tx.oncomplete = () => resolve(note);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
+      try {
+        tx.objectStore('canvases').put(note);
+        const elementStore = tx.objectStore('elements');
+        for (const element of elements) {
+          elementStore.put(element);
+        }
+      } catch (error) {
+        // A put that throws (for example DataCloneError) must not let the rest commit.
+        tx.abort();
+        reject(error);
+      }
+    });
+  }
+
+  /**
    * Helper to update only name in search index
    */
   async updateNoteNameInSearchIndex(noteId, name) {

@@ -18,6 +18,7 @@
     "@playwright/test": "1.64.1",
     "archiver": "^7.0.1",
     "clean-css": "^5.3.3",
+    "fake-indexeddb": "6.2.5",
     "terser": "^5.31.0",
     "typescript": "^5.9.3"
   },

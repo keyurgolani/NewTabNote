@@ -2,6 +2,26 @@
  * Block Editor - handles all editor interactions
  */
 
+/**
+ * The shared DatabaseManager from storage.js. The bare `Storage` global also
+ * names the DOM's Web Storage type, so typed calls go through this.
+ * @returns {DatabaseManager}
+ */
+function editorStorage() {
+  return /** @type {any} */ (globalThis).Storage;
+}
+
+/**
+ * What one save writes, captured synchronously when the save starts, so a
+ * later note switch can't change which note the blocks land in.
+ * @typedef {Object} EditorSaveState
+ * @property {number} seq - Capture order; a newer capture of the same note supersedes an older one
+ * @property {string} noteId
+ * @property {Object} noteData - The note record, shared with the editor while that note is loaded
+ * @property {Array<Object>} blocks - Serialized blocks with `canvasId` and `order` set
+ * @property {boolean} written - True once this state's transaction has been opened
+ */
+
 class BlockEditor {
   constructor(config = {}) {
     this.root = config.root || document;
@@ -35,7 +55,7 @@ class BlockEditor {
     this.templateFilter = '';
     this.templates = []; // Cached templates
 
-    this.saveTimeout = null;
+    this._initPersistenceState();
     this.isDragging = false;
     this.draggedBlock = null;
     this.isAutoTitleUpdate = false; // Flag to track programmatic title updates
@@ -72,6 +92,7 @@ class BlockEditor {
     this._versionHistoryOpen = false;
 
     this.setupEventListeners();
+    this._bindLifecycleFlush();
     this.buildSlashMenu();
 
     // Floating formatting toolbar (Req 9.1–9.5)
@@ -179,18 +200,44 @@ class BlockEditor {
 
   /**
    * Load a note by ID into the editor.
+   *
+   * The note being left is saved first, and the next note is read into locals
+   * and swapped in with one synchronous step, so no save can pair one note's ID
+   * with another note's blocks. A load superseded by a later call drops its result.
    * @param {string} noteId - Note ID to load
    * @returns {Promise<void>}
    */
   async loadNote(noteId) {
-    // Clear any existing insights polling
-    if (this.insightsPollingId) {
-      clearInterval(this.insightsPollingId);
-      this.insightsPollingId = null;
+    const loadSeq = ++this._loadSeq;
+    this._stopInsightsPolling();
+    this._stopSnapshotInterval();
+
+    // An import holds saves until it commits; the old note's edits go in after it.
+    if (this._holdReleased) await this._holdReleased;
+    if (loadSeq !== this._loadSeq) return;
+
+    await this.flushSave();
+    if (loadSeq !== this._loadSeq) return;
+
+    const noteData = await Storage.getNote(noteId);
+    const blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
+    if (loadSeq !== this._loadSeq) return;
+
+    if (!noteData) {
+      // Keep the note that is loaded rather than pointing the editor at nothing.
+      console.error('Note not found:', noteId);
+      this._resumeNoteTimers();
+      return;
     }
 
+    // Edits typed into the old note while the reads ran still belong to it.
+    this._writePendingNow();
+
     this.noteId = noteId;
-    this.noteData = await Storage.getNote(noteId);
+    this.noteData = noteData;
+    this.blocks = blocksData
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map((data) => Block.deserialize(data));
 
     // Clear undo/redo stacks for new note
     this.undoStack.length = 0;
@@ -202,31 +249,12 @@ class BlockEditor {
 
     // Reset snapshot tracking for new note (Req 31.1)
     this._snapshotDirty = false;
-    this._stopSnapshotInterval();
-    this._startSnapshotInterval();
-
-    if (!this.noteData) {
-      console.error('Note not found:', noteId);
-      return;
-    }
 
     // Set title
     this.titleEl.textContent = this.noteData.name || '';
 
     // Set timestamp
     this.updateTimestampDisplay();
-
-    // Render insights section if available (async - checks for extraction state)
-    await this.renderInsights();
-
-    // Start polling if extraction is in progress
-    await this.startInsightsPollingIfNeeded();
-
-    // Load blocks
-    const blocksData = await Storage.getElementsByNote(noteId);
-    this.blocks = blocksData
-      .sort((a, b) => (a.order || 0) - (b.order || 0))
-      .map((data) => Block.deserialize(data));
 
     // Check if note already has content (for first-content detection)
     const existingContent = this.blocks.some(block => {
@@ -265,14 +293,48 @@ class BlockEditor {
         editorContainer.scrollTop = 0;
       }
     }, 50);
+
+    this._startSnapshotInterval();
+
+    // Render insights section if available (async - checks for extraction state)
+    await this.renderInsights();
+    if (loadSeq !== this._loadSeq) return;
+
+    // Start polling if extraction is in progress
+    await this.startInsightsPollingIfNeeded();
+  }
+
+  /**
+   * Stop polling for insights extraction.
+   * @returns {void}
+   */
+  _stopInsightsPolling() {
+    if (this.insightsPollingId) {
+      clearInterval(this.insightsPollingId);
+      this.insightsPollingId = null;
+    }
+  }
+
+  /**
+   * Restart the snapshot interval and insights polling for the loaded note
+   * after a load that didn't switch notes.
+   * @returns {void}
+   */
+  _resumeNoteTimers() {
+    if (!this.noteId) return;
+    this._startSnapshotInterval();
+    this.startInsightsPollingIfNeeded().catch((error) => {
+      console.warn('Insights polling failed to restart:', error);
+    });
   }
 
   /**
    * Start polling for insights extraction completion if needed
    */
   async startInsightsPollingIfNeeded() {
-    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
-    if (!extractingTimestamp) {
+    const noteId = this.noteId;
+    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${noteId}`, null);
+    if (!extractingTimestamp || noteId !== this.noteId) {
       return;
     }
 
@@ -282,7 +344,8 @@ class BlockEditor {
       return;
     }
 
-    // Poll every 2 seconds to check if extraction completed
+    // Poll every 2 seconds to check if extraction completed (one poller at a time)
+    this._stopInsightsPolling();
     this.insightsPollingId = setInterval(async () => {
       const stillExtracting = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
 
@@ -1327,9 +1390,11 @@ class BlockEditor {
 
   /**
    * Get all blocks' text content combined
+   * @param {Array<Object>} [blocks=this.blocks] - Blocks or serialized block records
+   * @returns {string}
    */
-  getAllBlocksTextContent() {
-    return this.blocks
+  getAllBlocksTextContent(blocks = this.blocks) {
+    return blocks
       .map(block => this.extractBlockTextContent(block))
       .filter(text => text && text.trim())
       .join('\n\n');
@@ -3325,6 +3390,33 @@ class BlockEditor {
   // ============ Saving ============
 
   /**
+   * Set up save and load bookkeeping. Called from the constructor.
+   * @returns {void}
+   */
+  _initPersistenceState() {
+    /** @type {ReturnType<typeof setTimeout>|null} Pending debounce or 1 s retry timer */
+    this.saveTimeout = null;
+    /** True when the pending timer is the retry after a failed save (Req 25.4) */
+    this._retryPending = false;
+    /** Capture counter for EditorSaveState.seq */
+    this._saveSeq = 0;
+    /** @type {Map<string, number>} Newest capture per note whose transaction has opened */
+    this._writtenSeq = new Map();
+    /** @type {Set<{state: EditorSaveState, promise: Promise<void>}>} */
+    this._inFlightSaves = new Set();
+    /** Load counter; a load that is no longer the latest drops its result */
+    this._loadSeq = 0;
+    /** True while an import holds saves (see holdSaves) */
+    this._savesHeld = false;
+    /** A save came due while saves were held */
+    this._heldSaveDue = false;
+    /** @type {Promise<void>|null} Resolves when the current hold ends */
+    this._holdReleased = null;
+    /** @type {((value?: any) => void)|null} */
+    this._releaseHold = null;
+  }
+
+  /**
    * Schedule save with debounce (Req 25.1).
    * Batches multiple rapid edits into a single save with a 500ms delay.
    * @returns {void}
@@ -3332,90 +3424,339 @@ class BlockEditor {
   scheduleSave() {
     this.updateSaveStatus('Saving...');
     this._snapshotDirty = true;
-
-    clearTimeout(this.saveTimeout);
-    this.saveTimeout = setTimeout(() => this.save(), 500);
+    this._setSaveTimer(500, false);
   }
 
   /**
-   * Collect DOM-dependent save metadata inside a rAF callback (Req 25.2).
+   * Arm the save timer. The 1 s retry uses the same handle, so a pending retry
+   * counts as a pending save for flushSave and the page-hide flush.
+   * @param {number} delay
+   * @param {boolean} isRetry
+   * @returns {void}
+   */
+  _setSaveTimer(delay, isRetry) {
+    clearTimeout(this.saveTimeout);
+    this._retryPending = isRetry;
+    this.saveTimeout = setTimeout(() => {
+      this.saveTimeout = null;
+      this._retryPending = false;
+      if (this._savesHeld) {
+        this._heldSaveDue = true;
+        return;
+      }
+      this._startSave(isRetry);
+    }, delay);
+  }
+
+  /**
+   * Cancel the pending timer and report whether a save was due.
+   * @returns {{due: boolean, isRetry: boolean}}
+   */
+  _takePendingSave() {
+    const due = this.saveTimeout !== null || this._heldSaveDue;
+    const isRetry = this._retryPending;
+    clearTimeout(this.saveTimeout);
+    this.saveTimeout = null;
+    this._retryPending = false;
+    this._heldSaveDue = false;
+    return { due, isRetry };
+  }
+
+  /**
+   * Save the loaded note now. Callers that need it stored before acting on it
+   * (AI insert) await this.
+   * @param {boolean} [isRetry=false] - Whether this is a retry attempt
+   * @returns {Promise<void>}
+   */
+  save(isRetry = false) {
+    this._takePendingSave();
+    return this._startSave(isRetry);
+  }
+
+  /**
+   * Write any pending save now, or wait for the one in flight. A pending retry
+   * counts. Writes nothing when nothing is pending.
+   * @returns {Promise<void>}
+   */
+  async flushSave() {
+    // A pending save, the retry it may schedule, and the saves in flight: a few rounds at most.
+    for (let round = 0; round < 8; round++) {
+      const pending = this._takePendingSave();
+      if (pending.due) {
+        await this._startSave(pending.isRetry);
+        continue;
+      }
+      if (this._inFlightSaves.size > 0) {
+        await Promise.all(Array.from(this._inFlightSaves, (entry) => entry.promise));
+        continue;
+      }
+      return;
+    }
+  }
+
+  /**
+   * Capture what a save writes, synchronously. Serializing here, before any
+   * await, keeps a later note switch from moving these blocks to another note.
+   * @returns {EditorSaveState|null} null when no note is loaded
+   */
+  _captureSaveState() {
+    if (!this.noteId || !this.noteData) return null;
+    const noteId = this.noteId;
+    const blocks = this.blocks.map((block, index) => {
+      const data = block.serialize();
+      // Field name 'canvasId' kept for backward compatibility
+      data.canvasId = noteId;
+      data.order = index;
+      return data;
+    });
+    return { seq: ++this._saveSeq, noteId, noteData: this.noteData, blocks, written: false };
+  }
+
+  /**
+   * Start a save of the loaded note and track it until it finishes.
+   * @param {boolean} isRetry
+   * @returns {Promise<void>}
+   */
+  _startSave(isRetry) {
+    const state = this._captureSaveState();
+    if (!state) return Promise.resolve();
+    return this._trackSave(state, this._runSave(state, isRetry));
+  }
+
+  /**
+   * @param {EditorSaveState} state
+   * @param {Promise<void>} work
+   * @returns {Promise<void>}
+   */
+  _trackSave(state, work) {
+    const entry = { state, promise: Promise.resolve() };
+    entry.promise = work.finally(() => {
+      this._inFlightSaves.delete(entry);
+    });
+    this._inFlightSaves.add(entry);
+    return entry.promise;
+  }
+
+  /**
+   * Run one save: wait a frame for the metadata (Req 25.2), write the note and
+   * its blocks in one transaction, then update the search name, links,
+   * indexing, and sidebar. Shows "Saved" when done (Req 25.3).
+   * @param {EditorSaveState} state
+   * @param {boolean} isRetry
+   * @returns {Promise<void>}
+   */
+  async _runSave(state, isRetry) {
+    try {
+      const meta = await this._prepareSaveData(state.blocks);
+      // A page-hide flush or a newer save of this note may have written it while we waited.
+      if (state.written || this._isSuperseded(state)) return;
+      this._applySaveMeta(state, meta);
+      await this._writeSaveState(state);
+      await this._afterSaveWrite(state, meta.text);
+    } catch (error) {
+      this._onSaveFailed(error, isRetry);
+    }
+  }
+
+  /**
+   * Retry once after 1 s, then show the error toast (Req 25.4).
+   * @param {*} error
+   * @param {boolean} isRetry
+   * @returns {void}
+   */
+  _onSaveFailed(error, isRetry) {
+    console.error('Failed to save:', error);
+    if (!isRetry) {
+      this.updateSaveStatus('Retrying...');
+      this._setSaveTimer(1000, true);
+    } else {
+      this.updateSaveStatus('Error saving');
+      Utils.showToast('Failed to save note. Please try again.', 'error');
+    }
+  }
+
+  /**
+   * @param {EditorSaveState} state
+   * @returns {boolean} True when a newer capture of the same note has been written
+   */
+  _isSuperseded(state) {
+    return (this._writtenSeq.get(state.noteId) || 0) > state.seq;
+  }
+
+  /**
+   * @param {EditorSaveState} state
+   * @param {{preview: string, todoProgress: Object|null}} meta
+   * @returns {void}
+   */
+  _applySaveMeta(state, meta) {
+    state.noteData.preview = meta.preview;
+    state.noteData.todoProgress = meta.todoProgress;
+  }
+
+  /**
+   * Open the note-and-blocks transaction for a captured state.
+   * @param {EditorSaveState} state
+   * @returns {Promise<Object>}
+   */
+  _writeSaveState(state) {
+    state.written = true;
+    if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
+      this._writtenSeq.set(state.noteId, state.seq);
+    }
+    return editorStorage().saveNoteWithBlocks(state.noteData, state.blocks);
+  }
+
+  /**
+   * Writes that follow once the note and its blocks are stored.
+   * @param {EditorSaveState} state
+   * @param {string} text - All block text, for wiki links
+   * @returns {Promise<void>}
+   */
+  async _afterSaveWrite(state, text) {
+    const storage = editorStorage();
+    if (state.noteData.name !== undefined) {
+      await storage.updateNoteNameInSearchIndex(state.noteId, state.noteData.name);
+    }
+
+    // Update bidirectional links
+    await storage.updateNoteLinks(state.noteId, Utils.extractWikiLinks(text));
+
+    this.updateSaveStatus('Saved');
+
+    // Trigger background indexing and sidebar preview refresh
+    const app = this.getApp();
+    if (app && app.triggerIndexing) {
+      app.triggerIndexing(state.noteId);
+    }
+    if (app && app.updateSidebarNotePreview) {
+      app.updateSidebarNotePreview(state.noteData);
+    }
+  }
+
+  /**
+   * Save metadata for a set of blocks: preview, todo progress, and the text
+   * wiki links are read from.
+   * @param {Array<Object>} blocks
+   * @returns {{preview: string, todoProgress: Object|null, text: string}}
+   */
+  _computeSaveData(blocks) {
+    let preview = '';
+    let todoProgress = null;
+    if (typeof SidebarUtils !== 'undefined') {
+      const metadata = SidebarUtils.buildNoteSaveMetadata(blocks);
+      preview = metadata.preview;
+      todoProgress = metadata.todoProgress;
+    }
+    const text = this.getAllBlocksTextContent(blocks);
+    return { preview, todoProgress, text };
+  }
+
+  /**
+   * Collect save metadata inside a rAF callback (Req 25.2).
    * Batches DOM reads to avoid forced synchronous layouts during save prep.
+   * @param {Array<Object>} blocks - The captured blocks this save writes
    * @returns {Promise<{preview: string, todoProgress: Object|null, text: string}>}
    */
-  _prepareSaveData() {
+  _prepareSaveData(blocks) {
     return new Promise((resolve) => {
-      requestAnimationFrame(() => {
-        let preview = '';
-        let todoProgress = null;
-        if (typeof SidebarUtils !== 'undefined') {
-          const metadata = SidebarUtils.buildNoteSaveMetadata(this.blocks);
-          preview = metadata.preview;
-          todoProgress = metadata.todoProgress;
-        }
-        const text = this.getAllBlocksTextContent();
-        resolve({ preview, todoProgress, text });
-      });
+      requestAnimationFrame(() => resolve(this._computeSaveData(blocks)));
     });
   }
 
   /**
-   * Persist note and blocks to storage.
-   * Uses rAF-batched DOM reads for save prep (Req 25.2),
-   * updates "Saved" status on completion (Req 25.3),
-   * and retries once after 1 s on failure with error toast if retry also fails (Req 25.4).
-   * @param {boolean} [isRetry=false] - Whether this is a retry attempt
-   * @returns {Promise<void>}
+   * Write pending edits when the page is hidden or closed. Each editor listens
+   * on its own document and window, so the PiP editor covers the PiP window.
+   * @returns {void}
    */
-  async save(isRetry = false) {
-    try {
-      // Batch DOM reads via rAF before writing to storage (Req 25.2)
-      const saveData = await this._prepareSaveData();
-
-      // Save note
-      if (this.noteData) {
-        this.noteData.preview = saveData.preview;
-        this.noteData.todoProgress = saveData.todoProgress;
-
-        await Storage.updateNote(this.noteData);
-
-        // Update bidirectional links
-        const linkNames = Utils.extractWikiLinks(saveData.text);
-        await Storage.updateNoteLinks(this.noteId, linkNames);
-      }
-
-      // Save blocks
-      for (let i = 0; i < this.blocks.length; i++) {
-        const block = this.blocks[i];
-        const data = block.serialize();
-        // Field name 'canvasId' kept for backward compatibility
-        data.canvasId = this.noteId;
-        data.order = i;
-        await Storage.saveElement(data);
-      }
-
-      this.updateSaveStatus('Saved');
-
-      // Trigger background indexing and sidebar preview refresh
-      const app = this.getApp();
-      if (app && app.triggerIndexing) {
-        app.triggerIndexing(this.noteId);
-      }
-      if (app && app.updateSidebarNotePreview) {
-        app.updateSidebarNotePreview(this.noteData);
-      }
-    } catch (error) {
-      console.error('Failed to save:', error);
-
-      if (!isRetry) {
-        // Retry once after 1 second (Req 25.4)
-        this.updateSaveStatus('Retrying...');
-        setTimeout(() => this.save(true), 1000);
-      } else {
-        // Retry also failed — show error toast (Req 25.4)
-        this.updateSaveStatus('Error saving');
-        Utils.showToast('Failed to save note. Please try again.', 'error');
-      }
+  _bindLifecycleFlush() {
+    const doc = this.doc;
+    doc.addEventListener('visibilitychange', () => {
+      if (doc.visibilityState === 'hidden') this._writePendingNow();
+    });
+    const win = doc.defaultView;
+    if (win) {
+      win.addEventListener('pagehide', () => this._writePendingNow());
     }
+  }
+
+  /**
+   * Synchronously write what is pending: a timer (debounce or retry), a save
+   * that came due while held, or a save still waiting for its frame. Hidden
+   * pages don't run rAF and closing pages don't wait, so the metadata is
+   * computed here and the transaction opens before this returns.
+   * Writes nothing when nothing is pending.
+   * @returns {void}
+   */
+  _writePendingNow() {
+    const waiting = Array.from(this._inFlightSaves, (entry) => entry.state)
+      .filter((state) => !state.written && !this._isSuperseded(state));
+    const pending = this._takePendingSave();
+    if (!pending.due && waiting.length === 0) return;
+
+    const current = pending.due ? this._captureSaveState() : null;
+    for (const state of waiting) {
+      // A fresh capture of the same note supersedes the older one.
+      if (current && state.noteId === current.noteId) continue;
+      this._writeNow(state, false);
+    }
+    if (current) this._writeNow(current, pending.isRetry);
+  }
+
+  /**
+   * Write a captured state without waiting for a frame.
+   * @param {EditorSaveState} state
+   * @param {boolean} isRetry
+   * @returns {void}
+   */
+  _writeNow(state, isRetry) {
+    const meta = this._computeSaveData(state.blocks);
+    this._applySaveMeta(state, meta);
+    const work = this._writeSaveState(state)
+      .then(() => this._afterSaveWrite(state, meta.text))
+      .catch((error) => this._onSaveFailed(error, isRetry));
+    this._trackSave(state, work);
+  }
+
+  /**
+   * Hold saves while another writer commits (import). Edits still schedule
+   * saves; one that comes due waits for releaseSaves. flushSave and the
+   * page-hide flush still write.
+   * @returns {void}
+   */
+  holdSaves() {
+    if (this._savesHeld) return;
+    this._savesHeld = true;
+    this._holdReleased = new Promise((resolve) => {
+      this._releaseHold = resolve;
+    });
+  }
+
+  /**
+   * End a hold and start any save that came due during it.
+   * @returns {void}
+   */
+  releaseSaves() {
+    if (!this._savesHeld) return;
+    const release = this._releaseHold;
+    this._savesHeld = false;
+    this._holdReleased = null;
+    this._releaseHold = null;
+    if (release) release();
+    if (this._heldSaveDue) {
+      this._heldSaveDue = false;
+      this._startSave(false);
+    }
+  }
+
+  /**
+   * Take on trash or archive flags another writer stored for the loaded note
+   * (import Replace), so the next save keeps them. Captures not yet written
+   * share this record and pick the flags up too.
+   * @param {{trashed?: boolean, trashedAt?: number|null, archived?: boolean, archivedAt?: number|null}} flags
+   * @returns {void}
+   */
+  adoptNoteFlags(flags) {
+    if (this.noteData) Object.assign(this.noteData, flags);
   }
 
   /**

@@ -12,7 +12,8 @@ class AnalyticsManager {
      */
     _getStorage() {
         if (!this.storage) {
-            this.storage = (typeof window !== 'undefined' ? window : self).Storage;
+            // `Storage` is also the DOM's Web Storage type, so read it untyped.
+            this.storage = /** @type {any} */ (typeof window !== 'undefined' ? window : self).Storage;
         }
         return this.storage;
     }
