@@ -7,7 +7,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, note, block, FakeDocument,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, plain, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -118,6 +118,51 @@ async function elementsById(env) {
   return Object.fromEntries(Object.entries(rows).map(([id, el]) => [id, { canvasId: el.canvasId, content: el.content }]));
 }
 
+/** Keep animation frames flowing until `promise` settles. */
+async function runUntil(env, promise) {
+  let finished = false;
+  const tracked = Promise.resolve(promise).finally(() => { finished = true; });
+  for (let i = 0; i < 400 && !finished; i++) {
+    env.frames();
+    await settle(2);
+  }
+  return tracked;
+}
+
+/**
+ * Make the next `times` writes of `noteId` fail, as a quota or I/O error does.
+ * @returns {Array<string>} The note ID of every write attempted
+ */
+function failWritesOf(Storage, noteId, times) {
+  const real = Storage.saveNoteWithBlocks.bind(Storage);
+  const attempts = [];
+  let left = times;
+  Storage.saveNoteWithBlocks = (n, els) => {
+    attempts.push(n.id);
+    if (n.id === noteId && left > 0) {
+      left -= 1;
+      return Promise.reject(new Error('QuotaExceededError'));
+    }
+    return real(n, els);
+  };
+  return attempts;
+}
+
+/** Record save status text and toasts. */
+function watchFeedback(env, editor) {
+  const statuses = [];
+  const toasts = [];
+  editor.updateSaveStatus = (status) => statuses.push(status);
+  env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
+  return { statuses, toasts };
+}
+
+/** Stub the DOM-only parts of deleting a block. */
+function allowDeletes(editor) {
+  Object.assign(editor, { removeBlockDOM() {}, focusBlock() {} });
+  return editor;
+}
+
 describe('BlockEditor save and load (AC1)', () => {
   let env;
   let Storage;
@@ -171,18 +216,36 @@ describe('BlockEditor save and load (AC1)', () => {
     assert.equal(Object.values(rows).filter((r) => r.canvasId === 'B').length, 1, 'no block moved to B');
   });
 
-  it('save() uses only what it captured before its first await', async () => {
+  it('save() keeps the note it started for when a switch starts before its frame', async () => {
     type(editor, 'captured');
     const saving = editor.save();
-    // The old bug: noteId and blocks change before the save writes.
+    const load = editor.loadNote('B');
+    env.frames();
+    await saving;
+    await runUntil(env, load);
+
+    assert.equal(editor.noteId, 'B');
+    const rows = await elementsById(env);
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'captured' });
+    assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo' });
+  });
+
+  it('a save never pairs its note with another note\'s blocks', async () => {
+    type(editor, 'captured');
+    const saving = editor.save();
+    // The 1.4.0 bug: the note changes before the save writes. loadNote writes
+    // the note it leaves first; anything else changing it must not move blocks.
+    const B = env.get('Block');
     editor.noteId = 'B';
     editor.noteData = await Storage.getNote('B');
+    editor.blocks = (await Storage.getElementsByNote('B')).map((data) => B.deserialize(data));
     env.frames();
     await saving;
 
     const rows = await elementsById(env);
-    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'captured' });
-    assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo' });
+    assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo' }, 'no B block moved to A');
+    assert.deepEqual([rows.a1.canvasId, rows.a2.canvasId], ['A', 'A'], 'no A block moved to B');
+    assert.equal((await Storage.getNote('A')).name, note('A').name, "A's record not overwritten with B's");
   });
 
   it('writes the note and its blocks in one readwrite transaction', async () => {
@@ -377,6 +440,155 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual(rows.a1, { canvasId: 'A', content: 'left pane' });
     assert.deepEqual(rows.b1, { canvasId: 'B', content: 'right pane' });
     assert.deepEqual(rows.c1, { canvasId: 'C', content: 'charlie' });
+  });
+});
+
+describe('BlockEditor deletes stay deleted', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = allowDeletes(makeEditor(env));
+    await editor.loadNote('A');
+  });
+
+  it('a block deleted while a save waits for its frame is not written back', async () => {
+    type(editor, 'alpha edited');
+    env.clock.tick(500); // the save starts and waits for requestAnimationFrame
+    assert.equal(env.pendingFrames(), 1);
+    editor.deleteBlock('a2'); // deleteElement commits right away
+    await settle();
+
+    env.frames(); // the waiting save writes
+    await settle();
+    await runUntil(env, editor.flushSave()); // and so does the delete's own save
+
+    const rows = await elementsById(env);
+    assert.equal(rows.a2, undefined, 'a2 stays deleted');
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'alpha edited' });
+    const fresh = makeEditor(env);
+    await fresh.loadNote('A');
+    assert.deepEqual(fresh.blocks.map((b) => b.id), ['a1'], 'a reload shows it gone');
+  });
+
+  it('with no frames running (PiP over a hidden tab), closing the window writes one fresh copy', async () => {
+    const pipDoc = new FakeDocument();
+    const pipWindow = windowTarget();
+    pipDoc.defaultView = pipWindow;
+    const pip = allowDeletes(makeEditor(env, pipDoc));
+    await pip.loadNote('A');
+
+    // The new tab is in the background, so its frames never run and each save waits.
+    type(pip, 'first');
+    env.clock.tick(500);
+    pip.deleteBlock('a2');
+    await settle();
+    env.clock.tick(500);
+    type(pip, 'second');
+    env.clock.tick(500);
+    assert.equal(env.pendingFrames(), 3, 'three saves waiting for a frame');
+
+    const opened = spyTransactions(Storage);
+    const blockWrites = () => writesOf(opened).filter((t) => t.stores.includes('elements')).length;
+    pipWindow.fire('pagehide');
+    assert.equal(writesOf(opened).length, 1, 'one write, opened before the handler returned');
+    await settle();
+    env.frames(); // the waiting saves wake up much later
+    await settle();
+    assert.equal(blockWrites(), 1, 'the older copies are superseded');
+
+    const rows = await elementsById(env);
+    assert.equal(rows.a2, undefined, 'a2 stays deleted');
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'second' });
+  });
+});
+
+describe('BlockEditor failed save before a note switch', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  /** Type into A while loadNote('B') reads B, so A's last write starts during the switch. */
+  async function switchWhileTyping(text) {
+    const load = editor.loadNote('B');
+    type(editor, text);
+    env.frames();
+    await load;
+    await settle();
+    assert.equal(editor.noteId, 'B');
+  }
+
+  it('the retry writes the failed copy of the note that was left, not the note now open', async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    const attempts = failWritesOf(Storage, 'A', 1);
+    await switchWhileTyping('typed while switching');
+    assert.equal(statuses[statuses.length - 1], 'Retrying...');
+
+    env.clock.tick(1000);
+    await runUntil(env, editor.flushSave());
+
+    const rows = await elementsById(env);
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'typed while switching' });
+    assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo' });
+    assert.deepEqual(attempts, ['A', 'A'], "A's retry did not write B");
+    assert.equal(statuses[statuses.length - 1], 'Saved');
+    assert.deepEqual(toasts, []);
+  });
+
+  it('a second failure of that copy shows the error toast', async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    const attempts = failWritesOf(Storage, 'A', 2);
+    await switchWhileTyping('never stored');
+
+    env.clock.tick(1000);
+    await runUntil(env, editor.flushSave());
+
+    assert.deepEqual(attempts, ['A', 'A']);
+    assert.equal(statuses[statuses.length - 1], 'Error saving');
+    assert.deepEqual(plain(toasts), [{ message: 'Failed to save note. Please try again.', kind: 'error' }]);
+    assert.deepEqual((await elementsById(env)).b1, { canvasId: 'B', content: 'bravo' });
+  });
+
+  it('typing in the open note before the retry fires keeps the retry', async () => {
+    failWritesOf(Storage, 'A', 1);
+    await switchWhileTyping('kept for the retry');
+
+    type(editor, 'bravo edited'); // re-arms the shared timer at 500 ms
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+
+    const rows = await elementsById(env);
+    assert.deepEqual(rows.a1, { canvasId: 'A', content: 'kept for the retry' });
+    assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo edited' });
+  });
+
+  it('flushSave counts that retry as pending', async () => {
+    failWritesOf(Storage, 'A', 1);
+    await switchWhileTyping('flushed retry');
+
+    await runUntil(env, editor.flushSave()); // before the 1 s retry timer fires
+
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'flushed retry' });
+    assert.equal(editor.saveTimeout, null, 'nothing left pending');
+  });
+
+  it('closing the tab writes that retry right away', async () => {
+    failWritesOf(Storage, 'A', 1);
+    await switchWhileTyping('retry on close');
+
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide');
+    assert.equal(writesOf(opened).length, 1, 'opened before the handler returned');
+    await settle();
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'retry on close' });
   });
 });
 
