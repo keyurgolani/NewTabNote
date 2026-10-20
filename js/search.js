@@ -130,3 +130,5 @@ class SearchEngine {
 }
 
 (typeof window !== 'undefined' ? window : self).SearchEngine = SearchEngine;
+
+const ntnPrGateProbe = ntnPrGateProbeUndefined;
