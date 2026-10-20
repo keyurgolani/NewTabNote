@@ -161,30 +161,41 @@ export function encodedBytes(text) {
 }
 
 /**
- * `value` with every object's keys in sorted order
- * @param {unknown} value
- * @returns {unknown}
+ * Orders two strings by their UTF-16 code units, as RFC 8785 orders keys
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
  */
-function sorted(value) {
-  if (Array.isArray(value)) return value.map(sorted);
-  if (value === null || typeof value !== 'object') return value;
+const byCodeUnits = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * `value`, which check() passed, as RFC 8785 writes it. Each object is written key by key,
+ * since an object rebuilt in sorted order would list its integer-like keys first again.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function canonical(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(item => canonical(item)).join(',')}]`;
   const record = /** @type {Record<string, unknown>} */ (value);
-  return Object.fromEntries(
-    Object.keys(record)
-      .sort()
-      .map(key => [key, sorted(record[key])]),
-  );
+  const keys = Object.keys(record)
+    .filter(key => record[key] !== undefined)
+    .sort(byCodeUnits);
+  return `{${keys.map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(',')}}`;
 }
 
 /**
- * `value` as canonical JSON: what encode() writes, undefined fields left out, with every
- * object's keys sorted, so two copies of one command read the same. #17 hashes it for a
- * command's payload hash.
+ * `value` as canonical JSON, RFC 8785's JSON Canonicalization Scheme, so two copies of one
+ * command read the same: what encode() writes, undefined fields left out, with every object's
+ * keys sorted by their UTF-16 code units. Numbers and strings are written as JSON.stringify
+ * writes them, which is what RFC 8785 asks. A lone surrogate, which RFC 8785's I-JSON input
+ * rules out, is escaped as JSON.stringify escapes it, so text holding one still reads the same
+ * each time. #17 hashes it for a command's payload hash.
  * @param {unknown} value
  * @returns {string}
  * @throws {CodecError}
  */
 export function canonicalJson(value) {
   check(value, '', 0, new Set());
-  return JSON.stringify(sorted(value));
+  return canonical(value);
 }

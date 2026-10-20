@@ -175,4 +175,40 @@ describe('codec', () => {
     assert.equal(canonicalJson({ title: undefined, id: 'n1' }), '{"id":"n1"}');
     assertRefused(() => canonicalJson([undefined]), 'a value of type undefined', '/0');
   });
+
+  it('sorts keys as RFC 8785 does, by UTF-16 code units, integer-like keys included', () => {
+    // JavaScript lists integer-like keys first, in numeric order, which RFC 8785 doesn't
+    assert.equal(canonicalJson({ 10: 1, 2: 2, a: 3 }), '{"10":1,"2":2,"a":3}');
+    assert.equal(canonicalJson({ list: [{ 1: 'x', '01': 'y', 0: 'z' }] }), '{"list":[{"0":"z","01":"y","1":"x"}]}');
+    // The keys of RFC 8785's sorting sample (section 3.2.3): an emoji's surrogate pair sorts
+    // by its first code unit, before U+FB33
+    const sample = { '\u20ac': 1, '\r': 2, '\ufb33': 3, 1: 4, '\ud83d\ude00': 5, '\u0080': 6, '\u00f6': 7 };
+    assert.equal(canonicalJson(sample), '{"\\r":2,"1":4,"\u0080":6,"\u00f6":7,"\u20ac":1,"\ud83d\ude00":5,"\ufb33":3}');
+  });
+
+  it('writes numbers and strings as RFC 8785 does, as ECMAScript writes them', () => {
+    // RFC 8785's sample (section 3.2.2), from its JSON text
+    const sample = decode(
+      String.raw`{"numbers":[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001],"string":"\u20ac$\u000F\u000aA'\u0042\u0022\u005c\\\"\/","literals":[null,true,false]}`,
+    );
+    assert.equal(
+      canonicalJson(sample),
+      String.raw`{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"€$\u000f\nA'B\"\\\\\"/"}`,
+    );
+    for (const [number, text] of /** @type {const} */ ([
+      [-0, '0'],
+      [5e-324, '5e-324'],
+      [-1.7976931348623157e308, '-1.7976931348623157e+308'],
+      [9007199254740992, '9007199254740992'],
+      [999999999999999900000, '999999999999999900000'],
+      [1e21, '1e+21'],
+      [0.000001, '0.000001'],
+      [1e-7, '1e-7'],
+    ])) {
+      assert.equal(canonicalJson([number]), `[${text}]`, text);
+    }
+    // A lone surrogate, which RFC 8785's I-JSON input rules out, is escaped as JSON.stringify
+    // escapes it, so text holding one still reads the same each time
+    assert.equal(canonicalJson({ text: 'a\ud800' }), '{"text":"a\\ud800"}');
+  });
 });
