@@ -21,6 +21,9 @@ const MARKERS = {
   unit: /^✖ failing tests:/,
   typecheck: /^typecheck ratchet/,
   build: /^✗ Strict build failed|^Build failed|^Packaging failed|^Error/,
+  // Playwright's list reporter numbers each failed test; a spec or config that fails to
+  // load, or a failed browser install, prints a bare Error line instead
+  extension: /^ {2}1\) |^Error: /,
 };
 
 function excerpt(text, marker) {

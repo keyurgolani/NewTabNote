@@ -49,6 +49,30 @@ test('starts a build excerpt at the strict summary, which lists every refusal', 
   assert.match(lines[2], /css\/c\.css: .*Broken @import/);
 });
 
+test('starts an extension excerpt at the first failed test, past the github annotations', () => {
+  const log = [
+    'Running 5 tests using 1 worker',
+    '',
+    '  ✓  1 e2e/smoke.spec.js:26:3 › new tab, first run: shows the welcome note and the walkthrough (1.9s)',
+    '  ✘  2 e2e/smoke.spec.js:26:3 › popup: shows the quick note input and an empty recent list (1.1s)',
+    '  ✘  3 e2e/smoke.spec.js:26:3 › popup: shows the quick note input and an empty recent list (retry #1) (1.0s)',
+    '::error file=e2e/smoke.spec.js,title=e2e/smoke.spec.js:26:3 › popup,line=35,col=7::  1) e2e/smoke.spec.js:26:3 › popup%0A    Error: uncaught',
+    '',
+    '  1) e2e/smoke.spec.js:26:3 › popup: shows the quick note input and an empty recent list ───────────',
+    '',
+    '    Error: uncaught exceptions that no test/known-defects.json entry lists under `uncaught`',
+    ...numbered(30, '    detail'),
+  ].join('\n');
+  const lines = excerpt(log, MARKERS.extension).split('\n');
+  assert.match(lines[0], /^ {2}1\) e2e\/smoke\.spec\.js:26:3 › popup/);
+  assert.match(lines[2], /Error: uncaught exceptions/);
+});
+
+test('starts an extension excerpt at an Error a failed load prints', () => {
+  const log = '> playwright test -c e2e/playwright.config.js\n\nError: test/known-defects.json breaks the ledger format:\n  KD-1: `id` has to be KD- and three digits\n';
+  assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], 'Error: test/known-defects.json breaks the ledger format:');
+});
+
 test('strips color codes and shortens very long lines', () => {
   const out = excerpt(`\u001b[31m✗ js/a.js: refused\u001b[39m\n${'x'.repeat(5000)}`, /^✗ /);
   assert.equal(out.split('\n')[0], '✗ js/a.js: refused');

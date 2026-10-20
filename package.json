@@ -8,12 +8,14 @@
     "build:dev": "node scripts/build.js --dev",
     "clean": "rm -rf dist",
     "test": "node --test test/*.test.js",
+    "test:extension": "playwright test -c e2e/playwright.config.js",
     "typecheck": "npx tsc --project jsconfig.json",
     "typecheck:ratchet": "node scripts/typecheck-ratchet.js",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "archiver": "^7.0.1",
     "clean-css": "^5.3.3",
     "terser": "^5.31.0",
