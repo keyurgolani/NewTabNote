@@ -34,17 +34,17 @@ const UPDATE_COMMAND = 'npm run design-token-scan -- --update';
 /** Counted patterns. Their counts per file only fall. */
 const PATTERNS = {
   'color-literal': 'Raw colors: hex, rgb(), hsl(), and the other color functions, and named colors in color properties',
-  'theme-branching': 'Theme branching outside the token output: [data-theme] and [data-scheme] selectors, prefers-color-scheme, dataset.theme, and comparisons with \'dark\' or \'light\'',
+  'theme-branching': 'Theme branching outside the token output: [data-theme] and [data-scheme] selectors, prefers-color-scheme, the data-theme attribute and dataset.theme, and comparisons with \'dark\' or \'light\'',
   'runtime-style': 'Runtime <style> creation: createElement(\'style\') and markup strings with <style',
   'inline-style-block': 'Inline <style> blocks in HTML',
   'style-attribute': 'style= attributes in HTML and markup strings, and setAttribute(\'style\')',
-  'undefined-var': 'var() of a property no production file or token defines, with no fallback',
-  'unregistered-read': 'getPropertyValue() of a custom property the token output doesn\'t register (it registers the color tokens), or of a computed name',
+  'undefined-var': 'var() with no fallback of a property nothing defines: no token, stylesheet, or script, and for an HTML page, not the page itself',
+  'unregistered-read': 'getPropertyValue() of a custom property the token output doesn\'t register with @property, or of a computed name',
   'gradient-text': 'Gradient text: a rule with background-clip: text',
   'backdrop-filter': 'backdrop-filter',
   'hard-shadow': 'box-shadow with a nonzero offset and zero blur',
   'one-sided-border': 'A one-sided border of 2px or more',
-  'transition-all': 'transition: all, or a transition with no property',
+  'transition-all': 'transition: all, or a transition with no property, reading var() of a duration or easing token as timing',
   'px-font-size': 'A px font size: font-size and font in CSS and style writes, canvas fonts, and Chart.js font sizes',
   'alias-use': 'var() of a legacy name (legacy.aliases in design/quiet-atlas.tokens.json)',
 };
@@ -80,6 +80,7 @@ const ONE_SIDE = /^border-(?:top|right|bottom|left|block-start|block-end|inline-
 const BORDER_STYLES = ['solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'];
 const EASING = /^(?:ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end|normal|allow-discrete|initial|inherit|unset|revert)$|^(?:steps|cubic-bezier|linear)\(/i;
 const TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)m?s$/i;
+const VAR_ONLY = /^var\(\s*(--[\w-]+)\s*(?:,[\s\S]*)?\)$/i;
 const PX = /(?:^|[^\w.-])(\d*\.?\d+)px\b/;
 
 // ---------- Files ----------
@@ -122,10 +123,13 @@ function productionFiles(root = ROOT_DIR) {
 function readDesign(root = ROOT_DIR) {
   const source = JSON.parse(fs.readFileSync(path.join(root, SOURCE_PATH), 'utf8'));
   const tokens = Object.entries(source.tokens || {});
+  const names = test => new Set(tokens.filter(([, token]) => test(token)).map(([name]) => name));
   return {
     tokens: new Set(tokens.map(([name]) => name)),
-    // The token output registers colors with @property
-    registered: new Set(tokens.filter(([, token]) => token.type === 'color').map(([name]) => name)),
+    // The token output registers colors with @property, except any marked unregistered
+    registered: names(token => token.type === 'color' && token.registered !== false),
+    // Durations and easings, which a transition names through var()
+    timing: names(token => token.type === 'duration' || token.type === 'easing'),
     aliases: new Set((source.legacy && source.legacy.aliases) || []),
   };
 }
@@ -256,6 +260,58 @@ function isStringish(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node);
 }
 
+function isPlus(node) {
+  return ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+}
+
+/**
+ * A + chain's operands, in order, through parentheses around inner chains, and
+ * the chain's own nodes
+ */
+function plusChain(node) {
+  const operands = [];
+  const links = [];
+  const visit = current => {
+    let inner = current;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    if (!isPlus(inner)) {
+      operands.push(current);
+      return;
+    }
+    links.push(current, inner);
+    visit(inner.left);
+    visit(inner.right);
+  };
+  visit(node);
+  return { operands, links };
+}
+
+/**
+ * The text of a string, a template, or a + chain with a string in it, with
+ * PLACEHOLDER for each expression and number literals as written; null for
+ * anything else
+ */
+function stringText(node) {
+  if (!node) return null;
+  if (isStringish(node)) return templateText(node);
+  if (!isPlus(node)) return null;
+  const { operands } = plusChain(node);
+  if (!operands.some(isStringish)) return null;
+  return operands.map(operand => {
+    if (isStringish(operand)) return templateText(operand);
+    return ts.isNumericLiteral(operand) ? operand.text : PLACEHOLDER;
+  }).join('');
+}
+
+/**
+ * A style value from a string or a concatenation, with each expression read as 0,
+ * so `${size}px` and size + 'px' read as px
+ */
+function styleValue(node) {
+  const text = stringText(node);
+  return text === null ? null : text.split(PLACEHOLDER).join('0');
+}
+
 function stringValue(node) {
   return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null;
 }
@@ -273,30 +329,42 @@ function collectJs(unit, text, startLine) {
   const consumed = new Set();
   const selectors = new Set();
   const fact = (kind, node, detail = {}) => unit.js.push({ kind, line: lineOf(node), ...detail });
+  // Mark a string, or a + chain and the strings in it, as read
+  const consume = node => {
+    consumed.add(node);
+    if (!isPlus(node)) return;
+    const { operands, links } = plusChain(node);
+    links.forEach(link => consumed.add(link));
+    operands.filter(isStringish).forEach(operand => consumed.add(operand));
+  };
 
   const visit = node => {
     // A stylesheet written as an array of lines, then joined
-    if (ts.isArrayLiteralExpression(node) && node.elements.length > 1
-      && node.elements.every(element => ts.isStringLiteral(element) || ts.isNoSubstitutionTemplateLiteral(element))) {
-      const joined = node.elements.map(element => element.text).join('\n');
+    if (ts.isArrayLiteralExpression(node) && node.elements.length > 1 && node.elements.every(element => stringText(element) !== null)) {
+      const joined = node.elements.map(stringText).join('\n');
       if (joined.includes('{') && joined.includes('}')) {
-        node.elements.forEach(element => consumed.add(element));
+        node.elements.forEach(consume);
         addJsString(unit, joined, lineOf(node.elements[0]));
       }
     }
-    if (isStringish(node) && !consumed.has(node)) addJsString(unit, templateText(node), lineOf(node), { selector: selectors.has(node) });
+    // A string, a template, or a concatenation, read whole
+    const text = consumed.has(node) ? null : stringText(node);
+    if (text !== null) {
+      consume(node);
+      addJsString(unit, text, lineOf(node), { selector: selectors.has(node) });
+    }
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const method = node.expression.name.text;
       const first = node.arguments[0];
       const firstValue = stringValue(first);
-      if (SELECTOR_METHODS.includes(method) && first && isStringish(first)) selectors.add(first);
+      if (SELECTOR_METHODS.includes(method) && stringText(first) !== null) selectors.add(first);
       if (method === 'createElement' && firstValue && firstValue.toLowerCase() === 'style') fact('runtime-style', node);
       if (method === 'setAttribute' && firstValue && firstValue.toLowerCase() === 'style') fact('style-attribute', node);
       if (method === 'getPropertyValue') fact('read', node, { name: firstValue });
       if (method === 'setProperty' && firstValue) {
         fact('define', node, { name: firstValue });
-        const second = node.arguments[1];
-        if (second && isStringish(second)) fact('style-write', node, { property: firstValue, value: templateText(second).split(PLACEHOLDER).join('0') });
+        const value = styleValue(node.arguments[1]);
+        if (value !== null) fact('style-write', node, { property: firstValue, value });
       }
     }
     if (ts.isBinaryExpression(node)) {
@@ -306,9 +374,11 @@ function collectJs(unit, text, startLine) {
       if (op === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left)) {
         const name = node.left.name.text;
         const target = node.left.expression;
-        const value = isStringish(node.right) ? templateText(node.right).split(PLACEHOLDER).join('0') : null;
-        if (name === 'font' && value !== null) fact('canvas-font', node, { value });
-        if (ts.isPropertyAccessExpression(target) && target.name.text === 'style' && value !== null) {
+        const value = styleValue(node.right);
+        const styleWrite = ts.isPropertyAccessExpression(target) && target.name.text === 'style';
+        // el.style.font is a style write; any other .font is a canvas font
+        if (name === 'font' && value !== null && !styleWrite) fact('canvas-font', node, { value });
+        if (styleWrite && value !== null) {
           fact('style-write', node, { property: name.replace(/[A-Z]/g, ch => `-${ch.toLowerCase()}`), value });
         }
         if (name === 'size' && ts.isPropertyAccessExpression(target) && target.name.text === 'font' && ts.isNumericLiteral(node.right)) {
@@ -317,8 +387,10 @@ function collectJs(unit, text, startLine) {
       }
     }
     if (ts.isCaseClause(node) && ['dark', 'light'].includes(stringValue(node.expression))) fact('theme-compare', node);
+    // dataset.theme is the legacy switch; data-scheme is the token output's own
+    // attribute, so writing it isn't branching, and only its selectors count
     if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression)
-      && node.expression.name.text === 'dataset' && ['theme', 'scheme'].includes(node.name.text)) {
+      && node.expression.name.text === 'dataset' && node.name.text === 'theme') {
       fact('theme-dataset', node);
     }
     if (ts.isPropertyAssignment(node) && propertyName(node.name) === 'font' && ts.isObjectLiteralExpression(node.initializer)) {
@@ -426,14 +498,23 @@ function isHardShadow(value) {
   });
 }
 
-function isTransitionAll(property, value) {
+/**
+ * transition-property: all, or a transition layer with no property. A var() of a
+ * duration or easing token is timing; any other var() may hold a property, so a
+ * layer with one can't be read.
+ */
+function isTransitionAll(property, value, timing) {
   if (property === 'transition-property') return css.splitTopLevel(value).some(part => /^all$/i.test(part));
   if (property !== 'transition') return false;
+  const isTiming = token => {
+    const variable = VAR_ONLY.exec(token);
+    return variable ? timing.has(variable[1]) : TIME.test(token) || EASING.test(token);
+  };
   return css.splitTopLevel(value).some(layer => {
     const tokens = layer.split(/\s+(?![^(]*\))/).filter(Boolean);
     if (tokens.some(token => /^all$/i.test(token))) return true;
-    if (/var\(/i.test(layer) || /^none$/i.test(layer.trim())) return false;
-    return tokens.length > 0 && tokens.every(token => TIME.test(token) || EASING.test(token));
+    if (/^none$/i.test(layer.trim())) return false;
+    return tokens.length > 0 && tokens.every(isTiming);
   });
 }
 
@@ -450,7 +531,7 @@ function countDeclaration(add, declaration, context, colors = 'all') {
     if (width !== null && width >= 2) add('one-sided-border', 1, declaration.line, `${property}: ${value}`);
   }
   if (property === 'border-width' && isOneSidedBorderWidth(value)) add('one-sided-border', 1, declaration.line, `${property}: ${value}`);
-  if (isTransitionAll(property, value)) add('transition-all', 1, declaration.line, `${property}: ${value}`);
+  if (isTransitionAll(property, value, context.timing)) add('transition-all', 1, declaration.line, `${property}: ${value}`);
   if ((property === 'font-size' || property === 'font') && PX.test(value)) add('px-font-size', 1, declaration.line, `${property}: ${value}`);
   if (REMOTE_URL.test(value)) context.fail('remote-url', declaration.line, `${property}: ${value}`);
 }
@@ -470,8 +551,10 @@ function countSheet(add, sheet, context) {
       if (node.name === 'font-face') {
         for (const declaration of node.declarations.filter(d => d.property === 'src')) {
           for (const match of declaration.value.matchAll(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi)) {
-            const resolved = path.posix.normalize(path.posix.join(sheet.base || '.', match[2]));
-            if (!resolved.startsWith('fonts/')) context.fail('font-face-src', declaration.line, `src: url(${match[2]})`);
+            // A leading / is the extension package's root; anything else is relative to the sheet
+            const url = match[2];
+            const resolved = path.posix.normalize(url.startsWith('/') ? url.replace(/^\/+/, '') : path.posix.join(sheet.base || '.', url));
+            if (!resolved.startsWith('fonts/')) context.fail('font-face-src', declaration.line, `src: url(${url})`);
           }
         }
       }
@@ -511,8 +594,8 @@ function definitionsOf(unit) {
 }
 
 /**
- * Count one file. `defined` holds every custom property production or the token
- * source defines.
+ * Count one file. `defined` holds every custom property the file can see defined:
+ * the tokens, every stylesheet and script, and an HTML page's own definitions.
  */
 function countUnit(unit, text, design, defined) {
   const occurrences = [];
@@ -520,7 +603,7 @@ function countUnit(unit, text, design, defined) {
   const add = (pattern, count, line, detail) => {
     for (let i = 0; i < count; i++) occurrences.push({ file: unit.file, line, pattern, detail });
   };
-  const context = { fail: (rule, line, detail) => failures.push({ file: unit.file, line, rule, detail }) };
+  const context = { fail: (rule, line, detail) => failures.push({ file: unit.file, line, rule, detail }), timing: design.timing };
 
   unit.sheets.forEach(sheet => countSheet(add, sheet, context));
   unit.declarationLists.forEach(list => {
@@ -553,7 +636,8 @@ function countUnit(unit, text, design, defined) {
       ? string.text.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*')/gi, ' ').replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ')
       : string.text;
     if (!string.css) add('theme-branching', (outsideCss.match(/prefers-color-scheme/gi) || []).length, string.line, string.text);
-    if (/^data-(?:theme|scheme)$/.test(string.text) || (!string.css && /\[data-(?:theme|scheme)\b/.test(outsideCss))) {
+    // The legacy attribute by name; data-scheme, the token output's own, only in selectors
+    if (string.text === 'data-theme' || (!string.css && /\[data-(?:theme|scheme)\b/.test(outsideCss))) {
       add('theme-branching', 1, string.line, string.text);
     }
     countVars(add, string.text, string.line, design, defined);
@@ -592,13 +676,17 @@ function scan(options = {}) {
     const text = texts[file] !== undefined ? texts[file] : fs.readFileSync(path.join(root, file), 'utf8');
     return { unit: collect(file, text), text };
   });
-  const defined = new Set(design.tokens);
-  units.forEach(({ unit }) => definitionsOf(unit).forEach(name => defined.add(name)));
+  // Stylesheets and scripts define for every page. A page's <style> blocks, style=
+  // attributes, and inline scripts define only for that page.
+  const isPage = file => file.endsWith('.html');
+  const shared = new Set(design.tokens);
+  units.filter(({ unit }) => !isPage(unit.file)).forEach(({ unit }) => definitionsOf(unit).forEach(name => shared.add(name)));
 
   const counts = {};
   const occurrences = [];
   const failures = [];
   for (const { unit, text } of units) {
+    const defined = isPage(unit.file) ? new Set([...shared, ...definitionsOf(unit)]) : shared;
     const result = countUnit(unit, text, design, defined);
     occurrences.push(...result.occurrences);
     failures.push(...result.failures);

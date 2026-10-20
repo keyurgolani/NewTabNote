@@ -9,8 +9,9 @@
  * Nodes:
  *   { type: 'rule', prelude, declarations, children, line }
  *   { type: 'at-rule', name, prelude, declarations, children, block, line }
- * A rule's children are nested rules; an at-rule has declarations (@font-face,
- * @property, @page, ...) or children (@media, @supports, @keyframes, ...).
+ * A rule's children are nested rules and at-rules; an at-rule has declarations
+ * (@font-face, @property, @page, ...), children (@media, @supports, @keyframes,
+ * ...), or, nested in a style rule as CSS nesting allows, both.
  * Declarations: { property, value, important, line }. Property names are
  * lowercased, except custom properties.
  */
@@ -129,7 +130,7 @@ function readBlock(reader) {
     const { text, stop } = readUntil(reader, [';', '{', '}']);
     if (stop === '{') {
       advance(reader);
-      children.push(nodeOf(text.trim(), reader, line));
+      children.push(nodeOf(text.trim(), reader, line, true));
       continue;
     }
     const declaration = declarationOf(text, line);
@@ -139,7 +140,11 @@ function readBlock(reader) {
   return { declarations, children };
 }
 
-function nodeOf(prelude, reader, line) {
+/**
+ * The node a block opens. `inStyle` is true inside a style rule, where a nested
+ * at-rule holds declarations as well as rules.
+ */
+function nodeOf(prelude, reader, line, inStyle) {
   if (prelude.startsWith('@')) {
     const match = /^@([\w-]+)\s*([\s\S]*)$/.exec(prelude);
     const name = (match ? match[1] : '').toLowerCase();
@@ -147,6 +152,10 @@ function nodeOf(prelude, reader, line) {
     if (DECLARATION_AT_RULES.includes(name)) {
       const { declarations } = readBlock(reader);
       return { type: 'at-rule', name, prelude: rest, declarations, children: [], block: true, line };
+    }
+    if (inStyle) {
+      const { declarations, children } = readBlock(reader);
+      return { type: 'at-rule', name, prelude: rest, declarations, children, block: true, line };
     }
     return { type: 'at-rule', name, prelude: rest, declarations: [], children: readRules(reader, true), block: true, line };
   }
@@ -174,7 +183,7 @@ function readRules(reader, nested) {
     const prelude = text.trim();
     if (stop === '{') {
       advance(reader);
-      nodes.push(nodeOf(prelude, reader, line));
+      nodes.push(nodeOf(prelude, reader, line, false));
     } else if (prelude.startsWith('@')) {
       const match = /^@([\w-]+)\s*([\s\S]*)$/.exec(prelude);
       nodes.push({ type: 'at-rule', name: (match ? match[1] : '').toLowerCase(), prelude: match ? match[2].trim() : '', declarations: [], children: [], block: false, line });

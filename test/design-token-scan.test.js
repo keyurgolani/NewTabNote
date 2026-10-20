@@ -12,8 +12,9 @@ const scanner = require('../scripts/design-token-scan.js');
 
 const ROOT = path.join(__dirname, '..');
 const DESIGN = {
-  tokens: new Set(['--surface-paper', '--text-primary', '--space-region']),
+  tokens: new Set(['--surface-paper', '--text-primary', '--space-region', '--motion-standard', '--motion-layer', '--ease-out']),
   registered: new Set(['--surface-paper', '--text-primary']),
+  timing: new Set(['--motion-standard', '--motion-layer', '--ease-out']),
   aliases: new Set(['--bg-primary']),
 };
 
@@ -55,6 +56,16 @@ describe('production matches the design token baseline', () => {
     assert.equal(counts['js/design/contrast.js'], undefined);
   });
 
+  it('reads the token source: tokens, the colors the output registers, the timing tokens, and the aliases', () => {
+    const design = scanner.readDesign(ROOT);
+    assert.ok(design.tokens.has('--focus-ring') && design.tokens.has('--space-region'));
+    assert.ok(design.registered.has('--surface-paper'));
+    assert.ok(!design.registered.has('--focus-ring'), 'the focus ring is the one unregistered color');
+    assert.ok(!design.registered.has('--space-region'));
+    assert.deepEqual([...design.timing].sort(), ['--ease-out', '--motion-layer', '--motion-standard']);
+    assert.ok(design.aliases.has('--bg-primary'));
+  });
+
   it('records every pattern the issue lists, and only those', () => {
     const baseline = JSON.parse(fs.readFileSync(path.join(ROOT, scanner.BASELINE_PATH), 'utf8'));
     assert.deepEqual(baseline.patterns, scanner.PATTERNS, `the baseline's pattern descriptions are stale: run \`${'npm run design-token-scan -- --update'}\``);
@@ -90,6 +101,15 @@ describe('what the scanner counts', () => {
       const t = document.documentElement.dataset.theme;
       switch (t) { case 'light': break; }
       if (role === 'system') {}`)['theme-branching'], 5);
+  });
+
+  it('counts data-scheme in selectors only, so writing the token output\'s attribute isn\'t branching', () => {
+    assert.equal(countsOf('js/x.js', `root.dataset.scheme = selection.scheme;
+      root.setAttribute('data-scheme', 'dark');
+      delete root.dataset.scheme;`)['theme-branching'], undefined);
+    assert.equal(countsOf('js/x.js', `document.querySelector('[data-scheme="dark"] .a');
+      root.dataset.theme = mode;
+      root.removeAttribute('data-theme');`)['theme-branching'], 3);
   });
 
   it('runtime <style> creation, inline <style> blocks, and style= attributes', () => {
@@ -138,6 +158,17 @@ describe('what the scanner counts', () => {
     assert.equal(counts['js/x.js'], undefined);
   });
 
+  it('lets a page\'s inline definitions satisfy only that page', () => {
+    const counts = scanFixtures({
+      'page.html': '<style>:root { --page-only: 1px } a { margin: var(--page-only) }</style><div style="--inline: 0; padding: var(--inline)"></div>',
+      'other.html': '<div style="margin: var(--page-only)"></div>',
+      'css/a.css': 'a { margin: var(--page-only); padding: var(--inline) }',
+    }).counts;
+    assert.equal(counts['page.html']['undefined-var'], undefined);
+    assert.equal(counts['other.html']['undefined-var'], 1);
+    assert.equal(counts['css/a.css']['undefined-var'], 2);
+  });
+
   it('getPropertyValue reads of anything but a registered color token', () => {
     assert.equal(countsOf('js/x.js', `const s = getComputedStyle(el);
       s.getPropertyValue('--bg-primary');
@@ -178,6 +209,41 @@ describe('what the scanner counts', () => {
     assert.equal(counts['transition-all'], 4);
   });
 
+  it('reads var() of a duration or easing token as timing, so a transition of only those names no property', () => {
+    const counts = countsOf('css/x.css', `.a { transition: var(--motion-standard) var(--ease-out); }
+      .b { transition: opacity var(--motion-standard) var(--ease-out); }
+      .c { transition: var(--motion-layer, 240ms), color 0.2s; }
+      .d { transition: var(--t) var(--motion-standard); }
+      .e { transition: var(--surface-paper); }`);
+    assert.equal(counts['transition-all'], 2);
+  });
+
+  it('reads declarations in at-rules nested in a style rule', () => {
+    const counts = countsOf('css/x.css', `.a {
+      color: var(--text-primary);
+      @media (min-width: 1px) { color: #fff; font-size: 12px }
+      @supports (display: grid) { @media print { background: red } }
+      &:hover { border-color: #000 }
+    }`);
+    assert.equal(counts['color-literal'], 3);
+    assert.equal(counts['px-font-size'], 1);
+  });
+
+  it('joins string concatenation before counting, with a placeholder for each expression', () => {
+    const counts = countsOf('js/x.js', `el.innerHTML = '<div style="color: ' + color + '">' + label + '</div>';
+      ctx.font = size + 'px sans-serif';
+      ctx.font = 'bold ' + 12 + 'px ' + family;
+      el.style.fontSize = n + 'px';
+      el.style.setProperty('font-size', (n * 2) + 'px');
+      ctx.fillStyle = 'rgba(' + r + ', 0, 0, 0.5)';
+      const sheet = '.a { background: ' + bg + '; }' + '.b { border: 1px solid #ccc }';
+      const accent = '#fff' + suffix;
+      document.querySelector('#' + id);`);
+    assert.equal(counts['style-attribute'], 1);
+    assert.equal(counts['px-font-size'], 4);
+    assert.equal(counts['color-literal'], 3);
+  });
+
   it('px font sizes in CSS, style writes, canvas fonts, and Chart.js configs', () => {
     assert.equal(countsOf('css/x.css', 'a { font-size: 14px } b { font: 12px/1.5 sans-serif } c { font-size: 0.8rem } d { font-size: var(--x, 13px) }')['px-font-size'], 3);
     assert.equal(countsOf('js/x.js', `ctx.font = '12px sans-serif';
@@ -186,6 +252,11 @@ describe('what the scanner counts', () => {
       el.style.fontSize = '1rem';
       new Chart(canvas, { options: { plugins: { legend: { labels: { font: { size: 11 } } } } } });
       Chart.defaults.font.size = 12;`)['px-font-size'], 5);
+  });
+
+  it('counts a style.font write once, as a style write, not also as a canvas font', () => {
+    assert.equal(countsOf('js/x.js', 'el.style.font = \'12px Arial\';')['px-font-size'], 1);
+    assert.equal(countsOf('js/x.js', 'ctx.font = \'12px Arial\'; el.style.font = \'1rem Arial\';')['px-font-size'], 1);
   });
 
   it('alias uses: var() of a legacy name, with or without a fallback', () => {
@@ -215,6 +286,13 @@ describe('what always fails', () => {
       ['x.html', 'remote-url'],
     ]);
     assert.equal(failures.find(f => f.rule === 'font-face-src').detail, 'src: url(b.woff2)');
+  });
+
+  it('resolves an @font-face url() with a leading / from the package root', () => {
+    const { failures } = scanFixtures({
+      'css/x.css': '@font-face { font-family: A; src: url(/fonts/a/a.woff2) format("woff2"); } @font-face { font-family: B; src: url("/css/b.woff2"); }',
+    });
+    assert.deepEqual(failures.map(f => [f.rule, f.detail]), [['font-face-src', 'src: url(/css/b.woff2)']]);
   });
 });
 
