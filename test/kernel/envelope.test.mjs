@@ -113,7 +113,8 @@ describe('transport codes (#13, "Outcomes and authorization")', () => {
     }
     /** @param {import('../../js/kernel/core/contracts/transport-codes.js').TransportCode} code @param {boolean} mayHaveStarted */
     const answer = (code, mayHaveStarted) => commandOutcome(code, { commandId: 'c1', mayHaveStarted });
-    // Only a command that may have started is unknown, which the client resolves by its key
+    // A command that may have started is unknown, whatever stopped its answer, so a save that
+    // may have committed never shows failed: the client resolves it by its key
     assert.deepEqual(answer('outcome-unknown', true), {
       kind: 'unknown',
       code: 'outcome-unknown',
@@ -121,11 +122,19 @@ describe('transport codes (#13, "Outcomes and authorization")', () => {
       messageKey: 'unknown.outcome-unknown',
       severity: 'warning',
     });
+    assert.equal(answer('outcome-unknown', false).kind, 'unknown');
     assert.equal(answer('deadline-exceeded', true).kind, 'unknown');
+    assert.deepEqual(answer('unavailable', true), {
+      kind: 'unknown',
+      code: 'unavailable',
+      commandId: 'c1',
+      messageKey: 'unknown.unavailable',
+      severity: 'warning',
+    });
+    // Only one that can't have started is unavailable, and a resend is safe
     for (const [code, mayHaveStarted] of /** @type {const} */ ([
       ['deadline-exceeded', false],
       ['unavailable', false],
-      ['unavailable', true],
     ])) {
       assert.deepEqual(answer(code, mayHaveStarted), {
         kind: 'unavailable',

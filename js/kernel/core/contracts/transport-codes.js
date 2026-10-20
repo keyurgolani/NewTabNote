@@ -69,6 +69,8 @@ export function isTransportCode(code) {
 /**
  * The outcome a command gets for a transport code. `mayHaveStarted` is false only while the
  * command can't have reached the coordinator, or the coordinator said it never started it.
+ * An answer that didn't come for a command that may have started is unknown whatever the
+ * code, so a save that may have committed never shows failed. `outcome-unknown` always is.
  * @param {TransportCode} code
  * @param {{commandId: string, mayHaveStarted: boolean}} command
  * @returns {Outcome}
@@ -76,7 +78,7 @@ export function isTransportCode(code) {
 export function commandOutcome(code, { commandId, mayHaveStarted }) {
   if (has(VALIDATION_CODES, code)) return rejected('validation', code);
   if (has(POLICY_CODES, code)) return rejected('policy', code);
-  if (code === 'outcome-unknown' || (code === 'deadline-exceeded' && mayHaveStarted)) return unknown(code, commandId);
+  if (mayHaveStarted || code === 'outcome-unknown') return unknown(code, commandId);
   return unavailable('coordinator', code, true);
 }
 
