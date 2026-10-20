@@ -257,3 +257,56 @@ test('with Settings open from the header and a block selected, undo, redo, Backs
   await driver.closeSettings(page);
   await expectNoUncaught(extension, page);
 });
+
+test('? from the Notes tab opens Keyboard Shortcuts with focus in it, keys there leave the note alone, and a second ? closes it with focus back on the tab', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'milk' }] }]);
+  const page = await driver.openNewTab(extension);
+  // An edit the note could undo
+  await driver.clickBlock(page, 0);
+  await page.keyboard.type(' and bread');
+  await untilUndoable(page, 'left');
+  const note = [{ type: 'text', text: 'milk and bread' }];
+
+  const notesTab = page.getByRole('tab', { name: /^Notes/ });
+  await notesTab.focus();
+  await page.keyboard.press('?');
+  const shortcuts = page.getByRole('dialog', { name: 'Keyboard Shortcuts' });
+  await expect(shortcuts).toBeVisible();
+  await expect(shortcuts.getByRole('button', { name: 'Close modal' })).toBeFocused();
+  await page.keyboard.type('zap');
+  for (const key of ['Backspace', 'Delete', 'ControlOrMeta+z', 'ControlOrMeta+Shift+KeyZ']) await page.keyboard.press(key);
+  expect(await driver.blocks(page)).toEqual(note);
+  expect(await driver.savedBlocks(page)).toEqual(['milk and bread']);
+
+  await page.keyboard.press('?');
+  await expect(shortcuts).toBeHidden();
+  await expect(notesTab).toBeFocused();
+  expect(await driver.blocks(page), 'the second ? typed nothing').toEqual(note);
+
+  // Escape closes it too, with focus back on the tab
+  await page.keyboard.press('?');
+  await expect(shortcuts).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(shortcuts).toBeHidden();
+  await expect(notesTab).toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test('during the first-run walkthrough, focus is on its Next button and letters typed leave the welcome note alone', async ({ extension }) => {
+  const page = await driver.openNewTab(extension, { wait: false });
+  const walkthrough = page.getByRole('dialog', { name: 'Onboarding walkthrough' });
+  await expect(walkthrough).toBeVisible();
+  await expect(page.locator('#page-title')).toHaveText('Welcome to NewTabNote 🚀');
+  // After the welcome note's own focus, which would land in its first block
+  await driver.afterEditorFocus(page);
+  await expect(walkthrough.getByRole('button', { name: 'Next' })).toBeFocused();
+
+  const welcome = await driver.blocks(page);
+  const stored = await driver.savedBlocks(page);
+  await page.keyboard.type('zap');
+  expect(await driver.blocks(page)).toEqual(welcome);
+  expect(await driver.savedBlocks(page)).toEqual(stored);
+  await driver.skipOnboarding(page);
+  await expectNoUncaught(extension, page);
+});

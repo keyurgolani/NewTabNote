@@ -14,7 +14,7 @@ const {
   createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, note, block,
 } = require('./helpers/legacy-env');
 
-const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/editor.js'];
+const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/shortcut-utils.js', 'js/editor.js'];
 
 /** The modals newtab.html has, each closed, with its dialog box inside */
 const MODALS = ['settings-modal', 'shortcuts-modal', 'theme-builder-modal', 'command-palette-modal', 'ai-insert-preview-modal'];
@@ -259,6 +259,15 @@ describe('type anywhere', () => {
     const { at, press } = setup();
     assert.deepEqual(press(at.headerButton, 'a', { defaultPrevented: true, preventDefault() {} }),
       { left: [], right: [], prevented: true });
+  });
+
+  it('? stays out of the note wherever it is not typed into text, since the app opens Keyboard Shortcuts on it', () => {
+    const { at, press } = setup();
+    for (const target of [at.headerButton, at.headerLink, at.noticeButton, at.roleButton, at.sidebarButton, at.body]) {
+      assert.deepEqual(press(target, '?', { shiftKey: true }), NOWHERE, label(target));
+    }
+    // In a block it's typed there
+    assert.deepEqual(press(at.blockText, '?', { shiftKey: true }), NOWHERE);
   });
 
   it('Enter, other named keys, and shortcuts never go to the note', () => {

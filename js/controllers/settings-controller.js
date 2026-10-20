@@ -41,6 +41,8 @@ class SettingsController {
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */
     this._shortcutsFocusTrapCleanup = null;
+    /** @type {HTMLElement|null} Where focus was when Keyboard Shortcuts opened */
+    this._shortcutsReturnFocus = null;
   }
 
   /** Initialize settings: wire DOM listeners, check backup status. */
@@ -567,17 +569,32 @@ class SettingsController {
 
   // ─── Shortcuts modal ───
 
+  /**
+   * Open or close Keyboard Shortcuts. It opens on ? as well as from its
+   * button, so focus moves into it, where the keys pressed while it's open
+   * stay, and goes back where it was when it closes.
+   * @param {boolean} [force] - Open (true) or close (false); toggles without it
+   * @returns {void}
+   */
   toggleShortcutsModal(force) {
     const modal = document.getElementById('shortcuts-modal');
     if (!modal) return;
 
-    const show = force !== undefined ? force : modal.classList.contains('hidden');
+    const open = !modal.classList.contains('hidden');
+    const show = force !== undefined ? force : !open;
+    if (show === open) return;
     if (show) {
+      this._shortcutsReturnFocus = /** @type {HTMLElement|null} */ (document.activeElement);
       modal.classList.remove('hidden');
       this._shortcutsFocusTrapCleanup = Utils.trapFocus(modal);
+      const closeBtn = /** @type {HTMLElement|null} */ (modal.querySelector('.close-btn'));
+      if (closeBtn) closeBtn.focus();
     } else {
       modal.classList.add('hidden');
       if (this._shortcutsFocusTrapCleanup) { this._shortcutsFocusTrapCleanup(); this._shortcutsFocusTrapCleanup = null; }
+      const previous = this._shortcutsReturnFocus;
+      this._shortcutsReturnFocus = null;
+      if (previous && previous !== document.body && previous.isConnected) previous.focus();
     }
   }
 

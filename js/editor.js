@@ -184,10 +184,16 @@ class BlockEditor {
     // Slash menu
     this.slashMenu.addEventListener('click', (e) => this.onSlashMenuClick(e));
 
-    // Close slash menu on outside click
+    // Close the slash, link, and template menus on a click outside them
     this.doc.addEventListener('click', (e) => {
       if (!this.slashMenu.contains(e.target) && this.slashMenuVisible) {
         this.hideSlashMenu();
+      }
+      if (this.wikiMenu && !this.wikiMenu.contains(e.target) && this.wikiMenuVisible) {
+        this.hideWikiMenu();
+      }
+      if (this.templateMenu && !this.templateMenu.contains(e.target) && this.templateMenuVisible) {
+        this.hideTemplateMenu();
       }
     });
 
@@ -322,10 +328,12 @@ class BlockEditor {
     // Set editor width
     const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
 
-    // Focus first block, then ensure scroll is at top
+    // Focus first block, then ensure scroll is at top. Not while a modal, menu,
+    // or dialog is open: focus stays in it, as on the onboarding walkthrough's
+    // button over the welcome note, so keys typed there don't edit the note
     setTimeout(() => {
       const firstContent = this.container.querySelector('.block-content');
-      if (firstContent) {
+      if (firstContent && !this._overlayOpen()) {
         firstContent.focus();
         this.placeCaretAtEnd(firstContent);
       }
@@ -2572,7 +2580,7 @@ class BlockEditor {
       !e.metaKey &&
       !e.altKey &&
       e.key.length === 1 &&
-      !this._keyStaysAt(e.target, e.key)
+      !this._keyStaysAt(e)
     ) {
       // Focus last block or create new one
       if (this.blocks.length > 0) {
@@ -2645,22 +2653,43 @@ class BlockEditor {
   }
 
   /**
-   * Whether a printable key pressed at `target` stays there instead of going
-   * to the note: a text control (input, textarea, select, editable text),
+   * Whether a printable key stays where it was pressed instead of going to
+   * the note: a text control (input, textarea, select, editable text),
    * another control that takes keys itself (summary, details, media
    * controls), or a modal, menu, listbox, or dialog has focus, one is open
-   * wherever focus is, or it's Space on a button, which presses it, or on a
-   * link, where the browser does what it does (links open on Enter). Enter
-   * isn't printable, so it never goes either.
-   * @param {Element} target - Where the key was pressed
-   * @param {string} key - KeyboardEvent.key
+   * wherever focus is, the app takes the key as a shortcut (? opens Keyboard
+   * Shortcuts), or it's Space on a button, which presses it, or on a link,
+   * where the browser does what it does (links open on Enter). Enter isn't
+   * printable, so it never goes either.
+   * @param {KeyboardEvent} e
    * @returns {boolean}
    */
-  _keyStaysAt(target, key) {
+  _keyStaysAt(e) {
+    const target = /** @type {Element} */ (e.target);
     if (target.closest('input, textarea, select, [contenteditable], summary, details, audio[controls], video[controls]')) return true;
     if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
     if (this._overlayOpen()) return true;
-    return key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
+    if (BlockEditor.isAppShortcut(e)) return true;
+    return e.key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
+  }
+
+  /**
+   * Whether the app takes a key as one of its shortcuts. ShortcutsManager
+   * listens on window, so it hears a key after the editors do, and a key it
+   * takes (? opens Keyboard Shortcuts) mustn't move focus into the note first.
+   * It reads the key as ShortcutsManager does.
+   * @param {KeyboardEvent} e
+   * @returns {boolean}
+   */
+  static isAppShortcut(e) {
+    const shortcuts = /** @type {any} */ (window).ShortcutUtils;
+    if (!shortcuts) return false;
+    const target = /** @type {Element} */ (e.target);
+    const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.getAttribute('contenteditable') === 'true';
+    const modKey = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? e.metaKey : e.ctrlKey;
+    return shortcuts.getAppShortcutAction({
+      code: e.code, key: e.key, modKey, shiftKey: e.shiftKey, altKey: e.altKey, isInput,
+    }) !== null;
   }
 
   /**
@@ -2729,6 +2758,21 @@ class BlockEditor {
   hideSlashMenu() {
     this.slashMenu.classList.add('hidden');
     this.slashMenuVisible = false;
+  }
+
+  /**
+   * Close every menu this editor opens: the slash, link, and template menus,
+   * a block's menu with Turn into, a selection's Turn into, and a table's
+   * menu. Escape does this in both panes (App.closeAllModals), since an open
+   * menu holds the keys pressed outside the note.
+   * @returns {void}
+   */
+  hideMenus() {
+    this.hideSlashMenu();
+    this.hideWikiMenu();
+    this.hideTemplateMenu();
+    this.hideBlockActionMenu();
+    this.hideTableContextMenu();
   }
 
   /**

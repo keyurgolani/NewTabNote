@@ -801,6 +801,7 @@ function recentNoteNames(popup) {
 
 module.exports = {
   trackStartup,
+  afterEditorFocus,
   waitForApp,
   openNewTab,
   skipOnboarding,

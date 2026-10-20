@@ -6855,6 +6855,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Close all open modals and menus
    */
   closeAllModals() {
+    // Keyboard Shortcuts gives focus back where it was
+    if (this.settingsController) this.settingsController.toggleShortcutsModal(false);
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     document.querySelectorAll('.context-menu').forEach(m => m.classList.add('hidden'));
 
@@ -6866,9 +6868,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.themeBuilderController && this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
     if (this.shortcutsManager && this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
 
-    // Also close slash menu if open in active editor
-    this.getEditor()?.hideSlashMenu();
-    this.getEditor()?.hideWikiMenu();
+    // The editors' menus, in both panes: an open one holds the keys pressed outside the note
+    for (const editor of [this.editor, this.secondaryEditor]) {
+      if (editor) editor.hideMenus();
+    }
   }
 
   /**
