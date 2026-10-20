@@ -1381,17 +1381,30 @@ class DatabaseManager {
    * Trash and archive state stays as stored: the editor never sets it, and its
    * copy of the note can be older than a trash, restore, or import Replace done
    * meanwhile (in this tab or another). The stored values are copied onto `note`.
+   *
+   * A note that is no longer stored was deleted after the editor loaded it
+   * (emptying trash, or trashNote deleting an empty untitled note). Writing it
+   * would bring it back, so the transaction aborts, blocks included, and the
+   * promise resolves with null. Every editor note comes from a stored one: notes
+   * are created and imported in IndexedDB before an editor loads them.
    * @param {Object} note - Note record (`updatedAt` is set on it)
    * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
-   * @returns {Promise<Object>} The note, once the transaction completes
+   * @returns {Promise<Object|null>} The note once the transaction completes, or null when
+   *   the note no longer exists and nothing was written
    */
   saveNoteWithBlocks(note, elements) {
     note.updatedAt = Date.now();
     return new Promise((resolve, reject) => {
       const tx = this.transaction(['canvases', 'elements'], 'readwrite');
+      let gone = false;
       tx.oncomplete = () => resolve(note);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
+      tx.onerror = () => {
+        if (!gone) reject(tx.error);
+      };
+      tx.onabort = () => {
+        if (gone) resolve(null);
+        else reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
+      };
       // A put that throws (for example DataCloneError) must not let the rest commit.
       const fail = (error) => {
         tx.abort();
@@ -1405,6 +1418,11 @@ class DatabaseManager {
         const canvases = tx.objectStore('canvases');
         const read = canvases.get(note.id);
         read.onsuccess = () => {
+          if (!read.result) {
+            gone = true;
+            tx.abort();
+            return;
+          }
           try {
             this._keepStoredNoteState(note, read.result);
             canvases.put(note);
@@ -1421,11 +1439,10 @@ class DatabaseManager {
   /**
    * Copy the stored trash and archive fields onto a note about to be written.
    * @param {Object} note
-   * @param {Object|undefined} stored - The note as stored, if it is
+   * @param {Object} stored - The note as stored
    * @returns {void}
    */
   _keepStoredNoteState(note, stored) {
-    if (!stored) return;
     for (const field of ['trashed', 'trashedAt', 'archived', 'archivedAt']) {
       if (field in stored) note[field] = stored[field];
       else delete note[field];

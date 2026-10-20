@@ -3657,7 +3657,8 @@ class BlockEditor {
       }
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      await this._writeSaveState(state);
+      // null: the note was deleted meanwhile, so nothing was written and nothing is retried.
+      if (!(await this._writeSaveState(state))) return;
       await this._afterSaveWrite(state, meta.text);
     } catch (error) {
       this._onSaveFailed(error, state);
@@ -3710,7 +3711,7 @@ class BlockEditor {
   /**
    * Open the note-and-blocks transaction for a captured state.
    * @param {EditorSaveState} state
-   * @returns {Promise<Object>}
+   * @returns {Promise<Object|null>} The note, or null when it no longer exists and nothing was written
    */
   _writeSaveState(state) {
     state.written = true;
@@ -3852,7 +3853,7 @@ class BlockEditor {
     try {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      work = this._writeSaveState(state).then(() => this._afterSaveWrite(state, meta.text));
+      work = this._writeSaveState(state).then((saved) => (saved ? this._afterSaveWrite(state, meta.text) : undefined));
     } catch (error) {
       work = Promise.reject(error);
     }

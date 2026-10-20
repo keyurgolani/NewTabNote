@@ -571,6 +571,73 @@ describe('BlockEditor in a PiP window', () => {
   });
 });
 
+describe('BlockEditor saves of a deleted note', () => {
+  let env;
+  let Storage;
+  let editor;
+  let feedback;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = allowDeletes(makeEditor(env));
+    feedback = watchFeedback(env, editor);
+    await editor.loadNote('A');
+  });
+
+  const stored = async () => {
+    const db = await dumpDatabase(env.indexedDB);
+    return { notes: recordsOf(db, 'canvases'), elements: Object.values(recordsOf(db, 'elements')) };
+  };
+
+  it('an edit still pending when the note is deleted does not bring the note back', async () => {
+    type(editor, 'typed before the delete');
+    await Storage.permanentlyDeleteNote('A'); // emptying trash, or another tab
+    await runUntil(env, editor.loadNote('B')); // the switch writes the pending edit
+
+    const { notes, elements } = await stored();
+    assert.equal(notes.A, undefined, 'A stays deleted');
+    assert.deepEqual(elements.filter((el) => el.canvasId === 'A'), [], 'its blocks too');
+    assert.deepEqual(feedback.toasts, []);
+    assert.equal(editor._retryPending, false, 'no retry');
+  });
+
+  it('trashing an empty untitled note while an edit is pending deletes it for good', async () => {
+    const untitled = await Storage.createNote('Untitled');
+    await runUntil(env, editor.loadNote(untitled.id));
+    type(editor, 'typed into the untitled note');
+
+    // The sidebar trashes it; with no stored content trashNote deletes it, then opens another note.
+    const trashed = await Storage.trashNote(untitled.id);
+    assert.equal(trashed.permanentlyDeleted, true);
+    await runUntil(env, editor.loadNote('B'));
+
+    const { notes, elements } = await stored();
+    assert.equal(notes[untitled.id], undefined, 'not back as an active note');
+    assert.deepEqual(elements.filter((el) => el.canvasId === untitled.id), []);
+    assert.deepEqual(feedback.toasts, []);
+  });
+
+  it('the retry of a note deleted meanwhile neither brings it back nor shows an error', async () => {
+    failWritesOf(Storage, 'A', 1);
+    const load = editor.loadNote('B');
+    type(editor, 'typed while switching');
+    env.frames();
+    await load;
+    await settle();
+    assert.equal(editor._retryPending, true, 'the failed save of A waits to retry');
+
+    await Storage.permanentlyDeleteNote('A');
+    env.clock.tick(1000);
+    await runUntil(env, editor.flushSave());
+
+    const { notes, elements } = await stored();
+    assert.equal(notes.A, undefined);
+    assert.deepEqual(elements.filter((el) => el.canvasId === 'A'), []);
+    assert.deepEqual(feedback.toasts, []);
+    assert.ok(!feedback.statuses.includes('Error saving'));
+  });
+});
+
 describe('BlockEditor failed save before a note switch', () => {
   let env;
   let Storage;
