@@ -6,7 +6,8 @@
  *
  * Fails when:
  * - the zip lacks LICENSE or THIRD_PARTY_NOTICES at its root, or they differ from the repository copies;
- * - a js/lib file is missing from the zip or differs from its source (headers included);
+ * - a js/lib file that ships, Valibot's under js/lib/valibot/ included, is missing from the zip
+ *   or differs from its source (headers included);
  * - PRIVACY_POLICY.md's "## Permissions" bullets (`- **<permission>**: <use>`) differ from
  *   manifest.json `permissions`, or a host permission isn't described;
  * - PRIVACY_POLICY.md doesn't name a network destination the code uses;
@@ -24,7 +25,8 @@ const JSZip = require('../js/lib/jszip.min.js');
 const ROOT = path.join(__dirname, '..');
 const NOTICE_FILES = ['LICENSE', 'THIRD_PARTY_NOTICES'];
 const VENDOR_DIR = 'js/lib';
-const VENDOR_SKIP = new Set(['README.md']);
+/** js/lib files that don't ship: this README, and Valibot's type declarations and vendor record */
+const VENDOR_SKIP = new Set(['README.md', 'valibot/index.d.mts', 'valibot/vendor.json']);
 
 /** Network destinations the extension's code can contact, which the policy must name. */
 const REQUIRED_DESTINATIONS = [
@@ -37,14 +39,22 @@ const REQUIRED_DESTINATIONS = [
 ];
 
 /**
- * Library files under js/lib (the README is documentation, not shipped).
+ * Library files under js/lib that ship, relative to it, subdirectories included (VENDOR_SKIP
+ * lists the ones that don't).
  * @param {string} [root]
  * @returns {string[]}
  */
 function vendoredFiles(root = ROOT) {
-  return fs.readdirSync(path.join(root, VENDOR_DIR))
-    .filter((name) => !VENDOR_SKIP.has(name) && fs.statSync(path.join(root, VENDOR_DIR, name)).isFile())
-    .sort();
+  const files = [];
+  const walk = (prefix) => {
+    for (const entry of fs.readdirSync(path.join(root, VENDOR_DIR, prefix), { withFileTypes: true })) {
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(name);
+      else if (entry.isFile() && !VENDOR_SKIP.has(name)) files.push(name);
+    }
+  };
+  walk('');
+  return files.sort();
 }
 
 /**
@@ -123,6 +133,7 @@ function checkPolicy(policy, manifest) {
 }
 
 /**
+ * A row whose File cell names a directory (`valibot/`) covers every file under it.
  * @param {string} readme - js/lib/README.md
  * @param {string[]} files - js/lib file names
  * @returns {string[]} Problems
@@ -138,8 +149,9 @@ function checkLibReadme(readme, files) {
     return ['js/lib/README.md has no table with File and License columns'];
   }
   const problems = [];
+  const covers = (cell, file) => cell === file || (cell.endsWith('/') && file.startsWith(cell));
   for (const file of files) {
-    const row = rows.find((cells) => (cells[fileColumn] || '').replace(/`/g, '') === file);
+    const row = rows.find((cells) => covers((cells[fileColumn] || '').replace(/`/g, ''), file));
     if (!row) problems.push(`js/lib/README.md has no row for ${file}`);
     else if (!row[licenseColumn] || /^-+$/.test(row[licenseColumn])) problems.push(`js/lib/README.md gives no license for ${file}`);
   }

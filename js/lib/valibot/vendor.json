@@ -1,0 +1,25 @@
+{
+  "package": "valibot",
+  "version": "1.5.0",
+  "license": "MIT",
+  "page": "https://www.npmjs.com/package/valibot/v/1.5.0",
+  "tarball": "https://registry.npmjs.org/valibot/-/valibot-1.5.0.tgz",
+  "integrity": "sha512-nil6AkP2TChWL43Z5uJ6GTxX01CUA+g8LWUM+N/rB9NBbkUMaUsi9PUNzlUPgoKASgmx9f7eGOYpJ04/fSa6FQ==",
+  "files": {
+    "index.mjs": {
+      "from": "package/dist/index.mjs",
+      "sha256": "cc7a8f7551082a19178f8e553e34fd23bea774113e3bcc4b914abc91f19a5cd0",
+      "ships": true
+    },
+    "index.d.mts": {
+      "from": "package/dist/index.d.mts",
+      "sha256": "d9ab24ed7cafc9aad84e687f9b297e68a78ca731a6249cc3aa9780eea0aebecf",
+      "ships": false
+    },
+    "LICENSE.md": {
+      "from": "package/LICENSE.md",
+      "sha256": "1ca6c9ca372cffe26c313464b9d9f0aef2417b27b2bad20396f4769005122d4d",
+      "ships": true
+    }
+  }
+}
