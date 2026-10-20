@@ -328,8 +328,11 @@ class App {
     } else if (editor.noteId) {
       editor.titleEl.focus();
     } else {
-      editor.root.setAttribute('tabindex', '-1');
-      editor.root.focus();
+      // Focusable only until focus moves on
+      const pane = editor.root;
+      pane.setAttribute('tabindex', '-1');
+      pane.addEventListener('blur', () => pane.removeAttribute('tabindex'), { once: true });
+      pane.focus();
     }
   }
 

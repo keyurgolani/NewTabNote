@@ -125,6 +125,20 @@ test('Export JSON asks to check the file; Done records "exported", and the file 
   await expectNoUncaught(extension, page);
 });
 
+test('a tab opened after an Export JSON starts at the check-the-file step', async ({ extension }) => {
+  const page = await profileWithNotes(extension);
+  await driver.exportFromNotice(page);
+  await expect.poll(() => driver.exportNotice(page)).toEqual(CHECK_STEP);
+
+  const later = await driver.openNewTab(extension);
+  expect(await driver.exportNotice(later)).toEqual(CHECK_STEP);
+  await driver.chooseInExportNotice(later, 'Done');
+  await expect.poll(() => driver.exportNotice(later)).toBeNull();
+  await expect.poll(() => driver.exportNotice(page)).toBeNull();
+  expect(await driver.exportNoticeRecord(page)).toEqual(recorded('exported'));
+  await expectNoUncaught(extension, page);
+});
+
 test('an Export JSON right after typing has the edit in the file', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   // The new tab focuses the note's first block; click Export JSON inside the editor's 500 ms save delay

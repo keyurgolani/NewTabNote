@@ -473,7 +473,7 @@
     "js/storage.js": {
       "TS2304": {
         "Cannot find name 'StorageError'.": 1,
-        "Cannot find name 'chrome'.": 26
+        "Cannot find name 'chrome'.": 23
       },
       "TS2339": {
         "Property 'chrome' does not exist on type 'Window & typeof globalThis'.": 2

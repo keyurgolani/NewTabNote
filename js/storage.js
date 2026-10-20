@@ -1870,25 +1870,25 @@ class DatabaseManager {
   // Settings use chrome.storage.local for cross-tab synchronization
 
   /**
-   * Get setting from chrome.storage.local
+   * Get setting from chrome.storage.local: readSetting, with `defaultValue`
+   * when there's none or the read fails
+   * @param {string} key
+   * @param {*} [defaultValue=null]
+   * @returns {Promise<*>}
    */
   async getSetting(key, defaultValue = null) {
-    return new Promise((resolve) => {
-      const storageKey = `setting_${key}`;
-      chrome.storage.local.get([storageKey], (result) => {
-        if (chrome.runtime.lastError) {
-          console.warn('Error getting setting:', chrome.runtime.lastError);
-          resolve(defaultValue);
-          return;
-        }
-        resolve(result[storageKey] !== undefined ? result[storageKey] : defaultValue);
-      });
-    });
+    try {
+      const value = await this.readSetting(key);
+      return value !== undefined ? value : defaultValue;
+    } catch (error) {
+      console.warn('Error getting setting:', error);
+      return defaultValue;
+    }
   }
 
   /**
    * Read a setting, rejecting when chrome.storage fails, where getSetting
-   * would resolve its default and a caller couldn't tell "none" from "unknown".
+   * resolves its default, for a caller that has to tell "none" from "unknown".
    * @param {string} key
    * @returns {Promise<*>} The value, or undefined when there's none
    */
@@ -2053,9 +2053,8 @@ class DatabaseManager {
   async exportAll() {
     const { notes, elements, media, folders } = await this._readExport();
 
-    // Convert blobs to base64 for export, one at a time
-    const mediaWithBase64 = [];
-    for (const m of media) mediaWithBase64.push(await this._exportMediaRow(m));
+    // Convert blobs to base64 for export
+    const mediaWithBase64 = await Promise.all(media.map((m) => this._exportMediaRow(m)));
 
     return {
       version: 1,

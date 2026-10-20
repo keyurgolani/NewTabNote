@@ -11,8 +11,8 @@
  * Export JSON downloads the file, and since the browser may still ask where to
  * save it or block it, the notice then asks to check that the file saved: Done
  * records `exported`, Export again downloads again. An Export JSON or Create
- * Backup from Settings, in any tab, moves a showing notice to that step too.
- * Not now records `dismissed`. A profile with nothing of its own to export when
+ * Backup from Settings, in any tab, moves a showing notice to that step too,
+ * and a tab opened after one starts there. Not now records `dismissed`. A profile with nothing of its own to export when
  * this version first decides records `not-needed`. The record is
  * `setting_preMigrationNotice` ({version, outcome, at}) in
  * chrome.storage.local, and once it exists no tab shows the notice. Nothing
@@ -78,6 +78,8 @@ class ExportNotice {
     this.returnFocus = null;
     /** @type {(() => void)|null} Stops listening to settings changes */
     this.unsubscribe = null;
+    /** Whether a full export already happened (its receipt is there), so the notice starts at the check step */
+    this.exportedEarlier = false;
     /** @param {FocusEvent} event */
     this.onFocusIn = (event) => this._noteReturnFocus(event);
   }
@@ -92,7 +94,9 @@ class ExportNotice {
    * stops startup before this), no store Export JSON reads is missing, and
    * nothing is recorded yet. A profile with no note that holds anything, an
    * untitled empty note counting as nothing, records `not-needed` instead, so
-   * its own first notes never bring the notice. A failed read rejects.
+   * its own first notes never bring the notice. A failed read of the record
+   * rejects. When it's due after a full export (only 1.4.1 writes the
+   * receipt), it starts at the check step.
    * @returns {Promise<boolean>}
    */
   async isDue() {
@@ -100,23 +104,41 @@ class ExportNotice {
     if (storage.openState !== 'open') return false;
     if (EXPORT_AUX_STORES.some((store) => storage.missingStores.includes(store))) return false;
     if (ExportNotice.isRecorded(await storage.readSetting(EXPORT_NOTICE_SETTING))) return false;
-    if (await this._holdsSomething()) return true;
+    if (await this._holdsSomething()) {
+      this.exportedEarlier = Boolean(await storage.getSetting(EXPORT_RECEIPT_SETTING, null));
+      return true;
+    }
     await this.record('not-needed');
     return false;
   }
 
   /**
-   * Whether the profile has a note outside trash with a title or any content.
-   * Stops at the first one.
+   * Whether the profile has a note outside trash with a title or any block
+   * besides an empty text one. Stops at the first.
    * @returns {Promise<boolean>}
    */
   async _holdsSomething() {
     const storage = this.storage;
     const notes = [...(await storage.getAllNotes(true)), ...(await storage.getTemplates())];
     for (const note of notes) {
-      if (!storage.isNoteUntitled(note) || !(await storage.isNoteEmpty(note.id))) return true;
+      if (!storage.isNoteUntitled(note)) return true;
+      const blocks = await storage.getElementsByNote(note.id);
+      if (blocks.some((block) => !ExportNotice.isEmptyTextBlock(block))) return true;
     }
     return false;
+  }
+
+  /**
+   * Whether a block holds nothing: a text block whose content is only spaces
+   * and line breaks. Any other block counts, an image, a table, or a divider
+   * included, and so does a text block with any other markup, such as a
+   * pasted image.
+   * @param {Object} block
+   * @returns {boolean}
+   */
+  static isEmptyTextBlock(block) {
+    if ((block.type || 'text') !== 'text') return false;
+    return String(block.content || '').replace(/<br\s*\/?>|&nbsp;/gi, '').trim() === '';
   }
 
   /**
@@ -150,9 +172,9 @@ class ExportNotice {
   }
 
   /**
-   * Fill `card`, the #export-notice markup, and show it. Another tab recording
-   * an outcome closes it here, and an export from Settings moves it to the
-   * confirm step.
+   * Fill `card`, the #export-notice markup, and show it, at the check step
+   * when a full export already happened. Another tab recording an outcome
+   * closes it here, and an export from Settings moves it to the check step.
    * @param {HTMLElement} card
    * @returns {void}
    */
@@ -184,6 +206,7 @@ class ExportNotice {
     actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.export, 'primary-btn', 'export', () => this._export()));
     actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.dismiss, 'secondary-btn', 'dismiss', () => this._decide('dismissed')));
     card.appendChild(actions);
+    if (this.exportedEarlier) this._askToConfirm();
     // Named by its heading, now that the heading is there
     card.setAttribute('aria-labelledby', 'export-notice-title');
     card.classList.add('is-shown');

@@ -27,6 +27,71 @@ test('Space on a header button presses it instead of typing into the note, and l
   await expectNoUncaught(extension, page);
 });
 
+test('letters typed with a header button focused reach the note every time, not only the first', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Groceries', blocks: [{ type: 'text', content: 'eggs' }] }]);
+  const page = await driver.openNewTab(extension);
+
+  let expected = 'eggs';
+  for (const letters of ['ab', 'cd', 'ef']) {
+    await driver.focusHeaderButton(page, 'Settings');
+    await page.keyboard.type(letters);
+    expected += letters;
+    await expect.poll(() => driver.blocks(page), `after typing "${letters}"`).toEqual([{ type: 'text', text: expected }]);
+  }
+  await expectNoUncaught(extension, page);
+});
+
+/** Two notes with two blocks each, a new tab on them, and split view open with the left pane active */
+async function splitViewOnTwoNotes(extension) {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [
+    { name: 'Groceries', blocks: [{ type: 'text', content: 'eggs' }, { type: 'text', content: 'milk' }] },
+    { name: 'Packing', blocks: [{ type: 'text', content: 'socks' }, { type: 'text', content: 'boots' }] },
+  ]);
+  const page = await driver.openNewTab(extension);
+  await driver.openSplitView(page);
+  await driver.clickBlock(page, 0);
+  return page;
+}
+
+/** The blocks with `letters` added to the last one's text */
+const typedAtEnd = (blocks, letters) => blocks.map((block, index) => (
+  index === blocks.length - 1 ? { ...block, text: block.text + letters } : block));
+
+test('with split view open, letters typed from a header button or the notice go to the active left pane\'s note', async ({ extension }) => {
+  const page = await splitViewOnTwoNotes(extension);
+  const left = await driver.blocks(page);
+  const right = await driver.rightPaneBlocks(page);
+
+  await driver.focusHeaderButton(page, 'Settings');
+  await page.keyboard.type('hello');
+  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'hello'));
+
+  // The notice's Not now, a Shift+Tab before the left note's first block
+  await driver.clickBlock(page, 0);
+  await page.keyboard.press('Shift+Tab');
+  expect(await driver.focused(page)).toEqual({ kind: 'button', text: 'Not now' });
+  await page.keyboard.type('world');
+  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'helloworld'));
+  expect(await driver.rightPaneBlocks(page)).toEqual(right);
+  await expectNoUncaught(extension, page);
+});
+
+test('after split view opens and closes, letters typed from a header button still reach the note, every time', async ({ extension }) => {
+  const page = await splitViewOnTwoNotes(extension);
+  await driver.closeSplitView(page);
+  const left = await driver.blocks(page);
+
+  await driver.focusHeaderButton(page, 'Settings');
+  await page.keyboard.type('hello');
+  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'hello'));
+  await driver.focusHeaderButton(page, 'Settings');
+  await page.keyboard.type('world');
+  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'helloworld'));
+  await expectNoUncaught(extension, page);
+});
+
 test('text typed in the right pane of split view stays in the block it is typed in', async ({ extension }) => {
   await extension.seedOnboarded();
   await driver.seedNotes(extension, [

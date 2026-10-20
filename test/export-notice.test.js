@@ -112,7 +112,7 @@ describe('ExportNotice.isDue', () => {
     ['no notes', [], []],
     ['only an untitled empty note, as a first start creates', [note('U', { name: 'Untitled' })], []],
     ['only untitled notes with empty blocks, and a note in trash', [note('U', { name: 'Untitled 2' }), note('T', { name: 'Kept', trashed: true, trashedAt: 1 })],
-      [block('u1', 'U', 0, '<br>'), block('t1', 'T', 0, 'trashed text')]],
+      [block('u1', 'U', 0, '<br>'), block('u2', 'U', 1, ' &nbsp; <br/> '), block('u3', 'U', 2, ''), block('t1', 'T', 0, 'trashed text')]],
   ]) {
     it(`with ${label}, records "not-needed" and is never due again`, async () => {
       const { env, Storage, ExportNotice } = await setup({ canvases, elements });
@@ -128,6 +128,11 @@ describe('ExportNotice.isDue', () => {
 
   for (const [label, canvases, elements] of [
     ['an untitled note with text', [note('U', { name: 'Untitled' })], [block('u1', 'U', 0, 'a line')]],
+    ['an untitled note whose only block is a pasted image', [note('U', { name: 'Untitled' })],
+      [block('u1', 'U', 0, '<img src="data:image/png;base64,iVBORw0KGgo=">')]],
+    ['an untitled note with only a new table, its cells still "Header 1"', [note('U', { name: 'Untitled' })],
+      [block('u1', 'U', 0, '', { type: 'table', tableData: [['Header 1', 'Header 2'], ['', '']] })]],
+    ['an untitled note with only a divider', [note('U', { name: 'Untitled' })], [block('u1', 'U', 0, '', { type: 'divider' })]],
     ['a titled note with no blocks', [note('N', { name: 'Ideas' })], []],
     ['only a template', [note('T', { name: 'Weekly review', isTemplate: true })], []],
     ['only an archived note', [note('AR', { name: 'Untitled', archived: true, archivedAt: 1 })], [block('ar1', 'AR', 0, 'old')]],
@@ -175,6 +180,44 @@ describe('ExportNotice.isDue', () => {
     failNextRead(env, KEY);
     await assert.rejects(new ExportNotice({ storage: Storage }).isDue());
     assert.equal(record(env), undefined);
+  });
+
+  it('after a full export, a tab that shows it starts at the check-the-file step', async () => {
+    const { env, Storage, ExportNotice } = await setup();
+    env.chrome.local[RECEIPT] = 1700000000000;
+    const notice = new ExportNotice({ storage: Storage, onExport: async () => true });
+    assert.equal(await notice.isDue(), true);
+    const card = noticeMarkup(env);
+    notice.show(card);
+    assert.equal(card.querySelector('.export-notice-body').textContent, CONFIRM);
+    assert.deepEqual(buttons(card), [['Done', 'primary-btn'], ['Export again', 'secondary-btn'], ['Not now', 'secondary-btn']]);
+    assert.equal(record(env), undefined);
+  });
+
+  it('a failed read of that receipt starts it at the first step', async () => {
+    const { env, Storage, ExportNotice } = await setup();
+    env.chrome.local[RECEIPT] = 1700000000000;
+    failNextRead(env, RECEIPT);
+    const notice = new ExportNotice({ storage: Storage, onExport: async () => true });
+    assert.equal(await notice.isDue(), true);
+    const card = noticeMarkup(env);
+    notice.show(card);
+    assert.deepEqual(buttons(card).map(([text]) => text), ['Export JSON', 'Not now']);
+  });
+});
+
+describe('Storage settings reads', () => {
+  it('getSetting is readSetting with a default for a missing key or a failed read', async () => {
+    const { env, Storage } = await setup();
+    env.chrome.local.setting_theme = 'dark';
+    assert.equal(await Storage.getSetting('theme', 'system'), 'dark');
+    assert.equal(await Storage.readSetting('theme'), 'dark');
+    assert.equal(await Storage.getSetting('nothingHere', 'fallback'), 'fallback');
+    assert.equal(await Storage.readSetting('nothingHere'), undefined);
+    failNextRead(env, 'setting_theme');
+    assert.equal(await Storage.getSetting('theme', 'system'), 'system');
+    failNextRead(env, 'setting_theme');
+    await assert.rejects(Storage.readSetting('theme'), /IO error/);
   });
 });
 
@@ -577,12 +620,15 @@ describe('focus after the notice closes holding it (App.focusAfterExportNotice)'
     assert.deepEqual(focusedBlocks, []);
   });
 
-  it('else the pane itself when no note is loaded, never the page body', () => {
+  it('else the pane itself when no note is loaded, never the page body, and only until focus moves on', () => {
     const { env, focusAfter } = appSetup();
     const { editor, root } = activePane(env, { noteId: null, blocks: [] });
     focusAfter(editor, null);
     assert.equal(env.document.activeElement, root);
     assert.equal(root.getAttribute('tabindex'), '-1');
     assert.notEqual(env.document.activeElement, env.document.body);
+
+    root.dispatchEvent({ type: 'blur' });
+    assert.equal(root.hasAttribute('tabindex'), false, 'the pane is focusable again only as the markup has it');
   });
 });

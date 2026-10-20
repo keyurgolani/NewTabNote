@@ -668,6 +668,22 @@ async function openSplitView(page) {
 }
 
 /**
+ * Turn split view off with the header's button and wait until the right pane is gone
+ */
+async function closeSplitView(page) {
+  await page.locator('#header').getByRole('button', { name: 'Toggle Split View', exact: true }).click();
+  await expect(page.locator('#secondary-editor-container')).toBeHidden();
+}
+
+/**
+ * Click into the left pane's block at `index` and put the caret at its end
+ */
+async function clickBlock(page, index) {
+  await page.locator('#blocks-container > .block .block-content').nth(index).click();
+  await page.keyboard.press('End');
+}
+
+/**
  * The right pane's blocks in order, as blocks() reads the left pane's
  */
 function rightPaneBlocks(page) {
@@ -802,6 +818,8 @@ module.exports = {
   focusHeaderButton,
   focused,
   openSplitView,
+  closeSplitView,
+  clickBlock,
   rightPaneBlocks,
   clickRightPaneBlock,
   importBackup,

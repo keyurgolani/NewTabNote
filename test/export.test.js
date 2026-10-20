@@ -255,6 +255,13 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
     assert.deepEqual([seen.total, seen.most], [MEDIA_ROWS, 1], 'media rows are encoded one at a time');
   });
 
+  it('exportAll, which auto backup and the Replace all copy use, still encodes media rows all at once', async () => {
+    const env = await uploadsProfile();
+    const seen = watchEncoding(env);
+    await env.get('Storage').exportAll();
+    assert.deepEqual([seen.total, seen.most], [MEDIA_ROWS, MEDIA_ROWS]);
+  });
+
   it('imports with Replace all into an empty profile with every image and file intact', async () => {
     const source = await uploadsProfile();
     const text = await (await source.get('Storage').exportAllAsBlob()).text();

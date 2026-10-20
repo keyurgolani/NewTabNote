@@ -1163,7 +1163,8 @@ class BlockEditor {
     const content = el.querySelector('.block-content');
     if (content) {
       content.focus();
-      if (atEnd) {
+      // Only where focus went: a caret in a hidden pane's block would swallow every key typed after it
+      if (atEnd && this.doc.activeElement === content) {
         this.placeCaretAtEnd(content);
       }
     }
@@ -2533,12 +2534,14 @@ class BlockEditor {
     }
 
     // Type anywhere: a printable key goes to the note, moving focus there before
-    // the key types, unless what has focus keeps it
+    // the key types, unless something took it already or what has focus keeps it
     if (
+      !e.defaultPrevented &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
       e.key.length === 1 &&
+      this._takesTypedKey(e.target) &&
       !this._keyStaysAt(e.target, e.key)
     ) {
       // Focus last block or create new one
@@ -2552,16 +2555,32 @@ class BlockEditor {
   }
 
   /**
+   * Whether a key typed at `target` is this editor's to send to its note. Both
+   * panes listen on one document, so a key typed in a pane is that pane's, and
+   * any other key is the active pane's while it shows.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _takesTypedKey(target) {
+    const pane = target.closest('.editor-pane');
+    if (pane) return pane === this.root;
+    return this.root.classList.contains('active') && !this.root.classList.contains('hidden');
+  }
+
+  /**
    * Whether a printable key pressed at `target` stays there instead of going
-   * to the note: a text control (input, textarea, select, editable text) or a
-   * modal, menu, listbox, or dialog has focus, or it's Space on a button or
-   * link, which presses it. Enter isn't printable, so it never goes either.
+   * to the note: a text control (input, textarea, select, editable text),
+   * another control that takes keys itself (summary, details, media
+   * controls), or a modal, menu, listbox, or dialog has focus, or it's Space
+   * on a button, which presses it, or on a link, where the browser does what
+   * it does (links open on Enter). Enter isn't printable, so it never goes
+   * either.
    * @param {Element} target - Where the key was pressed
    * @param {string} key - KeyboardEvent.key
    * @returns {boolean}
    */
   _keyStaysAt(target, key) {
-    if (target.closest('input, textarea, select, [contenteditable]')) return true;
+    if (target.closest('input, textarea, select, [contenteditable], summary, details, audio[controls], video[controls]')) return true;
     if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
     return key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
   }
