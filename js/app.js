@@ -60,7 +60,7 @@ class App {
     this.calendarMonth = now.getMonth();
     this.calendarYear = now.getFullYear();
     // Tab management
-    this.openTabs = []; // Array of { noteId, name, side }
+    this._openTabs = []; // Until TabController exists; see the openTabs accessor
     this.activeTabIndex = 0;
     // Auto-title
     this.autoTitleIntervalId = null;
@@ -124,6 +124,47 @@ class App {
         this.rebuildSearchIndex();
       }
     }, 300);
+  }
+
+  /**
+   * The open tabs. TabController owns them and replaces the array when it
+   * restores the saved tabs, so this reads its current array, never a copy.
+   * @returns {Array<any>}
+   */
+  get openTabs() {
+    return this.tabController ? this.tabController.openTabs : this._openTabs;
+  }
+
+  /** @param {Array<any>} tabs */
+  set openTabs(tabs) {
+    if (this.tabController) this.tabController.openTabs = tabs;
+    else this._openTabs = tabs;
+  }
+
+  /**
+   * Notes are about to leave the active set (trash, archive, delete): panes on
+   * them write what they have pending and move to other notes
+   * (TabController.forgetNotes). A failure there is logged and never stops the
+   * trash, archive, or delete itself.
+   * @param {Array<string>} ids
+   * @returns {Promise<void>}
+   */
+  async notesLeaving(ids) {
+    if (!this.tabController) return;
+    try {
+      await this.tabController.forgetNotes(ids);
+    } catch (error) {
+      console.error('Moving panes off notes that are leaving failed:', error);
+    }
+  }
+
+  /**
+   * Notes left the active set: the other new tabs move off them too.
+   * @param {Array<string>} ids
+   * @returns {void}
+   */
+  notesLeft(ids) {
+    if (this.tabController) this.tabController.announceNotesLeft(ids);
   }
 
   /**
@@ -553,6 +594,8 @@ class App {
     this.sidebarController.onConvertNoteToTemplate = (noteId) => this.convertNoteToTemplate(noteId);
     this.sidebarController.onConvertTemplateToNote = (noteId) => this.convertTemplateToNote(noteId);
     this.sidebarController.onImportNote = (file) => this.importNote(file);
+    this.sidebarController.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.sidebarController.onNotesLeft = (ids) => this.notesLeft(ids);
 
     await this.sidebarController.init();
 
@@ -584,11 +627,11 @@ class App {
     this.tabController.onRefreshNotesList = () => this.refreshNotesList();
     this.tabController.onRenderNotesList = () => this.renderNotesList();
     this.tabController.onGetNotes = () => this.notes;
+    this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     await this.tabController.init();
 
-    // Sync state back to App for backward compat
-    this.openTabs = this.tabController.openTabs;
+    // Sync state back to App for backward compat (openTabs reads the controller's own array)
     this.activeTabIndex = this.tabController.activeTabIndex;
     this.splitViewEnabled = this.tabController.splitViewEnabled;
     this.activeEditorSide = this.tabController.activeEditorSide;
@@ -667,8 +710,8 @@ class App {
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
     this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
     this.settingsController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
-    this.settingsController.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
-    this.settingsController.onHandleNoteRemoved = (noteId) => this.handleNoteRemoved(noteId);
+    this.settingsController.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.settingsController.onNotesLeft = (ids) => this.notesLeft(ids);
     this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
     this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
@@ -884,7 +927,8 @@ class App {
     // Wire callbacks so the manager can trigger App-level actions
     this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
     this.notesManager.onRenderNotesList = () => this.renderNotesList();
-    this.notesManager.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
+    this.notesManager.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.notesManager.onNotesLeft = (ids) => this.notesLeft(ids);
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
     this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();

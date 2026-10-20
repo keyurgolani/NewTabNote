@@ -5747,3 +5747,32 @@ kbd {
   min-width: 44px;
   min-height: 44px;
 }
+
+/* A save found the open note deleted (BlockEditor._onNoteGone); stays in view while the pane scrolls */
+.note-gone-notice {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: var(--spacing-lg);
+  padding: 12px 16px;
+  border: 1px solid var(--danger-color);
+  border-radius: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.note-gone-text {
+  flex: 1 1 240px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.note-gone-btn {
+  min-width: 44px;
+  min-height: 44px;
+}

@@ -8,6 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument,
+  makeEditor, runUntil, shownTabs,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -421,33 +422,137 @@ describe('Replace all (AC4)', () => {
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
   });
 
-  it('after Replace all no open editor can save a trashed note back to active', async () => {
+  it('after Replace all no pane stays on a trashed note, and none can save one back to active', async () => {
     const { tabs, editors, pip } = await openEditors(env, Storage);
-    const controller = makeController(env, Storage);
-    controller.onFlushEditors = () => tabs.flushEditorsForImport();
-    controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
+    const controller = wireImport(makeController(env, Storage), tabs);
 
     typeInto(editors.primary, 'typed before import');
-    const done = controller.importFromFile(fileOf(sameProfileBackup()));
-    choose(await waitForDialog(env, 'Import backup'), 'replace');
-    confirmButton(await waitForDialog(env, 'Replace all notes?')).click();
-    await runUntil(env, done);
+    await replaceAll(env, controller, sameProfileBackup());
 
-    assert.equal(pip.closed, true, 'PiP on a trashed note was closed');
-    assert.equal(editors.primary.noteData.trashed, true, 'primary reloaded');
-    assert.equal(editors.secondary.noteData.trashed, true, 'secondary reloaded');
+    assert.equal(pip.closed, true, 'PiP on a trashed note closed');
+    const shown = await Storage.getNote(editors.primary.noteId);
+    assert.ok(shown && !shown.trashed, 'the left pane moved to an active note');
+    assert.deepEqual(plain(tabs.openTabs.map((tab) => tab.noteId)), [shown.id], 'in a tab');
+    assert.equal(editors.secondary.noteData.trashed, true, 'the hidden right pane shows its note as trashed');
 
     typeInto(editors.primary, 'typed after import');
     typeInto(editors.secondary, 'secondary after import');
     env.clock.tick(500);
     await runUntil(env, Promise.all([editors.primary.flushSave(), editors.secondary.flushSave()]));
 
-    const notes = recordsOf(await dumpDatabase(env.indexedDB), 'canvases');
-    assert.equal(notes.A.trashed, true);
-    assert.equal(notes.D.trashed, true);
-    assert.equal(notes.E.trashed, true, 'the PiP note stays trashed after its window closed');
-    const elements = recordsOf(await dumpDatabase(env.indexedDB), 'elements');
-    assert.equal(elements.a1.content, 'typed after import', 'edits still saved, to the trashed note');
+    const db = await dumpDatabase(env.indexedDB);
+    const notes = recordsOf(db, 'canvases');
+    for (const id of ['A', 'D', 'E']) assert.equal(notes[id].trashed, true, `${id} stays in trash`);
+    const elements = Object.values(recordsOf(db, 'elements'));
+    assert.ok(elements.some((el) => el.id === 'a1' && el.content === 'typed before import'), 'the edit from before the import stayed with A');
+    assert.ok(elements.some((el) => el.canvasId === shown.id && el.content === 'typed after import'), 'later typing went to the note on screen');
+  });
+
+  it('with the right pane active, both panes leave the trashed notes, never for the same note', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs._setSplitView(true);
+    tabs.setActiveEditorSide('right');
+    tabs.openTabs.push({ noteId: 'D', name: 'Daily' });
+    const controller = wireImport(makeController(env, Storage), tabs);
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    for (const editor of [editors.primary, editors.secondary]) {
+      const shown = await Storage.getNote(editor.noteId);
+      assert.ok(shown && !shown.trashed, `${shown ? shown.name : 'nothing'} is active`);
+    }
+    assert.notEqual(editors.primary.noteId, editors.secondary.noteId);
+    assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, tabs.getEditor().noteId, "the active tab is the active pane's note");
+  });
+
+  for (const [label, backup] of [
+    ['no notes', { version: 1, exportedAt: 1, canvases: [], elements: [] }],
+    ['only archived notes', {
+      version: 1,
+      exportedAt: 1,
+      canvases: [note('X', { name: 'Kept in the archive', archived: true, archivedAt: 1 })],
+      elements: [block('x1', 'X', 0, 'archived body')],
+    }],
+  ]) {
+    it(`Replace all with a backup of ${label} opens a new note and closes split view`, async () => {
+      const { tabs, editors } = await openEditors(env, Storage);
+      tabs._setSplitView(true);
+      tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
+      const controller = wireImport(makeController(env, Storage), tabs);
+
+      await replaceAll(env, controller, backup);
+
+      const active = plain(await Storage.getAllNotes());
+      assert.deepEqual(active.map((n) => n.name), ['Untitled'], 'the one active note is a new one');
+      assert.equal(editors.primary.noteId, active[0].id);
+      assert.deepEqual(plain(tabs.openTabs.map((tab) => tab.noteId)), [active[0].id]);
+      assert.equal(tabs.splitViewEnabled, false, 'no right pane without a second note');
+      assert.equal(env.chrome.local.setting_splitViewEnabled, false);
+    });
+  }
+
+  it('drops the notes it trashed from the tabs, and the saved workspace names none of them', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs._setSplitView(true);
+    tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'AR', name: 'Old daily' }, { noteId: 'E', name: 'Untitled' });
+    tabs.activeTabIndex = 2;
+    await tabs.saveTabs();
+    tabs.cacheLastOpenedNoteId('E');
+    const controller = makeController(env, Storage);
+    controller.onFlushEditors = () => tabs.flushEditorsForImport();
+    controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    assert.deepEqual(plain(tabs.openTabs), [{ noteId: 'AR', name: 'Old daily' }], 'the archived note keeps its tab');
+    assert.equal(editors.primary.noteId, 'AR', 'the active pane went to the surviving tab');
+    assert.deepEqual(shownTabs(env), ['Old daily']);
+    const right = await Storage.getNote(editors.secondary.noteId);
+    assert.ok(right && !right.trashed && !right.archived && right.id !== 'AR', 'the right pane went to another active note');
+
+    const local = env.chrome.local;
+    assert.deepEqual(local.setting_openTabs, [{ noteId: 'AR', name: 'Old daily' }]);
+    assert.equal(local.setting_activeTabIndex, 0);
+    assert.equal(local.setting_secondaryNoteId, right.id);
+    assert.equal(local.lastOpenedNoteId, 'AR');
+  });
+
+  it('opens the first note in a tab, and a reload opens no note in trash', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs._setSplitView(true);
+    tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'E', name: 'Untitled' });
+    await tabs.saveTabs();
+    tabs.cacheLastOpenedNoteId('A');
+    const controller = wireImport(makeController(env, Storage), tabs);
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    const [first] = plain(await Storage.getAllNotes());
+    assert.deepEqual(plain(tabs.openTabs.map((tab) => tab.noteId)), [first.id], 'the first note after the import has the only tab');
+    assert.equal(editors.primary.noteId, first.id);
+    assert.equal(env.chrome.local.lastOpenedNoteId, first.id);
+    const right = await Storage.getNote(env.chrome.local.setting_secondaryNoteId);
+    assert.ok(right && !right.trashed && right.id !== first.id, 'the saved split note is another active note');
+
+    // Reload: a new page on the same profile restores the saved workspace
+    const page = createLegacyEnv({ indexedDB: env.indexedDB, chrome: env.chrome });
+    page.load(...FILES);
+    const reloaded = page.get('Storage');
+    await reloaded.init();
+    page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
+    const restored = new (page.get('TabController'))({ storage: reloaded, eventBus: null, domRefs: null, logger: null });
+    restored.editor = makeEditor(page, page.document);
+    restored.secondaryEditor = makeEditor(page, page.document);
+    const activeNotes = await reloaded.getAllNotes();
+    restored.onGetNotes = () => activeNotes;
+    await restored.loadSavedTabs();
+
+    assert.equal(restored.editor.noteId, first.id);
+    assert.equal(restored.splitViewEnabled, true);
+    for (const editor of [restored.editor, restored.secondaryEditor]) {
+      assert.ok(editor.noteData, 'each pane has a note');
+      assert.notEqual(editor.noteData.trashed, true, `${editor.noteData.name} is not in trash`);
+    }
   });
 
   it('a page-hide write queued behind the commit cannot move a trashed note back to active', async () => {
@@ -470,10 +575,7 @@ describe('Replace all (AC4)', () => {
       }
       return tx;
     };
-    const done = controller.importFromFile(fileOf(sameProfileBackup()));
-    choose(await waitForDialog(env, 'Import backup'), 'replace');
-    confirmButton(await waitForDialog(env, 'Replace all notes?')).click();
-    await runUntil(env, done);
+    await replaceAll(env, controller, sameProfileBackup());
     Storage.transaction = realTransaction;
     assert.equal(hidden, true, 'the page hid during the commit');
 
@@ -481,68 +583,133 @@ describe('Replace all (AC4)', () => {
     const notes = recordsOf(db, 'canvases');
     assert.equal(notes.A.trashed, true, 'A stays in trash');
     assert.equal(notes.A.archived, false);
-    assert.equal(editors.primary.noteData.trashed, true, 'the editor shows it trashed');
     assert.equal(recordsOf(db, 'elements').a1.content, 'typed while the import commits', 'the edit is kept');
+    assert.notEqual(editors.primary.noteId, 'A', 'the pane moved off A');
+  });
+
+  it('a chrome.storage write that fails after the commit still reports the import, opens the note, and refreshes', async () => {
+    const { tabs, editors } = await openEditors(env, Storage);
+    const controller = wireImport(makeController(env, Storage), tabs);
+    let refreshes = 0;
+    controller.onRefreshNotesList = async () => { refreshes += 1; };
+    // The commit lands, then the next chrome.storage.local write (the open tabs) fails
+    const realImport = Storage.importData.bind(Storage);
+    Storage.importData = async (...args) => {
+      const result = await realImport(...args);
+      env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+      return result;
+    };
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    assert.ok(toasts.some((t) => t.kind === 'success' && t.message.startsWith('Imported 5 notes')), 'the import is reported');
+    assert.deepEqual(toasts.filter((t) => t.kind === 'error'), [
+      { message: "Your notes were imported, but this page didn't finish updating. Reload it to see them.", kind: 'error' },
+    ]);
+    const shown = await Storage.getNote(editors.primary.noteId);
+    assert.ok(shown && !shown.trashed, 'a note from the import is open');
+    assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, shown.id);
+    assert.equal(refreshes, 1, 'the notes list refreshed');
+  });
+
+  it('a failed post-commit step in this page still tells the other new tabs', async () => {
+    const { tabs } = await openEditors(env, Storage);
+    const channel = { sent: [], postMessage(data) { this.sent.push(plain(data)); } };
+    tabs.channel = channel;
+    const controller = wireImport(makeController(env, Storage), tabs);
+    const realImport = Storage.importData.bind(Storage);
+    Storage.importData = async (...args) => {
+      const result = await realImport(...args);
+      env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+      return result;
+    };
+
+    await replaceAll(env, controller, sameProfileBackup());
+
+    assert.equal(channel.sent.length, 1);
+    assert.deepEqual(channel.sent[0].left.slice().sort(), ['A', 'D', 'E']);
+  });
+});
+
+describe('Merge and the tab bar', () => {
+  it('Merge opens the first note in a tab, so the tab bar and the editor agree', async () => {
+    const { env, Storage } = await setup();
+    const { tabs, editors } = await openEditors(env, Storage);
+    tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
+    const controller = wireImport(makeController(env, Storage), tabs);
+    const newer = {
+      version: 1,
+      exportedAt: 1,
+      canvases: [note('N', { name: 'Newer note', updatedAt: 4102444800000 })],
+      elements: [block('n1', 'N', 0, 'newer body')],
+    };
+
+    const done = controller.importFromFile(fileOf(newer));
+    choose(await waitForDialog(env, 'Import backup'), 'merge');
+    await runUntil(env, done);
+
+    const [first] = plain(await Storage.getAllNotes());
+    assert.equal(first.name, 'Newer note');
+    assert.equal(editors.primary.noteId, first.id);
+    assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, first.id, 'the active tab is the note on screen');
+    assert.deepEqual(shownTabs(env), ['Alpha', 'Newer note']);
+  });
+});
+
+describe('The import file input', () => {
+  it('clears after an import, and after one that throws, so the same file can be picked again', async () => {
+    const { env, Storage } = await setup();
+    const controller = makeController(env, Storage);
+    env.document.stub(['settings-modal', 'settings-btn', 'import-btn', { id: 'import-input', tag: 'input' }]);
+    controller.setupSettings();
+    const input = env.document.getElementById('import-input');
+    const [onChange] = input.listeners.change;
+    const pick = (file) => {
+      input.files = [file];
+      input.value = 'C:\\fakepath\\backup.json';
+      return onChange.call(input, { type: 'change', target: input });
+    };
+
+    const merged = pick(fileOf(backup140()));
+    choose(await waitForDialog(env, 'Import backup'), 'merge');
+    await merged;
+    assert.equal(input.value, '');
+
+    controller.importFromFile = async () => { throw new Error('the profile went away'); };
+    await assert.rejects(pick(fileOf(backup140())), /the profile went away/);
+    assert.equal(input.value, '');
   });
 });
 
 // ─── Editors for the AC4 test ───
-
-function makeEditor(env, doc) {
-  const BlockEditor = env.get('BlockEditor');
-  const editor = Object.create(BlockEditor.prototype);
-  Object.assign(editor, {
-    root: { querySelector: () => null },
-    doc,
-    noteId: null,
-    noteData: null,
-    blocks: [],
-    titleEl: { textContent: '' },
-    container: { querySelector: () => null },
-    insightsPollingId: null,
-    undoStack: [],
-    redoStack: [],
-    _contentUndoPending: {},
-    selectedBlockIds: new Set(),
-    _snapshotDirty: false,
-    _snapshotInterval: null,
-  });
-  editor._initPersistenceState();
-  editor._bindLifecycleFlush();
-  const noop = () => {};
-  Object.assign(editor, {
-    renderBlocks: noop,
-    renderBacklinks: noop,
-    updateTimestampDisplay: noop,
-    updateSaveStatus: noop,
-    clearBlockSelection: noop,
-    placeCaretAtEnd: noop,
-    renderInsights: async () => {},
-    startInsightsPollingIfNeeded: async () => {},
-    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
-  });
-  return editor;
-}
 
 function typeInto(editor, text) {
   editor.blocks[0].content = text;
   editor.scheduleSave();
 }
 
-/** Keep animation frames flowing until `promise` settles. */
-async function runUntil(env, promise) {
-  let finished = false;
-  const tracked = Promise.resolve(promise).finally(() => { finished = true; });
-  for (let i = 0; i < 400 && !finished; i++) {
-    env.frames();
-    await settle(2);
-  }
-  return tracked;
+/** Wire an import the way App does: hold and flush the editors, then reopen and refresh. */
+function wireImport(controller, tabs) {
+  controller.getEditor = () => tabs.getEditor();
+  controller.onFlushEditors = () => tabs.flushEditorsForImport();
+  controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
+  controller.onOpenNoteInNewTab = (noteId) => tabs.openNoteInNewTab(noteId);
+  return controller;
+}
+
+/** Import `data` with Replace all, through both dialogs. */
+async function replaceAll(env, controller, data) {
+  const done = controller.importFromFile(fileOf(data));
+  choose(await waitForDialog(env, 'Import backup'), 'replace');
+  confirmButton(await waitForDialog(env, 'Replace all notes?')).click();
+  await runUntil(env, done);
 }
 
 async function openEditors(env, Storage) {
+  env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
   const TabController = env.get('TabController');
   const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  tabs.onCreateNote = () => Storage.createNote('Untitled');
   const primary = makeEditor(env, env.document);
   const secondary = makeEditor(env, env.document);
   const pipDoc = new FakeDocument();

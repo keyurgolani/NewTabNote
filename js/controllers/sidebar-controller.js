@@ -66,6 +66,10 @@ class SidebarController {
     this.onConvertNoteToTemplate = null;
     this.onConvertTemplateToNote = null;
     this.onImportNote = null;
+    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
+    this.onNotesLeaving = null;
+    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
+    this.onNotesLeft = null;
   }
 
   /** Initialize sidebar: load persisted state, wire DOM listeners. */
@@ -770,7 +774,10 @@ class SidebarController {
       return;
     }
     if (!await confirmDialog({ title: 'Empty Trash', message: `Permanently delete ${this.trashedNotes.length} note(s)? This cannot be undone.`, confirmText: 'Delete', danger: true })) return;
+    const ids = (await this.storage.getTrashedNotes()).map((note) => note.id);
+    if (this.onNotesLeaving) await this.onNotesLeaving(ids);
     await this.storage.emptyTrash();
+    if (this.onNotesLeft) this.onNotesLeft(ids);
     await this.refreshNotesList();
     Utils.showToast('Trash emptied', 'success');
   }
@@ -1271,8 +1278,12 @@ class SidebarController {
     }
     if (confirmMsg && !await confirmDialog({ title: 'Confirm', message: confirmMsg, confirmText: action === 'delete' ? 'Delete' : 'OK', danger: action === 'delete' })) return;
 
+    // Trash, archive, and delete take the notes out of the active set
+    const leaving = ['trash', 'archive', 'delete'].includes(action);
     try {
+      if (leaving && this.onNotesLeaving) await this.onNotesLeaving(ids);
       await this.storage.bulkNoteAction(ids, action);
+      if (leaving && this.onNotesLeft) this.onNotesLeft(ids);
       Utils.showToast(`${ids.length} notes ${action}ed`, 'success');
       this.notes = await this.storage.getAllNotes();
       this.archivedNotes = await this.storage.getArchivedNotes();

@@ -22,13 +22,15 @@ class SettingsController {
     this.onCloseAllModals = null;
     this.onRefreshNotesList = null;
     this.onOpenNoteInNewTab = null;
-    this.onCloseTabForNote = null;
-    this.onHandleNoteRemoved = null;
     this.getEditor = null;
     /** @type {(() => Promise<void>)|null} Hold and flush every open editor before an import commits */
     this.onFlushEditors = null;
-    /** @type {((trashedIds: Array<string>, trashedAt: number|null) => Promise<void>)|null} After an import: reload editors on trashed notes and release the hold */
+    /** @type {((trashedIds: Array<string>, trashedAt: number|null) => Promise<void>)|null} After an import: release the hold and move panes off trashed notes */
     this.onReloadEditors = null;
+    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
+    this.onNotesLeaving = null;
+    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
+    this.onNotesLeft = null;
     this.onSetupAutoTitle = null;
     this.onSetupInsightsExtraction = null;
     this.onUpdateAISidebarState = null;
@@ -157,10 +159,13 @@ class SettingsController {
 
       importInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
-        if (file) {
-          await this.importFromFile(file);
+        try {
+          if (file) {
+            await this.importFromFile(file);
+          }
+        } finally {
+          e.target.value = '';
         }
-        e.target.value = '';
       });
     }
 
@@ -798,20 +803,42 @@ class SettingsController {
     } catch (error) {
       console.error('Import failed:', error);
       this._showImportFailed(error && error.message ? error.message : 'unknown error');
-    } finally {
-      if (this.onReloadEditors) {
-        await this.onReloadEditors(result ? result.trashedIds : [], result ? result.trashedAt : null);
-      }
     }
+
+    // Editors resume, and the notes Replace all trashed leave every new tab
+    const resumed = await this._afterImport(async () => {
+      if (this.onReloadEditors) await this.onReloadEditors(result ? result.trashedIds : [], result ? result.trashedAt : null);
+    });
     if (!result) return;
 
     Utils.showToast(this._importSummary(result), 'success', 6000);
+    // The first note opens in a tab, so the tab bar and the editor agree
+    const opened = await this._afterImport(async () => {
+      const notes = await this.storage.getAllNotes();
+      if (notes.length > 0 && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(notes[0].id);
+    });
+    const listed = await this._afterImport(async () => {
+      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    });
+    if (!resumed || !opened || !listed) {
+      Utils.showToast("Your notes were imported, but this page didn't finish updating. Reload it to see them.", 'error', 6000);
+    }
+  }
 
-    // Reload
-    const editor = this.getEditor ? this.getEditor() : null;
-    const notes = await this.storage.getAllNotes();
-    if (editor && notes.length > 0) await editor.loadNote(notes[0].id);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+  /**
+   * Run a step that follows an import, so one that fails (a chrome.storage
+   * write, say) doesn't stop the steps after it. The failure is logged.
+   * @param {() => Promise<void>} step
+   * @returns {Promise<boolean>} false when the step failed
+   */
+  async _afterImport(step) {
+    try {
+      await step();
+      return true;
+    } catch (error) {
+      console.error('A step after the import failed:', error);
+      return false;
+    }
   }
 
   /**
@@ -881,10 +908,10 @@ class SettingsController {
     if (!editor) return;
 
     const currentId = editor.noteId;
+    if (this.onNotesLeaving) await this.onNotesLeaving([currentId]);
     await this.storage.deleteNote(currentId);
-    if (this.onCloseTabForNote) await this.onCloseTabForNote(currentId);
+    if (this.onNotesLeft) this.onNotesLeft([currentId]);
     if (this.onRefreshNotesList) await this.onRefreshNotesList();
-    if (this.onHandleNoteRemoved) await this.onHandleNoteRemoved(currentId);
 
     document.getElementById('settings-modal').classList.add('hidden');
     Utils.showToast('Note moved to trash', 'success');
