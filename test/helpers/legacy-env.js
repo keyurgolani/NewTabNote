@@ -8,6 +8,7 @@
  * - fake-indexeddb as `indexedDB` (one fresh IDBFactory per environment),
  * - a fake clock behind setTimeout, setInterval, and requestAnimationFrame,
  * - recording `chrome.*` and `importScripts` stubs,
+ * - an exclusive `navigator.locks` stub (Web Locks),
  * - an optional minimal DOM (FakeDocument) for page contexts.
  *
  * Nothing here copies production logic. Fixtures are built with raw
@@ -374,6 +375,24 @@ class FakeWindowTarget {
   }
 }
 
+// ─── navigator.locks stub ───
+
+/**
+ * Exclusive Web Locks, granted per name in request order. Share one between
+ * environments to model pages of the same origin.
+ */
+function createLockManager() {
+  const tails = new Map();
+  return {
+    request(name, optionsOrCallback, maybeCallback) {
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      const held = (tails.get(name) || Promise.resolve()).then(() => callback({ name, mode: 'exclusive' }));
+      tails.set(name, held.catch(() => {}));
+      return held;
+    },
+  };
+}
+
 // ─── chrome.* stub ───
 
 function createEventStub() {
@@ -487,13 +506,17 @@ function createChromeStub() {
  * @param {'page'|'worker'} [options.context='page'] - page: window, self, document. worker: self and importScripts only.
  * @param {IDBFactory} [options.indexedDB] - share a factory between environments (for example a page and the worker)
  * @param {FakeDocument|null} [options.document] - page contexts get a FakeDocument unless null is passed
+ * @param {ReturnType<typeof createChromeStub>} [options.chrome] - share chrome.* (and chrome.storage.local) with another environment
+ * @param {ReturnType<typeof createLockManager>|null} [options.locks] - share navigator.locks with another
+ *   environment, or pass null for a context without it
  */
 function createLegacyEnv(options = {}) {
   const kind = options.context || 'page';
   const indexedDB = options.indexedDB || new IDBFactory();
   const clock = new FakeClock();
   const frames = [];
-  const chrome = createChromeStub();
+  const chrome = options.chrome || createChromeStub();
+  const locks = options.locks === null ? undefined : (options.locks || createLockManager());
   const logs = [];
   const record = (level) => (...args) => { logs.push({ level, args }); };
   const quietConsole = {
@@ -519,7 +542,7 @@ function createLegacyEnv(options = {}) {
     requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     cancelAnimationFrame: () => {},
     chrome: chrome.api,
-    navigator: { maxTouchPoints: 0, userAgent: 'node-test' },
+    navigator: { maxTouchPoints: 0, userAgent: 'node-test', locks },
     location: { reload() { sandbox.__reloads = (sandbox.__reloads || 0) + 1; } },
   };
 
@@ -771,6 +794,8 @@ module.exports = {
   FakeDocument,
   FakeElement,
   createLegacyEnv,
+  createChromeStub,
+  createLockManager,
   createDatabase,
   dumpDatabase,
   recordsOf,

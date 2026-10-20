@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
+  createLegacyEnv, createLockManager, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
 
 const TEST_KEY = 'test-only-api-key';
@@ -59,6 +59,37 @@ async function fixture(factory, { version = 8, omit = [] } = {}) {
     records.meta = [{ key: 'schemaVersion', value: 9 }, { key: 'migratedAt', value: 1760000000000 }];
   }
   await createDatabase(factory, { version, omit, extraStores, records });
+}
+
+/**
+ * Hold chrome.storage.local reads of `key` until a second one arrives, or for 50
+ * event-loop turns, so two starts that overlap both read before either writes.
+ */
+function holdReads(chromeStub, key) {
+  const local = chromeStub.api.storage.local;
+  const realGet = local.get.bind(local);
+  let held = [];
+  const release = () => {
+    const run = held;
+    held = [];
+    run.forEach((read) => read());
+  };
+  local.get = (keys, callback) => {
+    if (keys !== key || !callback) return realGet(keys, callback);
+    held.push(() => realGet(keys, callback));
+    if (held.length === 2) {
+      release();
+    } else {
+      let turns = 0;
+      const wait = () => {
+        if (held.length === 0) return;
+        if (++turns >= 50) release();
+        else setImmediate(wait);
+      };
+      setImmediate(wait);
+    }
+    return undefined;
+  };
 }
 
 function recoveryCopies(env) {
@@ -159,6 +190,33 @@ describe('startup: version 8 without themes (AC6)', () => {
     Object.assign(again.chrome.local, JSON.parse(JSON.stringify(env.chrome.local)));
     await startStorage(again);
     assert.equal(recoveryCopies(again).length, 1);
+  });
+
+  it('two tabs starting at once write one copy between them', async () => {
+    const locks = createLockManager();
+    const first = createLegacyEnv({ locks });
+    await fixture(first.indexedDB, { omit: ['themes'] });
+    // A second new tab of the same profile: same database, chrome.storage.local, and locks.
+    const second = createLegacyEnv({ indexedDB: first.indexedDB, chrome: first.chrome, locks });
+    // Reading every store takes a while on a real profile, so the second tab looks for the
+    // copy while the first is still reading. Hold each look briefly so both can overlap.
+    holdReads(first.chrome, 'recovery_copy_missing_stores');
+
+    await Promise.all([startStorage(first), startStorage(second)]);
+
+    // Count writes, not keys: two starts in the same millisecond pick the same key.
+    const copyWrites = first.chrome.calls.filter((c) => c.method === 'set'
+      && c.keys.some((key) => key.startsWith('recovery_backup_')));
+    assert.equal(copyWrites.length, 1, 'one tab writes the copy, the other finds it');
+    const copies = recoveryCopies(first).filter(([, copy]) => copy.reason === 'missing-stores');
+    assert.equal(copies.length, 1);
+  });
+
+  it('without navigator.locks a start still writes the copy', async () => {
+    const env = createLegacyEnv({ locks: null });
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    await startStorage(env);
+    assert.equal(recoveryCopies(env).length, 1);
   });
 
   it('no start reads all of chrome.storage.local to look for the copy', async () => {

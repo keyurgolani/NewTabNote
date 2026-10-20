@@ -402,11 +402,30 @@ class DatabaseManager {
    * every readable store except `settings` under its own name, with Blobs as
    * data URLs. Skipped when a copy for the same missing stores exists, which
    * the `missingStoresCopyKey` value records.
+   *
+   * Tabs that open together would each read every store and write a copy, so
+   * the check and the write run under a Web Lock: the later tab finds the
+   * earlier one's copy. Without navigator.locks they run unguarded.
    * @param {IDBDatabase} db - Open through an unversioned open
    * @param {Array<string>} missing
    * @returns {Promise<void>}
    */
   async _writeMissingStoresCopy(db, missing) {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!locks || typeof locks.request !== 'function') {
+      await this._writeMissingStoresCopyIfNone(db, missing);
+      return;
+    }
+    await locks.request('ntn-recovery-copy', () => this._writeMissingStoresCopyIfNone(db, missing));
+  }
+
+  /**
+   * The check and write of _writeMissingStoresCopy.
+   * @param {IDBDatabase} db
+   * @param {Array<string>} missing
+   * @returns {Promise<void>}
+   */
+  async _writeMissingStoresCopyIfNone(db, missing) {
     const sameStores = (list) => Array.isArray(list) && list.length === missing.length
       && missing.every((store) => list.includes(store));
     const written = await this._getStorageValue(this.missingStoresCopyKey);
