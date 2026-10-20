@@ -1,0 +1,557 @@
+{
+  "about": "tsc diagnostics allowed by scripts/typecheck-ratchet.js, as file -> code -> message -> count. A new key or a higher count fails. Record fixes with `npm run typecheck:ratchet -- --update`.",
+  "diagnostics": {
+    "js/ai-prompt-templates.js": {
+      "TS2367": {
+        "This comparison appears to be unintentional because the types '\"note\" | \"global\"' and '\"both\"' have no overlap.": 1
+      }
+    },
+    "js/analytics.js": {
+      "TS2339": {
+        "Property 'Analytics' does not exist on type 'Window & typeof globalThis'.": 1
+      },
+      "TS2740": {
+        "Type '{ new (): Storage; prototype: Storage; }' is missing the following properties from type 'DatabaseManager': dbName, dbVersion, db, requiredStores, and 82 more.": 1
+      }
+    },
+    "js/app.js": {
+      "TS2304": {
+        "Cannot find name 'AIChatController'.": 1,
+        "Cannot find name 'AIPromptTemplates'.": 2,
+        "Cannot find name 'AIResponseUtils'.": 10,
+        "Cannot find name 'AnalyticsController'.": 1,
+        "Cannot find name 'CommandPaletteUtils'.": 2,
+        "Cannot find name 'ExportImportService'.": 1,
+        "Cannot find name 'GraphView'.": 2,
+        "Cannot find name 'NotesManager'.": 1,
+        "Cannot find name 'Onboarding'.": 6,
+        "Cannot find name 'ResizablePanel'.": 2,
+        "Cannot find name 'SettingsController'.": 1,
+        "Cannot find name 'ShortcutUtils'.": 2,
+        "Cannot find name 'ShortcutsManager'.": 1,
+        "Cannot find name 'SidebarController'.": 1,
+        "Cannot find name 'SidebarUtils'.": 6,
+        "Cannot find name 'SyncService'.": 2,
+        "Cannot find name 'ThemeBuilderController'.": 1,
+        "Cannot find name 'Themes'.": 2,
+        "Cannot find name 'confirmDialog'.": 6,
+        "Cannot find name 'createDomRefs'.": 1,
+        "Cannot find name 'createEventBus'.": 1,
+        "Cannot find name 'createLogger'.": 1,
+        "Cannot find name 'promptDialog'.": 2,
+        "Cannot find name 'sanitizeHtml'.": 2
+      },
+      "TS2322": {
+        "Type 'number' is not assignable to type 'string'.": 2
+      },
+      "TS2339": {
+        "Property 'app' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'archiveNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'bulkNoteAction' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'checked' does not exist on type 'EventTarget'.": 2,
+        "Property 'checked' does not exist on type 'HTMLElement'.": 4,
+        "Property 'cleanupTrash' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'closest' does not exist on type 'EventTarget'.": 2,
+        "Property 'createFolder' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'createNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 8,
+        "Property 'dataset' does not exist on type 'Element'.": 2,
+        "Property 'deleteFolder' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'disabled' does not exist on type 'HTMLElement'.": 10,
+        "Property 'editor' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'emptyTrash' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'ensureDailyNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5,
+        "Property 'ensureDailyNoteForDate' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'files' does not exist on type 'EventTarget'.": 1,
+        "Property 'getAllFolders' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'getAllNotes' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 8,
+        "Property 'getAllVectors' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'getArchivedNotes' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'getAttribute' does not exist on type 'EventTarget'.": 1,
+        "Property 'getElementsByNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 9,
+        "Property 'getNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 9,
+        "Property 'getSearchIndex' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 21,
+        "Property 'getTemplates' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'getTrashedNotes' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'init' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'moveNoteToFolder' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'openNote' does not exist on type 'App'.": 1,
+        "Property 'permanentlyDeleteNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'restoreNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'saveElements' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'saveVector' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'secondaryEditor' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'setSearchIndex' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'setSelectionRange' does not exist on type 'HTMLElement'.": 2,
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 22,
+        "Property 'style' does not exist on type 'Element'.": 10,
+        "Property 'tagName' does not exist on type 'EventTarget'.": 2,
+        "Property 'title' does not exist on type 'Element'.": 1,
+        "Property 'trashNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'unarchiveNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'updateFolder' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4,
+        "Property 'updateNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 12,
+        "Property 'updateNoteLinks' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'value' does not exist on type 'Element'.": 1,
+        "Property 'value' does not exist on type 'EventTarget'.": 9,
+        "Property 'value' does not exist on type 'HTMLElement'.": 32
+      },
+      "TS2345": {
+        "Argument of type 'EventTarget' is not assignable to parameter of type 'Node'.\n  Type 'EventTarget' is missing the following properties from type 'Node': baseURI, childNodes, firstChild, isConnected, and 43 more.": 1
+      },
+      "TS2551": {
+        "Property 'select' does not exist on type 'HTMLElement'. Did you mean 'onselect'?": 1
+      },
+      "TS2552": {
+        "Cannot find name 'TabController'. Did you mean 'AbortController'?": 2
+      }
+    },
+    "js/background.js": {
+      "TS2304": {
+        "Cannot find name 'chrome'.": 21,
+        "Cannot find name 'importScripts'.": 1
+      },
+      "TS2339": {
+        "Property 'ensureDailyNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'init' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+      },
+      "TS2353": {
+        "Object literal may only specify known properties, and 'error' does not exist in type '{ ok: boolean; status: number; data: any; }'.": 1
+      }
+    },
+    "js/blocks.js": {
+      "TS2304": {
+        "Cannot find name 'BlockPlaceholders'.": 6
+      },
+      "TS2322": {
+        "Type 'boolean' is not assignable to type 'string'.": 5
+      },
+      "TS2339": {
+        "Property 'BlockTypes' does not exist on type 'Window & typeof globalThis'.": 1
+      },
+      "TS2551": {
+        "Property 'Block' does not exist on type 'Window & typeof globalThis'. Did you mean 'Lock'?": 1
+      }
+    },
+    "js/chat-ui-components.js": {
+      "TS2339": {
+        "Property 'ChatUIComponents' does not exist on type 'Window & typeof globalThis'.": 1
+      },
+      "TS2739": {
+        "Type '{}' is missing the following properties from type '{ content: string; displayName: string; timestamp: Date; }': content, displayName, timestamp": 1,
+        "Type '{}' is missing the following properties from type '{ toolName: string; toolType: string; onRetry?: () => void; }': toolName, toolType": 1
+      },
+      "TS2740": {
+        "Type 'Element' is missing the following properties from type 'HTMLElement': accessKey, accessKeyLabel, autocapitalize, autocorrect, and 129 more.": 1
+      },
+      "TS2741": {
+        "Property 'onClick' is missing in type '{}' but required in type '{ onClick: () => void; }'.": 1
+      }
+    },
+    "js/controllers/ai-chat-controller.js": {
+      "TS18047": {
+        "'messageEl' is possibly 'null'.": 1,
+        "'renderer' is possibly 'null'.": 2
+      },
+      "TS2304": {
+        "Cannot find name 'AIPromptTemplates'.": 2,
+        "Cannot find name 'AIResponseUtils'.": 4,
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'ResizablePanel'.": 1,
+        "Cannot find name 'SidebarUtils'.": 2,
+        "Cannot find name 'confirmDialog'.": 1,
+        "Cannot find name 'sanitizeHtml'.": 4
+      },
+      "TS2339": {
+        "Property 'AIChatController' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'ChatUIComponents' does not exist on type 'Window & typeof globalThis'.": 2,
+        "Property 'ScrollStateMachine' does not exist on type 'Window & typeof globalThis'.": 2,
+        "Property 'abort' does not exist on type 'never'.": 1,
+        "Property 'checked' does not exist on type 'HTMLElement'.": 4,
+        "Property 'closest' does not exist on type 'EventTarget'.": 1,
+        "Property 'dataset' does not exist on type 'Element'.": 1,
+        "Property 'destroy' does not exist on type 'never'.": 1,
+        "Property 'disabled' does not exist on type 'HTMLElement'.": 11,
+        "Property 'finish' does not exist on type 'never'.": 1,
+        "Property 'getStepContent' does not exist on type 'never'.": 1,
+        "Property 'push' does not exist on type 'never'.": 1,
+        "Property 'remove' does not exist on type 'never'.": 1,
+        "Property 'setSelectionRange' does not exist on type 'HTMLElement'.": 2,
+        "Property 'setStepStatus' does not exist on type 'never'.": 1,
+        "Property 'stableContent' does not exist on type 'never'.": 2,
+        "Property 'style' does not exist on type 'Element'.": 11,
+        "Property 'title' does not exist on type 'Element'.": 1,
+        "Property 'value' does not exist on type 'Element'.": 1,
+        "Property 'value' does not exist on type 'EventTarget'.": 4,
+        "Property 'value' does not exist on type 'HTMLElement'.": 30
+      }
+    },
+    "js/controllers/analytics-controller.js": {
+      "TS2304": {
+        "Cannot find name 'Chart'.": 4,
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1
+      },
+      "TS2322": {
+        "Type 'number' is not assignable to type 'string'.": 3
+      },
+      "TS2339": {
+        "Property 'AnalyticsController' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/controllers/export-import-service.js": {
+      "TS2304": {
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1
+      },
+      "TS2339": {
+        "Property 'ExportImportService' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/controllers/notes-manager.js": {
+      "TS2304": {
+        "Cannot find name 'AIResponseUtils'.": 6,
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'confirmDialog'.": 1
+      },
+      "TS2339": {
+        "Property 'NotesManager' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/controllers/settings-controller.js": {
+      "TS2304": {
+        "Cannot find name 'AIResponseUtils'.": 3,
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'JSZip'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'Themes'.": 2,
+        "Cannot find name 'confirmDialog'.": 2
+      },
+      "TS2339": {
+        "Property 'SettingsController' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'checked' does not exist on type 'EventTarget'.": 1,
+        "Property 'checked' does not exist on type 'HTMLElement'.": 1,
+        "Property 'closest' does not exist on type 'EventTarget'.": 2,
+        "Property 'dataset' does not exist on type 'Element'.": 6,
+        "Property 'files' does not exist on type 'EventTarget'.": 1,
+        "Property 'onAIPromptTemplatesChanged' does not exist on type 'SettingsController'.": 2,
+        "Property 'onAISidebarWidthChanged' does not exist on type 'SettingsController'.": 2,
+        "Property 'onLLMSettingsChanged' does not exist on type 'SettingsController'.": 2,
+        "Property 'onSidebarStateChanged' does not exist on type 'SettingsController'.": 8,
+        "Property 'style' does not exist on type 'Element'.": 5,
+        "Property 'value' does not exist on type 'EventTarget'.": 8,
+        "Property 'value' does not exist on type 'HTMLElement'.": 10
+      }
+    },
+    "js/controllers/shortcuts-manager.js": {
+      "TS2304": {
+        "Cannot find name 'CommandPaletteUtils'.": 2,
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'ShortcutUtils'.": 2
+      },
+      "TS2339": {
+        "Property 'ShortcutsManager' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'closest' does not exist on type 'EventTarget'.": 1,
+        "Property 'value' does not exist on type 'HTMLElement'.": 4
+      },
+      "TS2551": {
+        "Property 'select' does not exist on type 'HTMLElement'. Did you mean 'onselect'?": 1
+      }
+    },
+    "js/controllers/sidebar-controller.js": {
+      "TS2304": {
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'ResizablePanel'.": 1,
+        "Cannot find name 'SidebarUtils'.": 4,
+        "Cannot find name 'confirmDialog'.": 3,
+        "Cannot find name 'promptDialog'.": 2
+      },
+      "TS2322": {
+        "Type 'number' is not assignable to type 'string'.": 3
+      },
+      "TS2339": {
+        "Property 'SidebarController' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'dataset' does not exist on type 'Element'.": 1,
+        "Property 'files' does not exist on type 'EventTarget'.": 1,
+        "Property 'style' does not exist on type 'Element'.": 1,
+        "Property 'value' does not exist on type 'EventTarget'.": 3,
+        "Property 'value' does not exist on type 'HTMLElement'.": 1
+      },
+      "TS2345": {
+        "Argument of type 'EventTarget' is not assignable to parameter of type 'Node'.\n  Type 'EventTarget' is missing the following properties from type 'Node': baseURI, childNodes, firstChild, isConnected, and 43 more.": 1
+      }
+    },
+    "js/controllers/tab-controller.js": {
+      "TS2304": {
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'chrome'.": 8,
+        "Cannot find name 'documentPictureInPicture'.": 1
+      },
+      "TS2322": {
+        "Type 'number' is not assignable to type 'string'.": 1
+      },
+      "TS2551": {
+        "Property 'TabController' does not exist on type 'Window & typeof globalThis'. Did you mean 'AbortController'?": 1
+      }
+    },
+    "js/controllers/theme-builder-controller.js": {
+      "TS2304": {
+        "Cannot find name 'DomRefs'.": 1,
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'Themes'.": 4
+      },
+      "TS2339": {
+        "Property 'ThemeBuilderController' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'value' does not exist on type 'EventTarget'.": 1,
+        "Property 'value' does not exist on type 'HTMLElement'.": 3
+      }
+    },
+    "js/core/dom-refs.js": {
+      "TS2339": {
+        "Property 'createDomRefs' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/core/event-bus.js": {
+      "TS2339": {
+        "Property 'createEventBus' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/core/logger.js": {
+      "TS2304": {
+        "Cannot find name 'chrome'.": 4
+      },
+      "TS2339": {
+        "Property 'createLogger' does not exist on type 'Window & typeof globalThis'.": 1
+      },
+      "TS2580": {
+        "Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.": 3
+      }
+    },
+    "js/core/storage-error.js": {
+      "TS2551": {
+        "Property 'StorageError' does not exist on type 'Window & typeof globalThis'. Did you mean 'RangeError'?": 1
+      }
+    },
+    "js/editor.js": {
+      "TS2304": {
+        "Cannot find name 'AIResponseUtils'.": 2,
+        "Cannot find name 'FormattingToolbar'.": 2,
+        "Cannot find name 'ShortcutUtils'.": 6,
+        "Cannot find name 'SidebarUtils'.": 2,
+        "Cannot find name 'confirmDialog'.": 2
+      },
+      "TS2339": {
+        "Property 'BlockEditor' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'LLM' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'app' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'autoTitleNoteId' does not exist on type 'BlockEditor'.": 1,
+        "Property 'clientX' does not exist on type 'Event'.": 1,
+        "Property 'clientY' does not exist on type 'Event'.": 1,
+        "Property 'closest' does not exist on type 'EventTarget'.": 5,
+        "Property 'dataset' does not exist on type 'Element'.": 2,
+        "Property 'deleteElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4,
+        "Property 'deleteElements' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'getBacklinks' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'getElementsByNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'getNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'getNoteNames' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4,
+        "Property 'getSnapshots' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'getTemplates' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'saveSnapshot' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'src' does not exist on type 'Element'.": 1,
+        "Property 'tagName' does not exist on type 'EventTarget'.": 2,
+        "Property 'updateNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'updateNoteLinks' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+      },
+      "TS2345": {
+        "Argument of type 'string' is not assignable to parameter of type '\"rewrite\" | \"expand\" | \"summarize\" | \"translate\"'.": 1
+      }
+    },
+    "js/embeddings.js": {
+      "TS2304": {
+        "Cannot find name 'transformers'.": 1
+      },
+      "TS2339": {
+        "Property 'Embeddings' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/image-compression.js": {
+      "TS2339": {
+        "Property 'ImageCompression' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/llm.js": {
+      "TS2304": {
+        "Cannot find name 'chrome'.": 7
+      },
+      "TS2339": {
+        "Property 'LLM' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'error' does not exist on type '{ ok: boolean; status: number; data: any; }'.": 1,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5,
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5
+      }
+    },
+    "js/offscreen.js": {
+      "TS2304": {
+        "Cannot find name 'chrome'.": 1
+      }
+    },
+    "js/onboarding.js": {
+      "TS2339": {
+        "Property 'Onboarding' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4
+      }
+    },
+    "js/popup.js": {
+      "TS2304": {
+        "Cannot find name 'chrome'.": 2
+      },
+      "TS2339": {
+        "Property 'disabled' does not exist on type 'HTMLElement'.": 2,
+        "Property 'value' does not exist on type 'HTMLElement'.": 2
+      },
+      "TS2362": {
+        "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.": 1
+      },
+      "TS2363": {
+        "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.": 1
+      }
+    },
+    "js/resizable-panel.js": {
+      "TS2322": {
+        "Type 'string' is not assignable to type '\"left\" | \"right\"'.": 1
+      }
+    },
+    "js/scroll-state-machine.js": {
+      "TS2339": {
+        "Property 'ScrollStateMachine' does not exist on type 'Window & typeof globalThis'.": 1
+      },
+      "TS2741": {
+        "Property 'onNewContentCount' is missing in type '{}' but required in type '{ onNewContentCount: (arg0: number) => void; }'.": 1
+      }
+    },
+    "js/search.js": {
+      "TS2304": {
+        "Cannot find name 'Fuse'.": 1
+      },
+      "TS2339": {
+        "Property 'SearchEngine' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/services/sync-service.js": {
+      "TS2304": {
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1,
+        "Cannot find name 'confirmDialog'.": 3
+      },
+      "TS2339": {
+        "Property 'SyncService' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'confirmDialog' does not exist on type 'Window & typeof globalThis'.": 2
+      },
+      "TS2580": {
+        "Cannot find name 'Buffer'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.": 1
+      }
+    },
+    "js/sidepanel.js": {
+      "TS2304": {
+        "Cannot find name 'InsightsSummary'.": 1,
+        "Cannot find name 'chrome'.": 2
+      }
+    },
+    "js/storage.js": {
+      "TS2304": {
+        "Cannot find name 'StorageError'.": 1,
+        "Cannot find name 'chrome'.": 28
+      },
+      "TS2339": {
+        "Property 'chrome' does not exist on type 'Window & typeof globalThis'.": 2,
+        "Property 'error' does not exist on type 'EventTarget'.": 3,
+        "Property 'result' does not exist on type 'EventTarget'.": 5
+      },
+      "TS2451": {
+        "Cannot redeclare block-scoped variable 'Storage'.": 1
+      }
+    },
+    "js/stream-renderer.js": {
+      "TS2339": {
+        "Property 'StreamRenderer' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/theme-engine.js": {
+      "TS2339": {
+        "Property 'Themes' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'getCustomThemes' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+      },
+      "TS2345": {
+        "Argument of type '{}' is not assignable to parameter of type '{ [x: string]: string; }'.\n  Index signature for type 'string' is missing in type '{}'.": 1
+      }
+    },
+    "js/ui/confirm-dialog.js": {
+      "TS2339": {
+        "Property 'confirmDialog' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'promptDialog' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/ui/formatting-toolbar.js": {
+      "TS2339": {
+        "Property 'FormattingToolbar' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/ui/graph-view.js": {
+      "TS2304": {
+        "Cannot find name 'EventBus'.": 1,
+        "Cannot find name 'Logger'.": 1
+      },
+      "TS2339": {
+        "Property 'GraphView' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'getContext' does not exist on type 'HTMLElement'.": 1,
+        "Property 'height' does not exist on type 'HTMLElement'.": 4,
+        "Property 'width' does not exist on type 'HTMLElement'.": 4
+      }
+    },
+    "js/utils.js": {
+      "TS2304": {
+        "Cannot find name 'html'.": 1
+      },
+      "TS2339": {
+        "Property 'Utils' does not exist on type 'Window & typeof globalThis'.": 1,
+        "Property 'focus' does not exist on type 'Element'.": 2,
+        "Property 'offsetParent' does not exist on type 'Element'.": 1
+      },
+      "TS2345": {
+        "Argument of type 'string | ArrayBuffer' is not assignable to parameter of type 'string | PromiseLike<string>'.\n  Type 'ArrayBuffer' is not assignable to type 'string | PromiseLike<string>'.": 2
+      }
+    },
+    "js/utils/sanitize.js": {
+      "TS2339": {
+        "Property 'sanitizeHtml' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    },
+    "js/virtual-scroller.js": {
+      "TS2339": {
+        "Property 'VirtualScroller' does not exist on type 'Window & typeof globalThis'.": 1
+      }
+    }
+  }
+}

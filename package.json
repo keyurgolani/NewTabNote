@@ -9,6 +9,7 @@
     "clean": "rm -rf dist",
     "test": "node --test test/*.test.js",
     "typecheck": "npx tsc --project jsconfig.json",
+    "typecheck:ratchet": "node scripts/typecheck-ratchet.js",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package"
   },
