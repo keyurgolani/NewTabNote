@@ -40,7 +40,10 @@ class NotesManager {
     // App-level callbacks (set by App after construction)
     this.onRefreshNotesList = null;
     this.onRenderNotesList = null;
-    this.onCloseTabForNote = null;
+    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
+    this.onNotesLeaving = null;
+    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
+    this.onNotesLeft = null;
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
     this.onUpdateEmptyState = null;
@@ -89,12 +92,23 @@ class NotesManager {
    * Archive a note by ID
    */
   async archiveNote(noteId) {
+    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
     await this.storage.archiveNote(noteId);
-    if (this.onCloseTabForNote) this.onCloseTabForNote(noteId);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
-    await this.handleNoteRemoved(noteId);
+    await this._afterNotesLeft([noteId]);
     this.removeNoteIndex(noteId);
     Utils.showToast('Note archived', 'success');
+  }
+
+  /**
+   * After notes left the active set: tell the other new tabs, then refresh the lists.
+   * Panes moved off them before the write (onNotesLeaving), so their edits landed first.
+   * @param {Array<string>} ids
+   * @returns {Promise<void>}
+   */
+  async _afterNotesLeft(ids) {
+    if (this.onNotesLeft) this.onNotesLeft(ids);
+    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
   }
 
   /**
@@ -110,10 +124,9 @@ class NotesManager {
    * Move note to trash by ID
    */
   async trashNoteById(noteId) {
+    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
     const result = await this.storage.trashNote(noteId);
-    if (this.onCloseTabForNote) this.onCloseTabForNote(noteId);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
-    await this.handleNoteRemoved(noteId);
+    await this._afterNotesLeft([noteId]);
     this.removeNoteIndex(noteId);
 
     if (result && result.permanentlyDeleted) {
@@ -140,7 +153,9 @@ class NotesManager {
       return;
     }
 
+    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
     await this.storage.permanentlyDeleteNote(noteId);
+    await this._afterNotesLeft([noteId]);
     Utils.showToast('Note permanently deleted', 'success');
   }
 

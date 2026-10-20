@@ -5,7 +5,7 @@
  * the last test fails when a listed message never occurred.
  */
 
-const { test, expect } = require('./harness');
+const { test, expect, expectNoUncaught } = require('./harness');
 const { toleratedUncaught } = require('./harness/known-defects');
 
 // Message -> ids of the ledger entries that list it
@@ -25,16 +25,8 @@ function smoke(title, body) {
   SMOKE_TITLES.push(title);
   test(title, async ({ extension }) => {
     const page = await body(extension);
-    // Startup work the page deferred to an idle callback runs before errors are read
-    await page.evaluate(() => new Promise(resolve => requestIdleCallback(() => resolve(), { timeout: 2000 })));
-
-    const uncaught = await extension.uncaught();
+    const uncaught = await expectNoUncaught(extension, page, TOLERATED);
     uncaught.forEach(({ message }) => observed.add(message));
-    const unexpected = uncaught.filter(({ message }) => !TOLERATED.has(message));
-    expect(
-      unexpected.map(({ source, where, message, stack }) => `${source}${where ? ` (${where})` : ''}: ${stack || message}`),
-      'uncaught exceptions that no test/known-defects.json entry lists under `uncaught`',
-    ).toEqual([]);
     passed.add(title);
   });
 }

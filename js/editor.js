@@ -242,9 +242,19 @@ class BlockEditor {
     // An import holds saves until it commits; the old note's edits go in after it.
     if (this._holdReleased) await this._holdReleased;
     if (loadSeq !== this._loadSeq) return;
+    // "Save as a new note" finishes first, so the text it saves goes with it.
+    if (this._savingAsNew) await this._savingAsNew;
+    if (loadSeq !== this._loadSeq) return;
 
+    const knewGone = this.noteGone;
     await this.flushSave();
     if (loadSeq !== this._loadSeq) return;
+    // The note it shows turned out deleted with edits it couldn't save: it stays, with
+    // the text and the notice, so they aren't lost unseen.
+    if (this.noteGone && !knewGone && noteId !== this.noteId) {
+      this._resumeNoteTimers();
+      return;
+    }
 
     let noteData = null;
     let blocksData = [];
@@ -280,6 +290,7 @@ class BlockEditor {
       return;
     }
 
+    this._clearNoteGone();
     this.noteId = noteId;
     this.noteData = noteData;
     this.blocks = blocksData
@@ -3622,6 +3633,14 @@ class BlockEditor {
     this._holdReleased = null;
     /** @type {((value?: any) => void)|null} */
     this._releaseHold = null;
+    /** True once a save of the loaded note found it deleted: its text stays on screen, unsaved */
+    this.noteGone = false;
+    /** @type {HTMLElement|null} The notice that says so, with "Save as a new note" */
+    this._noteGoneNotice = null;
+    /** @type {Promise<void>|null} "Save as a new note" while it runs; loadNote waits for it */
+    this._savingAsNew = null;
+    /** @type {Set<string>} Deleted notes whose text "Save as a new note" saved under a new ID */
+    this._rescuedIds = new Set();
   }
 
   /**
@@ -3838,7 +3857,10 @@ class BlockEditor {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
       // null: the note was deleted meanwhile, so nothing was written and nothing is retried.
-      if (!(await this._writeSaveState(state))) return;
+      if (!(await this._writeSaveState(state))) {
+        this._onNoteGone(state);
+        return;
+      }
       await this._afterSaveWrite(state, meta.text);
     } catch (error) {
       this._onSaveFailed(error, state);
@@ -4033,7 +4055,11 @@ class BlockEditor {
     try {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      work = this._writeSaveState(state).then((saved) => (saved ? this._afterSaveWrite(state, meta.text) : undefined));
+      work = this._writeSaveState(state).then((saved) => {
+        if (saved) return this._afterSaveWrite(state, meta.text);
+        this._onNoteGone(state);
+        return undefined;
+      });
     } catch (error) {
       work = Promise.reject(error);
     }
@@ -4080,6 +4106,100 @@ class BlockEditor {
    */
   adoptNoteFlags(flags) {
     if (this.noteData) Object.assign(this.noteData, flags);
+  }
+
+  /**
+   * A save found its note deleted, so nothing was written. While the editor
+   * shows that note it says so, keeps the text on screen, and offers "Save as a
+   * new note"; nothing is created on its own. Changes to a note the editor has
+   * left (a failed save's retry) get a toast.
+   * @param {EditorSaveState} state
+   * @returns {void}
+   */
+  _onNoteGone(state) {
+    if (state.noteId !== this.noteId) {
+      // A write that was in flight when "Save as a new note" took the text is moot
+      if (!this._rescuedIds.has(state.noteId)) {
+        Utils.showToast("A note you edited was deleted, so its last changes aren't saved.", 'error');
+      }
+      return;
+    }
+    this.noteGone = true;
+    this.updateSaveStatus('Not saved');
+    if (this._noteGoneNotice) return;
+
+    const notice = this.doc.createElement('div');
+    notice.className = 'note-gone-notice';
+    notice.setAttribute('role', 'alert');
+    const text = this.doc.createElement('p');
+    text.className = 'note-gone-text';
+    text.textContent = "This note was deleted, so these changes aren't saved.";
+    const button = this.doc.createElement('button');
+    button.type = 'button';
+    button.className = 'primary-btn note-gone-btn';
+    button.textContent = 'Save as a new note';
+    button.addEventListener('click', () => this.saveAsNewNote());
+    notice.appendChild(text);
+    notice.appendChild(button);
+    const column = this.root.querySelector('.editor') || this.root;
+    column.insertBefore(notice, column.firstChild);
+    this._noteGoneNotice = notice;
+  }
+
+  /**
+   * @returns {void}
+   */
+  _clearNoteGone() {
+    if (this._noteGoneNotice) this._noteGoneNotice.remove();
+    this._noteGoneNotice = null;
+    this.noteGone = false;
+  }
+
+  /**
+   * "Save as a new note": a deleted note's text, still on screen, becomes a new
+   * active note with the same title. The editor keeps its blocks and writes
+   * them to the new note from here on, and the note's tab follows. A loadNote
+   * called meanwhile waits for it.
+   * @returns {Promise<void>}
+   */
+  saveAsNewNote() {
+    if (!this._savingAsNew && this.noteGone) {
+      this._savingAsNew = this._saveAsNewNote().finally(() => {
+        this._savingAsNew = null;
+      });
+    }
+    return this._savingAsNew || Promise.resolve();
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async _saveAsNewNote() {
+    const goneId = this.noteId;
+    let note;
+    try {
+      note = await editorStorage().createNote((this.noteData && this.noteData.name) || 'Untitled');
+    } catch (error) {
+      console.error('Save as a new note failed:', error);
+      Utils.showToast("Couldn't save this as a new note. Try again.", 'error');
+      return;
+    }
+    note.titleManuallySet = Boolean(this.noteData && this.noteData.titleManuallySet);
+    // The deleted note's pending and failed saves can't land anywhere; the new note gets all the text.
+    this._takePendingSave();
+    this._retryCopies.delete(goneId);
+    this._rescuedIds.add(goneId);
+    this.noteId = note.id;
+    this.noteData = note;
+    this._clearNoteGone();
+    await this.save();
+    const app = this.getApp();
+    if (!app || !app.tabController) return;
+    try {
+      await app.tabController.noteReplaced(this, goneId, note);
+    } catch (error) {
+      console.error('The tab of a note saved as a new note did not follow it:', error);
+    }
   }
 
   /**
