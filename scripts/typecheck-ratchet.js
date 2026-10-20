@@ -29,6 +29,10 @@ const ABOUT = 'tsc diagnostics allowed by scripts/typecheck-ratchet.js, as file 
 // `file(line,col): error TS1234: message`, and the same without a file for global diagnostics
 const LOCATED = /^(\S.*?)\((\d+),(\d+)\): (error|warning|message) (TS\d+): (.*)$/;
 const GLOBAL = /^(error|warning|message) (TS\d+): (.*)$/;
+// tsc's exit codes when it reports diagnostics (DiagnosticsPresent_OutputsSkipped and _OutputsGenerated)
+const DIAGNOSTIC_EXIT_CODES = [1, 2];
+// Node's own warnings, the only stderr a trusted run may have
+const NODE_WARNING = /^\(node:\d+\) |^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the warning was created\)$/;
 
 /**
  * Run tsc from the repository root and return its exit status and output
@@ -77,6 +81,34 @@ function parseTscOutput(text) {
   }
 
   return { diagnostics, unparsed };
+}
+
+/**
+ * Why a tsc run can't be trusted, or null. Diagnostics must come with one of tsc's
+ * diagnostic exit codes and no diagnostics with 0, stderr may hold only Node's own
+ * warnings, and every stdout line must parse. Anything else may be a crash after
+ * partial output, which --update would otherwise record as fixes.
+ */
+function untrustedRun(tsc, diagnostics, unparsed) {
+  const lines = text => (text || '').split(/\r?\n/).filter(line => line.trim());
+  const stderr = lines(tsc.stderr).filter(line => !NODE_WARNING.test(line));
+
+  if (tsc.status === null) {
+    return { reason: 'tsc was killed by a signal', lines: stderr };
+  }
+  if (diagnostics.length === 0 && tsc.status !== 0) {
+    return { reason: `tsc exited ${tsc.status} with no parseable diagnostics`, lines: [...lines(tsc.stdout), ...stderr] };
+  }
+  if (stderr.length > 0) {
+    return { reason: 'tsc wrote to stderr', lines: stderr };
+  }
+  if (diagnostics.length > 0 && !DIAGNOSTIC_EXIT_CODES.includes(tsc.status)) {
+    return { reason: `tsc printed diagnostics but exited ${tsc.status}, not ${DIAGNOSTIC_EXIT_CODES.join(' or ')}`, lines: [] };
+  }
+  if (unparsed.length > 0) {
+    return { reason: `tsc printed ${plural(unparsed.length, 'line')} the ratchet can't parse`, lines: unparsed };
+  }
+  return null;
 }
 
 function keyOf({ file, code, message }) {
@@ -225,17 +257,10 @@ function main(argv = process.argv.slice(2), options = {}) {
 
   const tsc = run();
   const { diagnostics, unparsed } = parseTscOutput(tsc.stdout || '');
-  if (tsc.status === null || (tsc.status !== 0 && diagnostics.length === 0)) {
-    error(tsc.status === null
-      ? 'typecheck ratchet: tsc was killed by a signal'
-      : `typecheck ratchet: tsc exited ${tsc.status} with no parseable diagnostics`);
-    const output = `${tsc.stdout || ''}\n${tsc.stderr || ''}`.trim();
-    if (output) output.split('\n').slice(0, 20).forEach(line => error(`  ${line}`));
-    return 1;
-  }
-  if (unparsed.length > 0) {
-    error(`typecheck ratchet: tsc printed ${plural(unparsed.length, 'line')} the ratchet can't parse`);
-    unparsed.slice(0, 20).forEach(line => error(`  ${line}`));
+  const untrusted = untrustedRun(tsc, diagnostics, unparsed);
+  if (untrusted) {
+    error(`typecheck ratchet: ${untrusted.reason}${init || update ? `, so ${baselineName} was not written` : ''}`);
+    untrusted.lines.slice(0, 20).forEach(line => error(`  ${line}`));
     return 1;
   }
   const current = countDiagnostics(diagnostics);

@@ -195,6 +195,32 @@ describe('typecheck ratchet', () => {
     assert.deepEqual(fs.readFileSync(baselinePath), before);
   });
 
+  it('fails when tsc prints diagnostics but exits with a code it does not use for them', () => {
+    seed();
+    const before = fs.readFileSync(baselinePath);
+    for (const status of [0, 3, 134]) {
+      const { code, output } = run(['--update'], [NAME_X, PROP_Y_1, CHAIN].join('\n'), { status });
+      assert.equal(code, 1, `status ${status}`);
+      assert.match(output, new RegExp(`exited ${status}, not 1 or 2`));
+    }
+    assert.deepEqual(fs.readFileSync(baselinePath), before);
+  });
+
+  it('fails when tsc writes to stderr beside its diagnostics, apart from Node warnings', () => {
+    seed();
+    const before = fs.readFileSync(baselinePath);
+    const crashed = run(['--update'], [NAME_X, PROP_Y_1, CHAIN].join('\n'), { stderr: 'Error: Debug Failure. False expression.\n    at tsc.js:1:1' });
+    assert.equal(crashed.code, 1);
+    assert.match(crashed.output, /tsc wrote to stderr/);
+    assert.match(crashed.output, /Debug Failure/);
+    assert.deepEqual(fs.readFileSync(baselinePath), before);
+
+    const warned = run([], TODAY, {
+      stderr: '(node:4242) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n',
+    });
+    assert.equal(warned.code, 0, warned.output);
+  });
+
   it('fails on output lines it cannot parse instead of dropping them', () => {
     seed();
     const { code, output } = run([], `${TODAY}\nsomething tsc never prints`);
