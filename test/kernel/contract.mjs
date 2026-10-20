@@ -411,15 +411,16 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 2));
       });
 
-      it('a save never takes a note out of the trash (#33)', async () => {
+      it('a save into a trashed note commits what was typed, and the note stays in the trash (#33)', async () => {
+        // Another tab's pane can stay on a note trashed elsewhere, and its typing isn't lost
         await createNote({ noteId: 'n1', name: 'Plan' });
-        ctx.clock.advance();
         await run(cmd('trashNote', { noteId: 'n1' }));
-        const trashed = await noteOf('n1');
-        ctx.clock.advance();
-        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'A late save' }));
-        const saved = await noteOf('n1');
-        assert.deepEqual([saved?.trashed, saved?.trashedAt, saved?.preview], [true, trashed?.trashedAt, 'A late save']);
+        const typed = [{ ...someBlocks('n1', 1)[0], content: 'Typed after the trash' }];
+        const outcome = await run(cmd('saveNoteContent', { noteId: 'n1', blocks: typed, preview: 'A late save' }));
+        assert.deepEqual([outcome.code, outcome.changedIds], ['content-saved', ['n1']]);
+        assert.deepEqual(await blocksOf('n1'), typed);
+        assert.equal((await noteOf('n1'))?.preview, 'A late save');
+        assert.equal((await noteOf('n1'))?.trashed, true);
         assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [['n1'], []]);
       });
 
