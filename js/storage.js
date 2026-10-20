@@ -163,7 +163,7 @@ class DatabaseManager {
   }
 
   /**
-   * Open the database at this build's version (8).
+   * Open the database at this build's version (8), then run startup maintenance.
    *
    * Nothing here deletes or rewrites a database. One a newer build upgraded is
    * left alone: init() rejects with code NEWER_SCHEMA before opening it at 8,
@@ -174,6 +174,18 @@ class DatabaseManager {
    * @returns {Promise<void>}
    */
   async init() {
+    await this.open();
+    await this.runStartupMaintenance();
+  }
+
+  /**
+   * What init() does before startup maintenance: open the database at this
+   * build's version (8), with the same refusals. The kernel's legacy adapter
+   * opens the new tab's and the service worker's database with this, and runs
+   * maintenance as the runStartupMaintenance command (#12).
+   * @returns {Promise<void>}
+   */
+  async open() {
     this.openState = 'closed';
     this.onDiskVersion = null;
     this.missingStores = [];
@@ -212,7 +224,43 @@ class DatabaseManager {
       throw error;
     }
     this.openState = 'open';
+  }
 
+  /**
+   * Open the database at whatever version it has, with no repair, upgrade, or
+   * maintenance, the way Popup and Side Panel open it. One a newer build
+   * upgraded is closed again, and this rejects with code NEWER_SCHEMA. A
+   * database missing stores opens anyway, and transaction() refuses the
+   * missing ones.
+   * @returns {Promise<void>}
+   */
+  async openExisting() {
+    this.openState = 'closed';
+    this.onDiskVersion = null;
+    this.missingStores = [];
+    const db = await this._openUnversioned();
+    if (!db) {
+      this.openState = 'failed';
+      throw this._codedError('OPEN_FAILED', 'Notes database could not be opened');
+    }
+    this.onDiskVersion = db.version;
+    if (db.version > this.dbVersion) {
+      db.close();
+      this.openState = 'newer-version';
+      throw this._newerSchemaError();
+    }
+    this.db = db;
+    this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
+    this.openState = 'open';
+  }
+
+  /**
+   * Startup maintenance, which init() runs once the database is open: default
+   * settings in chrome.storage.local on first load, then the integrity check,
+   * which reports orphaned records and deletes nothing.
+   * @returns {Promise<void>}
+   */
+  async runStartupMaintenance() {
     // Initialize default settings in chrome.storage.local on first load
     await this.initializeDefaultSettings();
 
