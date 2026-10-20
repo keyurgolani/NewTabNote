@@ -215,6 +215,12 @@ async function main(argv) {
 
   const missing = REQUIRED.filter(name => !process.env[name]?.trim());
   if (missing.length > 0) throw new Failure(`Missing ${missing.join(', ')}. No call was made.`);
+  // A value pasted with a newline would 404 or get invalid_grant, which reads like an expired token
+  const padded = REQUIRED.filter(name => process.env[name] !== process.env[name].trim());
+  if (padded.length > 0) {
+    throw new Failure(`${padded.join(', ')} ${padded.length === 1 ? 'has' : 'have'} leading or trailing whitespace, such as a pasted newline. `
+      + 'Save the secret again without it. No call was made.');
+  }
   const env = Object.fromEntries(REQUIRED.map(name => [name, process.env[name]]));
   hide(env.CHROME_CLIENT_SECRET);
   hide(env.CHROME_REFRESH_TOKEN);

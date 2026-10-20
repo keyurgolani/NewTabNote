@@ -334,6 +334,25 @@ describe('publish-store.mjs fails closed', () => {
     });
   }
 
+  for (const name of Object.keys(CREDENTIALS)) {
+    it(`exits 1 before any call when ${name} has leading or trailing whitespace, without printing it`, async () => {
+      const value = CREDENTIALS[name];
+      for (const padded of [`${value}\n`, ` ${value}`, `${value}\t`]) {
+        const result = await publish(SYNC_UPLOAD, { env: { [name]: padded } });
+        assertFailed(result, `${name} has leading or trailing whitespace`, /Save the secret again without it\. No call was made\./);
+        assert.ok(!result.output.includes(value), `the value of ${name} is in the output:\n${result.output}`);
+        assert.deepEqual(result.google.requests, []);
+      }
+    });
+  }
+
+  it('names every padded variable at once', async () => {
+    const env = { CHROME_PUBLISHER_ID: `${CREDENTIALS.CHROME_PUBLISHER_ID}\n`, CHROME_REFRESH_TOKEN: `${CREDENTIALS.CHROME_REFRESH_TOKEN}\n` };
+    const result = await publish(SYNC_UPLOAD, { env });
+    assertFailed(result, 'CHROME_REFRESH_TOKEN, CHROME_PUBLISHER_ID have leading or trailing whitespace');
+    assert.deepEqual(result.google.requests, []);
+  });
+
   it('exits 1 before any call when the zip is missing or empty', async () => {
     const empty = path.join(path.dirname(zipPath), 'empty.zip');
     fs.writeFileSync(empty, '');

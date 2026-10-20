@@ -8,32 +8,23 @@
  *       package-lock.json (top level and packages[""]) at the repository root
  *   node scripts/release/check-version.mjs <tag> --manifest <path>
  *       compares the tag with one manifest.json, such as the one inside a release zip
+ *   node scripts/release/check-version.mjs <tag> --format-only
+ *       checks only that the tag is a release tag, before anything else uses it
  *
  * The part after `v` is MAJOR.MINOR.PATCH, each a number from 0 to 65535 with no leading
- * zero, so both npm and Chrome accept it. Exits 1 naming every field that differs.
+ * zero, so both npm and Chrome accept it (tag.mjs). Exits 1 naming every field that differs.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { TAG_FORM, versionFromTag } from './tag.mjs';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-// Chrome's limit for each part of a manifest version
-const MAX_PART = 65535;
-const USAGE = 'Usage: node scripts/release/check-version.mjs <tag> [--manifest <path>]';
+const USAGE = 'Usage: node scripts/release/check-version.mjs <tag> [--manifest <path> | --format-only]';
 
 class Refusal extends Error {}
-
-/**
- * The version a release tag names, or null when the tag isn't one
- */
-function versionFromTag(tag) {
-  const match = TAG_PATTERN.exec(tag);
-  if (!match || match.slice(1).some(part => Number(part) > MAX_PART)) return null;
-  return tag.slice(1);
-}
 
 function readJson(file, label) {
   let text;
@@ -70,20 +61,29 @@ function versionFields(manifestPath) {
 function main(argv) {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: { manifest: { type: 'string' } }, allowPositionals: true, strict: true });
+    parsed = parseArgs({
+      args: argv,
+      options: { manifest: { type: 'string' }, 'format-only': { type: 'boolean' } },
+      allowPositionals: true,
+      strict: true,
+    });
   } catch (error) {
     throw new Refusal(`${error.message}\n${USAGE}`);
   }
-  if (parsed.positionals.length !== 1) throw new Refusal(USAGE);
+  const { manifest, 'format-only': formatOnly } = parsed.values;
+  if (parsed.positionals.length !== 1 || (manifest !== undefined && formatOnly)) throw new Refusal(USAGE);
 
   const [tag] = parsed.positionals;
   const version = versionFromTag(tag);
   if (version === null) {
-    throw new Refusal(`${JSON.stringify(tag)} is not a release tag. Expected v<major>.<minor>.<patch>, `
-      + `each part 0 to ${MAX_PART} with no leading zero, for example v1.4.1.`);
+    throw new Refusal(`${JSON.stringify(tag)} is not a release tag. Expected ${TAG_FORM}.`);
+  }
+  if (formatOnly) {
+    console.log(`✓ ${tag} is a release tag`);
+    return;
   }
 
-  const fields = versionFields(parsed.values.manifest);
+  const fields = versionFields(manifest);
   const mismatches = fields.filter(([, value]) => value !== version);
   if (mismatches.length > 0) {
     const lines = mismatches.map(([label, value]) => `   ${label} is ${value === undefined ? 'missing' : JSON.stringify(value)}`);

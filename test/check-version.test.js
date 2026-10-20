@@ -40,10 +40,17 @@ function tree(version, edit = () => {}) {
   for (const [name, json] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), typeof json === 'string' ? json : `${JSON.stringify(json, null, 2)}\n`);
   }
-  const script = path.join(dir, 'scripts', 'release', 'check-version.mjs');
-  fs.mkdirSync(path.dirname(script), { recursive: true });
-  fs.copyFileSync(SCRIPT, script);
-  return script;
+  return copyScripts(dir);
+}
+
+/**
+ * Copy scripts/release, which check-version.mjs and the tag module it imports live in, to
+ * `dir`. Returns the copied check-version.mjs.
+ */
+function copyScripts(dir) {
+  const target = path.join(dir, 'scripts', 'release');
+  fs.cpSync(path.dirname(SCRIPT), target, { recursive: true });
+  return path.join(target, 'check-version.mjs');
 }
 
 function check(script, args) {
@@ -163,11 +170,28 @@ describe('check-version.mjs --manifest', () => {
   });
 });
 
+describe('check-version.mjs --format-only', () => {
+  it('passes a release tag without reading any release file', () => {
+    // No manifest.json, package.json, or package-lock.json next to the copied script
+    const script = copyScripts(tempDir());
+    const result = check(script, ['v1.4.1', '--format-only']);
+    assert.equal(result.code, 0, result.output);
+    assert.equal(result.stdout, '✓ v1.4.1 is a release tag\n');
+  });
+
+  it('refuses a malformed tag', () => {
+    const script = copyScripts(tempDir());
+    for (const tag of ['1.4.1', 'v1.4', 'v1.4.1-beta.1', 'v65536.0.0', 'v1.4.1;id', '$(id)']) {
+      assertRefused(check(script, [tag, '--format-only']), /is not a release tag/);
+    }
+  });
+});
+
 describe('check-version.mjs usage', () => {
-  it('fails without exactly one tag or on an unknown option', () => {
-    for (const args of [[], ['v1.4.1', 'v1.4.2'], ['v1.4.1', '--manifest'], ['v1.4.1', '--strict']]) {
+  it('fails without exactly one tag, on an unknown option, or with both modes', () => {
+    for (const args of [[], ['v1.4.1', 'v1.4.2'], ['v1.4.1', '--manifest'], ['v1.4.1', '--strict'], ['v1.4.1', '--format-only', '--manifest', 'manifest.json']]) {
       const result = check(SCRIPT, args);
-      assertRefused(result, /Usage: node scripts\/release\/check-version\.mjs <tag> \[--manifest <path>\]/);
+      assertRefused(result, /Usage: node scripts\/release\/check-version\.mjs <tag> \[--manifest <path> \| --format-only\]/);
     }
   });
 });
