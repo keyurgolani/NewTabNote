@@ -342,23 +342,145 @@ describe('a note leaving the active set, in this new tab', () => {
     assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['C']);
   });
 
-  it("turning split view off and on keeps the right pane's unsaved text from a deleted note", async () => {
+  for (const [label, noticedFirst] of [['right after typing there', false], ['with its notice already showing', true]]) {
+    it(`turning split view off ${label}, with the right pane's note deleted, keeps split view, the text, and the notice in view`, async () => {
+      const env = createLegacyEnv();
+      await createProfile(env.indexedDB);
+      const page = await openPage(env, { split: true });
+      const right = page.tabs.secondaryEditor;
+      type(right, 'typed into B');
+      await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+      if (noticedFirst) await runUntil(env, right.flushSave());
+
+      await runUntil(env, page.tabs.toggleSplitView());
+
+      assert.equal(page.tabs.splitViewEnabled, true);
+      assert.equal(env.document.getElementById('secondary-editor-container').classList.contains('hidden'), false);
+      assert.equal(right.noteId, 'B');
+      assert.equal(right.noteGone, true);
+      assert.equal(right.blocks[0].content, 'typed into B');
+      assert.ok(right.root.querySelector('.note-gone-notice'), 'the notice shows');
+      assert.deepEqual(page.toasts, [{ message: "Split view stays open while the right pane has a deleted note's unsaved text.", kind: 'info' }]);
+    });
+  }
+
+  it('closing the tab of a note deleted with unsaved edits keeps the tab bar on it, and closing another tab loads nothing', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { open: ['A', 'B', 'C'] });
+    await runUntil(env, page.tabs.switchToTab(1));
+    const editor = page.tabs.editor;
+    type(editor, 'typed into B');
+    await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+
+    await runUntil(env, page.tabs.closeTab(1));
+    assert.equal(editor.noteId, 'B', 'the text stays on screen');
+    assert.equal(editor.noteGone, true);
+    assert.deepEqual(tabIds(page.tabs), ['A', 'B', 'C']);
+    assert.equal(page.tabs.activeTabIndex, 1);
+    assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A', 'B', 'C']);
+    page.tabs.updateCurrentTabName('Beta, renamed');
+    assert.deepEqual(shownTabs(env), ['Alpha', 'Beta, renamed', 'Gamma'], "a title edit renames B's tab");
+
+    await runUntil(env, page.tabs.closeTab(0));
+    assert.equal(editor.noteId, 'B');
+    assert.equal(editor.blocks[0].content, 'typed into B', 'still there');
+    assert.deepEqual(tabIds(page.tabs), ['B', 'C']);
+    assert.equal(page.tabs.activeTabIndex, 0);
+  });
+
+  it("leaving a deleted note's notice for another tab takes that note's tab away", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { open: ['A', 'B'] });
+    const editor = page.tabs.editor;
+    type(editor, 'typed into B');
+    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await runUntil(env, page.tabs.forgetNotes(['B'])); // its message
+    assert.equal(editor.noteGone, true);
+    assert.deepEqual(tabIds(page.tabs), ['A', 'B'], 'B keeps its tab while its notice shows');
+
+    await runUntil(env, page.tabs.switchToTab(0));
+    assert.equal(editor.noteId, 'A');
+    assert.deepEqual(tabIds(page.tabs), ['A']);
+    assert.equal(page.tabs.activeTabIndex, 0);
+    assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['A']);
+  });
+
+  it("archiving the hidden right pane's note lets go of it, so turning split view on shows an active note", async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { split: true });
+    assert.equal(page.tabs.secondaryEditor.noteId, 'B');
+    await runUntil(env, page.tabs.toggleSplitView()); // off: the hidden right pane has B
+    const notes = page.wire(controllers.notes(env, page.Storage));
+
+    await runUntil(env, notes.archiveNote('B'));
+    assert.equal(page.tabs.secondaryEditor.noteId, null);
+
+    await runUntil(env, page.tabs.toggleSplitView());
+    const right = page.tabs.secondaryEditor.noteId;
+    assert.ok(right && right !== 'B' && right !== page.tabs.editor.noteId, `the right pane shows ${right}`);
+    assert.equal((await stored(env)).notes[right].archived, false);
+    assert.deepEqual(tabIds(page.tabs), ['A']);
+  });
+
+  it('"Save as a new note" keeps the folder and the pin, and writes the text under new block IDs', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await bootNewTab(env);
+    const folder = await page.Storage.createFolder('Work');
+    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), folderId: folder.id, pinned: true });
+    await runUntil(env, page.tabs.openNoteInNewTab('B'));
+    const editor = page.tabs.editor;
+    type(editor, 'typed into B');
+    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true);
+
+    await runUntil(env, editor.saveAsNewNote());
+    const { notes: records, elements } = await stored(env);
+    const saved = records[editor.noteId];
+    assert.equal(saved.name, 'Beta');
+    assert.equal(saved.folderId, folder.id);
+    assert.equal(saved.pinned, true);
+    const blocks = elements.filter((el) => el.canvasId === editor.noteId);
+    assert.deepEqual(blocks.map((el) => el.content), ['typed into B']);
+    assert.ok(blocks.every((el) => el.id !== 'b1'), 'not the deleted note\'s block ID');
+  });
+
+  it('"Save as a new note" puts the note at the top of the list when its folder went too', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await bootNewTab(env);
+    const folder = await page.Storage.createFolder('Work');
+    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), folderId: folder.id });
+    await runUntil(env, page.tabs.openNoteInNewTab('B'));
+    const editor = page.tabs.editor;
+    type(editor, 'typed into B');
+    // Another tab takes the note and its folder, as Replace all does
+    await page.Storage.permanentlyDeleteNote('B');
+    await page.Storage.deleteFolder(folder.id);
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true);
+
+    await runUntil(env, editor.saveAsNewNote());
+    const saved = (await stored(env)).notes[editor.noteId];
+    assert.equal(saved.folderId, null, 'a note in a missing folder would show nowhere in the sidebar');
+  });
+
+  it('a hidden pane takes no key or paste from outside the panes, whatever it was last', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { split: true });
+    page.tabs.setActiveEditorSide('right');
     const right = page.tabs.secondaryEditor;
-    type(right, 'typed into B');
-    await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
-    await runUntil(env, right.flushSave());
-    assert.equal(right.noteGone, true);
-
-    await runUntil(env, page.tabs.toggleSplitView());
-    await runUntil(env, page.tabs.toggleSplitView());
-
-    assert.equal(page.tabs.splitViewEnabled, true);
-    assert.equal(right.noteId, 'B');
-    assert.equal(right.blocks[0].content, 'typed into B');
-    assert.ok(right.root.querySelector('.note-gone-notice'), 'the notice stays');
+    const outside = { target: env.document.body };
+    assert.equal(right._ownsDocumentEvent(outside), true, 'the active right pane takes them');
+    // Hidden while still marked active, as nothing else would leave it
+    right.root.classList.add('hidden');
+    assert.equal(right._ownsDocumentEvent(outside), false);
+    assert.equal(page.tabs.editor._ownsDocumentEvent(outside), false, 'nor the inactive left pane');
   });
 
   for (const [label, pick] of [
@@ -418,6 +540,46 @@ describe('a note leaving the active set in another new tab', () => {
     return { first, second };
   }
 
+  for (const [label, leave, comeBack] of [
+    ['out of focus', (env) => { env.document.focused = false; }, (env) => { env.document.focused = true; env.window.fire('focus'); }],
+    ['hidden', (env) => { env.document.visibilityState = 'hidden'; env.document.focused = false; env.document.fire('visibilitychange'); },
+      (env) => { env.document.visibilityState = 'visible'; env.document.focused = true; env.document.fire('visibilitychange'); }],
+  ]) {
+    it(`a tab ${label} stays where it is, then moves onto the notes as they are once the user is back`, async () => {
+      const { first, second } = await twoPages();
+      // The background tab has Beta and Alpha open, Alpha on screen
+      const two = await openPage(second, { open: ['B', 'A'] });
+      leave(second);
+      const one = await openPage(first, { open: ['B'] });
+      const notes = one.wire(controllers.notes(first, one.Storage));
+
+      await runUntil(first, notes.trashNoteById('A'));
+      await runUntil(second, settle(40)); // the message reaches the background tab
+      assert.equal(first.channels.sent.length, 1);
+      assert.equal(two.tabs.editor.noteId, 'A', 'it stays on Alpha, as 1.4.0 did');
+      assert.deepEqual(tabIds(two.tabs), ['B', 'A']);
+      assert.deepEqual(first.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['B'], "the saved workspace is the first tab's");
+
+      // The user keeps editing Beta in the first tab
+      type(one.tabs.editor, 'Beta, edited in the first tab');
+      first.clock.tick(500);
+      await runUntil(first, one.tabs.editor.flushSave());
+
+      comeBack(second);
+      await runUntil(second, waitFor(() => two.tabs.editor.noteId === 'B', { message: 'the background tab to move' }));
+      assert.equal(two.tabs.editor.blocks[0].content, 'Beta, edited in the first tab', 'Beta as it is now');
+      assert.deepEqual(tabIds(two.tabs), ['B']);
+
+      // Typing there keeps the first tab's edit
+      two.tabs.editor.blocks[0].content += ', and more from the second tab';
+      two.tabs.editor.scheduleSave();
+      second.clock.tick(500);
+      await runUntil(second, two.tabs.editor.flushSave());
+      const beta = (await stored(first)).elements.filter((el) => el.canvasId === 'B').map((el) => el.content);
+      assert.deepEqual(beta, ['Beta, edited in the first tab, and more from the second tab']);
+    });
+  }
+
   it('a tab that shows none of the notes leaves the saved workspace alone', async () => {
     const { first, second } = await twoPages();
     const two = await openPage(second, { open: ['C'] });
@@ -460,6 +622,7 @@ describe('a note leaving the active set in another new tab', () => {
     sidebar.logger = { info() {} };
     sidebar.refreshNotesList = async () => {};
 
+    // As App.init runs it, after workspaceReady. e2e/notes-leave-across-tabs.spec.js starts a real new tab for that order.
     await runUntil(first, sidebar.runTrashCleanup());
     await runUntil(second, waitFor(() => two.tabs.editor.noteId !== 'TR', { message: 'the other tab to move' }));
 

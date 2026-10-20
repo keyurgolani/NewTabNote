@@ -94,7 +94,7 @@ class SidebarController {
     this.setupNoteContextMenu();
     this._bindBulkActions();
     this._bindSidebarDropHandlers();
-    await this.runTrashCleanup();
+    // Trash retention runs from App.init once the tabs are ready, so the other new tabs hear of it
   }
 
   /** Tear down listeners and resizer. */

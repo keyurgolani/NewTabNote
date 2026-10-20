@@ -2583,7 +2583,8 @@ class BlockEditor {
 
   /**
    * Whether a keydown or paste on the document is this editor's to handle
-   * (see _takesTypedKey).
+   * (see _takesTypedKey). A hidden pane takes none, so it never undoes,
+   * deletes, or pastes into a stale copy of a note.
    * @param {Event} e
    * @returns {boolean}
    */
@@ -4204,9 +4205,10 @@ class BlockEditor {
 
   /**
    * "Save as a new note": a deleted note's text, still on screen, becomes a new
-   * active note with the same title. The editor keeps its blocks and writes
-   * them to the new note from here on, and the note's tab follows. A loadNote
-   * called meanwhile waits for it.
+   * active note with the same title, pin, and folder if it still exists. The
+   * editor keeps its blocks, under new IDs so they never share a record with
+   * the deleted note's, and writes them to the new note from here on, and the
+   * note's tab follows. A loadNote called meanwhile waits for it.
    * @returns {Promise<void>}
    */
   saveAsNewNote() {
@@ -4223,22 +4225,33 @@ class BlockEditor {
    */
   async _saveAsNewNote() {
     const goneId = this.noteId;
+    const gone = this.noteData || {};
+    // Its folder only while that's still there (Replace all takes folders too): a note in a missing folder shows nowhere
+    const folder = gone.folderId ? await editorStorage().getFolder(gone.folderId).catch(() => null) : null;
     let note;
     try {
-      note = await editorStorage().createNote((this.noteData && this.noteData.name) || 'Untitled');
+      note = await editorStorage().createNote(gone.name || 'Untitled');
     } catch (error) {
       console.error('Save as a new note failed:', error);
       Utils.showToast("Couldn't save this as a new note. Try again.", 'error');
       return;
     }
-    note.titleManuallySet = Boolean(this.noteData && this.noteData.titleManuallySet);
+    note.titleManuallySet = Boolean(gone.titleManuallySet);
+    note.folderId = folder ? folder.id : null;
+    note.pinned = Boolean(gone.pinned);
     // The deleted note's pending and failed saves can't land anywhere; the new note gets all the text.
     this._takePendingSave();
     this._retryCopies.delete(goneId);
     this._rescuedIds.add(goneId);
     this.noteId = note.id;
     this.noteData = note;
+    for (const block of this.blocks) block.id = Utils.generateId();
+    // Undo history points at the old IDs, and the blocks render again under the new ones
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._contentUndoPending = {};
     this._clearNoteGone();
+    this.renderBlocks();
     await this.save();
     const app = this.getApp();
     if (!app || !app.tabController) return;
