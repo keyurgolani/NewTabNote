@@ -25,6 +25,10 @@ class SettingsController {
     this.onCloseTabForNote = null;
     this.onHandleNoteRemoved = null;
     this.getEditor = null;
+    /** @type {(() => Promise<void>)|null} Hold and flush every open editor before an import commits */
+    this.onFlushEditors = null;
+    /** @type {((trashedIds: Array<string>, trashedAt: number|null) => Promise<void>)|null} After an import: reload editors on trashed notes and release the hold */
+    this.onReloadEditors = null;
     this.onSetupAutoTitle = null;
     this.onSetupInsightsExtraction = null;
     this.onUpdateAISidebarState = null;
@@ -684,33 +688,131 @@ class SettingsController {
     }
   }
 
+  /**
+   * The dialog helpers from js/ui/confirm-dialog.js, which live on window.
+   * @returns {{choiceDialog: function(Object): Promise<string>, confirmDialog: function(Object): Promise<boolean>}}
+   */
+  _dialogs() {
+    return /** @type {any} */ (window);
+  }
+
+  /**
+   * Import a backup file. Order: parse, validate, choose, confirm Replace all,
+   * flush every open editor, then let Storage.importData write the recovery
+   * copy (Replace all) and commit. Dismissing a dialog or a refused file
+   * changes nothing.
+   * @param {Blob} file
+   * @returns {Promise<void>}
+   */
   async importFromFile(file) {
+    let data;
     try {
-      const text = await Utils.readFileAsText(file);
-      const data = JSON.parse(text);
+      data = JSON.parse(await Utils.readFileAsText(/** @type {File} */ (file)));
+    } catch (error) {
+      this._showImportFailed("the file isn't valid JSON");
+      return;
+    }
 
-      if (!data.version || !data.canvases) {
-        throw new Error('Invalid backup file');
-      }
+    const check = this.storage.validateImport(data);
+    if (check.ok === false) {
+      this._showImportFailed(check.reason);
+      return;
+    }
 
-      const merge = await confirmDialog({
-        title: 'Import Data',
-        message: 'Merge with existing data?\n\nConfirm = Merge, Cancel = Replace all'
-      });
+    const { counts } = check;
+    const choice = await this._dialogs().choiceDialog({
+      title: 'Import backup',
+      message: `This backup has ${this._count(counts.notes, 'note')}, ${this._count(counts.blocks, 'block')}, `
+        + `and ${this._count(counts.folders, 'folder')}. Merge adds them as copies next to your notes. `
+        + 'Replace all moves your active notes to trash first.',
+      choices: [
+        { id: 'merge', label: 'Merge', variant: 'primary' },
+        { id: 'replace', label: 'Replace all' },
+        { id: 'cancel', label: 'Cancel' },
+      ],
+      cancelId: 'cancel',
+    });
+    if (choice !== 'merge' && choice !== 'replace') return;
+    if (choice === 'replace' && !(await this._confirmReplaceAll())) return;
 
-      await this.storage.importData(data, merge);
-
-      Utils.showToast('Import complete', 'success');
-
-      // Reload
-      const editor = this.getEditor ? this.getEditor() : null;
-      const notes = await this.storage.getAllNotes();
-      if (editor && notes.length > 0) await editor.loadNote(notes[0].id);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    /** @type {ImportResult|null} */
+    let result = null;
+    try {
+      if (this.onFlushEditors) await this.onFlushEditors();
+      result = await this.storage.importData(data, choice);
     } catch (error) {
       console.error('Import failed:', error);
-      Utils.showToast('Import failed: ' + error.message, 'error');
+      this._showImportFailed(error && error.message ? error.message : 'unknown error');
+    } finally {
+      if (this.onReloadEditors) {
+        await this.onReloadEditors(result ? result.trashedIds : [], result ? result.trashedAt : null);
+      }
     }
+    if (!result) return;
+
+    Utils.showToast(this._importSummary(result), 'success', 6000);
+
+    // Reload
+    const editor = this.getEditor ? this.getEditor() : null;
+    const notes = await this.storage.getAllNotes();
+    if (editor && notes.length > 0) await editor.loadNote(notes[0].id);
+    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+  }
+
+  /**
+   * The second, danger-styled confirmation for Replace all. Focus starts on Cancel.
+   * @returns {Promise<boolean>}
+   */
+  async _confirmReplaceAll() {
+    const activeCount = (await this.storage.getAllNotes()).length;
+    const retention = Number(await this.storage.getSetting('trashRetention', 30));
+    const moves = activeCount === 1
+      ? '1 active note moves to trash, where it stays'
+      : `${activeCount} active notes move to trash, where they stay`;
+    const stay = retention > 0 ? `for ${this._count(retention, 'day')}` : 'until you empty trash';
+    return this._dialogs().confirmDialog({
+      title: 'Replace all notes?',
+      message: `${moves} ${stay}. Archived notes, templates, and folders stay. A recovery copy is saved first.`,
+      confirmText: 'Replace all',
+      cancelText: 'Cancel',
+      danger: true,
+      initialFocus: 'cancel',
+    });
+  }
+
+  /**
+   * @param {string} reason
+   * @returns {void}
+   */
+  _showImportFailed(reason) {
+    Utils.showToast(`Import failed before any change: ${reason}`, 'error', 6000);
+  }
+
+  /**
+   * @param {ImportResult} result
+   * @returns {string}
+   */
+  _importSummary(result) {
+    const parts = [this._count(result.notes, 'note'), this._count(result.blocks, 'block')];
+    if (result.folders > 0) parts.push(this._count(result.folders, 'folder'));
+    if (result.media > 0) parts.push(this._count(result.media, 'media file'));
+    const imported = parts.length > 1
+      ? `${parts.slice(0, -1).join(', ')}${parts.length > 2 ? ',' : ''} and ${parts[parts.length - 1]}`
+      : parts[0];
+    let summary = `Imported ${imported}.`;
+    if (result.skippedMedia > 0) {
+      summary += ` Skipped ${this._count(result.skippedMedia, 'media file')} that belonged to no note in the backup.`;
+    }
+    return summary;
+  }
+
+  /**
+   * @param {number} n
+   * @param {string} noun - Singular; plural adds "s"
+   * @returns {string}
+   */
+  _count(n, noun) {
+    return `${n} ${noun}${n === 1 ? '' : 's'}`;
   }
 
   // ─── Delete current note ───

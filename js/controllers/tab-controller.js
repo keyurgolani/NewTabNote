@@ -128,6 +128,58 @@ class TabController {
     return targetSide === 'left' ? this.editor : this.secondaryEditor;
   }
 
+  /**
+   * Every editor open in this tab: primary, secondary, and PiP.
+   * @returns {Array<BlockEditor>}
+   */
+  getOpenEditors() {
+    return [this.editor, this.secondaryEditor, this.pipEditor].filter(Boolean);
+  }
+
+  /**
+   * Before an import commits: hold saves in every open editor, then write what
+   * each one has pending, so nothing written later carries pre-import flags.
+   * @returns {Promise<void>}
+   */
+  async flushEditorsForImport() {
+    const editors = this.getOpenEditors();
+    editors.forEach((editor) => editor.holdSaves());
+    await Promise.all(editors.map((editor) => editor.flushSave()));
+  }
+
+  /**
+   * After an import (or a failed one, with no IDs): close PiP if its note is
+   * now trashed, reload any other editor still on a trashed note, and release
+   * the save hold, so a later save can't move a trashed note back to active.
+   * @param {Array<string>} [trashedIds=[]]
+   * @param {number|null} [trashedAt=null]
+   * @returns {Promise<void>}
+   */
+  async reloadEditorsAfterImport(trashedIds = [], trashedAt = null) {
+    const trashed = new Set(trashedIds);
+    const flags = { trashed: true, trashedAt: trashedAt || Date.now(), archived: false, archivedAt: null };
+    const isOnTrashedNote = (editor) => Boolean(editor && editor.noteId && trashed.has(editor.noteId));
+
+    const pipEditor = this.pipEditor;
+    if (pipEditor) {
+      const closePiP = isOnTrashedNote(pipEditor);
+      if (closePiP) pipEditor.adoptNoteFlags(flags);
+      pipEditor.releaseSaves();
+      if (closePiP) {
+        await pipEditor.flushSave();
+        if (this.pipWindow) this.pipWindow.close();
+      }
+    }
+
+    for (const editor of [this.editor, this.secondaryEditor]) {
+      if (!editor) continue;
+      const reload = isOnTrashedNote(editor);
+      if (reload) editor.adoptNoteFlags(flags);
+      editor.releaseSaves();
+      if (reload) await editor.loadNote(editor.noteId);
+    }
+  }
+
   // ─── Tab CRUD ───
 
   /**

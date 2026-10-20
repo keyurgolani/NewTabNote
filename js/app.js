@@ -456,6 +456,9 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
+    this.settingsController.onFlushEditors = () => this.tabController.flushEditorsForImport();
+    this.settingsController.onReloadEditors = (trashedIds, trashedAt) =>
+      this.tabController.reloadEditorsAfterImport(trashedIds, trashedAt);
     this.settingsController.onApplyTheme = () => this.applyTheme();
     this.settingsController.onOpenThemeBuilder = () => {
       if (this.themeBuilderController) {

@@ -44,6 +44,32 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
   if (typeof globalThis !== 'undefined') globalThis.chrome = { storage: mockStorage, runtime: mockRuntime };
 }
 
+/**
+ * What an import writes, prepared before its transaction opens.
+ * @typedef {Object} ImportPlan
+ * @property {'merge'|'replace'} mode
+ * @property {Array<Object>} notes - Package notes (from a structuredClone of the parsed file)
+ * @property {Map<string, string>} noteIds - Package note ID to the new local ID
+ * @property {Array<Object>} elements - Blocks with new IDs and mapped canvasId
+ * @property {Array<Object>} media - Media rows with new IDs, mapped canvasId, and Blob data
+ * @property {Array<Object>} folders - Package folders
+ * @property {number} skippedMedia - Media rows whose note isn't in the package
+ */
+
+/**
+ * What a committed import did.
+ * @typedef {Object} ImportResult
+ * @property {'merge'|'replace'} mode
+ * @property {number} notes
+ * @property {number} blocks
+ * @property {number} folders - Folders added
+ * @property {number} reusedFolders - Package folders whose ID already existed locally
+ * @property {number} media
+ * @property {number} skippedMedia
+ * @property {Array<string>} trashedIds - Local notes Replace all moved to trash
+ * @property {number} trashedAt
+ */
+
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
@@ -51,6 +77,36 @@ class DatabaseManager {
     this.db = null;
     // Store names kept as 'canvases' for backward compatibility with existing databases
     this.requiredStores = ['canvases', 'elements', 'settings', 'media', 'search_index', 'folders', 'links', 'themes', 'vectors', 'snapshots'];
+  }
+
+  /**
+   * The chrome API (or the file:// mock installed at the top of this file).
+   * @returns {any}
+   */
+  _chromeApi() {
+    return /** @type {any} */ (globalThis).chrome;
+  }
+
+  /**
+   * An Error with a machine-readable `code`. A plain Error rather than
+   * StorageError, because the service worker doesn't load storage-error.js.
+   * @param {string} code
+   * @param {string} message
+   * @returns {Error & {code: string}}
+   */
+  _codedError(code, message) {
+    const error = /** @type {Error & {code: string}} */ (new Error(message));
+    error.code = code;
+    return error;
+  }
+
+  /**
+   * Whether the open database has an object store.
+   * @param {string} name
+   * @returns {boolean}
+   */
+  hasStore(name) {
+    return Boolean(this.db) && this.db.objectStoreNames.contains(name);
   }
 
   /**
@@ -410,6 +466,50 @@ class DatabaseManager {
         resolve(keys.sort());
       });
     });
+  }
+
+  /**
+   * Entries in chrome.storage.local whose key starts with `prefix`.
+   * @param {string} prefix
+   * @returns {Promise<Array<{key: string, value: *}>>}
+   */
+  _getStorageEntries(prefix) {
+    const chromeApi = this._chromeApi();
+    return new Promise((resolve) => {
+      chromeApi.storage.local.get(null, (result) => {
+        if (chromeApi.runtime.lastError || !result) { resolve([]); return; }
+        resolve(Object.keys(result)
+          .filter((key) => key.startsWith(prefix))
+          .sort()
+          .map((key) => ({ key, value: result[key] })));
+      });
+    });
+  }
+
+  /**
+   * Save a recovery copy to chrome.storage.local under a new
+   * `recovery_backup_<timestamp>` key. Nothing prunes these; the backup and
+   * Recovery Center work (#18, #20) reads them.
+   * @param {Object} copy
+   * @returns {Promise<string>} The key written
+   */
+  async _writeRecoveryBackup(copy) {
+    const chromeApi = this._chromeApi();
+    const taken = new Set((await this._getStorageEntries('recovery_backup_')).map((entry) => entry.key));
+    let stamp = Date.now();
+    while (taken.has(`recovery_backup_${stamp}`)) stamp += 1;
+    const key = `recovery_backup_${stamp}`;
+    await new Promise((resolve, reject) => {
+      chromeApi.storage.local.set({ [key]: copy }, () => {
+        const error = chromeApi.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message || String(error)));
+        } else {
+          resolve(key);
+        }
+      });
+    });
+    return key;
   }
 
   /**
@@ -1791,63 +1891,275 @@ class DatabaseManager {
   }
 
   /**
-   * Import data
-   * Note: Import format uses 'canvases' key for backward compatibility
+   * Check a parsed backup before anything is written. Writes nothing.
+   * The format uses the 'canvases' key for backward compatibility.
+   * @param {*} data - Parsed backup file
+   * @returns {{ok: true, counts: {notes: number, blocks: number, folders: number, media: number, skippedMedia: number}} | {ok: false, reason: string}}
    */
-  async importData(data, merge = false) {
-    if (!merge) {
-      // Clear existing data
-      const existingNotes = await this.getAllNotes();
-      for (const note of existingNotes) {
-        await this.deleteNote(note.id);
+  validateImport(data) {
+    /**
+     * @param {string} reason
+     * @returns {{ok: false, reason: string}}
+     */
+    const refuse = (reason) => ({ ok: false, reason });
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !('canvases' in data)) {
+      return refuse("the file isn't a NewTabNote backup");
+    }
+    if (data.version !== 1) {
+      return refuse(data.version === undefined
+        ? 'the file has no backup version'
+        : `backup version ${String(data.version)} isn't supported`);
+    }
+    if (!Array.isArray(data.canvases)) return refuse("its notes aren't a list");
+    if (!Array.isArray(data.elements)) return refuse('it has no list of blocks');
+    const optionalList = (value) => value === undefined || value === null || Array.isArray(value);
+    if (!optionalList(data.media)) return refuse("its media isn't a list");
+    if (!optionalList(data.folders)) return refuse("its folders aren't a list");
+    const media = Array.isArray(data.media) ? data.media : [];
+    const folders = Array.isArray(data.folders) ? data.folders : [];
+
+    /**
+     * @param {Array<*>} list
+     * @param {string} one - Singular label
+     * @param {string} many - Plural label
+     * @returns {string|null} Refusal reason
+     */
+    const checkRecords = (list, one, many) => {
+      const seen = new Set();
+      for (let i = 0; i < list.length; i++) {
+        const record = list[i];
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return `${one} ${i + 1} isn't a record`;
+        if (typeof record.id !== 'string' || record.id === '') return `${one} ${i + 1} has no text ID`;
+        if (seen.has(record.id)) return `two ${many} share the ID "${record.id}"`;
+        seen.add(record.id);
       }
+      return null;
+    };
+    const recordProblem = checkRecords(data.canvases, 'note', 'notes')
+      || checkRecords(data.elements, 'block', 'blocks')
+      || checkRecords(media, 'media item', 'media items')
+      || checkRecords(folders, 'folder', 'folders');
+    if (recordProblem) return refuse(recordProblem);
+
+    const noteIds = new Set(data.canvases.map((n) => n.id));
+    const orphan = data.elements.find((el) => !noteIds.has(el.canvasId));
+    if (orphan) return refuse(`block "${orphan.id}" belongs to a note that isn't in the file`);
+
+    // 1.4.0 exports carry the whole media store, so media for notes outside the file is skipped, not refused.
+    const skippedMedia = media.filter((m) => !noteIds.has(m.canvasId)).length;
+    return {
+      ok: true,
+      counts: {
+        notes: data.canvases.length,
+        blocks: data.elements.length,
+        folders: folders.length,
+        media: media.length - skippedMedia,
+        skippedMedia,
+      },
+    };
+  }
+
+  /**
+   * Import a backup. Never writes package data over a local record: notes,
+   * blocks, and media get new IDs; a package folder whose ID exists locally
+   * reuses the local folder untouched. Replace all also moves every active
+   * note to trash, in the same transaction, after saving a recovery copy.
+   * Works on a structuredClone of `data`, so the parsed input isn't changed.
+   * @param {*} data - Parsed backup file (checked with validateImport)
+   * @param {'merge'|'replace'} mode
+   * @returns {Promise<ImportResult>}
+   */
+  async importData(data, mode) {
+    if (mode !== 'merge' && mode !== 'replace') {
+      throw this._codedError('IMPORT_INVALID', `unknown import mode "${mode}"`);
+    }
+    const check = this.validateImport(data);
+    if (check.ok === false) {
+      throw this._codedError('IMPORT_INVALID', check.reason);
     }
 
-    // Import notes (data uses 'canvases' key for backward compatibility)
-    for (const note of data.canvases) {
-      if (merge) {
-        // Generate new IDs to avoid conflicts
-        const oldId = note.id;
-        note.id = Utils.generateId();
-
-        // Update element references (field name 'canvasId' kept for backward compatibility)
-        data.elements
-          .filter((el) => el.canvasId === oldId)
-          .forEach((el) => {
-            el.canvasId = note.id;
-          });
-
-        // Update media references (field name 'canvasId' kept for backward compatibility)
-        data.media
-          .filter((m) => m.canvasId === oldId)
-          .forEach((m) => {
-            m.canvasId = note.id;
-          });
-      }
-
-      await this.withRetry(() => new Promise((resolve, reject) => {
-        // Store name 'canvases' kept for backward compatibility
-        const store = this.getStore('canvases', 'readwrite');
-        const request = store.put(note);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      }), 'importData');
+    const pkg = structuredClone(data);
+    const folders = Array.isArray(pkg.folders) ? pkg.folders : [];
+    const mediaRows = Array.isArray(pkg.media) ? pkg.media : [];
+    if (folders.length > 0 && !this.hasStore('folders')) {
+      throw this._codedError('IMPORT_INVALID', "this profile's folders store is missing");
     }
 
-    // Import elements
-    await this.saveElements(data.elements);
-
-    // Import media (convert base64 back to blobs)
+    const noteIds = new Map(pkg.canvases.map((n) => [n.id, Utils.generateId()]));
     // Field name 'canvasId' kept for backward compatibility
-    for (const m of data.media) {
-      if (typeof m.blob === 'string' && m.blob.startsWith('data:')) {
-        const response = await fetch(m.blob);
-        m.blob = await response.blob();
+    const elements = pkg.elements.map((el) => ({ ...el, id: Utils.generateId(), canvasId: noteIds.get(el.canvasId) }));
+    const media = [];
+    let skippedMedia = 0;
+    for (const row of mediaRows) {
+      if (!noteIds.has(row.canvasId)) {
+        skippedMedia += 1;
+        continue;
       }
-      await this.saveMedia(m.id, m.canvasId, m.blob, m.type);
+      // Turn data URLs into Blobs now: awaiting inside the transaction would let it commit early.
+      const blob = typeof row.blob === 'string' && row.blob.startsWith('data:') ? this._dataUrlToBlob(row.blob) : row.blob;
+      media.push({ ...row, id: Utils.generateId(), canvasId: noteIds.get(row.canvasId), blob });
+    }
+    if (media.length > 0 && !this.hasStore('media')) {
+      throw this._codedError('IMPORT_INVALID', "this profile's media store is missing");
     }
 
-    return data.canvases;
+    if (mode === 'replace') {
+      // A superset of the export and the older recovery format, for the legacy decoders in #18.
+      const copy = { ...(await this.exportAll()), recoveryBackup: true, reason: 'pre-import-replace', timestamp: Date.now() };
+      try {
+        await this._writeRecoveryBackup(copy);
+      } catch (error) {
+        console.warn('Recovery copy before Replace all failed:', error);
+        throw this._codedError('RECOVERY_COPY_FAILED', "couldn't save a recovery copy");
+      }
+    }
+
+    return this._commitImport({ mode, notes: pkg.canvases, noteIds, elements, media, folders, skippedMedia });
+  }
+
+  /**
+   * The import commit: one readwrite transaction over canvases, elements,
+   * media, and folders. Local notes and folders are read inside it, so what
+   * it decides (trash, folder reuse, daily-note dates) matches what it writes.
+   * Any failure aborts the whole transaction.
+   * @param {ImportPlan} plan
+   * @returns {Promise<ImportResult>}
+   */
+  _commitImport(plan) {
+    return new Promise((resolve, reject) => {
+      const scope = ['canvases', 'elements'];
+      if (this.hasStore('media')) scope.push('media');
+      if (this.hasStore('folders')) scope.push('folders');
+      const tx = this.transaction(scope, 'readwrite');
+      const now = Date.now();
+      /** @type {ImportResult} */
+      const result = {
+        mode: plan.mode,
+        notes: plan.notes.length,
+        blocks: plan.elements.length,
+        folders: 0,
+        reusedFolders: 0,
+        media: plan.media.length,
+        skippedMedia: plan.skippedMedia,
+        trashedIds: [],
+        trashedAt: now,
+      };
+      /** @type {*} */
+      let failure = null;
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(failure || tx.error || new Error('Import transaction aborted'));
+
+      const notesRequest = tx.objectStore('canvases').getAll();
+      const foldersRequest = scope.includes('folders') ? tx.objectStore('folders').getAll() : null;
+      let waiting = foldersRequest ? 2 : 1;
+      const onRead = () => {
+        waiting -= 1;
+        if (waiting > 0) return;
+        try {
+          this._writeImport(tx, plan, notesRequest.result, foldersRequest ? foldersRequest.result : [], result);
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+      notesRequest.onsuccess = onRead;
+      if (foldersRequest) foldersRequest.onsuccess = onRead;
+    });
+  }
+
+  /**
+   * Queue the import's writes inside its transaction.
+   * @param {IDBTransaction} tx
+   * @param {ImportPlan} plan
+   * @param {Array<Object>} localNotes - Every note record, read in this transaction
+   * @param {Array<Object>} localFolders - Every folder record, read in this transaction
+   * @param {ImportResult} result - Updated with what was written
+   * @returns {void}
+   */
+  _writeImport(tx, plan, localNotes, localFolders, result) {
+    const noteStore = tx.objectStore('canvases');
+    const localFolderIds = new Set(localFolders.map((f) => f.id));
+    const packageFolderIds = new Set(plan.folders.map((f) => f.id));
+    /** @param {*} id */
+    const resolveFolder = (id) => (id && (packageFolderIds.has(id) || localFolderIds.has(id)) ? id : null);
+
+    if (plan.mode === 'replace') {
+      for (const local of localNotes) {
+        if (local.trashed || local.archived || local.isTemplate) continue;
+        // As trashNote does, without its hard delete of empty untitled notes.
+        local.trashed = true;
+        local.trashedAt = result.trashedAt;
+        local.archived = false;
+        local.archivedAt = null;
+        local.updatedAt = result.trashedAt;
+        noteStore.put(local);
+        result.trashedIds.push(local.id);
+      }
+    }
+
+    // Dates that keep a local daily note outside trash after this commit.
+    const dailyDates = new Set(localNotes
+      .filter((n) => !n.trashed && n.isDaily && n.dateStr)
+      .map((n) => n.dateStr));
+
+    if (plan.folders.length > 0) {
+      const folderStore = tx.objectStore('folders');
+      for (const folder of plan.folders) {
+        if (localFolderIds.has(folder.id)) {
+          result.reusedFolders += 1;
+          continue;
+        }
+        folderStore.add({ ...folder, parentId: resolveFolder(folder.parentId) });
+        result.folders += 1;
+      }
+    }
+
+    for (const packageNote of plan.notes) {
+      const imported = { ...packageNote, id: plan.noteIds.get(packageNote.id), folderId: resolveFolder(packageNote.folderId) };
+      // Imported notes start outside trash, so an import never queues anything for deletion.
+      delete imported.trashed;
+      delete imported.trashedAt;
+      if (imported.isDaily && imported.dateStr && dailyDates.has(imported.dateStr)) {
+        imported.isDaily = false;
+        imported.dateStr = null;
+        imported.name = `${imported.name || 'Untitled'} (imported)`;
+      }
+      noteStore.add(imported);
+    }
+
+    const elementStore = tx.objectStore('elements');
+    for (const element of plan.elements) {
+      elementStore.add(element);
+    }
+    if (plan.media.length > 0) {
+      const mediaStore = tx.objectStore('media');
+      for (const row of plan.media) {
+        mediaStore.add(row);
+      }
+    }
+  }
+
+  /**
+   * Decode a data URL into a Blob without fetch (the extension CSP doesn't allow data: in connect-src).
+   * @param {string} dataUrl
+   * @returns {Blob}
+   */
+  _dataUrlToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(',');
+    if (comma === -1) throw new Error('malformed data URL in media');
+    const meta = dataUrl.slice(5, comma);
+    const payload = dataUrl.slice(comma + 1);
+    const isBase64 = /;base64$/i.test(meta);
+    const type = meta.replace(/;base64$/i, '').split(';')[0] || '';
+    if (!isBase64) {
+      return new Blob([decodeURIComponent(payload)], { type });
+    }
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type });
   }
 
   /**

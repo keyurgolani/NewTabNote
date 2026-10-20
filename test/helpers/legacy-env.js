@@ -705,13 +705,22 @@ async function settle(rounds = 20) {
   for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Poll `predicate` until it is truthy, letting queued work run in between. */
+/** Poll `predicate` until it returns something truthy, letting queued work run in between; returns that value. */
 async function waitFor(predicate, { rounds = 500, message = 'condition' } = {}) {
   for (let i = 0; i < rounds; i++) {
-    if (await predicate()) return;
+    const value = await predicate();
+    if (value) return value;
     await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error(`Timed out waiting for ${message}`);
+}
+
+/**
+ * Copy a value out of the vm context into this realm, so strict deep equality
+ * doesn't trip over the context's own Object and Array prototypes.
+ */
+function plain(value) {
+  return structuredClone(value);
 }
 
 /** A 1.4.0-shaped note record. */
@@ -766,6 +775,7 @@ module.exports = {
   requestToPromise,
   settle,
   waitFor,
+  plain,
   note,
   block,
 };
