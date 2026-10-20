@@ -26,6 +26,13 @@ export const WORKSPACE_SESSION_KEYS = Object.freeze([
   'lastOpenedNoteId',
 ]);
 
+/**
+ * The values Storage.initializeDefaultSettings gives these keys on first run. Startup
+ * maintenance writes them where nothing is stored yet, as it does the default preferences.
+ * @type {Readonly<Partial<WorkspaceSession>>}
+ */
+export const DEFAULT_SESSION = Object.freeze({ openTabs: null, activeTabIndex: 0 });
+
 /** @type {Readonly<Record<WorkspaceSessionKey, (value: unknown) => boolean>>} */
 const VALID = Object.freeze({
   openTabs: value => value === null || (Array.isArray(value) && value.every(tab => isRecord(tab) && isId(tab.noteId))),

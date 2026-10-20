@@ -19,6 +19,7 @@
 import { clone } from '../contracts/clone.js';
 import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
+import { DEFAULT_SESSION } from '../domain/session.js';
 import { STORES } from '../ports/repository.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
@@ -248,8 +249,15 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
       return finish(work);
     }
     if (effect.kind === 'maintenance') {
-      for (const [key, value] of Object.entries(DEFAULT_PREFERENCES)) {
-        if (!settings.preferences.has(key)) settings.preferences.set(key, clone(value));
+      /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
+      const defaults = [
+        ['preferences', DEFAULT_PREFERENCES],
+        ['session', DEFAULT_SESSION],
+      ];
+      for (const [area, values] of defaults) {
+        for (const [key, value] of Object.entries(values)) {
+          if (!settings[area].has(key)) settings[area].set(key, clone(value));
+        }
       }
       return finish(work);
     }

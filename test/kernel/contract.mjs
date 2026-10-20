@@ -106,6 +106,9 @@ const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
   aiSidebarWidth: 360,
 });
 
+/** The workspace session keys Storage.initializeDefaultSettings writes on first run */
+const STORAGE_DEFAULT_SESSION = Object.freeze({ openTabs: null, activeTabIndex: 0 });
+
 /**
  * @param {ContractFixture} fixture
  */
@@ -782,6 +785,18 @@ export function runContractSuite(fixture) {
         committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
         const theme = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
         assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'dark' });
+      });
+
+      it('runStartupMaintenance writes the session defaults Storage writes on first run, and keeps a stored session', async () => {
+        assert.equal((await kernel.query({ type: 'getWorkspaceSession' })).kind, 'empty');
+        await run(cmd('runStartupMaintenance', {}));
+        const defaults = await kernel.query({ type: 'getWorkspaceSession' });
+        assert.deepEqual(defaults.kind === 'ready' && defaults.data, STORAGE_DEFAULT_SESSION);
+        const session = { openTabs: [{ noteId: 'n1' }], activeTabIndex: 0, splitViewEnabled: true };
+        await run(cmd('saveWorkspaceSession', { session }));
+        committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
+        const kept = await kernel.query({ type: 'getWorkspaceSession' });
+        assert.deepEqual(kept.kind === 'ready' && kept.data, session);
       });
     });
 
