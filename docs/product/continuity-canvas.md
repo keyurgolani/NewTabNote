@@ -2,7 +2,7 @@
 
 - Status: Accepted ([#1][i1] slice 1). The owner questions are open, and each proposed default ships until the owner answers.
 - Date: 2026-10-20
-- Browser check: done headless on Chrome for Testing 156. Four owner-optional checks are left for stable Chrome ([Browser check](#browser-check)).
+- Browser check: run headless on Chrome for Testing 156 in place of #1's manual stable-Chrome check, a recorded deviation, since stable Chrome ignores `--load-extension` and can't be automated. Every engine row that decides slice 2's contracts passed. Four UI rows stay open as manual checks in stable Chrome, carried by [#30][i30] ([Browser check](#browser-check)).
 
 This record defines the topology every surface builds on: Moment and Workspace as two apertures of one document, entry points, URLs and history, note placement, and the rules no aperture may break. #1 ships as this record, pure tested modules (slice 2), versioned preference records, and a feature-parity inventory (slice 3). Nothing here changes what users see until [#2][i2] (Moment shell) and [#3][i3] (Workspace shell) load the modules.
 
@@ -19,7 +19,7 @@ At `3706d84` (1.4.0):
 
 1. A brand-new tab opens a pristine, writable Moment by default. Workspace and last-used are explicit user choices, and features are reorganized, never removed. This is the owner's decision from the 2026-10-18 direction review.
 2. Open Workspace unfolds the rail, collection, and inspector around the same canvas, and Return to Moment folds them away, with no navigation, reload, or new tab. Moment and Workspace tabs coexist, each with its own aperture, route, and layout, over one repository.
-3. The rail and destinations follow the approved review board: Inbox, Daily, Projects, and Templates, then Search, Insights, Trust, and Settings. This replaces the rail in the owner's earlier topology (Inbox, Daily Notes, Library, Folders, Templates, Graph, Insights, Archive, Trash). Folders become Projects collections, notes list by placement under Inbox, Daily, and Projects instead of a separate Library, Graph and Analytics sit under Insights, and Archive and Trash are collection views. No feature is dropped.
+3. The rail and destinations follow the approved review board: Inbox, Daily, Projects, and Templates, then Search, Insights, Trust, and Settings. This replaces the rail in the owner's earlier topology (Inbox, Daily Notes, Library, Folders, Templates, Graph, Insights, Archive, Trash). Folders become Projects collections (nesting and Unfiled: open, Q2), notes list by placement under Inbox, Daily, and Projects instead of a separate Library, Graph and Analytics sit under Insights, Archive is a collection view, and so is Trash (open, Q4). No feature is dropped.
 4. Every baseline feature keeps exactly one home. The onboarding tour is the only one replaced (owner decision), by three Moment tips from [#23][i23].
 
 ## Owner questions
@@ -110,7 +110,7 @@ From the browser check: a tab that started as a new tab keeps `chrome://newtab/`
 
 `resolveOpenNote` takes a note ID or none (Workspace target), the two aperture records, and the tabs from #2's `readOpenTabs()` (`lastAccessed` needs Chrome 121, which raises #27's `minimum_chrome_version`). A current-window tab whose note matches is activated with `chrome.tabs.update`, aperture unchanged, else a new tab opens in the resolved default aperture. #6's slice 4 adds a `leaseHolder` input that supersedes the note match and activates the holder's tab in its own window. With no note, the current window's Workspace tab with the latest `lastAccessed` is activated, else a new tab opens at `#/workspace/inbox`.
 
-From the browser check: of the worker APIs, only `chrome.runtime.getContexts` shows a new tab's hash (in `documentUrl`), and `chrome.tabs.query` gives `lastAccessed` without the `tabs` permission.
+From the browser check: of the worker APIs probed (`chrome.runtime.getContexts`, `chrome.tabs.get`, `chrome.tabs.query`, `chrome.tabs.update`), only `getContexts` shows a new tab's hash (in `documentUrl`), and `chrome.tabs.query` gives `lastAccessed` without the `tabs` permission.
 
 ## Entry points
 
@@ -254,7 +254,7 @@ What this means for slice 2 and the consumers:
 - Duplicated and restored tabs report `back_forward`, so `resolveLaunch` handles them with trigger `back-forward`.
 - If a manual check finds history or activation broken in stable Chrome, the fallbacks are #1's: `replaceState` only (no Back entries), and always a new tab.
 
-Manual checks, owner-optional, in stable Chrome with `dist/` loaded through Load unpacked:
+Manual checks, still open. None of them changes slice 2's contracts, so slice 2 doesn't wait on them. #30 (extension end-to-end) carries them as manual rows, and the owner can run them in stable Chrome with `dist/` loaded through Load unpacked:
 
 1. Address bar. Open a new tab, run `history.pushState(null, '', '#/workspace/inbox')` from DevTools on that tab, and look at the address bar, then reload and press Back. The probe predicts the address bar stays empty. While there, bookmark the tab and see which URL the bookmark saves.
 2. Reopen a closed tab (Ctrl+Shift+T, or Cmd+Shift+T on macOS) after a `pushState`. Check `performance.getEntriesByType('navigation')[0].type`, the hash, `history.state`, and `sessionStorage`.
@@ -264,7 +264,7 @@ Manual checks, owner-optional, in stable Chrome with `dist/` loaded through Load
 ## Risks
 
 1. Users lose "new tab shows my last note", so #2's Notes peek and #23's upgrade cue ship together.
-2. The browser check above replaces the unverified-API risk, with the manual checks still open.
+2. The browser check above retires the unverified-API risk for slice 2. The four manual rows stay open with #30.
 
 ## Consumers
 
