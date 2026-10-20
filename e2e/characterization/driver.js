@@ -45,10 +45,30 @@ function recordAppInit() {
   });
 }
 
+/**
+ * Note in window.__ntnNoticeAtFirstBlock whether the export notice took up space when the
+ * note's first block went on the page. Runs in every page before the page's own scripts.
+ */
+function recordFirstBlock() {
+  const observer = new MutationObserver(() => {
+    if (!document.querySelector('#blocks-container .block')) return;
+    observer.disconnect();
+    const notice = document.getElementById('export-notice');
+    window.__ntnNoticeAtFirstBlock = Boolean(notice) && notice.getBoundingClientRect().height > 0;
+  });
+  observer.observe(document, { childList: true, subtree: true });
+}
+
+/**
+ * Have every page of the session record its startup (see recordAppInit and
+ * recordFirstBlock). openNewTab does this; call it first when a spec opens the new tab
+ * some other way.
+ */
 async function trackStartup(extension) {
   if (trackedContexts.has(extension.context)) return;
   trackedContexts.add(extension.context);
   await extension.context.addInitScript(recordAppInit);
+  await extension.context.addInitScript(recordFirstBlock);
 }
 
 /**
@@ -63,7 +83,9 @@ async function afterEditorFocus(page) {
 /**
  * Wait until App.init() has finished and the editor has settled. Startup can load a note
  * twice (the last opened one, then the saved tabs), and each load moves focus to the
- * note's first block shortly after, so nothing may type before both have.
+ * note's first block shortly after, so nothing may type before both have. App.init()
+ * catches its own errors and shows them, or the storage guard, in place of the app, so
+ * either fails here too.
  */
 async function waitForApp(page) {
   await page.waitForFunction(() => window.__ntnAppInit !== undefined, null, { polling: 50, timeout: SETTLE_TIMEOUT_MS })
@@ -72,18 +94,40 @@ async function waitForApp(page) {
     });
   const outcome = await page.evaluate(() => window.__ntnAppInit);
   if (outcome !== 'done') throw new Error(`The new tab's App.init() ${outcome}`);
+  const shown = await page.evaluate(() => {
+    const guard = document.querySelector('.storage-guard');
+    if (guard) return `shows the storage guard: ${guard.textContent.trim()}`;
+    const failed = Array.from(document.querySelectorAll('#app h2')).find(heading => heading.textContent === 'Failed to initialize');
+    return failed ? `failed to start: ${failed.parentElement.textContent.trim()}` : null;
+  });
+  if (shown) throw new Error(`The new tab ${shown}`);
   await expect(page.locator('#note-tabs .note-tab.active'), 'the new tab opened a note').toBeVisible();
   await afterEditorFocus(page);
 }
 
 /**
- * Open a new tab (newtab.html) and wait until its app has started
+ * Open a new tab (newtab.html) and wait until its app has started, or with `wait: false`
+ * return as soon as it loads, for a start that waits on the user (onboarding); call
+ * waitForApp once it can finish
  */
-async function openNewTab(extension) {
+async function openNewTab(extension, { wait = true } = {}) {
   await trackStartup(extension);
   const page = await extension.openSurface('newtab');
-  await waitForApp(page);
+  if (wait) await waitForApp(page);
   return page;
+}
+
+/**
+ * On a first run (a new tab opened with `wait: false`), skip the onboarding walkthrough,
+ * open the sample note it offers, and wait until the app has started
+ */
+async function skipOnboarding(page) {
+  const walkthrough = page.getByRole('dialog', { name: 'Onboarding walkthrough' });
+  await expect(walkthrough).toBeVisible();
+  await walkthrough.getByRole('button', { name: 'Skip' }).click();
+  // Onboarding ends with the quick-start choice, and App.init returns after it
+  await page.getByRole('dialog', { name: 'Quick start' }).getByRole('button', { name: /Open the sample note/ }).click();
+  await waitForApp(page);
 }
 
 /**
@@ -363,17 +407,21 @@ async function workerStorageSettled(extension) {
 }
 
 /**
- * Write `notes` ([{ name, blocks: [element fields] }]) through the worker's Storage global,
- * blocks in order. Run it before the first new tab opens, so the app starts on these notes.
+ * Write `notes` ([{ name, blocks: [element fields], archived, isTemplate }]) through the
+ * worker's Storage global, blocks in order, then archive the archived ones and make the
+ * templates templates. Run it before the first new tab opens, so the app starts on these
+ * notes.
  */
 async function seedNotes(extension, notes) {
   await workerStorageSettled(extension);
   await extension.worker.evaluate(async notes => {
-    for (const { name, blocks } of notes) {
+    for (const { name, blocks = [], archived = false, isTemplate = false } of notes) {
       const note = await self.Storage.createNote(name);
       for (const [order, block] of blocks.entries()) {
         await self.Storage.saveElement({ id: self.Utils.generateId(), canvasId: note.id, order, ...block });
       }
+      if (archived) await self.Storage.archiveNote(note.id);
+      if (isTemplate) await self.Storage.updateNote({ ...(await self.Storage.getNote(note.id)), isTemplate: true });
     }
   }, notes);
 }
@@ -424,20 +472,217 @@ async function setTheme(page, theme) {
 }
 
 /**
- * The theme the page shows: 'light' or 'dark', from the theme engine's <html data-theme>
+ * The theme the page shows: 'light' or 'dark', from the theme engine's <html data-theme>,
+ * which the light theme leaves off
  */
 function theme(page) {
-  return page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  return page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'light');
 }
 
 /**
- * Save the Settings > Data & Backup > Export JSON download as `file`
+ * Close Settings with Escape
+ */
+async function closeSettings(page) {
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
+}
+
+/**
+ * Whether Settings is open
+ */
+function settingsOpen(page) {
+  return page.getByRole('dialog', { name: 'Settings' }).isVisible();
+}
+
+/**
+ * The Settings > Data & Backup hint on what exports hold. Leaves Settings open.
+ */
+async function exportContentsHint(page) {
+  const settings = await openSettings(page, 'Data & Backup');
+  return settings.locator('#export-contents-hint').textContent();
+}
+
+/**
+ * Export JSON from Settings > Data & Backup, saving the download as `file` if given.
+ * Returns the Download. Leaves Settings open.
  */
 async function exportJson(page, file) {
   const settings = await openSettings(page, 'Data & Backup');
   const download = page.waitForEvent('download');
   await settings.getByRole('button', { name: 'Export JSON' }).click();
-  await (await download).saveAs(file);
+  const done = await download;
+  if (file) await done.saveAs(file);
+  return done;
+}
+
+/**
+ * A JSON download's file name and parsed contents
+ */
+async function readJsonDownload(download) {
+  return { name: download.suggestedFilename(), data: JSON.parse(fs.readFileSync(await download.path(), 'utf8')) };
+}
+
+// ─── Export notice (NTN-18 slice 0) ───
+
+/**
+ * The export notice as the new tab shows it, or null when it shows none: its role and
+ * name, how its live region announces, what that announces (heading, then each
+ * paragraph), and the labels of the buttons beside it
+ */
+async function exportNotice(page) {
+  const notice = page.locator('#export-notice');
+  if (!(await notice.isVisible())) return null;
+  const shown = await notice.evaluate(card => {
+    const label = document.getElementById(card.getAttribute('aria-labelledby') || '');
+    const live = card.querySelector('[aria-live]');
+    return {
+      name: label ? label.textContent : null,
+      live: live ? live.getAttribute('aria-live') : null,
+      announces: live ? Array.from(live.children, child => child.textContent) : [],
+      buttons: Array.from(card.querySelectorAll('button'), button => button.textContent),
+    };
+  });
+  // The role as the accessibility tree has it: a section is a region only once it has a name
+  const asRegion = shown.name ? page.getByRole('region', { name: shown.name, exact: true }) : null;
+  const role = asRegion && await asRegion.count() === 1 ? 'region' : null;
+  return { role, ...shown };
+}
+
+/**
+ * The export notice's live region, which is on the page whether or not the notice shows:
+ * how it announces and the text it holds
+ */
+function exportNoticeLiveRegion(page) {
+  return page.locator('#export-notice [aria-live]').evaluate(live => ({ live: live.getAttribute('aria-live'), text: live.textContent }));
+}
+
+/**
+ * The export notice's colors as the page computes them (`rgb(...)` strings): the card's
+ * background, each line of text, and each button's label and background, as shown and,
+ * under `hovered`, with the pointer over it
+ */
+async function exportNoticeColors(page) {
+  const notice = page.locator('#export-notice');
+  const read = () => notice.evaluate(async card => {
+    // Hover changes come with a transition; read the colors it ends on
+    await Promise.all(card.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
+    return {
+      card: getComputedStyle(card).backgroundColor,
+      text: Array.from(card.querySelectorAll('.export-notice-text > *'), line => ({ text: line.textContent, color: getComputedStyle(line).color })),
+      buttons: Array.from(card.querySelectorAll('button'), button => {
+        const style = getComputedStyle(button);
+        return { label: button.textContent, color: style.color, background: style.backgroundColor };
+      }),
+    };
+  });
+  const shown = await read();
+  const hovered = [];
+  for (const { label } of shown.buttons) {
+    await notice.getByRole('button', { name: label, exact: true }).hover();
+    hovered.push((await read()).buttons.find(button => button.label === label));
+  }
+  await page.mouse.move(0, 0);
+  return { ...shown, hovered };
+}
+
+/**
+ * The size of each of the export notice's buttons, as { label, width, height }
+ */
+function exportNoticeButtonSizes(page) {
+  return page.locator('#export-notice button').evaluateAll(buttons => buttons.map(button => {
+    const { width, height } = button.getBoundingClientRect();
+    return { label: button.textContent, width, height };
+  }));
+}
+
+/**
+ * Click the export notice's button labeled `label`
+ */
+async function chooseInExportNotice(page, label) {
+  await page.locator('#export-notice').getByRole('button', { name: label, exact: true }).click();
+}
+
+/**
+ * Click the export notice's Export JSON (or Export again) and return the Download
+ */
+async function exportFromNotice(page, label = 'Export JSON') {
+  const download = page.waitForEvent('download');
+  await chooseInExportNotice(page, label);
+  return download;
+}
+
+/**
+ * What the profile recorded for the export notice (setting_preMigrationNotice), the record
+ * the next version reads, or null
+ */
+function exportNoticeRecord(page) {
+  return page.evaluate(async () => (await chrome.storage.local.get('setting_preMigrationNotice')).setting_preMigrationNotice || null);
+}
+
+/**
+ * Whether the export notice already took up space when the page's first note block went on
+ * the page (see recordFirstBlock), so the note laid out once
+ */
+function noticeShownBeforeFirstBlock(page) {
+  return page.evaluate(() => window.__ntnNoticeAtFirstBlock);
+}
+
+// ─── Focus ───
+
+/**
+ * Focus the header button named `name`, as a click or Tab would
+ */
+async function focusHeaderButton(page, name) {
+  await page.locator('#header').getByRole('button', { name, exact: true }).focus();
+}
+
+/**
+ * What has focus: { kind: 'title', text } for a note's title, { kind: 'block', pane, index,
+ * text } for a block, { kind: 'button', text } for a button, or { kind: 'page' }
+ */
+function focused(page) {
+  return page.evaluate(() => {
+    const element = document.activeElement;
+    if (!element || element === document.body) return { kind: 'page' };
+    const pane = element.closest('#secondary-editor-container') ? 'right' : 'left';
+    if (element.classList.contains('page-title')) return { kind: 'title', pane, text: element.textContent };
+    const block = element.classList.contains('block-content') ? element.closest('.block') : null;
+    if (block) {
+      const index = Array.from(block.parentElement.querySelectorAll(':scope > .block')).indexOf(block);
+      return { kind: 'block', pane, index, text: element.textContent };
+    }
+    if (element.tagName === 'BUTTON') return { kind: 'button', text: element.textContent.trim() || element.getAttribute('aria-label') };
+    return { kind: element.tagName.toLowerCase(), text: element.textContent };
+  });
+}
+
+// ─── Split view ───
+
+/**
+ * Turn on split view with the header's button and wait until the right pane shows a note
+ */
+async function openSplitView(page) {
+  await page.locator('#header').getByRole('button', { name: 'Toggle Split View', exact: true }).click();
+  await expect(page.locator('#secondary-editor-container .block-content').first()).toBeVisible();
+  await afterEditorFocus(page);
+}
+
+/**
+ * The right pane's blocks in order, as blocks() reads the left pane's
+ */
+function rightPaneBlocks(page) {
+  return page.locator('#secondary-editor-container .blocks-container > .block').evaluateAll(elements => elements.map(element => {
+    const content = element.querySelector('.block-content');
+    return { type: element.dataset.type, text: content ? content.textContent : '' };
+  }));
+}
+
+/**
+ * Click into the right pane's block at `index` and put the caret at its end
+ */
+async function clickRightPaneBlock(page, index) {
+  await page.locator('#secondary-editor-container .blocks-container > .block .block-content').nth(index).click();
+  await page.keyboard.press('End');
 }
 
 /**
@@ -516,7 +761,10 @@ function recentNoteNames(popup) {
 }
 
 module.exports = {
+  trackStartup,
+  waitForApp,
   openNewTab,
+  skipOnboarding,
   reload,
   markPage,
   wasReloaded,
@@ -537,7 +785,25 @@ module.exports = {
   captureBookmark,
   setTheme,
   theme,
+  openSettings,
+  closeSettings,
+  settingsOpen,
+  exportContentsHint,
   exportJson,
+  readJsonDownload,
+  exportNotice,
+  exportNoticeLiveRegion,
+  exportNoticeColors,
+  exportNoticeButtonSizes,
+  chooseInExportNotice,
+  exportFromNotice,
+  exportNoticeRecord,
+  noticeShownBeforeFirstBlock,
+  focusHeaderButton,
+  focused,
+  openSplitView,
+  rightPaneBlocks,
+  clickRightPaneBlock,
   importBackup,
   openPopup,
   addQuickNote,

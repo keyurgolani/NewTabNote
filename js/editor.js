@@ -2532,17 +2532,14 @@ class BlockEditor {
       return;
     }
 
-    // Start typing anywhere to create/focus block
+    // Type anywhere: a printable key goes to the note, moving focus there before
+    // the key types, unless what has focus keeps it
     if (
-      !e.target.closest('#editor') &&
-      !e.target.closest('.modal') &&
-      !e.target.closest('.sidebar') &&
-      !e.target.closest('.ai-sidebar') &&
-      !e.target.closest('#ai-chat-input') &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
-      e.key.length === 1
+      e.key.length === 1 &&
+      !this._keyStaysAt(e.target, e.key)
     ) {
       // Focus last block or create new one
       if (this.blocks.length > 0) {
@@ -2552,6 +2549,21 @@ class BlockEditor {
         this.addBlockAtEnd();
       }
     }
+  }
+
+  /**
+   * Whether a printable key pressed at `target` stays there instead of going
+   * to the note: a text control (input, textarea, select, editable text) or a
+   * modal, menu, listbox, or dialog has focus, or it's Space on a button or
+   * link, which presses it. Enter isn't printable, so it never goes either.
+   * @param {Element} target - Where the key was pressed
+   * @param {string} key - KeyboardEvent.key
+   * @returns {boolean}
+   */
+  _keyStaysAt(target, key) {
+    if (target.closest('input, textarea, select, [contenteditable]')) return true;
+    if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
+    return key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
   }
 
   // ============ Slash Menu ============

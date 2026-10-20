@@ -2,61 +2,121 @@
  * The one-time notice that asks a profile with notes to export a copy before
  * the next update changes how notes are stored (#17's first schema change).
  *
- * It's a region at the top of the writing column, not a dialog: it takes no
- * focus and covers nothing, so the editor stays writable, and its buttons come
- * before the note in the tab order. Export JSON runs Settings > Data & Backup >
- * Export JSON. Either button records the outcome once, as
- * `setting_preMigrationNotice` ({version, outcome, at}) in chrome.storage.local,
- * and no tab shows the notice again. Neither changes a note.
+ * It fills the #export-notice markup between the note's title and its blocks:
+ * a region, not a dialog, so it takes no focus, covers nothing, and the editor
+ * stays writable. Below the title, the title stays the first stop after the
+ * header. Its heading and text go into a live region that's on the page from
+ * the start, so they're announced; its buttons sit outside it.
+ *
+ * Export JSON downloads the file, and since the browser may still ask where to
+ * save it or block it, the notice then asks to check that the file saved: Done
+ * records `exported`, Export again downloads again. An Export JSON or Create
+ * Backup from Settings, in any tab, moves a showing notice to that step too.
+ * Not now records `dismissed`. A profile with nothing of its own to export when
+ * this version first decides records `not-needed`. The record is
+ * `setting_preMigrationNotice` ({version, outcome, at}) in
+ * chrome.storage.local, and once it exists no tab shows the notice. Nothing
+ * here changes a note.
  */
 
 /** Storage.getSetting key of the recorded outcome */
 const EXPORT_NOTICE_SETTING = 'preMigrationNotice';
 
+/** Storage.getSetting key that Export JSON and Create Backup write once the browser has the file */
+const EXPORT_RECEIPT_SETTING = 'lastFullExportAt';
+
 /** This notice's version. A later notice bumps it, so a profile sees that one once too. */
 const EXPORT_NOTICE_VERSION = 1;
 
-/** The notice's text. `contents` matches the Data & Backup hint in newtab.html. */
-const EXPORT_NOTICE_TEXT = {
+/** Stores Export JSON reads besides the core ones, whose loss already shows #33's guard instead */
+const EXPORT_AUX_STORES = ['media', 'folders'];
+
+/** What Export JSON and Create Backup hold, said once for the notice and the Data & Backup hint */
+const EXPORT_CONTENTS = {
+  included: 'active and archived notes, templates, folders, and media',
+  excluded: 'Not included: trash, themes, version history, AI chat history, and settings.',
+  backlinks: 'Backlinks rebuild when each note is next saved.',
+};
+
+const EXPORT_NOTICE_TEXT = Object.freeze({
   title: 'Save a copy before the next update',
   body: 'The next NewTabNote update changes how notes are stored on this device. Exporting now gives you a copy to keep.',
-  contents: 'Export JSON includes active and archived notes, templates, folders, and media. '
-    + 'Not included: trash, themes, version history, AI chat history, and settings.',
+  confirm: 'Check that the file saved, then choose Done.',
+  contents: `Export JSON includes ${EXPORT_CONTENTS.included}. ${EXPORT_CONTENTS.excluded} ${EXPORT_CONTENTS.backlinks}`,
+  // Not now is for good, so the notice says where exporting stays
+  anyTime: 'You can export any time from Settings > Data & Backup.',
+  hint: `Export JSON and Create Backup include ${EXPORT_CONTENTS.included}. ${EXPORT_CONTENTS.excluded} `
+    + `The Markdown ZIP holds active notes only. ${EXPORT_CONTENTS.backlinks}`,
   export: 'Export JSON',
+  exportAgain: 'Export again',
+  done: 'Done',
   dismiss: 'Not now',
   recordFailed: "Couldn't save your choice. Try again.",
-};
+});
+
+/**
+ * @typedef {Object} ReturnFocus
+ * @property {Element|null} element - What had focus before it moved into the notice
+ * @property {Range|null} range - The selection then, to put the caret back
+ */
 
 class ExportNotice {
   /**
    * @param {Object} deps
    * @param {DatabaseManager} deps.storage
-   * @param {() => Promise<boolean>} deps.onExport - Runs Export JSON; resolves true once the file is handed to the browser
-   * @param {(() => void)|null} [deps.onClose] - Runs when the notice leaves the page while it holds focus
+   * @param {() => Promise<boolean>} deps.onExport - Export JSON; resolves true once the browser has the file
+   * @param {((returnFocus: ReturnFocus|null) => void)|null} [deps.onClose] - Runs when the notice
+   *   closes while it holds focus, with where focus was before it moved into the notice
    */
   constructor({ storage, onExport, onClose = null }) {
     this.storage = storage;
     this.onExport = onExport;
     this.onClose = onClose;
-    /** @type {HTMLElement|null} The region, while it's on the page */
-    this.element = null;
-    /** True while a choice is being carried out */
-    this.busy = false;
+    /** @type {HTMLElement|null} #export-notice, while the notice shows */
+    this.card = null;
+    /** @type {ReturnFocus|null} */
+    this.returnFocus = null;
+    /** @type {(() => void)|null} Stops listening to settings changes */
+    this.unsubscribe = null;
+    /** @param {FocusEvent} event */
+    this.onFocusIn = (event) => this._noteReturnFocus(event);
+  }
+
+  /** The notice's text, which the Data & Backup hint uses too */
+  static get TEXT() {
+    return EXPORT_NOTICE_TEXT;
   }
 
   /**
-   * Whether a new tab shows the notice: the notes database opened with every
-   * store (not #33's guard or degraded states), the profile had a note outside
-   * trash when the tab started, the tab didn't run onboarding, and no outcome
-   * is recorded yet.
-   * @param {DatabaseManager} storage
-   * @param {{hadNotes: boolean, ranOnboarding: boolean}} startup
+   * Whether this new tab shows the notice: the database opened (#33's guard
+   * stops startup before this), no store Export JSON reads is missing, and
+   * nothing is recorded yet. A profile with no note that holds anything, an
+   * untitled empty note counting as nothing, records `not-needed` instead, so
+   * its own first notes never bring the notice. A failed read rejects.
    * @returns {Promise<boolean>}
    */
-  static async isDue(storage, { hadNotes, ranOnboarding }) {
-    if (storage.openState !== 'open' || storage.missingStores.length > 0) return false;
-    if (!hadNotes || ranOnboarding) return false;
-    return !ExportNotice.isRecorded(await storage.getSetting(EXPORT_NOTICE_SETTING, null));
+  async isDue() {
+    const storage = this.storage;
+    if (storage.openState !== 'open') return false;
+    if (EXPORT_AUX_STORES.some((store) => storage.missingStores.includes(store))) return false;
+    if (ExportNotice.isRecorded(await storage.readSetting(EXPORT_NOTICE_SETTING))) return false;
+    if (await this._holdsSomething()) return true;
+    await this.record('not-needed');
+    return false;
+  }
+
+  /**
+   * Whether the profile has a note outside trash with a title or any content.
+   * Stops at the first one.
+   * @returns {Promise<boolean>}
+   */
+  async _holdsSomething() {
+    const storage = this.storage;
+    const notes = [...(await storage.getAllNotes(true)), ...(await storage.getTemplates())];
+    for (const note of notes) {
+      if (!storage.isNoteUntitled(note) || !(await storage.isNoteEmpty(note.id))) return true;
+    }
+    return false;
   }
 
   /**
@@ -68,54 +128,39 @@ class ExportNotice {
   }
 
   /**
-   * Record the outcome, unless one is recorded already: when two tabs show the
-   * notice, the first choice stands.
-   * @param {DatabaseManager} storage
-   * @param {'exported'|'dismissed'} outcome
-   * @returns {Promise<boolean>} True when this call wrote the record
+   * Record the outcome, under a Web Lock so tabs take turns. A recorded
+   * outcome stands, except that `exported` replaces `dismissed`, so an export
+   * that finishes after another tab's Not now still counts. When the read
+   * fails it rejects and writes nothing over what may be there.
+   * @param {'exported'|'dismissed'|'not-needed'} outcome
+   * @returns {Promise<void>}
    */
-  static async record(storage, outcome) {
-    if (ExportNotice.isRecorded(await storage.getSetting(EXPORT_NOTICE_SETTING, null))) return false;
-    await storage.setSetting(EXPORT_NOTICE_SETTING, { version: EXPORT_NOTICE_VERSION, outcome, at: Date.now() });
-    return true;
+  async record(outcome) {
+    const write = async () => {
+      const current = await this.storage.readSetting(EXPORT_NOTICE_SETTING);
+      if (ExportNotice.isRecorded(current) && !(outcome === 'exported' && current.outcome === 'dismissed')) return;
+      await this.storage.setSetting(EXPORT_NOTICE_SETTING, { version: EXPORT_NOTICE_VERSION, outcome, at: Date.now() });
+    };
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!locks || typeof locks.request !== 'function') {
+      await write();
+      return;
+    }
+    await locks.request('ntn-pre-migration-notice', write);
   }
 
   /**
-   * Put the notice at the top of `column`, the writing column (#editor). The
-   * region goes in empty and is filled a moment later, since screen readers
-   * don't announce a live region that arrives with its content. Another tab
-   * recording an outcome takes it away here too.
-   * @param {HTMLElement} column
+   * Fill `card`, the #export-notice markup, and show it. Another tab recording
+   * an outcome closes it here, and an export from Settings moves it to the
+   * confirm step.
+   * @param {HTMLElement} card
    * @returns {void}
    */
-  show(column) {
-    if (this.element) return;
-    const region = column.ownerDocument.createElement('section');
-    region.className = 'export-notice';
-    region.setAttribute('aria-labelledby', 'export-notice-title');
-    region.setAttribute('aria-live', 'polite');
-    column.insertBefore(region, column.firstChild);
-    this.element = region;
-    setTimeout(() => this._fill(region), 0);
-
-    this.storage.onSettingsChange((changes) => {
-      const change = changes[EXPORT_NOTICE_SETTING];
-      if (change && ExportNotice.isRecorded(change.newValue)) this._close();
-    });
-  }
-
-  /**
-   * @param {HTMLElement} region
-   * @returns {void}
-   */
-  _fill(region) {
-    if (this.element !== region) return;
-    const doc = region.ownerDocument;
-    const card = doc.createElement('div');
-    card.className = 'export-notice-card';
-
-    const text = doc.createElement('div');
-    text.className = 'export-notice-text';
+  show(card) {
+    if (this.card) return;
+    this.card = card;
+    const doc = card.ownerDocument;
+    const text = /** @type {HTMLElement} */ (card.querySelector('.export-notice-text'));
     const title = doc.createElement('h2');
     title.id = 'export-notice-title';
     title.className = 'export-notice-title';
@@ -126,86 +171,141 @@ class ExportNotice {
     const contents = doc.createElement('p');
     contents.className = 'export-notice-contents';
     contents.textContent = EXPORT_NOTICE_TEXT.contents;
+    const anyTime = doc.createElement('p');
+    anyTime.className = 'export-notice-contents';
+    anyTime.textContent = EXPORT_NOTICE_TEXT.anyTime;
     text.appendChild(title);
     text.appendChild(body);
     text.appendChild(contents);
+    text.appendChild(anyTime);
 
     const actions = doc.createElement('div');
     actions.className = 'export-notice-actions';
-    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.export, 'primary-btn', 'exported'));
-    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.dismiss, 'secondary-btn', 'dismissed'));
-
-    card.appendChild(text);
+    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.export, 'primary-btn', 'export', () => this._export()));
+    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.dismiss, 'secondary-btn', 'dismiss', () => this._decide('dismissed')));
     card.appendChild(actions);
-    region.appendChild(card);
+    // Named by its heading, now that the heading is there
+    card.setAttribute('aria-labelledby', 'export-notice-title');
+    card.classList.add('is-shown');
+
+    card.addEventListener('focusin', this.onFocusIn);
+    this.unsubscribe = this.storage.onSettingsChange((changes) => {
+      const recorded = changes[EXPORT_NOTICE_SETTING];
+      if (recorded && ExportNotice.isRecorded(recorded.newValue)) this.close();
+      else if (changes[EXPORT_RECEIPT_SETTING]) this._askToConfirm();
+    });
   }
 
   /**
    * @param {Document} doc
    * @param {string} label
    * @param {string} style - The app's button class
-   * @param {'exported'|'dismissed'} outcome
+   * @param {string} action - What the button does, as data-action
+   * @param {() => Promise<void>} run
    * @returns {HTMLButtonElement}
    */
-  _button(doc, label, style, outcome) {
+  _button(doc, label, style, action, run) {
     const button = doc.createElement('button');
     button.type = 'button';
     button.className = `${style} export-notice-btn`;
+    button.dataset.action = action;
     button.textContent = label;
-    button.addEventListener('click', () => this._choose(outcome));
+    button.addEventListener('click', () => this._run(run));
     return button;
   }
 
   /**
-   * Carry out a choice. Export JSON records `exported` only once the file is
-   * handed to the browser; when the export fails, its own toast says so and
-   * the notice stays. A record that fails to save keeps the notice too.
-   * @param {'exported'|'dismissed'} outcome
+   * Run a choice with the notice marked busy (aria-busy), which is what makes
+   * clicks meanwhile do nothing.
+   * @param {() => Promise<void>} run
    * @returns {Promise<void>}
    */
-  async _choose(outcome) {
-    if (this.busy || !this.element) return;
-    this._setBusy(true);
+  async _run(run) {
+    const card = this.card;
+    if (!card || card.getAttribute('aria-busy') === 'true') return;
+    card.setAttribute('aria-busy', 'true');
     try {
-      if (outcome === 'exported' && !(await this.onExport())) return;
-      await ExportNotice.record(this.storage, outcome);
-      this._close();
-    } catch (error) {
-      console.error('Export notice: the choice was not saved', error);
-      Utils.showToast(EXPORT_NOTICE_TEXT.recordFailed, 'error');
+      await run();
     } finally {
-      this._setBusy(false);
+      card.removeAttribute('aria-busy');
     }
   }
 
   /**
-   * Ignore clicks while a choice runs. aria-disabled rather than disabled, so a
-   * keyboard user's focus stays on the button.
-   * @param {boolean} busy
-   * @returns {void}
+   * Export JSON, or Export again. Once the browser has the file the notice
+   * asks to check that it saved; a failed export's own toast says so.
+   * @returns {Promise<void>}
    */
-  _setBusy(busy) {
-    this.busy = busy;
-    if (!this.element) return;
-    this.element.querySelectorAll('.export-notice-btn').forEach((button) => {
-      if (busy) button.setAttribute('aria-disabled', 'true');
-      else button.removeAttribute('aria-disabled');
-    });
+  async _export() {
+    if (await this.onExport()) this._askToConfirm();
   }
 
   /**
-   * Take the notice off the page. When it held focus, onClose puts focus back
-   * in the note.
+   * Record a choice and close. A choice that fails to save keeps the notice
+   * and says so.
+   * @param {'exported'|'dismissed'} outcome
+   * @returns {Promise<void>}
+   */
+  async _decide(outcome) {
+    try {
+      await this.record(outcome);
+      this.close();
+    } catch (error) {
+      console.error('Export notice: the choice was not saved', error);
+      Utils.showToast(EXPORT_NOTICE_TEXT.recordFailed, 'error');
+    }
+  }
+
+  /**
+   * The step after an export: check that the file saved, then Done. Export JSON
+   * becomes Export again in place, so focus on it stays there.
    * @returns {void}
    */
-  _close() {
-    const region = this.element;
-    if (!region) return;
-    this.element = null;
-    let node = region.ownerDocument.activeElement;
-    while (node && node !== region) node = /** @type {Element|null} */ (node.parentNode);
-    region.remove();
-    if (node === region && this.onClose) this.onClose();
+  _askToConfirm() {
+    const card = this.card;
+    if (!card || card.querySelector('[data-action="done"]')) return;
+    /** @type {HTMLElement} */ (card.querySelector('.export-notice-body')).textContent = EXPORT_NOTICE_TEXT.confirm;
+    const exportButton = /** @type {HTMLElement} */ (card.querySelector('[data-action="export"]'));
+    exportButton.textContent = EXPORT_NOTICE_TEXT.exportAgain;
+    exportButton.className = 'secondary-btn export-notice-btn';
+    const done = this._button(card.ownerDocument, EXPORT_NOTICE_TEXT.done, 'primary-btn', 'done', () => this._decide('exported'));
+    /** @type {HTMLElement} */ (exportButton.parentNode).insertBefore(done, exportButton);
+  }
+
+  /**
+   * Where focus was before it first moved into the notice.
+   * @param {FocusEvent} event
+   * @returns {void}
+   */
+  _noteReturnFocus(event) {
+    const card = /** @type {HTMLElement} */ (this.card);
+    const from = /** @type {Element|null} */ (event.relatedTarget);
+    if (from && card.contains(from)) return;
+    const selection = card.ownerDocument.getSelection();
+    this.returnFocus = {
+      element: from,
+      range: selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null,
+    };
+  }
+
+  /**
+   * Take the notice off the page and stop listening. When it held focus,
+   * onClose puts focus back where it was.
+   * @returns {void}
+   */
+  close() {
+    const card = this.card;
+    if (!card) return;
+    this.card = null;
+    /** @type {() => void} */ (this.unsubscribe)();
+    this.unsubscribe = null;
+    card.removeEventListener('focusin', this.onFocusIn);
+    const heldFocus = card.contains(card.ownerDocument.activeElement);
+    card.classList.remove('is-shown');
+    card.removeAttribute('aria-labelledby');
+    /** @type {HTMLElement} */ (card.querySelector('.export-notice-text')).textContent = '';
+    /** @type {HTMLElement} */ (card.querySelector('.export-notice-actions')).remove();
+    if (heldFocus && this.onClose) this.onClose(this.returnFocus);
   }
 }
 

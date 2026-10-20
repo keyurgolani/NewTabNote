@@ -123,20 +123,23 @@ class FakeClassList {
   toString() { return Array.from(this.set).join(' '); }
 }
 
+/** A compound selector: an optional tag, then .class and #id parts, then [attr] or [attr="value"] parts. */
 function matchesSimple(element, selector) {
   if (!element || !element.tagName) return false;
-  const attrMatch = selector.match(/^\[([^\]=]+)(?:="([^"]*)")?\]$/);
-  if (attrMatch) {
-    const value = element.getAttribute(attrMatch[1]);
-    return attrMatch[2] === undefined ? value !== null : value === attrMatch[2];
-  }
-  const parts = selector.match(/^([a-zA-Z0-9-]*)((?:[.#][\w-]+)*)$/);
+  const parts = selector.match(/^([a-zA-Z0-9-]*)((?:[.#][\w-]+)*)((?:\[[^\]=]+(?:="[^"]*")?\])*)$/);
   if (!parts) return false;
   if (parts[1] && element.tagName.toLowerCase() !== parts[1].toLowerCase()) return false;
   const rest = parts[2].match(/[.#][\w-]+/g) || [];
-  return rest.every((token) => (token[0] === '#'
+  const simple = rest.every((token) => (token[0] === '#'
     ? element.id === token.slice(1)
     : element.classList.contains(token.slice(1))));
+  if (!simple) return false;
+  const attributes = parts[3].match(/\[[^\]]+\]/g) || [];
+  return attributes.every((token) => {
+    const [, name, expected] = token.match(/^\[([^\]=]+)(?:="([^"]*)")?\]$/);
+    const value = element.getAttribute(name);
+    return expected === undefined ? value !== null : value === expected;
+  });
 }
 
 function matches(element, selectorList) {
@@ -194,6 +197,15 @@ class FakeElement {
   }
 
   get firstChild() { return this.children[0] || null; }
+
+  /** Whether it's in its document's tree */
+  get isConnected() {
+    const root = this.ownerDocument && this.ownerDocument.documentElement;
+    for (let node = this; node; node = node.parentNode) {
+      if (node === root) return true;
+    }
+    return false;
+  }
 
   appendChild(child) {
     if (child.parentNode) child.parentNode.removeChild(child);
@@ -280,6 +292,14 @@ class FakeElement {
 
   matches(selector) { return matches(this, selector); }
 
+  /** Whether `node` is this element or inside it */
+  contains(node) {
+    for (let current = node; current; current = current.parentNode) {
+      if (current === this) return true;
+    }
+    return false;
+  }
+
   closest(selector) {
     let node = this;
     while (node && node.tagName) {
@@ -337,6 +357,8 @@ class FakeDocument {
   }
   querySelector(selector) { return this.documentElement.querySelector(selector); }
   querySelectorAll(selector) { return this.documentElement.querySelectorAll(selector); }
+  /** No text selection in this fake */
+  getSelection() { return null; }
   addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
   removeEventListener(type, fn) {
     this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn);

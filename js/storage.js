@@ -30,7 +30,9 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
       }
     },
     onChanged: {
-      addListener: () => { }
+      addListener: () => { },
+      // onSettingsChange's unsubscribe calls it
+      removeListener: () => { }
     }
   };
   const mockRuntime = {
@@ -1885,6 +1887,27 @@ class DatabaseManager {
   }
 
   /**
+   * Read a setting, rejecting when chrome.storage fails, where getSetting
+   * would resolve its default and a caller couldn't tell "none" from "unknown".
+   * @param {string} key
+   * @returns {Promise<*>} The value, or undefined when there's none
+   */
+  readSetting(key) {
+    const chromeApi = this._chromeApi();
+    return new Promise((resolve, reject) => {
+      const storageKey = `setting_${key}`;
+      chromeApi.storage.local.get([storageKey], (result) => {
+        const error = chromeApi.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message || `couldn't read ${key}`));
+          return;
+        }
+        resolve(result[storageKey]);
+      });
+    });
+  }
+
+  /**
    * Set setting in chrome.storage.local
    */
   async setSetting(key, value) {
@@ -1926,11 +1949,18 @@ class DatabaseManager {
 
   /**
    * Add listener for settings changes (for cross-tab sync)
+   * @param {(changes: Object<string, {oldValue: *, newValue: *}>) => void} callback
+   * @returns {() => void} Removes the listener
    */
   onSettingsChange(callback) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
+    /**
+     * @param {Object<string, {oldValue?: *, newValue?: *}>} changes
+     * @param {string} areaName
+     */
+    const listener = (changes, areaName) => {
       if (areaName !== 'local') return;
 
+      /** @type {Object<string, {oldValue: *, newValue: *}>} */
       const settingChanges = {};
       for (const [key, change] of Object.entries(changes)) {
         if (key.startsWith('setting_')) {
@@ -1945,7 +1975,10 @@ class DatabaseManager {
       if (Object.keys(settingChanges).length > 0) {
         callback(settingChanges);
       }
-    });
+    };
+    const chromeApi = this._chromeApi();
+    chromeApi.storage.onChanged.addListener(listener);
+    return () => chromeApi.storage.onChanged.removeListener(listener);
   }
 
   /**
@@ -2018,38 +2051,85 @@ class DatabaseManager {
    * @returns {Promise<Object>} {version, exportedAt, canvases, elements, media, folders}
    */
   async exportAll() {
-    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
-    const noteIds = new Set(notes.map((note) => note.id));
-    const allElements = [];
+    const { notes, elements, media, folders } = await this._readExport();
 
-    for (const note of notes) {
-      const elements = await this.getElementsByNote(note.id);
-      allElements.push(...elements);
-    }
-
-    // Only media whose note is exported (1.4.0 exported the whole store)
-    const allMedia = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
-
-    // Convert blobs to base64 for export
-    const mediaWithBase64 = await Promise.all(
-      allMedia.map(async (m) => {
-        if (m.blob instanceof Blob) {
-          const base64 = await Utils.readFileAsDataURL(m.blob);
-          return { ...m, blob: base64 };
-        }
-        return m;
-      })
-    );
+    // Convert blobs to base64 for export, one at a time
+    const mediaWithBase64 = [];
+    for (const m of media) mediaWithBase64.push(await this._exportMediaRow(m));
 
     return {
       version: 1,
       exportedAt: Date.now(),
       // Key name 'canvases' kept for backward compatibility with existing exports
       canvases: notes,
-      elements: allElements,
+      elements,
       media: mediaWithBase64,
-      folders: await this.getAllFolders(),
+      folders,
     };
+  }
+
+  /**
+   * exportAll as a JSON file (`extra` fields after folders), written record by
+   * record: each note, block, media row, and folder goes through its own
+   * JSON.stringify, so no string ever holds the whole export, however many
+   * images and files its blocks carry as data URLs. Same JSON as exportAll,
+   * without indentation, so 1.4.0 and importData read it the same.
+   * @param {Object<string, *>} [extra] - More top-level fields, as Create Backup adds
+   * @returns {Promise<Blob>}
+   */
+  async exportAllAsBlob(extra = {}) {
+    const { notes, elements, media, folders } = await this._readExport();
+    /** @type {Array<string>} */
+    const parts = [`{"version":1,"exportedAt":${Date.now()}`];
+    /**
+     * @param {string} key
+     * @param {Array<Object>} rows
+     */
+    const list = (key, rows) => {
+      parts.push(`,${JSON.stringify(key)}:[`);
+      rows.forEach((row, i) => parts.push((i === 0 ? '' : ',') + JSON.stringify(row)));
+      parts.push(']');
+    };
+    // Key name 'canvases' kept for backward compatibility with existing exports
+    list('canvases', notes);
+    list('elements', elements);
+    parts.push(',"media":[');
+    for (let i = 0; i < media.length; i++) {
+      parts.push((i === 0 ? '' : ',') + JSON.stringify(await this._exportMediaRow(media[i])));
+      media[i] = null; // its Blob can go once it's written out
+    }
+    parts.push(']');
+    list('folders', folders);
+    for (const [key, value] of Object.entries(extra)) parts.push(`,${JSON.stringify(key)}:${JSON.stringify(value)}`);
+    parts.push('}');
+    return new Blob(parts, { type: 'application/json' });
+  }
+
+  /**
+   * What exportAll exports: every note outside trash, their blocks note by
+   * note, the media of those notes, and every folder.
+   * @returns {Promise<{notes: Array<Object>, elements: Array<Object>, media: Array<Object>, folders: Array<Object>}>}
+   */
+  async _readExport() {
+    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
+    const noteIds = new Set(notes.map((note) => note.id));
+    const elements = [];
+    for (const note of notes) {
+      elements.push(...(await this.getElementsByNote(note.id)));
+    }
+    // Only media whose note is exported (1.4.0 exported the whole store)
+    const media = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
+    return { notes, elements, media, folders: await this.getAllFolders() };
+  }
+
+  /**
+   * A media row as exports hold it, its Blob as a data URL.
+   * @param {Object} row
+   * @returns {Promise<Object>}
+   */
+  async _exportMediaRow(row) {
+    if (!(row.blob instanceof Blob)) return row;
+    return { ...row, blob: await Utils.readFileAsDataURL(row.blob) };
   }
 
   /**

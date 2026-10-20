@@ -140,8 +140,25 @@ class App {
       await Storage.init();
       this.reportMissingStores();
 
+      // The export notice decides now, before any note renders and before a first note exists
+      this.exportNotice = new ExportNotice({
+        storage: appStorage(),
+        onExport: () => this.settingsController.exportAll(),
+        onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
+      });
+      const startupReads = Promise.all([
+        Onboarding.hasCompleted(),
+        this.exportNotice.isDue().catch((error) => {
+          console.error('Export notice: could not decide whether to show it', error);
+          return false;
+        }),
+      ]);
+
       // Populate DOM cache after document is ready
       this.domRefs.init();
+      // Settings > Data & Backup says what the export holds in the notice's words
+      const exportHint = document.getElementById('export-contents-hint');
+      if (exportHint) exportHint.textContent = ExportNotice.TEXT.hint;
 
       // Initialize LLM service
       await LLM.init();
@@ -215,13 +232,12 @@ class App {
       await this.initThemeBuilderController();
 
       // Check if we have notes to display
-      const hasCompletedOnboarding = await Onboarding.hasCompleted();
-      // Counted before a first note exists: the export notice is for profiles that already had notes
-      const hadNotes = this.notes.length + this.archivedNotes.length + this.templates.length > 0;
-      let firstRun = false;
-      if (this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding) {
+      const [hasCompletedOnboarding, exportNoticeDue] = await startupReads;
+      const runsOnboarding = this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding;
+      // Before a note loads, so the note lays out once
+      if (exportNoticeDue && !runsOnboarding) this.showExportNotice();
+      if (runsOnboarding) {
         // First-run: show onboarding walkthrough
-        firstRun = true;
         await this.runOnboarding();
       } else if (this.notes.length === 0 && this.archivedNotes.length === 0) {
         // Returning user with no notes
@@ -240,7 +256,6 @@ class App {
 
       this.updateEmptyState();
       this.updateBadgeCounts();
-      await this.showExportNoticeIfDue({ hadNotes, ranOnboarding: firstRun });
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
@@ -271,27 +286,50 @@ class App {
   }
 
   /**
-   * The one-time notice to export a copy before the next update changes how
-   * notes are stored (js/ui/export-notice.js), at the top of the writing
-   * column. Nothing here stops the new tab from starting.
-   * @param {{hadNotes: boolean, ranOnboarding: boolean}} startup
-   * @returns {Promise<void>}
+   * Show the one-time notice to export a copy before the next update changes
+   * how notes are stored (js/ui/export-notice.js), in #export-notice between
+   * the note's title and its blocks. Nothing here stops the new tab from starting.
+   * @returns {void}
    */
-  async showExportNoticeIfDue(startup) {
+  showExportNotice() {
     try {
-      const column = document.getElementById('editor');
-      if (!column || !(await ExportNotice.isDue(appStorage(), startup))) return;
-      const notice = new ExportNotice({
-        storage: appStorage(),
-        onExport: () => this.settingsController.exportAll(),
-        onClose: () => {
-          const block = /** @type {HTMLElement|null} */ (column.querySelector('.block-content'));
-          if (block) block.focus();
-        },
-      });
-      notice.show(column);
+      this.exportNotice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
     } catch (error) {
       console.error('Export notice failed to show:', error);
+    }
+  }
+
+  /**
+   * The export notice closed while it held focus: focus goes back where it was
+   * in a pane before it moved into the notice, caret included. Else to the end
+   * of the active pane's first text block, else that pane's title, else the
+   * pane itself, never the page body.
+   * @param {{element: Element|null, range: Range|null}|null} returnFocus
+   * @returns {void}
+   */
+  focusAfterExportNotice(returnFocus) {
+    const previous = /** @type {HTMLElement|null} */ (returnFocus && returnFocus.element);
+    if (previous && previous.isConnected && previous.closest('.editor-pane')) {
+      previous.focus();
+      const selection = document.getSelection();
+      if (returnFocus.range && selection) {
+        selection.removeAllRanges();
+        selection.addRange(returnFocus.range);
+      }
+      return;
+    }
+    const editor = this.getEditor();
+    const textBlock = editor.blocks.find((block) => {
+      const element = editor.getBlockElement(block.id);
+      return Boolean(element && element.querySelector('.block-content'));
+    });
+    if (textBlock) {
+      editor.focusBlock(textBlock.id, true);
+    } else if (editor.noteId) {
+      editor.titleEl.focus();
+    } else {
+      editor.root.setAttribute('tabindex', '-1');
+      editor.root.focus();
     }
   }
 
@@ -612,6 +650,7 @@ class App {
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
     this.settingsController.onFlushEditors = () => this.tabController.flushEditorsForImport();
+    this.settingsController.onSaveOpenEditors = () => this.tabController.saveOpenEditors();
     this.settingsController.onReloadEditors = (trashedIds, trashedAt) =>
       this.tabController.reloadEditorsAfterImport(trashedIds, trashedAt);
     this.settingsController.onApplyTheme = () => this.applyTheme();

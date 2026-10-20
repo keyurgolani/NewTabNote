@@ -130,12 +130,157 @@ describe('Merging a profile\'s own export (AC3)', () => {
 });
 
 describe('Data & Backup hint (AC5)', () => {
-  it('lists what exports include and leave out', () => {
+  it('lists what exports include and leave out, from the text the export notice uses', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'newtab.html'), 'utf8');
-    const section = html.slice(html.indexOf('<h3>Export &amp; Import</h3>'), html.indexOf('<h3>Auto Backup</h3>'));
-    assert.ok(section.includes('<p class="setting-hint" id="export-contents-hint">Export JSON and Create Backup include '
+    // The element with that id, whatever its tag and the order of its attributes
+    const hint = html.match(/<([a-z][a-z0-9]*)\b[^>]*\bid="export-contents-hint"[^>]*>([\s\S]*?)<\/\1>/);
+    assert.ok(hint, 'newtab.html has #export-contents-hint');
+    assert.equal(hint[2], '', 'App.init fills it');
+    assert.ok(html.indexOf('<h3>Export &amp; Import</h3>') < hint.index && hint.index < html.indexOf('<h3>Auto Backup</h3>'),
+      'in Data & Backup, under Export & Import');
+    const env = createLegacyEnv();
+    env.load('js/ui/export-notice.js');
+    assert.equal(env.get('ExportNotice').TEXT.hint, 'Export JSON and Create Backup include '
       + 'active and archived notes, templates, folders, and media. Not included: trash, themes, version history, '
       + 'AI chat history, and settings. The Markdown ZIP holds active notes only. Backlinks rebuild when each note is '
-      + 'next saved.</p>'));
+      + 'next saved.');
+  });
+});
+
+describe('Export JSON as a file (exportAllAsBlob)', () => {
+  // Images and files live in their blocks as data URLs (the upload buttons
+  // write them uncompressed); only import writes the media store.
+  const UPLOADS = 16;
+  const UPLOAD_BYTES = 96 * 1024;
+  const dataUrl = (type, fill) => `data:${type};base64,${Buffer.alloc(UPLOAD_BYTES, fill).toString('base64')}`;
+  const imageUrl = (i) => dataUrl('image/png', i);
+  const fileData = (i) => dataUrl('application/pdf', 100 + i);
+  const MEDIA_ROWS = 3;
+  const mediaBytes = (i) => Buffer.alloc(8 * 1024, 200 + i);
+  /** The longest string one record needs: a block with its upload, and its other fields */
+  const RECORD_CAP = imageUrl(0).length + 1024;
+
+  /** One note with UPLOADS images and UPLOADS files in its blocks, plus media rows, an archived note, a template, and a folder */
+  async function uploadsProfile() {
+    const env = createLegacyEnv();
+    const elements = [block('p0', 'photos', 0, 'first')];
+    for (let i = 0; i < UPLOADS; i++) {
+      elements.push(block(`img${i}`, 'photos', 1 + 2 * i, '', { type: 'image', imageUrl: imageUrl(i) }));
+      elements.push(block(`file${i}`, 'photos', 2 + 2 * i, '', {
+        type: 'file', fileName: `scan-${i}.pdf`, fileSize: UPLOAD_BYTES, fileData: fileData(i),
+      }));
+    }
+    elements.push(block('k1', 'kept', 0, 'kept'));
+    const media = [];
+    for (let i = 0; i < MEDIA_ROWS; i++) {
+      media.push({ id: `m${i}`, canvasId: 'photos', blob: new Blob([mediaBytes(i)], { type: 'image/png' }), type: 'image/png', createdAt: i });
+    }
+    await createDatabase(env.indexedDB, {
+      records: {
+        folders: [{ id: 'F1', name: 'Trips', parentId: null, createdAt: 1, updatedAt: 1, color: null, collapsed: false }],
+        canvases: [
+          note('photos', { name: 'Photos', folderId: 'F1' }),
+          note('kept', { name: 'Kept', archived: true, archivedAt: 1 }),
+          note('template', { name: 'Template', isTemplate: true }),
+        ],
+        elements,
+        media,
+      },
+    });
+    env.load(...FILES);
+    await env.get('Storage').init();
+    return env;
+  }
+
+  /** Record the size in bytes of each part of each Blob the page's code builds; `instanceof Blob` still holds for every Blob */
+  function watchBlobs(env) {
+    const built = [];
+    env.global.Blob = new Proxy(Blob, {
+      construct(target, args) {
+        built.push(Array.from(args[0] || [], (part) => (typeof part === 'string' ? Buffer.byteLength(part) : part.size)));
+        return Reflect.construct(target, args);
+      },
+    });
+    return built;
+  }
+
+  /** Count how many media rows are being encoded at once */
+  function watchEncoding(env) {
+    const Utils = env.get('Utils');
+    const encode = Utils.readFileAsDataURL.bind(Utils);
+    const seen = { now: 0, most: 0, total: 0 };
+    Utils.readFileAsDataURL = async (file) => {
+      seen.now += 1;
+      seen.total += 1;
+      seen.most = Math.max(seen.most, seen.now);
+      try {
+        return await encode(file);
+      } finally {
+        seen.now -= 1;
+      }
+    };
+    return seen;
+  }
+
+  it('holds the same JSON as exportAll, without indentation, with extra fields last', async () => {
+    const env = await uploadsProfile();
+    const Storage = env.get('Storage');
+    const file = await Storage.exportAllAsBlob({ backupType: 'full-backup', backupVersion: 1 });
+    assert.equal(file.type, 'application/json');
+    const text = await file.text();
+    assert.ok(!text.includes('\n'), 'no indentation');
+    const parsed = JSON.parse(text);
+    assert.deepEqual(Object.keys(parsed), ['version', 'exportedAt', 'canvases', 'elements', 'media', 'folders', 'backupType', 'backupVersion']);
+    const { exportedAt, backupType, backupVersion, ...rest } = parsed;
+    assert.equal(typeof exportedAt, 'number');
+    assert.deepEqual([backupType, backupVersion], ['full-backup', 1]);
+    const { exportedAt: objectTime, ...object } = plain(await Storage.exportAll());
+    assert.equal(typeof objectTime, 'number');
+    assert.deepEqual(rest, object);
+    assert.equal(rest.elements.length, 2 + 2 * UPLOADS);
+    assert.equal(rest.media.length, MEDIA_ROWS);
+  });
+
+  it('writes each record on its own, so no string holds more than one block\'s upload', async () => {
+    const env = await uploadsProfile();
+    const built = watchBlobs(env);
+    const seen = watchEncoding(env);
+    const file = await env.get('Storage').exportAllAsBlob();
+
+    assert.equal(built.length, 1);
+    const [parts] = built;
+    assert.equal(parts.reduce((sum, length) => sum + length, 0), file.size);
+    assert.ok(file.size > 20 * RECORD_CAP, 'the file is many records long');
+    assert.ok(Math.max(...parts) <= RECORD_CAP, `the longest part was ${Math.max(...parts)} bytes, over ${RECORD_CAP}`);
+    assert.deepEqual([seen.total, seen.most], [MEDIA_ROWS, 1], 'media rows are encoded one at a time');
+  });
+
+  it('imports with Replace all into an empty profile with every image and file intact', async () => {
+    const source = await uploadsProfile();
+    const text = await (await source.get('Storage').exportAllAsBlob()).text();
+
+    const target = createLegacyEnv();
+    target.load(...FILES);
+    const Storage = target.get('Storage');
+    await Storage.init();
+    await Storage.importData(JSON.parse(text), 'replace');
+    const dump = await dumpDatabase(target.indexedDB);
+    const notes = Object.values(recordsOf(dump, 'canvases'));
+    assert.deepEqual(notes.map((n) => n.name).sort(), ['Kept', 'Photos', 'Template']);
+    const photos = notes.find((n) => n.name === 'Photos');
+    assert.equal(photos.folderId, 'F1');
+
+    const blocks = Object.values(recordsOf(dump, 'elements')).filter((e) => e.canvasId === photos.id).sort((a, b) => a.order - b.order);
+    assert.equal(blocks.length, 1 + 2 * UPLOADS);
+    for (let i = 0; i < UPLOADS; i++) {
+      assert.equal(blocks[1 + 2 * i].imageUrl, imageUrl(i), `image ${i}`);
+      assert.equal(blocks[2 + 2 * i].fileData, fileData(i), `file ${i}`);
+    }
+    const media = Object.values(recordsOf(dump, 'media')).sort((a, b) => a.createdAt - b.createdAt);
+    assert.equal(media.length, MEDIA_ROWS);
+    media.forEach((row, i) => {
+      assert.equal(row.canvasId, photos.id);
+      assert.deepEqual(row.blob, { __blob: mediaBytes(i).toString('base64'), type: 'image/png' }, `media row ${i}`);
+    });
   });
 });

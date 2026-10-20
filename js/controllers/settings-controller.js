@@ -35,6 +35,8 @@ class SettingsController {
     this.onRenderNotesList = null;
     this.onUpdateSmartSuggestions = null;
     this.onRenderAIPromptTemplateSettings = null;
+    /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
+    this.onSaveOpenEditors = null;
     /** @type {function|null} */
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */
@@ -582,22 +584,40 @@ class SettingsController {
   // ─── Export / Import / Backup ───
 
   /**
-   * Export JSON: download Storage.exportAll() as a file.
+   * Export JSON: download the full export (Storage.exportAllAsBlob) as a file,
+   * after the open editors have written their pending edits.
    * @returns {Promise<boolean>} True once the file is handed to the browser
    */
   async exportAll() {
     try {
-      const data = await this.storage.exportAll();
-      const json = JSON.stringify(data, null, 2);
+      if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
+      const file = await this.storage.exportAllAsBlob();
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-export-${timestamp}.json`);
-      Utils.showToast('All notes exported as JSON', 'success');
-      await this.storage.setSetting('lastBackupAt', Date.now());
-      return true;
+      Utils.downloadFile(file, `new-tab-note-export-${timestamp}.json`);
     } catch (error) {
       console.error('Export failed:', error);
       Utils.showToast('Export failed', 'error');
       return false;
+    }
+    Utils.showToast('All notes exported as JSON', 'success');
+    await this._afterFullExport({ backup: true });
+    return true;
+  }
+
+  /**
+   * Once a full export (Export JSON, Create Backup) is the browser's: the
+   * receipt the export notice listens for, and for Export JSON the time auto
+   * backup counts from. Best-effort, since the file is already handed over.
+   * @param {{backup?: boolean}} [what]
+   * @returns {Promise<void>}
+   */
+  async _afterFullExport({ backup = false } = {}) {
+    const at = Date.now();
+    try {
+      await this.storage.setSetting('lastFullExportAt', at);
+      if (backup) await this.storage.setSetting('lastBackupAt', at);
+    } catch (error) {
+      console.warn('The export was handed to the browser, but its time was not saved:', error);
     }
   }
 
@@ -676,22 +696,29 @@ class SettingsController {
     }
   }
 
+  /**
+   * Create Backup: the full export with backup fields, downloaded as a file,
+   * after the open editors have written their pending edits.
+   * @returns {Promise<boolean>} True once the file is handed to the browser
+   */
   async createBackup() {
     try {
-      const data = await this.storage.exportAll();
-
-      data.backupType = 'full-backup';
-      data.backupCreatedAt = new Date().toISOString();
-      data.backupVersion = 1;
-
-      const json = JSON.stringify(data, null, 2);
+      if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
+      const file = await this.storage.exportAllAsBlob({
+        backupType: 'full-backup',
+        backupCreatedAt: new Date().toISOString(),
+        backupVersion: 1,
+      });
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-backup-${timestamp}.json`);
-      Utils.showToast('Backup created', 'success');
+      Utils.downloadFile(file, `new-tab-note-backup-${timestamp}.json`);
     } catch (error) {
       console.error('Backup failed:', error);
       Utils.showToast('Backup failed', 'error');
+      return false;
     }
+    Utils.showToast('Backup created', 'success');
+    await this._afterFullExport();
+    return true;
   }
 
   /**
