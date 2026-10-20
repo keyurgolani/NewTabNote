@@ -3,21 +3,26 @@
 // test/known-defects.json and the expected failures match both ways: each test the ledger
 // lists exists as an expected failure, and each expected failure is listed under the id its
 // title carries. Harness tests come from Playwright's listing, which needs no browser, and
-// node tests from the expectFailure() calls in test/.
+// node tests from the expectFailure() calls in test/. A test.fail() made while a test runs
+// doesn't show in the listing; e2e/harness/expected-failures.js checks those as they run,
+// and expectFailure() checks its own title when it's called. The last tests here check both.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { loadKnownDefects } = require('../e2e/harness/known-defects.js');
-const { runExpectedFailure } = require('./helpers/expect-failure.js');
+const { expectFailure, runExpectedFailure } = require('./helpers/expect-failure.js');
 
 const ROOT = path.join(__dirname, '..');
 const TEST_DIR = __dirname;
+const PLAYWRIGHT_CLI = require.resolve('@playwright/test/cli');
 const ID = /\bKD-\d{3}\b/;
-// An expectFailure( call whose title is a string literal that starts with a ledger id
-const NODE_CALL = /\bexpectFailure\(\s*(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\$]|\\.|\$(?!\{))*)`)/g;
+// An expectFailure( call whose title is one string literal, quotes included
+const NODE_CALL = /\bexpectFailure\(\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.|\$(?!\{))*`)/g;
 
 /**
  * Every harness test as { title, file, expectedFailure }, from
@@ -25,8 +30,7 @@ const NODE_CALL = /\bexpectFailure\(\s*(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\
  * with test.fail(title, body) carries a `fail` annotation before it runs.
  */
 function harnessTests() {
-  const cli = require.resolve('@playwright/test/cli');
-  const output = execFileSync(process.execPath, [cli, 'test', '--list', '--reporter=json', '-c', 'e2e/playwright.config.js'], {
+  const output = execFileSync(process.execPath, [PLAYWRIGHT_CLI, 'test', '--list', '--reporter=json', '-c', 'e2e/playwright.config.js'], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -52,7 +56,7 @@ function harnessTests() {
 
 /**
  * Every expectFailure() call under test/ whose title is a literal starting with an id, as
- * { title, file }
+ * { title, file }. The literal is evaluated, so its escapes read as JavaScript reads them.
  */
 function nodeExpectedFailures(dir = TEST_DIR) {
   const found = [];
@@ -61,9 +65,8 @@ function nodeExpectedFailures(dir = TEST_DIR) {
     if (entry.isDirectory()) {
       found.push(...nodeExpectedFailures(file));
     } else if (entry.name.endsWith('.js')) {
-      for (const match of fs.readFileSync(file, 'utf8').matchAll(NODE_CALL)) {
-        const literal = [match[1], match[2], match[3]].find(group => group !== undefined);
-        const title = literal.replace(/\\(.)/gs, '$1');
+      for (const [, literal] of fs.readFileSync(file, 'utf8').matchAll(NODE_CALL)) {
+        const title = vm.runInNewContext(literal);
         if (/^KD-\d{3}\b/.test(title)) found.push({ title, file: path.relative(ROOT, file) });
       }
     }
@@ -103,9 +106,11 @@ test('each harness test.fail() and each test carrying an id is listed under that
       continue;
     }
     if (listedAs.get(title) !== carried[0]) {
-      problems.push(`${file}: "${title}" isn't listed under ${carried[0]} in test/known-defects.json`);
+      problems.push(expectedFailure === false
+        ? `${file}: "${title}" carries ${carried[0]} but no test/known-defects.json entry lists it; drop the id from the title if it's fixed`
+        : `${file}: "${title}" is expected to fail but test/known-defects.json doesn't list it under ${carried[0]}`);
     } else if (expectedFailure === false) {
-      problems.push(`${file}: "${title}" carries ${carried[0]} but isn't declared with test.fail(title, body)`);
+      problems.push(`${file}: "${title}" is listed under ${carried[0]} but isn't declared with test.fail(title, body); if it's fixed, delete the entry and drop the id from the title`);
     }
   }
   assert.deepEqual(problems, []);
@@ -119,15 +124,18 @@ test('the scans find the expected failures in both tiers', () => {
   assert.ok(listed.every(title => harness.some(t => t.title === title) || node.some(t => t.title === title)));
 });
 
-test('the node scan reads single-, double-, and back-quoted titles, escapes included', () => {
-  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ntn-known-defects-scan-'));
+test('the node scan reads each kind of string literal as JavaScript does', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-known-defects-scan-'));
   try {
     // CALL stands in for the helper's name, so the scan of this file doesn't find these
     const source = [
       "CALL('KD-901 single \\'quoted\\'', () => {});",
       'CALL("KD-902 double \\"quoted\\" today\'s", () => {});',
       'CALL(`KD-903 back-quoted`, () => {});',
-      'CALL(`KD-904 ${"template"}`, () => {});',
+      "CALL('KD-904 caf\\u00e9 and two\\nlines', () => {});",
+      // Built at run time, so expectFailure() checks these itself when it's called
+      'CALL(`KD-905 ${"template"}`, () => {});',
+      'CALL(title, () => {});',
       "CALL('not a ledger title', () => {});",
       'function CALL(title, body) {}',
     ].join('\n').replaceAll('CALL', 'expectFailure');
@@ -136,6 +144,7 @@ test('the node scan reads single-, double-, and back-quoted titles, escapes incl
       "KD-901 single 'quoted'",
       'KD-902 double "quoted" today\'s',
       'KD-903 back-quoted',
+      'KD-904 café and two\nlines',
     ]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -144,9 +153,59 @@ test('the node scan reads single-, double-, and back-quoted titles, escapes incl
 
 test('expectFailure() passes on a failed assertion, and fails when the step passes or throws anything else', async () => {
   assert.equal(await runExpectedFailure('KD-900', () => assert.equal(1, 2)), 'Expected values to be strictly equal: got 1');
+  assert.equal(await runExpectedFailure('KD-900', () => assert.fail('a written message')), 'a written message');
   await assert.rejects(runExpectedFailure('KD-900', () => {}), {
     name: 'AssertionError',
     message: /^KD-900 passed, so its defect looks fixed: delete its entry from test\/known-defects.json/,
   });
   await assert.rejects(runExpectedFailure('KD-900', async () => { throw new TypeError('broken step'); }), { name: 'TypeError', message: 'broken step' });
+});
+
+test('expectFailure() refuses a title the ledger does not list, however the title is built', () => {
+  const unlisted = ['KD-002 a step the ledger never listed', `KD-${900 + 99} a step under an id with no entry`];
+  for (const title of unlisted) {
+    assert.throws(() => expectFailure(title, () => {}), /^Error: expectFailure: test\/known-defects.json doesn't list ".*" under KD-\d{3}/);
+  }
+});
+
+test('the reporter fails a run whose expected failures the ledger does not match, test.fail() in any form', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-expected-failures-'));
+  try {
+    const evidence = 'https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/search.js#L75-L77';
+    fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify({
+      defects: [{ id: 'KD-950', ownerIssue: 22, evidence, tests: ['KD-950 a listed expected failure', 'KD-950 listed but plain'] }],
+    }));
+    fs.writeFileSync(path.join(dir, 'cases.spec.js'), [
+      `const { test, expect } = require(${JSON.stringify(require.resolve('@playwright/test'))});`,
+      "test.fail('KD-950 a listed expected failure', () => { expect(1).toBe(2); });",
+      "test('KD-951 marked in its body', () => { test.fail(); expect(1).toBe(2); });",
+      "test('marked when a condition holds', () => { test.fail(true, 'known'); expect(1).toBe(2); });",
+      "test.describe('a hook', () => { test.beforeEach(() => { test.fail(); }); test('marked by a beforeEach', () => { expect(1).toBe(2); }); });",
+      "test('KD-952 a fixed defect', () => {});",
+      "test('KD-950 listed but plain', () => {});",
+      "test('a plain test', () => {});",
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'playwright.config.js'), `module.exports = ${JSON.stringify({
+      testDir: dir,
+      outputDir: path.join(dir, 'results'),
+      workers: 1,
+      reporter: [[path.join(ROOT, 'e2e', 'harness', 'expected-failures.js'), { ledger: path.join(dir, 'ledger.json') }]],
+    })};\n`);
+
+    const run = spawnSync(process.execPath, [PLAYWRIGHT_CLI, 'test', '-c', path.join(dir, 'playwright.config.js')], { cwd: dir, encoding: 'utf8' });
+    assert.equal(run.status, 1, `the run should fail:\n${run.stdout}\n${run.stderr}`);
+    const flagged = run.stderr.split('\n').filter(line => line.startsWith('  cases.spec.js:')).map(line => line.replace(/^  cases\.spec\.js:\d+: /, ''));
+    assert.deepEqual(flagged, [
+      `"KD-951 marked in its body" is expected to fail but test/known-defects.json doesn't list it under KD-951`,
+      '"marked when a condition holds" is expected to fail but carries no ledger id; add a test/known-defects.json entry and put its id in the title',
+      '"marked by a beforeEach" is expected to fail but carries no ledger id; add a test/known-defects.json entry and put its id in the title',
+      `"KD-952 a fixed defect" carries KD-952 but no test/known-defects.json entry lists it; drop the id from the title if it's fixed`,
+      '"KD-950 listed but plain" is listed under KD-950 but wasn\'t expected to fail; declare it with test.fail(title, body), or if it\'s fixed delete the entry and drop the id from the title',
+    ]);
+    // The four expected failures leave no error-context.md behind
+    const leftovers = fs.readdirSync(path.join(dir, 'results'), { recursive: true }).filter(file => path.basename(String(file)) === 'error-context.md');
+    assert.deepEqual(leftovers, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
