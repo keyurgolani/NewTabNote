@@ -185,6 +185,18 @@ Pure modules with `node:test` suites and no I/O. Callers pass in reads and write
 - `js/product/placement.js`: `Placement`, `placementOf`, and the verb contracts.
 - Module format follows #12's stack ADR (`docs/adr/0001-kernel-stack.md`) once it lands, else [`js/sidebar-utils.js`][sidebar-utils]. The first page to load the modules adds them to [`JS_FILES`][js-files] until #27 replaces it.
 
+Slice 2 builds them as ES modules with JSDoc types, per the ADR. `js/product/validation.js` holds the checks both modules share, and `js/product/package.json` sets `"type": "module"` for Node and isn't shipped. Where the rules above leave a choice, the modules make it like this:
+
+- `resolveLaunch` also returns `notice`: `unknown-route` when an unknown route opened the aperture's default destination, `invalid-preference` when the default came from a malformed record, else null. An unknown aperture, or a query with anything besides one `note`, counts as no URL. `pane` is null for a Moment session, and for a new tab that followed the default.
+- A Workspace session always has a route and a layout. With no snapshot, the layout starts empty.
+- A load that starts a new Workspace instance from a URL enters Workspace the way Open Workspace does. The URL's note becomes the active tab of a copy of the snapshot, and with no `?note=` the canvas takes that copy's active document. A Workspace URL applied over a saved session keeps that session's layout as it is.
+- A canvas note that isn't open becomes the last document tab, where 1.4.0's `openNoteInNewTab` puts it.
+- `homeRoute` is `homeRouteOf(placementOf(note, folderIds))` for the note `noteOnOpenWorkspace(session, layoutSnapshot)` returns: Trash, Archive, or Templates for those states, else Inbox, Daily, or Projects by placement.
+- `resolveOpenNote` also takes the current `windowId` and the note's `homeRoute`. It matches only `newtab.html` tabs, takes the latest `lastAccessed` when several match, and opens a new Workspace tab at `homeRoute`, else Inbox.
+- `seedWorkspaceLayout` keeps the active tab on its note when the note survives. `loadSavedTabs` reapplies the old index after dropping tabs, which can land on another tab. When the active note is gone, the next kept tab takes its place, else the last.
+- `placementOf` also returns `dailyKey`, a Daily Note's date wherever it's placed, and `findings` for #17's migration: `stale-folder` and `daily-without-date`. A falsy `folderId` is a root note, as 1.4.0's sidebar treats it.
+- Create takes a Moment capture into Inbox only, and never creates in Daily. A Daily Note only comes from an append to a daily target, found or created, so a date never gets two. `localDateKey` gives that target's local key, where 1.4.0's `dateStr` is the UTC date.
+
 Tests:
 
 - `npm test` picks up `test/topology.test.js`, `test/placement.test.js`, and `test/feature-parity.test.js` through its `node --test test/*.test.js` glob ([`package.json` L6-L14][npm-scripts]).
