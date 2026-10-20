@@ -8,7 +8,7 @@
 
 import * as v from '../../../../lib/valibot/index.mjs';
 import { blockInput } from '../entities.js';
-import { content, entityId, revision } from '../fields.js';
+import { content, count, entityId, revision } from '../fields.js';
 import { commandPayload } from '../operation.js';
 import { outcomeSchema } from '../outcome-schemas.js';
 
@@ -16,7 +16,7 @@ export const payload = commandPayload('saveNoteContent', {
   noteId: entityId('note'),
   blocks: v.array(blockInput),
   preview: v.optional(content(v.string())),
-  todoProgress: v.optional(v.nullable(v.looseObject({ completed: v.number(), total: v.number() }))),
+  todoProgress: v.optional(v.nullable(v.strictObject({ completed: count, total: count }))),
   expectedRevision: v.optional(revision),
 });
 

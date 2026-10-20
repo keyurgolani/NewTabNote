@@ -6,6 +6,8 @@
  *
  * Content (note text, titles, previews, insights, and a captured page's URL and title)
  * travels only in a field marked with content(), and such a field is never logged or counted.
+ * test/kernel/contract-schema-lint.test.mjs holds payloads and frames to that: outside
+ * content, a string has a bound, a URL has no place, and nothing is untyped or loose.
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
