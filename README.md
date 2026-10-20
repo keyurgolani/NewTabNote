@@ -76,6 +76,8 @@ Most "New Tab" extensions are either too simple or cluttered with ads. NewTabNot
 6. Click **"Load unpacked"** and select the `dist` folder
 7. Open a new tab to start using NewTabNote
 
+After a rebuild, click **Reload** on the extension in `chrome://extensions/`. Starting Chrome on changed files can leave a new service worker waiting until the next restart.
+
 ---
 
 ## 🛠 Development
