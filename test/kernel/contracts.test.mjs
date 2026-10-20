@@ -127,30 +127,54 @@ describe('outcomes', () => {
 });
 
 describe('clone', () => {
-  it('copies plain objects, arrays, Dates, and primitives, nested', () => {
-    const value = { a: [1, 'two', null, undefined, { b: true }], at: new Date(5), nested: { deep: { n: -0 } } };
+  it('copies plain objects, arrays, and primitives, nested', () => {
+    const value = { a: [1, 'two', null, undefined, { b: true }], at: 5, nested: { deep: { n: -0 } } };
     const copy = clone(value);
     assert.deepEqual(copy, value);
     assert.notEqual(copy.a, value.a);
-    assert.notEqual(copy.at, value.at);
-    assert.ok(copy.at instanceof Date);
+    assert.notEqual(copy.nested.deep, value.nested.deep);
     assert.equal(copy.a.length, 5);
   });
 
   it("copies another realm's plain objects, as the legacy scripts make them", () => {
-    const foreign = vm.runInNewContext('({ list: [1, 2], when: new Date(3) })');
+    const foreign = vm.runInNewContext('({ list: [1, 2], when: 3, nested: { ok: true } })');
     assert.deepEqual(JSON.stringify(clone(foreign)), JSON.stringify(foreign));
   });
 
-  it('refuses what structured clone refuses, and what the kernel never stores', () => {
+  it("refuses what #13's JSON codec refuses, and what the kernel never stores", () => {
     const cycle = /** @type {Record<string, unknown>} */ ({});
     cycle.self = cycle;
     class Note {}
-    for (const value of [() => 1, Symbol('x'), cycle, { at: new Note() }, new Map(), [Promise.resolve()]]) {
-      assert.throws(() => clone(value), NotCloneableError);
+    const foreignDate = vm.runInNewContext('new Date(3)');
+    for (const value of [
+      () => 1,
+      Symbol('x'),
+      cycle,
+      { at: new Note() },
+      new Map(),
+      [Promise.resolve()],
+      new Date(5),
+      { at: foreignDate },
+      10n,
+      { count: 10n },
+      NaN,
+      [Infinity],
+      { offset: -Infinity },
+    ]) {
+      assert.throws(() => clone(value), NotCloneableError, String(typeof value));
     }
     // The same object twice is fine, as long as it doesn't contain itself
     const shared = { x: 1 };
     assert.deepEqual(clone({ a: shared, b: shared }), { a: { x: 1 }, b: { x: 1 } });
+  });
+
+  it('copies an own __proto__ key, as JSON.parse makes it, as data, and keeps the prototype', () => {
+    const text = '{"__proto__":{"polluted":true},"a":{"__proto__":1}}';
+    const copy = /** @type {Record<string, any>} */ (clone(JSON.parse(text)));
+    assert.equal(Object.getPrototypeOf(copy), Object.prototype);
+    assert.ok(Object.hasOwn(copy, '__proto__'));
+    assert.equal(copy.polluted, undefined);
+    assert.ok(Object.hasOwn(copy.a, '__proto__'));
+    assert.equal(JSON.stringify(copy), text);
   });
 });
