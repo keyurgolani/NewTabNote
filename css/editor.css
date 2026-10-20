@@ -5680,3 +5680,58 @@ kbd {
   min-width: 44px;
   min-height: 44px;
 }
+
+/* One-time notice to export before the storage upgrade (js/ui/export-notice.js), above the note */
+.export-notice-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  margin-bottom: var(--spacing-xl);
+  padding: 16px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.export-notice-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.export-notice-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.export-notice-body,
+.export-notice-contents {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.export-notice-contents {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.export-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.export-notice-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.export-notice-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}

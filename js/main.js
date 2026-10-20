@@ -23,6 +23,7 @@ import './utils/sanitize.js';
 import './ui/confirm-dialog.js';
 import './ui/formatting-toolbar.js';
 import './ui/graph-view.js';
+import './ui/export-notice.js';
 
 // Data & Services
 import './storage.js';

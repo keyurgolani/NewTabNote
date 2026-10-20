@@ -581,6 +581,10 @@ class SettingsController {
 
   // ─── Export / Import / Backup ───
 
+  /**
+   * Export JSON: download Storage.exportAll() as a file.
+   * @returns {Promise<boolean>} True once the file is handed to the browser
+   */
   async exportAll() {
     try {
       const data = await this.storage.exportAll();
@@ -589,9 +593,11 @@ class SettingsController {
       Utils.downloadFile(json, `new-tab-note-export-${timestamp}.json`);
       Utils.showToast('All notes exported as JSON', 'success');
       await this.storage.setSetting('lastBackupAt', Date.now());
+      return true;
     } catch (error) {
       console.error('Export failed:', error);
       Utils.showToast('Export failed', 'error');
+      return false;
     }
   }
 

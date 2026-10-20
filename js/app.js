@@ -216,8 +216,12 @@ class App {
 
       // Check if we have notes to display
       const hasCompletedOnboarding = await Onboarding.hasCompleted();
+      // Counted before a first note exists: the export notice is for profiles that already had notes
+      const hadNotes = this.notes.length + this.archivedNotes.length + this.templates.length > 0;
+      let firstRun = false;
       if (this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding) {
         // First-run: show onboarding walkthrough
+        firstRun = true;
         await this.runOnboarding();
       } else if (this.notes.length === 0 && this.archivedNotes.length === 0) {
         // Returning user with no notes
@@ -236,6 +240,7 @@ class App {
 
       this.updateEmptyState();
       this.updateBadgeCounts();
+      await this.showExportNoticeIfDue({ hadNotes, ranOnboarding: firstRun });
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
@@ -262,6 +267,31 @@ class App {
       } else {
         this.showErrorState(error);
       }
+    }
+  }
+
+  /**
+   * The one-time notice to export a copy before the next update changes how
+   * notes are stored (js/ui/export-notice.js), at the top of the writing
+   * column. Nothing here stops the new tab from starting.
+   * @param {{hadNotes: boolean, ranOnboarding: boolean}} startup
+   * @returns {Promise<void>}
+   */
+  async showExportNoticeIfDue(startup) {
+    try {
+      const column = document.getElementById('editor');
+      if (!column || !(await ExportNotice.isDue(appStorage(), startup))) return;
+      const notice = new ExportNotice({
+        storage: appStorage(),
+        onExport: () => this.settingsController.exportAll(),
+        onClose: () => {
+          const block = /** @type {HTMLElement|null} */ (column.querySelector('.block-content'));
+          if (block) block.focus();
+        },
+      });
+      notice.show(column);
+    } catch (error) {
+      console.error('Export notice failed to show:', error);
     }
   }
 
