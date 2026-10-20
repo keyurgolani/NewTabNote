@@ -9,6 +9,10 @@
  * register. A kernel file missing from dist/ breaks the module graph and boots a blank new
  * tab, so CI runs this on the build the extension job tests.
  *
+ * Every module under #13's contract and messaging directories, and Valibot's build, must be
+ * in the build too, whether or not anything reached from a page or the worker imports it yet
+ * (#13, AC7). A missing one would break whichever context loads it next.
+ *
  *   npm run check:dist                 check dist/
  *   node scripts/check-dist.js <dir>   check another build
  */
@@ -18,6 +22,37 @@ const path = require('path');
 const { readScriptGraph } = require('./lib/script-graph');
 
 const ROOT_DIR = path.join(__dirname, '..');
+
+/** Source directories whose every .js and .mjs file must be in the build (#13, AC7) */
+const SHIPPED_DIRS = [
+  'js/kernel/core/contracts/',
+  'js/kernel/core/messaging/',
+  'js/kernel/adapters/messaging/',
+  'js/lib/valibot/',
+];
+
+/**
+ * Every .js and .mjs file under `dir` in `root`, relative to `root` and sorted, or none when
+ * the directory doesn't exist yet
+ */
+function modulesUnder(root, dir) {
+  const top = path.join(root, dir);
+  if (!fs.existsSync(top)) return [];
+  return fs.readdirSync(top, { withFileTypes: true }).flatMap(entry => {
+    const file = `${dir}${entry.name}`;
+    if (entry.isDirectory()) return modulesUnder(root, `${file}/`);
+    return /\.m?js$/.test(entry.name) ? [file] : [];
+  }).sort();
+}
+
+/**
+ * The SHIPPED_DIRS modules in `root`'s sources that the build in `dir` lacks
+ */
+function missingModules(dir, root = ROOT_DIR) {
+  return SHIPPED_DIRS.flatMap(shipped => modulesUnder(root, shipped)
+    .filter(file => !fs.existsSync(path.join(dir, file)))
+    .map(file => ({ message: `${file} is missing; every module under ${shipped} ships, imported yet or not` })));
+}
 
 function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -35,9 +70,9 @@ function pagesIn(dir, prefix = '') {
 }
 
 /**
- * Check the build in `dir`. Returns the exit code.
+ * Check the build in `dir`, built from the sources in `sources`. Returns the exit code.
  */
-function main(argv = process.argv.slice(2), { log = console.log, error = console.error } = {}) {
+function main(argv = process.argv.slice(2), { log = console.log, error = console.error, sources = ROOT_DIR } = {}) {
   if (argv.length > 1 || argv.some(arg => arg.startsWith('-'))) {
     error('usage: node scripts/check-dist.js [dir]');
     return 2;
@@ -51,9 +86,10 @@ function main(argv = process.argv.slice(2), { log = console.log, error = console
   }
 
   const graph = readScriptGraph(dir, { pages: pagesIn(dir), inspectClassic: true });
-  if (graph.problems.length > 0) {
-    error(`check:dist failed: ${plural(graph.problems.length, 'problem')} in ${name}/`);
-    graph.problems.forEach(({ message }) => error(`  - ${message}`));
+  const problems = [...graph.problems, ...missingModules(dir, sources)];
+  if (problems.length > 0) {
+    error(`check:dist failed: ${plural(problems.length, 'problem')} in ${name}/`);
+    problems.forEach(({ message }) => error(`  - ${message}`));
     return 1;
   }
 
@@ -70,4 +106,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = { main, pagesIn };
+module.exports = { main, pagesIn, SHIPPED_DIRS, missingModules };
