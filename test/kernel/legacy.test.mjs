@@ -52,6 +52,58 @@ const settingWrites = page =>
  */
 const assertKind = (outcome, kind) => assert.equal(outcome.kind, kind, JSON.stringify(outcome));
 
+/**
+ * Waits for `upgrade`, or a second, whichever comes first. When `holder`'s connection is still
+ * blocking it then, this closes that connection and waits for the upgrade, so a regression
+ * fails a test instead of hanging the run.
+ * @param {Promise<unknown>} upgrade
+ * @param {LegacyContext} holder - the context whose open connection could block it
+ * @returns {Promise<'opened' | 'blocked'>}
+ */
+async function settleUpgrade(upgrade, holder) {
+  /** @type {Promise<'blocked'>} */
+  const blocked = new Promise(resolve => setTimeout(() => resolve('blocked'), 1000).unref());
+  const settled = await Promise.race([upgrade.then(() => /** @type {const} */ ('opened')), blocked]);
+  if (settled === 'blocked') {
+    holder.storage.db.close();
+    await upgrade;
+  }
+  return settled;
+}
+
+/**
+ * Records each connection `factory` opens from now on and whether it was closed, until stop()
+ * gives `factory` its own open back. A connection left open fails a test at once, where an
+ * upgrade it blocks would wait for ever.
+ * @param {IDBFactory} factory
+ * @returns {{stop: () => Array<{name: string, closed: boolean}>}}
+ */
+function recordConnections(factory) {
+  /** @type {Array<{name: string, closed: boolean}>} */
+  const connections = [];
+  const { open } = factory;
+  /** @type {any} */ (factory).open = (/** @type {string} */ name, /** @type {number | undefined} */ version) => {
+    const request = version === undefined ? open.call(factory, name) : open.call(factory, name, version);
+    request.addEventListener('success', () => {
+      const connection = { name, closed: false };
+      const db = request.result;
+      const close = db.close.bind(db);
+      db.close = () => {
+        connection.closed = true;
+        close();
+      };
+      connections.push(connection);
+    });
+    return request;
+  };
+  return {
+    stop: () => {
+      delete (/** @type {any} */ (factory).open);
+      return connections;
+    },
+  };
+}
+
 describe('the legacy adapter', () => {
   it('has a declared-gap row in the kernel ledger for each guarantee it lacks, two contexts included', () => {
     const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/architecture/kernel-ledger.json'), 'utf8'));
@@ -156,11 +208,48 @@ describe('the legacy adapter', () => {
           : legacyEnv
               .requestToPromise(panel.env.indexedDB.open('CanvasTabDB', 9))
               .then((/** @type {IDBDatabase} */ db) => db.close());
-      /** @type {Promise<string>} */
-      const blocked = new Promise(resolve => setTimeout(() => resolve('blocked'), 1000).unref());
-      assert.equal(await Promise.race([upgrade.then(() => 'opened'), blocked]), 'opened', `version ${version}`);
-      assert.equal(panel.storage.openState, 'closed', `version ${version}`);
+      assert.equal(await settleUpgrade(upgrade, panel), 'opened', `version ${version}`);
+      assert.equal(panel.storage.openState, 'version-changed', `version ${version}`);
     }
+  });
+
+  it('once another context upgrades the database, Popup and Side Panel answer reload-required, not retryable', async () => {
+    const panel = context();
+    await legacyEnv.createDatabase(panel.env.indexedDB, {
+      version: 7,
+      records: { canvases: [legacyEnv.note('n1', { name: 'Kept' })] },
+    });
+    const adapter = adapterFor(panel, 'existing');
+    const ready = adapter.open();
+    const popup = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.popup,
+      ids: testIds(),
+      clock: testClock(),
+      ready,
+    });
+    // The kernel settles a turn after the open does
+    await ready.then(() => new Promise(resolve => setImmediate(resolve)));
+    assert.equal((await popup.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+    assert.equal(await settleUpgrade(adapterFor(context(panel.env)).open(), panel), 'opened');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const quickNote = await popup.execute({ type: 'createNote', commandId: `c${attempt}`, noteId: 'n2' });
+      assert.deepEqual(
+        quickNote.kind === 'unavailable' && [
+          quickNote.cause,
+          quickNote.code,
+          quickNote.retryable,
+          quickNote.messageKey,
+        ],
+        ['storage', 'reload-required', false, 'unavailable.reload-required'],
+      );
+    }
+    assert.deepEqual(await popup.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'reload-required',
+    });
   });
 
   it('never runs startup maintenance on a database opened as it is', async () => {
@@ -188,8 +277,17 @@ describe('the legacy adapter', () => {
       });
       const before = await legacyEnv.dumpDatabase(page.env.indexedDB);
       const adapter = adapterFor(page, mode);
+      const connections = recordConnections(page.env.indexedDB);
       const ready = adapter.open();
       await assert.rejects(ready, error => /** @type {any} */ (error).unavailableCause === 'newer-schema');
+      // Every connection the refused open made is closed, so none holds up the newer build's
+      // next upgrade
+      assert.ok(connections.stop().length > 0, mode);
+      assert.deepEqual(
+        connections.stop().filter(connection => !connection.closed),
+        [],
+        `${mode}: a connection was left open`,
+      );
       const kernel = createKernel({
         adapter,
         policy: createBaselinePolicy(),

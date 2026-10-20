@@ -17,7 +17,9 @@
  * Storage.init ran it before the app did anything; its first run writes every default over
  * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
  * whatever version is on disk, with no repair, upgrade, or maintenance. A database a newer
- * build upgraded is refused either way, as `unavailable` with cause `newer-schema`.
+ * build upgraded is refused either way, as `unavailable` with cause `newer-schema`. Once
+ * another context upgrades the database, an `existing` connection closes, and every IndexedDB
+ * call answers `reload-required`, which no resend fixes: the page reloads to open it again.
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
@@ -40,6 +42,7 @@ import { UnavailableError, unavailable, unavailableFrom } from '../../core/contr
  * @property {() => Promise<void>} open
  * @property {() => Promise<void>} openExisting
  * @property {() => Promise<void>} runStartupMaintenance
+ * @property {string} openState - `version-changed` once another context upgraded a database openExisting opened
  */
 
 /**
@@ -234,6 +237,18 @@ function runUnit(storage, unit) {
  */
 export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
   /**
+   * What a failed IndexedDB call means here. Once another context upgraded the database and
+   * this page's connection closed, only a reload opens it again (#17: pages ask for a reload),
+   * so every call answers `reload-required`, which no resend fixes.
+   * @param {unknown} error
+   * @returns {UnavailableError}
+   */
+  const databaseError = error =>
+    storage.openState === 'version-changed'
+      ? new UnavailableError('storage', 'reload-required', false)
+      : storageError(error);
+
+  /**
    * @param {Work} work
    * @param {Unit[]} units
    * @returns {Promise<Outcome>}
@@ -247,7 +262,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
       }
       return work.done();
     } catch (error) {
-      return unavailableFrom(storageError(error));
+      return unavailableFrom(databaseError(error));
     }
   };
 
@@ -309,7 +324,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
         const tx = names.length > 0 ? storage.transaction(names, 'readonly') : null;
         return await body(view(storage, tx, stores));
       } catch (error) {
-        throw storageError(error);
+        throw databaseError(error);
       }
     },
 

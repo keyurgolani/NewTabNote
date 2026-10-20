@@ -85,8 +85,9 @@ class DatabaseManager {
     /**
      * 'closed' before init; 'open' after it (check missingStores for a degraded
      * database); 'newer-version' when a newer build upgraded the database;
-     * 'missing-core-stores'; or 'failed'.
-     * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'}
+     * 'missing-core-stores'; 'failed'; or 'version-changed' once another
+     * context upgraded a database openExisting() opened.
+     * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'|'version-changed'}
      */
     this.openState = 'closed';
     /** @type {number|null} Version of the database on disk, read before opening */
@@ -233,7 +234,8 @@ class DatabaseManager {
    * build upgraded is closed again, and this rejects with code NEWER_SCHEMA. A
    * database missing stores opens anyway, and transaction() refuses the
    * missing ones. The connection closes when another context upgrades the
-   * database, so it never blocks a new tab's open.
+   * database, so it never blocks a new tab's open, and openState becomes
+   * 'version-changed': only a reload opens the database again.
    * @returns {Promise<void>}
    */
   async openExisting() {
@@ -256,7 +258,7 @@ class DatabaseManager {
     }
     db.onversionchange = () => {
       db.close();
-      this.openState = 'closed';
+      this.openState = 'version-changed';
     };
     this.db = db;
     this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
