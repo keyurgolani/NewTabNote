@@ -276,11 +276,20 @@ describe('eslint.config.mjs boundary rules', () => {
       'export { probeApp, probeFetch, probeLocal };',
     ].join('\n'));
     append('js/shortcut-utils.js', "import './kernel/adapters/legacy/notes.js';");
+    // Chrome resolves a leading / from the extension root, and a chrome-extension:// URL by
+    // its path, so both reach the adapters too
+    append('js/block-placeholders.js', "import '/js/kernel/adapters/legacy/notes.js';");
+    append('js/command-palette-utils.js', "import 'chrome-extension://emildbpnneonfcanpfnafkphiflbddig/js/kernel/adapters/legacy/notes.js';");
+    append('js/resizable-panel.js', 'export const later = () => import(`./kernel/adapters/legacy/notes.js`);');
+    // An import() whose specifier isn't a fixed string can't be checked, so it counts
+    append('js/virtual-scroller.js', 'export const named = name => import(`./kernel/${name}.js`);');
     write('js/kernel/core/probe.js', [
       "import '../../storage.js';",
-      // Allowed: core itself and the vendored Valibot
+      // Allowed: core itself and the vendored Valibot, however the specifier is written
       "import { sibling } from './domain/sibling.js';",
       "import * as v from '../../lib/valibot/index.mjs';",
+      "import '/js/kernel/core/domain/sibling.js';",
+      'export const lazy = () => import(`./domain/sibling.js`);',
       'export const id = chrome.runtime.id;',
       'export const kind = typeof window;',
       'export const ok = [sibling, v, new Map(), Promise.resolve()];',
@@ -303,12 +312,16 @@ describe('eslint.config.mjs boundary rules', () => {
       'js/search.js: 1 fetch hit no ledger row covers',
       'js/search.js: 1 Storage hit no ledger row covers',
       'js/shortcut-utils.js: 1 adapter-import hit no ledger row covers',
+      'js/block-placeholders.js: 1 adapter-import hit no ledger row covers',
+      'js/command-palette-utils.js: 1 adapter-import hit no ledger row covers',
+      'js/resizable-panel.js: 1 adapter-import hit no ledger row covers',
+      'js/virtual-scroller.js: 1 adapter-import hit no ledger row covers',
       'js/kernel/core/probe.js: 1 core-import hit no ledger row covers',
       'js/kernel/core/probe.js: 2 core-global hits no ledger row covers',
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 8, output);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 12, output);
   });
 });

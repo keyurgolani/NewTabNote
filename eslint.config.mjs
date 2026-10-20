@@ -77,10 +77,36 @@ const APP_CALLBACK = {
 };
 
 /**
- * Imports resolved against the importing file: `deny` lists directories nothing may import
+ * The repository path an import specifier names, resolved the way Chrome resolves it in an
+ * extension: a leading / from the extension root, a chrome-extension:// URL by its path, and
+ * ./ or ../ from the importing file's directory. Null for a bare specifier or any other URL,
+ * which name nothing in the package.
+ */
+const packagePath = (specifier, fileDir) => {
+  let target;
+  if (/^chrome-extension:\/\//i.test(specifier)) target = path.join(ROOT, decodeURIComponent(new URL(specifier).pathname));
+  else if (/^[a-z][a-z\d+.-]*:/i.test(specifier)) return null;
+  else if (specifier.startsWith('/')) target = path.join(ROOT, specifier);
+  else if (/^\.{1,2}\//.test(specifier)) target = path.resolve(fileDir, specifier);
+  else return null;
+  return path.relative(ROOT, target).split(path.sep).join('/');
+};
+
+/**
+ * The specifier an import's source spells out: a string literal, or a template literal with
+ * no ${}. Null when it's built at run time.
+ */
+const specifierOf = source => {
+  if (source.type === 'Literal' && typeof source.value === 'string') return source.value;
+  if (source.type === 'TemplateLiteral' && source.expressions.length === 0) return source.quasis[0].value.cooked;
+  return null;
+};
+
+/**
+ * Imports checked against where they land: `deny` lists directories nothing may import
  * from, and `allow`, when given, the only directories imports may come from. Static
- * imports, `export ... from`, and import() with a string count; any other import() can't
- * be checked, so it counts too when `allow` is given.
+ * imports, `export ... from`, and import() count. An import() whose specifier is built at
+ * run time could name anything, so it always counts.
  */
 const importsRule = {
   meta: {
@@ -105,15 +131,15 @@ const importsRule = {
     const fileDir = realDir(path.dirname(context.filename));
     const check = (node, source) => {
       if (!source) return;
-      const specifier = source.type === 'Literal' && typeof source.value === 'string' ? source.value : null;
-      let blocked;
+      const specifier = specifierOf(source);
       if (specifier === null) {
-        blocked = Boolean(allow);
-      } else {
-        const resolved = path.relative(ROOT, path.resolve(fileDir, specifier)).split(path.sep).join('/');
-        const relativeSpecifier = /^(\.{1,2})?\//.test(specifier);
-        blocked = inside(resolved, deny) || Boolean(allow && (!relativeSpecifier || !inside(resolved, allow)));
+        context.report({ node, message: `[${rule}] ${message} This import() builds its specifier at run time, so it can't be checked.` });
+        return;
       }
+      const target = packagePath(specifier, fileDir);
+      const blocked = target === null
+        ? Boolean(allow)
+        : inside(target, deny) || Boolean(allow && !inside(target, allow));
       if (blocked) context.report({ node, message: `[${rule}] ${message}` });
     };
     return {
