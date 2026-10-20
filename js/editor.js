@@ -3067,11 +3067,18 @@ class BlockEditor {
   }
 
   /**
-   * Handle global paste event with smart content detection (Req 34.1–34.6)
+   * Handle global paste event with smart content detection (Req 34.1–34.6).
+   * A paste follows the rules keys do (see onGlobalKeyDown): it is one pane's,
+   * a text field outside the note keeps it, and while a modal, menu, or dialog
+   * is open only a paste with focus in this editor's own pane is the note's.
+   * That last rule reads focus, not the target: with text selected in a block,
+   * the target is that block wherever focus went.
    * @param {ClipboardEvent} e
    */
   onPaste(e) {
     if (!this._ownsDocumentEvent(e)) return;
+    if (this._inTextField(/** @type {Element} */ (e.target))) return;
+    if (!this._inOwnPane(this.doc.activeElement) && this._overlayOpen()) return;
 
     // Only handle if not in an input/textarea (unless it's our blocks)
     const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
