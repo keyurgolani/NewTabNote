@@ -1,12 +1,13 @@
 name: Release
 
 # A v* tag push checks the tag against every version field and that it's on main or a
-# release/** branch, runs pr-checks.yml on the tagged commit, and creates the GitHub
-# Release from the dist/ that run built and tested, with a build provenance attestation
-# for the zip. It reads no store secret and makes no store call. Publishing to the Chrome
-# Web Store is a workflow_dispatch for an existing release tag, from main or release/**,
-# that waits for the maintainer's approval in the chrome-web-store environment and
-# verifies the zip's attestation first. docs/release-plan.md has the steps.
+# release/** branch, runs pr-checks.yml on the tagged commit, and packages the dist/ that
+# run built and tested. attest signs the zip's build provenance in a job that runs no
+# package code, and release creates the GitHub Release with that zip. None of it reads a
+# store secret or calls the store. Publishing to the Chrome Web Store is a
+# workflow_dispatch for an existing release tag, from main or release/**, that waits for
+# the maintainer's approval in the chrome-web-store environment and verifies the zip's
+# attestation first. docs/release-plan.md has the steps.
 on:
   push:
     tags: ['v*']
@@ -79,18 +80,15 @@ jobs:
       contents: read
     uses: ./.github/workflows/pr-checks.yml
 
-  release:
-    name: release
+  package:
+    name: package
     needs: [preflight, checks]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # The only job that writes. It creates the GitHub Release, and the attestation needs an
-    # OIDC token to sign with and permission to store it.
+    # Runs npm, so it holds no id-token and can't write to the repository
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -117,7 +115,6 @@ jobs:
           set -euo pipefail
           node scripts/release/check-version.mjs "$TAG" --manifest dist/manifest.json
       - name: Package the zip and write its checksum
-        id: package
         run: |
           set -euo pipefail
           npm run package
@@ -126,14 +123,105 @@ jobs:
           zip="new-tab-note-$TAG.zip"
           sha256sum "$zip" > "$zip.sha256"
           sha256sum --check --strict "$zip.sha256"
-          echo "sha256=$(cut -d' ' -f1 "$zip.sha256")" >> "$GITHUB_OUTPUT"
-      # publish-store verifies this before it calls the store, so a zip swapped on the
-      # release later doesn't pass. attest-build-provenance v4 runs actions/attest v4.2.1
-      # (node24), pinned by SHA inside it.
+      - name: Upload the zip and its checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-zip
+          path: |
+            releases/new-tab-note-${{ github.ref_name }}.zip
+            releases/new-tab-note-${{ github.ref_name }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    name: attest
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # The only job that can sign. It checks out nothing and installs nothing, so no package
+    # code runs while it holds the OIDC token. publish-store verifies this attestation before
+    # it calls the store, so a zip swapped on the release later doesn't pass.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download the zip and its checksum
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-zip
+          path: release-zip
+      - name: Check the zip against its checksum
+        run: |
+          set -euo pipefail
+          cd release-zip
+          zip="new-tab-note-$TAG.zip"
+          for file in "$zip" "$zip.sha256"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::The release-zip artifact has no $file"
+              exit 1
+            fi
+          done
+          if [ "$(wc -l < "$zip.sha256")" -ne 1 ] || [ "$(cut -d' ' -f3- "$zip.sha256")" != "$zip" ]; then
+            echo "::error::$zip.sha256 must hold one checksum line, for $zip"
+            exit 1
+          fi
+          sha256sum --check --strict "$zip.sha256"
+      # attest-build-provenance v4 runs actions/attest v4.2.1 (node24), pinned by SHA inside it
       - name: Attest the zip's build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: releases/new-tab-note-${{ github.ref_name }}.zip
+          subject-path: release-zip/new-tab-note-${{ github.ref_name }}.zip
+
+  release:
+    name: release
+    needs: [package, attest]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The only job that writes: it creates the GitHub Release with the zip attest signed. It
+    # installs no npm package and holds no id-token. The checkout is for README.md and
+    # scripts/release, which use only Node's built-ins.
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Download the attested zip and its checksum
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-zip
+          path: release-zip
+      - name: Check the zip against its checksum
+        id: checksum
+        run: |
+          set -euo pipefail
+          cd release-zip
+          zip="new-tab-note-$TAG.zip"
+          for file in "$zip" "$zip.sha256"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::The release-zip artifact has no $file"
+              exit 1
+            fi
+          done
+          if [ "$(wc -l < "$zip.sha256")" -ne 1 ] || [ "$(cut -d' ' -f3- "$zip.sha256")" != "$zip" ]; then
+            echo "::error::$zip.sha256 must hold one checksum line, for $zip"
+            exit 1
+          fi
+          sha256sum --check --strict "$zip.sha256"
+          echo "sha256=$(cut -d' ' -f1 "$zip.sha256")" >> "$GITHUB_OUTPUT"
       - name: Find the store listing the README links
         id: listing
         run: |
@@ -166,10 +254,10 @@ jobs:
             2. Check the zip with `sha256sum -c new-tab-note-${{ github.ref_name }}.zip.sha256`, or check its build provenance with `gh attestation verify new-tab-note-${{ github.ref_name }}.zip -R ${{ github.repository }}`.
             3. Extract it to a folder you keep, open `chrome://extensions`, turn on Developer mode, and click Load unpacked.
 
-            SHA-256 of `new-tab-note-${{ github.ref_name }}.zip`: `${{ steps.package.outputs.sha256 }}`
+            SHA-256 of `new-tab-note-${{ github.ref_name }}.zip`: `${{ steps.checksum.outputs.sha256 }}`
           files: |
-            releases/new-tab-note-${{ github.ref_name }}.zip
-            releases/new-tab-note-${{ github.ref_name }}.zip.sha256
+            release-zip/new-tab-note-${{ github.ref_name }}.zip
+            release-zip/new-tab-note-${{ github.ref_name }}.zip.sha256
           fail_on_unmatched_files: true
           generate_release_notes: true
           # Latest only when no published release has a higher version (is-latest.mjs), so
