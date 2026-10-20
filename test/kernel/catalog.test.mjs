@@ -10,6 +10,7 @@ import path from 'node:path';
 import * as v from '../../js/lib/valibot/index.mjs';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
+import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { ENTITY_TYPES } from '../../js/kernel/core/contracts/fields.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
@@ -237,8 +238,11 @@ describe('the catalog (#13, "Desired behavior")', () => {
 
   it('names every key it accepts: no record, rest entries, map, or set, so no path holds a key the sender chose', () => {
     const undeclared = new Set(['record', 'object_with_rest', 'map', 'set']);
-    const schemas = [...[...modules.values()].flatMap(({ payload, result }) => [payload, result])];
-    assert.ok(schemas.length > 40);
+    const schemas = [
+      ...[...modules.values()].flatMap(({ payload, result }) => [payload, result]),
+      ...Object.values(envelope).filter(value => typeof value === 'object' && value !== null && 'kind' in value),
+    ];
+    assert.ok(schemas.length > 50);
     for (const schema of schemas) {
       for (const { schema: inner, path: at } of walk(schema)) {
         assert.ok(!undeclared.has(inner.type), `${inner.type} at ${at.join('.')}`);
