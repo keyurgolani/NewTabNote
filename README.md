@@ -101,6 +101,13 @@ npm run release
 # and never build it, so run npm run build first.
 npx playwright install --no-shell chromium   # once
 npm run test:extension
+
+# Regenerate css/design-tokens.css and js/design/tokens.generated.js after editing
+# design/quiet-atlas.tokens.json. npm test fails while they're stale.
+npm run design-tokens
+
+# npm test runs the design token scan, whose per-file counts only fall. Record a drop:
+npm run design-token-scan -- --update
 ```
 
 ---
