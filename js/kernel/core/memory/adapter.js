@@ -1,10 +1,13 @@
 /**
  * The in-memory adapter (#12, "Layout"), with all three flags:
  * - atomicMultiStore: a command's units commit together, or nothing does
- * - revisions: every record has one, committed outcomes report it, and a stale
- *   `expectedRevision` is a conflict, after which the adapter keeps the command
- * - idempotency: a commandId that already has an outcome gets that outcome again, and
- *   nothing runs. An `unavailable` outcome isn't kept, so resending the command retries it.
+ * - revisions: a note has a content revision, which only a change to its title or blocks
+ *   moves (Work.revised). Committed outcomes report it, and a stale `expectedRevision` is a
+ *   conflict, after which the adapter keeps the command.
+ * - idempotency: a commandId sent again with the same command gets its committed or conflict
+ *   outcome again, and nothing runs; sent with another command it's `idempotency-key-reuse`.
+ *   Rejections and `unavailable` outcomes aren't kept, so sending the command again runs it.
+ *   The same command is the same canonical JSON, keys sorted, which #17 hashes instead.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
@@ -14,12 +17,13 @@
  */
 
 import { clone } from '../contracts/clone.js';
-import { UnavailableError, unavailableFrom } from '../contracts/outcomes.js';
+import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { STORES } from '../ports/repository.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
+/** @typedef {import('../ports/repository.js').CommitResult} CommitResult */
 /** @typedef {import('../ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../ports/repository.js').SettingsArea} SettingsArea */
@@ -59,6 +63,31 @@ const isKey = key => typeof key === 'string' && key !== '';
 const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
+ * `value` with every object's keys in sorted order, so two copies of one command serialize alike
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+const sortedKeys = value => {
+  if (Array.isArray(value)) return value.map(sortedKeys);
+  if (value === null || typeof value !== 'object') return value;
+  const record = /** @type {Record<string, unknown>} */ (value);
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort(byKey)
+      .map(key => [key, sortedKeys(record[key])]),
+  );
+};
+
+/**
+ * What tells one command from another under the same commandId: its canonical JSON
+ * @param {Command} command
+ * @returns {string}
+ */
+const fingerprintOf = command => JSON.stringify(sortedKeys(command));
+
+/** @typedef {{fingerprint: string, outcome: Outcome}} KeptOutcome */
+
+/**
  * @param {MemoryAdapterOptions} [options]
  * @returns {MemoryAdapter}
  */
@@ -67,7 +96,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   const stores = new Map(/** @type {StoreName[]} */ (Object.keys(STORES)).map(name => [name, new Map()]));
   /** @type {Map<string, number>} */
   const revisions = new Map();
-  /** @type {Map<string, Outcome>} */
+  /** @type {Map<string, KeptOutcome>} */
   const outcomes = new Map();
   /** @type {KeptConflict[]} */
   const conflicts = [];
@@ -117,13 +146,16 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
 
   /**
    * A transaction over `scope`'s committed records and the writes `pending` holds. As in
-   * IndexedDB, a store outside the scope can't be read or written.
+   * IndexedDB, a store outside the scope can't be read or written. A revision is answered
+   * only for a key this transaction got, as #17's adapter can only answer it.
    * @param {Map<string, {store: StoreName, key: string, record: Record<string, unknown> | undefined}> | null} pending
    * @param {'readonly' | 'readwrite'} mode
    * @param {readonly StoreName[]} scope
    * @returns {Tx}
    */
   const transaction = (pending, mode, scope) => {
+    /** @type {Set<string>} */
+    const got = new Set();
     /**
      * @param {StoreName} store
      * @returns {Map<string, Record<string, unknown>>}
@@ -164,7 +196,11 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
       pending.set(revisionKey(store, key), { store, key, record: record && clone(record) });
     };
     return /** @type {Tx} */ ({
-      get: async (store, key) => clone(current(store, key)),
+      get: async (store, key) => {
+        const record = clone(current(store, key));
+        got.add(revisionKey(store, key));
+        return record;
+      },
       getAll: async store => clone(records(store)),
       getAllByIndex: async (store, index, value) => clone(records(store).filter(record => record[index] === value)),
       getKeysByIndex: async (store, index, value) =>
@@ -173,6 +209,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
           .map(record => /** @type {string} */ (record[STORES[store].keyPath])),
       revision: (store, key) => {
         scoped(store);
+        if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
         return committedRevision(store, key);
       },
       put: (store, record) => write(store, /** @type {string} */ (record[STORES[store].keyPath]), record),
@@ -181,14 +218,20 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   };
 
   /**
-   * The committed outcome, with the primary record's new revision.
+   * The committed outcome, with the primary record's revision: one more than before when the
+   * command changed its content, and where it was otherwise.
    * @param {Work} work
    * @returns {Outcome}
    */
   const finish = work => {
     const outcome = work.done();
     const primary = work.primary && work.primary();
-    const revision = primary && committedRevision(primary.store, primary.key);
+    if (!primary) return outcome;
+    if (work.revised && work.revised() && storeOf(primary.store).has(primary.key)) {
+      const id = revisionKey(primary.store, primary.key);
+      revisions.set(id, (revisions.get(id) || 0) + 1);
+    }
+    const revision = committedRevision(primary.store, primary.key);
     return revision === undefined ? outcome : { ...outcome, revision };
   };
 
@@ -227,36 +270,55 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
       }
     }
     for (const { store, key, record } of pending.values()) {
-      const id = revisionKey(store, key);
-      revisions.set(id, (revisions.get(id) || 0) + 1);
-      if (record === undefined) storeOf(store).delete(key);
-      else storeOf(store).set(key, record);
+      if (record === undefined) {
+        storeOf(store).delete(key);
+        // A record made again under this key starts over
+        revisions.delete(revisionKey(store, key));
+      } else {
+        storeOf(store).set(key, record);
+      }
     }
     return finish(work);
+  };
+
+  /**
+   * What the commandId already answered, or `idempotency-key-reuse` when it came with
+   * another command. Undefined when it has no record.
+   * @param {string} commandId
+   * @param {Command} command
+   * @returns {Outcome | undefined}
+   */
+  const keptFor = (commandId, command) => {
+    const kept = outcomes.get(commandId);
+    if (!kept) return undefined;
+    if (kept.fingerprint !== fingerprintOf(command)) return rejected('validation', 'idempotency-key-reuse');
+    return clone(kept.outcome);
   };
 
   return Object.freeze({
     name: 'memory',
     flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true }),
 
-    recall(commandId) {
-      const outcome = outcomes.get(commandId);
-      return outcome && clone(outcome);
+    recall(command) {
+      return keptFor(command.commandId, command);
     },
 
     commit(work) {
       return serial(async () => {
-        const kept = outcomes.get(work.commandId);
-        if (kept) return clone(kept);
+        // A send of the same command that committed while this one waited its turn
+        const kept = keptFor(work.commandId, work.command);
+        if (kept) return { outcome: kept, replayed: kept.kind !== 'rejected' };
         /** @type {Outcome} */
         let outcome;
         try {
           outcome = await apply(work);
         } catch (error) {
-          return unavailableFrom(error);
+          return { outcome: unavailableFrom(error), replayed: false };
         }
-        outcomes.set(work.commandId, clone(outcome));
-        return outcome;
+        if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
+          outcomes.set(work.commandId, { fingerprint: fingerprintOf(work.command), outcome: clone(outcome) });
+        }
+        return { outcome, replayed: false };
       });
     },
 

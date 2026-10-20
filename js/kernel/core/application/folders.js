@@ -7,7 +7,7 @@
 import { isId, isIdOrNull } from '../contracts/checks.js';
 import { committed, empty, ready, rejected } from '../contracts/outcomes.js';
 import { createsCycle, newFolderRecord } from '../domain/folder.js';
-import { unitsWork } from './work.js';
+import { contentChanged, unitsWork } from './work.js';
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
@@ -48,7 +48,7 @@ export const folderCommands = {
         },
       ],
       () => committed('folder-created', [folderId]),
-      folderRecord(folderId),
+      { primary: folderRecord(folderId), revised: contentChanged },
     );
   },
 
@@ -74,7 +74,8 @@ export const folderCommands = {
         },
       ],
       () => committed('folder-moved', [folderId]),
-      folderRecord(folderId),
+      // A move is placement, so the folder's revision stays where it was
+      { primary: folderRecord(folderId) },
     );
   },
 };

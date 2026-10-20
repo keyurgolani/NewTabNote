@@ -55,7 +55,9 @@ export const STORES = Object.freeze({
  *   The records whose `index` field (each index is named after its field) holds `value`
  * @property {(store: StoreName, index: string, value: string) => Promise<string[]>} getKeysByIndex
  * @property {(store: StoreName, key: string) => number | undefined} revision
- *   The record's committed revision, or undefined from an adapter without revisions
+ *   The record's committed content revision, or undefined from an adapter without revisions.
+ *   Ask only after a `get` of the same key in the same transaction: an adapter that keeps the
+ *   revision in the record (#17) answers from the record that get read.
  */
 
 /**
@@ -92,11 +94,25 @@ export const STORES = Object.freeze({
  * A command, ready for an adapter to commit.
  * @typedef {object} Work
  * @property {string} commandId
- * @property {Command} command - what an adapter with revisions keeps when the command conflicts
+ * @property {Command} command
+ *   What an adapter with idempotency compares a resent commandId against, and what one with
+ *   revisions keeps when the command conflicts
  * @property {Effect} effect
  * @property {() => {store: StoreName, key: string} | undefined} [primary]
- *   The record whose new revision the committed outcome reports, once the units have run
+ *   The record whose revision the committed outcome reports (#13's `committedRevision`),
+ *   once the units have run
+ * @property {() => boolean} [revised]
+ *   Whether the command changed the primary record's content (a note's title or blocks),
+ *   asked once the units have run. An adapter with revisions then moves the record's revision
+ *   on by one. Placement and derived writes (pin, archive, trash, restore, a folder move,
+ *   insights) leave it where it was, so they never turn a save into a conflict.
  * @property {() => Committed} done - the outcome once everything committed
+ */
+
+/**
+ * What commit answers. `replayed` is true when the commandId already had this outcome, from a
+ * send of the same command that committed first, so the kernel doesn't publish it again.
+ * @typedef {{outcome: Outcome, replayed: boolean}} CommitResult
  */
 
 /**
@@ -105,20 +121,23 @@ export const STORES = Object.freeze({
  * @typedef {object} AdapterFlags
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
- *   Records have revisions: committed outcomes report them, and a stale `expectedRevision`
- *   is a conflict
+ *   Notes have content revisions: committed outcomes report them, only title and block
+ *   changes move them, and a stale `expectedRevision` is a conflict
  * @property {boolean} idempotency
- *   A commandId that already has a committed, rejected, or conflict outcome gets that
- *   outcome again, and nothing runs
+ *   A commandId sent again with the same command gets its committed or conflict outcome
+ *   again, and nothing runs. Sent with another command it's rejected as
+ *   `idempotency-key-reuse`. A rejection or an `unavailable` outcome leaves no record, so the
+ *   same command sent again runs again.
  */
 
 /**
  * @typedef {object} KernelAdapter
  * @property {string} name
  * @property {Readonly<AdapterFlags>} flags
- * @property {(commandId: string) => Outcome | undefined} recall
- *   Synchronous, so a save can still open its transaction in the calling task
- * @property {(work: Work) => Promise<Outcome>} commit
+ * @property {(command: Command) => Outcome | undefined} recall
+ *   What the command's commandId already answered, when it has a record (see `idempotency`),
+ *   or undefined. Synchronous, so a save can still open its transaction in the calling task.
+ * @property {(work: Work) => Promise<CommitResult>} commit
  *   Opens the first transaction before it returns. It never rejects: a failure is an
  *   `unavailable` outcome.
  * @property {<T>(stores: StoreName[], body: (tx: ReadTx) => Promise<T>) => Promise<T>} read

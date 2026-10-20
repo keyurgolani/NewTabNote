@@ -24,7 +24,7 @@ import {
   newSearchEntry,
   notesInView,
 } from '../domain/note.js';
-import { unitsWork } from './work.js';
+import { contentChanged, unitsWork } from './work.js';
 
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../domain/note.js').BlockRecord} BlockRecord */
@@ -139,7 +139,8 @@ function isCapture(value) {
 }
 
 /**
- * A command that sets fields on one note.
+ * A command that sets placement fields on one note (pinned, archived, trashed), so the
+ * note's content revision stays where it was.
  * @param {import('../contracts/commands.js').Command & {noteId: unknown}} command
  * @param {string} code
  * @param {(note: NoteRecord) => NoteRecord} change
@@ -147,7 +148,9 @@ function isCapture(value) {
 function setFields(command, code, change) {
   const { noteId } = command;
   if (!isId(noteId)) return invalid();
-  return unitsWork(command, [changeNote(noteId, change)], () => committed(code, [noteId]), noteRecord(noteId));
+  return unitsWork(command, [changeNote(noteId, change)], () => committed(code, [noteId]), {
+    primary: noteRecord(noteId),
+  });
 }
 
 /** @type {{[T in NoteCommandType]: CommandHandler<T>}} */
@@ -187,7 +190,10 @@ export const noteCommands = {
         },
       });
     }
-    return unitsWork(command, units, () => committed('note-created', [noteId]), noteRecord(noteId));
+    return unitsWork(command, units, () => committed('note-created', [noteId]), {
+      primary: noteRecord(noteId),
+      revised: contentChanged,
+    });
   },
 
   renameNote(command, { clock }) {
@@ -203,7 +209,7 @@ export const noteCommands = {
       command,
       [rename, renameSearchEntry(noteId, name, now)],
       () => committed('note-renamed', [noteId]),
-      noteRecord(noteId),
+      { primary: noteRecord(noteId), revised: contentChanged },
     );
   },
 
@@ -303,12 +309,9 @@ export const noteCommands = {
         },
       },
     ];
-    return unitsWork(
-      command,
-      units,
-      () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]),
-      noteRecord(noteId),
-    );
+    return unitsWork(command, units, () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]), {
+      primary: noteRecord(noteId),
+    });
   },
 
   saveNoteContent(command, { clock }) {
@@ -339,7 +342,10 @@ export const noteCommands = {
         tx.put('notes', next);
       },
     };
-    return unitsWork(command, [save], () => committed('content-saved', [noteId]), noteRecord(noteId));
+    return unitsWork(command, [save], () => committed('content-saved', [noteId]), {
+      primary: noteRecord(noteId),
+      revised: contentChanged,
+    });
   },
 
   applyDerivedTitle(command, { clock }) {
@@ -362,7 +368,7 @@ export const noteCommands = {
       command,
       [derive, { ...renameSearchEntry(noteId, name, now), when: () => !kept }],
       () => (kept ? committed('title-kept', [], { severity: 'info' }) : committed('title-derived', [noteId])),
-      noteRecord(noteId),
+      { primary: noteRecord(noteId), revised: () => !kept },
     );
   },
 
@@ -381,7 +387,7 @@ export const noteCommands = {
         }),
       ],
       () => committed('insights-attached', [noteId]),
-      noteRecord(noteId),
+      { primary: noteRecord(noteId) },
     );
   },
 
@@ -434,12 +440,10 @@ export const noteCommands = {
         },
       },
     ];
-    return unitsWork(
-      command,
-      units,
-      () => committed('capture-saved', [dailyId]),
-      () => ({ store: 'notes', key: dailyId }),
-    );
+    return unitsWork(command, units, () => committed('capture-saved', [dailyId]), {
+      primary: () => ({ store: 'notes', key: dailyId }),
+      revised: contentChanged,
+    });
   },
 
   async runBulkAction(command, { run }) {

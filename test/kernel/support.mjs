@@ -60,6 +60,9 @@ export const CALLERS = Object.freeze({
  * @property {() => Promise<{kernel: (caller?: Caller) => Kernel}>} secondContext
  *   Another context, such as a second tab, with its own adapter over the same storage
  * @property {(target: StoreName | SettingsArea) => void} failNextWrite - make the next write to `target` fail
+ * @property {() => Promise<Array<{commandId: string}>>} [conflicts]
+ *   The commands the adapter kept when they conflicted, read however the adapter stores them.
+ *   A fixture whose adapter has revisions provides it, so the adapter itself needs no test method.
  * @property {() => Promise<void>} close
  */
 

@@ -38,7 +38,8 @@
  * @property {Clock} clock
  * @property {Ids} ids
  * @property {(command: Command) => Promise<Outcome>} run
- *   Runs another command the way execute() does, policy check included (bulk commands use it)
+ *   Runs another command the way execute() does, policy check included. A bulk command runs
+ *   its items through it, and an item is never a bulk command, so it answers with an Outcome.
  */
 
 /** @typedef {Work | Outcome | BulkOutcome} UseCaseResult */
@@ -62,12 +63,17 @@
  * @param {Command} command
  * @param {Unit[]} units
  * @param {() => Committed} done
- * @param {() => {store: StoreName, key: string} | undefined} [primary]
+ * @param {{primary?: Work['primary'], revised?: Work['revised']}} [options]
+ *   The record the outcome reports the revision of, and whether the command changed its content
  * @returns {Work}
  */
-export function unitsWork(command, units, done, primary) {
+export function unitsWork(command, units, done, { primary, revised } = {}) {
   /** @type {Work} */
   const work = { commandId: command.commandId, command, effect: { kind: 'units', units }, done };
   if (primary) work.primary = primary;
+  if (revised) work.revised = revised;
   return work;
 }
+
+/** Says a command changed its primary record's content */
+export const contentChanged = () => true;

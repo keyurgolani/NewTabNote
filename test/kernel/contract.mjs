@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
-import { newNoteRecord } from '../../js/kernel/core/domain/note.js';
-import { DEFAULT_PREFERENCES } from '../../js/kernel/core/domain/preferences.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -59,6 +57,52 @@ function bulkOf(outcome) {
   assert.equal(outcome.kind, 'bulk', JSON.stringify(outcome));
   return /** @type {BulkOutcome} */ (outcome);
 }
+
+/**
+ * The note Storage.createNote writes (js/storage.js), written out here so a change to the
+ * kernel's own copy of it fails the suite.
+ * @param {string} id
+ * @param {string} name
+ * @param {number} now
+ * @returns {NoteRecord}
+ */
+const storageNote = (id, name, now) => ({
+  id,
+  name,
+  createdAt: now,
+  updatedAt: now,
+  archived: false,
+  archivedAt: null,
+  titleManuallySet: false,
+  lastAutoTitleAt: null,
+  insights: null,
+  lastInsightsExtractedAt: null,
+  preview: '',
+  pinned: false,
+  todoProgress: null,
+  isDaily: false,
+  dateStr: null,
+  isTemplate: false,
+  folderId: null,
+  viewport: { scale: 1, offsetX: 0, offsetY: 0 },
+  settings: { gridType: 'dots', backgroundColor: '#fafafa' },
+});
+
+/** The preferences Storage.initializeDefaultSettings writes on first run (js/storage.js) */
+const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
+  theme: 'system',
+  font: 'default',
+  width: 'default',
+  trashRetention: 30,
+  sidebarOpen: true,
+  sidebarWidth: 260,
+  sidebarViewMode: 'list',
+  autoTitleEnabled: false,
+  autoTitleInterval: 15,
+  insightsEnabled: false,
+  insightsInterval: 360,
+  aiSidebarWidth: 360,
+});
 
 /**
  * @param {ContractFixture} fixture
@@ -147,7 +191,7 @@ export function runContractSuite(fixture) {
       it('createNote stores the record Storage.createNote has always written, and a search entry', async () => {
         const outcome = await run(cmd('createNote', { noteId: 'n1' }));
         assert.deepEqual([outcome.code, outcome.changedIds], ['note-created', ['n1']]);
-        assert.deepEqual(await noteOf('n1'), newNoteRecord({ id: 'n1', name: 'Untitled', now: NOW }));
+        assert.deepEqual(await noteOf('n1'), storageNote('n1', 'Untitled', NOW));
         assert.deepEqual(await searchEntryOf('n1'), { noteId: 'n1', name: 'Untitled', content: '', updatedAt: NOW });
       });
 
@@ -383,6 +427,40 @@ export function runContractSuite(fixture) {
         await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Line 0' }));
         assert.equal((await noteOf('n1'))?.pinned, true);
       });
+
+      /**
+       * The revision the editor loaded the note at, as saveNoteContent sends it back
+       * @param {string} noteId
+       */
+      const loadedRevision = async noteId => {
+        const state = await kernel.query({ type: 'getNote', noteId });
+        return (state.kind === 'ready' ? state.data.revision : undefined) ?? 1;
+      };
+
+      it("pinning an open note survives the editor's next save, sent with the revision it loaded", async () => {
+        await createNote({ noteId: 'n1' });
+        const expectedRevision = await loadedRevision('n1');
+        await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+        await run(cmd('archiveNote', { noteId: 'n1' }));
+        const saved = await run(
+          cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Line 0', expectedRevision }),
+        );
+        assert.equal(saved.code, 'content-saved');
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.pinned, note?.archived, note?.preview], [true, true, 'Line 0']);
+      });
+
+      it("insights that finish during editing don't stop the editor's save, sent with the revision it loaded", async () => {
+        await createNote({ noteId: 'n1' });
+        const expectedRevision = await loadedRevision('n1');
+        await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Call'] } }));
+        const saved = await run(
+          cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Typed', expectedRevision }),
+        );
+        assert.equal(saved.code, 'content-saved');
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.preview, note?.insights], ['Typed', { todos: ['Call'] }]);
+      });
     });
 
     describe('captureToDailyNote', () => {
@@ -612,8 +690,8 @@ export function runContractSuite(fixture) {
       it('runStartupMaintenance writes the default preferences once and keeps what is stored', async () => {
         assert.equal((await kernel.query({ type: 'getPreferences' })).kind, 'empty');
         await run(cmd('runStartupMaintenance', {}));
-        const defaults = await kernel.query({ type: 'getPreferences', keys: Object.keys(DEFAULT_PREFERENCES) });
-        assert.deepEqual(defaults.kind === 'ready' && defaults.data, DEFAULT_PREFERENCES);
+        const defaults = await kernel.query({ type: 'getPreferences' });
+        assert.deepEqual(defaults.kind === 'ready' && defaults.data, STORAGE_DEFAULT_PREFERENCES);
         await run(cmd('setPreferences', { values: { theme: 'dark' } }));
         committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
         const theme = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
@@ -847,9 +925,9 @@ export function runContractSuite(fixture) {
             assert.ok(!JSON.stringify(outcome).includes('Tab B'));
             assert.equal((await noteOf('n1'))?.preview, 'Tab A');
             assert.equal((await blocksOf('n1')).length, 1);
-            const adapter = /** @type {{conflicts?: () => Array<{commandId: string}>}} */ (ctx.adapter);
+            assert.ok(ctx.conflicts, 'a fixture for an adapter with revisions reads the conflicts it kept');
             assert.deepEqual(
-              adapter.conflicts?.().map(kept => kept.commandId),
+              (await ctx.conflicts()).map(kept => kept.commandId),
               [stale.commandId],
             );
           } else {
@@ -858,6 +936,93 @@ export function runContractSuite(fixture) {
             committedOf(outcome);
             assert.equal((await noteOf('n1'))?.preview, 'Tab B');
           }
+        },
+      );
+
+      it(
+        flags.revisions
+          ? "revisions: only a change to a note's title or blocks moves its revision, and every committed outcome reports it"
+          : 'no revisions: no committed outcome reports one',
+        async () => {
+          /** @param {Command} command */
+          const revisionAfter = async command => (await run(command)).revision;
+          const revisions = [
+            await revisionAfter(cmd('createNote', { noteId: 'n1' })),
+            await revisionAfter(cmd('setPinned', { noteId: 'n1', pinned: true })),
+            await revisionAfter(cmd('archiveNote', { noteId: 'n1' })),
+            await revisionAfter(cmd('unarchiveNote', { noteId: 'n1' })),
+            await revisionAfter(cmd('attachInsights', { noteId: 'n1', insights: { todos: [] } })),
+            await revisionAfter(cmd('applyDerivedTitle', { noteId: 'n1', name: 'Derived' })),
+            await revisionAfter(cmd('renameNote', { noteId: 'n1', name: 'Mine' })),
+            // Kept: the title was set by hand, so nothing changed
+            await revisionAfter(cmd('applyDerivedTitle', { noteId: 'n1', name: 'Derived again' })),
+            await revisionAfter(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1) })),
+            await revisionAfter(cmd('trashNote', { noteId: 'n1' })),
+            await revisionAfter(cmd('restoreNote', { noteId: 'n1' })),
+          ];
+          const expected = flags.revisions ? [1, 1, 1, 1, 1, 2, 3, 3, 4, 4, 4] : revisions.map(() => undefined);
+          assert.deepEqual(revisions, expected);
+          // A note deleted and made again under its id starts over
+          await revisionAfter(cmd('createNote', { noteId: 'n2' }));
+          assert.equal((await run(cmd('trashNote', { noteId: 'n2' }))).code, 'note-deleted');
+          assert.equal(await revisionAfter(cmd('createNote', { noteId: 'n2' })), flags.revisions ? 1 : undefined);
+        },
+      );
+
+      it(
+        flags.idempotency
+          ? 'idempotency: a commandId sent again with another command is rejected as key reuse, and nothing runs'
+          : 'no idempotency: a commandId sent again with another command runs that command',
+        async () => {
+          const create = cmd('createNote', { noteId: 'n1', name: 'Kept' });
+          await run(create);
+          const before = await noteOf('n1');
+          const sameKey = /** @type {Command[]} */ ([
+            { type: 'createNote', commandId: create.commandId, noteId: 'n2', name: 'Other' },
+            { type: 'trashNote', commandId: create.commandId, noteId: 'n1' },
+          ]);
+          const outcomes = [];
+          for (const command of sameKey) outcomes.push(await kernel.execute(command));
+          if (flags.idempotency) {
+            for (const outcome of outcomes) assertRejected(outcome, 'validation', 'idempotency-key-reuse');
+            assert.equal(await noteOf('n2'), undefined);
+            assert.deepEqual(await noteOf('n1'), before);
+          } else {
+            assert.deepEqual(
+              outcomes.map(outcome => committedOf(outcome).code),
+              ['note-created', 'note-trashed'],
+            );
+          }
+        },
+      );
+
+      it('a rejected command leaves no record, so sending it again once it can commit commits it', async () => {
+        const child = cmd('createFolder', { folderId: 'child', name: 'Child', parentId: 'parent' });
+        assertRejected(await kernel.execute(child), 'not-found', 'parent-not-found');
+        await run(cmd('createFolder', { folderId: 'parent', name: 'Parent', parentId: null }));
+        assert.equal(committedOf(await kernel.execute(child)).code, 'folder-created');
+      });
+
+      it(
+        flags.idempotency
+          ? 'idempotency: two sends of one command at once commit it once, answer both with its outcome, and publish it once'
+          : 'no idempotency: two sends of one command at once both run, and the second finds the note made',
+        async () => {
+          /** @type {string[]} */
+          const published = [];
+          kernel.subscribe(event => {
+            published.push(...event.ids);
+          });
+          const create = cmd('createNote', { noteId: 'n1' });
+          const [first, second] = await Promise.all([kernel.execute(create), kernel.execute(create)]);
+          assert.equal(committedOf(first).code, 'note-created');
+          if (flags.idempotency) {
+            assert.deepEqual(second, first);
+            assert.deepEqual(await kernel.execute(create), first);
+          } else {
+            assertRejected(second, 'validation', 'note-exists');
+          }
+          assert.deepEqual(published, ['n1']);
         },
       );
 

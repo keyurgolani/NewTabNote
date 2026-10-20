@@ -46,6 +46,7 @@ const memoryFixture = {
       failNextWrite: target => {
         failing.push(target);
       },
+      conflicts: async () => adapter.conflicts(),
       close: async () => {},
     };
   },
@@ -130,7 +131,7 @@ describe('the in-memory adapter', () => {
 
   it('refuses a write in a read-only unit and an unknown store', async () => {
     const adapter = createMemoryAdapter();
-    const outcome = await adapter.commit({
+    const { outcome } = await adapter.commit({
       commandId: 'w1',
       command: { type: 'runStartupMaintenance', commandId: 'w1' },
       effect: {
@@ -160,9 +161,31 @@ describe('the in-memory adapter', () => {
     );
   });
 
+  it('answers revision only after a get of the same key, as an adapter that keeps it in the record can', async () => {
+    const adapter = createMemoryAdapter();
+    await assert.rejects(
+      adapter.read(['notes'], async tx => tx.revision('notes', 'n1')),
+      /revision-before-get/,
+    );
+    await assert.rejects(
+      adapter.read(['notes'], async tx => {
+        await tx.get('notes', 'n2');
+        return tx.revision('notes', 'n1');
+      }),
+      /revision-before-get/,
+    );
+    assert.equal(
+      await adapter.read(['notes'], async tx => {
+        await tx.get('notes', 'n1');
+        return tx.revision('notes', 'n1');
+      }),
+      undefined,
+    );
+  });
+
   it("refuses a store outside the unit's or the read's stores, as IndexedDB does", async () => {
     const adapter = createMemoryAdapter();
-    const outcome = await adapter.commit({
+    const { outcome } = await adapter.commit({
       commandId: 'w1',
       command: { type: 'runStartupMaintenance', commandId: 'w1' },
       effect: {

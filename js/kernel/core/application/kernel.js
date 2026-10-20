@@ -181,10 +181,12 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
   };
 
   /**
+   * A use case's work committed, or the outcome it answered with itself.
    * @param {UseCaseResult} result
-   * @returns {Promise<Outcome | BulkOutcome>}
+   * @returns {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>}
    */
-  const commitResult = result => (isWork(result) ? adapter.commit(result) : Promise.resolve(result));
+  const commitResult = result =>
+    isWork(result) ? adapter.commit(result) : Promise.resolve({ outcome: result, replayed: false });
 
   /**
    * @param {unknown} input
@@ -210,10 +212,10 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
       /** @type {(command: Command, context: UseCaseContext) => UseCaseResult | PromiseLike<UseCaseResult>} */ (
         COMMAND_HANDLERS[command.type]
       );
-    /** @type {Promise<Outcome | BulkOutcome>} */
+    /** @type {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>} */
     let pending;
     try {
-      const remembered = adapter.recall(command.commandId);
+      const remembered = adapter.recall(command);
       if (remembered) return Promise.resolve(remembered);
       const result = handler(command, context);
       pending = isThenable(result) ? Promise.resolve(result).then(commitResult) : commitResult(result);
@@ -222,8 +224,9 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
     }
     const { aggregate } = COMMANDS[command.type];
     return pending.then(
-      outcome => {
-        publish(aggregate, outcome);
+      ({ outcome, replayed }) => {
+        // A send of the same command that committed first already published it
+        if (!replayed) publish(aggregate, outcome);
         return outcome;
       },
       // A use case or an adapter that throws still answers with an outcome
