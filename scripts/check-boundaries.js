@@ -14,8 +14,9 @@
  *   doesn't have which names #12 as its owner. A later PR may add a row by hand, but only
  *   for a defined rule, owned by another issue. With no ledger at the ref, as in the PR
  *   that seeds it, every row is new.
- * declared-gap rows record gaps no rule sees, so they're checked for shape (count 1, a file
- * that exists) and never against hits. One file can declare several gaps, told apart by
+ * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
+ * hits: count 1, the legacy adapter module as file, which has to exist, and #17 as owner,
+ * since #17's adapter closes each gap. That module declares several gaps, told apart by
  * verify; every other row is one per file and rule.
  *
  *   npm run check:boundaries                         compare with the ledger
@@ -56,6 +57,9 @@ const RULES = {
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
 };
 const DECLARED_GAP = 'declared-gap';
+// The one module that declares gaps (its adapter flags), and the issue whose adapter closes them
+const DECLARED_GAP_FILE = 'js/kernel/adapters/legacy/adapter.js';
+const DECLARED_GAP_OWNER = 17;
 
 /**
  * Who removes each kind of hit, for rows --write-baseline seeds: the first entry whose
@@ -208,7 +212,9 @@ function parseLedger(text, root, name) {
     }
     if (row.rule === DECLARED_GAP) {
       if (row.count !== 1) fail('is a declared-gap row, so its count is 1');
-      if (typeof row.file === 'string' && !fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
+      if (row.file !== DECLARED_GAP_FILE) fail(`is a declared-gap row, so its file is ${DECLARED_GAP_FILE}`);
+      else if (!fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
+      if (row.owner !== DECLARED_GAP_OWNER) fail(`is a declared-gap row, so #${DECLARED_GAP_OWNER} owns it`);
     }
 
     const key = rowKey(row);

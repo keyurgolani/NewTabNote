@@ -5,6 +5,8 @@
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { isEmpty, isUntitled } from '../../js/kernel/core/domain/note.js';
@@ -18,6 +20,8 @@ import { CALLERS, testClock, testIds } from './support.mjs';
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
 
 runContractSuite(legacyFixture);
+
+const ROOT = path.join(import.meta.dirname, '..', '..');
 
 /** @type {LegacyContext[]} */
 const opened = [];
@@ -49,6 +53,22 @@ const settingWrites = page =>
 const assertKind = (outcome, kind) => assert.equal(outcome.kind, kind, JSON.stringify(outcome));
 
 describe('the legacy adapter', () => {
+  it('has a declared-gap row in the kernel ledger for each guarantee it lacks, two contexts included', () => {
+    const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/architecture/kernel-ledger.json'), 'utf8'));
+    /** @type {Array<{file: string, rule: string, owner: number, verify: string}>} */
+    const gaps = ledger.rows.filter((/** @type {{rule: string}} */ row) => row.rule === 'declared-gap');
+    const flags = /** @type {Record<string, boolean>} */ ({ ...adapterFor(context()).flags });
+    const lacking = Object.keys(flags).filter(flag => !flags[flag]);
+    // Without revisions, two contexts saving one note's blocks race too (contract.mjs)
+    if (!flags.revisions) lacking.push('two contexts');
+    for (const gap of lacking) {
+      const rows = gaps.filter(row => row.verify.includes(`the ${gap} check in test/kernel/contract.mjs`));
+      assert.equal(rows.length, 1, `the ${gap} gap has ${rows.length} rows`);
+      assert.deepEqual([rows[0].file, rows[0].owner], ['js/kernel/adapters/legacy/adapter.js', 17], gap);
+    }
+    assert.equal(gaps.length, lacking.length, 'a declared-gap row for a guarantee the adapter has');
+  });
+
   it('saveNoteContent opens its IndexedDB transaction, over canvases and elements, in the calling task', async () => {
     const page = context();
     const adapter = adapterFor(page);

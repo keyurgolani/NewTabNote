@@ -158,22 +158,40 @@ describe('scripts/check-boundaries.js with canned hits', () => {
       'js/h.js fetch appears twice');
   });
 
-  it('never compares declared-gap rows with hits, but needs count 1 and a file that exists', async () => {
+  it('never compares declared-gap rows with hits, but needs count 1 and the adapter module to exist', async () => {
     const root = tempRoot();
-    const adapter = 'js/kernel/adapters/legacy/notes.js';
+    const adapter = 'js/kernel/adapters/legacy/adapter.js';
+    const gap = row(adapter, 'declared-gap', 1, 17, { verify: 'contract suite: legacy adapter, atomicMultiStore' });
+    const hits = [{ file: 'js/a.js', rule: 'Storage', count: 1 }];
+    writeLedger(root, [gap, row('js/a.js', 'Storage', 1)]);
+    assertFails(await run(root, [], { hits }), `names ${adapter}, which doesn't exist`);
+
     fs.mkdirSync(path.join(root, path.dirname(adapter)), { recursive: true });
     fs.writeFileSync(path.join(root, adapter), '');
-    const gap = row(adapter, 'declared-gap', 1, 17, { verify: 'contract suite: legacy adapter, atomicMultiStore' });
-    writeLedger(root, [gap, row('js/a.js', 'Storage', 1)]);
-    const hits = [{ file: 'js/a.js', rule: 'Storage', count: 1 }];
     assert.equal((await run(root, [], { hits })).code, 0);
     assert.equal((await run(root, ['--write-baseline'], { hits })).code, 0);
     assert.deepEqual(readRows(root), [row('js/a.js', 'Storage', 1), gap]);
 
-    writeLedger(root, [{ ...gap, count: 2 }, { ...gap, file: 'js/kernel/adapters/legacy/gone.js' }]);
+    writeLedger(root, [{ ...gap, count: 2 }]);
     assertFails(await run(root, []),
-      `${adapter} declared-gap (contract suite: legacy adapter, atomicMultiStore) is a declared-gap row, so its count is 1`,
-      "names js/kernel/adapters/legacy/gone.js, which doesn't exist");
+      `${adapter} declared-gap (contract suite: legacy adapter, atomicMultiStore) is a declared-gap row, so its count is 1`);
+  });
+
+  it('takes a declared-gap row only on the legacy adapter module, owned by #17, whose adapter closes it', async () => {
+    const root = tempRoot();
+    for (const file of ['js/kernel/adapters/legacy/adapter.js', 'js/editor.js']) {
+      fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), '');
+    }
+    const gaps = ['atomicMultiStore', 'idempotency', 'revisions', 'two contexts'].map(name =>
+      row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 17, { verify: `contract suite: ${name}` }));
+    const elsewhere = row('js/editor.js', 'declared-gap', 1, 35, { verify: 'editor saves race' });
+    const fifth = row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 2, { verify: 'contract suite: moment' });
+    writeLedger(root, [...gaps, elsewhere, fifth]);
+    const base = { 'origin/next': [...gaps, elsewhere, fifth] };
+    assertFails(await run(root, ['--base', 'origin/next'], { base }),
+      'js/editor.js declared-gap (editor saves race) is a declared-gap row, so its file is js/kernel/adapters/legacy/adapter.js',
+      'js/kernel/adapters/legacy/adapter.js declared-gap (contract suite: moment) is a declared-gap row, so #17 owns it');
   });
 
   it('tells declared-gap rows on one file apart by verify, and rejects two with the same verify', async () => {
@@ -194,13 +212,6 @@ describe('scripts/check-boundaries.js with canned hits', () => {
     assert.deepEqual(readRows(root).filter(r => r.rule === 'declared-gap').map(r => r.verify), gaps.map(g => g.verify).sort());
     const based = await run(root, ['--base', 'origin/next'], { hits, base: { 'origin/next': [...gaps, row('js/a.js', 'Storage', 1)] } });
     assert.equal(based.code, 0, based.output);
-    // A gap row #12 owns isn't new when the base has it under the same verify
-    const kept = row(adapter, 'declared-gap', 1, 12, { verify: 'contract suite: kept' });
-    writeLedger(root, [...gaps, kept, row('js/a.js', 'Storage', 1)]);
-    const keptAtBase = await run(root, ['--base', 'origin/next'], { hits, base: { 'origin/next': [...gaps, kept, row('js/a.js', 'Storage', 1)] } });
-    assert.equal(keptAtBase.code, 0, keptAtBase.output);
-    assertFails(await run(root, ['--base', 'origin/next'], { hits, base: { 'origin/next': [...gaps, row('js/a.js', 'Storage', 1)] } }),
-      'a row added since origin/next names #12 as owner');
 
     writeLedger(root, [...gaps, gap('contract suite: revisions'), row('js/a.js', 'Storage', 1), row('js/a.js', 'Storage', 1)]);
     assertFails(await run(root, [], { hits }),
