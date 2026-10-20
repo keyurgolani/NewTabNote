@@ -103,7 +103,7 @@ export const STATIC_LIMITS = Object.freeze([
   'Every interactive element\'s rendered box is at least 44 by 44 CSS px.',
   'No component animates transform, translation, scaling, or scrolling under reduced motion.',
   'Planes, cards, inputs, and selected states draw a 1px solid transparent border or outline in forced colors, and focus renders in Highlight.',
-  'Focus rings draw the inner ring wherever they draw the outer ring.',
+  'Focus rings draw the inner ring wherever Focus Blue alone is under 3:1: on slate and sage, and on every dark surface.',
 ]);
 
 /** CSS Color 4 system colors */
