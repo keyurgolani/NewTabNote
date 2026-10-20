@@ -76,12 +76,16 @@ Every baseline feature keeps exactly one home.
 | Focus mode | Workspace canvas mode. Moment does not replace it | #3 |
 | Templates; daily notes, calendar; daily-note template | Templates; Daily Notes, the only place the calendar shows; `settings/general` | #3; #25 |
 | Command palette; shortcuts list | Workspace top line on `Mod+Shift+A`; shortcuts as a settings route | #3, [#15][i15] (registries); #25 |
+| [Save status][save-status] | Both apertures: Moment's save proof and the Workspace top line | [#2][i2], #3 |
 | Folders; pin, sort, list or cards, bulk actions; drag a block to the sidebar | Projects collection; collection headers and item actions; drops use the two verbs | #3 |
+| [Notes view][notes-view]; [new note][new-note]; [sidebar show and hide][sidebar-toggle] | Inbox, Daily, or a Projects collection by placement (open, Q2); collection header; collection toggle on `Mod+Shift+E` | #3, [#17][i17]; #3; #3 |
+| [AI sidebar show and hide][ai-toggle] (`Alt+A`, the floating AI button, the palette command) | Inspector toggle | #3, #11 |
 | Resizable sidebar, AI sidebar | Collection width; inspector width | #3 |
 | Archive; Trash, retention, empty trash | Collection views (Trash: open, Q4); retention is a job | #3, [#35][i35] (job host) |
 | Version history, backlinks; graph, analytics | Inspectors; Workspace routes | #3, [#22][i22] (search) |
 | Keyword search; local semantic search | Search destination; its "Similar meaning" group | #3; #22 |
 | Note chat, context-window indicator, block AI, insert preview, insights panel | AI inspector. Moment has no AI commands (#2) | [#11][i11] (remote AI) |
+| [Generate title][ctx-title]; [in-note AI Insights and Refresh][note-insights] | AI inspector | #11; #11, [#7][i7] (intelligence) |
 | Global RAG chat | "Ask across notes" route under Search (open, Q4) | #11, #22 |
 | Auto-title and insights schedulers | `background` jobs | #35, [#8][i8] (recipes) |
 | AI provider settings, prompt-template editor | `settings/intelligence` | #11, #25 |
@@ -91,9 +95,12 @@ Every baseline feature keeps exactly one home.
 | Partial WebDAV sync | `settings/sync` route | [#19][i19] (sync), #25 |
 | Single-note export; single-note import | Note menu; collection header | #3 |
 | Onboarding walkthrough, quick-start prompt | Three Moment tips | #23 (activation) |
+| [Welcome note][welcome-note] | Opt-in sample content, "Try sample content" in Moment. It isn't a tip | #23 |
 | Popup [`quickNoteInput`][popup-quick], [`renderDailySummary`][popup-daily], [`renderRecentNotes`][popup-recent]; Side Panel [`renderSummary`][sp-summary]; [context menus][bg-menus] and [`Alt+P`/`Alt+S`][m-commands] ([handler][bg-commands]) | `popup`: `popup-quick-note`, `popup-daily-summary`, `popup-recent-notes`; `side-panel`: `sidepanel-insights`; `background`: `capture-page`, `capture-selection` | #4; #5; #5, #35 |
 
 Smart paste and the rest of the editor core from [#14][i14] (block registry) work in both apertures. The offscreen Ollama proxy ([`background.js` L114-L130][bg-ollama]) is transport and gets no entry, since `settings/intelligence` covers Ollama. The capture notification belongs to the capture entries, and its click is new.
+
+Slice 3 checked the table against the 1.4.0 code and added the save status, the Notes view, new note, the sidebar and AI sidebar toggles, Generate title, the in-note AI Insights, and the welcome note, which becomes opt-in sample content rather than a tip. Entry points (the toolbar click, and the Popup and Side Panel Open buttons) are in [Entry points](#entry-points), keyboard shortcuts stay with their commands in #15's registry, and the sync status indicator belongs to the sync entry.
 
 ## Routes and history
 
@@ -213,6 +220,7 @@ Tests:
 - `home.kind` is one of `rail`, `collection-view`, `inspector`, `canvas-mode`, `canvas-action`, `route`, `settings-route`, `top-line`, `moment`, `both-apertures` (editor core), `popup`, `side-panel`, `background`.
 - `status` is `mapped` or `owner-question`.
 - The test fails on an absent `requiredIds` entry, a missing or duplicate home, an unknown home kind, a missing owner, or a `removed` status.
+- Each entry's `owner` lists its row's Owner column as issue numbers, split where the row splits it. `status` is `owner-question` while the home waits on Q2 or Q4, and the home is then the proposed default. A feature listed twice counts as a duplicate home, and an ID the list doesn't name fails too, so the inventory and `requiredIds` change together.
 
 ## Browser check
 
@@ -300,6 +308,7 @@ Shell, settings, toolbar, and storage code are out of scope here. The consumers 
 [i4]: https://github.com/keyurgolani/NewTabNote/issues/4
 [i5]: https://github.com/keyurgolani/NewTabNote/issues/5
 [i6]: https://github.com/keyurgolani/NewTabNote/issues/6
+[i7]: https://github.com/keyurgolani/NewTabNote/issues/7
 [i8]: https://github.com/keyurgolani/NewTabNote/issues/8
 [i11]: https://github.com/keyurgolani/NewTabNote/issues/11
 [i12]: https://github.com/keyurgolani/NewTabNote/issues/12
@@ -347,3 +356,11 @@ Shell, settings, toolbar, and storage code are out of scope here. The consumers 
 [sidebar-utils]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/sidebar-utils.js#L210-L215
 [js-files]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/scripts/build.js#L21-L73
 [npm-scripts]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/package.json#L6-L14
+[save-status]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/editor.js#L3424-L3429
+[notes-view]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/controllers/sidebar-controller.js#L862-L883
+[new-note]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/newtab.html#L61
+[sidebar-toggle]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/newtab.html#L271
+[ctx-title]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/controllers/sidebar-controller.js#L637-L641
+[note-insights]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/editor.js#L304-L428
+[welcome-note]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/app.js#L260-L276
+[ai-toggle]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/app.js#L3977-L3988

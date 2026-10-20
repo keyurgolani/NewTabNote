@@ -1,0 +1,95 @@
+{
+  "about": "Every 1.4.0 feature and its one home in the Continuity Canvas, one entry per feature in the parity table of docs/product/continuity-canvas.md, plus editor-core and one per export and import format. Each entry has id, home {kind, id}, owner (the issues in the table's Owner column for that feature), and status: mapped, or owner-question while the home waits on an open owner question, at its proposed default. No entry is ever removed. test/feature-parity.test.js checks the file against its fixed list of IDs.",
+  "features": [
+    { "id": "editor-core", "home": { "kind": "both-apertures", "id": "editor" }, "owner": [14], "status": "mapped" },
+
+    { "id": "document-tabs", "home": { "kind": "canvas-action", "id": "tab-strip" }, "owner": [3], "status": "mapped" },
+    { "id": "split-view", "home": { "kind": "canvas-mode", "id": "split-view" }, "owner": [3], "status": "mapped" },
+    { "id": "picture-in-picture", "home": { "kind": "canvas-action", "id": "picture-in-picture" }, "owner": [3, 6], "status": "owner-question" },
+    { "id": "focus-mode", "home": { "kind": "canvas-mode", "id": "focus" }, "owner": [3], "status": "mapped" },
+
+    { "id": "templates", "home": { "kind": "rail", "id": "templates" }, "owner": [3], "status": "mapped" },
+    { "id": "daily-notes", "home": { "kind": "rail", "id": "daily" }, "owner": [3], "status": "mapped" },
+    { "id": "calendar", "home": { "kind": "collection-view", "id": "daily" }, "owner": [3], "status": "mapped" },
+    { "id": "daily-note-template", "home": { "kind": "settings-route", "id": "settings/general" }, "owner": [25], "status": "mapped" },
+
+    { "id": "command-palette", "home": { "kind": "top-line", "id": "command-palette" }, "owner": [3, 15], "status": "mapped" },
+    { "id": "shortcuts-list", "home": { "kind": "settings-route", "id": "settings/shortcuts" }, "owner": [25], "status": "mapped" },
+    { "id": "save-status", "home": { "kind": "both-apertures", "id": "save-status" }, "owner": [2, 3], "status": "mapped" },
+
+    { "id": "folders", "home": { "kind": "collection-view", "id": "projects" }, "owner": [3], "status": "owner-question" },
+    { "id": "pin", "home": { "kind": "collection-view", "id": "item-actions" }, "owner": [3], "status": "mapped" },
+    { "id": "sort", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+    { "id": "list-or-cards", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+    { "id": "bulk-actions", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+    { "id": "drag-block-to-sidebar", "home": { "kind": "collection-view", "id": "drop-targets" }, "owner": [3], "status": "mapped" },
+
+    { "id": "notes-list", "home": { "kind": "collection-view", "id": "by-placement" }, "owner": [3, 17], "status": "owner-question" },
+    { "id": "new-note", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+    { "id": "sidebar-toggle", "home": { "kind": "collection-view", "id": "toggle" }, "owner": [3], "status": "mapped" },
+    { "id": "ai-inspector-toggle", "home": { "kind": "inspector", "id": "toggle" }, "owner": [3, 11], "status": "mapped" },
+
+    { "id": "resizable-sidebar", "home": { "kind": "collection-view", "id": "width" }, "owner": [3], "status": "mapped" },
+    { "id": "resizable-ai-sidebar", "home": { "kind": "inspector", "id": "width" }, "owner": [3], "status": "mapped" },
+
+    { "id": "archive", "home": { "kind": "collection-view", "id": "archive" }, "owner": [3, 35], "status": "mapped" },
+    { "id": "trash", "home": { "kind": "collection-view", "id": "trash" }, "owner": [3, 35], "status": "owner-question" },
+    { "id": "trash-retention", "home": { "kind": "background", "id": "trash-retention" }, "owner": [3, 35], "status": "mapped" },
+    { "id": "empty-trash", "home": { "kind": "collection-view", "id": "trash" }, "owner": [3, 35], "status": "owner-question" },
+
+    { "id": "version-history", "home": { "kind": "inspector", "id": "history" }, "owner": [3, 22], "status": "mapped" },
+    { "id": "backlinks", "home": { "kind": "inspector", "id": "backlinks" }, "owner": [3, 22], "status": "mapped" },
+    { "id": "graph", "home": { "kind": "route", "id": "graph" }, "owner": [3, 22], "status": "mapped" },
+    { "id": "analytics", "home": { "kind": "route", "id": "analytics" }, "owner": [3, 22], "status": "mapped" },
+
+    { "id": "keyword-search", "home": { "kind": "rail", "id": "search" }, "owner": [3], "status": "mapped" },
+    { "id": "semantic-search", "home": { "kind": "collection-view", "id": "search/similar-meaning" }, "owner": [22], "status": "mapped" },
+
+    { "id": "note-chat", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "context-window-indicator", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "block-ai", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "ai-insert-preview", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "insights-panel", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "generate-title", "home": { "kind": "inspector", "id": "ai" }, "owner": [11], "status": "mapped" },
+    { "id": "note-insights", "home": { "kind": "inspector", "id": "ai" }, "owner": [11, 7], "status": "mapped" },
+    { "id": "global-chat", "home": { "kind": "route", "id": "search/ask-across-notes" }, "owner": [11, 22], "status": "owner-question" },
+
+    { "id": "auto-title-scheduler", "home": { "kind": "background", "id": "auto-title" }, "owner": [35, 8], "status": "mapped" },
+    { "id": "insights-scheduler", "home": { "kind": "background", "id": "insights" }, "owner": [35, 8], "status": "mapped" },
+
+    { "id": "ai-provider-settings", "home": { "kind": "settings-route", "id": "settings/intelligence" }, "owner": [11, 25], "status": "mapped" },
+    { "id": "prompt-template-editor", "home": { "kind": "settings-route", "id": "settings/intelligence" }, "owner": [11, 25], "status": "mapped" },
+
+    { "id": "themes", "home": { "kind": "settings-route", "id": "settings/appearance" }, "owner": [16, 25], "status": "mapped" },
+    { "id": "font", "home": { "kind": "settings-route", "id": "settings/appearance" }, "owner": [16, 25], "status": "mapped" },
+    { "id": "editor-width", "home": { "kind": "settings-route", "id": "settings/appearance" }, "owner": [16, 25], "status": "mapped" },
+    { "id": "theme-builder", "home": { "kind": "route", "id": "theme-builder" }, "owner": [16, 25], "status": "mapped" },
+
+    { "id": "settings-navigation", "home": { "kind": "settings-route", "id": "settings" }, "owner": [25], "status": "mapped" },
+    { "id": "settings-search", "home": { "kind": "settings-route", "id": "settings" }, "owner": [25], "status": "mapped" },
+
+    { "id": "export-json", "home": { "kind": "settings-route", "id": "settings/data" }, "owner": [18, 25], "status": "mapped" },
+    { "id": "export-markdown-zip", "home": { "kind": "settings-route", "id": "settings/data" }, "owner": [18, 25], "status": "mapped" },
+    { "id": "export-backup", "home": { "kind": "settings-route", "id": "settings/data" }, "owner": [18, 25], "status": "mapped" },
+    { "id": "import-json", "home": { "kind": "settings-route", "id": "settings/data" }, "owner": [18, 25], "status": "mapped" },
+    { "id": "auto-backup", "home": { "kind": "settings-route", "id": "settings/data" }, "owner": [18, 25], "status": "mapped" },
+
+    { "id": "webdav-sync", "home": { "kind": "settings-route", "id": "settings/sync" }, "owner": [19, 25], "status": "mapped" },
+
+    { "id": "export-note-json", "home": { "kind": "canvas-action", "id": "note-menu" }, "owner": [3], "status": "mapped" },
+    { "id": "export-note-markdown", "home": { "kind": "canvas-action", "id": "note-menu" }, "owner": [3], "status": "mapped" },
+    { "id": "import-note-json", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+    { "id": "import-note-markdown", "home": { "kind": "collection-view", "id": "header" }, "owner": [3], "status": "mapped" },
+
+    { "id": "onboarding-walkthrough", "home": { "kind": "moment", "id": "tips" }, "owner": [23], "status": "mapped" },
+    { "id": "quick-start-prompt", "home": { "kind": "moment", "id": "tips" }, "owner": [23], "status": "mapped" },
+    { "id": "welcome-note", "home": { "kind": "moment", "id": "sample-content" }, "owner": [23], "status": "mapped" },
+
+    { "id": "popup-quick-note", "home": { "kind": "popup", "id": "popup-quick-note" }, "owner": [4], "status": "mapped" },
+    { "id": "popup-daily-summary", "home": { "kind": "popup", "id": "popup-daily-summary" }, "owner": [4], "status": "mapped" },
+    { "id": "popup-recent-notes", "home": { "kind": "popup", "id": "popup-recent-notes" }, "owner": [4], "status": "mapped" },
+    { "id": "sidepanel-insights", "home": { "kind": "side-panel", "id": "sidepanel-insights" }, "owner": [5], "status": "mapped" },
+    { "id": "capture-page", "home": { "kind": "background", "id": "capture-page" }, "owner": [5, 35], "status": "mapped" },
+    { "id": "capture-selection", "home": { "kind": "background", "id": "capture-selection" }, "owner": [5, 35], "status": "mapped" }
+  ]
+}
