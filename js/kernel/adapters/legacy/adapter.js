@@ -241,8 +241,8 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
    * Whether this page's connection is gone for good: another context upgraded the database,
    * or Chrome closed the connection itself. Only a reload opens it again (#17: pages ask for
    * a reload), so every IndexedDB call answers `reload-required`, which no resend fixes. Each
-   * call checks first, since one that finds a store missing on the old connection would
-   * attempt no transaction to fail.
+   * read, and each unit of a command, checks first, since one that finds a store missing on
+   * the old connection would attempt no transaction to fail.
    * @returns {boolean}
    */
   const reloadRequired = () => storage.openState === 'version-changed' || storage.openState === 'closed-by-browser';
@@ -266,6 +266,8 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
     try {
       for (const unit of units) {
         if (unit.when && !unit.when()) continue;
+        // Each unit commits on its own, so the connection can go between one and the next
+        if (reloadRequired()) return unavailableFrom(reloadError());
         const stop = await runUnit(storage, unit);
         if (stop) return stop;
       }
@@ -300,10 +302,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
 
     commit(work) {
       const { effect } = work;
-      if (effect.kind === 'units') {
-        if (reloadRequired()) return fresh(Promise.resolve(unavailableFrom(reloadError())));
-        return fresh(runUnits(work, effect.units));
-      }
+      if (effect.kind === 'units') return fresh(runUnits(work, effect.units));
       if (effect.kind === 'settings') {
         const items = Object.fromEntries(
           Object.entries(effect.values).map(([key, value]) => [settingKey(effect.area, key), value]),

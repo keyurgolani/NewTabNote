@@ -302,6 +302,33 @@ describe('the legacy adapter', () => {
     storage.transaction = transaction;
   });
 
+  it("checks the connection before each of a command's units, not only its first", async () => {
+    const panel = context();
+    await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });
+    const adapter = adapterFor(panel, 'existing');
+    await adapter.open();
+    const { storage } = panel;
+    const transaction = storage.transaction;
+    let calls = 0;
+    // The connection is marked gone as the command's first unit commits, while a transaction
+    // could still open on it
+    storage.transaction = (/** @type {unknown[]} */ ...args) => {
+      const tx = transaction.apply(storage, args);
+      if (++calls === 1) {
+        tx.addEventListener('complete', () => {
+          storage.openState = 'version-changed';
+        });
+      }
+      return tx;
+    };
+    const tab = kernelFor(adapter, runtime(), CALLERS.newtab);
+    const renamed = await tab.execute({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'Plan' });
+    assert.deepEqual(renamed.kind === 'unavailable' && [renamed.code, renamed.retryable], ['reload-required', false]);
+    // Its search entry's unit never ran
+    assert.equal(calls, 1);
+    storage.transaction = transaction;
+  });
+
   it('answers reload-required once Chrome closes the connection itself, as it does when the database goes', async () => {
     const panel = context();
     await legacyEnv.createDatabase(panel.env.indexedDB, { records: { canvases: [legacyEnv.note('n1')] } });
