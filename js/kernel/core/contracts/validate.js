@@ -122,8 +122,9 @@ export function readFrame(text) {
 export function checkRequest(request, bytes, lookup) {
   const operation = lookup(request.operation);
   if (!operation) return { ok: false, code: 'unknown-operation', issues: [] };
-  if (bytes > operation.entry.maxBytes) return { ok: false, code: 'payload-too-large', issues: [] };
+  // maxBytes is this version's, so a request for another version is refused for its version
   if (request.version !== operation.entry.version) return { ok: false, code: 'unsupported-version', issues: [] };
+  if (bytes > operation.entry.maxBytes) return { ok: false, code: 'payload-too-large', issues: [] };
   const payload = check(operation.payload, request.payload);
   if (!payload.ok) return { ok: false, code: 'invalid-payload', issues: payload.issues };
   return { ok: true, operation, payload: request.payload };

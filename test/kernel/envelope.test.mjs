@@ -242,6 +242,12 @@ describe('the checks a request passes (#13, AC1 and AC4)', () => {
     assert.equal(unknownOperation.ok === false && unknownOperation.code, 'unknown-operation');
     const newer = readRequest(encode(request('captureToDailyNote', capture, { version: 2 })));
     assert.equal(newer.ok === false && newer.code, 'unsupported-version');
+    // The version is checked before the size, since a newer version can have a larger limit
+    const archive = { type: 'archiveNote', commandId: 'c1', noteId: 'n1', padding: 'x'.repeat(SMALL_MESSAGE_BYTES) };
+    const newerAndLarger = readRequest(encode(request('archiveNote', archive, { version: 2 })));
+    assert.equal(newerAndLarger.ok === false && newerAndLarger.code, 'unsupported-version');
+    const larger = readRequest(encode(request('archiveNote', archive)));
+    assert.equal(larger.ok === false && larger.code, 'payload-too-large');
   });
 
   it("holds a request to its operation's maxBytes before its schema, the limit itself included", () => {
