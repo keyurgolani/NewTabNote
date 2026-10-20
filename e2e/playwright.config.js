@@ -16,7 +16,9 @@ module.exports = defineConfig({
   // Each test starts its own browser; one at a time keeps the legacy UI's timing steady
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
-  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
+  // expected-failures.js fails the run when the tests expected to fail don't match
+  // test/known-defects.json
+  reporter: [...(process.env.CI ? [['list'], ['github']] : [['list']]), ['./harness/expected-failures.js']],
   expect: { timeout: 10_000 },
   use: {
     trace: 'retain-on-failure',
