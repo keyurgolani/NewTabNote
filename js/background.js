@@ -1,14 +1,26 @@
 /**
  * Background service worker for New Tab Note
  * Handles context menus, keyboard shortcuts, and API requests via offscreen document.
+ *
+ * A module worker (manifest background "type": "module"). Everything it imports runs before
+ * the listeners below register, and a throw there stops the worker with no menus or
+ * commands, so no module in this graph may throw, or use top-level await, while it loads.
+ * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
  */
 
-// Import shared logic
-try {
-  importScripts('utils.js', 'storage.js');
-} catch (e) {
-  console.error('Failed to import scripts in background:', e);
-}
+// utils.js and storage.js put Utils and Storage on self
+import './utils.js';
+import './storage.js';
+import './kernel/composition/background.js';
+
+/**
+ * The worker's global. A module's top-level functions aren't globals, so captureToDailyNote
+ * is published here for #34's harness, and the listeners call it through this name, as
+ * they did in the classic worker. #12 slice 4 points it at the kernel's command.
+ * @type {any}
+ */
+const workerGlobal = self;
+workerGlobal.captureToDailyNote = captureToDailyNote;
 
 // Global Storage instance for background (instantiated in storage.js)
 let storageReady = Storage.init().catch(e => {
@@ -222,13 +234,13 @@ chrome.action.onClicked.addListener((tab) => {
  */
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'capture-page') {
-    captureToDailyNote({
+    workerGlobal.captureToDailyNote({
       type: 'bookmark',
       url: tab.url,
       title: tab.title
     });
   } else if (info.menuItemId === 'capture-selection') {
-    captureToDailyNote({
+    workerGlobal.captureToDailyNote({
       type: 'text',
       content: info.selectionText,
       source: tab.url
@@ -244,7 +256,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (!tab) return;
 
   if (command === 'capture-page') {
-    captureToDailyNote({
+    workerGlobal.captureToDailyNote({
       type: 'bookmark',
       url: tab.url,
       title: tab.title
@@ -252,7 +264,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   } else if (command === 'capture-selection') {
     // Selection capture via command requires content script or scripting API
     // For now, only page capture is reliable via command without content script
-    captureToDailyNote({
+    workerGlobal.captureToDailyNote({
       type: 'bookmark',
       url: tab.url,
       title: tab.title

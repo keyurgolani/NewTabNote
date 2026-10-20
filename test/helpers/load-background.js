@@ -7,18 +7,26 @@
  * background.js a module (#12 slice 1), and #35's coordinator rerouting captures, change
  * this file, its fakes, and its read, not the assertions.
  *
- * background.js runs as the worker loads it: test/helpers/legacy-env.js's worker context
- * importScripts the real js/utils.js and js/storage.js on fake-indexeddb, with chrome.*
- * fakes that record listeners. This file adds fakes for what the tests look at: the
- * context menus created, the active tab, and chrome.scripting.executeScript returning a
- * selection from that tab, as #5's extractSelection reads it (1.4.0 never calls it).
+ * background.js runs as Chrome runs it, a module service worker (#12 slice 1): startWorker
+ * evaluates it and the modules it imports, the real js/utils.js, js/storage.js, and its
+ * kernel composition root, as ES modules in test/helpers/legacy-env.js's worker context,
+ * on fake-indexeddb, with chrome.* fakes that record listeners. That takes
+ * vm.SourceTextModule, so node runs with --experimental-vm-modules (npm test passes it).
+ * This file adds fakes for what the tests look at: the context menus created, the active
+ * tab, and chrome.scripting.executeScript returning a selection from that tab, as #5's
+ * extractSelection reads it (1.4.0 never calls it).
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
+const { pathToFileURL, fileURLToPath } = require('node:url');
 const { createLegacyEnv, dumpDatabase, recordsOf, plain } = require('./legacy-env');
 
 const ROOT = path.join(__dirname, '..', '..');
+const WORKER_SCRIPT = 'js/background.js';
+// What importScripts() throws in a module service worker
+const MODULE_IMPORT_SCRIPTS = "Failed to execute 'importScripts' on 'WorkerGlobalScope': Module scripts don't support importScripts().";
 // #27 adds it; then every row has to take its release-build value here
 const DEFINE_ALLOWLIST = path.join(ROOT, 'build', 'define-allowlist.json');
 // Rounds of queued work a capture may take before the worker counts as stuck
@@ -65,6 +73,43 @@ async function drain() {
 }
 
 /**
+ * Evaluate js/background.js in `env`, a legacy-env worker context, the way Chrome starts a
+ * module service worker: each module read from disk unmodified, linked by its relative
+ * specifiers, and evaluated once, imports first. importScripts() throws, as it does in a
+ * module worker. Resolves once the graph has evaluated, so its listeners are registered;
+ * rejects with what a module threw while it evaluated, which would stop the real worker.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<void>}
+ */
+async function startWorker(env) {
+  if (typeof vm.SourceTextModule !== 'function') {
+    throw new Error('test/helpers/load-background.js runs the module service worker with vm.SourceTextModule, '
+      + 'which needs node --experimental-vm-modules (npm test passes it)');
+  }
+  if (env.kind !== 'worker') throw new Error("startWorker needs createLegacyEnv({ context: 'worker' })");
+  env.global.importScripts = () => { throw new TypeError(MODULE_IMPORT_SCRIPTS); };
+
+  const modules = new Map();
+  const moduleFor = file => {
+    if (!modules.has(file)) {
+      modules.set(file, new vm.SourceTextModule(fs.readFileSync(file, 'utf8'), {
+        context: env.context,
+        identifier: pathToFileURL(file).href,
+      }));
+    }
+    return modules.get(file);
+  };
+  const worker = moduleFor(path.join(ROOT, WORKER_SCRIPT));
+  await worker.link((specifier, referencing) => {
+    if (!/^\.{1,2}\//.test(specifier)) {
+      throw new Error(`${fileURLToPath(referencing.identifier)} imports ${JSON.stringify(specifier)}; the worker resolves only relative specifiers`);
+    }
+    return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
+  });
+  await worker.evaluate();
+}
+
+/**
  * Start js/background.js on an empty profile and wait for its startup Storage.init().
  * `mutate`, for the self-tests that check these assertions catch a broken worker, gets the
  * worker's global once it has started, to break something in it.
@@ -94,9 +139,15 @@ async function loadBackground({ mutate } = {}) {
     executeScript: async () => [{ frameId: 0, result: { ...SELECTION } }],
   };
 
-  env.load('js/background.js');
-  // background.js keeps its startup Storage.init() as storageReady; captures await it too
-  await env.get('storageReady');
+  await startWorker(env);
+  // background.js keeps its startup Storage.init() as storageReady, which captures await
+  // too. A module's top-level bindings aren't globals, so wait until the worker is idle,
+  // when that init has settled, and check it opened the database.
+  await drain();
+  const { openState } = env.global.Storage;
+  if (openState !== 'open') {
+    throw new Error(`The worker's startup Storage.init() left Storage.openState at '${openState}' on an empty profile`);
+  }
   if (mutate) mutate(env.global);
 
   const events = eventFakes(env.chrome.api);
@@ -142,4 +193,4 @@ async function readTodaysDailyNote(worker) {
   return { note, blocks };
 }
 
-module.exports = { loadBackground, readTodaysDailyNote };
+module.exports = { loadBackground, readTodaysDailyNote, startWorker };

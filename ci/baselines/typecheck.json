@@ -106,8 +106,7 @@
     },
     "js/background.js": {
       "TS2304": {
-        "Cannot find name 'chrome'.": 21,
-        "Cannot find name 'importScripts'.": 1
+        "Cannot find name 'chrome'.": 21
       },
       "TS2339": {
         "Property 'ensureDailyNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
