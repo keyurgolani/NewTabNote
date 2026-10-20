@@ -9,9 +9,6 @@
     "js/analytics.js": {
       "TS2339": {
         "Property 'Analytics' does not exist on type 'Window & typeof globalThis'.": 1
-      },
-      "TS2740": {
-        "Type '{ new (): Storage; prototype: Storage; }' is missing the following properties from type 'DatabaseManager': dbName, dbVersion, db, requiredStores, and 82 more.": 1
       }
     },
     "js/app.js": {
@@ -234,7 +231,7 @@
         "Cannot find name 'JSZip'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'Themes'.": 2,
-        "Cannot find name 'confirmDialog'.": 2
+        "Cannot find name 'confirmDialog'.": 1
       },
       "TS2339": {
         "Property 'SettingsController' does not exist on type 'Window & typeof globalThis'.": 1,
@@ -374,13 +371,12 @@
         "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4,
         "Property 'getSnapshots' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
         "Property 'getTemplates' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
+        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
         "Property 'saveSnapshot' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
         "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
         "Property 'src' does not exist on type 'Element'.": 1,
         "Property 'tagName' does not exist on type 'EventTarget'.": 2,
-        "Property 'updateNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 3,
-        "Property 'updateNoteLinks' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+        "Property 'updateNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2
       },
       "TS2345": {
         "Argument of type 'string' is not assignable to parameter of type '\"rewrite\" | \"expand\" | \"summarize\" | \"translate\"'.": 1
@@ -424,11 +420,7 @@
     },
     "js/popup.js": {
       "TS2304": {
-        "Cannot find name 'chrome'.": 2
-      },
-      "TS2339": {
-        "Property 'disabled' does not exist on type 'HTMLElement'.": 2,
-        "Property 'value' does not exist on type 'HTMLElement'.": 2
+        "Cannot find name 'chrome'.": 1
       },
       "TS2362": {
         "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.": 1
@@ -481,12 +473,10 @@
     "js/storage.js": {
       "TS2304": {
         "Cannot find name 'StorageError'.": 1,
-        "Cannot find name 'chrome'.": 28
+        "Cannot find name 'chrome'.": 27
       },
       "TS2339": {
-        "Property 'chrome' does not exist on type 'Window & typeof globalThis'.": 2,
-        "Property 'error' does not exist on type 'EventTarget'.": 3,
-        "Property 'result' does not exist on type 'EventTarget'.": 5
+        "Property 'chrome' does not exist on type 'Window & typeof globalThis'.": 2
       },
       "TS2451": {
         "Cannot redeclare block-scoped variable 'Storage'.": 1

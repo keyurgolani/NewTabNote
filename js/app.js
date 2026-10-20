@@ -2,6 +2,38 @@
  * Main application entry point
  */
 
+/**
+ * The shared DatabaseManager from storage.js. The bare `Storage` global also
+ * names the DOM's Web Storage type, so typed calls go through this.
+ * @returns {DatabaseManager}
+ */
+function appStorage() {
+  return /** @type {any} */ (globalThis).Storage;
+}
+
+/** What the new tab shows when it can't open the notes database (Storage.init codes). */
+const STORAGE_GUARD_TEXT = {
+  NEWER_SCHEMA: {
+    title: 'Your notes were upgraded by a newer NewTabNote version',
+    body: "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.",
+  },
+  MISSING_CORE_STORES: {
+    title: 'Your notes database is incomplete',
+    body: "Part of it is missing, so this version won't change anything. Export a copy of what's there now.",
+  },
+};
+
+/** Features that are off while an auxiliary store is missing. `settings` has none: settings live in chrome.storage.local. */
+const MISSING_STORE_FEATURES = {
+  media: 'imported media',
+  search_index: 'search',
+  folders: 'folders',
+  links: 'backlinks and graph',
+  themes: 'custom themes',
+  vectors: 'semantic search',
+  snapshots: 'version history',
+};
+
 class App {
   constructor() {
     this.editor = null;
@@ -106,6 +138,7 @@ class App {
 
       // Initialize storage
       await Storage.init();
+      this.reportMissingStores();
 
       // Populate DOM cache after document is ready
       this.domRefs.init();
@@ -224,7 +257,99 @@ class App {
       this.logger.info('App', 'New Tab Note initialized successfully');
     } catch (error) {
       console.error('Failed to initialize app:', error);
-      this.showErrorState(error);
+      if (error && (error.code === 'NEWER_SCHEMA' || error.code === 'MISSING_CORE_STORES')) {
+        this.showStorageGuard(error.code);
+      } else {
+        this.showErrorState(error);
+      }
+    }
+  }
+
+  /**
+   * On each start with auxiliary stores missing, a toast names the features
+   * that are off and points to Export. A missing settings store alone shows nothing.
+   * @returns {void}
+   */
+  reportMissingStores() {
+    const features = appStorage().missingStores
+      .map((store) => MISSING_STORE_FEATURES[store])
+      .filter(Boolean);
+    if (features.length === 0) return;
+    Utils.showToast(
+      `Your notes database is incomplete, so these are off: ${features.join(', ')}. `
+      + 'Export a copy from Settings > Data & Backup.',
+      'error',
+      10000
+    );
+  }
+
+  /**
+   * Full-page state for a database this build can't open: a newer build
+   * upgraded it, or its notes or blocks store is missing. Nothing here
+   * writes; Export reads every store except settings.
+   * @param {'NEWER_SCHEMA'|'MISSING_CORE_STORES'} code
+   * @returns {void}
+   */
+  showStorageGuard(code) {
+    const text = STORAGE_GUARD_TEXT[code];
+    const appEl = document.getElementById('app');
+    appEl.innerHTML = '';
+
+    const wrapper = document.createElement('main');
+    wrapper.className = 'storage-guard';
+    wrapper.setAttribute('aria-labelledby', 'storage-guard-title');
+
+    const heading = document.createElement('h1');
+    heading.id = 'storage-guard-title';
+    heading.className = 'storage-guard-title';
+    heading.textContent = text.title;
+    wrapper.appendChild(heading);
+
+    const body = document.createElement('p');
+    body.className = 'storage-guard-body';
+    body.textContent = text.body;
+    wrapper.appendChild(body);
+
+    const actions = document.createElement('div');
+    actions.className = 'storage-guard-actions';
+
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.className = 'primary-btn storage-guard-btn';
+    exportBtn.textContent = 'Export';
+    exportBtn.addEventListener('click', () => this.exportRawCopy(exportBtn));
+    actions.appendChild(exportBtn);
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.type = 'button';
+    reloadBtn.className = 'secondary-btn storage-guard-btn';
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.addEventListener('click', () => location.reload());
+    actions.appendChild(reloadBtn);
+
+    wrapper.appendChild(actions);
+    appEl.appendChild(wrapper);
+    exportBtn.focus();
+  }
+
+  /**
+   * Download `newtabnote-raw-v<version>-<timestamp>.json`: every store except
+   * settings, read without changing anything.
+   * @param {HTMLButtonElement} [button] - Disabled while the export runs
+   * @returns {Promise<void>}
+   */
+  async exportRawCopy(button) {
+    if (button) button.disabled = true;
+    try {
+      const raw = await appStorage().exportRawStores();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      Utils.downloadFile(JSON.stringify(raw, null, 2), `newtabnote-raw-v${raw.onDiskVersion}-${timestamp}.json`);
+      Utils.showToast('Exported a copy of your notes. Settings are left out.', 'success');
+    } catch (error) {
+      console.error('Raw export failed:', error);
+      Utils.showToast(`Export failed: ${error.message}`, 'error');
+    } finally {
+      if (button) button.disabled = false;
     }
   }
 
@@ -456,6 +581,9 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
+    this.settingsController.onFlushEditors = () => this.tabController.flushEditorsForImport();
+    this.settingsController.onReloadEditors = (trashedIds, trashedAt) =>
+      this.tabController.reloadEditorsAfterImport(trashedIds, trashedAt);
     this.settingsController.onApplyTheme = () => this.applyTheme();
     this.settingsController.onOpenThemeBuilder = () => {
       if (this.themeBuilderController) {
@@ -2062,6 +2190,8 @@ class App {
    * Run trash cleanup based on retention setting
    */
   async runTrashCleanup() {
+    // Cleanup strips blocks before media; skip it while any store is missing.
+    if (appStorage().missingStores.length > 0) return;
     const retentionDays = await Storage.getSetting('trashRetention', 30);
     if (retentionDays > 0) {
       const deletedCount = await Storage.cleanupTrash(retentionDays);

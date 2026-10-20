@@ -998,6 +998,8 @@ class NotesManager {
    */
   initIndexer() {
     if (typeof Worker === 'undefined') return;
+    // Search indexing is off while the search_index store is missing.
+    if (!this.storage.hasStore('search_index')) return;
     try {
       this.indexerWorker = new Worker('js/workers/indexer.js');
       this.indexerWorker.onmessage = async (e) => {
@@ -1090,6 +1092,8 @@ class NotesManager {
    */
   async updateMissingEmbeddings() {
     if (typeof Embeddings === 'undefined') return;
+    // Semantic search is off while the vectors store is missing: don't load the model for nothing.
+    if (!this.storage.hasStore('vectors')) return;
 
     const vectors = await this.storage.getAllVectors();
     const vectorMap = new Map(vectors.map(v => [v.noteId, v]));

@@ -96,6 +96,8 @@ jobs:
         run: npm run build -- --strict 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run package
         run: npm run package 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run check:notices
+        run: npm run check:notices 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Upload dist
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -170,7 +172,7 @@ jobs:
           COMMANDS: >-
             {"unit": "npm test",
             "typecheck": "npm run typecheck:ratchet",
-            "build": "npm run build -- --strict && npm run package",
+            "build": "npm run build -- --strict && npm run package && npm run check:notices",
             "extension": "npm run build -- --strict && npm run test:extension"}
         run: |
           set -euo pipefail

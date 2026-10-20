@@ -5640,3 +5640,43 @@ kbd {
   border-top: 1px solid var(--border-color);
   margin: 8px 0;
 }
+
+/* Notes database can't be opened safely (App.showStorageGuard) */
+.storage-guard {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+}
+
+.storage-guard-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.storage-guard-body {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.storage-guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.storage-guard-btn {
+  min-width: 44px;
+  min-height: 44px;
+}

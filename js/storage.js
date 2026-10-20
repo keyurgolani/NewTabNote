@@ -44,6 +44,32 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
   if (typeof globalThis !== 'undefined') globalThis.chrome = { storage: mockStorage, runtime: mockRuntime };
 }
 
+/**
+ * What an import writes, prepared before its transaction opens.
+ * @typedef {Object} ImportPlan
+ * @property {'merge'|'replace'} mode
+ * @property {Array<Object>} notes - Package notes (from a structuredClone of the parsed file)
+ * @property {Map<string, string>} noteIds - Package note ID to the new local ID
+ * @property {Array<Object>} elements - Blocks with new IDs and mapped canvasId
+ * @property {Array<Object>} media - Media rows with new IDs, mapped canvasId, and Blob data
+ * @property {Array<Object>} folders - Package folders
+ * @property {number} skippedMedia - Media rows whose note isn't in the package
+ */
+
+/**
+ * What a committed import did.
+ * @typedef {Object} ImportResult
+ * @property {'merge'|'replace'} mode
+ * @property {number} notes
+ * @property {number} blocks
+ * @property {number} folders - Folders added
+ * @property {number} reusedFolders - Package folders whose ID already existed locally
+ * @property {number} media
+ * @property {number} skippedMedia
+ * @property {Array<string>} trashedIds - Local notes Replace all moved to trash
+ * @property {number} trashedAt
+ */
+
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
@@ -51,6 +77,55 @@ class DatabaseManager {
     this.db = null;
     // Store names kept as 'canvases' for backward compatibility with existing databases
     this.requiredStores = ['canvases', 'elements', 'settings', 'media', 'search_index', 'folders', 'links', 'themes', 'vectors', 'snapshots'];
+    /** Without these the notes can't be read, so init() refuses to run. */
+    this.coreStores = ['canvases', 'elements'];
+    /**
+     * 'closed' before init; 'open' after it (check missingStores for a degraded
+     * database); 'newer-version' when a newer build upgraded the database;
+     * 'missing-core-stores'; or 'failed'.
+     * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'}
+     */
+    this.openState = 'closed';
+    /** @type {number|null} Version of the database on disk, read before opening */
+    this.onDiskVersion = null;
+    /** @type {Array<string>} Stores a version-8 database is missing */
+    this.missingStores = [];
+    /**
+     * chrome.storage.local key naming the missing-stores recovery copy, so each
+     * start reads this one small value instead of every stored backup. Whatever
+     * removes that copy removes this key with it.
+     */
+    this.missingStoresCopyKey = 'recovery_copy_missing_stores';
+  }
+
+  /**
+   * The chrome API (or the file:// mock installed at the top of this file).
+   * @returns {any}
+   */
+  _chromeApi() {
+    return /** @type {any} */ (globalThis).chrome;
+  }
+
+  /**
+   * An Error with a machine-readable `code`. A plain Error rather than
+   * StorageError, because the service worker doesn't load storage-error.js.
+   * @param {string} code
+   * @param {string} message
+   * @returns {Error & {code: string}}
+   */
+  _codedError(code, message) {
+    const error = /** @type {Error & {code: string}} */ (new Error(message));
+    error.code = code;
+    return error;
+  }
+
+  /**
+   * Whether the open database has an object store.
+   * @param {string} name
+   * @returns {boolean}
+   */
+  hasStore(name) {
+    return Boolean(this.db) && this.db.objectStoreNames.contains(name);
   }
 
   /**
@@ -74,6 +149,8 @@ class DatabaseManager {
       try {
         return await fn();
       } catch (error) {
+        // A store missing from the database won't appear on retry.
+        if (error && error.code === 'STORE_UNAVAILABLE') throw error;
         if (attempt === maxRetries) {
           throw new StorageError('TRANSACTION_FAILED', operation, error);
         }
@@ -83,116 +160,104 @@ class DatabaseManager {
   }
 
   /**
-   * Initialize the database
+   * Open the database at this build's version (8).
+   *
+   * Nothing here deletes or rewrites a database. One a newer build upgraded is
+   * left alone: init() rejects with code NEWER_SCHEMA before opening it at 8,
+   * writing default settings, or running the integrity check. A version-8
+   * database with stores missing is kept: without `canvases` or `elements`
+   * init() rejects with MISSING_CORE_STORES; otherwise the app runs with those
+   * features off (see missingStores and transaction()).
+   * @returns {Promise<void>}
    */
   async init() {
-    // First, check if we need to delete a corrupted database
-    await this.checkAndRepairDatabase();
+    this.openState = 'closed';
+    this.onDiskVersion = null;
+    this.missingStores = [];
 
+    await this.checkAndRepairDatabase();
+    if (/** @type {string} */ (this.openState) === 'newer-version') {
+      throw this._newerSchemaError();
+    }
+    this._throwIfCoreStoresMissing();
+
+    let db;
+    try {
+      db = await this._openAtCurrentVersion();
+    } catch (error) {
+      if (error && error.name === 'VersionError') {
+        // A newer build upgraded the database between the check and this open.
+        this.openState = 'newer-version';
+        this.onDiskVersion = await this._readOnDiskVersion();
+        throw this._newerSchemaError();
+      }
+      this.openState = 'failed';
+      console.error('IndexedDB error:', error);
+      throw error;
+    }
+
+    this.db = db;
+    this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
+    if (this.missingStores.length > 0) {
+      console.warn('Missing stores detected:', this.missingStores);
+    }
+    try {
+      this._throwIfCoreStoresMissing();
+    } catch (error) {
+      db.close();
+      this.db = null;
+      throw error;
+    }
+    this.openState = 'open';
+
+    // Initialize default settings in chrome.storage.local on first load
+    await this.initializeDefaultSettings();
+
+    // Read-only integrity check: reports orphans, deletes nothing
+    try {
+      const report = await this.validateDatabase();
+      const orphans = Object.entries(report)
+        .filter(([key, value]) => key.startsWith('orphaned') && typeof value === 'number' && value > 0);
+      if (orphans.length > 0) {
+        console.info('Integrity check (read-only) found orphaned records:', Object.fromEntries(orphans));
+      }
+    } catch (e) {
+      console.warn('Integrity check encountered an error:', e);
+    }
+  }
+
+  /**
+   * @returns {Error & {code: string}}
+   */
+  _newerSchemaError() {
+    return this._codedError('NEWER_SCHEMA',
+      `Notes database version ${this.onDiskVersion || 'unknown'} is newer than this build supports (${this.dbVersion})`);
+  }
+
+  /**
+   * @returns {void}
+   */
+  _throwIfCoreStoresMissing() {
+    const missingCore = this.coreStores.filter((store) => this.missingStores.includes(store));
+    if (missingCore.length === 0) return;
+    this.openState = 'missing-core-stores';
+    throw this._codedError('MISSING_CORE_STORES', `Notes database is missing ${missingCore.join(' and ')}`);
+  }
+
+  /**
+   * Open at this build's version, creating any store an older version lacks.
+   * @returns {Promise<IDBDatabase>}
+   */
+  _openAtCurrentVersion() {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
-      request.onerror = (event) => {
-        console.error('IndexedDB error:', event.target.error);
-        reject(event.target.error);
-      };
-
-      request.onsuccess = async (event) => {
-        this.db = event.target.result;
-
-        // Verify all stores exist
-        const missingStores = this.requiredStores.filter(
-          (store) => !this.db.objectStoreNames.contains(store)
-        );
-
-        if (missingStores.length > 0) {
-          console.warn('Missing stores detected:', missingStores);
-          // Close and delete, then retry
-          this.db.close();
-          this.deleteAndRetry().then(resolve).catch(reject);
-          return;
-        }
-
-        // Initialize default settings in chrome.storage.local on first load
-        await this.initializeDefaultSettings();
-
-        // Run referential integrity check and remove orphans
-        try {
-          await this._removeOrphans();
-        } catch (e) {
-          console.warn('Integrity check encountered an error:', e);
-        }
-
-        resolve();
-      };
-
       request.onupgradeneeded = (event) => {
-        const db = event.target.result;
         console.debug('Upgrading database from version', event.oldVersion, 'to', event.newVersion);
-
-        // Canvases store
-        if (!db.objectStoreNames.contains('canvases')) {
-          const canvasStore = db.createObjectStore('canvases', { keyPath: 'id' });
-          canvasStore.createIndex('name', 'name', { unique: false });
-          canvasStore.createIndex('updatedAt', 'updatedAt', { unique: false });
-        }
-
-        // Elements store
-        if (!db.objectStoreNames.contains('elements')) {
-          const elementStore = db.createObjectStore('elements', { keyPath: 'id' });
-          elementStore.createIndex('canvasId', 'canvasId', { unique: false });
-          elementStore.createIndex('type', 'type', { unique: false });
-        }
-
-        // Settings store
-        if (!db.objectStoreNames.contains('settings')) {
-          db.createObjectStore('settings', { keyPath: 'key' });
-        }
-
-        if (!db.objectStoreNames.contains('media')) {
-          const mediaStore = db.createObjectStore('media', { keyPath: 'id' });
-          mediaStore.createIndex('canvasId', 'canvasId', { unique: false });
-        }
-
-        // Search index store
-        if (!db.objectStoreNames.contains('search_index')) {
-          db.createObjectStore('search_index', { keyPath: 'noteId' });
-        }
-
-        // Folders store
-        if (!db.objectStoreNames.contains('folders')) {
-          const folderStore = db.createObjectStore('folders', { keyPath: 'id' });
-          folderStore.createIndex('parentId', 'parentId', { unique: false });
-          folderStore.createIndex('name', 'name', { unique: false });
-        }
-
-        // Links store (for bidirectional linking)
-        if (!db.objectStoreNames.contains('links')) {
-          const linkStore = db.createObjectStore('links', { keyPath: 'id' });
-          linkStore.createIndex('fromNoteId', 'fromNoteId', { unique: false });
-          linkStore.createIndex('toNoteId', 'toNoteId', { unique: false });
-        }
-
-        // Themes store
-        if (!db.objectStoreNames.contains('themes')) {
-          const themeStore = db.createObjectStore('themes', { keyPath: 'id' });
-          themeStore.createIndex('name', 'name', { unique: false });
-          themeStore.createIndex('updatedAt', 'updatedAt', { unique: false });
-        }
-
-        // Vectors store (for embeddings)
-        if (!db.objectStoreNames.contains('vectors')) {
-          db.createObjectStore('vectors', { keyPath: 'id' });
-        }
-
-        // Snapshots store (for version history)
-        if (!db.objectStoreNames.contains('snapshots')) {
-          const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
-          snapshotStore.createIndex('noteId', 'noteId', { unique: false });
-          snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
-        }
+        this._createMissingStores(request.result);
       };
-
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
       request.onblocked = () => {
         console.warn('Database upgrade blocked. Please close other tabs using this extension.');
       };
@@ -200,144 +265,278 @@ class DatabaseManager {
   }
 
   /**
-   * Check if database is corrupted and needs repair.
-   * Exports existing data to chrome.storage.local before deleting a corrupted DB.
+   * Create the version-8 stores an older database lacks. Runs only inside an upgrade.
+   * @param {IDBDatabase} db
+   * @returns {void}
    */
-  async checkAndRepairDatabase() {
-    return new Promise((resolve) => {
-      const request = indexedDB.open(this.dbName);
-
-      request.onsuccess = async (event) => {
-        const db = event.target.result;
-        const currentVersion = db.version;
-
-        // Check if all required stores exist
-        const missingStores = this.requiredStores.filter(
-          (store) => !db.objectStoreNames.contains(store)
-        );
-
-        if (missingStores.length > 0 && currentVersion >= this.dbVersion) {
-          // Database is corrupted — export what we can before deleting
-          console.warn('Corrupted database detected, exporting data before delete...');
-          try {
-            await this._exportBeforeCorruptionDelete(db);
-          } catch (e) {
-            console.warn('Failed to export data before corruption delete:', e);
-          }
-
-          db.close();
-
-          const deleteRequest = indexedDB.deleteDatabase(this.dbName);
-          deleteRequest.onsuccess = () => {
-            console.debug('Corrupted database deleted');
-            resolve();
-          };
-          deleteRequest.onerror = () => resolve();
-        } else {
-          db.close();
-          resolve();
-        }
-      };
-
-      request.onerror = () => resolve();
-    });
-  }
-
-  /**
-   * Delete database and retry initialization.
-   * Exports existing data to chrome.storage.local before deleting.
-   */
-  async deleteAndRetry() {
-    // Export data before deleting
-    try {
-      await this._exportBeforeCorruptionDelete(this.db);
-    } catch (e) {
-      console.warn('Failed to export data before DB delete/recreate:', e);
+  _createMissingStores(db) {
+    // Canvases store
+    if (!db.objectStoreNames.contains('canvases')) {
+      const canvasStore = db.createObjectStore('canvases', { keyPath: 'id' });
+      canvasStore.createIndex('name', 'name', { unique: false });
+      canvasStore.createIndex('updatedAt', 'updatedAt', { unique: false });
     }
 
-    return new Promise((resolve, reject) => {
-      console.debug('Deleting database for fresh start...');
-      const deleteRequest = indexedDB.deleteDatabase(this.dbName);
+    // Elements store
+    if (!db.objectStoreNames.contains('elements')) {
+      const elementStore = db.createObjectStore('elements', { keyPath: 'id' });
+      elementStore.createIndex('canvasId', 'canvasId', { unique: false });
+      elementStore.createIndex('type', 'type', { unique: false });
+    }
 
-      deleteRequest.onsuccess = () => {
-        console.debug('Database deleted, reinitializing...');
-        // Retry init
-        const request = indexedDB.open(this.dbName, this.dbVersion);
+    // Settings store
+    if (!db.objectStoreNames.contains('settings')) {
+      db.createObjectStore('settings', { keyPath: 'key' });
+    }
 
-        request.onerror = (event) => reject(event.target.error);
+    if (!db.objectStoreNames.contains('media')) {
+      const mediaStore = db.createObjectStore('media', { keyPath: 'id' });
+      mediaStore.createIndex('canvasId', 'canvasId', { unique: false });
+    }
 
-        request.onsuccess = (event) => {
-          this.db = event.target.result;
-          resolve();
-        };
+    // Search index store
+    if (!db.objectStoreNames.contains('search_index')) {
+      db.createObjectStore('search_index', { keyPath: 'noteId' });
+    }
 
-        request.onupgradeneeded = (event) => {
-          const db = event.target.result;
+    // Folders store
+    if (!db.objectStoreNames.contains('folders')) {
+      const folderStore = db.createObjectStore('folders', { keyPath: 'id' });
+      folderStore.createIndex('parentId', 'parentId', { unique: false });
+      folderStore.createIndex('name', 'name', { unique: false });
+    }
 
-          const canvasStore = db.createObjectStore('canvases', { keyPath: 'id' });
-          canvasStore.createIndex('name', 'name', { unique: false });
-          canvasStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+    // Links store (for bidirectional linking)
+    if (!db.objectStoreNames.contains('links')) {
+      const linkStore = db.createObjectStore('links', { keyPath: 'id' });
+      linkStore.createIndex('fromNoteId', 'fromNoteId', { unique: false });
+      linkStore.createIndex('toNoteId', 'toNoteId', { unique: false });
+    }
 
-          const elementStore = db.createObjectStore('elements', { keyPath: 'id' });
-          elementStore.createIndex('canvasId', 'canvasId', { unique: false });
-          elementStore.createIndex('type', 'type', { unique: false });
+    // Themes store
+    if (!db.objectStoreNames.contains('themes')) {
+      const themeStore = db.createObjectStore('themes', { keyPath: 'id' });
+      themeStore.createIndex('name', 'name', { unique: false });
+      themeStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+    }
 
-          db.createObjectStore('settings', { keyPath: 'key' });
+    // Vectors store (for embeddings)
+    if (!db.objectStoreNames.contains('vectors')) {
+      db.createObjectStore('vectors', { keyPath: 'id' });
+    }
 
-          const mediaStore = db.createObjectStore('media', { keyPath: 'id' });
-          mediaStore.createIndex('canvasId', 'canvasId', { unique: false });
+    // Snapshots store (for version history)
+    if (!db.objectStoreNames.contains('snapshots')) {
+      const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
+      snapshotStore.createIndex('noteId', 'noteId', { unique: false });
+      snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
+    }
+  }
 
-          db.createObjectStore('search_index', { keyPath: 'noteId' });
+  /**
+   * Look at the database before opening it at this build's version, through
+   * an unversioned open: record its version and missing stores, and write a
+   * recovery copy when a version-8 database is missing stores. Never deletes
+   * or changes the database.
+   * @returns {Promise<void>}
+   */
+  async checkAndRepairDatabase() {
+    const db = await this._openUnversioned();
+    if (!db) return;
+    try {
+      this.onDiskVersion = db.version;
+      if (db.version > this.dbVersion) {
+        this.openState = 'newer-version';
+        return;
+      }
+      // An older database gets its missing stores from the upgrade.
+      if (db.version !== this.dbVersion) return;
 
-          const folderStore = db.createObjectStore('folders', { keyPath: 'id' });
-          folderStore.createIndex('parentId', 'parentId', { unique: false });
-          folderStore.createIndex('name', 'name', { unique: false });
+      this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
+      // Page contexts only: the service worker leaves the copy to the next page that opens.
+      if (this.missingStores.length > 0 && this.isPageContext()) {
+        try {
+          await this._writeMissingStoresCopy(db, this.missingStores);
+        } catch (error) {
+          console.warn('Could not save a recovery copy of the incomplete database:', error);
+        }
+      }
+    } finally {
+      db.close();
+    }
+  }
 
-          const linkStore = db.createObjectStore('links', { keyPath: 'id' });
-          linkStore.createIndex('fromNoteId', 'fromNoteId', { unique: false });
-          linkStore.createIndex('toNoteId', 'toNoteId', { unique: false });
-
-          db.createObjectStore('vectors', { keyPath: 'id' });
-
-          const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
-          snapshotStore.createIndex('noteId', 'noteId', { unique: false });
-          snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
-        };
-      };
-
-      deleteRequest.onerror = () => {
-        reject(new Error('Failed to delete corrupted database'));
-      };
+  /**
+   * Open the database at whatever version it has, without upgrading it.
+   * @returns {Promise<IDBDatabase|null>} null when it can't be opened
+   */
+  _openUnversioned() {
+    return new Promise((resolve) => {
+      const request = indexedDB.open(this.dbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
     });
   }
 
   /**
-   * Export existing data to chrome.storage.local before a corruption delete.
-   * Reads whatever stores are available and saves as a recovery backup.
-   * @param {IDBDatabase} db - The open database handle
+   * @returns {Promise<number|null>}
+   */
+  async _readOnDiskVersion() {
+    const db = await this._openUnversioned();
+    if (!db) return null;
+    const version = db.version;
+    db.close();
+    return version;
+  }
+
+  /**
+   * Whether this is a page (new tab, popup, side panel) rather than the service worker.
+   * @returns {boolean}
+   */
+  isPageContext() {
+    return typeof document !== 'undefined';
+  }
+
+  /**
+   * Save one recovery copy of a version-8 database that is missing stores:
+   * every readable store except `settings` under its own name, with Blobs as
+   * data URLs. Skipped when a copy for the same missing stores exists, which
+   * the `missingStoresCopyKey` value records.
+   *
+   * Tabs that open together would each read every store and write a copy, so
+   * the check and the write run under a Web Lock: the later tab finds the
+   * earlier one's copy. Without navigator.locks they run unguarded.
+   * @param {IDBDatabase} db - Open through an unversioned open
+   * @param {Array<string>} missing
    * @returns {Promise<void>}
    */
-  async _exportBeforeCorruptionDelete(db) {
-    const data = { recoveryBackup: true, timestamp: Date.now(), canvases: [], elements: [] };
+  async _writeMissingStoresCopy(db, missing) {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!locks || typeof locks.request !== 'function') {
+      await this._writeMissingStoresCopyIfNone(db, missing);
+      return;
+    }
+    await locks.request('ntn-recovery-copy', () => this._writeMissingStoresCopyIfNone(db, missing));
+  }
 
-    const readStore = (storeName) => new Promise((resolve) => {
+  /**
+   * The check and write of _writeMissingStoresCopy.
+   * @param {IDBDatabase} db
+   * @param {Array<string>} missing
+   * @returns {Promise<void>}
+   */
+  async _writeMissingStoresCopyIfNone(db, missing) {
+    const sameStores = (list) => Array.isArray(list) && list.length === missing.length
+      && missing.every((store) => list.includes(store));
+    const written = await this._getStorageValue(this.missingStoresCopyKey);
+    if (written && sameStores(written.missingStores)) return;
+
+    /** @type {Object<string, *>} */
+    const copy = { recoveryBackup: true, reason: 'missing-stores', timestamp: Date.now(), missingStores: missing.slice() };
+    for (const name of Array.from(db.objectStoreNames)) {
+      // settings is skipped: versions up to 1.1.2 kept the AI key there in plaintext.
+      if (name === 'settings') continue;
       try {
-        if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
-        const tx = db.transaction(storeName, 'readonly');
-        const request = tx.objectStore(storeName).getAll();
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => resolve([]);
-      } catch (e) { resolve([]); }
-    });
+        copy[name] = await this._readStoreForCopy(db, name);
+      } catch (error) {
+        console.warn(`Recovery copy skipped unreadable store ${name}:`, error);
+      }
+    }
+    await this._writeRecoveryBackup(copy, (key) => ({
+      [this.missingStoresCopyKey]: { key, missingStores: copy.missingStores, timestamp: copy.timestamp },
+    }));
+  }
 
-    data.canvases = await readStore('canvases');
-    data.elements = await readStore('elements');
+  /**
+   * Read every store except `settings` through an unversioned open, changing
+   * nothing. The newer-version and incomplete-database screens offer this
+   * when the regular export can't run.
+   * @returns {Promise<{rawExport: true, onDiskVersion: number, exportedAt: number, stores: Object<string, Array<*>>}>}
+   */
+  async exportRawStores() {
+    const db = await this._openUnversioned();
+    if (!db) throw new Error("couldn't open the notes database");
+    try {
+      /** @type {Object<string, Array<*>>} */
+      const stores = {};
+      for (const name of Array.from(db.objectStoreNames)) {
+        if (name === 'settings') continue;
+        stores[name] = await this._readStoreForCopy(db, name);
+      }
+      return { rawExport: true, onDiskVersion: db.version, exportedAt: Date.now(), stores };
+    } finally {
+      db.close();
+    }
+  }
 
-    const key = `recovery_backup_${Date.now()}`;
-    await new Promise((resolve) => {
-      chrome.storage.local.set({ [key]: data }, () => resolve());
+  /**
+   * Read a whole store for a copy: its values with Blobs as data URLs. Stores
+   * without a key path (none in version 8) come back as {key, value} pairs.
+   * @param {IDBDatabase} db
+   * @param {string} name
+   * @returns {Promise<Array<*>>}
+   */
+  async _readStoreForCopy(db, name) {
+    const { values, keys } = await new Promise((resolve, reject) => {
+      const tx = db.transaction(name, 'readonly');
+      const store = tx.objectStore(name);
+      const valuesRequest = store.getAll();
+      const keysRequest = store.keyPath === null ? store.getAllKeys() : null;
+      tx.oncomplete = () => resolve({ values: valuesRequest.result || [], keys: keysRequest ? keysRequest.result : null });
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
     });
-    console.debug('Recovery backup saved to chrome.storage.local:', key);
+    const converted = [];
+    for (const value of values) {
+      converted.push(await this._blobsToDataUrls(value));
+    }
+    return keys ? converted.map((value, i) => ({ key: keys[i], value })) : converted;
+  }
+
+  /**
+   * Copy a stored value with every Blob in it replaced by a data URL.
+   * @param {*} value
+   * @returns {Promise<*>}
+   */
+  async _blobsToDataUrls(value) {
+    if (value instanceof Blob) return this._blobToDataUrl(value);
+    if (!this._hasBlob(value, 0)) return value;
+    if (Array.isArray(value)) {
+      const out = [];
+      for (const item of value) out.push(await this._blobsToDataUrls(item));
+      return out;
+    }
+    /** @type {Object<string, *>} */
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = await this._blobsToDataUrls(item);
+    }
+    return out;
+  }
+
+  /**
+   * @param {*} value
+   * @param {number} depth
+   * @returns {boolean}
+   */
+  _hasBlob(value, depth) {
+    if (value instanceof Blob) return true;
+    if (!value || typeof value !== 'object' || depth > 32 || ArrayBuffer.isView(value)) return false;
+    const items = Array.isArray(value) ? value : Object.values(value);
+    return items.some((item) => this._hasBlob(item, depth + 1));
+  }
+
+  /**
+   * @param {Blob} blob
+   * @returns {Promise<string>}
+   */
+  _blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   }
 
   /**
@@ -413,6 +612,49 @@ class DatabaseManager {
   }
 
   /**
+   * One value from chrome.storage.local, reading only that key.
+   * @param {string} key
+   * @returns {Promise<*>} undefined when the key isn't set or can't be read
+   */
+  _getStorageValue(key) {
+    const chromeApi = this._chromeApi();
+    return new Promise((resolve) => {
+      chromeApi.storage.local.get(key, (result) => {
+        if (chromeApi.runtime.lastError || !result) { resolve(undefined); return; }
+        resolve(result[key]);
+      });
+    });
+  }
+
+  /**
+   * Save a recovery copy to chrome.storage.local under a new
+   * `recovery_backup_<timestamp>` key. Nothing prunes these; the backup and
+   * Recovery Center work (#18, #20) reads them.
+   * @param {Object} copy
+   * @param {(key: string) => Object<string, *>} [withItems] - More items to set in the same write, given the key
+   * @returns {Promise<string>} The key written
+   */
+  async _writeRecoveryBackup(copy, withItems) {
+    const chromeApi = this._chromeApi();
+    // Check only the key about to be used, rather than reading every stored backup.
+    let stamp = Date.now();
+    while ((await this._getStorageValue(`recovery_backup_${stamp}`)) !== undefined) stamp += 1;
+    const key = `recovery_backup_${stamp}`;
+    const items = { [key]: copy, ...(withItems ? withItems(key) : {}) };
+    await new Promise((resolve, reject) => {
+      chromeApi.storage.local.set(items, () => {
+        const error = chromeApi.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message || String(error)));
+        } else {
+          resolve(key);
+        }
+      });
+    });
+    return key;
+  }
+
+  /**
    * Collect all note IDs from the canvases store.
    * @returns {Promise<Set<string>>}
    */
@@ -420,85 +662,16 @@ class DatabaseManager {
     return new Promise((resolve, reject) => {
       const store = this.getStore('canvases');
       const request = store.getAllKeys();
-      request.onsuccess = () => resolve(new Set(request.result));
+      request.onsuccess = () => resolve(new Set(/** @type {Array<string>} */ (request.result)));
       request.onerror = () => reject(request.error);
     });
   }
 
   /**
-   * Remove orphaned entries from a store where the foreign key references a non-existent note.
-   * @param {string} storeName - Object store name
-   * @param {string} foreignKey - Property name that references a note ID
-   * @param {Set<string>} noteIds - Set of valid note IDs
-   * @returns {Promise<number>} Number of orphans removed
-   */
-  async _removeOrphansFromStore(storeName, foreignKey, noteIds) {
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const request = store.getAll();
-      let removed = 0;
-
-      request.onsuccess = () => {
-        const entries = request.result;
-        for (const entry of entries) {
-          const refId = entry[foreignKey];
-          if (refId && !noteIds.has(refId)) {
-            store.delete(entry.id || entry[store.keyPath]);
-            removed++;
-          }
-        }
-      };
-
-      tx.oncomplete = () => resolve(removed);
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-
-  /**
-   * Run referential integrity check and remove orphaned entries.
-   * Scans elements, search_index, links, and vectors for references to non-existent notes.
-   * @returns {Promise<void>}
-   */
-  async _removeOrphans() {
-    const noteIds = await this._getAllNoteIds();
-
-    // elements: canvasId → note ID
-    await this._removeOrphansFromStore('elements', 'canvasId', noteIds);
-
-    // search_index: noteId → note ID
-    await this._removeOrphansFromStore('search_index', 'noteId', noteIds);
-
-    // links: check both fromNoteId and toNoteId
-    await new Promise((resolve, reject) => {
-      const tx = this.db.transaction('links', 'readwrite');
-      const store = tx.objectStore('links');
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        for (const link of request.result) {
-          if ((link.fromNoteId && !noteIds.has(link.fromNoteId)) ||
-              (link.toNoteId && !noteIds.has(link.toNoteId))) {
-            store.delete(link.id);
-          }
-        }
-      };
-
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-
-    // vectors: noteId → note ID (keyPath is 'id', but noteId field references the note)
-    await this._removeOrphansFromStore('vectors', 'noteId', noteIds);
-
-    // snapshots: noteId → note ID
-    await this._removeOrphansFromStore('snapshots', 'noteId', noteIds);
-  }
-
-  /**
    * Validate database integrity and return a report.
-   * Does NOT modify data — read-only scan.
-   * @returns {Promise<{orphanedElements: number, orphanedSearchIndex: number, orphanedLinks: number, orphanedVectors: number, missingStores: string[]}>}
+   * Does NOT modify data — read-only scan. Missing stores are skipped. Index
+   * key cursors keep media and element payloads from being loaded.
+   * @returns {Promise<{orphanedElements: number, orphanedSearchIndex: number, orphanedLinks: number, orphanedVectors: number, orphanedSnapshots: number, orphanedMedia: number, missingStores: string[]}>}
    */
   async validateDatabase() {
     const report = {
@@ -506,66 +679,129 @@ class DatabaseManager {
       orphanedSearchIndex: 0,
       orphanedLinks: 0,
       orphanedVectors: 0,
-      missingStores: []
+      orphanedSnapshots: 0,
+      orphanedMedia: 0,
+      missingStores: this.requiredStores.filter((store) => !this.hasStore(store))
     };
-
-    // Check missing stores
-    report.missingStores = this.requiredStores.filter(
-      (store) => !this.db.objectStoreNames.contains(store)
-    );
 
     const noteIds = await this._getAllNoteIds();
 
-    // Scan elements
-    const elements = await new Promise((resolve, reject) => {
-      const request = this.getStore('elements').getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    report.orphanedElements = elements.filter(e => e.canvasId && !noteIds.has(e.canvasId)).length;
+    if (this.hasStore('elements')) {
+      report.orphanedElements = await this._countOrphanIndexKeys('elements', 'canvasId', noteIds);
+    }
 
-    // Scan search_index
-    const searchEntries = await new Promise((resolve, reject) => {
-      const request = this.getStore('search_index').getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    report.orphanedSearchIndex = searchEntries.filter(e => e.noteId && !noteIds.has(e.noteId)).length;
+    if (this.hasStore('search_index')) {
+      // keyPath is noteId
+      const keys = await this._getAllKeys('search_index');
+      report.orphanedSearchIndex = keys.filter((key) => !noteIds.has(/** @type {string} */ (key))).length;
+    }
 
-    // Scan links
-    const links = await new Promise((resolve, reject) => {
-      const request = this.getStore('links').getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    report.orphanedLinks = links.filter(l =>
-      (l.fromNoteId && !noteIds.has(l.fromNoteId)) ||
-      (l.toNoteId && !noteIds.has(l.toNoteId))
-    ).length;
+    if (this.hasStore('links')) {
+      const links = await new Promise((resolve, reject) => {
+        const request = this.getStore('links').getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      report.orphanedLinks = links.filter(l =>
+        (l.fromNoteId && !noteIds.has(l.fromNoteId)) ||
+        (l.toNoteId && !noteIds.has(l.toNoteId))
+      ).length;
+    }
 
-    // Scan vectors
-    const vectors = await new Promise((resolve, reject) => {
-      const request = this.getStore('vectors').getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    report.orphanedVectors = vectors.filter(v => v.noteId && !noteIds.has(v.noteId)).length;
+    if (this.hasStore('vectors')) {
+      // saveVector keys each vector by its note ID
+      const keys = await this._getAllKeys('vectors');
+      report.orphanedVectors = keys.filter((key) => !noteIds.has(/** @type {string} */ (key))).length;
+    }
+
+    if (this.hasStore('snapshots')) {
+      report.orphanedSnapshots = await this._countOrphanIndexKeys('snapshots', 'noteId', noteIds);
+    }
+
+    if (this.hasStore('media')) {
+      report.orphanedMedia = await this._countOrphanIndexKeys('media', 'canvasId', noteIds);
+    }
 
     return report;
   }
 
   /**
-   * Generic transaction helper
+   * @param {string} storeName
+   * @returns {Promise<Array<IDBValidKey>>}
+   */
+  _getAllKeys(storeName) {
+    return new Promise((resolve, reject) => {
+      const request = this.getStore(storeName).getAllKeys();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Count records whose index key names a note that doesn't exist.
+   * @param {string} storeName
+   * @param {string} indexName - Index on the note-ID field
+   * @param {Set<string>} noteIds
+   * @returns {Promise<number>}
+   */
+  _countOrphanIndexKeys(storeName, indexName, noteIds) {
+    return new Promise((resolve, reject) => {
+      let orphans = 0;
+      const request = this.getStore(storeName).index(indexName).openKeyCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve(orphans);
+          return;
+        }
+        if (cursor.key && !noteIds.has(/** @type {string} */ (cursor.key))) orphans += 1;
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Generic transaction helper. A store the database lacks throws an Error
+   * with code STORE_UNAVAILABLE: reads of auxiliary stores treat it as empty,
+   * and writes let it reach their error toasts.
+   * @param {string|Array<string>} storeNames
+   * @param {IDBTransactionMode} [mode='readonly']
+   * @returns {IDBTransaction}
    */
   transaction(storeNames, mode = 'readonly') {
+    const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+    const missing = names.filter((name) => !this.hasStore(name));
+    if (this.db && missing.length > 0) {
+      throw this._codedError('STORE_UNAVAILABLE', `Store unavailable: ${missing.join(', ')}`);
+    }
     return this.db.transaction(storeNames, mode);
   }
 
   /**
    * Get object store
+   * @param {string} storeName
+   * @param {IDBTransactionMode} [mode='readonly']
+   * @returns {IDBObjectStore}
    */
   getStore(storeName, mode = 'readonly') {
     return this.transaction(storeName, mode).objectStore(storeName);
+  }
+
+  /**
+   * Run a read of an auxiliary store, treating a missing store as empty.
+   * @template T
+   * @param {() => Promise<T>} read
+   * @param {T} emptyValue
+   * @returns {Promise<T>}
+   */
+  async _readAux(read, emptyValue) {
+    try {
+      return await read();
+    } catch (error) {
+      if (error && error.code === 'STORE_UNAVAILABLE') return emptyValue;
+      throw error;
+    }
   }
 
   // ============ Daily Note Operations ============
@@ -659,17 +895,21 @@ class DatabaseManager {
       },
     };
 
+    // Without a search_index store the note is still created; only its index entry is skipped.
+    const indexed = this.hasStore('search_index');
     return this.withRetry(async () => {
-      const tx = this.transaction(['canvases', 'search_index'], 'readwrite');
+      const tx = this.transaction(indexed ? ['canvases', 'search_index'] : ['canvases'], 'readwrite');
       await tx.objectStore('canvases').add(note);
 
       // Initial search index entry
-      await tx.objectStore('search_index').add({
-        noteId: note.id,
-        name: note.name,
-        content: '',
-        updatedAt: note.updatedAt
-      });
+      if (indexed) {
+        await tx.objectStore('search_index').add({
+          noteId: note.id,
+          name: note.name,
+          content: '',
+          updatedAt: note.updatedAt
+        });
+      }
 
       return note;
     }, 'createNote');
@@ -823,23 +1063,25 @@ class DatabaseManager {
    * Get all search index entries
    */
   async getSearchIndex() {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index');
       const request = store.getAll();
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
 
   /**
    * Set the entire search index
    */
   async setSearchIndex(data) {
+    // Background indexing is skipped while the search_index store is missing.
+    if (!this.hasStore('search_index')) return;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       store.clear();
       data.forEach(entry => store.put(entry));
-      const tx = store.transaction || store.db.transaction(['search_index'], 'readwrite');
+      const tx = store.transaction;
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     }), 'setSearchIndex');
@@ -849,6 +1091,7 @@ class DatabaseManager {
    * Update search index for a note
    */
   async updateNoteSearchIndex(noteId, data) {
+    if (!this.hasStore('search_index')) return;
     return this.withRetry(async () => {
       const store = this.getStore('search_index', 'readwrite');
       const entry = await store.get(noteId);
@@ -866,6 +1109,7 @@ class DatabaseManager {
    * @param {Object} entry - Search index entry with noteId
    */
   async setSearchIndexEntry(entry) {
+    if (!this.hasStore('search_index')) return;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       const request = store.put(entry);
@@ -879,6 +1123,7 @@ class DatabaseManager {
    * @param {string} noteId
    */
   async removeSearchIndexEntry(noteId) {
+    if (!this.hasStore('search_index')) return;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       const request = store.delete(noteId);
@@ -1019,12 +1264,14 @@ class DatabaseManager {
     // Delete all media for this note
     await this.deleteMediaByNote(id);
 
-    // Delete vectors for this note
-    try {
-      const store = this.getStore('vectors', 'readwrite');
-      await store.delete(id);
-    } catch (e) {
-      console.warn('Failed to delete vectors for note:', id, e);
+    // Delete vectors for this note (none exist while the vectors store is missing)
+    if (this.hasStore('vectors')) {
+      try {
+        const store = this.getStore('vectors', 'readwrite');
+        await store.delete(id);
+      } catch (e) {
+        console.warn('Failed to delete vectors for note:', id, e);
+      }
     }
 
     // Delete snapshots for this note
@@ -1145,9 +1392,88 @@ class DatabaseManager {
   }
 
   /**
+   * Write a note and its blocks in one readwrite transaction on `canvases` and
+   * `elements`, so a note is never stored without the blocks the editor had for it.
+   * Sets `updatedAt` like updateNote. The transaction opens synchronously, before
+   * this returns, which lets pagehide and visibilitychange handlers use it.
+   *
+   * Trash and archive state stays as stored: the editor never sets it, and its
+   * copy of the note can be older than a trash, restore, or import Replace done
+   * meanwhile (in this tab or another). The stored values are copied onto `note`.
+   *
+   * A note that is no longer stored was deleted after the editor loaded it
+   * (emptying trash, or trashNote deleting an empty untitled note). Writing it
+   * would bring it back, so the transaction aborts, blocks included, and the
+   * promise resolves with null. Every editor note comes from a stored one: notes
+   * are created and imported in IndexedDB before an editor loads them.
+   * @param {Object} note - Note record (`updatedAt` is set on it)
+   * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
+   * @returns {Promise<Object|null>} The note once the transaction completes, or null when
+   *   the note no longer exists and nothing was written
+   */
+  saveNoteWithBlocks(note, elements) {
+    note.updatedAt = Date.now();
+    return new Promise((resolve, reject) => {
+      const tx = this.transaction(['canvases', 'elements'], 'readwrite');
+      let gone = false;
+      tx.oncomplete = () => resolve(note);
+      tx.onerror = () => {
+        if (!gone) reject(tx.error);
+      };
+      tx.onabort = () => {
+        if (gone) resolve(null);
+        else reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
+      };
+      // A put that throws (for example DataCloneError) must not let the rest commit.
+      const fail = (error) => {
+        tx.abort();
+        reject(error);
+      };
+      try {
+        const elementStore = tx.objectStore('elements');
+        for (const element of elements) {
+          elementStore.put(element);
+        }
+        const canvases = tx.objectStore('canvases');
+        const read = canvases.get(note.id);
+        read.onsuccess = () => {
+          if (!read.result) {
+            gone = true;
+            tx.abort();
+            return;
+          }
+          try {
+            this._keepStoredNoteState(note, read.result);
+            canvases.put(note);
+          } catch (error) {
+            fail(error);
+          }
+        };
+      } catch (error) {
+        fail(error);
+      }
+    });
+  }
+
+  /**
+   * Copy the stored trash and archive fields onto a note about to be written.
+   * @param {Object} note
+   * @param {Object} stored - The note as stored
+   * @returns {void}
+   */
+  _keepStoredNoteState(note, stored) {
+    for (const field of ['trashed', 'trashedAt', 'archived', 'archivedAt']) {
+      if (field in stored) note[field] = stored[field];
+      else delete note[field];
+    }
+  }
+
+  /**
    * Helper to update only name in search index
    */
   async updateNoteNameInSearchIndex(noteId, name) {
+    // A side effect of saving: skipped while the search_index store is missing.
+    if (!this.hasStore('search_index')) return;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('search_index', 'readwrite');
       const getRequest = store.get(noteId);
@@ -1193,22 +1519,22 @@ class DatabaseManager {
    * Get all folders
    */
   async getAllFolders() {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const request = this.getStore('folders').getAll();
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
 
   /**
    * Get folder by ID
    */
   async getFolder(id) {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const request = this.getStore('folders').get(id);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }), undefined);
   }
 
   /**
@@ -1303,6 +1629,8 @@ class DatabaseManager {
    * @param {Array<string>} targetNoteNames - Names of notes being linked to
    */
   async updateNoteLinks(fromNoteId, targetNoteNames) {
+    // A side effect of saving: skipped while the links store is missing.
+    if (!this.hasStore('links')) return;
     if (!targetNoteNames || targetNoteNames.length === 0) {
       // Clear existing links from this note
       await this.clearLinksFromNote(fromNoteId);
@@ -1356,6 +1684,7 @@ class DatabaseManager {
    * Clear all links originating from a note
    */
   async clearLinksFromNote(noteId) {
+    if (!this.hasStore('links')) return;
     return this.withRetry(() => {
       const tx = this.transaction('links', 'readwrite');
       const store = tx.objectStore('links');
@@ -1376,7 +1705,7 @@ class DatabaseManager {
    * Get all backlinks for a note
    */
   async getBacklinks(noteId) {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('links');
       const index = store.index('toNoteId');
       const request = index.getAll(noteId);
@@ -1394,7 +1723,7 @@ class DatabaseManager {
         resolve(sourceNotes);
       };
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
 
   // ============ Element Operations ============
@@ -1504,12 +1833,12 @@ class DatabaseManager {
    * Get media by ID
    */
   async getMedia(id) {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('media');
       const request = store.get(id);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }), undefined);
   }
 
   /**
@@ -1517,6 +1846,8 @@ class DatabaseManager {
    * Note: Index name 'canvasId' kept for backward compatibility
    */
   async deleteMediaByNote(noteId) {
+    // No media exists while the media store is missing, so there is nothing to delete.
+    if (!this.hasStore('media')) return;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const tx = this.transaction('media', 'readwrite');
       const store = tx.objectStore('media');
@@ -1680,26 +2011,24 @@ class DatabaseManager {
   // ============ Export/Import ============
 
   /**
-   * Export all data
+   * Export every note outside trash (active, archived, and templates) with
+   * its blocks and media, plus all folders. Export JSON, Create Backup,
+   * auto-backup, and the Replace all recovery copy use this. `version` stays
+   * 1 so 1.4.0 can still import the file.
+   * @returns {Promise<Object>} {version, exportedAt, canvases, elements, media, folders}
    */
   async exportAll() {
-    const notes = await this.getAllNotes();
+    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
+    const noteIds = new Set(notes.map((note) => note.id));
     const allElements = [];
-    const allMedia = [];
 
     for (const note of notes) {
       const elements = await this.getElementsByNote(note.id);
       allElements.push(...elements);
     }
 
-    // Get all media
-    const mediaStore = this.getStore('media');
-    const mediaRequest = await new Promise((resolve, reject) => {
-      const request = mediaStore.getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    allMedia.push(...mediaRequest);
+    // Only media whose note is exported (1.4.0 exported the whole store)
+    const allMedia = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
 
     // Convert blobs to base64 for export
     const mediaWithBase64 = await Promise.all(
@@ -1719,7 +2048,20 @@ class DatabaseManager {
       canvases: notes,
       elements: allElements,
       media: mediaWithBase64,
+      folders: await this.getAllFolders(),
     };
+  }
+
+  /**
+   * Every media row.
+   * @returns {Promise<Array<Object>>}
+   */
+  async _getAllMedia() {
+    return this._readAux(() => new Promise((resolve, reject) => {
+      const request = this.getStore('media').getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    }), []);
   }
 
   /**
@@ -1730,14 +2072,12 @@ class DatabaseManager {
     const elements = await this.getElementsByNote(noteId);
 
     // Get media for this note
-    const mediaStore = this.getStore('media');
-    // Index name 'canvasId' kept for backward compatibility
-    const index = mediaStore.index('canvasId');
-    const media = await new Promise((resolve, reject) => {
-      const request = index.getAll(noteId);
+    const media = await this._readAux(() => new Promise((resolve, reject) => {
+      // Index name 'canvasId' kept for backward compatibility
+      const request = this.getStore('media').index('canvasId').getAll(noteId);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-    });
+    }), []);
 
     // Convert blobs to base64
     const mediaWithBase64 = await Promise.all(
@@ -1761,77 +2101,289 @@ class DatabaseManager {
   }
 
   /**
-   * Import data
-   * Note: Import format uses 'canvases' key for backward compatibility
+   * Check a parsed backup before anything is written. Writes nothing.
+   * The format uses the 'canvases' key for backward compatibility.
+   * @param {*} data - Parsed backup file
+   * @returns {{ok: true, counts: {notes: number, blocks: number, folders: number, media: number, skippedMedia: number}} | {ok: false, reason: string}}
    */
-  async importData(data, merge = false) {
-    if (!merge) {
-      // Clear existing data
-      const existingNotes = await this.getAllNotes();
-      for (const note of existingNotes) {
-        await this.deleteNote(note.id);
+  validateImport(data) {
+    /**
+     * @param {string} reason
+     * @returns {{ok: false, reason: string}}
+     */
+    const refuse = (reason) => ({ ok: false, reason });
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !('canvases' in data)) {
+      return refuse("the file isn't a NewTabNote backup");
+    }
+    if (data.version !== 1) {
+      return refuse(data.version === undefined
+        ? 'the file has no backup version'
+        : `backup version ${String(data.version)} isn't supported`);
+    }
+    if (!Array.isArray(data.canvases)) return refuse("its notes aren't a list");
+    if (!Array.isArray(data.elements)) return refuse('it has no list of blocks');
+    const optionalList = (value) => value === undefined || value === null || Array.isArray(value);
+    if (!optionalList(data.media)) return refuse("its media isn't a list");
+    if (!optionalList(data.folders)) return refuse("its folders aren't a list");
+    const media = Array.isArray(data.media) ? data.media : [];
+    const folders = Array.isArray(data.folders) ? data.folders : [];
+
+    /**
+     * @param {Array<*>} list
+     * @param {string} one - Singular label
+     * @param {string} many - Plural label
+     * @returns {string|null} Refusal reason
+     */
+    const checkRecords = (list, one, many) => {
+      const seen = new Set();
+      for (let i = 0; i < list.length; i++) {
+        const record = list[i];
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return `${one} ${i + 1} isn't a record`;
+        if (typeof record.id !== 'string' || record.id === '') return `${one} ${i + 1} has no text ID`;
+        if (seen.has(record.id)) return `two ${many} share the ID "${record.id}"`;
+        seen.add(record.id);
       }
+      return null;
+    };
+    const recordProblem = checkRecords(data.canvases, 'note', 'notes')
+      || checkRecords(data.elements, 'block', 'blocks')
+      || checkRecords(media, 'media item', 'media items')
+      || checkRecords(folders, 'folder', 'folders');
+    if (recordProblem) return refuse(recordProblem);
+
+    const noteIds = new Set(data.canvases.map((n) => n.id));
+    const orphan = data.elements.find((el) => !noteIds.has(el.canvasId));
+    if (orphan) return refuse(`block "${orphan.id}" belongs to a note that isn't in the file`);
+
+    // 1.4.0 exports carry the whole media store, so media for notes outside the file is skipped, not refused.
+    const skippedMedia = media.filter((m) => !noteIds.has(m.canvasId)).length;
+    return {
+      ok: true,
+      counts: {
+        notes: data.canvases.length,
+        blocks: data.elements.length,
+        folders: folders.length,
+        media: media.length - skippedMedia,
+        skippedMedia,
+      },
+    };
+  }
+
+  /**
+   * Import a backup. Never writes package data over a local record: notes,
+   * blocks, and media get new IDs; a package folder whose ID exists locally
+   * reuses the local folder untouched. Replace all also moves every active
+   * note to trash, in the same transaction, after saving a recovery copy.
+   * Works on a structuredClone of `data`, so the parsed input isn't changed.
+   * @param {*} data - Parsed backup file (checked with validateImport)
+   * @param {'merge'|'replace'} mode
+   * @returns {Promise<ImportResult>}
+   */
+  async importData(data, mode) {
+    if (mode !== 'merge' && mode !== 'replace') {
+      throw this._codedError('IMPORT_INVALID', `unknown import mode "${mode}"`);
+    }
+    const check = this.validateImport(data);
+    if (check.ok === false) {
+      throw this._codedError('IMPORT_INVALID', check.reason);
     }
 
-    // Import notes (data uses 'canvases' key for backward compatibility)
-    for (const note of data.canvases) {
-      if (merge) {
-        // Generate new IDs to avoid conflicts
-        const oldId = note.id;
-        note.id = Utils.generateId();
-
-        // Update element references (field name 'canvasId' kept for backward compatibility)
-        data.elements
-          .filter((el) => el.canvasId === oldId)
-          .forEach((el) => {
-            el.canvasId = note.id;
-          });
-
-        // Update media references (field name 'canvasId' kept for backward compatibility)
-        data.media
-          .filter((m) => m.canvasId === oldId)
-          .forEach((m) => {
-            m.canvasId = note.id;
-          });
-      }
-
-      await this.withRetry(() => new Promise((resolve, reject) => {
-        // Store name 'canvases' kept for backward compatibility
-        const store = this.getStore('canvases', 'readwrite');
-        const request = store.put(note);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      }), 'importData');
+    const pkg = structuredClone(data);
+    const folders = Array.isArray(pkg.folders) ? pkg.folders : [];
+    const mediaRows = Array.isArray(pkg.media) ? pkg.media : [];
+    if (folders.length > 0 && !this.hasStore('folders')) {
+      throw this._codedError('IMPORT_INVALID', "this profile's folders store is missing");
     }
 
-    // Import elements
-    await this.saveElements(data.elements);
-
-    // Import media (convert base64 back to blobs)
+    const noteIds = new Map(pkg.canvases.map((n) => [n.id, Utils.generateId()]));
     // Field name 'canvasId' kept for backward compatibility
-    for (const m of data.media) {
-      if (typeof m.blob === 'string' && m.blob.startsWith('data:')) {
-        const response = await fetch(m.blob);
-        m.blob = await response.blob();
+    const elements = pkg.elements.map((el) => ({ ...el, id: Utils.generateId(), canvasId: noteIds.get(el.canvasId) }));
+    const media = [];
+    let skippedMedia = 0;
+    for (const row of mediaRows) {
+      if (!noteIds.has(row.canvasId)) {
+        skippedMedia += 1;
+        continue;
       }
-      await this.saveMedia(m.id, m.canvasId, m.blob, m.type);
+      // Turn data URLs into Blobs now: awaiting inside the transaction would let it commit early.
+      const blob = typeof row.blob === 'string' && row.blob.startsWith('data:') ? this._dataUrlToBlob(row.blob) : row.blob;
+      media.push({ ...row, id: Utils.generateId(), canvasId: noteIds.get(row.canvasId), blob });
+    }
+    if (media.length > 0 && !this.hasStore('media')) {
+      throw this._codedError('IMPORT_INVALID', "this profile's media store is missing");
     }
 
-    return data.canvases;
+    if (mode === 'replace') {
+      // A superset of the export and the older recovery format, for the legacy decoders in #18.
+      const copy = { ...(await this.exportAll()), recoveryBackup: true, reason: 'pre-import-replace', timestamp: Date.now() };
+      try {
+        await this._writeRecoveryBackup(copy);
+      } catch (error) {
+        console.warn('Recovery copy before Replace all failed:', error);
+        throw this._codedError('RECOVERY_COPY_FAILED', "couldn't save a recovery copy");
+      }
+    }
+
+    return this._commitImport({ mode, notes: pkg.canvases, noteIds, elements, media, folders, skippedMedia });
+  }
+
+  /**
+   * The import commit: one readwrite transaction over canvases, elements,
+   * media, and folders. Local notes and folders are read inside it, so what
+   * it decides (trash, folder reuse, daily-note dates) matches what it writes.
+   * Any failure aborts the whole transaction.
+   * @param {ImportPlan} plan
+   * @returns {Promise<ImportResult>}
+   */
+  _commitImport(plan) {
+    return new Promise((resolve, reject) => {
+      const scope = ['canvases', 'elements'];
+      if (this.hasStore('media')) scope.push('media');
+      if (this.hasStore('folders')) scope.push('folders');
+      const tx = this.transaction(scope, 'readwrite');
+      const now = Date.now();
+      /** @type {ImportResult} */
+      const result = {
+        mode: plan.mode,
+        notes: plan.notes.length,
+        blocks: plan.elements.length,
+        folders: 0,
+        reusedFolders: 0,
+        media: plan.media.length,
+        skippedMedia: plan.skippedMedia,
+        trashedIds: [],
+        trashedAt: now,
+      };
+      /** @type {*} */
+      let failure = null;
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(failure || tx.error || new Error('Import transaction aborted'));
+
+      const notesRequest = tx.objectStore('canvases').getAll();
+      const foldersRequest = scope.includes('folders') ? tx.objectStore('folders').getAll() : null;
+      let waiting = foldersRequest ? 2 : 1;
+      const onRead = () => {
+        waiting -= 1;
+        if (waiting > 0) return;
+        try {
+          this._writeImport(tx, plan, notesRequest.result, foldersRequest ? foldersRequest.result : [], result);
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+      notesRequest.onsuccess = onRead;
+      if (foldersRequest) foldersRequest.onsuccess = onRead;
+    });
+  }
+
+  /**
+   * Queue the import's writes inside its transaction.
+   * @param {IDBTransaction} tx
+   * @param {ImportPlan} plan
+   * @param {Array<Object>} localNotes - Every note record, read in this transaction
+   * @param {Array<Object>} localFolders - Every folder record, read in this transaction
+   * @param {ImportResult} result - Updated with what was written
+   * @returns {void}
+   */
+  _writeImport(tx, plan, localNotes, localFolders, result) {
+    const noteStore = tx.objectStore('canvases');
+    const localFolderIds = new Set(localFolders.map((f) => f.id));
+    const packageFolderIds = new Set(plan.folders.map((f) => f.id));
+    /** @param {*} id */
+    const resolveFolder = (id) => (id && (packageFolderIds.has(id) || localFolderIds.has(id)) ? id : null);
+
+    if (plan.mode === 'replace') {
+      for (const local of localNotes) {
+        if (local.trashed || local.archived || local.isTemplate) continue;
+        // As trashNote does, without its hard delete of empty untitled notes.
+        local.trashed = true;
+        local.trashedAt = result.trashedAt;
+        local.archived = false;
+        local.archivedAt = null;
+        local.updatedAt = result.trashedAt;
+        noteStore.put(local);
+        result.trashedIds.push(local.id);
+      }
+    }
+
+    // Dates that keep a local daily note outside trash after this commit.
+    const dailyDates = new Set(localNotes
+      .filter((n) => !n.trashed && n.isDaily && n.dateStr)
+      .map((n) => n.dateStr));
+
+    if (plan.folders.length > 0) {
+      const folderStore = tx.objectStore('folders');
+      for (const folder of plan.folders) {
+        if (localFolderIds.has(folder.id)) {
+          result.reusedFolders += 1;
+          continue;
+        }
+        folderStore.add({ ...folder, parentId: resolveFolder(folder.parentId) });
+        result.folders += 1;
+      }
+    }
+
+    for (const packageNote of plan.notes) {
+      const imported = { ...packageNote, id: plan.noteIds.get(packageNote.id), folderId: resolveFolder(packageNote.folderId) };
+      // Imported notes start outside trash, so an import never queues anything for deletion.
+      delete imported.trashed;
+      delete imported.trashedAt;
+      if (imported.isDaily && imported.dateStr && dailyDates.has(imported.dateStr)) {
+        imported.isDaily = false;
+        imported.dateStr = null;
+        imported.name = `${imported.name || 'Untitled'} (imported)`;
+      }
+      noteStore.add(imported);
+    }
+
+    const elementStore = tx.objectStore('elements');
+    for (const element of plan.elements) {
+      elementStore.add(element);
+    }
+    if (plan.media.length > 0) {
+      const mediaStore = tx.objectStore('media');
+      for (const row of plan.media) {
+        mediaStore.add(row);
+      }
+    }
+  }
+
+  /**
+   * Decode a data URL into a Blob without fetch (the extension CSP doesn't allow data: in connect-src).
+   * @param {string} dataUrl
+   * @returns {Blob}
+   */
+  _dataUrlToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(',');
+    if (comma === -1) throw new Error('malformed data URL in media');
+    const meta = dataUrl.slice(5, comma);
+    const payload = dataUrl.slice(comma + 1);
+    const isBase64 = /;base64$/i.test(meta);
+    const type = meta.replace(/;base64$/i, '').split(';')[0] || '';
+    if (!isBase64) {
+      return new Blob([decodeURIComponent(payload)], { type });
+    }
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type });
   }
 
   /**
    * Get all custom themes
    */
   async getCustomThemes() {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('themes');
       const request = store.index('updatedAt').getAll();
       request.onsuccess = () => {
         resolve(request.result.reverse());
       };
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
 
   /**
@@ -1865,6 +2417,8 @@ class DatabaseManager {
    * Save a vector embedding for a note
    */
   async saveVector(noteId, vector) {
+    // Background indexing is skipped while the vectors store is missing.
+    if (!this.hasStore('vectors')) return false;
     return this.withRetry(() => new Promise((resolve, reject) => {
       const store = this.getStore('vectors', 'readwrite');
       const request = store.put({ id: noteId, noteId, vector, updatedAt: Date.now() });
@@ -1877,24 +2431,24 @@ class DatabaseManager {
    * Get a vector embedding for a note
    */
   async getVector(noteId) {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('vectors', 'readonly');
       const request = store.get(noteId);
       request.onsuccess = () => resolve(request.result?.vector || null);
       request.onerror = () => reject(request.error);
-    });
+    }), null);
   }
 
   /**
    * Get all vectors
    */
   async getAllVectors() {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('vectors', 'readonly');
       const request = store.getAll();
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
   // ============ Snapshot / Version History Operations ============
 
@@ -1933,7 +2487,7 @@ class DatabaseManager {
    * @returns {Promise<Array<Object>>}
    */
   async getSnapshots(noteId) {
-    return new Promise((resolve, reject) => {
+    return this._readAux(() => new Promise((resolve, reject) => {
       const store = this.getStore('snapshots');
       const index = store.index('noteId');
       const request = index.getAll(noteId);
@@ -1942,7 +2496,7 @@ class DatabaseManager {
         resolve(snapshots);
       };
       request.onerror = () => reject(request.error);
-    });
+    }), []);
   }
 
   /**

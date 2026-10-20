@@ -425,6 +425,54 @@
     ::-webkit-scrollbar-thumb:hover {
       background: var(--scrollbar-hover);
     }
+
+    /* Notes database upgraded by a newer build (popup.js renderStorageGuard) */
+    .storage-guard {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: 560px;
+      padding: 28px 24px;
+    }
+
+    .storage-guard-title {
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 1.35;
+      color: var(--text-primary);
+    }
+
+    .storage-guard-body {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+
+    .storage-guard-btn {
+      align-self: flex-start;
+      min-width: 44px;
+      min-height: 44px;
+      margin-top: 6px;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent-dark);
+      color: white;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .storage-guard-btn:focus-visible {
+      outline: 2px solid var(--accent-color);
+      outline-offset: 2px;
+    }
+
+    #quick-note-input:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>

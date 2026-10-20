@@ -5,6 +5,7 @@
  * @property {string} [confirmText='Confirm']
  * @property {string} [cancelText='Cancel']
  * @property {boolean} [danger=false]
+ * @property {'confirm'|'cancel'} [initialFocus='confirm'] - Button focused on open
  */
 
 /**
@@ -22,7 +23,8 @@ function confirmDialog(options) {
     message,
     confirmText = 'Confirm',
     cancelText = 'Cancel',
-    danger = false
+    danger = false,
+    initialFocus = 'confirm'
   } = options;
 
   return new Promise((resolve) => {
@@ -73,7 +75,7 @@ function confirmDialog(options) {
 
     /** @type {HTMLElement[]} */
     const focusableEls = [cancelBtn, confirmBtn];
-    let focusIndex = 1; // start on confirm button
+    let focusIndex = initialFocus === 'cancel' ? 0 : 1;
 
     function cleanup() {
       overlay.removeEventListener('keydown', onKeyDown);
@@ -130,7 +132,129 @@ function confirmDialog(options) {
     overlay.addEventListener('mousedown', onOverlayClick);
 
     document.body.appendChild(overlay);
-    confirmBtn.focus();
+    focusableEls[focusIndex].focus();
+  });
+}
+
+/**
+ * @typedef {Object} DialogChoice
+ * @property {string} id - Resolved when this choice is picked
+ * @property {string} label - Button text
+ * @property {'primary'|'danger'|'neutral'} [variant='neutral']
+ */
+
+/**
+ * @typedef {Object} ChoiceDialogOptions
+ * @property {string} title
+ * @property {string} message
+ * @property {DialogChoice[]} choices - Buttons in order; focus starts on the first
+ * @property {string} cancelId - Resolved on Escape or a backdrop click
+ */
+
+/**
+ * Show a dialog with several choices, styled like confirmDialog: role="dialog",
+ * aria-modal, a label, Tab cycling, and focus on the first choice when it opens.
+ * Enter activates the focused choice. Escape and a backdrop click resolve cancelId.
+ *
+ * @param {ChoiceDialogOptions} options
+ * @returns {Promise<string>} The chosen ID, or cancelId
+ */
+function choiceDialog(options) {
+  const { title, message, choices, cancelId } = options;
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', title);
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog';
+
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'confirm-dialog-title';
+    titleEl.textContent = title;
+    dialog.appendChild(titleEl);
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'confirm-dialog-message';
+    messageEl.textContent = message;
+    dialog.appendChild(messageEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-dialog-actions';
+
+    /** @type {HTMLButtonElement[]} */
+    const buttons = choices.map((choice) => {
+      const button = document.createElement('button');
+      const variantClass = choice.variant === 'primary'
+        ? 'confirm-dialog-confirm'
+        : choice.variant === 'danger'
+          ? 'confirm-dialog-confirm confirm-dialog-danger'
+          : 'confirm-dialog-cancel';
+      button.className = `confirm-dialog-btn ${variantClass}`;
+      button.type = 'button';
+      button.textContent = choice.label;
+      button.dataset.choice = choice.id;
+      button.addEventListener('click', () => close(choice.id));
+      actions.appendChild(button);
+      return button;
+    });
+
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+
+    let focusIndex = 0;
+
+    function cleanup() {
+      overlay.removeEventListener('keydown', onKeyDown);
+      overlay.removeEventListener('mousedown', onOverlayClick);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+
+    /** @param {string} id */
+    function close(id) {
+      cleanup();
+      resolve(id);
+    }
+
+    /** @param {KeyboardEvent} e */
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close(cancelId);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        const focused = buttons.indexOf(/** @type {HTMLButtonElement} */ (document.activeElement));
+        close(choices[focused === -1 ? focusIndex : focused].id);
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          focusIndex = (focusIndex - 1 + buttons.length) % buttons.length;
+        } else {
+          focusIndex = (focusIndex + 1) % buttons.length;
+        }
+        buttons[focusIndex].focus();
+      }
+    }
+
+    /** @param {MouseEvent} e */
+    function onOverlayClick(e) {
+      if (e.target === overlay) close(cancelId);
+    }
+
+    overlay.addEventListener('keydown', onKeyDown);
+    overlay.addEventListener('mousedown', onOverlayClick);
+
+    document.body.appendChild(overlay);
+    buttons[focusIndex].focus();
   });
 }
 
@@ -311,10 +435,13 @@ function promptDialog(options) {
     '}',
     '.confirm-dialog-actions {',
     '  display: flex;',
+    '  flex-wrap: wrap;',
     '  justify-content: flex-end;',
     '  gap: 8px;',
     '}',
     '.confirm-dialog-btn {',
+    '  min-width: 44px;',
+    '  min-height: 44px;',
     '  padding: 8px 16px;',
     '  border-radius: 6px;',
     '  font-size: 14px;',
@@ -375,8 +502,9 @@ function promptDialog(options) {
 
 // Dual CommonJS/browser export (same pattern as event-bus.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { confirmDialog, promptDialog };
+  module.exports = { confirmDialog, promptDialog, choiceDialog };
 } else if (typeof window !== 'undefined') {
   window.confirmDialog = confirmDialog;
   window.promptDialog = promptDialog;
+  /** @type {any} */ (window).choiceDialog = choiceDialog;
 }

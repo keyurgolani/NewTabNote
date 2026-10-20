@@ -776,6 +776,8 @@ class SidebarController {
   }
 
   async runTrashCleanup() {
+    // Cleanup strips blocks before media; skip it while any store is missing.
+    if (this.storage.missingStores && this.storage.missingStores.length > 0) return;
     const retentionDays = await this.storage.getSetting('trashRetention', 30);
     if (retentionDays > 0) {
       const deletedCount = await this.storage.cleanupTrash(retentionDays);

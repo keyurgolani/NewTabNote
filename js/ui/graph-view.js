@@ -114,6 +114,10 @@ class GraphView {
       const request = store.getAll();
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
+    }).catch((error) => {
+      // Without a links store the graph shows notes with no edges.
+      if (error && error.code === 'STORE_UNAVAILABLE') return [];
+      throw error;
     });
 
     // Build node map
