@@ -75,5 +75,18 @@ export function unitsWork(command, units, done, { primary, revised } = {}) {
   return work;
 }
 
+/**
+ * The adapter's work for a bulk command whose items have run, each as a command of its own.
+ * It writes nothing, and an adapter with idempotency keeps the outcome under the bulk
+ * command's commandId, so a resend gets the same items and the same commandId with another
+ * selection is key reuse.
+ * @param {Command} command
+ * @param {BulkOutcome} outcome
+ * @returns {Work}
+ */
+export function bulkWork(command, outcome) {
+  return { commandId: command.commandId, command, effect: { kind: 'units', units: [] }, done: () => outcome };
+}
+
 /** Says a command changed its primary record's content */
 export const contentChanged = () => true;

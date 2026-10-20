@@ -104,7 +104,8 @@ describe('the in-memory adapter', () => {
     assert.deepEqual(log, ['first started', 'first finished', 'read', 'second']);
   });
 
-  it("keeps a conflicted command and doesn't keep an unavailable outcome, so a resend runs", async () => {
+  // A resent conflict replays: the contract suite's idempotency cases resend one
+  it("doesn't keep an unavailable outcome, so a resend runs", async () => {
     let fail = true;
     const adapter = createMemoryAdapter({
       beforeWrite() {

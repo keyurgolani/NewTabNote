@@ -183,6 +183,16 @@ export function isOutcome(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {value is BulkOutcome}
+ */
+export function isBulkOutcome(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const { kind, items } = /** @type {{kind?: unknown, items?: unknown}} */ (value);
+  return kind === 'bulk' && Array.isArray(items) && items.every(item => isOutcome(item?.outcome));
+}
+
+/**
  * What a port throws when storage can't do what was asked. The kernel turns it into an
  * `unavailable` outcome, or a `failed` query state. Its message holds only the cause and
  * the code.

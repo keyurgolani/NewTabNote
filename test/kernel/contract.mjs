@@ -1157,6 +1157,15 @@ export function runContractSuite(fixture) {
         assert.equal(committedOf(await kernel.execute(child)).code, 'folder-created');
       });
 
+      it('a bulk command none of whose notes committed leaves no record, so sending it again once one can commits it', async () => {
+        const archive = cmd('runBulkAction', { action: 'archive', noteIds: ['a'] });
+        const first = await kernel.execute(archive);
+        assert.deepEqual(first.kind === 'bulk' && first.committedIds, []);
+        await createNote({ noteId: 'a', name: 'A' });
+        const again = await kernel.execute(archive);
+        assert.deepEqual(again.kind === 'bulk' && again.committedIds, ['a']);
+      });
+
       it(
         flags.idempotency
           ? 'idempotency: two sends of one command at once commit it once, answer both with its outcome, and publish it once'
@@ -1192,6 +1201,122 @@ export function runContractSuite(fixture) {
           const again = await kernel.execute(first);
           assert.deepEqual(again, firstOutcome);
           assert.equal((await noteOf('n1'))?.name, flags.idempotency ? 'Second' : 'First');
+        },
+      );
+
+      it(
+        flags.idempotency
+          ? 'idempotency: a resend with its keys in another order is the same command, so it replays'
+          : 'no idempotency: a resend with its keys in another order runs again',
+        async () => {
+          const create = cmd('createNote', { noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          const first = await run(create);
+          /** @param {Record<string, unknown>} value */
+          const reversed = value => Object.fromEntries(Object.entries(value).reverse());
+          const reordered = reversed({ ...create, blocks: (create.blocks ?? []).map(reversed) });
+          assert.notDeepEqual(Object.keys(reordered), Object.keys(create));
+          const again = await kernel.execute(/** @type {Command} */ (reordered));
+          if (flags.idempotency) assert.deepEqual(again, first);
+          else assertRejected(again, 'validation', 'note-exists');
+        },
+      );
+
+      it(
+        flags.revisions && flags.idempotency
+          ? 'idempotency: a resent conflict gets the same conflict, runs nothing, and keeps one conflict record'
+          : flags.revisions
+            ? 'no idempotency: a resent conflict runs again and keeps a second conflict record'
+            : 'no revisions: a resent stale save commits again, or replays with idempotency',
+        async () => {
+          await createNote({ noteId: 'n1', blocks: someBlocks('n1', 1) });
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Newer' }));
+          const stale = cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: someBlocks('n1', 2),
+            preview: 'Stale',
+            expectedRevision: 1,
+          });
+          const first = await kernel.execute(stale);
+          const again = await kernel.execute(stale);
+          if (flags.revisions) {
+            assert.equal(first.kind, 'conflict', JSON.stringify(first));
+            assert.deepEqual(again, first);
+            assert.ok(ctx.conflicts);
+            const kept = (await ctx.conflicts()).filter(conflict => conflict.commandId === stale.commandId);
+            assert.equal(kept.length, flags.idempotency ? 1 : 2);
+            assert.equal((await noteOf('n1'))?.preview, 'Newer');
+          } else {
+            committedOf(first);
+            if (flags.idempotency) assert.deepEqual(again, first);
+            else committedOf(again);
+          }
+        },
+      );
+
+      it(
+        flags.idempotency
+          ? 'idempotency: a resent bulk command gets the same items, writes nothing, and publishes nothing'
+          : 'no idempotency: a resent bulk command runs each note command again',
+        async () => {
+          await createNote({ noteId: 'a', name: 'A' });
+          await createNote({ noteId: 'b', name: 'B' });
+          const archive = cmd('runBulkAction', { action: 'archive', noteIds: ['a', 'gone', 'b'] });
+          const first = await kernel.execute(archive);
+          assert.deepEqual(first.kind === 'bulk' && first.committedIds, ['a', 'b']);
+          await run(cmd('unarchiveNote', { noteId: 'a' }));
+          /** @type {string[]} */
+          const published = [];
+          kernel.subscribe(event => {
+            published.push(...event.ids);
+          });
+          const again = await kernel.execute(archive);
+          if (flags.idempotency) {
+            assert.deepEqual(again, first);
+            assert.deepEqual(published, []);
+            assert.equal((await noteOf('a'))?.archived, false);
+          } else {
+            assert.deepEqual(again.kind === 'bulk' && again.committedIds, ['a', 'b']);
+            assert.deepEqual(published, ['a', 'b']);
+            assert.equal((await noteOf('a'))?.archived, true);
+          }
+        },
+      );
+
+      it(
+        flags.idempotency
+          ? 'idempotency: two sends of one bulk command at once commit and publish each note once'
+          : 'no idempotency: two sends of one bulk command at once both run every note command',
+        async () => {
+          await createNote({ noteId: 'a', name: 'A' });
+          await createNote({ noteId: 'b', name: 'B' });
+          /** @type {string[]} */
+          const published = [];
+          kernel.subscribe(event => {
+            published.push(...event.ids);
+          });
+          const archive = cmd('runBulkAction', { action: 'archive', noteIds: ['a', 'b'] });
+          const [first, second] = await Promise.all([kernel.execute(archive), kernel.execute(archive)]);
+          assert.deepEqual(first.kind === 'bulk' && first.committedIds, ['a', 'b']);
+          assert.deepEqual(second, first);
+          assert.deepEqual(published.sort(), flags.idempotency ? ['a', 'b'] : ['a', 'a', 'b', 'b']);
+        },
+      );
+
+      it(
+        flags.idempotency
+          ? 'idempotency: a bulk commandId sent again with another selection is key reuse, and nothing runs'
+          : 'no idempotency: a bulk commandId sent again with another selection runs it',
+        async () => {
+          for (const noteId of ['a', 'b', 'c']) await createNote({ noteId, name: noteId });
+          const first = cmd('runBulkAction', { action: 'archive', noteIds: ['a', 'gone'] });
+          assert.deepEqual((await kernel.execute(first)).kind, 'bulk');
+          const other = await kernel.execute({ ...first, noteIds: ['b', 'c'] });
+          if (flags.idempotency) {
+            assertRejected(other, 'validation', 'idempotency-key-reuse');
+            assert.deepEqual(await idsIn('archived'), ['a']);
+          } else {
+            assert.deepEqual(other.kind === 'bulk' && other.committedIds, ['b', 'c']);
+          }
         },
       );
 

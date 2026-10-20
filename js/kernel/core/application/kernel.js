@@ -20,7 +20,15 @@
 import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS, isCommandType } from '../contracts/commands.js';
-import { failed, failedFrom, isOutcome, loading, rejected, unavailableFrom } from '../contracts/outcomes.js';
+import {
+  failed,
+  failedFrom,
+  isBulkOutcome,
+  isOutcome,
+  loading,
+  rejected,
+  unavailableFrom,
+} from '../contracts/outcomes.js';
 import { isQueryType } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
@@ -149,7 +157,7 @@ function isWork(result) {
  */
 function commitResultOf(value) {
   const outcome = isRecord(value) ? value.outcome : undefined;
-  if (!isOutcome(outcome)) throw new TypeError('commit answered without an outcome');
+  if (!isOutcome(outcome) && !isBulkOutcome(outcome)) throw new TypeError('commit answered without an outcome');
   return { outcome, replayed: /** @type {Record<string, unknown>} */ (value).replayed === true };
 }
 
@@ -247,7 +255,9 @@ export function createKernel({ adapter, policy, caller, ids, clock = systemClock
     try {
       const remembered = adapter.recall(command);
       if (remembered !== undefined) {
-        if (!isOutcome(remembered)) throw new TypeError('recall answered without an outcome');
+        if (!isOutcome(remembered) && !isBulkOutcome(remembered)) {
+          throw new TypeError('recall answered without an outcome');
+        }
         return Promise.resolve(remembered);
       }
       const result = handler(command, context);
