@@ -4,91 +4,43 @@
  * note to create, the block a capture adds) is chosen when the intent happens, so a retry
  * names the same things. Payloads are what contracts/clone.js copies.
  *
- * Each entry names the command's aggregate and the surfaces allowed to run it, which the
- * baseline policy reads. Slice 3 holds the commands the kernel core needs to prove itself,
- * and later slices add theirs as they route callers to the kernel. #13 (message contracts)
- * adds versions and validators to these entries.
+ * Each entry declares its command once (#13, "Desired behavior"): its catalog version, the
+ * module under contracts/operations/ that holds its Valibot schemas, its aggregate, which
+ * names it in the commit feed, the surfaces allowed to run it, which the baseline policy
+ * reads, the most its request may encode to, its deadline, until when it can be cancelled,
+ * its idempotency class, whether it's journaled, the entity types its ids may name, and the
+ * destinations it may reach. An entry names its schema module rather than importing it, so
+ * a page that reads the catalog loads no schema, and Moment (#2) imports only the schemas it
+ * validates. Each command's type comes from its schema, through JSDoc.
+ *
+ * Slice 3 of #12 holds the commands the kernel core needs to prove itself, and later slices
+ * add theirs as they route callers to the kernel.
  */
 
-/** @typedef {import('../domain/note.js').BlockInput} BlockInput */
-/** @typedef {import('../domain/note.js').Capture} Capture */
-/** @typedef {import('../domain/session.js').WorkspaceSession} WorkspaceSession */
+import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from './limits.js';
+
 /** @typedef {import('./surfaces.js').Surface} Surface */
+/** @typedef {import('./fields.js').EntityType} EntityType */
 
-/**
- * A note with the fields Storage.createNote has always written, plus its search entry.
- * `folderId` files it, and `blocks` are its first blocks.
- * @typedef {{type: 'createNote', commandId: string, noteId: string, name?: string, folderId?: string | null, blocks?: BlockInput[]}} CreateNote
- */
+/** @typedef {import('./operations/create-note.js').CreateNote} CreateNote */
+/** @typedef {import('./operations/rename-note.js').RenameNote} RenameNote */
+/** @typedef {import('./operations/set-pinned.js').SetPinned} SetPinned */
+/** @typedef {import('./operations/archive-note.js').ArchiveNote} ArchiveNote */
+/** @typedef {import('./operations/unarchive-note.js').UnarchiveNote} UnarchiveNote */
+/** @typedef {import('./operations/trash-note.js').TrashNote} TrashNote */
+/** @typedef {import('./operations/restore-note.js').RestoreNote} RestoreNote */
+/** @typedef {import('./operations/save-note-content.js').SaveNoteContent} SaveNoteContent */
+/** @typedef {import('./operations/apply-derived-title.js').ApplyDerivedTitle} ApplyDerivedTitle */
+/** @typedef {import('./operations/attach-insights.js').AttachInsights} AttachInsights */
+/** @typedef {import('./operations/capture-to-daily-note.js').CaptureToDailyNote} CaptureToDailyNote */
+/** @typedef {import('./operations/run-bulk-action.js').RunBulkAction} RunBulkAction */
+/** @typedef {import('./operations/create-folder.js').CreateFolder} CreateFolder */
+/** @typedef {import('./operations/move-folder.js').MoveFolder} MoveFolder */
+/** @typedef {import('./operations/set-preferences.js').SetPreferences} SetPreferences */
+/** @typedef {import('./operations/save-workspace-session.js').SaveWorkspaceSession} SaveWorkspaceSession */
+/** @typedef {import('./operations/run-startup-maintenance.js').RunStartupMaintenance} RunStartupMaintenance */
 
-/**
- * A new title, which the search entry gets too. `typed` (the default) is a title the user
- * typed, which marks it as set by hand when it differs; `generated` is one the user asked the
- * AI for, which records `lastAutoTitleAt` instead.
- * @typedef {{type: 'renameNote', commandId: string, noteId: string, name: string, origin?: 'typed' | 'generated'}} RenameNote
- */
-
-/** @typedef {{type: 'setPinned', commandId: string, noteId: string, pinned: boolean}} SetPinned */
-/** @typedef {{type: 'archiveNote', commandId: string, noteId: string}} ArchiveNote */
-/** @typedef {{type: 'unarchiveNote', commandId: string, noteId: string}} UnarchiveNote */
-
-/**
- * Moves the note to trash, out of the archive. An untitled note with no content is deleted
- * instead, blocks, media, vectors, and snapshots included, as Storage.trashNote does.
- * @typedef {{type: 'trashNote', commandId: string, noteId: string}} TrashNote
- */
-
-/** @typedef {{type: 'restoreNote', commandId: string, noteId: string}} RestoreNote */
-
-/**
- * An editor save: the blocks as they were when the save started, and what the editor
- * derived from them. It writes those, `updatedAt`, and no other note field, and it puts the
- * blocks without deleting any (deleting blocks is its own command). Note fields and blocks
- * commit together on every adapter. `expectedRevision`, from an adapter with revisions, makes
- * a save over a newer write a conflict.
- * @typedef {{type: 'saveNoteContent', commandId: string, noteId: string, blocks: BlockInput[], preview?: string, todoProgress?: unknown, expectedRevision?: number}} SaveNoteContent
- */
-
-/**
- * A title a background job derived. Dropped when the note's title was set by hand.
- * @typedef {{type: 'applyDerivedTitle', commandId: string, noteId: string, name: string, contentHash?: string}} ApplyDerivedTitle
- */
-
-/**
- * Insights a job extracted. Writes `insights`, `lastInsightsExtractedAt`, and the content
- * hash, and nothing else, `updatedAt` included.
- * @typedef {{type: 'attachInsights', commandId: string, noteId: string, insights: unknown, contentHash?: string}} AttachInsights
- */
-
-/**
- * A capture into today's Daily Note. `noteId` is the id the Daily Note gets if this
- * capture creates it, and `blockId` the captured block's.
- * @typedef {{type: 'captureToDailyNote', commandId: string, noteId: string, blockId: string, capture: Capture}} CaptureToDailyNote
- */
-
-/** @typedef {'archive' | 'unarchive' | 'trash' | 'restore'} BulkAction */
-
-/**
- * One note command per id, in order. It returns an outcome per note.
- * @typedef {{type: 'runBulkAction', commandId: string, action: BulkAction, noteIds: string[]}} RunBulkAction
- */
-
-/** @typedef {{type: 'createFolder', commandId: string, folderId: string, name: string, parentId: string | null}} CreateFolder */
-
-/**
- * A new parent, null for the root. Moving a folder into itself or a folder inside it is
- * rejected, against the folders as committed.
- * @typedef {{type: 'moveFolder', commandId: string, folderId: string, parentId: string | null}} MoveFolder
- */
-
-/** @typedef {{type: 'setPreferences', commandId: string, values: Record<string, unknown>}} SetPreferences */
-/** @typedef {{type: 'saveWorkspaceSession', commandId: string, session: Partial<WorkspaceSession>}} SaveWorkspaceSession */
-
-/**
- * Default settings and the read-only integrity check, which the new-tab page and the
- * service worker run as they start.
- * @typedef {{type: 'runStartupMaintenance', commandId: string}} RunStartupMaintenance
- */
+/** @typedef {RunBulkAction['action']} BulkAction */
 
 /**
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
@@ -106,19 +58,56 @@
 /** @typedef {'note' | 'folder' | 'preferences' | 'session' | 'system'} Aggregate */
 
 /**
- * A command's catalog entry: its aggregate, which names it in the commit feed, and the
- * surfaces allowed to run it. A bulk command returns an outcome per item.
- * @typedef {Readonly<{aggregate: Aggregate, surfaces: readonly Surface[], bulk?: true}>} CommandEntry
+ * A command's catalog entry. `maxBytes` caps its encoded request, envelope included, and a
+ * journaled command declares exactly MAX_MESSAGE_BYTES. `deadlineMs` runs from when the
+ * request is sent. A command can be cancelled only until the coordinator opens its
+ * transaction, and its `commandId` is its idempotency key. `destinations` stays empty until
+ * #21 (security boundaries) adds destination ids. A bulk command returns an outcome per item.
+ * @typedef {Readonly<{
+ *   kind: 'command',
+ *   version: number,
+ *   schema: string,
+ *   aggregate: Aggregate,
+ *   surfaces: readonly Surface[],
+ *   maxBytes: number,
+ *   deadlineMs: number,
+ *   cancellable: 'before-transaction',
+ *   idempotency: 'keyed',
+ *   journaled: boolean,
+ *   entityTypes: readonly EntityType[],
+ *   destinations: readonly string[],
+ *   bulk?: true,
+ * }>} CommandEntry
  */
 
 /**
+ * A version 1 entry. #35 (background coordinator) sets `journaled` on its content saves, note
+ * creation, appends, and captures.
+ * @param {string} module - the schema module's name under contracts/operations/
  * @param {Aggregate} aggregate
  * @param {Surface[]} surfaces
- * @param {{bulk?: true}} [options]
+ * @param {{entityTypes: EntityType[], maxBytes?: number, deadlineMs?: number, bulk?: true}} options
  * @returns {CommandEntry}
  */
-const entry = (aggregate, surfaces, options = {}) =>
-  Object.freeze({ aggregate, surfaces: Object.freeze(surfaces), ...options });
+const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESSAGE_BYTES, ...options }) =>
+  Object.freeze({
+    kind: /** @type {const} */ ('command'),
+    version: 1,
+    schema: `./operations/${module}.js`,
+    aggregate,
+    surfaces: Object.freeze(surfaces),
+    maxBytes,
+    deadlineMs: COMMAND_DEADLINE_MS,
+    cancellable: /** @type {const} */ ('before-transaction'),
+    idempotency: /** @type {const} */ ('keyed'),
+    journaled: false,
+    entityTypes: Object.freeze(entityTypes),
+    destinations: Object.freeze([]),
+    ...options,
+  });
+
+/** What a request that carries content, or a list as long as the user makes it, may encode to */
+const LARGE = MAX_MESSAGE_BYTES;
 
 /**
  * What each surface could do before the kernel: everything from the new-tab page, a quick
@@ -127,23 +116,35 @@ const entry = (aggregate, surfaces, options = {}) =>
  * @type {Readonly<Record<CommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
-  createNote: entry('note', ['newtab', 'popup']),
-  renameNote: entry('note', ['newtab']),
-  setPinned: entry('note', ['newtab']),
-  archiveNote: entry('note', ['newtab']),
-  unarchiveNote: entry('note', ['newtab']),
-  trashNote: entry('note', ['newtab']),
-  restoreNote: entry('note', ['newtab']),
-  saveNoteContent: entry('note', ['newtab']),
-  applyDerivedTitle: entry('note', ['newtab']),
-  attachInsights: entry('note', ['newtab']),
-  captureToDailyNote: entry('note', ['newtab', 'worker-internal']),
-  runBulkAction: entry('note', ['newtab'], { bulk: true }),
-  createFolder: entry('folder', ['newtab']),
-  moveFolder: entry('folder', ['newtab']),
-  setPreferences: entry('preferences', ['newtab']),
-  saveWorkspaceSession: entry('session', ['newtab']),
-  runStartupMaintenance: entry('system', ['newtab', 'worker-internal']),
+  createNote: entry('create-note', 'note', ['newtab', 'popup'], {
+    entityTypes: ['note', 'block', 'folder'],
+    maxBytes: LARGE,
+  }),
+  renameNote: entry('rename-note', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
+  setPinned: entry('set-pinned', 'note', ['newtab'], { entityTypes: ['note'] }),
+  archiveNote: entry('archive-note', 'note', ['newtab'], { entityTypes: ['note'] }),
+  unarchiveNote: entry('unarchive-note', 'note', ['newtab'], { entityTypes: ['note'] }),
+  trashNote: entry('trash-note', 'note', ['newtab'], { entityTypes: ['note'] }),
+  restoreNote: entry('restore-note', 'note', ['newtab'], { entityTypes: ['note'] }),
+  saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  applyDerivedTitle: entry('apply-derived-title', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
+  attachInsights: entry('attach-insights', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
+  captureToDailyNote: entry('capture-to-daily-note', 'note', ['newtab', 'worker-internal'], {
+    entityTypes: ['note', 'block'],
+    maxBytes: LARGE,
+  }),
+  runBulkAction: entry('run-bulk-action', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE, bulk: true }),
+  createFolder: entry('create-folder', 'folder', ['newtab'], { entityTypes: ['folder'], maxBytes: LARGE }),
+  moveFolder: entry('move-folder', 'folder', ['newtab'], { entityTypes: ['folder'] }),
+  setPreferences: entry('set-preferences', 'preferences', ['newtab'], { entityTypes: ['note'] }),
+  saveWorkspaceSession: entry('save-workspace-session', 'session', ['newtab'], {
+    entityTypes: ['note'],
+    maxBytes: LARGE,
+  }),
+  runStartupMaintenance: entry('run-startup-maintenance', 'system', ['newtab', 'worker-internal'], {
+    entityTypes: [],
+    deadlineMs: MAINTENANCE_DEADLINE_MS,
+  }),
 });
 
 /** @type {readonly CommandType[]} */

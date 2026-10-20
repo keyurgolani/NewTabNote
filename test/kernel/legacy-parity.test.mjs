@@ -363,7 +363,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
     });
     const blocks = [legacyEnv.block('b1', 'n1', 0, 'Milk and eggs'), legacyEnv.block('b2', 'n1', 1, 'Bread')];
-    const todoProgress = { done: 1, total: 2 };
+    const todoProgress = { completed: 1, total: 2 };
     // The editor's copy of the note is from before the trash, and the stored trash state wins
     const editorCopy = { ...stored, trashed: false, trashedAt: null, preview: 'Milk and eggs', todoProgress };
     await viaStorage.storage.saveNoteWithBlocks(editorCopy, blocks);

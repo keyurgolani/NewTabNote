@@ -3,35 +3,28 @@
  * to, and return a query state (contracts/outcomes.js). Each query's data is a copy the
  * caller can keep.
  *
- * Each entry names the surfaces allowed to run the query, as the command catalog's entries
- * do, and #13 (message contracts) adds versions and validators to these entries.
+ * Each entry declares its query once, as the command catalog's entries do (#13, "Desired
+ * behavior"): its catalog version, its schema module under contracts/operations/, the
+ * surfaces allowed to run it, the most its request may encode to, its deadline, and the
+ * entity types its ids may name. A query can be cancelled until it answers, and has no
+ * idempotency key. Each query's type comes from its schema, through JSDoc.
  */
 
+import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
+
 /** @typedef {import('./surfaces.js').Surface} Surface */
+/** @typedef {import('./fields.js').EntityType} EntityType */
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../domain/note.js').BlockRecord} BlockRecord */
-/** @typedef {import('../domain/note.js').NoteView} NoteView */
 /** @typedef {import('../domain/folder.js').FolderRecord} FolderRecord */
 /** @typedef {import('../domain/session.js').WorkspaceSession} WorkspaceSession */
 
-/** @typedef {{type: 'listNotes', view: NoteView}} ListNotes */
-
-/**
- * A note, with its revision from an adapter with revisions, for saveNoteContent's
- * `expectedRevision`.
- * @typedef {{type: 'getNote', noteId: string}} GetNote
- */
-
-/** @typedef {{type: 'getNoteBlocks', noteId: string}} GetNoteBlocks */
-/** @typedef {{type: 'listFolders'}} ListFolders */
-
-/**
- * Stored preferences, all of them unless `keys` names some. A key with nothing stored is
- * left out, and the caller applies its default.
- * @typedef {{type: 'getPreferences', keys?: string[]}} GetPreferences
- */
-
-/** @typedef {{type: 'getWorkspaceSession'}} GetWorkspaceSession */
+/** @typedef {import('./operations/list-notes.js').ListNotes} ListNotes */
+/** @typedef {import('./operations/get-note.js').GetNote} GetNote */
+/** @typedef {import('./operations/get-note-blocks.js').GetNoteBlocks} GetNoteBlocks */
+/** @typedef {import('./operations/list-folders.js').ListFolders} ListFolders */
+/** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
+/** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
 
 /** @typedef {ListNotes | GetNote | GetNoteBlocks | ListFolders | GetPreferences | GetWorkspaceSession} Query */
 /** @typedef {Query['type']} QueryType */
@@ -53,8 +46,21 @@
  */
 
 /**
- * A query's catalog entry: the surfaces allowed to run it.
- * @typedef {Readonly<{surfaces: readonly Surface[]}>} QueryEntry
+ * A query's catalog entry. `maxBytes` caps its encoded request, envelope included, and
+ * `deadlineMs` runs from when the request is sent.
+ * @typedef {Readonly<{
+ *   kind: 'query',
+ *   version: number,
+ *   schema: string,
+ *   surfaces: readonly Surface[],
+ *   maxBytes: number,
+ *   deadlineMs: number,
+ *   cancellable: 'any-time',
+ *   idempotency: 'none',
+ *   journaled: false,
+ *   entityTypes: readonly EntityType[],
+ *   destinations: readonly string[],
+ * }>} QueryEntry
  */
 
 /**
@@ -63,14 +69,35 @@
  */
 const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel']));
 
+/**
+ * A version 1 entry
+ * @param {string} module - the schema module's name under contracts/operations/
+ * @param {EntityType[]} entityTypes
+ * @returns {QueryEntry}
+ */
+const entry = (module, entityTypes) =>
+  Object.freeze({
+    kind: /** @type {const} */ ('query'),
+    version: 1,
+    schema: `./operations/${module}.js`,
+    surfaces: READERS,
+    maxBytes: SMALL_MESSAGE_BYTES,
+    deadlineMs: QUERY_DEADLINE_MS,
+    cancellable: /** @type {const} */ ('any-time'),
+    idempotency: /** @type {const} */ ('none'),
+    journaled: /** @type {const} */ (false),
+    entityTypes: Object.freeze(entityTypes),
+    destinations: Object.freeze([]),
+  });
+
 /** @type {Readonly<Record<QueryType, QueryEntry>>} */
 export const QUERIES = Object.freeze({
-  listNotes: Object.freeze({ surfaces: READERS }),
-  getNote: Object.freeze({ surfaces: READERS }),
-  getNoteBlocks: Object.freeze({ surfaces: READERS }),
-  listFolders: Object.freeze({ surfaces: READERS }),
-  getPreferences: Object.freeze({ surfaces: READERS }),
-  getWorkspaceSession: Object.freeze({ surfaces: READERS }),
+  listNotes: entry('list-notes', []),
+  getNote: entry('get-note', ['note']),
+  getNoteBlocks: entry('get-note-blocks', ['note']),
+  listFolders: entry('list-folders', []),
+  getPreferences: entry('get-preferences', []),
+  getWorkspaceSession: entry('get-workspace-session', []),
 });
 
 /** @type {readonly QueryType[]} */
