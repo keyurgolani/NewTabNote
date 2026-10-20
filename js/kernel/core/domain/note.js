@@ -152,6 +152,7 @@ export function isEmpty(blocks) {
  * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates'} NoteView
  */
 
+/** @type {readonly NoteView[]} */
 export const NOTE_VIEWS = Object.freeze(['active', 'withArchived', 'archived', 'trashed', 'templates']);
 
 /**

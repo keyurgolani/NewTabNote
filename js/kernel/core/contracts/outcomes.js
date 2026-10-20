@@ -11,17 +11,23 @@
 
 /**
  * The command committed. `changedIds` lists what it changed: note, folder, or setting ids.
- * `revision` is the changed record's new revision, from an adapter with revisions.
+ * `revision` is the primary record's content revision, #13's `committedRevision`, from an
+ * adapter with revisions. `commitSeq` is the commit's place in #17's change log, from an
+ * adapter that keeps one.
  * @typedef {object} Committed
  * @property {'committed'} kind
  * @property {string} code
  * @property {string[]} changedIds
  * @property {number} [revision]
+ * @property {number} [commitSeq]
  * @property {string} messageKey
  * @property {Severity} severity
  */
 
 /** @typedef {'validation' | 'policy' | 'not-found'} RejectReason */
+
+/** @type {readonly RejectReason[]} */
+export const REJECT_REASONS = Object.freeze(['validation', 'policy', 'not-found']);
 
 /**
  * The kernel refused the command and wrote nothing.
@@ -46,6 +52,9 @@
  */
 
 /** @typedef {'storage' | 'quota' | 'newer-schema' | 'adapter' | 'coordinator'} UnavailableCause */
+
+/** @type {readonly UnavailableCause[]} */
+export const UNAVAILABLE_CAUSES = Object.freeze(['storage', 'quota', 'newer-schema', 'adapter', 'coordinator']);
 
 /**
  * Storage couldn't run the command. `retryable` says whether the same command, sent again,
@@ -98,8 +107,8 @@ const REJECTED_SEVERITY = Object.freeze({ validation: 'warning', 'not-found': 'w
 /**
  * @param {string} code
  * @param {string[]} changedIds
- * @param {{revision?: number, severity?: Severity}} [options] - `severity: 'info'` for a
- *   command that committed without changing anything
+ * @param {{revision?: number, commitSeq?: number, severity?: Severity}} [options] -
+ *   `severity: 'info'` for a command that committed without changing anything
  * @returns {Committed}
  */
 export function committed(code, changedIds, options = {}) {
@@ -112,6 +121,7 @@ export function committed(code, changedIds, options = {}) {
     severity: options.severity || 'success',
   };
   if (options.revision !== undefined) outcome.revision = options.revision;
+  if (options.commitSeq !== undefined) outcome.commitSeq = options.commitSeq;
   return outcome;
 }
 
@@ -224,7 +234,8 @@ export function unavailableFrom(error) {
  * @template T
  * @typedef {object} Ready
  * @property {'ready'} kind
- * @property {number} asOf - when the data was read, on the kernel's clock
+ * @property {number} asOf - how fresh the data is: #13's `asOfCommitSeq` from an adapter
+ *   with a change log (#17), and until then when it was read, on the kernel's clock
  * @property {T} data
  */
 
@@ -244,6 +255,9 @@ export function unavailableFrom(error) {
  */
 
 /** @typedef {UnavailableCause | 'policy' | 'validation'} FailCause */
+
+/** @type {readonly FailCause[]} */
+export const FAIL_CAUSES = Object.freeze([...UNAVAILABLE_CAUSES, 'policy', 'validation']);
 
 /**
  * @typedef {object} Failed
