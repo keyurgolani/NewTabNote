@@ -333,11 +333,14 @@ class FakeDocument {
     this.body = this.documentElement.appendChild(new FakeElement('body', this));
     this.activeElement = this.body;
     this.visibilityState = 'visible';
+    /** What hasFocus() answers: set false for a page in front of which another window or tab has focus */
+    this.focused = true;
     this.listeners = {};
     /** Window-like target for `pagehide`; set by createLegacyEnv. */
     this.defaultView = null;
   }
 
+  hasFocus() { return this.focused; }
   createElement(tag) { return new FakeElement(tag, this); }
   createTextNode(text) {
     const node = new FakeElement('#text', this);
@@ -858,17 +861,18 @@ function block(id, canvasId, order, content = `Block ${id}`, fields = {}) {
 
 /**
  * A BlockEditor without its DOM constructor: real persistence and Storage,
- * render methods stubbed. Its root is a pane (`.editor-pane`) holding the
- * writing column (`.editor`) with the title and the blocks container, where
- * the editor puts its own notices.
+ * render methods stubbed. Its root is a pane (`.editor-pane`, active unless
+ * `root` is given) holding the writing column (`.editor`) with the title and
+ * the blocks container, where the editor puts its own notices.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {FakeDocument} [doc] - Its own document, as the PiP window has
+ * @param {{root?: FakeElement|null}} [options] - The pane element to use, as App passes #editor-container
  */
-function makeEditor(env, doc = env.document) {
+function makeEditor(env, doc = env.document, { root: pane = null } = {}) {
   const BlockEditor = env.get('BlockEditor');
   const editor = Object.create(BlockEditor.prototype);
-  const root = doc.createElement('div');
-  root.className = 'editor-pane';
+  const root = pane || doc.createElement('div');
+  if (!pane) root.className = 'editor-pane active';
   const column = root.appendChild(doc.createElement('div'));
   column.className = 'editor';
   const titleEl = column.appendChild(doc.createElement('div'));
@@ -950,14 +954,17 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
-  env.document.stub([
+  const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',
   ]);
+  // The two panes as newtab.html has them, which the editors use as their roots
+  panes['editor-container'].className = 'editor-pane active';
+  panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
   const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
-  tabs.editor = makeEditor(env);
-  tabs.secondaryEditor = makeEditor(env);
+  tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
+  tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   const page = { notes: await Storage.getAllNotes(), refreshes: 0 };
   tabs.onGetNotes = () => page.notes;
   tabs.onCreateNote = () => Storage.createNote('Untitled');

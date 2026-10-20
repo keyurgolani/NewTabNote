@@ -296,6 +296,8 @@ class App {
       }
       // The other new tabs' "notes left" messages wait until this tab has its first note
       this.tabController.workspaceReady();
+      // Trash retention once this tab's panes and tabs can move off what it deletes, and tell the other tabs
+      await this.sidebarController.runTrashCleanup().catch((error) => this.logger.error('App', 'Trash cleanup failed', error));
 
       this.updateEmptyState();
       this.updateBadgeCounts();

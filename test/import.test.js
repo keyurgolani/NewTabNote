@@ -433,10 +433,9 @@ describe('Replace all (AC4)', () => {
     const shown = await Storage.getNote(editors.primary.noteId);
     assert.ok(shown && !shown.trashed, 'the left pane moved to an active note');
     assert.deepEqual(plain(tabs.openTabs.map((tab) => tab.noteId)), [shown.id], 'in a tab');
-    assert.equal(editors.secondary.noteData.trashed, true, 'the hidden right pane shows its note as trashed');
+    assert.equal(editors.secondary.noteId, null, 'the hidden right pane lets go of its trashed note');
 
     typeInto(editors.primary, 'typed after import');
-    typeInto(editors.secondary, 'secondary after import');
     env.clock.tick(500);
     await runUntil(env, Promise.all([editors.primary.flushSave(), editors.secondary.flushSave()]));
 
@@ -765,12 +764,14 @@ async function replaceAll(env, controller, data) {
 }
 
 async function openEditors(env, Storage) {
-  env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
+  const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
+  panes['editor-container'].className = 'editor-pane active';
+  panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
   const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
   tabs.onCreateNote = () => Storage.createNote('Untitled');
-  const primary = makeEditor(env, env.document);
-  const secondary = makeEditor(env, env.document);
+  const primary = makeEditor(env, env.document, { root: panes['editor-container'] });
+  const secondary = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   const pipDoc = new FakeDocument();
   const pipTarget = {
     listeners: {},

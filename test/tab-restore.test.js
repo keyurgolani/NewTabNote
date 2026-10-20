@@ -21,18 +21,19 @@ const FILES = [
   'js/controllers/tab-controller.js',
 ];
 
-/** Active A (newest) and B, an archived note, a template, and a note in trash. */
+/** Active A (newest) and B (and C when asked), an archived note, a template, and a note in trash. */
 async function createProfile(factory, { active = ['A', 'B'] } = {}) {
   const all = [
     note('A', { name: 'Alpha', updatedAt: 1700000000300 }),
     note('B', { name: 'Beta', updatedAt: 1700000000200 }),
+    note('C', { name: 'Gamma', updatedAt: 1700000000100 }),
     note('AR', { name: 'Archived', archived: true, archivedAt: 5 }),
     note('T', { name: 'Template', isTemplate: true }),
     note('TR', { name: 'In trash', trashed: true, trashedAt: 6 }),
   ];
   await createDatabase(factory, {
     records: {
-      canvases: all.filter((n) => active.includes(n.id) || !['A', 'B'].includes(n.id)),
+      canvases: all.filter((n) => active.includes(n.id) || !['A', 'B', 'C'].includes(n.id)),
       elements: [
         block('a1', 'A', 0, 'alpha'),
         block('b1', 'B', 0, 'beta'),
@@ -64,11 +65,13 @@ async function start(env) {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
-  env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
+  const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
+  panes['editor-container'].className = 'editor-pane active';
+  panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
   const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
-  tabs.editor = makeEditor(env);
-  tabs.secondaryEditor = makeEditor(env);
+  tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
+  tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   // App passes its active notes, from Storage.getAllNotes()
   const activeNotes = await Storage.getAllNotes();
   tabs.onGetNotes = () => activeNotes;
@@ -178,11 +181,12 @@ describe('startup: restoring the saved workspace', () => {
     });
   }
 
-  it('restores an archived split note', async () => {
+  it('doesn\'t bring an archived split note back: the right pane gets an active note', async () => {
     saveWorkspace(env, { tabs: ['A'], split: true, secondary: 'AR' });
     const { tabs } = await start(env);
     await tabs.loadSavedTabs();
-    assert.equal(tabs.secondaryEditor.noteId, 'AR');
+    assert.equal(tabs.splitViewEnabled, true);
+    assert.equal(tabs.secondaryEditor.noteId, 'B');
   });
 
   it('a split note that is the active tab\'s note opens another note on the right', async () => {
@@ -277,6 +281,20 @@ describe('split view', () => {
   });
 
   it('keeps the right pane\'s own note when it can', async () => {
+    await createProfile(env.indexedDB, { active: ['A', 'B', 'C'] });
+    saveWorkspace(env, { tabs: ['A'] });
+    const { tabs } = await start(env);
+    await tabs.loadSavedTabs();
+    await tabs.secondaryEditor.loadNote('C');
+
+    await tabs.toggleSplitView();
+    assert.equal(tabs.secondaryEditor.noteId, 'C');
+    await tabs.toggleSplitView();
+    assert.equal(tabs.splitViewEnabled, false);
+    assert.equal(tabs.activeEditorSide, 'left');
+  });
+
+  it('never brings an archived note back to the right pane', async () => {
     await createProfile(env.indexedDB);
     saveWorkspace(env, { tabs: ['A'] });
     const { tabs } = await start(env);
@@ -284,10 +302,7 @@ describe('split view', () => {
     await tabs.secondaryEditor.loadNote('AR');
 
     await tabs.toggleSplitView();
-    assert.equal(tabs.secondaryEditor.noteId, 'AR');
-    await tabs.toggleSplitView();
-    assert.equal(tabs.splitViewEnabled, false);
-    assert.equal(tabs.activeEditorSide, 'left');
+    assert.equal(tabs.secondaryEditor.noteId, 'B');
   });
 });
 
