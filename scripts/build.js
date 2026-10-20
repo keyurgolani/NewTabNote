@@ -93,6 +93,8 @@ const HTML_FILES = [
 
 const STATIC_FILES = [
   'manifest.json',
+  'LICENSE',
+  'THIRD_PARTY_NOTICES',
 ];
 
 const STATIC_DIRS = [
@@ -101,7 +103,11 @@ const STATIC_DIRS = [
 
 // JS_FILES entries copied byte for byte instead of minified, such as vendored code
 // terser can't parse. An entry ending in '/' covers every listed file under it.
-const COPY_AS_IS = [];
+// js/lib/ keeps its license headers this way (Fuse.js's has no @license tag, so even
+// a comment filter would drop it); `npm run check:notices` fails if one changes.
+const COPY_AS_IS = [
+  'js/lib/',
+];
 
 // CSS_FILES entries that build at CleanCSS level 1 instead of level 2. CleanCSS 5.3.3's
 // level-2 removeUnusedAtRules pass throws on an `animation` shorthand that uses var()

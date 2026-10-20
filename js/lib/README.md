@@ -1,10 +1,12 @@
 # Vendored Libraries
 
-Third-party libraries bundled in `js/lib/`. These are copied to `dist/js/lib/` during the build without modification.
+Third-party libraries bundled in `js/lib/`. The build copies them to `dist/js/lib/` byte for byte, license headers included. Each library's version, copyright, and full license text, and those of the components bundled inside it, are in [`THIRD_PARTY_NOTICES`](../../THIRD_PARTY_NOTICES) at the repository root, which ships in the package.
 
-| File              | Library              | Version | Source                                                                                                           | Purpose                                                  |
-| ----------------- | -------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `chart.js`        | Chart.js             | 4.4.1   | https://www.chartjs.org / [jsDelivr](https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js)              | Analytics dashboard charts                               |
-| `fuse.js`         | Fuse.js              | 7.1.0   | https://fusejs.io / [npm](https://www.npmjs.com/package/fuse.js/v/7.1.0)                                         | Lightweight fuzzy search for sidebar and command palette |
-| `jszip.min.js`    | JSZip                | 3.10.1  | https://stuk.github.io/jszip / [npm](https://www.npmjs.com/package/jszip/v/3.10.1)                               | ZIP archive generation for bulk export                   |
-| `transformers.js` | @xenova/transformers | 2.17.1  | https://huggingface.co/docs/transformers.js / [npm](https://www.npmjs.com/package/@xenova/transformers/v/2.17.1) | Local embedding generation for semantic search           |
+| File              | Library              | Version | License                                          | Source                                                                                                           | Purpose                                                  |
+| ----------------- | -------------------- | ------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `chart.js`        | Chart.js             | 4.4.1   | MIT                                              | https://www.chartjs.org / [jsDelivr](https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js)              | Analytics dashboard charts                               |
+| `fuse.js`         | Fuse.js              | 7.1.0   | Apache-2.0                                       | https://fusejs.io / [npm](https://www.npmjs.com/package/fuse.js/v/7.1.0)                                         | Lightweight fuzzy search for sidebar and command palette |
+| `jszip.min.js`    | JSZip                | 3.10.1  | MIT (dual MIT or GPL-3.0; used under MIT)        | https://stuk.github.io/jszip / [npm](https://www.npmjs.com/package/jszip/v/3.10.1)                               | ZIP archive generation for bulk export                   |
+| `transformers.js` | @xenova/transformers | 2.17.1  | Apache-2.0 (bundles MIT, BSD-3-Clause, ISC code) | https://huggingface.co/docs/transformers.js / [npm](https://www.npmjs.com/package/@xenova/transformers/v/2.17.1) | Local embedding generation for semantic search           |
+
+`transformers.js` is the package's `dist/transformers.min.js` with its closing `export{...}` statement replaced by `window.transformers=__webpack_exports__;`, so it loads as a classic script. The other files are unmodified upstream builds (`chart.js` keeps the comment jsDelivr adds at the top).

@@ -12,7 +12,8 @@
     "typecheck": "npx tsc --project jsconfig.json",
     "typecheck:ratchet": "node scripts/typecheck-ratchet.js",
     "package": "node scripts/package.js",
-    "release": "npm run clean && npm run build && npm run package"
+    "release": "npm run clean && npm run build && npm run package && npm run check:notices",
+    "check:notices": "node scripts/check-notices.js"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
