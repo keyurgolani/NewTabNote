@@ -18,6 +18,7 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('../domain/note.js').BlockRecord} BlockRecord */
 /** @typedef {import('../domain/folder.js').FolderRecord} FolderRecord */
 /** @typedef {import('../domain/session.js').WorkspaceSession} WorkspaceSession */
+/** @typedef {import('./settings.js').PreferenceValues} PreferenceValues */
 
 /** @typedef {import('./operations/list-notes.js').ListNotes} ListNotes */
 /** @typedef {import('./operations/get-note.js').GetNote} GetNote */
@@ -35,13 +36,14 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  */
 
 /**
- * What each query's `ready` state holds.
+ * What each query's `ready` state holds. test/kernel/schemas.test.mjs holds each to what its
+ * result schema accepts.
  * @typedef {object} QueryData
  * @property {NoteRecord[]} listNotes
  * @property {{note: NoteRecord, revision?: number}} getNote
  * @property {BlockRecord[]} getNoteBlocks
  * @property {FolderRecord[]} listFolders
- * @property {Record<string, unknown>} getPreferences
+ * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
  */
 

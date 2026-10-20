@@ -45,13 +45,17 @@ export const noteRecord = v.looseObject({
   settings: v.optional(v.looseObject({ gridType: v.string(), backgroundColor: v.string() })),
 });
 
-/** A block, as IndexedDB's `elements` store holds it. `canvasId` names its note. */
+/**
+ * A block, as IndexedDB's `elements` store holds it. `canvasId` names its note, and `content`
+ * takes whatever shape the block's type gives it.
+ */
 export const blockRecord = content(
   v.looseObject({
     id: entityId('block'),
     canvasId: entityId('note'),
     type: v.optional(v.string()),
     order: v.optional(v.number()),
+    content: v.optional(v.unknown()),
   }),
 );
 

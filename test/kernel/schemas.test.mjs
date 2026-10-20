@@ -1,7 +1,8 @@
 // #13's schemas for what payloads and projections carry (contracts/fields.js, entities.js,
 // settings.js, and outcome-schemas.js). A schema's type comes from the schema, and the
-// `Equal` checks below hold each one to the typedef #12 wrote by hand: `npm run
-// typecheck:kernel` fails when they drift apart.
+// `Equal` and `Same` checks below hold each one to the typedef #12 wrote by hand, and each
+// query's result schema to the data the kernel answers it with: `npm run typecheck:kernel`
+// fails when they drift apart.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -83,6 +84,88 @@ const sessionTypesMatch = true;
 const sessionKeysMatch = true;
 
 /**
+ * true when A and B are each assignable to the other
+ * @template A, B
+ * @typedef {[A] extends [B] ? ([B] extends [A] ? true : false) : false} Same
+ */
+
+/**
+ * The names of T's fields, without the index signature a record has for the fields a newer
+ * build adds
+ * @template T
+ * @typedef {keyof {[K in keyof T as string extends K ? never : number extends K ? never : K]: T[K]}} FieldNames
+ */
+
+/**
+ * @template T, K
+ * @typedef {K extends keyof T ? NonNullable<T[K]> : never} Field
+ */
+
+/**
+ * true when A and B describe the same data: each is assignable to the other, they have the
+ * same field names, and the same holds for their items and for each field that holds an
+ * object. Equal can't hold a record to its typedef, since it tells an intersection, which a
+ * record type with an index signature is, from the object type it amounts to.
+ * @template A, B
+ * @typedef {Same<A, B> extends true
+ *   ? [A, B] extends [readonly (infer I)[], readonly (infer J)[]]
+ *     ? Bound<I, J>
+ *     : [A, B] extends [object, object]
+ *       ? Equal<FieldNames<A>, FieldNames<B>> extends true
+ *         ? false extends {[K in FieldNames<A>]-?: Bound<Field<A, K>, Field<B, K>>}[FieldNames<A>]
+ *           ? false
+ *           : true
+ *         : false
+ *       : true
+ *   : false} Bound
+ */
+
+/** @typedef {import('../../js/kernel/core/domain/note.js').NoteRecord} NoteRecord */
+/** @typedef {import('../../js/kernel/core/domain/note.js').BlockRecord} BlockRecord */
+/** @typedef {import('../../js/kernel/core/domain/note.js').BlockInput} BlockInput */
+/** @typedef {import('../../js/kernel/core/domain/folder.js').FolderRecord} FolderRecord */
+
+/** @type {Bound<v.InferOutput<typeof noteRecord>, NoteRecord>} */
+const noteTypesMatch = true;
+/** @type {Bound<v.InferOutput<typeof blockRecord>, BlockRecord>} */
+const blockTypesMatch = true;
+/** @type {Bound<v.InferOutput<typeof blockInput>, BlockInput>} */
+const blockInputTypesMatch = true;
+/** @type {Bound<v.InferOutput<typeof folderRecord>, FolderRecord>} */
+const folderTypesMatch = true;
+
+/** @typedef {import('../../js/kernel/core/contracts/queries.js').QueryType} QueryType */
+/** @typedef {import('../../js/kernel/core/contracts/queries.js').QueryData} QueryData */
+
+/**
+ * Each query's result schema
+ * @typedef {{
+ *   listNotes: typeof import('../../js/kernel/core/contracts/operations/list-notes.js').result,
+ *   getNote: typeof import('../../js/kernel/core/contracts/operations/get-note.js').result,
+ *   getNoteBlocks: typeof import('../../js/kernel/core/contracts/operations/get-note-blocks.js').result,
+ *   listFolders: typeof import('../../js/kernel/core/contracts/operations/list-folders.js').result,
+ *   getPreferences: typeof import('../../js/kernel/core/contracts/operations/get-preferences.js').result,
+ *   getWorkspaceSession: typeof import('../../js/kernel/core/contracts/operations/get-workspace-session.js').result,
+ * }} ResultSchemas
+ */
+
+/**
+ * What a query's result schema lets its `ready` state hold
+ * @template {QueryType} T
+ * @typedef {Extract<v.InferOutput<ResultSchemas[T]>, {kind: 'ready'}>['data']} ReadyData
+ */
+
+/** @type {{[T in QueryType]: Bound<ReadyData<T>, QueryData[T]>}} */
+const queryDataMatches = {
+  listNotes: true,
+  getNote: true,
+  getNoteBlocks: true,
+  listFolders: true,
+  getPreferences: true,
+  getWorkspaceSession: true,
+};
+
+/**
  * @param {v.GenericSchema} schema
  * @param {unknown} value
  */
@@ -114,6 +197,11 @@ describe('fields', () => {
 });
 
 describe('entity schemas (#13, AC1)', () => {
+  it("are the records #12's kernel reads and writes, field for field", () => {
+    assert.ok(noteTypesMatch && blockTypesMatch && blockInputTypesMatch && folderTypesMatch);
+    assert.ok(Object.values(queryDataMatches).every(Boolean));
+  });
+
   it('accept the records 1.4.x writes, and Popup notes with four fields', () => {
     assert.equal(accepts(noteRecord, newNoteRecord({ id: 'n1', name: 'Plan', now: NOW })), true);
     assert.equal(accepts(noteRecord, { id: 'n2', name: 'Quick', createdAt: NOW, updatedAt: NOW }), true);

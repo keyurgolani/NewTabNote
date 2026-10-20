@@ -40,3 +40,8 @@ export const workspaceSession = v.strictObject({
   secondaryNoteId: v.optional(v.nullable(entityId('note'))),
   lastOpenedNoteId: v.optional(v.nullable(entityId('note'))),
 });
+
+/**
+ * The preferences a getPreferences answer holds and a setPreferences command sets
+ * @typedef {v.InferOutput<typeof preferenceValues>} PreferenceValues
+ */
