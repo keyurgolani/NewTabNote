@@ -11,8 +11,9 @@
  *   like a before that can't be fetched, compares with HEAD^1, the pushed commit's parent,
  *   which the checkout has at fetch-depth 2. release.yml runs pr-checks for a v* tag that
  *   way, and the tag may sit on an older milestone than any branch tip.
- * A commit with no parent gets no --base, so check:boundaries only matches the ledger to
- * the hits.
+ * A root commit gets no --base, so check:boundaries only matches the ledger to the hits,
+ * with a warning. Any other failure to find HEAD^1, such as a checkout cut off at HEAD,
+ * exits 1, since dropping --base would switch the ratchet off.
  *
  *   EVENT=push BEFORE=<sha> BASE_REF= node scripts/ci/ledger-base.js
  */
@@ -40,9 +41,37 @@ function runGit(args) {
 }
 
 /**
+ * HEAD's parent, or null for a root commit. When HEAD^1 doesn't resolve, HEAD's commit
+ * object says whether it has a parent: a shallow checkout cut off at HEAD still records
+ * it. Throws when it has one, or when git can't read HEAD.
+ */
+function parentOf(git) {
+  try {
+    const parent = git(['rev-parse', '--verify', '--quiet', 'HEAD^1^{commit}']).trim();
+    if (parent) return parent;
+  } catch {
+    // Read HEAD's commit object below
+  }
+  const header = git(['cat-file', '-p', 'HEAD']).split('\n\n')[0];
+  if (/^parent [0-9a-f]+$/m.test(header)) {
+    throw new Error("HEAD has a parent this checkout doesn't have, so there's no ledger to compare with (the kernel job checks out with fetch-depth 2)");
+  }
+  return null;
+}
+
+/**
  * Returns the exit code
  */
 function main({ env = process.env, git = runGit, log = console.log } = {}) {
+  try {
+    return pickAndWrite({ env, git, log });
+  } catch (error) {
+    log(`::error::ledger-base: ${error.message}`);
+    return 1;
+  }
+}
+
+function pickAndWrite({ env, git, log }) {
   const { EVENT: eventName = '', BEFORE: before = '', BASE_REF: baseRef = '', GITHUB_OUTPUT: output } = env;
   if (!output) {
     log('ledger-base: GITHUB_OUTPUT is not set, so there is nowhere to write the base');
@@ -60,12 +89,7 @@ function main({ env = process.env, git = runGit, log = console.log } = {}) {
 
   let command = `git fetch origin ${base} && ${CHECK} -- --base ${base}`;
   if (base === 'HEAD^1') {
-    let parent = '';
-    try {
-      parent = git(['rev-parse', '--verify', '--quiet', 'HEAD^1^{commit}']).trim();
-    } catch {
-      // A root commit, which has no parent
-    }
+    const parent = parentOf(git);
     if (!parent) {
       base = '';
       command = CHECK;
@@ -79,17 +103,12 @@ function main({ env = process.env, git = runGit, log = console.log } = {}) {
   fs.appendFileSync(output, `base=${base}\ncommand=${command}\n`);
   log(base
     ? `ledger-base: check:boundaries compares with ${base}`
-    : 'ledger-base: HEAD has no parent to compare with, so check:boundaries runs without --base');
+    : '::warning::HEAD is a root commit with no ledger before it, so check:boundaries runs without --base and only matches the ledger to the hits');
   return 0;
 }
 
 if (require.main === module) {
-  try {
-    process.exitCode = main();
-  } catch (error) {
-    console.error(`ledger-base: ${error.message}`);
-    process.exitCode = 1;
-  }
+  process.exitCode = main();
 }
 
 module.exports = { pickBase, main };

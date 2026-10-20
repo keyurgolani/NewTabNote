@@ -38,10 +38,12 @@ test('the push that creates a release/** branch compares with its first commit\'
 });
 
 /**
- * Run main with a fake git: `fetchFails(ref)` makes a fetch fail, and `parent` is what
- * HEAD^1 resolves to, or null for a root commit
+ * Run main with a fake git: `fetchFails(ref)` makes a fetch fail, and `parent` is HEAD's
+ * parent, or null for a root commit. With `shallow`, the checkout stops at HEAD, so HEAD^1
+ * doesn't resolve though HEAD's commit object still names its parent. `catFileFails` makes
+ * reading HEAD's commit object fail.
  */
-function runMain(env, { fetchFails = () => false, parent = PARENT } = {}) {
+function runMain(env, { fetchFails = () => false, parent = PARENT, shallow = false, catFileFails = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-ledger-base-'));
   const output = path.join(dir, 'output');
   fs.writeFileSync(output, '');
@@ -54,8 +56,14 @@ function runMain(env, { fetchFails = () => false, parent = PARENT } = {}) {
         calls.push(args.join(' '));
         if (args[0] === 'fetch' && fetchFails(args[args.length - 1])) throw new Error('fatal: remote error: upload-pack: not our ref');
         if (args[0] === 'rev-parse') {
-          if (parent === null) throw new Error('fatal: Needed a single revision');
+          if (parent === null || shallow) throw new Error('Command failed: git rev-parse --verify --quiet HEAD^1^{commit}');
           return `${parent}\n`;
+        }
+        if (args[0] === 'cat-file') {
+          if (catFileFails) throw new Error('fatal: Not a valid object name HEAD');
+          const tree = 'tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n';
+          const author = 'author A <a@example.test> 1700000000 +0000\ncommitter A <a@example.test> 1700000000 +0000\n';
+          return `${tree}${parent === null ? '' : `parent ${parent}\n`}${author}\nA commit\n`;
         }
         return '';
       },
@@ -99,11 +107,26 @@ test("a push whose before commit can't be fetched falls back to HEAD^1, not anot
   assert.doesNotMatch(written, /origin\/main/);
 });
 
-test('a root commit has no HEAD^1, so check:boundaries runs without --base', () => {
-  const { code, written, log } = runMain({ EVENT: 'push', BEFORE: NEW_REF }, { parent: null });
+test('a root commit has no parent, so check:boundaries runs without --base, with a warning', () => {
+  const { code, written, log, calls } = runMain({ EVENT: 'push', BEFORE: NEW_REF }, { parent: null });
   assert.equal(code, 0);
   assert.equal(written, `base=\ncommand=${KERNEL}\n`);
-  assert.match(log, /without --base/);
+  assert.match(log, /^::warning::.*without --base/m);
+  assert.ok(calls.includes('cat-file -p HEAD'), calls.join('; '));
+});
+
+test("a checkout that stops short of HEAD's parent fails instead of dropping --base", () => {
+  const { code, written, log } = runMain({ EVENT: 'push', BEFORE: NEW_REF }, { shallow: true });
+  assert.equal(code, 1);
+  assert.equal(written, '');
+  assert.match(log, /^::error::.*parent/m);
+});
+
+test("failing to read HEAD's commit fails instead of dropping --base", () => {
+  const { code, written, log } = runMain({ EVENT: 'pull_request', BEFORE: '', BASE_REF: 'next' }, { shallow: true, catFileFails: true });
+  assert.equal(code, 1);
+  assert.equal(written, '');
+  assert.match(log, /^::error::/m);
 });
 
 test('the kernel job compares with the base ledger-base.js picks, and passes on its local command', () => {
@@ -113,6 +136,14 @@ test('the kernel job compares with the base ledger-base.js picks, and passes on 
   assert.match(WORKFLOW, /command: \$\{\{ steps\.ledger-base\.outputs\.command \}\}/);
   assert.doesNotMatch(WORKFLOW, /DEFAULT_BRANCH|default_branch/);
   assert.doesNotMatch(WORKFLOW, /check:boundaries -- --base HEAD\^1/);
+});
+
+test('the check:boundaries step passes --base whenever ledger-base.js wrote one', () => {
+  const steps = WORKFLOW.split(/\n(?= {6}- name: )/);
+  const step = steps.find(text => text.startsWith('      - name: npm run check:boundaries'));
+  assert.ok(step, 'no check:boundaries step in the kernel job');
+  assert.match(step, /BASE: \$\{\{ steps\.ledger-base\.outputs\.base \}\}/);
+  assert.match(step, /npm run check:boundaries -- \$\{BASE:\+--base "\$BASE"\}/);
 });
 
 test("pr-gate prints the kernel job's own local command instead of working out the base again", () => {
