@@ -22,14 +22,16 @@ const ID = /^(KD-\d{3}) \S/;
  * @param {string} id - The ledger id, for the messages
  * @param {(t?: any) => any} body
  * @param {any} [t] - The node:test context, passed to body
- * @returns {Promise<string>} The first line of the assertion that failed
+ * @returns {Promise<string>} The failed assertion's first line, and what it got
  */
 async function runExpectedFailure(id, body, t) {
   try {
     await body(t);
   } catch (error) {
-    if (error instanceof assert.AssertionError) return error.message.split('\n')[0];
-    throw error;
+    if (!(error instanceof assert.AssertionError)) throw error;
+    const [first] = error.message.split('\n');
+    const got = 'actual' in error ? ` got ${JSON.stringify(error.actual)}` : '';
+    return `${first}${got}`.slice(0, 300);
   }
   throw new assert.AssertionError({
     message: `${id} passed, so its defect looks fixed: delete its entry from test/known-defects.json and turn this expectFailure() into test()`,

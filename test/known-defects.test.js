@@ -143,7 +143,7 @@ test('the node scan reads single-, double-, and back-quoted titles, escapes incl
 });
 
 test('expectFailure() passes on a failed assertion, and fails when the step passes or throws anything else', async () => {
-  assert.equal(await runExpectedFailure('KD-900', () => assert.equal(1, 2)), 'Expected values to be strictly equal:');
+  assert.equal(await runExpectedFailure('KD-900', () => assert.equal(1, 2)), 'Expected values to be strictly equal: got 1');
   await assert.rejects(runExpectedFailure('KD-900', () => {}), {
     name: 'AssertionError',
     message: /^KD-900 passed, so its defect looks fixed: delete its entry from test\/known-defects.json/,

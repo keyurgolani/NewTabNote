@@ -8,6 +8,14 @@
       "tests": [
         "KD-001 sidebar search for a word only in a block's text finds the note"
       ]
+    },
+    {
+      "id": "KD-002",
+      "ownerIssue": 5,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/background.js#L233-L241",
+      "tests": [
+        "KD-002 the capture-selection command saves the selected text and its source to today's Daily Note"
+      ]
     }
   ]
 }
