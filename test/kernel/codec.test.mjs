@@ -50,11 +50,27 @@ describe('codec', () => {
     assert.equal(Object.is(/** @type {{zero: number}} */ (decode(encode({ zero: -0 }))).zero, 0), true);
   });
 
-  it("encodes another realm's plain objects and objects with no prototype", () => {
-    const foreign = vm.runInNewContext('({ list: [1, 2], nested: { ok: true } })');
-    assert.equal(encode(foreign), '{"list":[1,2],"nested":{"ok":true}}');
-    const bare = Object.assign(Object.create(null), { a: 1 });
-    assert.equal(encode(bare), '{"a":1}');
+  it('encodes objects with no prototype', () => {
+    const bare = Object.assign(Object.create(null), { a: 1, list: [Object.assign(Object.create(null), { b: 2 })] });
+    assert.equal(encode(bare), '{"a":1,"list":[{"b":2}]}');
+  });
+
+  it('refuses an object or array that inherits from anything else, which would change what JSON writes', () => {
+    /** @param {object} fields */
+    const inheriting = fields => Object.create(Object.assign(Object.create(null), fields));
+    // A toJSON it inherits replaces it: a Date would go as {}, and undefined would drop the field
+    assertRefused(() => encode({ at: inheriting({ toJSON: () => new Date(0) }) }), "an object that isn't plain", '/at');
+    assertRefused(() => encode({ at: inheriting({ toJSON: () => undefined }) }), "an object that isn't plain", '/at');
+    // A field it inherits reads as its own, but JSON leaves it out
+    assertRefused(() => encode(inheriting({ title: 'Plan' })), "an object that isn't plain", '');
+    const listed = Object.setPrototypeOf([1], { toJSON: () => 'x' });
+    assertRefused(() => encode(listed), "an array that isn't plain", '');
+    class List extends Array {}
+    assertRefused(() => encode({ ids: List.from(['n1']) }), "an array that isn't plain", '/ids');
+    // Another realm's prototypes can't be told from an object like these, so its objects and
+    // arrays are refused, and a sender in another realm encodes there
+    assertRefused(() => encode(vm.runInNewContext('({ ok: true })')), "an object that isn't plain", '');
+    assertRefused(() => encode({ list: vm.runInNewContext('[1, 2]') }), "an array that isn't plain", '/list');
   });
 
   it('leaves out an object field whose value is undefined, as JSON does, so it arrives absent', () => {
@@ -115,6 +131,15 @@ describe('codec', () => {
     assertRefused(() => encode(Object.defineProperty({}, 'secret', { value: 1 })), 'a hidden property', '/secret');
     assertRefused(() => encode([1, , 3]), 'an array with a hole', '/1');
     assertRefused(() => encode(Object.assign([1], { extra: true })), 'an array with keys besides its items', '');
+    // An array's items and keys are held to the same: a getter could give the check one value
+    // and JSON another, and JSON writes a hidden item but drops a hidden or symbol key
+    /** @param {PropertyDescriptor} descriptor */
+    const second = descriptor => Object.defineProperty([1, 2], 1, descriptor);
+    assertRefused(() => encode(second({ get: () => 2, enumerable: true })), 'a getter or setter', '/1');
+    assertRefused(() => encode(second({ value: 2, enumerable: false })), 'a hidden property', '/1');
+    assertRefused(() => encode(Object.assign([1], { [Symbol('k')]: 1 })), 'an array with keys besides its items', '');
+    const hiddenKey = Object.defineProperty([1], 'extra', { value: true });
+    assertRefused(() => encode(hiddenKey), 'an array with keys besides its items', '');
     // The same object twice isn't a cycle
     const shared = { x: 1 };
     assert.equal(encode({ a: shared, b: [shared] }), '{"a":{"x":1},"b":[{"x":1}]}');

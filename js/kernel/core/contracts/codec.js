@@ -1,11 +1,17 @@
 /**
  * The one JSON codec every transport uses, the in-process one included (#13, "Topology"), so a
  * message means the same thing however it travels. It encodes only what JSON carries without
- * changing it: plain objects (from any realm), arrays without holes, strings, booleans, null,
- * and finite numbers. It refuses Dates, Maps, Sets, BigInts, functions, symbols, binary data
+ * changing it: plain objects, arrays without holes, strings, booleans, null, and finite
+ * numbers. It refuses Dates, Maps, Sets, BigInts, functions, symbols, binary data
  * (ArrayBuffer, typed arrays, Blob), class instances, cycles, symbol keys, getters, hidden
  * properties, and nesting deeper than MAX_DEPTH. Timestamps are integers, which the schemas
  * check. -0 encodes as 0, as JSON has no negative zero.
+ *
+ * A plain object's prototype is Object.prototype or null, and a plain array's is
+ * Array.prototype, so it inherits nothing that changes what JSON writes: an inherited toJSON
+ * would replace the value, and an inherited field would read as the object's own but be left
+ * out. Another realm's Object.prototype can't be told from a prototype that hides either, so
+ * another realm's objects and arrays are refused too, and a sender there encodes in its realm.
  *
  * An object field whose value is `undefined` is left out, as JSON leaves it out, so it arrives
  * absent, which is what a schema's optional field takes it for. Stored records have such
@@ -43,6 +49,17 @@ export class CodecError extends Error {
 const child = (path, key) => `${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 
 /**
+ * Throws a CodecError unless a property is data JSON writes as it reads: no getter or setter,
+ * which could give JSON another value than the check saw, and nothing hidden
+ * @param {PropertyDescriptor} descriptor
+ * @param {string} path
+ */
+function checkData(descriptor, path) {
+  if (!('value' in descriptor)) throw new CodecError('a getter or setter', path);
+  if (!descriptor.enumerable) throw new CodecError('a hidden property', path);
+}
+
+/**
  * Throws a CodecError for anything in `value` JSON can't carry as it is.
  * @param {unknown} value
  * @param {string} path
@@ -68,23 +85,25 @@ function check(value, path, depth, open) {
   open.add(value);
   try {
     if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw new CodecError("an array that isn't plain", path);
       for (let index = 0; index < value.length; index++) {
-        if (!Object.hasOwn(value, index)) throw new CodecError('an array with a hole', child(path, index));
-        check(value[index], child(path, index), depth + 1, open);
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+        if (!descriptor) throw new CodecError('an array with a hole', child(path, index));
+        checkData(descriptor, child(path, index));
+        check(descriptor.value, child(path, index), depth + 1, open);
       }
-      if (Object.keys(value).length !== value.length)
+      // Its items and its length, and no other key, hidden and symbol ones included
+      if (Reflect.ownKeys(value).length !== value.length + 1) {
         throw new CodecError('an array with keys besides its items', path);
+      }
       return;
     }
     const proto = Object.getPrototypeOf(value);
-    if (proto !== null && Object.getPrototypeOf(proto) !== null) {
-      throw new CodecError("an object that isn't plain", path);
-    }
+    if (proto !== Object.prototype && proto !== null) throw new CodecError("an object that isn't plain", path);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key === 'symbol') throw new CodecError('a symbol key', path);
       const descriptor = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(value, key));
-      if (!('value' in descriptor)) throw new CodecError('a getter or setter', child(path, key));
-      if (!descriptor.enumerable) throw new CodecError('a hidden property', child(path, key));
+      checkData(descriptor, child(path, key));
       // Left out, as JSON leaves it out
       if (descriptor.value === undefined) continue;
       check(descriptor.value, child(path, key), depth + 1, open);
