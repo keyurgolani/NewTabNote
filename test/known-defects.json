@@ -1,4 +1,13 @@
 {
   "about": "What fails at the legacy 1.4.x code, one entry per defect: id (KD-NNN), ownerIssue, evidence (a GitHub link pinned to a full commit SHA, with a line anchor), tests (titles that carry the id; empty when the entry only lists uncaught messages), and optional uncaught (exact messages of exceptions the smoke tests tolerate). A listed test that passes, or a listed message that no longer occurs, fails the run, and the PR that fixes the defect deletes its entry. Format: e2e/harness/known-defects.js.",
-  "defects": []
+  "defects": [
+    {
+      "id": "KD-001",
+      "ownerIssue": 22,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/search.js#L75-L77",
+      "tests": [
+        "KD-001 sidebar search for a word only in a block's text finds the note"
+      ]
+    }
+  ]
 }

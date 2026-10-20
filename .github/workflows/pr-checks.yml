@@ -146,14 +146,18 @@ jobs:
         if: failure() || cancelled()
         run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" extension
       # Traces, screenshots, and extension logs of failed attempts, a flaky test's first
-      # failure included. A clean run leaves only the hidden .last-run.json, which
-      # upload-artifact skips, so it uploads nothing.
+      # failure included. Playwright writes an error-context.md for every test that threw,
+      # expected failures (test.fail(), see test/known-defects.json) too, so those stay out
+      # (a failure's trace holds the same error); with the hidden .last-run.json skipped, a
+      # clean run uploads nothing.
       - name: Upload test-results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results
-          path: test-results/
+          path: |
+            test-results/
+            !test-results/**/error-context.md
           if-no-files-found: ignore
           retention-days: 14
 
