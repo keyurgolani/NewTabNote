@@ -549,6 +549,8 @@ async function openEditors(env, Storage) {
   const pipTarget = {
     listeners: {},
     addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    // The PiP window's frames run whenever the new tab's do in these tests (runUntil).
+    requestAnimationFrame: (fn) => env.global.requestAnimationFrame(fn),
   };
   pipDoc.defaultView = pipTarget;
   const pipEditor = makeEditor(env, pipDoc);

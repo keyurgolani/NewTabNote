@@ -19,14 +19,36 @@ const FILES = [
   'js/editor.js',
 ];
 
-/** A window-like target for an editor's own document (the PiP window has its own). */
+/**
+ * A window-like target for an editor's own document. The PiP window has its
+ * own listeners and its own animation frames, which run apart from the new tab's.
+ */
 function windowTarget() {
   const listeners = {};
+  const queued = [];
   return {
     listeners,
     addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
     fire(type) { (listeners[type] || []).forEach((fn) => fn({ type })); },
+    requestAnimationFrame(fn) { queued.push(fn); return queued.length; },
+    /** Run this window's queued frame callbacks. */
+    frames() {
+      const batch = queued.splice(0, queued.length);
+      batch.forEach((fn) => fn(0));
+      return batch.length;
+    },
+    pendingFrames() { return queued.length; },
   };
+}
+
+/** A PiP editor on `noteId`, in its own document and window. */
+async function openPiP(env, noteId) {
+  const pipDoc = new FakeDocument();
+  const pipWindow = windowTarget();
+  pipDoc.defaultView = pipWindow;
+  const pip = allowDeletes(makeEditor(env, pipDoc));
+  await pip.loadNote(noteId);
+  return { pip, pipWindow };
 }
 
 /**
@@ -473,14 +495,10 @@ describe('BlockEditor deletes stay deleted', () => {
     assert.deepEqual(fresh.blocks.map((b) => b.id), ['a1'], 'a reload shows it gone');
   });
 
-  it('with no frames running (PiP over a hidden tab), closing the window writes one fresh copy', async () => {
-    const pipDoc = new FakeDocument();
-    const pipWindow = windowTarget();
-    pipDoc.defaultView = pipWindow;
-    const pip = allowDeletes(makeEditor(env, pipDoc));
-    await pip.loadNote('A');
+  it('with no frames running in the PiP window, closing it writes one fresh copy', async () => {
+    const { pip, pipWindow } = await openPiP(env, 'A');
 
-    // The new tab is in the background, so its frames never run and each save waits.
+    // The PiP window paints no frames (minimized, say), so each save waits.
     type(pip, 'first');
     env.clock.tick(500);
     pip.deleteBlock('a2');
@@ -488,20 +506,68 @@ describe('BlockEditor deletes stay deleted', () => {
     env.clock.tick(500);
     type(pip, 'second');
     env.clock.tick(500);
-    assert.equal(env.pendingFrames(), 3, 'three saves waiting for a frame');
+    assert.equal(pipWindow.pendingFrames(), 3, 'three saves waiting for a frame');
 
     const opened = spyTransactions(Storage);
     const blockWrites = () => writesOf(opened).filter((t) => t.stores.includes('elements')).length;
     pipWindow.fire('pagehide');
     assert.equal(writesOf(opened).length, 1, 'one write, opened before the handler returned');
     await settle();
-    env.frames(); // the waiting saves wake up much later
+    pipWindow.frames(); // the waiting saves wake up much later
     await settle();
     assert.equal(blockWrites(), 1, 'the older copies are superseded');
 
     const rows = await elementsById(env);
     assert.equal(rows.a2, undefined, 'a2 stays deleted');
     assert.deepEqual(rows.a1, { canvasId: 'A', content: 'second' });
+  });
+});
+
+describe('BlockEditor in a PiP window', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  it("saves on the PiP window's frames while the new tab paints none", async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    type(pip, 'charlie in PiP');
+    env.clock.tick(500);
+    assert.equal(env.pendingFrames(), 0, 'nothing waits on the new tab, which is in the background');
+    assert.equal(pipWindow.pendingFrames(), 1);
+
+    pipWindow.frames();
+    await settle();
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in PiP' });
+  });
+
+  it('when frames come back, only the newest waiting save of the note writes', async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    for (const text of ['one', 'two', 'three']) {
+      type(pip, text);
+      env.clock.tick(500);
+    }
+    assert.equal(pipWindow.pendingFrames(), 3);
+
+    const opened = spyTransactions(Storage);
+    pipWindow.frames();
+    await settle();
+    assert.equal(writesOf(opened).filter((t) => t.stores.includes('elements')).length, 1, 'one write, not three');
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'three' });
+  });
+
+  it("the new tab's editors keep saving on the new tab's frames", async () => {
+    type(editor, 'alpha in main');
+    env.clock.tick(500);
+    assert.equal(env.pendingFrames(), 1);
+    env.frames();
+    await settle();
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha in main' });
   });
 });
 

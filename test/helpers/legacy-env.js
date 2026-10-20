@@ -528,6 +528,8 @@ function createLegacyEnv(options = {}) {
   if (kind === 'page' && options.document !== null) {
     document = options.document || new FakeDocument();
     windowTarget = new FakeWindowTarget();
+    // As in a page, window.requestAnimationFrame is the global one.
+    windowTarget.requestAnimationFrame = sandbox.requestAnimationFrame;
     document.defaultView = windowTarget;
     sandbox.document = document;
   }

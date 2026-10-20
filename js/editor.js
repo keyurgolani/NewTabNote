@@ -3648,6 +3648,8 @@ class BlockEditor {
       await this._nextFrame();
       // A page-hide flush or a newer save of this note may have written it while we waited.
       if (state.written || this._isSuperseded(state)) return;
+      // A newer save of this note waits too, and it writes the same, newer blocks.
+      if (this._newerSaveWaiting(state)) return;
       // loadNote writes the note it leaves before switching, which supersedes this save.
       if (!this._takeBlockSnapshot(state)) {
         console.warn('Save skipped: the editor left the note before it was written', state.noteId);
@@ -3764,14 +3766,26 @@ class BlockEditor {
   }
 
   /**
-   * Wait for the next animation frame, so a save reads its metadata with the
-   * frame's other DOM reads instead of forcing a layout (Req 25.2).
+   * Wait for the next animation frame of this editor's own window, so a save
+   * reads its metadata with that frame's other DOM reads instead of forcing a
+   * layout (Req 25.2). The PiP editor follows the PiP window, which keeps
+   * painting while the new tab is in the background.
    * @returns {Promise<void>}
    */
   _nextFrame() {
+    const view = (this.doc && this.doc.defaultView) || window;
     return new Promise((resolve) => {
-      requestAnimationFrame(() => resolve());
+      view.requestAnimationFrame(() => resolve());
     });
+  }
+
+  /**
+   * @param {EditorSaveState} state
+   * @returns {boolean} True when a newer save of the same note is waiting for its frame
+   */
+  _newerSaveWaiting(state) {
+    return this._activeSaves().some(({ state: other }) => !other.written
+      && other.noteId === state.noteId && other.seq > state.seq);
   }
 
   /**
