@@ -1,187 +1,385 @@
 name: Release
 
+# A v* tag push checks the tag against every version field and that it's on main or a
+# release/** branch, runs pr-checks.yml on the tagged commit, and packages the dist/ that
+# run built and tested. attest signs the zip's build provenance in a job that runs no
+# package code, and release creates the GitHub Release with that zip. None of it reads a
+# store secret or calls the store. Publishing to the Chrome Web Store is a
+# workflow_dispatch for an existing release tag, from main or release/**, that waits for
+# the maintainer's approval in the chrome-web-store environment and verifies the zip's
+# attestation first. docs/release-plan.md has the steps.
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., 1.0.1)'
+      tag:
+        description: Release tag to publish to the Chrome Web Store, such as v1.4.1. Its GitHub Release must already exist.
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+# Tag runs and store dispatches queue in separate groups, so a dispatch waiting for
+# approval never holds up a tag run, and nothing cancels a run in progress. A run cancelled
+# while pending is re-run, never retagged.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'release-store' || 'release' }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
-    
+  preflight:
+    name: preflight
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      listing_url: ${{ steps.listing.outputs.url }}
+    env:
+      TAG: ${{ github.ref_name }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Update version in manifest (if manual trigger)
-        if: github.event_name == 'workflow_dispatch'
+          persist-credentials: false
+          # Every branch, to find the tagged commit on main or release/**
+          fetch-depth: 0
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Check the tag against every version field
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          # Update manifest.json version
-          node -e "
-            const fs = require('fs');
-            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
-            manifest.version = '$VERSION';
-            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-          "
-          # Update package.json version
-          npm version $VERSION --no-git-tag-version --allow-same-version
-      
-      - name: Build extension
-        run: npm run build
-      
-      - name: Package extension
-        run: npm run package
-      
-      - name: Get version
-        id: version
+          set -euo pipefail
+          node scripts/release/check-version.mjs "$TAG"
+      - name: Check the tagged commit is on main or a release branch
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          while read -r ref; do
+            case "$ref" in
+              refs/remotes/origin/main | refs/remotes/origin/release/*) ;;
+              *) continue ;;
+            esac
+            if git merge-base --is-ancestor "$GITHUB_SHA" "$ref"; then
+              echo "✓ $TAG ($GITHUB_SHA) is on ${ref#refs/remotes/origin/}"
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/)
+          echo "::error::$TAG points at $GITHUB_SHA, which isn't on main or any release/** branch. Tag a commit on main, or on release/R<n> for a patch."
+          exit 1
+      - name: Find the store listing the README links (checked here so a bad README fails before anything is built)
+        id: listing
+        run: |
+          set -euo pipefail
+          mapfile -t urls < <(grep -oE 'https://chromewebstore\.google\.com/detail/[A-Za-z0-9._~-]+/[a-p]{32}' README.md | sort -u)
+          if [ "${#urls[@]}" -ne 1 ]; then
+            echo "::error file=README.md::README.md must link exactly one Chrome Web Store listing, and it links ${#urls[@]}"
+            exit 1
           fi
-      
-      - name: Generate checksums
-        id: checksums
-        run: |
-          cd releases
-          VERSION="${{ steps.version.outputs.version }}"
-          ZIP_SHA256=$(sha256sum "new-tab-note-v${VERSION}.zip" | cut -d' ' -f1)
-          echo "zip_sha256=${ZIP_SHA256}" >> $GITHUB_OUTPUT
-      
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          echo "url=${urls[0]}" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: checks
+    needs: preflight
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pr-checks.yml
+
+  package:
+    name: package
+    needs: [preflight, checks]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Runs npm, so it holds no id-token and can't write to the repository
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: New Tab Note v${{ steps.version.outputs.version }}
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: npm ci --ignore-scripts
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+      - name: Download the dist/ that checks built and tested
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: Check dist/manifest.json against the tag
+        run: |
+          set -euo pipefail
+          node scripts/release/check-version.mjs "$TAG" --manifest dist/manifest.json
+      - name: Package the zip and write its checksum
+        run: |
+          set -euo pipefail
+          npm run package
+          npm run check:notices
+          cd releases
+          zip="new-tab-note-$TAG.zip"
+          sha256sum "$zip" > "$zip.sha256"
+          sha256sum --check --strict "$zip.sha256"
+      - name: Upload the zip and its checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-zip
+          path: |
+            releases/new-tab-note-${{ github.ref_name }}.zip
+            releases/new-tab-note-${{ github.ref_name }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    name: attest
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # The only job that can sign. It checks out nothing and installs nothing, so no package
+    # code runs while it holds the OIDC token. publish-store verifies this attestation before
+    # it calls the store, so a zip swapped on the release later doesn't pass.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download the zip and its checksum
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-zip
+          path: release-zip
+      - name: Check the zip against its checksum
+        run: |
+          set -euo pipefail
+          cd release-zip
+          zip="new-tab-note-$TAG.zip"
+          for file in "$zip" "$zip.sha256"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::The release-zip artifact has no $file"
+              exit 1
+            fi
+          done
+          if [ "$(wc -l < "$zip.sha256")" -ne 1 ] || [ "$(cut -d' ' -f3- "$zip.sha256")" != "$zip" ]; then
+            echo "::error::$zip.sha256 must hold one checksum line, for $zip"
+            exit 1
+          fi
+          sha256sum --check --strict "$zip.sha256"
+      # attest-build-provenance v4 runs actions/attest v4.2.1 (node24), pinned by SHA inside it
+      - name: Attest the zip's build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-zip/new-tab-note-${{ github.ref_name }}.zip
+
+  release:
+    name: release
+    needs: [preflight, package, attest]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The only job that writes: it creates the GitHub Release with the zip attest signed. It
+    # installs no npm package and holds no id-token. The checkout is for scripts/release,
+    # which uses only Node's built-ins.
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Download the attested zip and its checksum
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-zip
+          path: release-zip
+      - name: Check the zip against its checksum
+        id: checksum
+        run: |
+          set -euo pipefail
+          cd release-zip
+          zip="new-tab-note-$TAG.zip"
+          for file in "$zip" "$zip.sha256"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::The release-zip artifact has no $file"
+              exit 1
+            fi
+          done
+          if [ "$(wc -l < "$zip.sha256")" -ne 1 ] || [ "$(cut -d' ' -f3- "$zip.sha256")" != "$zip" ]; then
+            echo "::error::$zip.sha256 must hold one checksum line, for $zip"
+            exit 1
+          fi
+          sha256sum --check --strict "$zip.sha256"
+          echo "sha256=$(cut -d' ' -f1 "$zip.sha256")" >> "$GITHUB_OUTPUT"
+      - name: Decide whether this release is marked Latest
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          released=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName')
+          latest=$(printf '%s\n' "$released" | node scripts/release/is-latest.mjs "$TAG")
+          echo "make_latest=$latest" >> "$GITHUB_OUTPUT"
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: New Tab Note ${{ github.ref_name }}
           body: |
-            ## New Tab Note v${{ steps.version.outputs.version }}
-            
-            ### Installation Options
-            
-            #### Option 1: Chrome Web Store (Recommended)
-            Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/${{ secrets.CHROME_EXTENSION_ID }})
-            
-            #### Option 2: Load Unpacked (Developer Mode)
-            1. Download `new-tab-note-v${{ steps.version.outputs.version }}.zip`
-            2. Extract the zip file to a permanent location
-            3. Open Chrome and go to `chrome://extensions/`
-            4. Enable "Developer mode" in the top right
-            5. Click "Load unpacked" and select the extracted folder
-            
-            ### Checksum (SHA256)
-            ```
-            ZIP: ${{ steps.checksums.outputs.zip_sha256 }}
-            ```
+            The Chrome Web Store update is a separate step that the maintainer approves after this release. Until that step and the store review finish, the [Chrome Web Store listing](${{ needs.preflight.outputs.listing_url }}) can still serve the previous version.
+
+            To load this release unpacked:
+            1. Download `new-tab-note-${{ github.ref_name }}.zip` and `new-tab-note-${{ github.ref_name }}.zip.sha256`.
+            2. Check the zip with `sha256sum -c new-tab-note-${{ github.ref_name }}.zip.sha256`, or check its build provenance with `gh attestation verify new-tab-note-${{ github.ref_name }}.zip -R ${{ github.repository }}`.
+            3. Extract it to a folder you keep, open `chrome://extensions`, turn on Developer mode, and click Load unpacked.
+
+            SHA-256 of `new-tab-note-${{ github.ref_name }}.zip`: `${{ steps.checksum.outputs.sha256 }}`
           files: |
-            releases/new-tab-note-v${{ steps.version.outputs.version }}.zip
+            release-zip/new-tab-note-${{ github.ref_name }}.zip
+            release-zip/new-tab-note-${{ github.ref_name }}.zip.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          # Latest only when no published release has a higher version (is-latest.mjs), so
+          # a patch tagged on release/R<n> after a newer milestone doesn't take Latest from it
+          make_latest: ${{ steps.latest.outputs.make_latest }}
           draft: false
           prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: false
+
+  publish-store:
+    name: publish-store
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+    runs-on: ubuntu-24.04
+    # Up to 10 minutes of polling while the store processes the upload
+    timeout-minutes: 20
+    environment: chrome-web-store
+    # Reads the release and its attestations, nothing more
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The tags and history, to find the tag's commit on this branch
+          fetch-depth: 0
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Check the tag input is a release tag
+        run: |
+          set -euo pipefail
+          node scripts/release/check-version.mjs "$TAG" --format-only
+      - name: Check the tag is on the dispatched branch
+        id: tag
+        run: |
+          set -euo pipefail
+          if ! commit=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}"); then
+            echo "::error::There is no tag $TAG."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" "$GITHUB_SHA"; then
+            echo "::error::$TAG ($commit) isn't on ${GITHUB_REF#refs/heads/}. Dispatch from the branch it was tagged on: main for a milestone, release/R<n> for a patch."
+            exit 1
+          fi
+          echo "✓ $TAG ($commit) is on ${GITHUB_REF#refs/heads/}"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Download the release zip and its checksum
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Upload to Chrome Web Store
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/release"
+          zip="new-tab-note-$TAG.zip"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" \
+            --pattern "$zip" --pattern "$zip.sha256"
+          for file in "$zip" "$zip.sha256"; do
+            if [ ! -f "$RUNNER_TEMP/release/$file" ]; then
+              echo "::error::The $TAG release has no $file. Re-run the $TAG Release run to upload it again."
+              exit 1
+            fi
+          done
+      - name: Check the zip against its checksum
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          zip="new-tab-note-$TAG.zip"
+          if [ "$(wc -l < "$zip.sha256")" -ne 1 ] || [ "$(cut -d' ' -f3- "$zip.sha256")" != "$zip" ]; then
+            echo "::error::$zip.sha256 must hold one checksum line, for $zip"
+            exit 1
+          fi
+          sha256sum --check --strict "$zip.sha256"
+      # The checksum sits on the same release as the zip, so it only catches a broken
+      # download. The attestation ties the zip to release.yml's run for this tag and commit.
+      - name: Verify the zip's build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "$RUNNER_TEMP/release/new-tab-note-$TAG.zip" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" \
+            --source-digest "$COMMIT" \
+            --deny-self-hosted-runners
+      - name: Check the zip's manifest version against the tag
+        run: |
+          set -euo pipefail
+          zip="new-tab-note-$TAG.zip"
+          if ! unzip -q -o "$RUNNER_TEMP/release/$zip" manifest.json -d "$RUNNER_TEMP/unzipped"; then
+            echo "::error::$zip has no manifest.json at its root"
+            exit 1
+          fi
+          node scripts/release/check-version.mjs "$TAG" --manifest "$RUNNER_TEMP/unzipped/manifest.json"
+      - name: Upload to the Chrome Web Store and submit for publishing
         env:
           CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
           CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
           CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ZIP_FILE="releases/new-tab-note-v${VERSION}.zip"
-          
-          # Skip if secrets are not configured
-          if [ -z "$CHROME_CLIENT_ID" ] || [ -z "$CHROME_CLIENT_SECRET" ] || [ -z "$CHROME_REFRESH_TOKEN" ] || [ -z "$CHROME_EXTENSION_ID" ]; then
-            echo "Chrome Web Store secrets not configured, skipping upload"
-            exit 0
-          fi
-          
-          echo "Getting access token..."
-          TOKEN_RESPONSE=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
-            -d "client_id=${CHROME_CLIENT_ID}" \
-            -d "client_secret=${CHROME_CLIENT_SECRET}" \
-            -d "refresh_token=${CHROME_REFRESH_TOKEN}" \
-            -d "grant_type=refresh_token")
-          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
-          
-          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
-            echo "::warning::Failed to get Chrome Web Store access token. The refresh token is likely expired."
-            echo "Token response: $(echo "$TOKEN_RESPONSE" | jq -r '.error_description // .error // "unknown error"')"
-            echo ""
-            echo "To refresh the token:"
-            echo "1. Go to https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=\${CHROME_CLIENT_ID}&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-            echo "2. Authorize and copy the code"
-            echo "3. Exchange it: curl -s -X POST https://oauth2.googleapis.com/token -d 'client_id=CLIENT_ID&client_secret=CLIENT_SECRET&code=AUTH_CODE&grant_type=authorization_code&redirect_uri=urn:ietf:wg:oauth:2.0:oob'"
-            echo "4. Update the CHROME_REFRESH_TOKEN secret in repo Settings > Secrets"
-            echo "Skipping Chrome Web Store upload so GitHub release artifacts remain available."
-            exit 0
-          fi
-          
-          echo "Uploading to Chrome Web Store..."
-          UPLOAD_RESPONSE=$(curl -s -X PUT \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -H "x-goog-api-version: 2" \
-            -T "${ZIP_FILE}" \
-            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}")
-          
-          echo "Upload response: $UPLOAD_RESPONSE"
-          
-          UPLOAD_STATE=$(echo "$UPLOAD_RESPONSE" | jq -r '.uploadState')
-          ERROR_CODE=$(echo "$UPLOAD_RESPONSE" | jq -r '.itemError[0].error_code // empty')
-          
-          if [ "$UPLOAD_STATE" = "SUCCESS" ]; then
-            echo "Upload successful!"
-          elif [ "$ERROR_CODE" = "ITEM_NOT_UPDATABLE" ]; then
-            echo "Extension is currently pending review or ready to publish - cannot update at this time"
-            echo "This is expected if you recently submitted for review. Try again after the review is complete."
-            exit 0
-          else
-            echo "Upload failed with state: $UPLOAD_STATE"
-            echo "$UPLOAD_RESPONSE" | jq '.itemError // empty'
-            exit 1
-          fi
-          
-          echo "Publishing to Chrome Web Store..."
-          PUBLISH_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -H "x-goog-api-version: 2" \
-            -H "Content-Length: 0" \
-            "https://www.googleapis.com/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}/publish")
-          
-          echo "Publish response: $PUBLISH_RESPONSE"
-          
-          PUBLISH_STATUS=$(echo "$PUBLISH_RESPONSE" | jq -r '.status[0] // .status // empty')
-          if [ "$PUBLISH_STATUS" = "OK" ] || [ "$PUBLISH_STATUS" = "ITEM_PENDING_REVIEW" ]; then
-            echo "Successfully published to Chrome Web Store!"
-          else
-            echo "Publish status: $PUBLISH_STATUS"
-            echo "Note: Extension may require manual review before going live"
-          fi
-      
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: extension-package
-          path: releases/*
-          retention-days: 30
+          set -euo pipefail
+          node scripts/release/publish-store.mjs "$RUNNER_TEMP/release/new-tab-note-$TAG.zip"
+
+  wrong-branch:
+    name: publish-store branch check
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Refuse a dispatch from another branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          echo "::error::publish-store runs only from main or a release/** branch, and this run is on $REF. Dispatch it again from one of those."
+          exit 1
