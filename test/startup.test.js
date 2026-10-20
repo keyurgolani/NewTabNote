@@ -161,6 +161,24 @@ describe('startup: version 8 without themes (AC6)', () => {
     assert.equal(recoveryCopies(again).length, 1);
   });
 
+  it('no start reads all of chrome.storage.local to look for the copy', async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes'] });
+    // Backups already stored, which a full read would load into memory before render.
+    env.chrome.local.auto_backup_1 = { version: 1, canvases: [], elements: [] };
+    env.chrome.local.recovery_backup_1 = { recoveryBackup: true, reason: 'pre-import-replace', canvases: [] };
+    await startStorage(env);
+    const again = createLegacyEnv({ indexedDB: env.indexedDB });
+    Object.assign(again.chrome.local, JSON.parse(JSON.stringify(env.chrome.local)));
+    await startStorage(again);
+
+    const fullReads = (calls) => calls.filter((c) => c.method === 'get' && (c.keys === null || c.keys === undefined));
+    assert.deepEqual(fullReads(env.chrome.calls), [], 'the start that writes the copy');
+    assert.deepEqual(fullReads(again.chrome.calls), [], 'a later start');
+    const missingStoreCopies = recoveryCopies(again).filter(([, copy]) => copy.reason === 'missing-stores');
+    assert.equal(missingStoreCopies.length, 1);
+  });
+
   it('the service worker never writes the copy', async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { omit: ['themes'] });

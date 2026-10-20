@@ -90,6 +90,12 @@ class DatabaseManager {
     this.onDiskVersion = null;
     /** @type {Array<string>} Stores a version-8 database is missing */
     this.missingStores = [];
+    /**
+     * chrome.storage.local key naming the missing-stores recovery copy, so each
+     * start reads this one small value instead of every stored backup. Whatever
+     * removes that copy removes this key with it.
+     */
+    this.missingStoresCopyKey = 'recovery_copy_missing_stores';
   }
 
   /**
@@ -394,7 +400,8 @@ class DatabaseManager {
   /**
    * Save one recovery copy of a version-8 database that is missing stores:
    * every readable store except `settings` under its own name, with Blobs as
-   * data URLs. Skipped when a copy for the same missing stores exists.
+   * data URLs. Skipped when a copy for the same missing stores exists, which
+   * the `missingStoresCopyKey` value records.
    * @param {IDBDatabase} db - Open through an unversioned open
    * @param {Array<string>} missing
    * @returns {Promise<void>}
@@ -402,10 +409,8 @@ class DatabaseManager {
   async _writeMissingStoresCopy(db, missing) {
     const sameStores = (list) => Array.isArray(list) && list.length === missing.length
       && missing.every((store) => list.includes(store));
-    const existing = await this._getStorageEntries('recovery_backup_');
-    if (existing.some(({ value }) => value && value.reason === 'missing-stores' && sameStores(value.missingStores))) {
-      return;
-    }
+    const written = await this._getStorageValue(this.missingStoresCopyKey);
+    if (written && sameStores(written.missingStores)) return;
 
     /** @type {Object<string, *>} */
     const copy = { recoveryBackup: true, reason: 'missing-stores', timestamp: Date.now(), missingStores: missing.slice() };
@@ -418,7 +423,9 @@ class DatabaseManager {
         console.warn(`Recovery copy skipped unreadable store ${name}:`, error);
       }
     }
-    await this._writeRecoveryBackup(copy);
+    await this._writeRecoveryBackup(copy, (key) => ({
+      [this.missingStoresCopyKey]: { key, missingStores: copy.missingStores, timestamp: copy.timestamp },
+    }));
   }
 
   /**
@@ -586,19 +593,16 @@ class DatabaseManager {
   }
 
   /**
-   * Entries in chrome.storage.local whose key starts with `prefix`.
-   * @param {string} prefix
-   * @returns {Promise<Array<{key: string, value: *}>>}
+   * One value from chrome.storage.local, reading only that key.
+   * @param {string} key
+   * @returns {Promise<*>} undefined when the key isn't set or can't be read
    */
-  _getStorageEntries(prefix) {
+  _getStorageValue(key) {
     const chromeApi = this._chromeApi();
     return new Promise((resolve) => {
-      chromeApi.storage.local.get(null, (result) => {
-        if (chromeApi.runtime.lastError || !result) { resolve([]); return; }
-        resolve(Object.keys(result)
-          .filter((key) => key.startsWith(prefix))
-          .sort()
-          .map((key) => ({ key, value: result[key] })));
+      chromeApi.storage.local.get(key, (result) => {
+        if (chromeApi.runtime.lastError || !result) { resolve(undefined); return; }
+        resolve(result[key]);
       });
     });
   }
@@ -608,16 +612,18 @@ class DatabaseManager {
    * `recovery_backup_<timestamp>` key. Nothing prunes these; the backup and
    * Recovery Center work (#18, #20) reads them.
    * @param {Object} copy
+   * @param {(key: string) => Object<string, *>} [withItems] - More items to set in the same write, given the key
    * @returns {Promise<string>} The key written
    */
-  async _writeRecoveryBackup(copy) {
+  async _writeRecoveryBackup(copy, withItems) {
     const chromeApi = this._chromeApi();
-    const taken = new Set((await this._getStorageEntries('recovery_backup_')).map((entry) => entry.key));
+    // Check only the key about to be used, rather than reading every stored backup.
     let stamp = Date.now();
-    while (taken.has(`recovery_backup_${stamp}`)) stamp += 1;
+    while ((await this._getStorageValue(`recovery_backup_${stamp}`)) !== undefined) stamp += 1;
     const key = `recovery_backup_${stamp}`;
+    const items = { [key]: copy, ...(withItems ? withItems(key) : {}) };
     await new Promise((resolve, reject) => {
-      chromeApi.storage.local.set({ [key]: copy }, () => {
+      chromeApi.storage.local.set(items, () => {
         const error = chromeApi.runtime.lastError;
         if (error) {
           reject(new Error(error.message || String(error)));
