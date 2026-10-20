@@ -3,6 +3,11 @@
 /**
  * Build script for New Tab Note Chrome Extension
  * Minifies JS and CSS, copies assets to dist folder
+ *
+ *   --dev     copy JS and CSS without minifying
+ *   --strict  exit 1 instead of falling back: a missing listed file, a terser error,
+ *             a CleanCSS error, and the CleanCSS level-2 to level-1 retry each name
+ *             the file and the fallback refused. #27 (route-level builds) replaces it.
  */
 
 const fs = require('fs');
@@ -16,6 +21,7 @@ const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const SRC_DIR = ROOT_DIR;
 
 const isDev = process.argv.includes('--dev');
+const isStrict = process.argv.includes('--strict');
 
 // Files to process
 const JS_FILES = [
@@ -93,6 +99,17 @@ const STATIC_DIRS = [
   'icons',
 ];
 
+// JS_FILES entries copied byte for byte instead of minified, such as vendored code
+// terser can't parse. An entry ending in '/' covers every listed file under it.
+const COPY_AS_IS = [];
+
+// CSS_FILES entries that build at CleanCSS level 1 instead of level 2. CleanCSS 5.3.3's
+// level-2 removeUnusedAtRules pass throws on an `animation` shorthand that uses var()
+// in a sheet with @keyframes. Level 1 is what the level-2 retry always shipped for it.
+const CSS_LEVEL_1 = [
+  'css/premium-chat.css',
+];
+
 // Terser options for maximum compression
 const TERSER_OPTIONS = {
   compress: {
@@ -138,6 +155,39 @@ const CLEANCSS_OPTIONS = {
   },
 };
 
+// Level-1 options, for CSS_LEVEL_1 files and the level-2 retry
+const CLEANCSS_LEVEL_1_OPTIONS = { level: 1 };
+
+// Fallbacks --strict refuses, recorded as { file, message }
+const refused = [];
+
+/**
+ * Under --strict, record and print a fallback the build refuses, and return true.
+ * Without --strict, return false so the caller falls back as before.
+ */
+function refuse(file, refusal, detail) {
+  if (!isStrict) return false;
+  const message = `${refusal}${detail ? `: ${detail}` : ''}`;
+  refused.push({ file, message });
+  console.error(`  ✗ ${file}: --strict ${message}`);
+  return true;
+}
+
+/**
+ * Warn about a missing listed file and skip it, or refuse the skip under --strict
+ */
+function skipMissing(label) {
+  if (refuse(label, 'refused to skip a missing listed file')) return;
+  console.warn(`  ⚠️  ${label} not found, skipping`);
+}
+
+/**
+ * Whether a JS_FILES entry is copied byte for byte (see COPY_AS_IS)
+ */
+function isCopiedAsIs(file, list = COPY_AS_IS) {
+  return list.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
+}
+
 /**
  * Ensure directory exists
  */
@@ -177,7 +227,7 @@ function copyDir(src, dest) {
 /**
  * Minify JavaScript file
  */
-async function minifyJSFile(srcPath, destPath) {
+async function minifyJSFile(file, srcPath, destPath) {
   const code = fs.readFileSync(srcPath, 'utf8');
 
   if (isDev) {
@@ -185,6 +235,11 @@ async function minifyJSFile(srcPath, destPath) {
     ensureDir(path.dirname(destPath));
     fs.writeFileSync(destPath, code);
     return { original: code.length, minified: code.length };
+  }
+
+  if (isCopiedAsIs(file)) {
+    copyFile(srcPath, destPath);
+    return { original: code.length, minified: code.length, copiedAsIs: true };
   }
 
   try {
@@ -196,6 +251,11 @@ async function minifyJSFile(srcPath, destPath) {
     fs.writeFileSync(destPath, result.code);
     return { original: code.length, minified: result.code.length };
   } catch (error) {
+    // terser's col is 0-based; print file:line:col the way editors count
+    const at = Number.isInteger(error.line) && Number.isInteger(error.col) ? ` (${file}:${error.line}:${error.col + 1})` : '';
+    if (refuse(file, 'refused to copy it unminified after a terser error', `${error.message}${at}`)) {
+      return { refused: true };
+    }
     console.error(`Error minifying ${srcPath}:`, error.message);
     // Fall back to copying original
     ensureDir(path.dirname(destPath));
@@ -207,7 +267,7 @@ async function minifyJSFile(srcPath, destPath) {
 /**
  * Minify CSS file
  */
-function minifyCSSFile(srcPath, destPath) {
+function minifyCSSFile(file, srcPath, destPath) {
   const code = fs.readFileSync(srcPath, 'utf8');
 
   if (isDev) {
@@ -217,18 +277,28 @@ function minifyCSSFile(srcPath, destPath) {
     return { original: code.length, minified: code.length };
   }
 
-  const cleanCSS = new CleanCSS(CLEANCSS_OPTIONS);
   let result;
-  try {
-    result = cleanCSS.minify(code);
-  } catch (e) {
-    // Level-2 optimization can crash on some CSS features; fall back to level-1
-    console.warn(`  ⚠️  Level-2 minification failed for ${path.basename(srcPath)}, falling back to level-1`);
-    const fallbackCSS = new CleanCSS({ level: 1 });
-    result = fallbackCSS.minify(code);
+  if (CSS_LEVEL_1.includes(file)) {
+    result = new CleanCSS(CLEANCSS_LEVEL_1_OPTIONS).minify(code);
+  } else {
+    const cleanCSS = new CleanCSS(CLEANCSS_OPTIONS);
+    try {
+      result = cleanCSS.minify(code);
+    } catch (e) {
+      if (refuse(file, 'refused the level-1 retry after a CleanCSS level-2 error', e.message)) {
+        return { refused: true };
+      }
+      // Level-2 optimization can crash on some CSS features; fall back to level-1
+      console.warn(`  ⚠️  Level-2 minification failed for ${path.basename(srcPath)}, falling back to level-1`);
+      const fallbackCSS = new CleanCSS(CLEANCSS_LEVEL_1_OPTIONS);
+      result = fallbackCSS.minify(code);
+    }
   }
 
   if (result.errors.length > 0) {
+    if (refuse(file, 'refused to copy it unminified after a CleanCSS error', result.errors.join('; '))) {
+      return { refused: true };
+    }
     console.error(`Error minifying ${srcPath}:`, result.errors);
     ensureDir(path.dirname(destPath));
     fs.writeFileSync(destPath, code);
@@ -255,7 +325,8 @@ function processHTMLFile(srcPath, destPath) {
  * Main build function
  */
 async function build() {
-  console.log(`\n🔨 Building New Tab Note Extension${isDev ? ' (dev mode)' : ''}...\n`);
+  const modes = [isDev && 'dev mode', isStrict && 'strict'].filter(Boolean).join(', ');
+  console.log(`\n🔨 Building New Tab Note Extension${modes ? ` (${modes})` : ''}...\n`);
 
   const startTime = Date.now();
   let totalOriginal = 0;
@@ -276,13 +347,19 @@ async function build() {
     const destPath = path.join(DIST_DIR, file);
 
     if (!fs.existsSync(srcPath)) {
-      console.warn(`  ⚠️  ${file} not found, skipping`);
+      skipMissing(file);
       continue;
     }
 
-    const result = await minifyJSFile(srcPath, destPath);
+    const result = await minifyJSFile(file, srcPath, destPath);
+    if (result.refused) continue;
     totalOriginal += result.original;
     totalMinified += result.minified;
+
+    if (result.copiedAsIs) {
+      console.log(`  ✓ ${file}: ${formatBytes(result.original)} (copied as is)`);
+      continue;
+    }
 
     const savings = ((1 - result.minified / result.original) * 100).toFixed(1);
     const status = result.error ? '⚠️' : '✓';
@@ -298,11 +375,12 @@ async function build() {
     const destPath = path.join(DIST_DIR, file);
 
     if (!fs.existsSync(srcPath)) {
-      console.warn(`  ⚠️  ${file} not found, skipping`);
+      skipMissing(file);
       continue;
     }
 
-    const result = minifyCSSFile(srcPath, destPath);
+    const result = minifyCSSFile(file, srcPath, destPath);
+    if (result.refused) continue;
     totalOriginal += result.original;
     totalMinified += result.minified;
 
@@ -319,7 +397,7 @@ async function build() {
     const destPath = path.join(DIST_DIR, file);
 
     if (!fs.existsSync(srcPath)) {
-      console.warn(`  ⚠️  ${file} not found, skipping`);
+      skipMissing(file);
       continue;
     }
 
@@ -335,7 +413,7 @@ async function build() {
     const destPath = path.join(DIST_DIR, file);
 
     if (!fs.existsSync(srcPath)) {
-      console.warn(`  ⚠️  ${file} not found, skipping`);
+      skipMissing(file);
       continue;
     }
 
@@ -351,12 +429,20 @@ async function build() {
     const destPath = path.join(DIST_DIR, dir);
 
     if (!fs.existsSync(srcPath)) {
-      console.warn(`  ⚠️  ${dir}/ not found, skipping`);
+      skipMissing(`${dir}/`);
       continue;
     }
 
     copyDir(srcPath, destPath);
     console.log(`  ✓ ${dir}/`);
+  }
+
+  if (refused.length > 0) {
+    console.error(`\n✗ Strict build failed: refused ${refused.length} fallback${refused.length === 1 ? '' : 's'}`);
+    refused.forEach(({ file, message }) => console.error(`   ${file}: ${message}`));
+    console.error('');
+    process.exitCode = 1;
+    return;
   }
 
   // Run JSDoc type checking (warning-only, does not block build)
@@ -398,8 +484,22 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }
 
-// Run build
-build().catch(error => {
-  console.error('Build failed:', error);
-  process.exit(1);
-});
+// Run build when invoked as a script; tests require the lists
+if (require.main === module) {
+  build().catch(error => {
+    console.error('Build failed:', error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  JS_FILES,
+  CSS_FILES,
+  HTML_FILES,
+  STATIC_FILES,
+  STATIC_DIRS,
+  COPY_AS_IS,
+  CSS_LEVEL_1,
+  CLEANCSS_OPTIONS,
+  isCopiedAsIs,
+};

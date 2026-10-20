@@ -1,0 +1,159 @@
+name: PR checks
+
+# pr-gate is the required check (.github/rulesets/main.json). A job added here goes in
+# pr-gate's needs, its local command in pr-gate's COMMANDS, and the line where its
+# failure report starts in MARKERS in scripts/ci/failure-excerpt.js.
+on:
+  pull_request:
+    branches: [main, next, 'release/**']
+  push:
+    branches: [main, next, 'release/**']
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels that PR's older run. Every other run gets its own group,
+# so branch pushes and workflow_call runs never cancel each other.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-checks-{0}', github.event.pull_request.number) || format('pr-checks-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      excerpt: ${{ steps.excerpt.outputs.excerpt }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm test
+        run: npm test 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: Record the failure for pr-gate
+        id: excerpt
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" unit
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      excerpt: ${{ steps.excerpt.outputs.excerpt }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run typecheck:ratchet
+        run: npm run typecheck:ratchet 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: Record the failure for pr-gate
+        id: excerpt
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" typecheck
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      excerpt: ${{ steps.excerpt.outputs.excerpt }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run build -- --strict
+        run: npm run build -- --strict 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run package
+        run: npm run package 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: Upload dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Record the failure for pr-gate
+        id: excerpt
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" build
+
+  pr-gate:
+    name: pr-gate
+    # always(), so a failed, cancelled, skipped, or timed-out job fails the gate
+    # instead of skipping it
+    if: always()
+    needs: [unit, typecheck, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          COMMANDS: >-
+            {"unit": "npm test",
+            "typecheck": "npm run typecheck:ratchet",
+            "build": "npm run build -- --strict && npm run package"}
+        run: |
+          set -euo pipefail
+          jq -nr '
+            (env.NEEDS | fromjson) as $needs
+            | (env.COMMANDS | fromjson) as $commands
+            | ([$commands | keys_unsorted[] | select(in($needs))] + (($needs | keys) - ($commands | keys))) as $jobs
+            | "## pr-gate",
+              "",
+              "| Job | Result | Run locally |",
+              "| --- | --- | --- |",
+              ($jobs[] as $job
+                | "| \($job) | \(if $needs[$job].result == "success" then "✅" else "❌" end) \($needs[$job].result) | \(if $commands[$job] then "`\($commands[$job])`" else "not in COMMANDS" end) |"),
+              ($jobs[] as $job
+                | select($needs[$job].result != "success")
+                | "",
+                  "### \($job): \($needs[$job].result)",
+                  "",
+                  (($needs[$job].outputs.excerpt // "") as $excerpt
+                    | if $excerpt == "" then "No failure output was captured. If the job ran, its log has the details."
+                      else "<pre>\($excerpt | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))</pre>" end))
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
+
+          total=$(jq -nr 'env.NEEDS | fromjson | length')
+          failed=$(jq -nr 'env.NEEDS | fromjson | to_entries | map(select(.value.result != "success") | "\(.key) (\(.value.result))") | join(", ")')
+          if [ "$total" -eq 0 ]; then
+            echo "::error::pr-gate needs no jobs"
+            exit 1
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::pr-gate: not every job succeeded: $failed"
+            exit 1
+          fi
+          echo "All $total jobs succeeded."
