@@ -15,35 +15,39 @@ How NewTabNote ships while the 1.4.x code is rebuilt. [#34] added this file and 
 
 ## Rules
 
-- `main` is tagged only for a milestone release. Patches to a published milestone come from `release/R<n>`, cut at its tag. The owner creates each `release/R<n>` at a commit whose `push` run on `main` already reported `pr-gate` green (the milestone tag's commit, or `main`'s head when `release/R0` is cut before its tag), so the required check passes when the branch is created.
+- `main` is tagged only for a milestone release. Patches to a published milestone come from `release/R<n>`, cut at its tag, and `preflight` fails a tag whose commit is on neither. Only the Repository admin role can create a `release/**` branch (`.github/rulesets/release-branches.json`). The owner creates each `release/R<n>` at a commit whose `push` run on `main` already reported `pr-gate` green (the milestone tag's commit, or `main`'s head when `release/R0` is cut before its tag), so the required check passes when the branch is created.
 - R0 is tagged from `main` before the first [#12] PR that changes a shipped file. If #12 has to merge one first, cut `release/R0` just before it, point every remaining R0 PR there (#33, #18 slice 0, and #34 slice 2), and merge them forward. `release/R0` must contain #34's release gate (`.github/workflows/release.yml`, `scripts/release/check-version.mjs`, and `scripts/release/publish-store.mjs`) before `v1.4.1` is tagged.
 - [#17]'s data transforms (placement, `dailyKey`, media, and the rest of its step 3) and [#14]'s v2 document migration and ID links ship only once [#35] hosts them.
 - Work that merges before an earlier milestone's tag but belongs to a later milestone stays off in release builds behind its own row in [#27]'s `build/define-allowlist.json`. That milestone's release PR turns it on, as [#18]'s `backup` row does for R3. The characterization suite runs on the release build, and its node tier loads the worker through `test/helpers/load-background.js` with every row at its release-build value. So in both tiers, an assertion that flagged work changes moves in the release PR that turns its row on.
 
 ## Integration branch
 
-Work merges into `next`. Nothing publishes from `next`. Tags go only on `main` and `release/R<n>` commits, and `publish-store` runs only from `main` or `release/**`. The owner promotes `next`, or a milestone SHA recorded on it, to `main` and tags that commit. In the rules above, work that merges before a milestone's tag is on `next` at or before that milestone's recorded SHA.
+Work merges into `next`. Nothing publishes from `next`. Tags go only on `main` and `release/R<n>` commits, `preflight` fails any other tag, and `publish-store` runs only from `main` or `release/**`. The owner promotes `next`, or a milestone SHA recorded on it, to `main` and tags that commit. In the rules above, work that merges before a milestone's tag is on `next` at or before that milestone's recorded SHA.
 
 ## Publishing a release
 
 1. Bump the version in one PR. `npm version 1.4.1 --no-git-tag-version` sets `package.json` and both `version` fields in `package-lock.json`, and `manifest.json` gets the same version by hand. `npm test` fails while the four disagree.
 2. Tag the milestone commit on `main`, or the patch commit on `release/R<n>`, and push the tag.
-3. Wait for the Release run to go green. `preflight` checks the tag against all four version fields, `checks` runs the PR checks on the tagged commit, and `release` packages the `dist/` that `checks` built and tested. It then creates the GitHub Release with `new-tab-note-<tag>.zip` and `new-tab-note-<tag>.zip.sha256`. Nothing in this run reads a store secret.
-4. To dispatch `publish-store`, open Release in Actions, click Run workflow, pick `main` (or `release/R<n>` for a patch), and enter the tag. `gh workflow run release.yml --ref main -f tag=v1.4.1` does the same. The job downloads the release's zip and checks it against its `.sha256` and the tag before it calls the store.
-5. Approve the `chrome-web-store` deployment when GitHub asks.
+3. Wait for the Release run to go green. `preflight` checks the tag against all four version fields and that its commit is on `main` or a `release/**` branch. `checks` runs the PR checks on the tagged commit, and `release` packages the `dist/` that `checks` built and tested and attests the zip's build provenance. It then creates the GitHub Release with `new-tab-note-<tag>.zip` and `new-tab-note-<tag>.zip.sha256`, marked Latest only when no published release has a higher version. Nothing in this run reads a store secret.
+4. To dispatch `publish-store`, open Release in Actions, click Run workflow, pick `main` (or `release/R<n>` for a patch), and enter the tag. `gh workflow run release.yml --ref main -f tag=v1.4.1` does the same. The job checks the tag is on that branch, downloads the release's zip, and checks it against its `.sha256`, its build provenance attestation, and the tag before it calls the store. The attestation is what proves the zip is the one the tag's Release run built, since anyone who can write to the repository can replace a release's files.
+5. Approve the `chrome-web-store` deployment when GitHub asks, and only for a run on `main` or the `release/R<n>` you expect.
 6. Confirm in the [Developer Dashboard](https://chrome.google.com/webstore/devconsole) that the new version is pending review or published. The job prints "Submitted, pending store review" when the store queued it for review.
 
 A failed publish is fixed and dispatched again for the same tag. A run cancelled while it waited in the queue is re-run. Neither gets a new tag, and a tag with a GitHub Release never moves.
 
-When `preflight` or `checks` fails, nothing was released and the tag has no GitHub Release. Re-run a job that failed by chance. Otherwise fix the cause in a PR, delete the tag, and tag the merged commit.
+When `preflight` or `checks` fails, nothing was released and the tag has no GitHub Release. Re-run a job that failed by chance. Otherwise promote the fix to `main` (or merge it into `release/R<n>`), then delete the tag and tag the fixed commit. Under this program the fix merges into `next` first and the owner promotes it.
 
 ### When publish-store fails
 
-The job names the call that failed and prints the API's error. It makes no store call until the zip passes its checksum and version checks.
+The job names the call that failed and prints the API's error. It makes no store call until the tag and the zip pass every check before it.
 
 | The job printed | What to do |
 |---|---|
+| `isn't on` followed by the branch | The tag's commit isn't on the branch you dispatched from. Dispatch from the branch it was tagged on. |
+| `There is no tag` | Check the tag you entered. |
+| `gh attestation verify` fails | If it couldn't reach GitHub or Sigstore, dispatch again. Otherwise the zip on the release isn't one the tag's Release run built and attested, so don't upload it by hand. Check the repository's audit log for who changed the release, then re-run that Release run to replace its files. |
 | `Missing CHROME_...` | Add that secret to the `chrome-web-store` environment, not to the repository. |
+| `has leading or trailing whitespace` | Save that secret again without the stray space or newline. |
 | `OAuth token request` with `invalid_grant` | The refresh token expired or was revoked. Mint a new one as [Rotating the refresh token](#rotating-the-refresh-token) describes. |
 | `OAuth token request` with `invalid_client` | `CHROME_CLIENT_ID` or `CHROME_CLIENT_SECRET` is wrong, or the OAuth client was deleted. |
 | `:upload failed with HTTP 4xx` | The message says why. If a submission is pending review, wait for the review or cancel it in the Developer Dashboard, then dispatch again. If this version already sits in the dashboard, submit it there. |
@@ -71,9 +75,11 @@ A refresh token that goes unused for six months stops working, so rotate it befo
 
 The owner sets this up once, before the first dispatch.
 
-1. Create the environment `chrome-web-store` with deployment branches `main` and `release/**`, and the maintainer as required reviewer with self-review allowed. Create it before the first dispatch, because GitHub creates a missing environment on first use with no reviewers.
+1. Create the environment `chrome-web-store` with deployment branches `main` and `release/**`, and the maintainer as required reviewer with self-review allowed. Create it before the first dispatch, because GitHub creates a missing environment on first use with no reviewers. If you'd rather, list each deployment branch by exact name (`main`, `release/R0`, and so on) and add one when you cut it.
 2. Move `CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET`, `CHROME_REFRESH_TOKEN`, and `CHROME_EXTENSION_ID` into it, and add `CHROME_PUBLISHER_ID` from the Developer Dashboard's publisher settings. Then delete the repository copies, so only an approved `publish-store` run reads them.
-3. Before R0, confirm the refresh token still works or rotate it, and resolve whatever 1.4.0 left in the Developer Dashboard (a pending review, a rejection, or a draft that was never submitted), so the store doesn't refuse the 1.4.1 upload.
+3. Import the three rulesets in `.github/rulesets/`: `main.json`, `tags.json`, and `release-branches.json`. The last one lets only the Repository admin role create a `release/**` branch, so no other writer can make a branch the environment admits and run an edited `release.yml` there.
+4. Turn on immutable releases in the repository settings, so a published release's files and tag can't change. Publishing doesn't depend on it, since `publish-store` verifies the zip's attestation either way, but it stops a swap before anyone has to catch it.
+5. Before R0, confirm the refresh token still works or rotate it, and resolve whatever 1.4.0 left in the Developer Dashboard (a pending review, a rejection, or a draft that was never submitted), so the store doesn't refuse the 1.4.1 upload.
 
 [#1]: https://github.com/keyurgolani/NewTabNote/issues/1
 [#2]: https://github.com/keyurgolani/NewTabNote/issues/2
