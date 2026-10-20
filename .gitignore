@@ -22,3 +22,6 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+
+# Playwright output (npm run test:extension)
+test-results/

@@ -96,6 +96,11 @@ npm run package
 
 # Full release build (clean + build + package)
 npm run release
+
+# Extension tests in Playwright's Chromium. They test the build in dist/ (or NTN_DIST)
+# and never build it, so run npm run build first.
+npx playwright install --no-shell chromium   # once
+npm run test:extension
 ```
 
 ---
