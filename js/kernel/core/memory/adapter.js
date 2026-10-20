@@ -7,10 +7,12 @@
  *   its id carries on past the revision it had.
  * - idempotency: a commandId sent again with the same command gets its committed or conflict
  *   outcome again, and nothing runs; sent with another command it's `idempotency-key-reuse`.
- *   A bulk command's outcome is kept once any of its items' outcomes is, so a bulk command
- *   sent again answers with the same items. Rejections and `unavailable` outcomes aren't
- *   kept, so sending the command again runs it. The same command is the same canonical JSON,
- *   keys sorted, which #17 hashes instead.
+ *   Rejections and `unavailable` outcomes aren't kept, so sending the command again runs it.
+ *   A bulk command keeps only its fingerprint, from its first recall, so the same commandId
+ *   with another selection is key reuse even when both are sent at once, and a resend runs
+ *   again: each item that committed or conflicted answers from its own record, and each
+ *   other item runs again. The same command is the same canonical JSON, keys sorted, which
+ *   #17 hashes instead.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
@@ -20,6 +22,7 @@
  */
 
 import { clone } from '../contracts/clone.js';
+import { COMMANDS } from '../contracts/commands.js';
 import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
@@ -27,7 +30,6 @@ import { STORES } from '../ports/repository.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
-/** @typedef {import('../contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('../ports/repository.js').CommitResult} CommitResult */
 /** @typedef {import('../ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
@@ -90,18 +92,7 @@ const sortedKeys = value => {
  */
 const fingerprintOf = command => JSON.stringify(sortedKeys(command));
 
-/**
- * Whether a commandId keeps this outcome: a commit or a conflict, or a bulk outcome once any
- * of its items' outcomes is one
- * @param {Outcome | BulkOutcome} outcome
- * @returns {boolean}
- */
-const isKept = outcome =>
-  outcome.kind === 'bulk'
-    ? outcome.items.some(item => isKept(item.outcome))
-    : outcome.kind === 'committed' || outcome.kind === 'conflict';
-
-/** @typedef {{fingerprint: string, outcome: Outcome | BulkOutcome}} KeptOutcome */
+/** @typedef {{fingerprint: string, outcome?: Outcome}} KeptOutcome - a bulk command's has no outcome */
 
 /**
  * @param {MemoryAdapterOptions} [options]
@@ -237,12 +228,12 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
    * The committed outcome, with the primary record's revision: one more than before when the
    * command changed its content, and where it was otherwise.
    * @param {Work} work
-   * @returns {Outcome | BulkOutcome}
+   * @returns {Outcome}
    */
   const finish = work => {
     const outcome = work.done();
     const primary = work.primary && work.primary();
-    if (!primary || outcome.kind === 'bulk') return outcome;
+    if (!primary) return outcome;
     if (work.revised && work.revised() && storeOf(primary.store).has(primary.key)) {
       const id = revisionKey(primary.store, primary.key);
       revisions.set(id, (revisions.get(id) || 0) + 1);
@@ -253,7 +244,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
 
   /**
    * @param {Work} work
-   * @returns {Promise<Outcome | BulkOutcome>}
+   * @returns {Promise<Outcome>}
    */
   const apply = async work => {
     const { effect } = work;
@@ -304,16 +295,17 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
 
   /**
    * What the commandId already answered, or `idempotency-key-reuse` when it came with
-   * another command. Undefined when it has no record.
+   * another command. Undefined when it has no record, or a bulk command's record, which keeps
+   * no outcome.
    * @param {string} commandId
    * @param {Command} command
-   * @returns {Outcome | BulkOutcome | undefined}
+   * @returns {Outcome | undefined}
    */
   const keptFor = (commandId, command) => {
     const kept = outcomes.get(commandId);
     if (!kept) return undefined;
     if (kept.fingerprint !== fingerprintOf(command)) return rejected('validation', 'idempotency-key-reuse');
-    return clone(kept.outcome);
+    return kept.outcome && clone(kept.outcome);
   };
 
   return Object.freeze({
@@ -321,7 +313,15 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
     flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true }),
 
     recall(command) {
-      return keptFor(command.commandId, command);
+      const kept = keptFor(command.commandId, command);
+      // A bulk command keeps only its fingerprint, from its first recall, before any of its
+      // items runs. The same commandId with another selection is refused before it writes,
+      // even sent at the same time, and a resend runs again, each item answering from its own
+      // record.
+      if (kept === undefined && COMMANDS[command.type].bulk && !outcomes.has(command.commandId)) {
+        outcomes.set(command.commandId, { fingerprint: fingerprintOf(command) });
+      }
+      return kept;
     },
 
     commit(work) {
@@ -329,14 +329,14 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         // A send of the same command that committed while this one waited its turn
         const kept = keptFor(work.commandId, work.command);
         if (kept) return { outcome: kept, replayed: kept.kind !== 'rejected' };
-        /** @type {Outcome | BulkOutcome} */
+        /** @type {Outcome} */
         let outcome;
         try {
           outcome = await apply(work);
         } catch (error) {
           return { outcome: unavailableFrom(error), replayed: false };
         }
-        if (isKept(outcome)) {
+        if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
           outcomes.set(work.commandId, { fingerprint: fingerprintOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };

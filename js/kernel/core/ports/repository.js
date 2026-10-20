@@ -18,7 +18,6 @@
 /** @typedef {import('../domain/folder.js').FolderRecord} FolderRecord */
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
-/** @typedef {import('../contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('../contracts/outcomes.js').Committed} Committed */
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').Conflict} Conflict */
@@ -107,15 +106,13 @@ export const STORES = Object.freeze({
  *   asked once the units have run. An adapter with revisions then moves the record's revision
  *   on by one. Placement and derived writes (pin, archive, trash, restore, a folder move,
  *   insights) leave it where it was, so they never turn a save into a conflict.
- * @property {() => Committed | BulkOutcome} done
- *   The outcome once everything committed. A bulk command's work writes nothing, since its
- *   items committed as note commands of their own, and its outcome is the BulkOutcome.
+ * @property {() => Committed} done - the outcome once everything committed
  */
 
 /**
  * What commit answers. `replayed` is true when the commandId already had this outcome, from a
  * send of the same command that committed first, so the kernel doesn't publish it again.
- * @typedef {{outcome: Outcome | BulkOutcome, replayed: boolean}} CommitResult
+ * @typedef {{outcome: Outcome, replayed: boolean}} CommitResult
  */
 
 /**
@@ -130,18 +127,20 @@ export const STORES = Object.freeze({
  *   A commandId sent again with the same command gets its committed or conflict outcome
  *   again, and nothing runs. Sent with another command it's rejected as
  *   `idempotency-key-reuse`. A rejection or an `unavailable` outcome leaves no record, so the
- *   same command sent again runs again. A bulk command's outcome is kept once any of its
- *   items' outcomes is, so it answers a resend with the same items, and the same commandId
- *   with another selection is key reuse.
+ *   same command sent again runs again. A bulk command keeps only its fingerprint, from its
+ *   first recall: the same commandId with another selection is key reuse, even when both are
+ *   sent at once, and a resend runs again, so each item that committed or conflicted answers
+ *   from its own record and each other item runs again.
  */
 
 /**
  * @typedef {object} KernelAdapter
  * @property {string} name
  * @property {Readonly<AdapterFlags>} flags
- * @property {(command: Command) => Outcome | BulkOutcome | undefined} recall
+ * @property {(command: Command) => Outcome | undefined} recall
  *   What the command's commandId already answered, when it has a record (see `idempotency`),
- *   or undefined. Synchronous, so a save can still open its transaction in the calling task.
+ *   or undefined. A bulk command with no record gets one here, its fingerprint, before any of
+ *   its items runs. Synchronous, so a save can still open its transaction in the calling task.
  * @property {(work: Work) => Promise<CommitResult>} commit
  *   Opens the first transaction before it returns. It never rejects: a failure is an
  *   `unavailable` outcome.

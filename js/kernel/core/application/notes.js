@@ -24,7 +24,7 @@ import {
   newSearchEntry,
   notesInView,
 } from '../domain/note.js';
-import { bulkWork, contentChanged, unitsWork } from './work.js';
+import { contentChanged, unitsWork } from './work.js';
 
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../domain/note.js').BlockRecord} BlockRecord */
@@ -420,7 +420,7 @@ export const noteCommands = {
     for (const noteId of new Set(noteIds)) {
       items.push({ id: noteId, outcome: await run({ type, commandId: `${command.commandId}:${noteId}`, noteId }) });
     }
-    return bulkWork(command, bulk(action, items));
+    return bulk(action, items);
   },
 };
 
