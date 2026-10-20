@@ -142,7 +142,7 @@ jobs:
                   "",
                   (($needs[$job].outputs.excerpt // "") as $excerpt
                     | if $excerpt == "" then "No failure output was captured. If the job ran, its log has the details."
-                      else "<pre>\($excerpt | @html)</pre>" end))
+                      else "<pre>\($excerpt | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))</pre>" end))
           ' | tee -a "$GITHUB_STEP_SUMMARY"
 
           total=$(jq -nr 'env.NEEDS | fromjson | length')
