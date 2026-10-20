@@ -10,13 +10,12 @@ test('switching the theme to dark in one new tab turns the other one dark withou
   await extension.seedOnboarded();
   const first = await driver.openNewTab(extension);
   const second = await driver.openNewTab(extension);
-  await expect(second.locator('html')).not.toHaveAttribute('data-theme', 'dark');
-  // Gone if the page reloads
-  await second.evaluate(() => { window.ntnBeforeThemeChange = true; });
+  await expect.poll(() => driver.theme(second)).not.toBe('dark');
+  await driver.markPage(second);
 
   await first.bringToFront();
   await driver.setTheme(first, 'dark');
-  await expect(first.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await expect(second.locator('html')).toHaveAttribute('data-theme', 'dark');
-  expect(await second.evaluate(() => window.ntnBeforeThemeChange), 'the other tab was not reloaded').toBe(true);
+  await expect.poll(() => driver.theme(first)).toBe('dark');
+  await expect.poll(() => driver.theme(second)).toBe('dark');
+  expect(await driver.wasReloaded(second), 'the other tab reloaded').toBe(false);
 });

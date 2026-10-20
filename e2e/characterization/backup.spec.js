@@ -73,7 +73,7 @@ test('an Export JSON backup restores the same notes and blocks into a fresh prof
       await expect.poll(async () => (await driver.listedNoteNames(page)).sort()).toEqual(NOTES.map(note => note.name).sort());
       for (const { name, shows } of NOTES) {
         await driver.openNote(page, name);
-        await expect(driver.noteTitle(page)).toHaveText(name);
+        await expect.poll(() => driver.noteTitle(page)).toBe(name);
         await expect.poll(() => driver.blocks(page), `the blocks of "${name}"`).toEqual(shows);
       }
     });

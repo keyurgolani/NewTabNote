@@ -1,13 +1,17 @@
 /**
  * How the characterization specs act on the legacy 1.4.x UI, and how they read it. Specs
  * say what a user does and assert on what these functions return, usually after a reload.
- * A later issue that changes the UI on purpose updates this file, not the assertions.
+ * Reads return plain values (text, lists, block summaries), never a locator, so a later
+ * issue that changes the UI on purpose updates this file, not the assertions.
  *
  * The driver may seed through the legacy Storage global and read app state to know when
  * the UI has settled. Specs never assert on either.
  */
 
-const { expect, launchExtension } = require('../harness');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { expect, launchExtension, resolveDist } = require('../harness');
 
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
@@ -91,11 +95,25 @@ async function reload(page) {
 }
 
 /**
+ * Leave a mark in the page that a reload or a navigation clears
+ */
+async function markPage(page) {
+  await page.evaluate(() => { window.__ntnMark = true; });
+}
+
+/**
+ * Whether the page has reloaded or navigated since markPage
+ */
+async function wasReloaded(page) {
+  return !(await page.evaluate(() => window.__ntnMark === true));
+}
+
+/**
  * Run `body` with a second session on its own fresh profile, attaching its log when the
  * body fails, and close it
  */
-async function withFreshProfile({ playwright, headless }, testInfo, body) {
-  const extension = await launchExtension({ chromium: playwright.chromium, headless });
+async function withFreshProfile({ playwright, headless }, testInfo, body, { dist } = {}) {
+  const extension = await launchExtension({ dist, chromium: playwright.chromium, headless });
   try {
     await body(extension);
   } catch (error) {
@@ -103,6 +121,29 @@ async function withFreshProfile({ playwright, headless }, testInfo, body) {
     throw error;
   } finally {
     await extension.close();
+  }
+}
+
+/**
+ * Run `body` with a session on a copy of the build edited by `edits`, which maps each file
+ * to a function from its text to the text to write. For the self-tests that check a spec
+ * fails when the build does the wrong thing. An edit that changes nothing throws, so a
+ * build that no longer has the code a self-test edits fails it instead of passing it.
+ */
+async function withEditedBuild({ playwright, headless }, testInfo, edits, body) {
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-edited-'));
+  try {
+    fs.cpSync(resolveDist(), dist, { recursive: true });
+    for (const [file, edit] of Object.entries(edits)) {
+      const target = path.join(dist, file);
+      const before = fs.readFileSync(target, 'utf8');
+      const after = edit(before);
+      if (after === before) throw new Error(`The edit to ${file} changed nothing; update the self-test that makes it`);
+      fs.writeFileSync(target, after);
+    }
+    await withFreshProfile({ playwright, headless }, testInfo, body, { dist });
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
   }
 }
 
@@ -207,7 +248,7 @@ async function openNote(page, name) {
  * The open note's title
  */
 function noteTitle(page) {
-  return page.locator('#page-title');
+  return page.locator('#page-title').textContent();
 }
 
 /**
@@ -289,22 +330,35 @@ async function captureFunctionName(extension) {
 }
 
 /**
- * Resolve once background.js's startup Storage.init() has settled. At 1.4.x that init
- * ends by deleting blocks whose note it hadn't read yet (#33 makes the check read-only),
- * so a block written while it runs can vanish. background.js keeps the promise in a
- * top-level binding that captureToDailyNote awaits first; the minifier renames it, so the
- * name comes from that function's source.
+ * Resolve once a write through the worker's Storage global can't be lost. At 1.4.x the
+ * startup Storage.init() ends by deleting blocks whose note it hadn't read yet, so a block
+ * written while it runs can vanish. Since #33 that check only reads, and Storage.openState
+ * turns 'open' once the database is open, which is enough.
+ *
+ * A 1.4.x worker has no openState, so this waits for the startup promise itself.
+ * background.js keeps it in a top-level binding that captureToDailyNote awaits first, and
+ * the minifier renames it, so the name comes from that function's source. A module worker
+ * (#12) keeps its top-level bindings out of the global scope, so without openState this
+ * fails asking for an update instead of guessing.
  */
 async function workerStorageSettled(extension) {
+  if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
+    await expect.poll(() => extension.worker.evaluate(() => self.Storage.openState), { timeout: SETTLE_TIMEOUT_MS }).not.toBe('closed');
+    const state = await extension.worker.evaluate(() => self.Storage.openState);
+    if (state !== 'open') throw new Error(`The service worker's Storage didn't open its database (openState: ${state})`);
+    return;
+  }
   const capture = await captureFunctionName(extension);
   const binding = await extension.worker.evaluate(name => {
     const awaited = /\bawait\s+([A-Za-z_$][\w$]*)\s*[;,)]/.exec(Function.prototype.toString.call(self[name]));
     return awaited ? awaited[1] : null;
   }, capture);
-  if (!binding) {
-    throw new Error("Couldn't find the storage promise captureToDailyNote awaits; update workerStorageSettled in e2e/characterization/driver.js");
+  // An expression evaluates in the worker's global scope, which holds a classic script's
+  // top-level bindings and none of a module's
+  if (!binding || await extension.worker.evaluate(`typeof ${binding}`) !== 'object') {
+    throw new Error("Couldn't reach the storage promise captureToDailyNote awaits (a module worker's bindings aren't global); "
+      + 'update workerStorageSettled in e2e/characterization/driver.js');
   }
-  // An expression evaluates in the worker's global scope, where the binding lives
   await extension.worker.evaluate(binding);
 }
 
@@ -332,6 +386,22 @@ async function captureToDailyNote(extension, item) {
   await extension.worker.evaluate(([name, item]) => self[name](item), [name, item]);
 }
 
+/**
+ * Capture `text` selected on the page at `source` to today's Daily Note, as the selection
+ * menu does
+ */
+async function captureText(extension, { text, source }) {
+  await captureToDailyNote(extension, { type: 'text', content: text, source });
+}
+
+/**
+ * Capture the page at `url`, titled `title`, to today's Daily Note as a bookmark, as the
+ * page menu and command do
+ */
+async function captureBookmark(extension, { url, title }) {
+  await captureToDailyNote(extension, { type: 'bookmark', url, title });
+}
+
 // ─── Settings ───
 
 /**
@@ -351,6 +421,13 @@ async function openSettings(page, category) {
 async function setTheme(page, theme) {
   const settings = await openSettings(page, 'Appearance');
   await settings.locator('#theme-select').selectOption(theme);
+}
+
+/**
+ * The theme the page shows: 'light' or 'dark', from the theme engine's <html data-theme>
+ */
+function theme(page) {
+  return page.evaluate(() => document.documentElement.getAttribute('data-theme'));
 }
 
 /**
@@ -441,7 +518,10 @@ function recentNoteNames(popup) {
 module.exports = {
   openNewTab,
   reload,
+  markPage,
+  wasReloaded,
   withFreshProfile,
+  withEditedBuild,
   writeNote,
   createNote,
   showNotes,
@@ -453,8 +533,10 @@ module.exports = {
   openTodaysDailyNote,
   todaysDailyNoteTitle,
   seedNotes,
-  captureToDailyNote,
+  captureText,
+  captureBookmark,
   setTheme,
+  theme,
   exportJson,
   importBackup,
   openPopup,
