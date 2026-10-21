@@ -11,6 +11,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const checkDist = require('../scripts/check-dist.js');
+const { readScriptGraph } = require('../scripts/lib/script-graph.js');
 const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 
 // What a build ships: the manifest, the pages, and js/ (scripts/build.js)
@@ -61,10 +62,17 @@ function assertFails(result, ...expected) {
 }
 
 describe('scripts/check-dist.js', () => {
-  it('passes on the package as it is, with the module service worker and its kernel root', () => {
-    const { code, output } = run(packageCopy());
+  it('passes on the package as it is, with the module service worker and its kernel', () => {
+    const dir = packageCopy();
+    const { code, output } = run(dir);
     assert.equal(code, 0, output);
-    assert.match(output, /^check:dist: OK, .* resolves all \d+ references: 4 pages, \d+ ES modules, \d+ classic scripts, and a module service worker \(js\/background\.js, 4 files\)$/);
+    assert.match(output, /^check:dist: OK, .* resolves all \d+ references: 4 pages, \d+ ES modules, \d+ classic scripts, and a module service worker \(js\/background\.js, \d+ files\)$/);
+    // The worker loads its root, and through it the kernel on the legacy adapter
+    const { workerFiles } = readScriptGraph(dir, { pages: checkDist.pagesIn(dir) });
+    for (const file of ['js/background.js', 'js/utils.js', 'js/storage.js', 'js/kernel/composition/background.js',
+      'js/kernel/adapters/legacy/adapter.js', 'js/kernel/core/application/kernel.js']) {
+      assert.ok(workerFiles.has(file), `the worker loads ${file}`);
+    }
   });
 
   it('fails when a kernel file is missing, naming the import that needs it', () => {

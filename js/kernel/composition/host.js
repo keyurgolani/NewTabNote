@@ -1,0 +1,88 @@
+/**
+ * What the composition roots share (#12, "Where the kernel runs"): the legacy storage and
+ * settings a page or the worker loaded, and the kernel each root builds on its adapter, with
+ * the client it hands out.
+ *
+ * Loading this module touches no browser API, so a root can load before its page's or the
+ * worker's globals exist, as js/background.js needs. Everything here reads them when it's
+ * called.
+ */
+
+import { createKernel } from '../core/application/kernel.js';
+import { createBaselinePolicy } from '../core/ports/policy.js';
+import { legacyIds, systemClock } from '../core/ports/runtime.js';
+
+/** @typedef {import('../adapters/legacy/adapter.js').LegacyStorage} LegacyStorage */
+/** @typedef {import('../adapters/legacy/adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('../core/application/kernel.js').KernelClient} KernelClient */
+/** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
+/** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
+/** @typedef {import('../core/ports/runtime.js').Ids} Ids */
+/** @typedef {import('../core/ports/runtime.js').Logger} Logger */
+
+/**
+ * What the legacy adapter runs on: js/storage.js's DatabaseManager, which the page or the
+ * worker imports before it builds its kernel, and chrome.storage.local.
+ * @typedef {object} LegacyHost
+ * @property {LegacyStorage} storage
+ * @property {SettingsStore} settings
+ */
+
+/**
+ * What a root hands its page or the worker: the kernel's calls, and `ids` for the ids a
+ * command carries, made when the intent happens. #35 can point the calls at the background
+ * coordinator without changing a caller.
+ * @typedef {KernelClient & {ids: Ids}} Client
+ */
+
+/**
+ * The `Storage` global js/storage.js sets, and chrome.storage.local, both read when a call
+ * reaches them
+ * @returns {LegacyHost}
+ */
+export function legacyHost() {
+  return {
+    storage: /** @type {LegacyStorage} */ (/** @type {{Storage?: unknown}} */ (globalThis).Storage),
+    settings: {
+      get: keys => chrome.storage.local.get(keys),
+      set: items => chrome.storage.local.set(items),
+    },
+  };
+}
+
+/**
+ * Reports a commit-feed listener that threw. Its detail holds the aggregate, the ids, and the
+ * error, never a payload.
+ * @type {Logger}
+ */
+const consoleLogger = Object.freeze({
+  warn: (event, detail) => console.warn(`NewTabNote kernel: ${event}`, detail),
+});
+
+/**
+ * One context's kernel on `adapter`, which starts opening now, and its client. Its caller is
+ * `surface` with an id of its own, which the policy checks on every command and query.
+ * `maintainOnOpen` runs startup maintenance before anything else, as the new tab's and the
+ * worker's Storage.init did.
+ * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean}} options
+ * @returns {Client}
+ */
+export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
+  const kernel = createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: Object.freeze({ surface, contextId: `${surface}-${legacyIds.next()}` }),
+    ids: legacyIds,
+    clock: systemClock,
+    logger: consoleLogger,
+    ready: adapter.open(),
+    maintainOnOpen,
+  });
+  return Object.freeze({
+    execute: kernel.execute,
+    query: kernel.query,
+    subscribe: kernel.subscribe,
+    whenReady: kernel.whenReady,
+    ids: legacyIds,
+  });
+}
