@@ -11,7 +11,7 @@ function appStorage() {
   return /** @type {any} */ (globalThis).Storage;
 }
 
-/** What the new tab shows when it can't open the notes database (Storage.init codes). */
+/** What the new tab shows when it can't open the notes database, by the codes Storage.init threw. */
 const STORAGE_GUARD_TEXT = {
   NEWER_SCHEMA: {
     title: 'Your notes were upgraded by a newer NewTabNote version',
@@ -22,6 +22,30 @@ const STORAGE_GUARD_TEXT = {
     body: "Part of it is missing, so this version won't change anything. Export a copy of what's there now.",
   },
 };
+
+/**
+ * What the error state says when the tab's kernel couldn't open or maintain storage, by the
+ * outcome's messageKey: an outcome carries no error message, which is what 1.4.x showed
+ * there. #26 gives every outcome its copy.
+ */
+const STARTUP_FAILURES = {
+  'unavailable.quota': "There's no room left to store your notes.",
+};
+const STARTUP_FAILED = "NewTabNote couldn't open your notes.";
+
+/**
+ * What App.init shows when the tab's kernel couldn't open or maintain storage: the guard, by
+ * the code Storage.init threw, for a database a newer build upgraded or one missing its notes
+ * or blocks, and otherwise the error state, saying why in words.
+ * @param {{cause: string, code: string, messageKey: string}} failure - the outcome whenReady answered with
+ * @returns {Error & {code?: string}}
+ */
+function storageFailure(failure) {
+  const error = /** @type {Error & {code?: string}} */ (new Error(STARTUP_FAILURES[failure.messageKey] || STARTUP_FAILED));
+  if (failure.cause === 'newer-schema') error.code = 'NEWER_SCHEMA';
+  else if (failure.code === 'missing-core-stores') error.code = 'MISSING_CORE_STORES';
+  return error;
+}
 
 /** Features that are off while an auxiliary store is missing. `settings` has none: settings live in chrome.storage.local. */
 const MISSING_STORE_FEATURES = {
@@ -35,7 +59,13 @@ const MISSING_STORE_FEATURES = {
 };
 
 class App {
-  constructor() {
+  /**
+   * The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
+   * tab's kernel client (js/kernel/composition/host.js describes it).
+   * @param {{kernel?: any}} [options]
+   */
+  constructor({ kernel } = {}) {
+    this.kernel = kernel;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -173,8 +203,9 @@ class App {
       this.logger = createLogger();
       this.domRefs = createDomRefs();
 
-      // Initialize storage
-      await Storage.init();
+      // The tab's kernel opens storage and runs startup maintenance, as Storage.init did here
+      const failure = await this.kernel.whenReady();
+      if (failure) throw storageFailure(failure);
       this.reportMissingStores();
 
       // The export notice decides now, before any note renders and before a first note exists
@@ -5111,11 +5142,6 @@ class App {
   }
 }
 
-// Initialize app when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-  const app = new App();
-  window.app = app; // Make globally available for editor callbacks
-  app.init().catch(error => {
-    console.error('App initialization failed:', error);
-  });
-});
+// The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
+// tab's kernel client and starts it once the DOM is ready
+/** @type {any} */ (window).App = App;

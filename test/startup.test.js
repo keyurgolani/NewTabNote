@@ -495,6 +495,27 @@ describe('a version-9 database (AC7)', () => {
   });
 });
 
+describe("the new tab when its kernel can't open storage for another reason", () => {
+  it('shows the error state saying why in words, with Reload, and writes nothing', async () => {
+    for (const [failure, words] of [
+      // As when Chrome can't open the database's backing store
+      [new DOMException('Internal error opening backing store for indexedDB.open.', 'UnknownError'), "NewTabNote couldn't open your notes."],
+      [new DOMException('The quota has been exceeded.', 'QuotaExceededError'), "There's no room left to store your notes."],
+    ]) {
+      const { env, before } = await startApp({}, (page) => {
+        page.get('Storage').open = async () => { throw failure; };
+      });
+      const appEl = env.document.getElementById('app');
+      assert.equal(appEl.querySelector('h2').textContent, 'Failed to initialize');
+      // An outcome carries no error message, so the words are the new tab's own
+      assert.equal(appEl.querySelector('p').textContent, words);
+      assert.deepEqual(appEl.querySelectorAll('button').map((b) => b.textContent), ['Reload']);
+      assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+      assert.deepEqual(env.chrome.writes(), []);
+    }
+  });
+});
+
 describe('the export notice in the guard states (NTN-18 slice 0)', () => {
   for (const [label, spec, openState] of [
     ['a version-9 database', { version: 9 }, 'newer-version'],
@@ -511,7 +532,7 @@ describe('the export notice in the guard states (NTN-18 slice 0)', () => {
         };
       });
       assert.ok(env.document.querySelector('.storage-guard'));
-      assert.deepEqual(decided, [], 'App.init stops at Storage.init, before the decision');
+      assert.deepEqual(decided, [], "App.init stops when the tab's kernel can't open storage, before the decision");
 
       const Storage = env.get('Storage');
       assert.equal(Storage.openState, openState);
@@ -602,7 +623,11 @@ describe('background capture on a version-8 database', () => {
   });
 });
 
-/** Run App.init against a fixture with a stub #app element, after `beforeInit(env)`. */
+/**
+ * Start the new tab against a fixture with a stub #app element, after `beforeInit(env)`, as
+ * js/main.js starts it: its composition root constructs App with the tab's kernel once the
+ * DOM is ready, and runs App.init.
+ */
 async function startApp(spec, beforeInit = () => {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   await fixture(env.indexedDB, spec);
@@ -613,8 +638,8 @@ async function startApp(spec, beforeInit = () => {}) {
   env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
   env.get('Utils').showToast = () => {};
   beforeInit(env);
-  const App = env.get('App');
-  const app = new App();
-  await app.init();
-  return { env, app, before, downloads };
+  const { startNewTab } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  startNewTab();
+  await Promise.all(env.document.fire('DOMContentLoaded'));
+  return { env, app: env.global.app, before, downloads };
 }

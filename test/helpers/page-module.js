@@ -17,11 +17,11 @@ const ROOT = path.join(__dirname, '..', '..');
 
 /**
  * Evaluate `file`, relative to the repository root, and the modules it imports in `env`.
- * Resolves once the graph has evaluated, so its listeners are registered, and rejects with
- * what a module threw while it evaluated.
+ * Resolves with its exports once the graph has evaluated, so its listeners are registered,
+ * and rejects with what a module threw while it evaluated.
  * @param {ReturnType<import('./legacy-env').createLegacyEnv>} env
  * @param {string} file
- * @returns {Promise<void>}
+ * @returns {Promise<Object>}
  */
 async function loadPageModule(env, file) {
   if (typeof vm.SourceTextModule !== 'function') {
@@ -46,6 +46,7 @@ async function loadPageModule(env, file) {
     return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
   });
   await entry.evaluate();
+  return entry.namespace;
 }
 
 module.exports = { loadPageModule };
