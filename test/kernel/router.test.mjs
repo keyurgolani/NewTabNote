@@ -399,12 +399,24 @@ describe('the router: answers', () => {
     ]);
   });
 
-  it("answers a command that failed after it began as outcome-unknown, before it began as unavailable, and a query that couldn't answer as unavailable", async () => {
+  it("answers a command whose handler threw before it began as unavailable, any other answer it can't send as outcome-unknown, and a query that couldn't answer as unavailable", async () => {
+    // An outcome its schema takes, with a getter the codec won't read
+    const unencodable = committed('note-pinned', ['n1']);
+    Object.defineProperty(unencodable, 'code', { get: () => 'note-pinned', enumerable: true });
     /** @type {Record<string, Handler>} */
     const handlers = {
       setPinned: (payload, context) => {
         const { noteId } = /** @type {{noteId: string}} */ (payload);
         if (noteId === 'throws-first') throw new Error('before its transaction');
+        // An answer that never says begin() may still come from a commit, so it's unknown too
+        if (noteId === 'invalid-unbegun') return { kind: 'committed', code: 'Pinned!' };
+        if (noteId === 'unencodable-unbegun') return unencodable;
+        if (noteId === 'too-large-unbegun') {
+          return committed(
+            'note-pinned',
+            Array.from({ length: 9000 }, (_, index) => `n${index}`.padEnd(120, 'x')),
+          );
+        }
         context.begin();
         if (noteId === 'throws-after') return Promise.reject(new Error('after its transaction opened'));
         // Not an outcome its schema takes
@@ -423,6 +435,9 @@ describe('the router: answers', () => {
     peer.send(request('c1', pin('throws-first')));
     peer.send(request('c2', pin('throws-after')));
     peer.send(request('c3', pin('invalid')));
+    peer.send(request('c4', pin('invalid-unbegun')));
+    peer.send(request('c5', pin('unencodable-unbegun')));
+    peer.send(request('c6', pin('too-large-unbegun')));
     peer.send(request('q1', { type: 'getNoteBlocks', noteId: 'throws' }));
     peer.send(request('q2', { type: 'getNoteBlocks', noteId: 'invalid' }));
     peer.send(request('q3', { type: 'getNoteBlocks', noteId: 'unencodable' }));
@@ -432,6 +447,9 @@ describe('the router: answers', () => {
       c1: 'error unavailable',
       c2: 'error outcome-unknown',
       c3: 'error outcome-unknown',
+      c4: 'error outcome-unknown',
+      c5: 'error outcome-unknown',
+      c6: 'error outcome-unknown',
       q1: 'error unavailable',
       q2: 'error unavailable',
       q3: 'error unavailable',
