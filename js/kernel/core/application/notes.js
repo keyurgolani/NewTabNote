@@ -51,7 +51,7 @@ import { contentChanged, unitsWork } from './work.js';
  *   | 'runBulkAction'} NoteCommandType
  */
 
-/** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks'} NoteQueryType */
+/** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks'} NoteQueryType */
 
 const invalid = () => rejected('validation', 'invalid-command');
 const noteNotFound = () => rejected('not-found', 'note-not-found');
@@ -520,5 +520,21 @@ export const noteQueries = {
     if (!isId(noteId)) return failed('validation', 'invalid-query');
     const blocks = await adapter.read(['blocks'], tx => tx.getAllByIndex('blocks', 'canvasId', noteId));
     return blocks.length > 0 ? ready(clock.now(), inBlockOrder(blocks)) : empty(clock.now());
+  },
+
+  async getBacklinks({ noteId }, { adapter, clock }) {
+    if (!isId(noteId)) return failed('validation', 'invalid-query');
+    // Each link's note, in the order the links are stored, as Storage.getBacklinks lists them. A
+    // link whose note is gone is left out, as is one that names none.
+    const notes = await adapter.read(['links', 'notes'], async tx => {
+      /** @type {NoteRecord[]} */
+      const found = [];
+      for (const link of await tx.getAllByIndex('links', 'toNoteId', noteId)) {
+        const note = isId(link.fromNoteId) ? await tx.get('notes', link.fromNoteId) : undefined;
+        if (note) found.push(note);
+      }
+      return found;
+    });
+    return notes.length > 0 ? ready(clock.now(), notes) : empty(clock.now());
   },
 };
