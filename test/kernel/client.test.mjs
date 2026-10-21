@@ -287,6 +287,21 @@ describe('the client: requests (#13, "Topology")', () => {
     assert.deepEqual(answers, [failed('coordinator', 'deadline-exceeded'), unknown('deadline-exceeded', 'c-n1')]);
   });
 
+  it('reconnects for a call that found its connection closing under it, and sends it on the next', async () => {
+    const { coordinator, connection, client } = await welcomed();
+    // The coordinator went, and the client hasn't heard yet, so the send fails and the call waits
+    connection.close();
+    const answer = client.query({ type: 'getNote', noteId: 'n1' });
+    await settle();
+    assert.equal(coordinator.connections.length, 2);
+    coordinator.last.welcome();
+    await settle();
+    const [sent] = coordinator.last.requests();
+    assert.deepEqual(sent.payload, { type: 'getNote', noteId: 'n1' });
+    coordinator.last.send({ frame: 'response', requestId: sent.requestId, result: noNote });
+    assert.deepEqual(await answer, noNote);
+  });
+
   it('settles what was in flight when the connection closes, and reconnects for the next request in the same session', async () => {
     const { coordinator, connection, client } = await welcomed();
     const command = client.execute(pin('n1'));
