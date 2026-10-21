@@ -96,12 +96,26 @@ export const STORES = Object.freeze({
  */
 
 /**
+ * What a command writes, in the three scopes #17 keeps apart so filing never conflicts with
+ * typing:
+ * - `content`: a note's title and blocks, and what's made with them (the default)
+ * - `placement`: where a record sits and how it's kept: pinned, filed, a template or a Daily
+ *   Note, archived, trashed
+ * - `derived`: what jobs and the editor derive from content: preview, todoProgress, insights
+ * Only content moves a record's content revision, on an adapter with revisions. A derived
+ * command's units are held to the derived fields of notes they read (application/scopes.js),
+ * so it can't change a note's name, placement, or lifecycle.
+ * @typedef {'content' | 'placement' | 'derived'} WriteScope
+ */
+
+/**
  * A command, ready for an adapter to commit.
  * @typedef {object} Work
  * @property {string} commandId
  * @property {Command} command
  *   What an adapter with idempotency compares a resent commandId against, and what one with
  *   revisions keeps when the command conflicts
+ * @property {WriteScope} [scope] - content when left out
  * @property {Effect} effect
  * @property {() => {store: StoreName, key: string} | undefined} [primary]
  *   The record whose revision the committed outcome reports (#13's `committedRevision`),
@@ -109,8 +123,9 @@ export const STORES = Object.freeze({
  * @property {() => boolean} [revised]
  *   Whether the command changed the primary record's content (a note's title or blocks),
  *   asked once the units have run. An adapter with revisions then moves the record's revision
- *   on by one. Placement and derived writes (pin, archive, trash, restore, a folder move,
- *   insights) leave it where it was, so they never turn a save into a conflict.
+ *   on by one, for a content command only. Placement and derived writes (pin, archive, trash,
+ *   restore, a folder move, insights) leave it where it was, so they never turn a save into a
+ *   conflict.
  * @property {() => Committed} done - the outcome once everything committed
  */
 

@@ -163,6 +163,7 @@ function setFields(command, code, change) {
   if (!isId(noteId)) return invalid();
   return unitsWork(command, [changeNote(noteId, change)], () => committed(code, [noteId]), {
     primary: noteRecord(noteId),
+    scope: 'placement',
   });
 }
 
@@ -286,6 +287,7 @@ export const noteCommands = {
     };
     return unitsWork(command, [trash], () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]), {
       primary: noteRecord(noteId),
+      scope: 'placement',
     });
   },
 
@@ -363,7 +365,8 @@ export const noteCommands = {
         }),
       ],
       () => committed('insights-attached', [noteId]),
-      { primary: noteRecord(noteId) },
+      // Held to the insight fields, so it can't change the note's name, placement, or lifecycle
+      { primary: noteRecord(noteId), scope: 'derived' },
     );
   },
 

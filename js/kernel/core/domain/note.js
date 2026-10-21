@@ -63,6 +63,12 @@
 export const INSIGHT_FIELDS = Object.freeze(['insights', 'lastInsightsExtractedAt', 'lastInsightsContentHash']);
 
 /**
+ * The note fields derived from its content (#17's derived scope): the only ones a derived
+ * write may change. Not `updatedAt`, so a derived write never reorders a list.
+ */
+export const DERIVED_FIELDS = Object.freeze(['preview', 'todoProgress', ...INSIGHT_FIELDS]);
+
+/**
  * A new note, field for field the one Storage.createNote has written since 1.4.0.
  * @param {{id: string, name: string, now: number, folderId?: string | null}} fields
  * @returns {NoteRecord}

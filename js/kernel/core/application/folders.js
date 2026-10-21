@@ -75,7 +75,7 @@ export const folderCommands = {
       ],
       () => committed('folder-moved', [folderId]),
       // A move is placement, so the folder's revision stays where it was
-      { primary: folderRecord(folderId) },
+      { primary: folderRecord(folderId), scope: 'placement' },
     );
   },
 };
