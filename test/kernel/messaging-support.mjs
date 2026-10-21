@@ -26,6 +26,9 @@ export const VERSION = '2.0.0';
  */
 export const settle = () => new Promise(resolve => setImmediate(resolve));
 
+/** The most timers one advance() runs before it fails the test */
+const MAX_TIMERS_PER_ADVANCE = 1000;
+
 /**
  * A clock and timers the test moves. Nothing runs until advance() reaches its time, and timers
  * due together run in the order they were set, with messages settling between each.
@@ -61,10 +64,14 @@ export function testScheduler(start = NOW) {
     async advance(ms) {
       const until = now + ms;
       await settle();
-      for (;;) {
+      // Timers that keep setting each other with no time passing would never let advance() end
+      for (let ran = 0; ; ran += 1) {
         let next = /** @type {[number, {at: number, run: () => void}] | undefined} */ (undefined);
         for (const timer of due) if (timer[1].at <= until && (!next || timer[1].at < next[1].at)) next = timer;
         if (!next) break;
+        if (ran >= MAX_TIMERS_PER_ADVANCE) {
+          throw new Error(`more than ${MAX_TIMERS_PER_ADVANCE} timers ran in one advance()`);
+        }
         due.delete(next[0]);
         now = next[1].at;
         next[1].run();
