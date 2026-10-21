@@ -196,10 +196,10 @@ export function runContractSuite(fixture) {
       }));
 
     /**
-     * Puts records no command writes (media, vectors, snapshots, and notes in states no command
-     * reaches yet, such as a template), through the adapter's own commit, so any adapter can run
-     * the cases that need them.
-     * @param {'media' | 'vectors' | 'snapshots' | 'notes'} store
+     * Puts records no command writes (media, vectors, snapshots, links no note's text made, and
+     * notes in states no command reaches yet, such as a template), through the adapter's own
+     * commit, so any adapter can run the cases that need them.
+     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes'} store
      * @param {Array<{id: string} & Record<string, unknown>>} records
      */
     const seed = async (store, records) => {
@@ -1183,6 +1183,38 @@ export function runContractSuite(fixture) {
         );
         const bad = await kernel.query(/** @type {any} */ ({ type: 'listNotes', view: 'everything' }));
         assert.deepEqual(bad, { kind: 'failed', cause: 'validation', code: 'invalid-query' });
+      });
+
+      it('getBacklinks lists the notes that link to a note, in the order the links are stored, whatever list they are in', async () => {
+        await createNote({ noteId: 'target', name: 'Target' });
+        for (const noteId of ['plain', 'archived', 'trashed']) {
+          await createNote({ noteId, name: `Links from ${noteId}` });
+          await run(
+            cmd('saveNoteContent', { noteId, blocks: someBlocks(noteId, 1), linkedNames: ['target', 'Elsewhere'] }),
+          );
+        }
+        await run(cmd('archiveNote', { noteId: 'archived' }));
+        await run(cmd('trashNote', { noteId: 'trashed' }));
+        // A link from a note deleted since, and one that names no note, are left out
+        await seed('links', [
+          { id: 'from-gone', fromNoteId: 'gone', toNoteId: 'target', createdAt: NOW },
+          { id: 'from-nothing', toNoteId: 'target', createdAt: NOW },
+        ]);
+        const state = await kernel.query({ type: 'getBacklinks', noteId: 'target' });
+        assert.equal(state.kind, 'ready', JSON.stringify(state));
+        const links = await ctx.adapter.read(['links'], tx => tx.getAllByIndex('links', 'toNoteId', 'target'));
+        const inLinkOrder = links
+          .map(link => link.fromNoteId)
+          .filter(/** @returns {id is string} */ id => typeof id === 'string' && id !== 'gone');
+        assert.deepEqual(state.kind === 'ready' && state.data.map(note => note.id), inLinkOrder);
+        assert.deepEqual([...inLinkOrder].sort(), ['archived', 'plain', 'trashed']);
+        assert.deepEqual(state.kind === 'ready' && state.data[0], await noteOf(inLinkOrder[0]));
+        assert.deepEqual(await kernel.query({ type: 'getBacklinks', noteId: 'plain' }), { kind: 'empty', asOf: NOW });
+        assert.deepEqual(await kernel.query(/** @type {any} */ ({ type: 'getBacklinks', noteId: '' })), {
+          kind: 'failed',
+          cause: 'validation',
+          code: 'invalid-query',
+        });
       });
 
       it('refuses an index read by anything but an id, since IndexedDB reads null as every record', async () => {
