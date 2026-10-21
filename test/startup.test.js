@@ -53,6 +53,14 @@ function allRecords() {
   };
 }
 
+/**
+ * What `env` logged at `level` whose first argument is `first`, as each call's arguments
+ * @returns {Array<Array<any>>}
+ */
+function logged(env, level, first) {
+  return env.logs.filter((entry) => entry.level === level && entry.args[0] === first).map((entry) => entry.args);
+}
+
 /** A database from raw indexedDB.open calls: version 8 with `omit` left out, or version 9 with a meta store. */
 async function fixture(factory, { version = 8, omit = [] } = {}) {
   const records = allRecords();
@@ -421,6 +429,14 @@ describe('a version-9 database (AC7)', () => {
     assert.equal(env.global.__reloads, 1);
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     assert.deepEqual(env.chrome.writes(), []);
+
+    // The console names what the guard shows, with the outcome's cause and code, and the kernel
+    // logged what Storage threw
+    const [[, error]] = logged(env, 'error', 'Failed to initialize app:');
+    assert.equal(error.message, GUARD_TITLE);
+    assert.deepEqual([error.cause.cause, error.cause.code], ['newer-schema', 'version-too-new']);
+    const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
+    assert.deepEqual([opened.cause, opened.code, opened.error.cause.code], ['newer-schema', 'version-too-new', 'NEWER_SCHEMA']);
   });
 
   it('the popup shows the guard with one Open new tab button and disables quick note', async () => {
@@ -492,6 +508,16 @@ describe('a version-9 database (AC7)', () => {
     }
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     assert.deepEqual(env.chrome.writes(), []);
+
+    // Each refusal is in the console with its cause and code, and so is what Storage threw
+    const refusals = logged(env, 'warn', 'Storage not opened in background:');
+    assert.deepEqual(refusals.map(([, outcome]) => [outcome.cause, outcome.code]), [
+      ['newer-schema', 'version-too-new'],
+      ['newer-schema', 'version-too-new'],
+      ['newer-schema', 'version-too-new'],
+    ]);
+    const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
+    assert.deepEqual([opened.code, opened.error.cause.code], ['version-too-new', 'NEWER_SCHEMA']);
   });
 });
 
@@ -512,6 +538,13 @@ describe("the new tab when its kernel can't open storage for another reason", ()
       assert.deepEqual(appEl.querySelectorAll('button').map((b) => b.textContent), ['Reload']);
       assert.deepEqual(await dumpDatabase(env.indexedDB), before);
       assert.deepEqual(env.chrome.writes(), []);
+      // The console has the words, the outcome's cause and code, and what opening threw
+      const [[, error]] = logged(env, 'error', 'Failed to initialize app:');
+      assert.equal(error.message, words);
+      assert.equal(error.cause.kind, 'unavailable');
+      const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
+      assert.deepEqual([opened.cause, opened.code], [error.cause.cause, error.cause.code]);
+      assert.equal(opened.error.cause, failure);
     }
   });
 });
@@ -584,6 +617,13 @@ describe('background capture on a version-8 database', () => {
       { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: there is no room left to store it" },
       { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
     ]);
+    // and the console has each outcome's cause and code, and none of what was captured
+    const failed = logged(env, 'error', 'Failed to capture to daily note:');
+    assert.deepEqual(failed.map(([, outcome]) => [outcome.kind, outcome.cause, outcome.code]), [
+      ['unavailable', 'quota', 'quota'],
+      ['unavailable', 'storage', 'transaction-failed'],
+    ]);
+    assert.ok(!JSON.stringify(failed).includes('quote'));
   });
 
   it('refuses on a database without its blocks store and changes nothing', async () => {

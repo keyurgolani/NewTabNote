@@ -36,14 +36,19 @@ const STARTUP_FAILED = "NewTabNote couldn't open your notes.";
 /**
  * What App.init shows when the tab's kernel couldn't open or maintain storage: the guard, by
  * the code Storage.init threw, for a database a newer build upgraded or one missing its notes
- * or blocks, and otherwise the error state, saying why in words.
+ * or blocks, and otherwise the error state, saying why in words. The error's message is what
+ * the page shows, and its cause the outcome, so the console says both, with the cause and code.
  * @param {{cause: string, code: string, messageKey: string}} failure - the outcome whenReady answered with
- * @returns {Error & {code?: string}}
+ * @returns {Error & {code?: string, cause?: unknown}}
  */
 function storageFailure(failure) {
-  const error = /** @type {Error & {code?: string}} */ (new Error(STARTUP_FAILURES[failure.messageKey] || STARTUP_FAILED));
-  if (failure.cause === 'newer-schema') error.code = 'NEWER_SCHEMA';
-  else if (failure.code === 'missing-core-stores') error.code = 'MISSING_CORE_STORES';
+  let code = null;
+  if (failure.cause === 'newer-schema') code = 'NEWER_SCHEMA';
+  else if (failure.code === 'missing-core-stores') code = 'MISSING_CORE_STORES';
+  const shown = code ? STORAGE_GUARD_TEXT[code].title : STARTUP_FAILURES[failure.messageKey] || STARTUP_FAILED;
+  const error = /** @type {Error & {code?: string, cause?: unknown}} */ (new Error(shown));
+  error.cause = failure;
+  if (code) error.code = code;
   return error;
 }
 
