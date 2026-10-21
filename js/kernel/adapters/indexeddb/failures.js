@@ -8,7 +8,11 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 
-/** DOMException names a commit retries once (#17: only these, and a closing connection, retry) */
+/**
+ * DOMException names a commit retries once. #17 retries only these and a closing connection;
+ * a closing connection answers reload-required here (connection.js) until #17 slice 2 has the
+ * service worker reopen.
+ */
 export const TRANSIENT = Object.freeze(['AbortError', 'UnknownError']);
 
 /**

@@ -237,10 +237,8 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
     let tx = null;
     try {
       db = connection.database();
-      const names = present(
-        db,
-        units.flatMap(unit => unit.stores),
-      );
+      const stores = units.flatMap(unit => unit.stores);
+      const names = present(db, stores);
       const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite');
       if (names.length > 0) {
         tx = writes ? db.transaction(names, 'readwrite', STRICT) : db.transaction(names, 'readonly');

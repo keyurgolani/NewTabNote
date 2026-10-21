@@ -277,6 +277,37 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
       code: 'reload-required',
     });
   });
+
+  it('close() while an open still waits stays closed, whether that open then succeeds or fails', async () => {
+    for (const ending of /** @type {const} */ (['succeeds', 'fails'])) {
+      /** @type {any} */
+      const request = {};
+      let closed = false;
+      const database = { version: 8, objectStoreNames: { contains: () => true }, close: () => (closed = true) };
+      const factory = /** @type {IDBFactory} */ (/** @type {unknown} */ ({ open: () => request }));
+      const chrome = legacyEnv.createChromeStub();
+      const adapter = createIndexedDbAdapter({
+        indexedDB: factory,
+        settings: chrome.api.storage.local,
+        openWithinMs: 20,
+      });
+      const opening = adapter.open();
+      await opening;
+      adapter.close();
+      if (ending === 'succeeds') {
+        request.result = database;
+        request.onsuccess();
+      } else {
+        request.error = new DOMException('The open failed', 'UnknownError');
+        request.onerror();
+      }
+      assert.equal(closed, ending === 'succeeds', `${ending}: a database it opened after close() is closed`);
+      assert.deepEqual(
+        unavailableAs(await kernelOn(adapter).execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' })),
+        ['storage', 'reload-required', false],
+      );
+    }
+  });
 });
 
 describe('startup maintenance on the IndexedDB adapter', () => {

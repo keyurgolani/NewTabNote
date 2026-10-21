@@ -9,16 +9,18 @@
  * A database a newer build upgraded is refused either way, `newer-schema` `version-too-new`,
  * and left as it was.
  *
- * Opening never leaves its caller waiting: when another connection blocks the upgrade, or the
- * open hasn't finished within `openWithinMs` (5 seconds), open() resolves and the open keeps
- * waiting. Until it finishes, every call answers `blocked-upgrade`, or `open-pending` for an
- * open nothing reported blocked, both retryable, and once it opens, calls go through.
+ * Opening never leaves its caller waiting: an open that hasn't finished within `openWithinMs`
+ * (5 seconds), because another connection blocks its upgrade or for any other reason, lets
+ * open() resolve and keeps waiting. Until it finishes, every call answers `blocked-upgrade`,
+ * or `open-pending` for an open nothing reported blocked, both retryable, and once it opens,
+ * calls go through.
  *
  * On versionchange the connection closes, so it never blocks another context's upgrade, and a
  * connection Chrome closes itself (the database deleted, or its storage failing) is gone too.
  * After either, and after close(), every call answers `reload-required`, which no resend
  * fixes: pages reload to open the database again (#17: "Pages ask for a reload"). #17 slice
- * 2 has the service worker reopen after its own upgrade, and journal what it couldn't commit.
+ * 2 adds the journal that keeps what a closing connection couldn't commit, and the service
+ * worker's reopen after its own upgrade.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -91,8 +93,11 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
     new Promise((resolve, reject) => {
       /** @param {UnavailableError} error */
       const fail = error => {
-        state = 'failed';
-        failure = error;
+        // Closed while it opened, which stays the answer
+        if (state !== 'gone') {
+          state = 'failed';
+          failure = error;
+        }
         reject(error);
       };
       /** @type {IDBOpenDBRequest} */
