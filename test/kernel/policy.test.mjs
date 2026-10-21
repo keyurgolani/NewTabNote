@@ -18,7 +18,7 @@ const READS = ['listNotes', 'getNote', 'getNoteBlocks', 'listFolders', 'getPrefe
 // Written out by hand, so a change to a catalog entry's surfaces has to change this too
 /** @type {Record<Surface, {commands: string[] | 'all', queries: string[] | 'all'}>} */
 const TODAY = {
-  newtab: { commands: 'all', queries: READS },
+  newtab: { commands: 'all', queries: [...READS, 'getBacklinks'] },
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },
   sidepanel: { commands: [], queries: READS },
   offscreen: { commands: [], queries: [] },

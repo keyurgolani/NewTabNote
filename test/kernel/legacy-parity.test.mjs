@@ -463,6 +463,34 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await links(viaKernel), await links(viaStorage));
   });
 
+  it('getBacklinks lists the notes Storage.getBacklinks lists, in its order', async () => {
+    const { viaStorage, kernel } = await twin({
+      canvases: [
+        legacyEnv.note('target', { name: 'Target' }),
+        legacyEnv.note('plain', { name: 'Plain' }),
+        legacyEnv.note('archived', { name: 'Archived', archived: true, archivedAt: SEEDED_AT }),
+        legacyEnv.note('trashed', { name: 'Trashed', trashed: true, trashedAt: SEEDED_AT }),
+        legacyEnv.note('template', { name: 'Template', isTemplate: true }),
+      ],
+      links: [
+        { id: 'l3', fromNoteId: 'trashed', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l1', fromNoteId: 'plain', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l4', fromNoteId: 'template', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l2', fromNoteId: 'archived', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l5', fromNoteId: 'gone', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l6', fromNoteId: 'target', toNoteId: 'plain', createdAt: SEEDED_AT },
+      ],
+    });
+    for (const noteId of ['target', 'plain', 'nothing']) {
+      const state = await kernel.query({ type: 'getBacklinks', noteId });
+      assert.deepEqual(
+        state.kind === 'ready' ? legacyEnv.plain(state.data) : [],
+        legacyEnv.plain(await viaStorage.storage.getBacklinks(noteId)),
+        noteId,
+      );
+    }
+  });
+
   it("moveFolder refuses the moves SidebarController.isChildFolder refuses, and writes what the sidebar's move writes", async () => {
     const folders = [
       folder('f1', null),

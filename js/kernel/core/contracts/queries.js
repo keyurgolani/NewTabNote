@@ -23,14 +23,15 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('./operations/list-notes.js').ListNotes} ListNotes */
 /** @typedef {import('./operations/get-note.js').GetNote} GetNote */
 /** @typedef {import('./operations/get-note-blocks.js').GetNoteBlocks} GetNoteBlocks */
+/** @typedef {import('./operations/get-backlinks.js').GetBacklinks} GetBacklinks */
 /** @typedef {import('./operations/list-folders.js').ListFolders} ListFolders */
 /** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
 /** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
 /** @typedef {import('./operations/get-popup-insights-enabled.js').GetPopupInsightsEnabled} GetPopupInsightsEnabled */
 
 /**
- * @typedef {ListNotes | GetNote | GetNoteBlocks | ListFolders | GetPreferences | GetWorkspaceSession
- *   | GetPopupInsightsEnabled} Query
+ * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | ListFolders | GetPreferences
+ *   | GetWorkspaceSession | GetPopupInsightsEnabled} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -46,6 +47,7 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  * @property {NoteRecord[]} listNotes
  * @property {{note: NoteRecord, revision?: number}} getNote
  * @property {BlockRecord[]} getNoteBlocks
+ * @property {NoteRecord[]} getBacklinks
  * @property {FolderRecord[]} listFolders
  * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
@@ -103,6 +105,8 @@ export const QUERIES = Object.freeze({
   listNotes: entry('list-notes', []),
   getNote: entry('get-note', ['note']),
   getNoteBlocks: entry('get-note-blocks', ['note']),
+  // Only the new tab's editor has shown backlinks
+  getBacklinks: entry('get-backlinks', ['note'], Object.freeze(/** @type {Surface[]} */ (['newtab']))),
   listFolders: entry('list-folders', []),
   getPreferences: entry('get-preferences', []),
   getWorkspaceSession: entry('get-workspace-session', []),

@@ -86,6 +86,7 @@ const QUERY_SAMPLES = {
   listNotes: { view: 'active' },
   getNote: { noteId: 'n1' },
   getNoteBlocks: { noteId: 'n1' },
+  getBacklinks: { noteId: 'n1' },
   listFolders: {},
   getPreferences: { keys: ['theme', 'sidebarWidth'] },
   getWorkspaceSession: {},
