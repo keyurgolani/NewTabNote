@@ -8,7 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
-  runUntil,
+  runUntil, startEditorClient,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -89,6 +89,7 @@ async function setup() {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  await startEditorClient(env);
   return { env, Storage };
 }
 

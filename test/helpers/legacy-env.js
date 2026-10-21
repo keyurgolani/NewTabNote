@@ -875,16 +875,38 @@ function quietNavigation() {
 }
 
 /**
- * A BlockEditor without its DOM constructor: real persistence and Storage,
- * render methods stubbed. Its root is a pane (`.editor-pane`, active unless
- * `root` is given) holding the writing column (`.editor`) with the title and
+ * Make the document client the page's editors read and write through
+ * (test/helpers/editor-client.mjs): a new tab's kernel over the page's Storage, which has
+ * to have started. Each editor makeEditor makes for the page gets it. It takes
+ * test/helpers/page-module.js, so node runs with --experimental-vm-modules (npm test
+ * passes it).
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<Object>} the client
+ */
+async function startEditorClient(env) {
+  const { loadPageModule } = require('./page-module');
+  const { editorClientFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
+  env.documentClient = editorClientFor({ storage: env.get('Storage'), settings: env.chrome.api.storage.local });
+  return env.documentClient;
+}
+
+/**
+ * A BlockEditor without its DOM constructor: real persistence through the page's document
+ * client (startEditorClient), render methods stubbed. Its root is a pane (`.editor-pane`,
+ * active unless `root` is given) holding the writing column (`.editor`) with the title and
  * the blocks container, where the editor puts its own notices.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {FakeDocument} [doc] - Its own document, as the PiP window has
- * @param {{root?: FakeElement|null, navigation?: Object}} [options] - The pane element to use, as
- *   App passes #editor-container, and the navigation port, quietNavigation() unless given
+ * @param {{root?: FakeElement|null, navigation?: Object, documentClient?: Object}} [options] - The
+ *   pane element to use, as App passes #editor-container, the navigation port,
+ *   quietNavigation() unless given, and the document client, the page's unless given
  */
-function makeEditor(env, doc = env.document, { root: pane = null, navigation = quietNavigation() } = {}) {
+function makeEditor(env, doc = env.document, {
+  root: pane = null,
+  navigation = quietNavigation(),
+  documentClient = env.documentClient,
+} = {}) {
+  if (!documentClient) throw new Error('makeEditor: await startEditorClient(env) first, once Storage has started');
   const BlockEditor = env.get('BlockEditor');
   const editor = Object.create(BlockEditor.prototype);
   const root = pane || doc.createElement('div');
@@ -899,6 +921,7 @@ function makeEditor(env, doc = env.document, { root: pane = null, navigation = q
     root,
     doc,
     navigation,
+    documentClient,
     noteId: null,
     noteData: null,
     blocks: [],
@@ -972,6 +995,7 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
+  await startEditorClient(env);
   const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',
@@ -1033,6 +1057,7 @@ module.exports = {
   createLockManager,
   createChannelBus,
   makeEditor,
+  startEditorClient,
   quietNavigation,
   runUntil,
   bootNewTab,

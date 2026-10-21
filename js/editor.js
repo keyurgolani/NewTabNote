@@ -75,6 +75,12 @@ class BlockEditor {
     this.onChange = config.onChange || null;
     /** @type {EditorNavigation} */
     this.navigation = config.navigation || NO_NAVIGATION;
+    /**
+     * What it reads and writes its note through: js/kernel/composition/document.js, over the
+     * page's kernel, which App gives every editor in place of Storage
+     * @type {any}
+     */
+    this.documentClient = config.documentClient || null;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -280,8 +286,9 @@ class BlockEditor {
     let blocksData = [];
     let keepEditorCopy = false;
     for (let round = 0; ; round++) {
-      noteData = await Storage.getNote(noteId);
-      blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
+      const opened = await this.documentClient.openNote(noteId);
+      noteData = opened ? opened.note : null;
+      blocksData = opened ? opened.blocks : [];
       if (loadSeq !== this._loadSeq) return false;
       // Switching notes, or nothing written since the reads started: they are current.
       if (noteId !== this.noteId || !this._hasPendingSave()) break;
@@ -1523,7 +1530,7 @@ class BlockEditor {
     const lastTwo = textBefore.slice(-2);
     if (lastTwo === '[[' && !this.wikiMenuVisible) {
       // Get all note names for autocomplete
-      this.noteNames = await Storage.getNoteNames();
+      this.noteNames = await this.documentClient.noteNames();
       this.showWikiMenu(contentEl.closest('.block'));
       return;
     }
@@ -1703,7 +1710,7 @@ class BlockEditor {
 
     // Check for /template
     if (text === '/template') {
-      this.templates = await Storage.getTemplates();
+      this.templates = await this.documentClient.templates();
       this.showTemplateMenu(contentEl.closest('.block'));
       return;
     }
@@ -1776,7 +1783,8 @@ class BlockEditor {
    * Select a template to insert
    */
   async selectTemplateItem(templateId) {
-    const templateBlocks = await Storage.getElementsByNote(templateId);
+    // In the order the template shows them, as getNoteBlocks lists a note's blocks
+    const templateBlocks = await this.documentClient.blocksOf(templateId);
     if (!templateBlocks || templateBlocks.length === 0) {
       this.hideTemplateMenu();
       return;
@@ -3629,7 +3637,7 @@ class BlockEditor {
       return;
     }
 
-    const backlinks = await Storage.getBacklinks(this.noteId);
+    const backlinks = await this.documentClient.backlinks(this.noteId);
 
     if (backlinks.length === 0) {
       panel.classList.add('hidden');
