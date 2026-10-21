@@ -228,6 +228,55 @@ describe('failures on the IndexedDB adapter', () => {
     },
   );
 
+  it('a transaction that aborts while a unit awaits something else answers with why it aborted, and runs no more', async () => {
+    const { of, adapter, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
+    const command = /** @type {Command} */ ({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'X' });
+    /** @type {Unit} */
+    const unit = {
+      stores: ['notes'],
+      async run(tx) {
+        const note = await tx.get('notes', 'n1');
+        if (note) tx.put('notes', { ...note, name: 'X' });
+        // The disk refuses that write while the unit is away
+        await new Promise(resolve => setTimeout(resolve, 5));
+      },
+    };
+    // An AbortError would run again anywhere else, but not while the unit may still be running
+    /** @type {Array<[string, unknown]>} */
+    const cases = [
+      ['QuotaExceededError', ['quota', 'quota', false]],
+      ['AbortError', ['storage', 'transaction-failed', true]],
+    ];
+    for (const [name, answer] of cases) {
+      of.faults.abortAfterNextWrite('canvases', name);
+      const before = of.faults.transactions.length;
+      const { outcome } = await adapter.commit(unitsWork(command, [unit], () => committed('renamed', ['n1'])));
+      assert.deepEqual(unavailableAs(outcome), answer, name);
+      assert.deepEqual(modesSince(of, before), ['readwrite'], name);
+    }
+    const note = await tab.query({ type: 'getNote', noteId: 'n1' });
+    assert.equal(note.kind === 'ready' && note.data.note.name, 'Plan');
+  });
+
+  it("doesn't run a failed write again once this context sent a later one, so it can't land over the later one", async () => {
+    const { of, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', blocks: [{ id: 'b1', content: 'v0' }] });
+    /**
+     * @param {string} commandId
+     * @param {string} content
+     */
+    const save = (commandId, content) =>
+      tab.execute({ type: 'saveNoteContent', commandId, noteId: 'n1', blocks: [{ id: 'b1', content }] });
+    // The older save's transaction aborts after the newer one has opened its own
+    of.faults.abortAfterNextWrite('canvases', 'UnknownError');
+    const [older, newer] = await Promise.all([save('a', 'older'), save('b', 'newer')]);
+    assert.deepEqual(unavailableAs(older), ['storage', 'transaction-failed', true]);
+    assert.equal(newer.kind, 'committed');
+    const blocks = await tab.query({ type: 'getNoteBlocks', noteId: 'n1' });
+    assert.equal(blocks.kind === 'ready' && blocks.data[0].content, 'newer');
+  });
+
   describe('two contexts of one profile at once', () => {
     it('both creating one note: one commits, and the other is refused with note-exists', async () => {
       const { of, tab } = await opened();

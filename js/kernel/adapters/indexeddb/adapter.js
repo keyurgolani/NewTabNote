@@ -190,18 +190,27 @@ async function runUnits(db, tx, units) {
 }
 
 /**
+ * How one run of a command's units ended: its answer, whether another run could get past the
+ * failure, and which readwrite transaction this adapter opened for it (0 for none)
+ * @typedef {{outcome: Outcome, transient: boolean, seq: number}} Attempt
+ */
+
+/**
  * The answer for a transaction that failed, and whether it may run once more
  * @param {unknown} cause
- * @returns {{outcome: Outcome, transient: boolean}}
+ * @param {number} seq
+ * @returns {Attempt}
  */
-function failed(cause) {
-  return { outcome: unavailableFrom(failureOf(cause)), transient: isTransient(cause) };
+function failed(cause, seq) {
+  return { outcome: unavailableFrom(failureOf(cause)), transient: isTransient(cause), seq };
 }
 
-const endedEarly = () => ({
-  outcome: unavailable('adapter', 'transaction-ended-early', false),
-  transient: false,
-});
+/** @param {Outcome} outcome @returns {Attempt} */
+const answered = outcome => ({ outcome, transient: false, seq: 0 });
+
+const endedEarly = () => answered(unavailable('adapter', 'transaction-ended-early', false));
+
+const aborted = () => new DOMException('The transaction was aborted', 'AbortError');
 
 /**
  * @param {IndexedDbOptions} options
@@ -224,54 +233,73 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
     return failureOf(error);
   };
 
+  /** How many readwrite transactions this adapter has opened, so a retry can tell whether a later one went first */
+  let writesOpened = 0;
+
   /**
    * One run of a command's units, all in one transaction, which it opens before it returns
    * @param {Work} work
    * @param {Unit[]} units
-   * @returns {Promise<{outcome: Outcome, transient: boolean}>}
+   * @returns {Promise<Attempt>}
    */
   const attempt = (work, units) => {
     /** @type {IDBDatabase} */
     let db;
     /** @type {IDBTransaction | null} */
     let tx = null;
+    let seq = 0;
     try {
       db = connection.database();
       const stores = units.flatMap(unit => unit.stores);
       const names = present(db, stores);
       const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite');
-      if (names.length > 0) {
-        tx = writes ? db.transaction(names, 'readwrite', STRICT) : db.transaction(names, 'readonly');
+      if (names.length > 0 && writes) {
+        tx = db.transaction(names, 'readwrite', STRICT);
+        seq = ++writesOpened;
+      } else if (names.length > 0) {
+        tx = db.transaction(names, 'readonly');
       }
     } catch (error) {
-      return Promise.resolve({ outcome: unavailableFrom(startFailure(error)), transient: false });
+      return Promise.resolve(answered(unavailableFrom(startFailure(error))));
     }
-    const ended = tx ? ending(tx) : Promise.resolve(/** @type {Ending} */ ({ committed: true }));
     /** @type {Promise<{stop: Outcome | void} | {error: unknown}>} */
     const running = runUnits(db, tx, units).then(
       stop => ({ stop }),
       error => ({ error }),
     );
+    // With none of its stores in the database there's no transaction to end: the units read
+    // empty stores, and a write fails or is skipped as Storage's would
+    if (!tx) {
+      return running.then(first => {
+        if ('error' in first) return failed(first.error, 0);
+        return answered(first.stop || work.done());
+      });
+    }
+    const ended = ending(tx);
     return Promise.race([running, ended.then(end => ({ end }))]).then(async first => {
-      // The transaction ended while a unit still ran: the unit awaited something else, and what
-      // it wrote before that may have committed, so the command can't say it saved
-      if ('end' in first) return endedEarly();
+      // The transaction ended while a unit still ran, because the unit awaited something else.
+      // One that committed may hold what the unit wrote before that, so the command can't say it
+      // saved; one that aborted holds nothing and says why. Neither runs again, as that unit may
+      // still be running.
+      if ('end' in first) {
+        return first.end.committed ? endedEarly() : { ...failed(first.end.error || aborted(), seq), transient: false };
+      }
       if ('error' in first) {
-        if (!tx) return failed(first.error);
         abort(tx);
         const end = await ended;
         if (end.committed) return endedEarly();
         // Its own error says why the transaction aborted, when it aborted for one
-        return failed(end.error || first.error);
+        return failed(end.error || first.error, seq);
       }
       if (first.stop) {
         abort(tx);
-        await ended;
-        return { outcome: first.stop, transient: false };
+        // Committed before the abort could land, so what came before the stop is stored
+        if ((await ended).committed) return endedEarly();
+        return answered(first.stop);
       }
       const end = await ended;
-      if (end.committed) return { outcome: work.done(), transient: false };
-      return failed(end.error || new DOMException('The transaction was aborted', 'AbortError'));
+      if (end.committed) return answered(work.done());
+      return failed(end.error || aborted(), seq);
     });
   };
 
@@ -283,6 +311,10 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
   const commitUnits = (work, units) =>
     attempt(work, units).then(first => {
       if (!first.transient) return first.outcome;
+      // Another run would queue behind every transaction opened since, so a later command this
+      // context sent, such as a newer save of the same note, would land first and then be
+      // written over. So it runs again only when no write opened after it.
+      if (first.seq !== 0 && first.seq !== writesOpened) return unavailable('storage', 'transaction-failed', true);
       return attempt(work, units).then(second =>
         second.transient ? unavailable('storage', 'retries-exhausted', true) : second.outcome,
       );

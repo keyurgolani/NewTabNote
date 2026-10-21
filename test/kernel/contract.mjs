@@ -808,6 +808,39 @@ export function runContractSuite(fixture) {
           'folder-into-itself',
         );
       });
+
+      it(
+        'on a database without folders, a move finds no folder and a new one fails to store, as Storage does',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const other = await startWithout(['folders']);
+          try {
+            const tab = other.kernel();
+            /** @param {CommandType} type @param {any} fields */
+            const send = (type, fields) => tab.execute(newCommand(other.ids, type, fields));
+            assertRejected(
+              await send('moveFolder', { folderId: 'f1', parentId: null }),
+              'not-found',
+              'folder-not-found',
+            );
+            assertRejected(
+              await send('createNote', { noteId: 'n1', name: 'Filed', folderId: 'f1' }),
+              'not-found',
+              'folder-not-found',
+            );
+            const created = await send('createFolder', { folderId: 'f1', name: 'Work', parentId: null });
+            assert.deepEqual(
+              created.kind === 'unavailable' && [created.cause, created.code],
+              ['storage', 'store-unavailable'],
+              JSON.stringify(created),
+            );
+            assert.equal((await tab.query({ type: 'listFolders' })).kind, 'empty');
+          } finally {
+            await other.close();
+          }
+        },
+      );
     });
 
     describe('preferences, session, and startup maintenance', () => {

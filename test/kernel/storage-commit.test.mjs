@@ -6,12 +6,15 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { unitsWork } from '../../js/kernel/core/application/work.js';
+import { UnavailableError, committed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
+/** @typedef {import('../../js/kernel/core/ports/repository.js').Unit} Unit */
 
 /** @type {Profile[]} */
 const profiles = [];
@@ -26,6 +29,7 @@ async function opened() {
   const runtime = { ids: testIds(), clock: testClock() };
   return {
     of,
+    adapter,
     tab: kernelOn(adapter, runtime),
     worker: kernelOn(adapter, runtime, CALLERS['worker-internal']),
   };
@@ -131,18 +135,36 @@ describe('commits on the IndexedDB adapter', () => {
     }
   });
 
-  it('a command that stops on a rejection aborts its transaction, so nothing an earlier unit wrote stays', async () => {
-    const { of, tab } = await opened();
+  it('a command whose later unit stops it or throws aborts its transaction, so nothing an earlier unit wrote stays', async () => {
+    const { of, adapter, tab } = await opened();
     await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
-    const before = await legacyEnv.dumpDatabase(of.real);
-    const refused = await tab.execute({
-      type: 'createNote',
-      commandId: 'c1',
-      noteId: 'n1',
-      name: 'Again',
-      blocks: [{ id: 'b1' }],
-    });
-    assert.deepEqual(refused.kind === 'rejected' && refused.code, 'note-exists');
-    assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
+    const command = /** @type {Command} */ ({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
+    /** @type {Unit} */
+    const writes = {
+      stores: ['notes', 'blocks'],
+      async run(tx) {
+        tx.put('notes', { id: 'n2', name: 'Written first' });
+        tx.put('blocks', { id: 'b2', canvasId: 'n2' });
+      },
+    };
+    /** @type {Array<[Unit, string]>} */
+    const lasts = [
+      [{ stores: ['folders'], run: async () => rejected('not-found', 'folder-not-found') }, 'rejected'],
+      [
+        {
+          stores: ['folders'],
+          run: async () => {
+            throw new UnavailableError('storage', 'store-unavailable', false);
+          },
+        },
+        'unavailable',
+      ],
+    ];
+    for (const [last, kind] of lasts) {
+      const before = await legacyEnv.dumpDatabase(of.real);
+      const { outcome } = await adapter.commit(unitsWork(command, [writes, last], () => committed('created', ['n2'])));
+      assert.equal(outcome.kind, kind, JSON.stringify(outcome));
+      assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, kind);
+    }
   });
 });
