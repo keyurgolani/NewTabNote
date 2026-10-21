@@ -19,7 +19,7 @@ import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { entityTypesIn, walk } from './schema-walk.mjs';
+import { entityTypesIn, walk } from '../../js/kernel/core/contracts/schema-walk.js';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */

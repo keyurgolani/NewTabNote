@@ -27,10 +27,10 @@ import { bulkResultSchema, failedSchema, outcomeSchema } from '../../js/kernel/c
 import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import * as settings from '../../js/kernel/core/contracts/settings.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
-import { isContent, walk } from './schema-walk.mjs';
+import { isContent, walk } from '../../js/kernel/core/contracts/schema-walk.js';
 
-/** @typedef {import('./schema-walk.mjs').Schema} Schema */
-/** @typedef {import('./schema-walk.mjs').Visit} Visit */
+/** @typedef {import('../../js/kernel/core/contracts/schema-walk.js').Schema} Schema */
+/** @typedef {import('../../js/kernel/core/contracts/schema-walk.js').Visit} Visit */
 
 /**
  * - payload: a command's or query's payload, held to every rule

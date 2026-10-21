@@ -1,9 +1,16 @@
-// Walks a Valibot schema the way the contract tests read one: every schema and field inside
-// it, with the metadata a field's pipe gives it (contracts/fields.js marks entity ids and
-// content that way).
+/**
+ * Walks a Valibot schema: every schema and field inside it, with the metadata a field's pipe
+ * gives it (contracts/fields.js marks entity ids and content that way). The contract tests
+ * hold every schema to their rules through it, and the router reads where a payload's entity
+ * ids are through it (messaging/scope.js), so the two read a schema the same way.
+ *
+ * It reads Valibot's schema objects (entries, item, wrapped, options, pipe), so it's tied to
+ * the vendored version, and it fails closed: a schema holding another schema somewhere it
+ * doesn't follow throws rather than leave that part unread.
+ */
 
 /**
- * A Valibot schema or pipe action, as these tests read one
+ * A Valibot schema or pipe action, as the walk reads one
  * @typedef {{
  *   kind: string,
  *   type: string,
