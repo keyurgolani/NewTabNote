@@ -425,9 +425,20 @@ describe('the contract schema lint (#13, AC5)', () => {
       () => lint(commandPayload('example', { range: v.tuple([count, count]) }), { role: 'payload' }),
       /walk\(\)/,
     );
-    // An answer or a record is held to the same
+    // An answer or a record is held to the same, since checkResult passes an answer on as given
     const record = v.looseObject({ id: entityId('note'), name: v.optional(content(v.string()), '') });
     assert.deepEqual(lint(record, { role: 'result' }), [{ rule: 'default', path: 'name' }]);
+    for (const role of /** @type {const} */ (['result', 'outcome'])) {
+      for (const [name, fields, rule, path] of /** @type {const} */ ([
+        ['a transform', { size: v.pipe(count, v.transform(String)) }, 'transform', 'size'],
+        ['a default', { size: v.optional(count, 0) }, 'default', 'size'],
+        ['a fallback', { size: v.fallback(count, 0) }, 'fallback', 'size'],
+        ['an object', { counts: v.object({ size: count }) }, 'drops-undeclared', 'counts'],
+      ])) {
+        const answer = v.strictObject({ kind: v.literal('ready'), ...fields });
+        assert.deepEqual(lint(answer, { role }), [{ rule, path }], `${name} in ${role}`);
+      }
+    }
     // A brand or readonly changes only the type
     const branded = { noteId: v.pipe(entityId('note'), v.brand('NoteId')), ids: v.pipe(v.array(id), v.readonly()) };
     assert.deepEqual(lint(commandPayload('example', branded), { role: 'payload' }), []);
