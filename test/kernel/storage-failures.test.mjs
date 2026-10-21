@@ -277,6 +277,24 @@ describe('failures on the IndexedDB adapter', () => {
     assert.equal(blocks.kind === 'ready' && blocks.data[0].content, 'newer');
   });
 
+  it('still runs a failed write again after a later one that shares none of its stores', async () => {
+    const { of, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', blocks: [{ id: 'b1', content: 'v0' }] });
+    // The save's transaction aborts after the folder's, which touches only folders, has opened
+    of.faults.abortAfterNextWrite('canvases', 'UnknownError');
+    const before = of.faults.transactions.length;
+    const [saved, filed] = await Promise.all([
+      tab.execute({ type: 'saveNoteContent', commandId: 'a', noteId: 'n1', blocks: [{ id: 'b1', content: 'saved' }] }),
+      tab.execute({ type: 'createFolder', commandId: 'f', folderId: 'f1', name: 'Work', parentId: null }),
+    ]);
+    assert.equal(saved.kind, 'committed', JSON.stringify(saved));
+    assert.equal(filed.kind, 'committed', JSON.stringify(filed));
+    const folders = of.faults.transactions.slice(before).map(({ names }) => names.includes('folders'));
+    assert.deepEqual(folders, [false, true, false], 'the save, the folder, then the save again');
+    const blocks = await tab.query({ type: 'getNoteBlocks', noteId: 'n1' });
+    assert.equal(blocks.kind === 'ready' && blocks.data[0].content, 'saved');
+  });
+
   describe('two contexts of one profile at once', () => {
     it('both creating one note: one commits, and the other is refused with note-exists', async () => {
       const { of, tab } = await opened();

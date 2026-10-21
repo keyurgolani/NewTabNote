@@ -13,12 +13,12 @@
  *
  * A transaction that aborts with an AbortError or an UnknownError runs once more, in a new
  * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). It runs
- * again only when this adapter has opened no write since, as a later command, such as a newer
- * save of the same note, would land first and be written over; it answers
- * `transaction-failed`, retryable, instead. That holds within one context only: another
- * context's save that commits between the abort and the run again is written over, so the
- * older content wins. It's the two-contexts gap the kernel ledger declares, and once saves
- * carry an expected revision (#17 slice 2) the run again is a conflict instead.
+ * again only when this adapter has opened no write since on any store it writes, as a later
+ * command there, such as a newer save of the same note, would land first and be written
+ * over; it answers `transaction-failed`, retryable, instead. That holds within one context
+ * only: another context's save that commits between the abort and the run again is written
+ * over, so the older content wins. It's the two-contexts gap the kernel ledger declares, and
+ * once saves carry an expected revision (#17 slice 2) the run again is a conflict instead.
  *
  * A transaction that ends before the command's units have finished, because a unit awaited
  * something other than it, isn't run again, and the command answers as it ends rather than
@@ -201,23 +201,32 @@ async function runUnits(db, tx, units) {
 }
 
 /**
+ * A readwrite transaction this adapter opened: its place in the order it opened them, from 1,
+ * and the IndexedDB stores it spans. `seq` 0, over no store, is a run that opened none.
+ * @typedef {{seq: number, names: readonly string[]}} Write
+ */
+
+/** @type {Write} */
+const NO_WRITE = Object.freeze({ seq: 0, names: Object.freeze([]) });
+
+/**
  * How one run of a command's units ended: its answer, whether another run could get past the
- * failure, and which readwrite transaction this adapter opened for it (0 for none)
- * @typedef {{outcome: Outcome, transient: boolean, seq: number}} Attempt
+ * failure, and the readwrite transaction it opened
+ * @typedef {{outcome: Outcome, transient: boolean, write: Write}} Attempt
  */
 
 /**
  * The answer for a transaction that failed, and whether it may run once more
  * @param {unknown} cause
- * @param {number} seq
+ * @param {Write} write
  * @returns {Attempt}
  */
-function failed(cause, seq) {
-  return { outcome: unavailableFrom(failureOf(cause)), transient: isTransient(cause), seq };
+function failed(cause, write) {
+  return { outcome: unavailableFrom(failureOf(cause)), transient: isTransient(cause), write };
 }
 
 /** @param {Outcome} outcome @returns {Attempt} */
-const answered = outcome => ({ outcome, transient: false, seq: 0 });
+const answered = outcome => ({ outcome, transient: false, write: NO_WRITE });
 
 const endedEarly = () => answered(unavailable('adapter', 'transaction-ended-early', false));
 
@@ -244,8 +253,14 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
     return failureOf(error);
   };
 
-  /** How many readwrite transactions this adapter has opened, so a retry can tell whether a later one went first */
+  /** How many readwrite transactions this adapter has opened */
   let writesOpened = 0;
+  /**
+   * The last readwrite transaction this adapter opened over each IndexedDB store, so a retry
+   * can tell whether a later write went first on any store it writes
+   * @type {Map<string, number>}
+   */
+  const lastWrite = new Map();
 
   /**
    * One run of a command's units, all in one transaction, which it opens before it returns
@@ -258,7 +273,7 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
     let db;
     /** @type {IDBTransaction | null} */
     let tx = null;
-    let seq = 0;
+    let write = NO_WRITE;
     try {
       db = connection.database();
       const stores = units.flatMap(unit => unit.stores);
@@ -266,7 +281,8 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
       const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite');
       if (names.length > 0 && writes) {
         tx = db.transaction(names, 'readwrite', STRICT);
-        seq = ++writesOpened;
+        write = { seq: ++writesOpened, names };
+        for (const name of names) lastWrite.set(name, write.seq);
       } else if (names.length > 0) {
         tx = db.transaction(names, 'readonly');
       }
@@ -282,7 +298,7 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
     // empty stores, and a write fails or is skipped as Storage's would
     if (!tx) {
       return running.then(first => {
-        if ('error' in first) return failed(first.error, 0);
+        if ('error' in first) return failed(first.error, NO_WRITE);
         return answered(first.stop || work.done());
       });
     }
@@ -293,14 +309,16 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
       // saved; one that aborted holds nothing and says why. Neither runs again, as that unit may
       // still be running.
       if ('end' in first) {
-        return first.end.committed ? endedEarly() : { ...failed(first.end.error || aborted(), seq), transient: false };
+        return first.end.committed
+          ? endedEarly()
+          : { ...failed(first.end.error || aborted(), write), transient: false };
       }
       if ('error' in first) {
         abort(tx);
         const end = await ended;
         if (end.committed) return endedEarly();
         // Its own error says why the transaction aborted, when it aborted for one
-        return failed(end.error || first.error, seq);
+        return failed(end.error || first.error, write);
       }
       if (first.stop) {
         abort(tx);
@@ -310,7 +328,7 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
       }
       const end = await ended;
       if (end.committed) return answered(work.done());
-      return failed(end.error || aborted(), seq);
+      return failed(end.error || aborted(), write);
     });
   };
 
@@ -322,10 +340,12 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
   const commitUnits = (work, units) =>
     attempt(work, units).then(first => {
       if (!first.transient) return first.outcome;
-      // Another run would queue behind every transaction opened since, so a later command this
-      // context sent, such as a newer save of the same note, would land first and then be
-      // written over. So it runs again only when no write opened after it.
-      if (first.seq !== 0 && first.seq !== writesOpened) return unavailable('storage', 'transaction-failed', true);
+      // Another run would queue behind every transaction opened since over its stores, so a
+      // later command this context sent, such as a newer save of the same note, would land
+      // first and then be written over. So it runs again only when no write opened after it on
+      // any store it writes. One on other stores, such as filing into a folder, can't be.
+      const overtaken = first.write.names.some(name => lastWrite.get(name) !== first.write.seq);
+      if (overtaken) return unavailable('storage', 'transaction-failed', true);
       return attempt(work, units).then(second =>
         second.transient ? unavailable('storage', 'retries-exhausted', true) : second.outcome,
       );
