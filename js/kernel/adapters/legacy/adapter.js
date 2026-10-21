@@ -339,7 +339,10 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
         if (mode === 'versioned') await storage.open({ watchConnection: reopens });
         else await storage.openExisting();
       } catch (error) {
-        throw storageError(error);
+        const refused = storageError(error);
+        // An error with no code of its own reads as a failed transaction, but this was the
+        // open, as openExisting's OPEN_FAILED says
+        throw refused.code === 'transaction-failed' ? new UnavailableError('storage', 'open-failed', true) : refused;
       }
     },
 

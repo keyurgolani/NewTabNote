@@ -193,6 +193,22 @@ describe('the legacy adapter', () => {
     assert.deepEqual(await page.env.indexedDB.databases(), []);
   });
 
+  it('answers open-failed for an open that fails for a reason with no code of its own, in both modes', async () => {
+    for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
+      const page = context();
+      // As when Chrome can't open the database's backing store
+      const failing = () =>
+        Promise.reject(new DOMException('Internal error opening backing store for indexedDB.open.', 'UnknownError'));
+      page.storage.open = failing;
+      page.storage.openExisting = failing;
+      await assert.rejects(adapterFor(page, mode).open(), error => {
+        const { unavailableCause, code } = /** @type {any} */ (error);
+        assert.deepEqual([unavailableCause, code], ['storage', 'open-failed'], mode);
+        return true;
+      });
+    }
+  });
+
   it("never blocks a new tab's upgrade from the database Popup or Side Panel holds open", async () => {
     for (const version of [7, 8]) {
       const panel = context();
