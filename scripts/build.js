@@ -5,9 +5,16 @@
  * Minifies JS and CSS, copies assets to dist folder
  *
  *   --dev     copy JS and CSS without minifying
- *   --strict  exit 1 instead of falling back: a missing listed file, a terser error,
+ *   --strict  exit 1 instead of falling back: a missing listed file or walked directory,
+ *             a terser error, a file loaded both as a module and as a classic script,
  *             a CleanCSS error, and the CleanCSS level-2 to level-1 retry each name
  *             the file and the fallback refused. #27 (route-level builds) replaces it.
+ *
+ * Each JS file is minified the way the extension loads it (scripts/lib/script-graph.js):
+ * as an ES module when a page's <script type="module"> or the module service worker
+ * reaches it through static imports, or when it lives in a JS_DIRS directory, and as a
+ * classic script otherwise. A module's top-level names are its own, so terser may rename
+ * them; a classic script's are globals other scripts may read, so it keeps them.
  */
 
 const fs = require('fs');
@@ -15,6 +22,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { minify: minifyJS } = require('terser');
 const CleanCSS = require('clean-css');
+const { readScriptGraph } = require('./lib/script-graph');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
@@ -79,6 +87,13 @@ const JS_FILES = [
   'js/offscreen.js',
 ];
 
+// Directories shipped without a list: every .js and .mjs file under each, sorted, after
+// JS_FILES. Nothing else in them ships, so js/kernel/package.json (Node's "type": "module")
+// stays out of dist/.
+const JS_DIRS = [
+  'js/kernel/',
+];
+
 const CSS_FILES = [
   'css/editor.css',
   'css/premium-chat.css',
@@ -117,7 +132,9 @@ const CSS_LEVEL_1 = [
   'css/premium-chat.css',
 ];
 
-// Terser options for maximum compression
+// Terser options for maximum compression. terser writes into the nested objects it's
+// given (module: true lands in compress and mangle), so each call gets its own copy
+// from terserOptions().
 const TERSER_OPTIONS = {
   compress: {
     dead_code: true,
@@ -165,6 +182,13 @@ const CLEANCSS_OPTIONS = {
 // Level-1 options, for CSS_LEVEL_1 files and the level-2 retry
 const CLEANCSS_LEVEL_1_OPTIONS = { level: 1 };
 
+/**
+ * A fresh copy of TERSER_OPTIONS for one file, minified as an ES module or a classic script
+ */
+function terserOptions(module) {
+  return { ...structuredClone(TERSER_OPTIONS), module };
+}
+
 // Fallbacks --strict refuses, recorded as { file, message }
 const refused = [];
 
@@ -193,6 +217,34 @@ function skipMissing(label) {
  */
 function isCopiedAsIs(file, list = COPY_AS_IS) {
   return list.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
+}
+
+/**
+ * Every .js and .mjs file under a JS_DIRS entry, sorted, or null when it's missing
+ */
+function walkJSDir(dir) {
+  const top = path.join(SRC_DIR, dir);
+  if (!fs.existsSync(top)) return null;
+  const files = [];
+  const walk = current => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.m?js$/.test(entry.name)) files.push(path.relative(SRC_DIR, full).split(path.sep).join('/'));
+    }
+  };
+  walk(top);
+  return files.sort();
+}
+
+/**
+ * Whether terser treats `file` as an ES module: true when the extension loads it as one,
+ * false for a classic script, or null when it's loaded both ways
+ */
+function loadsAsModule(file, graph) {
+  const module = graph.modules.has(file) || JS_DIRS.some(dir => file.startsWith(dir));
+  if (module && graph.classic.has(file)) return null;
+  return module;
 }
 
 /**
@@ -232,9 +284,9 @@ function copyDir(src, dest) {
 }
 
 /**
- * Minify JavaScript file
+ * Minify JavaScript file, as an ES module when `module` is true
  */
-async function minifyJSFile(file, srcPath, destPath) {
+async function minifyJSFile(file, srcPath, destPath, module) {
   const code = fs.readFileSync(srcPath, 'utf8');
 
   if (isDev) {
@@ -250,13 +302,10 @@ async function minifyJSFile(file, srcPath, destPath) {
   }
 
   try {
-    // Detect ES module files (contain import/export statements)
-    const isModule = /^\s*(import\s|export\s)/m.test(code);
-    const options = isModule ? { ...TERSER_OPTIONS, module: true } : TERSER_OPTIONS;
-    const result = await minifyJS(code, options);
+    const result = await minifyJS(code, terserOptions(module));
     ensureDir(path.dirname(destPath));
     fs.writeFileSync(destPath, result.code);
-    return { original: code.length, minified: result.code.length };
+    return { original: code.length, minified: result.code.length, module };
   } catch (error) {
     // terser's col is 0-based; print file:line:col the way editors count
     const at = Number.isInteger(error.line) && Number.isInteger(error.col) ? ` (${file}:${error.line}:${error.col + 1})` : '';
@@ -349,7 +398,16 @@ async function build() {
   console.log('📦 Processing JavaScript files...');
   ensureDir(path.join(DIST_DIR, 'js'));
 
-  for (const file of JS_FILES) {
+  const walked = [];
+  for (const dir of JS_DIRS) {
+    const files = walkJSDir(dir);
+    if (files === null) skipMissing(dir);
+    else walked.push(...files.filter(file => !JS_FILES.includes(file)));
+  }
+  // How each page and the service worker load their scripts, so each is minified that way
+  const graph = readScriptGraph(SRC_DIR, { pages: HTML_FILES });
+
+  for (const file of [...JS_FILES, ...walked]) {
     const srcPath = path.join(SRC_DIR, file);
     const destPath = path.join(DIST_DIR, file);
 
@@ -358,7 +416,15 @@ async function build() {
       continue;
     }
 
-    const result = await minifyJSFile(file, srcPath, destPath);
+    let module = loadsAsModule(file, graph);
+    if (module === null && !isCopiedAsIs(file)) {
+      if (refuse(file, 'refused to minify a file loaded both as an ES module and as a classic script')) continue;
+      // A classic minify keeps top-level names, which is safe both ways
+      console.warn(`  ⚠️  ${file} is loaded both as an ES module and as a classic script, minifying it as a classic script`);
+    }
+    module = module === true;
+
+    const result = await minifyJSFile(file, srcPath, destPath, module);
     if (result.refused) continue;
     totalOriginal += result.original;
     totalMinified += result.minified;
@@ -368,9 +434,10 @@ async function build() {
       continue;
     }
 
-    const savings = ((1 - result.minified / result.original) * 100).toFixed(1);
+    const savings = result.original > 0 ? ((1 - result.minified / result.original) * 100).toFixed(1) : '0.0';
     const status = result.error ? '⚠️' : '✓';
-    console.log(`  ${status} ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved)`);
+    const kind = result.module ? ', module' : '';
+    console.log(`  ${status} ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved${kind})`);
   }
 
   // Process CSS files
@@ -501,6 +568,7 @@ if (require.main === module) {
 
 module.exports = {
   JS_FILES,
+  JS_DIRS,
   CSS_FILES,
   HTML_FILES,
   STATIC_FILES,
@@ -508,5 +576,7 @@ module.exports = {
   COPY_AS_IS,
   CSS_LEVEL_1,
   CLEANCSS_OPTIONS,
+  TERSER_OPTIONS,
   isCopiedAsIs,
+  terserOptions,
 };

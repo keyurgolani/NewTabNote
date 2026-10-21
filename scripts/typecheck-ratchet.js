@@ -7,6 +7,11 @@
  * ci/baselines/typecheck.json. Each diagnostic is keyed by file, code, and message, with
  * no line or column, so edits above it don't move it, and repeats are counted.
  *
+ * Diagnostics in js/kernel/ are dropped first: `npm run typecheck:kernel` checks those
+ * files under tsconfig.kernel.json's strict config and must report none. jsconfig.json
+ * still reaches them, through its js/ include and the imports from js/background.js, until
+ * #27 lists the legacy files instead (docs/adr/0001-kernel-stack.md, decision 1).
+ *
  *   npm run typecheck:ratchet               fail on a new key, a higher count, or a lower
  *                                           count the baseline hasn't recorded yet
  *   npm run typecheck:ratchet -- --update   record lowered and removed counts; exits 1
@@ -33,6 +38,8 @@ const GLOBAL = /^(error|warning|message) (TS\d+): (.*)$/;
 const DIAGNOSTIC_EXIT_CODES = [1, 2];
 // Node's own warnings, the only stderr a trusted run may have
 const NODE_WARNING = /^\(node:\d+\) |^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the warning was created\)$/;
+// Checked by typecheck:kernel instead (see the top of this file)
+const KERNEL_DIR = 'js/kernel/';
 
 /**
  * Run tsc from the repository root and return its exit status and output
@@ -109,6 +116,13 @@ function untrustedRun(tsc, diagnostics, unparsed) {
     return { reason: `tsc printed ${plural(unparsed.length, 'line')} the ratchet can't parse`, lines: unparsed };
   }
   return null;
+}
+
+/**
+ * The diagnostics the ratchet counts: all but those in js/kernel/
+ */
+function legacyDiagnostics(diagnostics) {
+  return diagnostics.filter(({ file }) => !file.startsWith(KERNEL_DIR));
 }
 
 function keyOf({ file, code, message }) {
@@ -256,13 +270,15 @@ function main(argv = process.argv.slice(2), options = {}) {
   }
 
   const tsc = run();
-  const { diagnostics, unparsed } = parseTscOutput(tsc.stdout || '');
-  const untrusted = untrustedRun(tsc, diagnostics, unparsed);
+  const parsed = parseTscOutput(tsc.stdout || '');
+  // Every diagnostic counts toward trusting the run, kernel ones included
+  const untrusted = untrustedRun(tsc, parsed.diagnostics, parsed.unparsed);
   if (untrusted) {
     error(`typecheck ratchet: ${untrusted.reason}${init || update ? `, so ${baselineName} was not written` : ''}`);
     untrusted.lines.slice(0, 20).forEach(line => error(`  ${line}`));
     return 1;
   }
+  const diagnostics = legacyDiagnostics(parsed.diagnostics);
   const current = countDiagnostics(diagnostics);
 
   if (init) {
@@ -320,4 +336,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = { main, parseTscOutput, countDiagnostics, compare, serializeBaseline, parseBaseline };
+module.exports = { main, parseTscOutput, legacyDiagnostics, countDiagnostics, compare, serializeBaseline, parseBaseline };

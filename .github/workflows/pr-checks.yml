@@ -74,6 +74,52 @@ jobs:
         if: failure() || cancelled()
         run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" typecheck
 
+  # The kernel checks from #12 (docs/adr/0001-kernel-stack.md), here until #29 takes them
+  kernel:
+    name: kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      excerpt: ${{ steps.excerpt.outputs.excerpt }}
+      # pr-gate prints it as the kernel job's local command
+      command: ${{ steps.ledger-base.outputs.command }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # HEAD^1 too, which check:boundaries compares with on a pull request (whose HEAD
+          # is the merge commit) and on a push with no before (scripts/ci/ledger-base.js)
+          fetch-depth: 2
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      # First, so pr-gate has the local command even when a later step fails
+      - name: Fetch the ledger check:boundaries compares with
+        id: ledger-base
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/ci/ledger-base.js 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run test:kernel
+        run: npm run test:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run typecheck:kernel
+        run: npm run typecheck:kernel 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # No --base when ledger-base.js found no parent commit to compare with
+      - name: npm run check:boundaries
+        env:
+          BASE: ${{ steps.ledger-base.outputs.base }}
+        run: npm run check:boundaries -- ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: Record the failure for pr-gate
+        id: excerpt
+        if: failure() || cancelled()
+        run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" kernel
+
   build:
     name: build
     runs-on: ubuntu-24.04
@@ -94,6 +140,8 @@ jobs:
         run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run build -- --strict
         run: npm run build -- --strict 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run check:dist
+        run: npm run check:dist 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run package
         run: npm run package 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run check:notices
@@ -162,17 +210,20 @@ jobs:
     # always(), so a failed, cancelled, skipped, or timed-out job fails the gate
     # instead of skipping it
     if: always()
-    needs: [unit, typecheck, build, extension]
+    needs: [unit, typecheck, kernel, build, extension]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # The kernel job passes on its check:boundaries command from scripts/ci/ledger-base.js,
+      # which picks the commit the job compared with
       - name: Require every job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
           COMMANDS: >-
             {"unit": "npm test",
             "typecheck": "npm run typecheck:ratchet",
-            "build": "npm run build -- --strict && npm run package && npm run check:notices",
+            "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && {0}', needs.kernel.outputs.command || 'npm run check:boundaries')) }},
+            "build": "npm run build -- --strict && npm run check:dist && npm run package && npm run check:notices",
             "extension": "npm run build -- --strict && npm run test:extension"}
         run: |
           set -euo pipefail

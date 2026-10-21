@@ -13,6 +13,8 @@ const path = require('node:path');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
+// The service worker is a module worker; this runs it the way Chrome does
+const { startWorker } = require('./helpers/load-background');
 
 const TEST_KEY = 'test-only-api-key';
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
@@ -473,7 +475,7 @@ describe('a version-9 database (AC7)', () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { version: 9 });
     const before = await dumpDatabase(env.indexedDB);
-    env.load('js/background.js');
+    await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
 
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
@@ -523,7 +525,7 @@ describe('background capture on a version-8 database', () => {
   it('saves to the daily note and notifies', async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB);
-    env.load('js/background.js');
+    await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
     await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
@@ -535,7 +537,7 @@ describe('background capture on a version-8 database', () => {
   it('a failed save notifies instead of failing silently', async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB);
-    env.load('js/background.js');
+    await startWorker(env);
     await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
     env.get('Storage').saveElement = async () => { throw new Error('disk full'); };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },

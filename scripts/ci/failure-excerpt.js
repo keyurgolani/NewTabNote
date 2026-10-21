@@ -20,7 +20,9 @@ const ANSI_ESCAPE = /\u001b\[[0-9;?]*[A-Za-z]/g;
 const MARKERS = {
   unit: /^✖ failing tests:/,
   typecheck: /^typecheck ratchet/,
-  build: /^✗ Strict build failed|^Build failed|^Packaging failed|^Error|^check:notices failed/,
+  // test:kernel's summary, typecheck:kernel's first diagnostic, or check:boundaries' report
+  kernel: /^✖ failing tests:|error TS\d+:|^check:boundaries failed/,
+  build: /^✗ Strict build failed|^Build failed|^check:dist failed|^Packaging failed|^Error|^check:notices failed/,
   // Playwright's list reporter numbers each failed test; a spec or config that fails to
   // load, or a failed browser install, prints a bare Error line instead
   extension: /^ {2}1\) |^Error: /,

@@ -1,0 +1,269 @@
+{
+  "about": "Hits of the kernel boundary rules (#12, eslint.config.mjs) each legacy file may still have, per rule. `npm run check:boundaries` fails on a hit no row covers, a count that rises, and a count that falls without its row falling in the same PR. Only `--write-baseline` writes this file; a PR may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify.",
+  "rows": [
+    {
+      "file": "js/analytics.js",
+      "rule": "this.storage",
+      "count": 4,
+      "owner": 12,
+      "removeWhen": "#12: analytics reads the note-list projection in place of storage",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "LLM",
+      "count": 40,
+      "owner": 11,
+      "removeWhen": "#11 replaces the LLM global with the injected AI port",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "Storage",
+      "count": 147,
+      "owner": 12,
+      "removeWhen": "#12 slices 4 to 7 route App's reads and writes through kernel commands and queries; search index, vector, and sync calls left are re-pointed to #22 and #19",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "count": 89,
+      "owner": 12,
+      "removeWhen": "#12 slice 7 replaces the domain callbacks with projections; UI-only ones left are re-pointed to #2 or #3",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "scheduler-timer",
+      "count": 2,
+      "owner": 35,
+      "removeWhen": "#8 deletes them",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "window.app",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: the new-tab composition root replaces the bootstrap",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/background.js",
+      "rule": "Storage",
+      "count": 4,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: capture runs as the kernel's captureToDailyNote command",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/background.js",
+      "rule": "fetch",
+      "count": 1,
+      "owner": 11,
+      "removeWhen": "#11 moves the provider request proxy into its AI adapter",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "rule": "this.storage",
+      "count": 41,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/analytics-controller.js",
+      "rule": "this.storage",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/export-import-service.js",
+      "rule": "this.storage",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/notes-manager.js",
+      "rule": "scheduler-timer",
+      "count": 2,
+      "owner": 35,
+      "removeWhen": "#8 deletes them",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/notes-manager.js",
+      "rule": "this.storage",
+      "count": 57,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/settings-controller.js",
+      "rule": "this.storage",
+      "count": 33,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/shortcuts-manager.js",
+      "rule": "this.storage",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/sidebar-controller.js",
+      "rule": "this.storage",
+      "count": 43,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/tab-controller.js",
+      "rule": "this.storage",
+      "count": 11,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/controllers/theme-builder-controller.js",
+      "rule": "this.storage",
+      "count": 5,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/editor.js",
+      "rule": "LLM",
+      "count": 1,
+      "owner": 11,
+      "removeWhen": "#11 replaces the LLM global with the injected AI port",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/editor.js",
+      "rule": "Storage",
+      "count": 26,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/editor.js",
+      "rule": "window.app",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/editor.js",
+      "rule": "window.opener",
+      "count": 4,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: getApp's lookups go with getApp, and getLLM's become the injected AI port, re-pointed to #11 if they stay here",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/llm.js",
+      "rule": "LLM",
+      "count": 1,
+      "owner": 11,
+      "removeWhen": "#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/llm.js",
+      "rule": "Storage",
+      "count": 10,
+      "owner": 11,
+      "removeWhen": "#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/llm.js",
+      "rule": "fetch",
+      "count": 25,
+      "owner": 11,
+      "removeWhen": "#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/onboarding.js",
+      "rule": "Storage",
+      "count": 5,
+      "owner": 12,
+      "removeWhen": "#12 slice 6: onboarding writes go through kernel commands",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/popup.js",
+      "rule": "indexedDB",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: Popup lists notes and saves its quick note through its composition root's client",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "rule": "fetch",
+      "count": 4,
+      "owner": 19,
+      "removeWhen": "#19's sync engine replaces js/services/sync-service.js",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "rule": "this.storage",
+      "count": 15,
+      "owner": 19,
+      "removeWhen": "#19's sync engine replaces js/services/sync-service.js",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/sidepanel.js",
+      "rule": "indexedDB",
+      "count": 1,
+      "owner": 12,
+      "removeWhen": "#12 slice 4: Side Panel reads notes through its composition root's client",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/theme-engine.js",
+      "rule": "Storage",
+      "count": 3,
+      "owner": 12,
+      "removeWhen": "#12 slice 6: themes go through kernel commands and queries",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/ui/export-notice.js",
+      "rule": "this.storage",
+      "count": 6,
+      "owner": 12,
+      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/ui/graph-view.js",
+      "rule": "this.storage",
+      "count": 3,
+      "owner": 22,
+      "removeWhen": "#22 builds the graph view from its own pipeline",
+      "verify": "npm run check:boundaries"
+    }
+  ]
+}

@@ -50,8 +50,8 @@ chrome.runtime.onMessage.addListener(message => {
 
 for (const [title, edits, thrown] of [
   ['throws at the top level', { 'js/background.js': text => `${text}\nthrow new Error('self-test: background.js throws');\n` }, 'self-test: background.js throws'],
-  // background.js catches what importScripts throws, then its Storage.init() call throws
-  ['loses storage.js', { 'js/storage.js': text => `if (typeof window === 'undefined') throw new Error('self-test: storage.js throws');\n${text}` }, 'Storage is not defined'],
+  // The module worker imports storage.js statically, so what it throws stops the worker
+  ['loses storage.js', { 'js/storage.js': text => `if (typeof window === 'undefined') throw new Error('self-test: storage.js throws');\n${text}` }, 'self-test: storage.js throws'],
 ]) {
   test(`fails the launch when the worker ${title} while starting`, async ({ playwright, headless }) => {
     const dist = editedBuild(edits);
@@ -150,4 +150,20 @@ test("reads the worker's own record, and fails when the worker runs without the 
 
   await extension.worker.evaluate(() => { delete self.__ntnHarness; });
   await expect(extension.uncaught()).rejects.toThrow('running without the harness hooks');
+});
+
+test('update() loads a new version in place, keeping the profile and the ID, and still sees what pages throw', async ({ extension }) => {
+  await extension.worker.evaluate(() => chrome.storage.local.set({ ntnSelfTest: 'kept' }));
+  const { extensionId } = extension;
+  const instance = await extension.worker.evaluate(() => self.__ntnHarness.instance);
+
+  await extension.update({ version: '9.9.9' });
+  expect(extension.extensionId).toBe(extensionId);
+  expect(await extension.worker.evaluate(() => self.__ntnHarness.instance), 'a new worker started').not.toBe(instance);
+  expect(await extension.worker.evaluate(() => chrome.runtime.getManifest().version)).toBe('9.9.9');
+  expect(await extension.worker.evaluate(async () => (await chrome.storage.local.get('ntnSelfTest')).ntnSelfTest)).toBe('kept');
+
+  const page = await extension.openSurface('popup');
+  await page.evaluate(() => { setTimeout(() => { throw new Error('self-test: page throws after an update'); }, 0); });
+  await expect.poll(async () => (await extension.uncaught()).map(describe)).toContain('popup.html |  | self-test: page throws after an update');
 });

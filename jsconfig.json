@@ -8,7 +8,8 @@
     "moduleResolution": "node",
     "allowJs": true,
     "skipLibCheck": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"]
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": []
   },
   "include": ["js/**/*.js"],
   "exclude": ["js/lib/**", "node_modules", "dist", "test"]

@@ -7,7 +7,8 @@
  * a bootstrap that installs worker-hooks.js before the extension's own worker script, so
  * the worker's uncaught exceptions are seen from its first line, after every restart, and
  * inside chrome.* listeners and callbacks. The extension ID follows the copy's path, so it
- * changes from one launch to the next.
+ * changes from one launch to the next, and stays the same across update(), which loads a new
+ * version in place, as a store update does.
  *
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
@@ -51,12 +52,14 @@ function resolveDist() {
 /**
  * Copy the build to `dir` and start its service worker through the harness bootstrap, which
  * loads the hooks and then the worker script the manifest names, the way the manifest would:
- * importScripts for a classic worker, import for "type": "module".
+ * importScripts for a classic worker, import for "type": "module". `version`, when given,
+ * replaces the manifest's.
  */
-function prepareExtension(dist, dir) {
+function prepareExtension(dist, dir, { version } = {}) {
   fs.cpSync(dist, dir, { recursive: true });
   const manifestPath = path.join(dir, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (version !== undefined) manifest.version = version;
   const script = manifest.background && manifest.background.service_worker;
   if (typeof script !== 'string') {
     throw new Error(`${path.join(dist, 'manifest.json')} names no background.service_worker for the harness to hook`);
@@ -244,6 +247,50 @@ class ExtensionSession {
     }
   }
 
+  /**
+   * Update the extension in place, as a store update does: write `dist` (by default the
+   * same build) into the loaded copy with manifest version `version`, and load it again
+   * while the browser runs. Chromium unloads the old version, its service worker
+   * registration included, and loads the new one, whose onInstalled runs with reason
+   * "update". The profile and the extension ID stay. Resolves once the updated worker has
+   * activated. (chrome.runtime.reload() can't do this: Chromium unloads an extension loaded
+   * with --load-extension and never loads it back. Restarting the browser on new files
+   * isn't the same either: the new version starts over the old registration, and a classic
+   * worker that turns into a module one waits as installed until the next restart.)
+   */
+  async update({ version, dist = this.dist }) {
+    if (typeof version !== 'string' || version === '') throw new Error('update() needs the version to update to');
+    const browser = this.context.browser();
+    if (!browser) throw new Error('update() needs the browser behind the context, to load the update over CDP');
+    // Keep the old worker's reports, including any its console lines never carried
+    await this._readWorker();
+    const previous = this._worker;
+    fs.rmSync(this._extensionDir, { recursive: true, force: true, maxRetries: 3 });
+    prepareExtension(dist, this._extensionDir, { version });
+    this.dist = dist;
+    this._record(`updating to ${version} from ${dist}`);
+
+    const started = this.context.waitForEvent('serviceworker', {
+      predicate: worker => isExtensionWorker(worker) && worker !== previous,
+      timeout: WORKER_TIMEOUT_MS,
+    }).catch(() => null);
+    const cdp = await browser.newBrowserCDPSession();
+    let loaded;
+    try {
+      loaded = await cdp.send('Extensions.loadUnpacked', { path: this._extensionDir });
+    } finally {
+      await cdp.detach().catch(() => {});
+    }
+    if (loaded.id !== this.extensionId) {
+      throw new Error(`The update loaded as extension ${loaded.id}, not ${this.extensionId}, so it isn't the same install`);
+    }
+    await started;
+    if (this._worker === previous) {
+      throw new Error(`No updated service worker started within ${WORKER_TIMEOUT_MS / 1000} seconds of loading version ${version}`);
+    }
+    await this._checkWorker();
+  }
+
   async _start() {
     this._watch();
     await this._blockNetwork();
@@ -257,7 +304,14 @@ class ExtensionSession {
         + "Check that the build is complete and that its manifest's background.service_worker exists.");
     }
     this.extensionId = new URL(this._worker.url()).host;
+    await this._checkWorker();
+  }
 
+  /**
+   * Wait for the current worker to activate, then read its reports and check it runs with
+   * the harness's locale and time zone
+   */
+  async _checkWorker() {
     const state = await activationState(this._worker);
     await this._readWorker();
     if (state !== 'activated') {
@@ -392,7 +446,8 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
       // can't run extensions, so headless runs use Playwright's own Chromium build
       ...(headless ? { channel: 'chromium' } : {}),
       headless,
-      args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, `--lang=${LOCALE}`],
+      // --enable-unsafe-extension-debugging turns on the CDP Extensions domain update() uses
+      args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, `--lang=${LOCALE}`, '--enable-unsafe-extension-debugging'],
       // Pages get locale and timezoneId emulation; the worker takes the process's TZ and,
       // on Linux, LANGUAGE
       env: { ...process.env, TZ: TIME_ZONE, LANGUAGE: LOCALE.replace('-', '_') },
