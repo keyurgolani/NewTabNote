@@ -300,13 +300,18 @@ export function runContractSuite(fixture) {
       });
 
       it('trashNote deletes an untitled note with nothing in it, blocks included, and trashes one with content', async () => {
-        await createNote({ noteId: 'empty', blocks: [{ id: 'b0', type: 'text', content: '<p> </p>' }] });
+        await createNote({ noteId: 'empty', blocks: [{ id: 'b0', type: 'text', content: ' <br>&nbsp;' }] });
         await createNote({ noteId: 'written', blocks: [{ id: 'b1', type: 'text', content: '<p>Milk</p>' }] });
+        // Markup in a text block, or a block of another type, is content
+        await createNote({ noteId: 'markup', blocks: [{ id: 'b2', type: 'text', content: '<p> </p>' }] });
+        await createNote({ noteId: 'divider', blocks: [{ id: 'b3', type: 'divider', content: '' }] });
         assert.deepEqual((await run(cmd('trashNote', { noteId: 'empty' }))).code, 'note-deleted');
         assert.deepEqual([await noteOf('empty'), await blocksOf('empty')], [undefined, []]);
-        assert.deepEqual((await run(cmd('trashNote', { noteId: 'written' }))).code, 'note-trashed');
-        assert.equal((await noteOf('written'))?.trashed, true);
-        assert.equal((await blocksOf('written')).length, 1);
+        for (const noteId of ['written', 'markup', 'divider']) {
+          assert.deepEqual((await run(cmd('trashNote', { noteId }))).code, 'note-trashed', noteId);
+          assert.equal((await noteOf(noteId))?.trashed, true, noteId);
+          assert.equal((await blocksOf(noteId)).length, 1, noteId);
+        }
       });
 
       it("trashNote deletes an empty untitled note's media, vectors, and snapshots, and keeps a trashed note's", async () => {

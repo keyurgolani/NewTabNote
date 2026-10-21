@@ -114,42 +114,30 @@ export function isUntitled(note) {
 }
 
 /**
- * @param {unknown} value
- * @returns {boolean} true when `value` is markup with visible text, or something other
- *   than a string that isn't empty
+ * Whether a block holds nothing, as Storage.isEmptyTextBlock decides it: a text block (a
+ * block with no type is one) whose content is only spaces, line breaks, and non-breaking
+ * spaces. Any other block holds something, an image, a table, or a divider included, and so
+ * does a text block with any other markup.
+ * @param {BlockRecord} block
+ * @returns {boolean}
  */
-function hasText(value) {
-  if (!value) return false;
-  if (typeof value !== 'string') return true;
-  return value.replace(/<[^>]*>/g, '').trim().length > 0;
+function isEmptyTextBlock(block) {
+  if ((block.type || 'text') !== 'text') return false;
+  return (
+    String(block.content || '')
+      .replace(/<br\s*\/?>|&nbsp;/gi, '')
+      .trim() === ''
+  );
 }
 
 /**
- * Whether blocks hold nothing a person wrote or added, as Storage.isNoteEmpty decides it. A
- * field it can't read counts as content, so trashing never deletes a note that has some.
+ * Whether blocks hold nothing, as Storage.isNoteEmpty decides it: every block is an empty
+ * text block, or there are none. The export notice goes by the same rule.
  * @param {BlockRecord[]} blocks
  * @returns {boolean}
  */
 export function isEmpty(blocks) {
-  return blocks.every(block => {
-    if (hasText(block.content)) return false;
-    if (block.imageUrl || block.fileData || block.videoUrl) return false;
-    if (block.tableData) {
-      if (!Array.isArray(block.tableData)) return false;
-      const filled = block.tableData.some(
-        row =>
-          !Array.isArray(row) ||
-          row.some(cell =>
-            typeof cell === 'string' ? cell.trim() !== '' && !cell.startsWith('Header ') : Boolean(cell),
-          ),
-      );
-      if (filled) return false;
-    }
-    if (block.url && block.title) return false;
-    if (hasText(block.children)) return false;
-    if (block.equation && (typeof block.equation !== 'string' || block.equation.trim())) return false;
-    return true;
-  });
+  return blocks.every(isEmptyTextBlock);
 }
 
 // ============ Lists ============

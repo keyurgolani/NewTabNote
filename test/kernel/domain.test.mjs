@@ -46,24 +46,28 @@ describe('notes', () => {
     assert.equal(isUntitled(note('n', { name: /** @type {any} */ (42) })), false);
   });
 
-  it('isEmpty: no text, media, filled cells, bookmark, child text, or equation', () => {
+  it('isEmpty: every block a text block of spaces, line breaks, and non-breaking spaces', () => {
     assert.equal(isEmpty([]), true);
-    assert.equal(isEmpty([block({ content: '<p> <br></p>' }), block({ tableData: [['Header 1', ' ']] })]), true);
+    assert.equal(
+      isEmpty([block({ content: '' }), block({ content: ' <br>&nbsp;<BR/>\n&NBSP;<br />' }), block({ content: null })]),
+      true,
+    );
+    // A block with no type is a text block, and only its content counts
+    assert.equal(isEmpty([block({ type: undefined, content: ' ', imageUrl: 'data:,', checked: true })]), true);
     for (const filled of [
-      { content: '<b>x</b>' },
-      { imageUrl: 'data:' },
-      { fileData: 'x' },
-      { videoUrl: 'x' },
-      { tableData: [['Header 1'], ['cell']] },
-      { url: 'https://example.test', title: 'Example' },
-      { children: '<p>child</p>' },
-      { equation: 'x^2' },
+      { content: 'x' },
+      { content: '<p> </p>' },
+      { content: '<b></b>' },
+      { content: '<img src="data:,">' },
       { content: { ops: [] } },
-      { tableData: 'not rows' },
+      { content: 5 },
+      { type: 'image', content: '' },
+      { type: 'table', content: '' },
+      { type: 'divider' },
+      { type: 'bookmark', content: '' },
     ]) {
-      assert.equal(isEmpty([block(filled)]), false, JSON.stringify(filled));
+      assert.equal(isEmpty([block({ content: '', ...filled })]), false, JSON.stringify(filled));
     }
-    assert.equal(isEmpty([block({ url: 'https://example.test' })]), true);
   });
 
   it('notesInView lists each view in the order Storage reads it, without notes lacking updatedAt', () => {
