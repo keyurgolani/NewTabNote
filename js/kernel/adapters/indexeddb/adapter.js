@@ -11,9 +11,12 @@
  * commit (failures.js has what each failure answers). A unit that stops the command (a
  * rejection or a conflict), or throws, aborts it, so nothing any of its units wrote commits.
  * A transaction that aborts with an AbortError or an UnknownError runs once more, in a new
- * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). One that
- * ends while a unit still runs, because the unit awaited something other than it, answers
- * `transaction-ended-early`, so no command waits for ever.
+ * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). It runs
+ * again only when this adapter has opened no write since, as a later command, such as a newer
+ * save of the same note, would land first and be written over; it answers `transaction-failed`,
+ * retryable, instead. One that ends while a unit still runs, because the unit awaited
+ * something other than it, never runs again, so no command waits for ever: it answers
+ * `transaction-ended-early` when it committed, and why it aborted when it aborted.
  *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
