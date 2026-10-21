@@ -41,6 +41,7 @@
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
+import { abort, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 
@@ -80,18 +81,6 @@ const STRICT = Object.freeze({ durability: 'strict' });
  */
 
 /**
- * @template T
- * @param {IDBRequest<T>} request
- * @returns {Promise<T>}
- */
-function result(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-/**
  * @param {IDBTransaction} tx
  * @returns {Promise<Ending>}
  */
@@ -100,15 +89,6 @@ function ending(tx) {
     tx.addEventListener('complete', () => resolve({ committed: true }));
     tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));
   });
-}
-
-/** @param {IDBTransaction | null} tx */
-function abort(tx) {
-  try {
-    if (tx) tx.abort();
-  } catch {
-    // Already finished
-  }
 }
 
 /**

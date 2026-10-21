@@ -395,7 +395,10 @@ describe('the legacy adapter', () => {
       const adapter = adapterFor(page, mode);
       const connections = recordConnections(page.env.indexedDB);
       const ready = adapter.open();
-      await assert.rejects(ready, error => /** @type {any} */ (error).unavailableCause === 'newer-schema');
+      await assert.rejects(ready, error => {
+        const { unavailableCause, code } = /** @type {any} */ (error);
+        return unavailableCause === 'newer-schema' && code === 'version-too-new';
+      });
       // Every connection the refused open made is closed, so none holds up the newer build's
       // next upgrade
       assert.ok(connections.stop().length > 0, mode);
@@ -414,14 +417,14 @@ describe('the legacy adapter', () => {
       });
       const outcome = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
       assert.deepEqual(
-        outcome.kind === 'unavailable' && [outcome.cause, outcome.retryable],
-        ['newer-schema', false],
+        outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+        ['newer-schema', 'version-too-new', false],
         mode,
       );
       assert.deepEqual(await kernel.query({ type: 'listNotes', view: 'active' }), {
         kind: 'failed',
         cause: 'newer-schema',
-        code: 'newer-schema',
+        code: 'version-too-new',
       });
       assert.deepEqual(await legacyEnv.dumpDatabase(page.env.indexedDB), before, mode);
       assert.deepEqual(settingWrites(page), [], mode);
@@ -513,7 +516,7 @@ describe('the legacy adapter', () => {
     });
     assert.deepEqual(outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable], [
       'quota',
-      'quota-exceeded',
+      'quota',
       false,
     ]);
   });
