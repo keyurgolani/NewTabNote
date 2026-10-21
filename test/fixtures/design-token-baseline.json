@@ -18,14 +18,14 @@
   },
   "files": {
     "css/editor.css": {
-      "color-literal": 132,
+      "color-literal": 134,
       "theme-branching": 7,
       "undefined-var": 8,
       "hard-shadow": 1,
       "one-sided-border": 6,
       "transition-all": 47,
-      "px-font-size": 172,
-      "alias-use": 598
+      "px-font-size": 176,
+      "alias-use": 604
     },
     "css/premium-chat.css": {
       "color-literal": 93,
