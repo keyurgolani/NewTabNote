@@ -196,39 +196,105 @@ const propertyName = member => {
   return specifierOf(member.property);
 };
 
+/** The name a destructuring property's key spells out, or null when it's built at run time */
+const keyName = property => {
+  if (property.computed) return specifierOf(property.key);
+  if (property.key.type === 'Identifier') return property.key.name;
+  return property.key.type === 'Literal' ? String(property.key.value) : null;
+};
+
+/** `node` without the optional chain around it, as in `chrome?.storage` */
+const unchained = node => (node && node.type === 'ChainExpression' ? node.expression : node);
+
 /**
- * #17's storage-access rules (#17 slice 1, "The architecture test"): a call of a function
- * named `name`, as `name(...)` or `x.name(...)`, with any spelling of the property
+ * What a destructuring pattern takes apart: the right side of its declaration, assignment, or
+ * default value. Null for a parameter without a default, or a pattern nested in another.
  */
-const callRule = name => ({
+const sourceOf = pattern => {
+  const { parent } = pattern;
+  const right =
+    (parent.type === 'VariableDeclarator' && parent.id === pattern && parent.init) ||
+    ((parent.type === 'AssignmentExpression' || parent.type === 'AssignmentPattern') && parent.left === pattern && parent.right);
+  return unchained(right || null);
+};
+
+/** The property a nested pattern is the value of, as `storage` is in `{ storage: { local } }`, or null */
+const holderOf = pattern => {
+  const node = pattern.parent.type === 'AssignmentPattern' && pattern.parent.left === pattern ? pattern.parent : pattern;
+  return node.parent.type === 'Property' && node.parent.value === node ? node.parent : null;
+};
+
+/** Whether a destructured property's value is itself a pattern, as `{ local }` is in `{ storage: { local } }` */
+const destructuresFurther = property => {
+  const value = property.value.type === 'AssignmentPattern' ? property.value.left : property.value;
+  return value.type === 'ObjectPattern' || value.type === 'ArrayPattern';
+};
+
+/**
+ * #17's storage-access rules (#17 slice 1, "The architecture test"): any use of a function
+ * named `name` but where it's defined. A call of `name(...)`, a read of `x.name` with any
+ * spelling of the property, whether it's called there or bound, passed on, or called through
+ * `.call` or `.apply`, and `name` taken apart from an object, as in `const { name } = x`.
+ */
+const accessRule = name => ({
   meta: { type: 'problem', schema: ACCESS_SCHEMA },
   create(context) {
     const { rule, message } = context.options[0];
+    const report = node => context.report({ node, message: `[${rule}] ${message}` });
     return {
       CallExpression(node) {
-        const { callee } = node;
-        const called =
-          (callee.type === 'Identifier' && callee.name === name) ||
-          (callee.type === 'MemberExpression' && propertyName(callee) === name);
-        if (called) context.report({ node, message: `[${rule}] ${message}` });
+        if (node.callee.type === 'Identifier' && node.callee.name === name) report(node);
+      },
+      MemberExpression(node) {
+        // `x.name = function () {}` defines it
+        const defined = node.parent.type === 'AssignmentExpression' && node.parent.left === node;
+        if (!defined && propertyName(node) === name) report(node);
+      },
+      'ObjectPattern > Property'(node) {
+        if (keyName(node) === name) report(node);
       },
     };
   },
 });
 
+/** A `.storage` read, or a value named `storage`, which `chrome.storage` was taken apart into */
+const isStorage = node => {
+  const value = unchained(node);
+  if (!value) return false;
+  return (value.type === 'MemberExpression' && propertyName(value) === 'storage') || (value.type === 'Identifier' && value.name === 'storage');
+};
+
+/** `chrome`, or a `.chrome` read such as `self.chrome` */
+const isChrome = node => {
+  const value = unchained(node);
+  if (!value) return false;
+  return (value.type === 'Identifier' && value.name === 'chrome') || (value.type === 'MemberExpression' && propertyName(value) === 'chrome');
+};
+
 /**
- * chrome.storage.local, reached through any object: `chrome.storage.local`,
- * `self.chrome.storage.local`, or an alias such as `this._chromeApi().storage.local`
+ * chrome.storage.local, reached through any object or taken apart: `chrome.storage.local`,
+ * `self.chrome.storage.local`, an alias such as `this._chromeApi().storage.local`, `local`
+ * taken from a storage (`const { local } = chrome.storage`, `const { storage: { local } } =
+ * chrome`), and `storage` taken from chrome under any name (`const { storage } = chrome`), along
+ * with `storage.local` on it
  */
 const storageLocalRule = {
   meta: { type: 'problem', schema: ACCESS_SCHEMA },
   create(context) {
     const { rule, message } = context.options[0];
+    const report = node => context.report({ node, message: `[${rule}] ${message}` });
     return {
       MemberExpression(node) {
-        const local =
-          propertyName(node) === 'local' && node.object.type === 'MemberExpression' && propertyName(node.object) === 'storage';
-        if (local) context.report({ node, message: `[${rule}] ${message}` });
+        if (propertyName(node) === 'local' && isStorage(node.object)) report(node);
+      },
+      'ObjectPattern > Property'(node) {
+        const key = keyName(node);
+        const holder = holderOf(node.parent);
+        if (key === 'local') {
+          if (holder ? keyName(holder) === 'storage' : isStorage(sourceOf(node.parent))) report(node);
+        } else if (key === 'storage' && !holder && !destructuresFurther(node) && isChrome(sourceOf(node.parent))) {
+          report(node);
+        }
       },
     };
   },
@@ -237,9 +303,9 @@ const storageLocalRule = {
 const kernel = {
   rules: {
     imports: importsRule,
-    'object-store': callRule('objectStore'),
-    'get-store': callRule('getStore'),
-    'legacy-blind-write': callRule('legacyBlindWrite'),
+    'object-store': accessRule('objectStore'),
+    'get-store': accessRule('getStore'),
+    'legacy-blind-write': accessRule('legacyBlindWrite'),
     'chrome-storage-local': storageLocalRule,
   },
 };

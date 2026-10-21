@@ -524,15 +524,33 @@ describe('eslint.config.mjs boundary rules', () => {
       "export const probeSelf = () => self.chrome['storage']['local'];",
       'export const probeOptional = () => chrome.storage?.local;',
     ].join('\n'));
+    // Called through .call, .apply, or a bound copy, passed on, or taken apart, under its own
+    // name or another, and chrome.storage.local taken apart the same ways
+    write('js/probe-access.js', [
+      "export const viaCall = tx => tx.objectStore.call(tx, 'canvases');",
+      "export const viaApply = tx => tx.objectStore.apply(tx, ['canvases']);",
+      "export const viaBind = tx => tx.objectStore.bind(tx)('canvases');",
+      "export const taken = tx => { const { objectStore: open } = tx; return open.call(tx, 'canvases'); };",
+      "export const passed = storage => [storage.getStore].map(get => get('links'));",
+      'export const param = ({ getStore }) => getStore;',
+      "export const blind = adapter => { const { legacyBlindWrite } = adapter; return legacyBlindWrite.apply(adapter, [['notes'], () => {}]); };",
+      'export const local = () => { const { local } = chrome.storage; return local; };',
+      'export const nested = () => { const { storage: { local } } = chrome; return local; };',
+      'export const renamed = () => { const { storage: area } = self.chrome; return area; };',
+      'export const later = () => { const { storage } = chrome; return storage.local; };',
+      // Where it's defined isn't a use
+      'export const defines = holder => { holder.getStore = () => null; };',
+    ].join('\n'));
     // js/storage.js is outside #12's rules, but not #17's
     append('js/storage.js', "function probeBlind(adapter) { return adapter.legacyBlindWrite(['notes'], () => {}); }");
     // Kernel core isn't exempt
     write('js/kernel/core/probe-store.js', "export const raw = tx => tx.objectStore('canvases');\n");
     // Allowed: #17's adapter opens stores, and adapters and composition roots reach
-    // chrome.storage.local; a method named getStore is only counted when it's called
+    // chrome.storage.local; a method named getStore counts only where it's used, not where
+    // it's defined
     write('js/kernel/adapters/indexeddb/probe.js', "export const raw = tx => tx.objectStore('canvases');\nexport const get = s => s.getStore('x');\n");
-    write('js/kernel/adapters/legacy/probe.js', 'export const settings = () => chrome.storage.local;\n');
-    write('js/kernel/composition/probe.js', 'export const settings = () => chrome.storage.local;\n');
+    write('js/kernel/adapters/legacy/probe.js', 'export const settings = () => chrome.storage.local;\nexport const { local } = chrome.storage;\n');
+    write('js/kernel/composition/probe.js', 'export const settings = () => chrome.storage.local;\nexport const { storage } = chrome;\n');
     append('js/search.js', 'export const holder = { getStore() { return null; } };');
 
     const lines = [];
@@ -545,12 +563,18 @@ describe('eslint.config.mjs boundary rules', () => {
       'js/sidebar-utils.js: 1 legacyBlindWrite hit no ledger row covers',
       'js/sidebar-utils.js: 4 chrome.storage.local hits no ledger row covers',
       'js/sidebar-utils.js: 3 chrome.storage hits no ledger row covers',
+      'js/probe-access.js: 4 objectStore hits no ledger row covers',
+      'js/probe-access.js: 2 getStore hits no ledger row covers',
+      'js/probe-access.js: 1 legacyBlindWrite hit no ledger row covers',
+      // `storage` taken from chrome, then storage.local on it, is two
+      'js/probe-access.js: 5 chrome.storage.local hits no ledger row covers',
+      'js/probe-access.js: 1 chrome.storage hit no ledger row covers',
       'js/storage.js: 1 legacyBlindWrite hit no ledger row covers',
       'js/kernel/core/probe-store.js: 1 objectStore hit no ledger row covers',
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/search\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 7, output);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 12, output);
   });
 });

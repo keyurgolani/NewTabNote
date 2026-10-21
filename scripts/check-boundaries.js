@@ -64,8 +64,9 @@ const RULES = {
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
   // #17's storage-access rules (#17 slice 1): their rows are a shrink-only exemption list
+  // Each counts any use of its function but where it's defined: called, bound, passed on, or taken apart
   objectStore: "an IndexedDB object store opened outside #17's IndexedDB adapter",
-  getStore: 'a call of DatabaseManager.getStore',
+  getStore: 'a use of DatabaseManager.getStore',
   legacyBlindWrite: 'a write through legacyBlindWrite(), which skips its expected version',
   'chrome.storage.local': 'chrome.storage.local outside js/kernel/adapters/ and js/kernel/composition/',
 };
