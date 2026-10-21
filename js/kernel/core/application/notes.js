@@ -47,8 +47,8 @@ import { contentChanged, unitsWork } from './work.js';
 
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
- *   | 'restoreNote' | 'saveNoteContent' | 'applyDerivedTitle' | 'attachInsights' | 'captureToDailyNote'
- *   | 'runBulkAction'} NoteCommandType
+ *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'applyDerivedTitle' | 'attachInsights'
+ *   | 'captureToDailyNote' | 'runBulkAction'} NoteCommandType
  */
 
 /** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks'} NoteQueryType */
@@ -375,6 +375,32 @@ export const noteCommands = {
     return unitsWork(command, units, () => committed('content-saved', [noteId]), {
       primary: noteRecord(noteId),
       revised: contentChanged,
+    });
+  },
+
+  deleteBlocks(command) {
+    const { noteId, blockIds } = command;
+    if (!isId(noteId) || !isIdList(blockIds)) return invalid();
+    let deleted = false;
+    /** @type {Unit} */
+    const remove = {
+      stores: ['blocks'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        deleted = false;
+        for (const blockId of new Set(blockIds)) {
+          const block = await tx.get('blocks', blockId);
+          // Never saved, or deleted already
+          if (!block) continue;
+          if (block.canvasId !== noteId) return rejected('validation', 'block-of-another-note');
+          tx.delete('blocks', blockId);
+          deleted = true;
+        }
+      },
+    };
+    return unitsWork(command, [remove], () => committed('blocks-deleted', deleted ? [noteId] : []), {
+      primary: noteRecord(noteId),
+      revised: () => deleted,
     });
   },
 

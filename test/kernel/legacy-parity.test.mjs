@@ -463,6 +463,23 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await links(viaKernel), await links(viaStorage));
   });
 
+  it('deleteBlocks leaves the blocks Storage.deleteElement leaves, one call per block', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('n1'), legacyEnv.note('n2')],
+      elements: [
+        legacyEnv.block('a', 'n1', 0, 'Kept'),
+        legacyEnv.block('b', 'n1', 1, 'Deleted'),
+        legacyEnv.block('c', 'n1', 2, 'Deleted too'),
+        legacyEnv.block('d', 'n2', 0, 'Another note'),
+      ],
+    });
+    const blockIds = ['b', 'c', 'never-saved'];
+    for (const id of blockIds) await viaStorage.storage.deleteElement(id);
+    assertCommitted(await kernel.execute({ type: 'deleteBlocks', commandId: 'c1', noteId: 'n1', blockIds }));
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
   it('getBacklinks lists the notes Storage.getBacklinks lists, in its order', async () => {
     const { viaStorage, kernel } = await twin({
       canvases: [

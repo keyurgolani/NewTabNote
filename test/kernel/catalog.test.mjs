@@ -64,6 +64,7 @@ const COMMAND_SAMPLES = {
     linkedNames: ['Plan 3', 'Elsewhere'],
     expectedRevision: 1,
   },
+  deleteBlocks: { noteId: 'n1', blockIds: ['b1', 'never-saved'] },
   applyDerivedTitle: { noteId: 'n1', name: 'Derived', contentHash: 'h1' },
   attachInsights: { noteId: 'n1', insights: { todos: ['Call'] }, contentHash: 'h1' },
   captureToDailyNote: {

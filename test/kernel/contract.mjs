@@ -615,6 +615,37 @@ export function runContractSuite(fixture) {
         },
       );
 
+      it('deleteBlocks deletes the blocks of the note it names, and a block already gone is nothing to delete', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 3) });
+        const deleted = await run(
+          cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0', 'n1-block-2', 'never-saved'] }),
+        );
+        assert.deepEqual([deleted.code, deleted.changedIds], ['blocks-deleted', ['n1']]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.id),
+          ['n1-block-1'],
+        );
+        const nothing = await run(cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'] }));
+        assert.deepEqual([nothing.code, nothing.changedIds], ['blocks-deleted', []]);
+      });
+
+      it('deleteBlocks refuses a block another note holds, and deletes none of the blocks it names', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 1) });
+        await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
+        assertRejected(
+          await kernel.execute(cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0', 'n2-block-0'] })),
+          'validation',
+          'block-of-another-note',
+        );
+        assert.equal((await blocksOf('n1')).length, 1);
+        assert.equal((await blocksOf('n2')).length, 1);
+        assertRejected(
+          await kernel.execute(cmd('deleteBlocks', { noteId: 'n1', blockIds: [] })),
+          'validation',
+          'invalid-command',
+        );
+      });
+
       it('refuses a block of another note and two blocks with one id', async () => {
         await createNote({ noteId: 'n1' });
         assertRejected(
@@ -1408,6 +1439,7 @@ export function runContractSuite(fixture) {
           'captureToDailyNote',
           'createFolder',
           'createNote',
+          'deleteBlocks',
           'moveFolder',
           'renameNote',
           'restoreNote',
