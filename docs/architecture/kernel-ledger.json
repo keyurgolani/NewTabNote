@@ -12,7 +12,7 @@
     {
       "file": "js/app.js",
       "rule": "LLM",
-      "count": 40,
+      "count": 23,
       "owner": 11,
       "removeWhen": "#11 replaces the LLM global with the injected AI port",
       "verify": "npm run check:boundaries"
@@ -20,7 +20,7 @@
     {
       "file": "js/app.js",
       "rule": "Storage",
-      "count": 147,
+      "count": 108,
       "owner": 12,
       "removeWhen": "#12 slices 4 to 7 route App's reads and writes through kernel commands and queries; search index, vector, and sync calls left are re-pointed to #22 and #19",
       "verify": "npm run check:boundaries"

@@ -19,6 +19,7 @@
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package && npm run check:notices",
     "check:notices": "node scripts/check-notices.js",
+    "check:write-paths": "node scripts/write-paths.js",
     "design-tokens": "node scripts/build-design-tokens.js",
     "design-token-scan": "node scripts/design-token-scan.js"
   },
