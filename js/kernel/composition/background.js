@@ -6,7 +6,7 @@
  * imports, leaves the extension without its context menus and commands. Loading it must
  * not touch a browser API: the worker calls into it once the root has something to build.
  *
- * Slice 1 is the module seam only, so this stub builds nothing yet. Slice 3 builds the
- * worker's kernel here and hands its caller, `{surface, contextId}`, to the policy port;
- * slice 4 routes capture through it.
+ * Slices 1 to 3 build nothing here, so no shipped page or worker runs kernel code yet.
+ * Slice 4 builds the worker's kernel here, hands its caller, `{surface: 'worker-internal',
+ * contextId}`, to the policy port, and routes capture through it.
  */

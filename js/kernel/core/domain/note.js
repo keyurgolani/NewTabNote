@@ -1,0 +1,304 @@
+/**
+ * Notes and their blocks, as IndexedDB has stored them since 1.4.0. No kernel slice changes
+ * a record's shape (#12, "Data and migration"), so the field names stay: a block names its
+ * note in `canvasId`. Stored records can lack fields (Popup wrote four-field notes until
+ * slice 4), and every function here takes that into account.
+ */
+
+/**
+ * @typedef {object} NoteFields
+ * @property {string} name
+ * @property {number} createdAt
+ * @property {number} updatedAt
+ * @property {boolean} archived
+ * @property {number | null} archivedAt
+ * @property {boolean} trashed
+ * @property {number | null} trashedAt
+ * @property {boolean} titleManuallySet
+ * @property {number | null} lastAutoTitleAt
+ * @property {string} lastTitleContentHash
+ * @property {unknown} insights
+ * @property {number | null} lastInsightsExtractedAt
+ * @property {string} lastInsightsContentHash
+ * @property {string} preview
+ * @property {boolean} pinned
+ * @property {unknown} todoProgress
+ * @property {boolean} isDaily
+ * @property {string | null} dateStr
+ * @property {boolean} isTemplate
+ * @property {string | null} folderId
+ * @property {{scale: number, offsetX: number, offsetY: number}} viewport
+ * @property {{gridType: string, backgroundColor: string}} settings
+ */
+
+/** @typedef {{id: string} & Partial<NoteFields> & Record<string, unknown>} NoteRecord */
+
+/**
+ * @typedef {object} BlockFields
+ * @property {string} type
+ * @property {number} order
+ * @property {unknown} content
+ */
+
+/** @typedef {{id: string, canvasId: string} & Partial<BlockFields> & Record<string, unknown>} BlockRecord */
+
+/**
+ * A block as a command carries it: `canvasId` may be left out, and the kernel fills in the
+ * note the command names.
+ * @typedef {{id: string, canvasId?: string} & Record<string, unknown>} BlockInput
+ */
+
+/**
+ * The search_index entry each note has.
+ * @typedef {{noteId: string, name?: unknown, content?: unknown, updatedAt?: unknown} & Record<string, unknown>} SearchEntry
+ */
+
+/**
+ * What a capture adds to today's Daily Note: a page, or selected text and the page it came
+ * from. A tab can lack a URL or title, and the block then lacks it too, as before.
+ * @typedef {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} Capture
+ */
+
+/** The fields attachInsights writes, and no others */
+export const INSIGHT_FIELDS = Object.freeze(['insights', 'lastInsightsExtractedAt', 'lastInsightsContentHash']);
+
+/**
+ * A new note, field for field the one Storage.createNote has written since 1.4.0.
+ * @param {{id: string, name: string, now: number, folderId?: string | null}} fields
+ * @returns {NoteRecord}
+ */
+export function newNoteRecord({ id, name, now, folderId = null }) {
+  return {
+    id,
+    name,
+    createdAt: now,
+    updatedAt: now,
+    archived: false,
+    archivedAt: null,
+    titleManuallySet: false,
+    lastAutoTitleAt: null,
+    insights: null,
+    lastInsightsExtractedAt: null,
+    preview: '',
+    pinned: false,
+    todoProgress: null,
+    isDaily: false,
+    dateStr: null,
+    isTemplate: false,
+    folderId,
+    viewport: { scale: 1, offsetX: 0, offsetY: 0 },
+    settings: { gridType: 'dots', backgroundColor: '#fafafa' },
+  };
+}
+
+/**
+ * @param {{id: string, name?: unknown}} note
+ * @param {number} now
+ * @returns {SearchEntry}
+ */
+export function newSearchEntry(note, now) {
+  return { noteId: note.id, name: note.name, content: '', updatedAt: now };
+}
+
+/**
+ * Whether a note has no title of its own, as Storage.isNoteUntitled decides it. A name that
+ * isn't a string counts as a title, so trashing never deletes a note it can't read.
+ * @param {NoteRecord} note
+ * @returns {boolean}
+ */
+export function isUntitled(note) {
+  if (!note.name) return true;
+  if (typeof note.name !== 'string') return false;
+  const name = note.name.toLowerCase().trim();
+  return name === '' || name === 'untitled' || /^untitled\s*\d*$/.test(name);
+}
+
+/**
+ * Whether a block holds nothing, as Storage.isEmptyTextBlock decides it: a text block (a
+ * block with no type is one) whose content is only spaces, line breaks, and non-breaking
+ * spaces. Any other block holds something, an image, a table, or a divider included, and so
+ * does a text block with any other markup.
+ * @param {BlockRecord} block
+ * @returns {boolean}
+ */
+function isEmptyTextBlock(block) {
+  if ((block.type || 'text') !== 'text') return false;
+  return (
+    String(block.content || '')
+      .replace(/<br\s*\/?>|&nbsp;/gi, '')
+      .trim() === ''
+  );
+}
+
+/**
+ * Whether blocks hold nothing, as Storage.isNoteEmpty decides it: every block is an empty
+ * text block, or there are none. The export notice goes by the same rule.
+ * @param {BlockRecord[]} blocks
+ * @returns {boolean}
+ */
+export function isEmpty(blocks) {
+  return blocks.every(isEmptyTextBlock);
+}
+
+// ============ Lists ============
+
+/**
+ * The lists the sidebar, archive, trash, and template views show:
+ * - `active`: not trashed, archived, or a template (Storage.getAllNotes())
+ * - `withArchived`: not trashed or a template (Storage.getAllNotes(true))
+ * - `archived`: archived and not trashed, latest archived first
+ * - `trashed`: latest trashed first
+ * - `templates`: templates not trashed, latest updated first
+ * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates'} NoteView
+ */
+
+export const NOTE_VIEWS = Object.freeze(['active', 'withArchived', 'archived', 'trashed', 'templates']);
+
+/**
+ * The order of two IndexedDB keys of the kinds `updatedAt` holds: numbers, then Dates,
+ * then strings.
+ * @param {unknown} a
+ * @param {unknown} b
+ * @returns {number}
+ */
+function compareKeys(a, b) {
+  const rank = /** @param {unknown} key */ key => (typeof key === 'number' ? 0 : key instanceof Date ? 1 : 2);
+  if (rank(a) !== rank(b)) return rank(a) - rank(b);
+  const left = a instanceof Date ? a.getTime() : /** @type {number | string} */ (a);
+  const right = b instanceof Date ? b.getTime() : /** @type {number | string} */ (b);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean} whether an IndexedDB index on the field lists the record
+ */
+function isIndexKey(value) {
+  if (typeof value === 'number') return !Number.isNaN(value);
+  if (typeof value === 'string') return true;
+  return (
+    Object.prototype.toString.call(value) === '[object Date]' && !Number.isNaN(/** @type {Date} */ (value).getTime())
+  );
+}
+
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
+function timeOf(value) {
+  return typeof value === 'number' && !Number.isNaN(value) ? value : 0;
+}
+
+/**
+ * One view's notes, in the order Storage lists them. Storage reads through the `updatedAt`
+ * index, which leaves out a record without a usable `updatedAt`, so this does too.
+ * @param {NoteRecord[]} notes
+ * @param {NoteView} view
+ * @returns {NoteRecord[]}
+ */
+export function notesInView(notes, view) {
+  const indexed = notes
+    .filter(note => isIndexKey(note.updatedAt))
+    .sort((a, b) => compareKeys(a.updatedAt, b.updatedAt) || compareKeys(a.id, b.id));
+  switch (view) {
+    case 'active':
+      return indexed.reverse().filter(note => !note.trashed && !note.isTemplate && !note.archived);
+    case 'withArchived':
+      return indexed.reverse().filter(note => !note.trashed && !note.isTemplate);
+    case 'archived':
+      return indexed
+        .filter(note => note.archived && !note.trashed)
+        .sort((a, b) => timeOf(b.archivedAt) - timeOf(a.archivedAt));
+    case 'trashed':
+      return indexed.filter(note => note.trashed).sort((a, b) => timeOf(b.trashedAt) - timeOf(a.trashedAt));
+    case 'templates':
+      return indexed
+        .filter(note => note.isTemplate && !note.trashed)
+        .sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt));
+  }
+}
+
+/**
+ * Blocks in note order: by `order`, then by id.
+ * @param {BlockRecord[]} blocks
+ * @returns {BlockRecord[]}
+ */
+export function inBlockOrder(blocks) {
+  return [...blocks].sort((a, b) => timeOf(a.order) - timeOf(b.order) || compareKeys(a.id, b.id));
+}
+
+// ============ Daily Notes ============
+
+/**
+ * The `dateStr` of the Daily Note for `now`. It's the UTC date, as background.js has always
+ * computed it, while the note's name uses the local date.
+ * @param {number} now
+ * @returns {string}
+ */
+export function dailyDateStr(now) {
+  return new Date(now).toISOString().split('T')[0];
+}
+
+/**
+ * @param {number} now
+ * @returns {string}
+ */
+export function dailyNoteName(now) {
+  const date = new Date(now).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return `Daily Note - ${date}`;
+}
+
+/**
+ * Today's Daily Note among `notes`, as Storage.getTodayNote finds it: the first in the
+ * `withArchived` list whose `dateStr` is today's.
+ * @param {NoteRecord[]} notes
+ * @param {number} now
+ * @returns {NoteRecord | undefined}
+ */
+export function findDailyNote(notes, now) {
+  const today = dailyDateStr(now);
+  return notesInView(notes, 'withArchived').find(note => note.isDaily && note.dateStr === today);
+}
+
+/**
+ * Copies of a template's blocks for a new note, with {{date}}, {{time}}, {{title}}, and
+ * {{datetime}} filled in, as Storage.applyTemplateToNote makes them.
+ * @param {BlockRecord[]} templateBlocks
+ * @param {{noteId: string, title: unknown, now: number, nextId: () => string}} target
+ * @returns {BlockRecord[]}
+ */
+export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId }) {
+  const date = new Date(now);
+  /** @type {Array<[string, string]>} */
+  const variables = [
+    ['{{date}}', date.toLocaleDateString()],
+    ['{{time}}', date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })],
+    ['{{title}}', typeof title === 'string' && title ? title : 'Untitled'],
+    ['{{datetime}}', date.toLocaleString()],
+  ];
+  /** @param {unknown} text */
+  const fill = text =>
+    typeof text === 'string' ? variables.reduce((result, [key, value]) => result.split(key).join(value), text) : text;
+  return templateBlocks.map(block => {
+    /** @type {BlockRecord} */
+    const copy = { ...block, id: nextId(), canvasId: noteId, createdAt: now, updatedAt: now };
+    if (copy.content) copy.content = fill(copy.content);
+    if (Array.isArray(copy.tableData)) {
+      copy.tableData = copy.tableData.map(row => (Array.isArray(row) ? row.map(fill) : row));
+    }
+    return copy;
+  });
+}
+
+/**
+ * The block a capture adds, as background.js has built it.
+ * @param {{id: string, noteId: string, capture: Capture, now: number}} fields
+ * @returns {BlockRecord}
+ */
+export function captureBlock({ id, noteId, capture, now }) {
+  if (capture.type === 'bookmark') {
+    return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, order: now };
+  }
+  const source = capture.source ? ` (Source: ${capture.source})` : '';
+  return { id, type: 'text', content: capture.content + source, canvasId: noteId, order: now };
+}
