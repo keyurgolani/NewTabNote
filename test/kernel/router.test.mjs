@@ -638,3 +638,117 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
     assert.deepEqual(stopped.sort(), ['first', 'second']);
   });
 });
+
+describe('the router: system.messagingHealth (#13, "Security and privacy")', () => {
+  const health = /** @type {import('../../js/kernel/core/contracts/validate.js').Operation} */ (
+    lookup('system.messagingHealth')
+  );
+
+  it('answers system.messagingHealth itself, to the surfaces its entry lists, and no handler takes its place', async () => {
+    const scheduler = testScheduler();
+    const router = makeRouter({ ...scheduler, handlers: { 'system.messagingHealth': () => ready(NOW, 'taken') } });
+    const peer = await opened(router, 'newtab');
+    peer.send(request('h1', { type: 'system.messagingHealth' }));
+    await settle();
+    const [answer] = peer.frames;
+    assert.equal(answer.frame, 'response');
+    assert.equal(check(health.result, answer.result).ok, true);
+    assert.deepEqual(
+      [answer.result.kind, answer.result.asOf, answer.result.data.coordinatorId],
+      ['ready', NOW, 'coordinator-1'],
+    );
+    // Not for the offscreen document or the worker's own code, which its entry doesn't list
+    for (const surface of /** @type {const} */ (['offscreen', 'worker-internal'])) {
+      const other = await opened(router, surface);
+      other.send(request('h1', { type: 'system.messagingHealth' }));
+      await settle();
+      assert.deepEqual(other.frames, [{ frame: 'error', requestId: 'h1', code: 'forbidden-for-surface' }], surface);
+    }
+  });
+
+  it('counts connections, handshakes, reconnects, requests, outcomes, refusals, and latency, and nothing a sender chose', async () => {
+    const scheduler = testScheduler();
+    /** @type {Array<(answer: unknown) => void>} */
+    const answers = [];
+    const router = makeRouter({
+      ...scheduler,
+      handlers: { getNote: () => new Promise(resolve => answers.push(resolve)), setPinned: noNote },
+    });
+    const first = rawConnection(router, 'newtab');
+    first.send(hello('newtab', 'session-secret-1'));
+    const second = await opened(router, 'popup');
+    await settle();
+    first.close();
+    await settle();
+    // The same session again, as a page does once the worker restarted, is a reconnect
+    const again = rawConnection(router, 'newtab');
+    again.send(hello('newtab', 'session-secret-1'));
+    await settle();
+    again.frames.length = 0;
+
+    again.send(request('r1', { type: 'getNote', noteId: 'note-secret-1' }));
+    again.send(request('r2', { type: 'getNote', noteId: 'note-secret-2' }));
+    await scheduler.advance(30);
+    answers[0](noNote());
+    await scheduler.advance(570);
+    answers[1](ready(NOW, { note: { id: 'note-secret-2' } }));
+    again.send(request('r3', { type: 'getNote', noteId: 'note-secret-3' }));
+    await settle();
+    again.send({ frame: 'cancel', requestId: 'r3' });
+    // Refused: an operation no catalog has, a surface the policy denies, a deadline gone, an
+    // unreadable message, and a hello claiming another surface
+    again.send(request('r4', { type: 'secretOperationName' }));
+    second.send(request('r5', pin('note-secret-4')));
+    again.send(request('r6', { type: 'getNote', noteId: 'note-secret-5' }, { deadline: NOW }));
+    again.sendText('{"secret": "not a frame"}');
+    rawConnection(router, 'popup').send(hello('newtab', 'session-secret-2'));
+    await settle();
+
+    const data = router.health();
+    assert.equal(check(health.result, ready(NOW, data)).ok, true);
+    assert.deepEqual(
+      { ...data, rejections: [...data.rejections].sort((a, b) => a.code.localeCompare(b.code)) },
+      {
+        protocol: PROTOCOL_VERSION,
+        coordinatorId: 'coordinator-1',
+        connections: 2,
+        handshakes: 3,
+        reconnects: 1,
+        requests: [
+          { operation: 'getNote', count: 4 },
+          { operation: 'setPinned', count: 1 },
+        ],
+        outcomes: [
+          { code: 'note-not-found', count: 1 },
+          { code: 'ready', count: 1 },
+          { code: 'cancelled', count: 1 },
+        ],
+        rejections: [
+          { reason: 'coordinator', code: 'deadline-exceeded', count: 1 },
+          { reason: 'policy', code: 'forbidden-for-surface', count: 1 },
+          { reason: 'validation', code: 'invalid-payload', count: 1 },
+          { reason: 'policy', code: 'unauthorized-sender', count: 1 },
+          { reason: 'validation', code: 'unknown-operation', count: 1 },
+        ],
+        latency: [
+          { underMs: 50, count: 1 },
+          { underMs: 1000, count: 1 },
+        ],
+      },
+    );
+    assert.doesNotMatch(JSON.stringify(data), /secret/);
+  });
+
+  it('counts at most 64 outcome codes, and the rest as other, so no handler grows it without bound', async () => {
+    let next = 0;
+    const router = makeRouter({
+      handlers: { getNote: () => ({ kind: 'failed', cause: 'storage', code: `code-${(next += 1)}` }) },
+    });
+    const peer = await opened(router, 'newtab');
+    for (let index = 0; index < 100; index += 1) peer.send(request(`r${index}`, { type: 'getNote', noteId: 'n1' }));
+    await settle();
+    const { outcomes } = router.health();
+    assert.equal(outcomes.length, 65);
+    assert.deepEqual(outcomes.at(-1), { code: 'other', count: 36 });
+  });
+});

@@ -26,11 +26,18 @@
  * one. A query stops there or when it's cancelled, as does a command that hasn't opened its
  * transaction. A command that has runs to its outcome: a cancel gets `too-late` with that
  * outcome, then the response. A connection that closes stops what it asked for the same way.
+ *
+ * It answers system.messagingHealth itself, from counters only (#13, "Security and privacy"):
+ * connections, handshakes, reconnects, requests by the catalog's operation names, outcomes and
+ * refusals by code, and answers by latency bucket. Nothing a sender chose is counted by name,
+ * and no payload, result, or schema issue reaches its counters or its logger.
  */
 
 import { encode, encodedBytes } from '../contracts/codec.js';
 import { code } from '../contracts/fields.js';
-import { MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../contracts/limits.js';
+import { LATENCY_BUCKETS_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../contracts/limits.js';
+import { ready } from '../contracts/outcomes.js';
+import { POLICY_CODES, VALIDATION_CODES } from '../contracts/transport-codes.js';
 import { check, checkRequest, checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
 import { createLookup } from './operations.js';
@@ -49,6 +56,12 @@ import { createScopeCheck } from './scope.js';
 /** @typedef {import('./link.js').Connection} Connection */
 /** @typedef {import('./link.js').Link} Link */
 /** @typedef {import('./operations.js').Lookup} Lookup */
+
+/**
+ * @typedef {import('../../../lib/valibot/index.mjs').InferOutput<
+ *   typeof import('../contracts/operations/system-messaging-health.js').messagingHealth
+ * >} MessagingHealth
+ */
 
 /**
  * What a handler is told about the request it serves
@@ -96,6 +109,7 @@ import { createScopeCheck } from './scope.js';
  * @typedef {object} Router
  * @property {(connection: Connection) => void} accept
  * @property {() => void} close - closes every connection, as the worker stopping would
+ * @property {() => MessagingHealth} health - what system.messagingHealth answers with
  */
 
 /**
@@ -127,6 +141,18 @@ import { createScopeCheck } from './scope.js';
  */
 const DENIALS = Object.freeze({ 'unknown-caller': 'unauthorized-sender', 'unknown-operation': 'unknown-operation' });
 
+/** The most outcome codes it counts apart. Any after them count as `other`. */
+const MAX_OUTCOME_CODES = 64;
+
+/** The most sessions it remembers, to count a hello from one it has seen as a reconnect */
+const MAX_SESSIONS = 256;
+
+/**
+ * @param {Map<string | number | null, number>} counts
+ * @param {string | number | null} key
+ */
+const tally = (counts, key) => counts.set(key, (counts.get(key) ?? 0) + 1);
+
 /**
  * @param {RouterOptions} options
  * @returns {Router}
@@ -145,6 +171,77 @@ export function createRouter({
   const inScope = createScopeCheck();
   /** @type {Set<Peer>} */
   const peers = new Set();
+  /** @type {Set<string>} */
+  const sessions = new Set();
+  const counts = {
+    handshakes: 0,
+    reconnects: 0,
+    /** @type {Map<string, number>} by operation */
+    requests: new Map(),
+    /** @type {Map<string, number>} by code */
+    outcomes: new Map(),
+    /** @type {Map<TransportCode, number>} by code */
+    refusals: new Map(),
+    /** @type {Map<number | null, number>} by bucket */
+    latency: new Map(),
+  };
+
+  /** @returns {MessagingHealth} */
+  const health = () => ({
+    protocol: { ...PROTOCOL_VERSION },
+    coordinatorId,
+    connections: peers.size,
+    handshakes: counts.handshakes,
+    reconnects: counts.reconnects,
+    requests: [...counts.requests].map(([operation, count]) => ({ operation, count })),
+    outcomes: [...counts.outcomes].map(([outcome, count]) => ({ code: outcome, count })),
+    rejections: [...counts.refusals].map(([refusal, count]) => ({ reason: reasonOf(refusal), code: refusal, count })),
+    latency: [...LATENCY_BUCKETS_MS, null]
+      .filter(bucket => counts.latency.has(bucket))
+      .map(bucket => ({ underMs: bucket, count: /** @type {number} */ (counts.latency.get(bucket)) })),
+  });
+
+  /** @type {Readonly<Record<string, Handler>>} */
+  const ownHandlers = Object.freeze({ 'system.messagingHealth': () => ready(clock.now(), health()) });
+
+  /**
+   * @param {TransportCode} refusal
+   * @returns {'validation' | 'policy' | 'coordinator'}
+   */
+  const reasonOf = refusal => {
+    if (/** @type {readonly string[]} */ (VALIDATION_CODES).includes(refusal)) return 'validation';
+    return /** @type {readonly string[]} */ (POLICY_CODES).includes(refusal) ? 'policy' : 'coordinator';
+  };
+
+  /** @param {unknown} name - an outcome's code */
+  const countOutcome = name => {
+    const known = typeof name === 'string' && check(code, name).ok ? name : 'other';
+    tally(counts.outcomes, counts.outcomes.has(known) || counts.outcomes.size < MAX_OUTCOME_CODES ? known : 'other');
+  };
+
+  /**
+   * Counts an answer by its outcome's code, or a query state's kind when it has none, and by
+   * how long it took
+   * @param {unknown} result
+   * @param {number} since - when its request arrived
+   */
+  const countAnswer = (result, since) => {
+    const { code: outcome, kind } = /** @type {{code?: unknown, kind?: unknown}} */ (result);
+    countOutcome(typeof outcome === 'string' ? outcome : kind);
+    const took = clock.now() - since;
+    tally(counts.latency, LATENCY_BUCKETS_MS.find(bound => took < bound) ?? null);
+  };
+
+  /** @param {Peer} peer */
+  const countHandshake = peer => {
+    counts.handshakes += 1;
+    if (sessions.has(peer.sessionId)) {
+      counts.reconnects += 1;
+      return;
+    }
+    sessions.add(peer.sessionId);
+    if (sessions.size > MAX_SESSIONS) sessions.delete(/** @type {string} */ (sessions.values().next().value));
+  };
 
   /**
    * Tells the logger, whose own failure changes no answer
@@ -184,6 +281,7 @@ export function createRouter({
    * @param {TransportCode} failure
    */
   const refuse = (peer, requestId, failure) => {
+    tally(counts.refusals, failure);
     send(peer, { frame: 'error', requestId, code: failure });
   };
 
@@ -257,11 +355,13 @@ export function createRouter({
   const greet = (peer, frame) => {
     // A second hello, or one claiming a surface the transport didn't verify, ends the connection
     if (peer.phase !== 'new' || frame.surface !== peer.surface) {
+      tally(counts.refusals, peer.phase === 'new' ? 'unauthorized-sender' : 'invalid-payload');
       close(peer);
       return;
     }
     peer.sessionId = frame.sessionId;
     peer.phase = frame.protocol.major === PROTOCOL_VERSION.major ? 'open' : 'incompatible';
+    countHandshake(peer);
     send(peer, { frame: 'welcome', protocol: PROTOCOL_VERSION, extensionVersion, coordinatorId, ...statusNow() });
   };
 
@@ -295,10 +395,15 @@ export function createRouter({
     if (peer.phase === 'new') return refuse(peer, requestId, 'unauthorized-sender');
     if (peer.phase !== 'open') return refuse(peer, requestId, 'unsupported-version');
     // An answer by a running request's id would be ambiguous, so the second gets none
-    if (peer.running.has(requestId)) return;
+    if (peer.running.has(requestId)) {
+      tally(counts.refusals, 'invalid-payload');
+      return;
+    }
     const checked = checkRequest(frame, bytes, lookup);
     if (!checked.ok) return refuse(peer, requestId, checked.code);
     const { operation, payload } = checked;
+    // A name the lookup found is the catalog's, so this counts nothing a sender chose
+    tally(counts.requests, frame.operation);
     const now = clock.now();
     if (frame.deadline <= now) return refuse(peer, requestId, 'deadline-exceeded');
     /** @type {Caller} */
@@ -306,22 +411,35 @@ export function createRouter({
     const denied = denial(payload, caller);
     if (denied) return refuse(peer, requestId, denied);
     if (!inScope(operation, payload)) return refuse(peer, requestId, 'forbidden-for-surface');
-    const handler = Object.hasOwn(handlers, frame.operation) ? handlers[frame.operation] : undefined;
+    const handler = handlerOf(frame.operation);
     if (!handler) return refuse(peer, requestId, 'unknown-operation');
-    dispatch(peer, frame, operation, handler, caller, Math.min(frame.deadline, now + operation.entry.deadlineMs));
+    dispatch(peer, frame, operation, handler, caller, now);
   };
 
   /**
-   * Runs a request's handler and answers it once
+   * The handler for an operation: the router's own for the coordinator's queries, which no
+   * handler it's given replaces
+   * @param {string} name
+   * @returns {Handler | undefined}
+   */
+  const handlerOf = name => {
+    if (Object.hasOwn(ownHandlers, name)) return ownHandlers[name];
+    return Object.hasOwn(handlers, name) ? handlers[name] : undefined;
+  };
+
+  /**
+   * Runs a request's handler and answers it once. The router stops waiting at the request's
+   * deadline, or its entry's when the request puts its own later.
    * @param {Peer} peer
    * @param {RequestFrame} frame
    * @param {Operation} operation
    * @param {Handler} handler
    * @param {Caller} caller
-   * @param {number} deadline
+   * @param {number} arrived
    */
-  const dispatch = (peer, frame, operation, handler, caller, deadline) => {
+  const dispatch = (peer, frame, operation, handler, caller, arrived) => {
     const { requestId } = frame;
+    const deadline = Math.min(frame.deadline, arrived + operation.entry.deadlineMs);
     /** @type {Running} */
     const running = {
       isCommand: operation.entry.kind === 'command',
@@ -384,9 +502,11 @@ export function createRouter({
         return fail(running.isCommand ? 'outcome-unknown' : 'unavailable');
       }
       // A query's answer too large for one message stays that way, so it isn't retryable
-      if (encodedBytes(text) > MAX_MESSAGE_BYTES)
+      if (encodedBytes(text) > MAX_MESSAGE_BYTES) {
         return fail(running.isCommand ? 'outcome-unknown' : 'payload-too-large');
+      }
       end(peer, requestId, running, false);
+      countAnswer(result, arrived);
       if (running.cancelAsked) send(peer, { frame: 'too-late', requestId, outcome: result });
       sendText(peer, text);
     };
@@ -416,6 +536,7 @@ export function createRouter({
       return;
     }
     end(peer, requestId, running, true);
+    countOutcome('cancelled');
     send(peer, { frame: 'cancelled', requestId });
   };
 
@@ -426,12 +547,16 @@ export function createRouter({
   const hear = (peer, text) => {
     if (peer.phase === 'closed') return;
     const read = readFrame(text);
-    if (!read.ok) return;
+    if (!read.ok) {
+      tally(counts.refusals, read.code);
+      return;
+    }
     const { frame, bytes } = read;
     if (frame.frame === 'hello') greet(peer, frame);
     else if (frame.frame === 'request') receive(peer, frame, bytes);
     else if (frame.frame === 'cancel') cancel(peer, frame.requestId);
     // Anything else is a frame only the router sends
+    else tally(counts.refusals, 'invalid-payload');
   };
 
   return Object.freeze({
@@ -445,5 +570,6 @@ export function createRouter({
     close() {
       for (const peer of [...peers]) close(peer);
     },
+    health,
   });
 }
