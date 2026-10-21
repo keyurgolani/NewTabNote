@@ -6,9 +6,11 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -334,6 +336,42 @@ export function runContractSuite(fixture) {
         );
       });
 
+      it(
+        'on a database without the search index, media, vectors, or snapshots, notes are made, renamed, trashed, and deleted as Storage does',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          for (const missing of /** @type {const} */ (['searchIndex', 'media', 'vectors', 'snapshots'])) {
+            const other = await startWithout([missing]);
+            try {
+              const tab = other.kernel();
+              /** @param {Command} command */
+              const codeOf = async command => {
+                const outcome = await tab.execute(command);
+                assert.equal(outcome.kind, 'committed', `without ${missing}: ${JSON.stringify(outcome)}`);
+                return /** @type {Committed} */ (outcome).code;
+              };
+              const blocks = someBlocks('kept', 1);
+              assert.equal(
+                await codeOf(newCommand(other.ids, 'createNote', { noteId: 'kept', name: 'Plan', blocks })),
+                'note-created',
+              );
+              assert.equal(
+                await codeOf(newCommand(other.ids, 'renameNote', { noteId: 'kept', name: 'Renamed' })),
+                'note-renamed',
+              );
+              assert.equal(await codeOf(newCommand(other.ids, 'trashNote', { noteId: 'kept' })), 'note-trashed');
+              assert.equal(await codeOf(newCommand(other.ids, 'createNote', { noteId: 'empty' })), 'note-created');
+              assert.equal(await codeOf(newCommand(other.ids, 'trashNote', { noteId: 'empty' })), 'note-deleted');
+              const trashed = await tab.query({ type: 'listNotes', view: 'trashed' });
+              assert.deepEqual(trashed.kind === 'ready' && trashed.data.map(note => note.name), ['Renamed'], missing);
+            } finally {
+              await other.close();
+            }
+          }
+        },
+      );
+
       it("commands on a note that doesn't exist are rejected with not-found", async () => {
         for (const command of [
           cmd('renameNote', { noteId: 'gone', name: 'X' }),
@@ -371,6 +409,24 @@ export function runContractSuite(fixture) {
           updatedAt: NOW + 1000,
         });
         assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 2));
+      });
+
+      it('a save into a trashed note commits what was typed, and the note stays in the trash (#33)', async () => {
+        // Another tab's pane can stay on a note trashed elsewhere, and its typing isn't lost
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        const trashedAt = (await noteOf('n1'))?.trashedAt;
+        ctx.clock.advance();
+        const typed = [{ ...someBlocks('n1', 1)[0], content: 'Typed after the trash' }];
+        const outcome = await run(cmd('saveNoteContent', { noteId: 'n1', blocks: typed, preview: 'A late save' }));
+        assert.deepEqual([outcome.code, outcome.changedIds], ['content-saved', ['n1']]);
+        assert.deepEqual(await blocksOf('n1'), typed);
+        assert.equal((await noteOf('n1'))?.preview, 'A late save');
+        assert.equal((await noteOf('n1'))?.trashed, true);
+        // A save doesn't restamp trashedAt, which would restart the trash's retention
+        assert.equal(typeof trashedAt, 'number');
+        assert.equal((await noteOf('n1'))?.trashedAt, trashedAt);
+        assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [['n1'], []]);
       });
 
       it('a save that carries no preview or todoProgress keeps the ones stored', async () => {
@@ -802,6 +858,68 @@ export function runContractSuite(fixture) {
         committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
         const kept = await kernel.query({ type: 'getWorkspaceSession' });
         assert.deepEqual(kept.kind === 'ready' && kept.data, session);
+      });
+
+      /**
+       * A kernel the way the new-tab and service-worker roots build it: startup maintenance
+       * runs once `ready` settles, before any command or query
+       * @param {PromiseLike<unknown>} ready
+       */
+      const maintainingRoot = ready =>
+        createKernel({
+          adapter: ctx.adapter,
+          policy: createBaselinePolicy(),
+          caller: CALLERS.newtab,
+          ids: ctx.ids,
+          clock: ctx.clock,
+          ready,
+          maintainOnOpen: true,
+        });
+
+      it("on a root that maintains as it opens, what's set once it's ready survives the next maintenance", async () => {
+        const root = maintainingRoot(Promise.resolve());
+        committedOf(await root.execute(cmd('setPreferences', { values: { theme: 'dark', sidebarWidth: 300 } })));
+        committedOf(
+          await root.execute(cmd('saveWorkspaceSession', { session: { activeTabIndex: 2, lastOpenedNoteId: 'n1' } })),
+        );
+        committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runStartupMaintenance', {})));
+        const preferences = await root.query({ type: 'getPreferences', keys: ['theme', 'sidebarWidth', 'font'] });
+        assert.deepEqual(preferences.kind === 'ready' && preferences.data, {
+          theme: 'dark',
+          sidebarWidth: 300,
+          font: 'default',
+        });
+        const session = await root.query({ type: 'getWorkspaceSession' });
+        assert.deepEqual(session.kind === 'ready' && [session.data.activeTabIndex, session.data.lastOpenedNoteId], [
+          2,
+          'n1',
+        ]);
+      });
+
+      it('on a root that maintains as it opens, a command sent before ready waits, then commits over the defaults', async () => {
+        /** @type {() => void} */
+        let open = () => {};
+        const root = maintainingRoot(
+          new Promise(resolve => {
+            open = () => resolve(undefined);
+          }),
+        );
+        let settled = false;
+        const setting = root.execute(cmd('setPreferences', { values: { theme: 'dark' } })).then(outcome => {
+          settled = true;
+          return outcome;
+        });
+        assert.deepEqual(await root.query({ type: 'getPreferences' }), { kind: 'loading' });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false);
+        assert.equal((await kernel.query({ type: 'getPreferences' })).kind, 'empty');
+        open();
+        committedOf(await setting);
+        const preferences = await root.query({ type: 'getPreferences' });
+        assert.deepEqual(preferences.kind === 'ready' && preferences.data, {
+          ...STORAGE_DEFAULT_PREFERENCES,
+          theme: 'dark',
+        });
       });
     });
 

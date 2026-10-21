@@ -14,8 +14,10 @@
  *   doesn't have which names #12 as its owner. A later PR may add a row by hand, but only
  *   for a defined rule, owned by another issue. With no ledger at the ref, as in the PR
  *   that seeds it, every row is new.
- * declared-gap rows record gaps no rule sees, so they're checked for shape (count 1, a file
- * that exists) and never against hits.
+ * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
+ * hits: count 1, the legacy adapter module as file, which has to exist, and #17 as owner,
+ * since #17's adapter closes each gap. That module declares several gaps, told apart by
+ * verify; every other row is one per file and rule.
  *
  *   npm run check:boundaries                         compare with the ledger
  *   npm run check:boundaries -- --base origin/next   also compare with the ledger at a ref
@@ -55,6 +57,9 @@ const RULES = {
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
 };
 const DECLARED_GAP = 'declared-gap';
+// The one module that declares gaps (its adapter flags), and the issue whose adapter closes them
+const DECLARED_GAP_FILE = 'js/kernel/adapters/legacy/adapter.js';
+const DECLARED_GAP_OWNER = 17;
 
 /**
  * Who removes each kind of hit, for rows --write-baseline seeds: the first entry whose
@@ -91,10 +96,22 @@ function keyOf(file, rule) {
   return `${file}\0${rule}`;
 }
 
+/**
+ * A ledger row's key: its file and rule, and for a declared-gap row its verify too, since
+ * the legacy adapter module declares one gap per row
+ */
+function rowKey(row) {
+  return row.rule === DECLARED_GAP ? `${keyOf(row.file, row.rule)}\0${row.verify}` : keyOf(row.file, row.rule);
+}
+
 function byFileThenRule(a, b) {
   if (a.file !== b.file) return a.file < b.file ? -1 : 1;
   if (a.rule !== b.rule) return a.rule < b.rule ? -1 : 1;
   return 0;
+}
+
+function byRowKey(a, b) {
+  return byFileThenRule(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
 }
 
 /**
@@ -170,8 +187,9 @@ function parseLedger(text, root, name) {
   if (!data || !Array.isArray(data.rows)) return { rows, problems: [`${name} has no "rows" array`] };
 
   data.rows.forEach((row, index) => {
-    const label = row && typeof row.file === 'string' && typeof row.rule === 'string'
+    let label = row && typeof row.file === 'string' && typeof row.rule === 'string'
       ? `${row.file} ${row.rule}` : `row ${index + 1}`;
+    if (row && row.rule === DECLARED_GAP && typeof row.verify === 'string') label += ` (${row.verify})`;
     const fail = why => problems.push(`${name}: ${label} ${why}`);
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
       fail('is not an object');
@@ -194,10 +212,12 @@ function parseLedger(text, root, name) {
     }
     if (row.rule === DECLARED_GAP) {
       if (row.count !== 1) fail('is a declared-gap row, so its count is 1');
-      if (typeof row.file === 'string' && !fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
+      if (row.file !== DECLARED_GAP_FILE) fail(`is a declared-gap row, so its file is ${DECLARED_GAP_FILE}`);
+      else if (!fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
+      if (row.owner !== DECLARED_GAP_OWNER) fail(`is a declared-gap row, so #${DECLARED_GAP_OWNER} owns it`);
     }
 
-    const key = keyOf(row.file, row.rule);
+    const key = rowKey(row);
     if (rows.has(key)) fail('appears twice');
     else rows.set(key, row);
   });
@@ -205,7 +225,7 @@ function parseLedger(text, root, name) {
 }
 
 function serializeLedger(rows) {
-  const sorted = [...rows].sort(byFileThenRule).map(row => Object.fromEntries(FIELDS.map(field => [field, row[field]])));
+  const sorted = [...rows].sort(byRowKey).map(row => Object.fromEntries(FIELDS.map(field => [field, row[field]])));
   return `${JSON.stringify({ about: ABOUT, rows: sorted }, null, 2)}\n`;
 }
 
@@ -256,8 +276,8 @@ function compare(hits, rows) {
  */
 function compareBase(rows, baseRows, ref) {
   const problems = [];
-  for (const row of [...rows.values()].sort(byFileThenRule)) {
-    const was = baseRows.get(keyOf(row.file, row.rule));
+  for (const row of [...rows.values()].sort(byRowKey)) {
+    const was = baseRows.get(rowKey(row));
     if (was && row.count > was.count) {
       problems.push({ message: `${row.file} ${row.rule}: count ${was.count} at ${ref} rose to ${row.count}; fix the new hits instead`, at: [] });
     } else if (!was && row.owner === KERNEL_ISSUE) {

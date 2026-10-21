@@ -71,4 +71,7 @@ export const CALLERS = Object.freeze({
  * @property {string} name
  * @property {Readonly<AdapterFlags>} flags - what the adapter is documented to guarantee
  * @property {() => Promise<ContractContext>} start
+ * @property {(stores: StoreName[]) => Promise<ContractContext>} [startWithout]
+ *   A context over a database that lacks `stores`, as one an older or damaged 1.x profile
+ *   can. Only a fixture over that storage can make one.
  */
