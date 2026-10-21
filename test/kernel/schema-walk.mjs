@@ -38,8 +38,51 @@ function pipeMetadata(schema) {
   ];
 }
 
+/** The properties walk() follows into */
+const FOLLOWED = new Set(['entries', 'item', 'wrapped', 'options', 'pipe']);
+
+/** Schemas whose inner schema sits behind a function, which no walk can read */
+const OPAQUE = new Set(['lazy', 'custom']);
+
 /**
- * Every schema inside `schema`, `schema` included, depth first
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+const isSchema = value =>
+  typeof value === 'object' && value !== null && /** @type {Schema} */ (value).kind === 'schema';
+
+/**
+ * Whether `value` is a schema, or an array or object holding one
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+const holdsSchema = value =>
+  isSchema(value) || (typeof value === 'object' && value !== null && Object.values(value).some(isSchema));
+
+/**
+ * Throws unless walk() reaches every schema inside `schema`, so a rule never passes a part
+ * of it no visit read: no lazy or custom schema, no schema in a property walk() doesn't follow
+ * (a tuple's items, a rest, a record's or a map's key and value, a set's value), and none
+ * later in a pipe than its first
+ * @param {Schema} schema
+ * @param {string} at
+ */
+function assertWalkable(schema, at) {
+  if (OPAQUE.has(schema.type)) throw new Error(`walk() can't read inside the ${schema.type} schema at ${at}`);
+  for (const [key, value] of Object.entries(schema)) {
+    if (!FOLLOWED.has(key) && holdsSchema(value)) {
+      throw new Error(`walk() doesn't follow the ${key} of the ${schema.type} schema at ${at}`);
+    }
+  }
+  if (!schema.pipe) return;
+  const [base, ...actions] = schema.pipe;
+  if (actions.some(isSchema)) throw new Error(`walk() doesn't follow a schema later in the pipe at ${at}`);
+  if (base !== schema) assertWalkable(base, at);
+}
+
+/**
+ * Every schema inside `schema`, `schema` included, depth first. It throws on a schema it
+ * can't walk all of (assertWalkable), rather than leave that part unread.
  * @param {unknown} root
  * @returns {Visit[]}
  */
@@ -52,6 +95,7 @@ export function walk(root) {
    * @param {Array<Record<string, unknown>>} outer
    */
   const visit = (schema, path, outer) => {
+    assertWalkable(schema, path.join('.') || '(root)');
     const metadata = [...outer, ...pipeMetadata(schema)];
     visits.push({ schema, path, metadata });
     for (const [key, entry] of Object.entries(schema.entries ?? {})) visit(entry, [...path, key], metadata);

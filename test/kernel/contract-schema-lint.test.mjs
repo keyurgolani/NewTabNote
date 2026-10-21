@@ -116,10 +116,10 @@ const CONTENT_WORDS = new Set([
 const isContentName = name => CONTENT_WORDS.has(name[name.length - 1]);
 
 /**
- * Schemas whose output drops what they don't declare: an object drops unknown keys, and a
- * tuple drops items past its own
+ * Schemas whose output drops what they don't declare: an object drops unknown keys. A tuple
+ * drops items past its own too, but walk() refuses every tuple before any rule runs.
  */
-const DROPPING = new Set(['object', 'tuple']);
+const DROPPING = new Set(['object']);
 
 /**
  * Transformations that change only a value's type, never the value: a brand and readonly
@@ -417,10 +417,14 @@ describe('the contract schema lint (#13, AC5)', () => {
       ['a nullable default', { parentId: v.nullable(entityId('folder'), 'f1') }, 'default', 'parentId'],
       ['a fallback', { view: v.fallback(v.picklist(['active']), 'active') }, 'fallback', 'view'],
       ['an object', { options: v.object({ size: count }) }, 'drops-undeclared', 'options'],
-      ['a tuple', { range: v.tuple([count, count]) }, 'drops-undeclared', 'range'],
     ])) {
       assert.deepEqual(lint(commandPayload('example', fields), { role: 'payload' }), [{ rule, path }], name);
     }
+    // walk() refuses a tuple outright, since it doesn't follow a tuple's items
+    assert.throws(
+      () => lint(commandPayload('example', { range: v.tuple([count, count]) }), { role: 'payload' }),
+      /walk\(\)/,
+    );
     // An answer or a record is held to the same
     const record = v.looseObject({ id: entityId('note'), name: v.optional(content(v.string()), '') });
     assert.deepEqual(lint(record, { role: 'result' }), [{ rule: 'default', path: 'name' }]);
