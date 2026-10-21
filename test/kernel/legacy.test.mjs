@@ -583,6 +583,17 @@ describe('the legacy adapter', () => {
       [{ children: '<p>child</p>' }],
       [{ equation: ' ' }],
       [{ equation: 'x' }],
+      // Only text blocks of spaces, line breaks, and non-breaking spaces are empty
+      [{ content: ' <br>&nbsp;<BR/>\n&NBSP;<br />' }, { content: null }],
+      [{ type: undefined, content: ' ' }],
+      [{ content: '<b></b>' }],
+      [{ content: '<img src="data:,">' }],
+      [{ content: 5 }],
+      [{ type: 'divider' }],
+      [{ type: 'image', imageUrl: 'data:,' }],
+      [{ type: 'table', tableData: [['Header 1', ' ']] }],
+      [{ type: 'bookmark', url: 'https://example.test', title: 'Example' }],
+      [{ content: '' }, { type: 'divider' }],
     ];
     await legacyEnv.createDatabase(page.env.indexedDB, {
       records: {
