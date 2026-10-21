@@ -87,6 +87,7 @@ const QUERY_SAMPLES = {
   listFolders: {},
   getPreferences: { keys: ['theme', 'sidebarWidth'] },
   getWorkspaceSession: {},
+  getPopupInsightsEnabled: {},
 };
 
 /** The coordinator's own queries, which take no field */
@@ -358,13 +359,11 @@ describe('schema modules (#13, AC1)', () => {
   });
 
   it('accept every answer the kernel gives the samples, both ways (#13, AC1)', async () => {
-    const kernel = createKernel({
-      adapter: createMemoryAdapter(),
-      policy: createBaselinePolicy(),
-      caller: CALLERS.newtab,
-      ids: testIds(),
-      clock: testClock(),
-    });
+    const adapter = createMemoryAdapter();
+    const runtime = { ids: testIds(), clock: testClock() };
+    /** @param {import('../../js/kernel/core/ports/policy.js').Caller} caller */
+    const kernelFor = caller => createKernel({ adapter, policy: createBaselinePolicy(), caller, ...runtime });
+    const kernel = kernelFor(CALLERS.newtab);
     /** @type {string[]} */
     const kinds = [];
     for (const [type, fields] of Object.entries(COMMAND_SAMPLES)) {
@@ -383,7 +382,10 @@ describe('schema modules (#13, AC1)', () => {
     assert.ok(kinds.filter(kind => kind.endsWith(':committed')).length >= 14, kinds.join(', '));
     assert.ok(kinds.includes('runBulkAction:bulk'), kinds.join(', '));
     for (const [type, fields] of Object.entries(QUERY_SAMPLES)) {
-      const state = await kernel.query(
+      // A query the new tab can't run, such as Popup's own, runs from the first surface that can
+      const { surfaces } = QUERIES[/** @type {QueryType} */ (type)];
+      const reader = surfaces.includes('newtab') ? kernel : kernelFor(CALLERS[surfaces[0]]);
+      const state = await reader.query(
         /** @type {import('../../js/kernel/core/contracts/queries.js').Query} */ ({ ...fields, type }),
       );
       assert.ok(state.kind === 'ready' || state.kind === 'empty', `${type}: ${state.kind}`);

@@ -130,6 +130,12 @@ describe('the in-memory adapter', () => {
     assert.equal((await kernel.execute(/** @type {any} */ (create))).kind, 'committed');
   });
 
+  it("serves only IDB_SETTINGS_KEYS from idbSettings, as the legacy adapter does from IndexedDB's settings store", async () => {
+    const adapter = createMemoryAdapter();
+    assert.deepEqual(await adapter.readSettings('idbSettings', ['insightsEnabled']), {});
+    await assert.rejects(adapter.readSettings('idbSettings', ['llmApiKey']), { code: 'setting-not-served' });
+  });
+
   it('refuses a write in a read-only unit and an unknown store', async () => {
     const adapter = createMemoryAdapter();
     const { outcome } = await adapter.commit({

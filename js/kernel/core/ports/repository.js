@@ -91,6 +91,17 @@ export const STORES = Object.freeze({
 /** @typedef {'preferences' | 'session'} SettingsArea */
 
 /**
+ * A settings area a query may read: one a command writes, or `idbSettings`, the settings 1.4.x
+ * kept in IndexedDB's `settings` store. Storage.setSetting never writes there, and only Popup's
+ * summary reads it, until #4 rebuilds Popup. The store also holds 1.4.x's provider keys, so an
+ * adapter serves only IDB_SETTINGS_KEYS from it.
+ * @typedef {SettingsArea | 'idbSettings'} ReadableSettingsArea
+ */
+
+/** The keys an adapter serves from `idbSettings` */
+export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
+
+/**
  * What a command changes: units over the stores, keys in a settings area, or startup
  * maintenance.
  * @typedef {{kind: 'units', units: Unit[]}
@@ -171,6 +182,7 @@ export const STORES = Object.freeze({
  *   `unavailable` outcome.
  * @property {<T>(stores: StoreName[], body: (tx: ReadTx) => Promise<T>) => Promise<T>} read
  *   Rejects with an UnavailableError when storage fails
- * @property {(area: SettingsArea, keys: readonly string[]) => Promise<Record<string, unknown>>} readSettings
- *   The keys that have a stored value
+ * @property {(area: ReadableSettingsArea, keys: readonly string[]) => Promise<Record<string, unknown>>} readSettings
+ *   The keys that have a stored value. A key outside IDB_SETTINGS_KEYS from `idbSettings` rejects
+ *   with an UnavailableError, code `setting-not-served`.
  */

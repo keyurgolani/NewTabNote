@@ -474,6 +474,32 @@ describe('the legacy adapter', () => {
     assert.equal(page.env.chrome.local.setting_storageInitialized, true);
   });
 
+  it("reads Popup's insightsEnabled from IndexedDB's settings store, and serves no other key from it", async () => {
+    const page = context();
+    await legacyEnv.createDatabase(page.env.indexedDB, {
+      records: {
+        settings: [
+          { key: 'insightsEnabled', value: true },
+          { key: 'llmApiKey', value: 'test-only-value' },
+        ],
+      },
+    });
+    const adapter = adapterFor(page, 'existing');
+    await adapter.open();
+    const popup = kernelFor(adapter, runtime(), CALLERS.popup);
+    const state = await popup.query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(state.kind === 'ready' && state.data, { insightsEnabled: true });
+    // The store also holds 1.4.x's provider keys, which nothing in the kernel may read
+    await assert.rejects(adapter.readSettings('idbSettings', ['llmApiKey']), { code: 'setting-not-served' });
+
+    const without = context();
+    await legacyEnv.createDatabase(without.env.indexedDB, { omit: ['settings'] });
+    const bare = adapterFor(without, 'existing');
+    await bare.open();
+    const none = await kernelFor(bare, runtime(), CALLERS.popup).query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(none.kind === 'ready' && none.data, { insightsEnabled: false });
+  });
+
   it('works on a database missing stores, the way Storage does: the search index is skipped, folders fail', async () => {
     const page = context();
     await legacyEnv.createDatabase(page.env.indexedDB, {

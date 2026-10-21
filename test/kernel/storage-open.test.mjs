@@ -301,6 +301,29 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
     assert.deepEqual(await empty.real.databases(), []);
   });
 
+  it("reads Popup's insightsEnabled from IndexedDB's settings store, and serves no other key from it", async () => {
+    const of = await made({
+      records: {
+        settings: [
+          { key: 'insightsEnabled', value: true },
+          { key: 'llmApiKey', value: 'test-only-value' },
+        ],
+      },
+    });
+    const adapter = adapterOn(of, { mode: 'existing' });
+    await adapter.open();
+    const state = await kernelOn(adapter, undefined, CALLERS.popup).query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(state.kind === 'ready' && state.data, { insightsEnabled: true });
+    // The store also holds 1.4.x's provider keys, which nothing in the kernel may read
+    await assert.rejects(adapter.readSettings('idbSettings', ['llmApiKey']), { code: 'setting-not-served' });
+
+    const without = await made({ omit: ['settings'] });
+    const bare = adapterOn(without, { mode: 'existing' });
+    await bare.open();
+    const none = await kernelOn(bare, undefined, CALLERS.popup).query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(none.kind === 'ready' && none.data, { insightsEnabled: false });
+  });
+
   it('refuses a database a newer build upgraded, in both modes, closes it, and leaves it as it was', async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
       const of = await made({

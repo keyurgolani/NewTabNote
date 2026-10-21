@@ -39,6 +39,7 @@
  */
 
 import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 import { silentLogger } from '../../core/ports/runtime.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
@@ -253,6 +254,42 @@ export function createIndexedDbAdapter({
     return failureOf(error);
   };
 
+  /**
+   * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
+   * Popup has read them since 1.4.x (#12 slice 4a; #4 moves Popup to the setting the new tab
+   * saves). The store also holds 1.4.x's provider keys, so only IDB_SETTINGS_KEYS are served,
+   * as on the legacy adapter. A database without the store has none.
+   * @param {readonly string[]} keys
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const readIdbSettings = async keys => {
+    if (keys.some(key => !IDB_SETTINGS_KEYS.includes(key))) {
+      throw new UnavailableError('adapter', 'setting-not-served', false);
+    }
+    /** @type {IDBObjectStore | null} */
+    let store = null;
+    try {
+      const db = connection.database();
+      if (db.objectStoreNames.contains('settings')) {
+        store = db.transaction('settings', 'readonly').objectStore('settings');
+      }
+    } catch (error) {
+      throw startFailure(error);
+    }
+    /** @type {Record<string, unknown>} */
+    const values = {};
+    if (!store) return values;
+    try {
+      for (const key of keys) {
+        const record = /** @type {{value?: unknown} | undefined} */ (await result(store.get(key)));
+        if (record && record.value !== undefined) values[key] = record.value;
+      }
+    } catch (error) {
+      throw failureOf(error);
+    }
+    return values;
+  };
+
   /** How many readwrite transactions this adapter has opened */
   let writesOpened = 0;
   /**
@@ -447,6 +484,7 @@ export function createIndexedDbAdapter({
     },
 
     async readSettings(area, keys) {
+      if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));
       /** @type {Record<string, unknown>} */
       let stored;

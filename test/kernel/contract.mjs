@@ -1022,6 +1022,22 @@ export function runContractSuite(fixture) {
         }
       });
 
+      it("answers Popup's insightsEnabled from IndexedDB's settings store, and only to Popup", async () => {
+        const popup = ctx.kernel(CALLERS.popup);
+        const unset = { kind: 'ready', asOf: NOW, data: { insightsEnabled: false } };
+        assert.deepEqual(await popup.query({ type: 'getPopupInsightsEnabled' }), unset);
+        // The setting the new tab saves lives with the preferences, which this doesn't read
+        committedOf(await run(cmd('setPreferences', { values: { insightsEnabled: true } })));
+        assert.deepEqual(await popup.query({ type: 'getPopupInsightsEnabled' }), unset);
+        for (const caller of [CALLERS.newtab, CALLERS.sidepanel]) {
+          assert.deepEqual(await ctx.kernel(caller).query({ type: 'getPopupInsightsEnabled' }), {
+            kind: 'failed',
+            cause: 'policy',
+            code: 'not-on-surface',
+          });
+        }
+      });
+
       it('returns empty for a note with nothing stored, blocks in note order, and failed for a bad query', async () => {
         assert.deepEqual(await kernel.query({ type: 'getNote', noteId: 'gone' }), { kind: 'empty', asOf: NOW });
         const blocks = someBlocks('n1', 3).reverse();

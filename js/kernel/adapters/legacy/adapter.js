@@ -24,6 +24,7 @@
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
 import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
@@ -33,6 +34,7 @@ import { settingKey } from '../indexeddb/settings.js';
 /** @typedef {import('../../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../core/ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../../core/ports/repository.js').SettingsArea} SettingsArea */
+/** @typedef {import('../../core/ports/repository.js').ReadableSettingsArea} ReadableSettingsArea */
 /** @typedef {import('../../core/ports/repository.js').Tx} Tx */
 /** @typedef {import('../../core/ports/repository.js').Unit} Unit */
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
@@ -110,6 +112,18 @@ function presentStores(storage, stores) {
 }
 
 /**
+ * The object store `name` in `tx`. This is the one place the legacy adapter opens a store
+ * (#17's objectStore rule): for its transaction view, and for the read of IndexedDB's
+ * settings store Popup has always made.
+ * @param {IDBTransaction} tx
+ * @param {string} name
+ * @returns {IDBObjectStore}
+ */
+function storeIn(tx, name) {
+  return tx.objectStore(name);
+}
+
+/**
  * The kernel's view of one transaction over `scope`. A store the database lacks reads as
  * empty, as DatabaseManager's reads of auxiliary stores do.
  * @param {LegacyStorage} storage
@@ -125,7 +139,7 @@ function view(storage, tx, scope) {
   const handle = store => {
     if (!scope.includes(store)) throw new UnavailableError('adapter', 'store-outside-transaction', false);
     const name = IDB_STORES[store];
-    return tx && storage.hasStore(name) ? tx.objectStore(name) : null;
+    return tx && storage.hasStore(name) ? storeIn(tx, name) : null;
   };
   return /** @type {Tx} */ ({
     get: async (store, key) => {
@@ -218,6 +232,32 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
   const databaseError = error => (reloadRequired() ? reloadError() : storageError(error));
 
   /**
+   * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
+   * Popup has read them. A database without the store has none.
+   * @param {readonly string[]} keys
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const readIdbSettings = async keys => {
+    if (keys.some(key => !IDB_SETTINGS_KEYS.includes(key))) {
+      throw new UnavailableError('adapter', 'setting-not-served', false);
+    }
+    if (reloadRequired()) throw reloadError();
+    /** @type {Record<string, unknown>} */
+    const values = {};
+    try {
+      if (!storage.hasStore('settings')) return values;
+      const store = storeIn(storage.transaction('settings', 'readonly'), 'settings');
+      for (const key of keys) {
+        const record = /** @type {{value?: unknown} | undefined} */ (await result(store.get(key)));
+        if (record && record.value !== undefined) values[key] = record.value;
+      }
+      return values;
+    } catch (error) {
+      throw databaseError(error);
+    }
+  };
+
+  /**
    * @param {Work} work
    * @param {Unit[]} units
    * @returns {Promise<Outcome>}
@@ -301,6 +341,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
     },
 
     async readSettings(area, keys) {
+      if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));
       /** @type {Record<string, unknown>} */
       let stored;
