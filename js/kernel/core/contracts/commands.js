@@ -30,6 +30,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/trash-note.js').TrashNote} TrashNote */
 /** @typedef {import('./operations/restore-note.js').RestoreNote} RestoreNote */
 /** @typedef {import('./operations/save-note-content.js').SaveNoteContent} SaveNoteContent */
+/** @typedef {import('./operations/delete-blocks.js').DeleteBlocks} DeleteBlocks */
 /** @typedef {import('./operations/apply-derived-title.js').ApplyDerivedTitle} ApplyDerivedTitle */
 /** @typedef {import('./operations/attach-insights.js').AttachInsights} AttachInsights */
 /** @typedef {import('./operations/capture-to-daily-note.js').CaptureToDailyNote} CaptureToDailyNote */
@@ -44,7 +45,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
- *   | SaveNoteContent | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | RunBulkAction
+ *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | RunBulkAction
  *   | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance} Command
  */
 
@@ -128,6 +129,7 @@ export const COMMANDS = Object.freeze({
   trashNote: entry('trash-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   restoreNote: entry('restore-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  deleteBlocks: entry('delete-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
   applyDerivedTitle: entry('apply-derived-title', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   attachInsights: entry('attach-insights', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   captureToDailyNote: entry('capture-to-daily-note', 'note', ['newtab', 'worker-internal'], {
