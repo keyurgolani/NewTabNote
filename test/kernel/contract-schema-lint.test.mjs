@@ -42,7 +42,20 @@ import { isContent, walk } from './schema-walk.mjs';
 /** @typedef {{rule: string, path: string}} Violation */
 
 /**
- * The words in a field's name: `accessToken` and `access_token` are both `access`, `token`
+ * A word as its singular, so a list's name reads as one of its items: `passwords` is
+ * `password`, and `queries` is `query`. `status` and `address` stay as they are.
+ * @param {string} word
+ * @returns {string}
+ */
+const singular = word => {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith('s') && !/(?:ss|us|is)$/.test(word)) return word.slice(0, -1);
+  return word;
+};
+
+/**
+ * The words in a field's name, each singular: `accessToken` and `access_token` are both
+ * `access`, `token`, and so is `accessTokens`
  * @param {string} name
  * @returns {string[]}
  */
@@ -51,34 +64,41 @@ const words = name =>
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(singular);
 
 const CREDENTIAL_WORDS = new Set([
+  'apikey',
   'auth',
   'authorization',
   'bearer',
   'cookie',
-  'cookies',
   'credential',
-  'credentials',
+  'jwt',
   'passphrase',
   'passwd',
   'password',
   'secret',
-  'secrets',
 ]);
 
+/** The words before `key` that make it a credential's: `apiKey`, `privateKey`, `signingKey` */
+const KEY_KINDS = new Set(['access', 'api', 'encryption', 'private', 'secret', 'signing']);
+
+/** The first words that make a name a count of tokens, not one: `maxTokens`, `totalTokens` */
+const QUANTITIES = new Set(['count', 'max', 'min', 'num', 'total']);
+
 /**
- * A credential's name: one of CREDENTIAL_WORDS anywhere, an API key, or a name ending in
- * token or headers. `maxTokens` and `tokenCount` aren't credentials.
+ * A credential's name: one of CREDENTIAL_WORDS anywhere, a key of a KEY_KINDS kind, or a
+ * name ending in token or header that doesn't count them. `maxTokens` and `tokenCount`
+ * aren't credentials.
  * @param {string[]} name
  */
 const isCredential = name =>
-  name.some(word => CREDENTIAL_WORDS.has(word) || word === 'apikey') ||
-  name.some((word, index) => word === 'api' && name[index + 1] === 'key') ||
-  ['token', 'header', 'headers'].includes(name[name.length - 1]);
+  name.some(word => CREDENTIAL_WORDS.has(word)) ||
+  name.some((word, index) => KEY_KINDS.has(word) && name[index + 1] === 'key') ||
+  (['token', 'header'].includes(name[name.length - 1]) && !QUANTITIES.has(name[0]));
 
-const URL_WORDS = new Set(['url', 'urls', 'uri', 'href', 'endpoint']);
+const URL_WORDS = new Set(['endpoint', 'href', 'link', 'src', 'uri', 'url']);
 
 /** @param {string[]} name */
 const isUrlName = name => URL_WORDS.has(name[name.length - 1]);
@@ -89,27 +109,30 @@ const isUrlName = name => URL_WORDS.has(name[name.length - 1]);
  * `lastTitleContentHash` hold hashes. A URL is the URL rule's to judge.
  */
 const CONTENT_WORDS = new Set([
-  'name',
-  'names',
-  'title',
-  'titles',
-  'preview',
-  'content',
-  'contents',
-  'text',
   'body',
-  'insights',
-  'source',
-  'query',
+  'caption',
+  'comment',
+  'content',
+  'description',
+  'excerpt',
+  'heading',
+  'html',
+  'insight',
+  'label',
+  'markdown',
+  'message',
+  'name',
+  'preview',
   'prompt',
+  'query',
   'quote',
   'selection',
   'snippet',
+  'source',
   'summary',
-  'description',
-  'caption',
-  'comment',
-  'comments',
+  'tag',
+  'text',
+  'title',
 ]);
 
 /** @param {string[]} name */
@@ -126,7 +149,7 @@ const DROPPING = new Set(['object']);
  */
 const TYPE_ONLY = new Set(['brand', 'readonly']);
 
-const STORAGE_WORDS = new Set(['store', 'stores', 'indexeddb', 'idb', 'db', 'database', 'transaction', 'sql']);
+const STORAGE_WORDS = new Set(['store', 'indexeddb', 'idb', 'db', 'database', 'transaction', 'sql']);
 
 /**
  * A store's or IndexedDB's name: `storeName`, `objectStore`, `indexedDB`, `transaction`.
@@ -159,8 +182,32 @@ function unwrapped(schema) {
   return current;
 }
 
-/** A string's bound: its length, a pattern, or a picklist */
-const BOUNDS = new Set(['max_length', 'length', 'regex', 'max_bytes', 'max_graphemes']);
+/** A string's bound: its length, its byte length, or its grapheme count */
+const BOUNDS = new Set(['max_length', 'length', 'max_bytes', 'max_graphemes']);
+
+/**
+ * Whether a pattern bounds the strings it matches: anchored at both ends, with nothing
+ * repeated without limit (`*`, `+`, `{n,}`) outside an escape or a character class
+ * @param {RegExp} pattern
+ * @returns {boolean}
+ */
+const bounds = pattern => {
+  const source = pattern.source.replace(/\\./g, '_').replace(/\[[^\]]*\]/g, '_');
+  return source.startsWith('^') && source.endsWith('$') && !/[*+]|\{\d+,\}/.test(source);
+};
+
+/**
+ * Whether `schema`'s pipe bounds the string it takes
+ * @param {Schema} schema
+ * @returns {boolean}
+ */
+const isBounded = schema =>
+  pipeActions(schema).some(
+    action =>
+      BOUNDS.has(action.type) ||
+      (action.type === 'regex' &&
+        bounds(/** @type {{requirement: RegExp}} */ (/** @type {unknown} */ (action)).requirement)),
+  );
 
 /**
  * What the lint finds in `schema`
@@ -177,18 +224,24 @@ export function lint(root, { role, carriesSecret = false, checkedElsewhere = [] 
   for (const visit of walk(root)) {
     const { schema, path } = visit;
     const at = path.join('.') || '(root)';
-    // A field's name is judged where its schema is unwrapped: an optional or nullable's
-    // wrapped schema comes next at the same path, with any content() mark on it
-    const named = path.length > 0 && path[path.length - 1] !== '[]' && !schema.wrapped;
-    const field = named ? words(path[path.length - 1]) : [];
+    // A field's name is judged where its schema is unwrapped, and a list's at its item: an
+    // optional's or an array's inner schema comes next, with any content() mark on it. The
+    // name-based rules report the field's own path.
+    let end = path.length;
+    while (end > 0 && path[end - 1] === '[]') end--;
+    const fieldAt = path.slice(0, end).join('.');
+    const named = end > 0 && !schema.wrapped && schema.type !== 'array';
+    const field = named ? words(path[end - 1]) : [];
     const contentHere = isContent(visit);
     const vaultRef = visit.metadata.some(item => item.vaultRef === true);
     /** @param {string} rule */
     const add = rule => found.push({ rule, path: at });
+    /** @param {string} rule */
+    const addNamed = rule => found.push({ rule, path: fieldAt });
     const credential = field.length > 0 && isCredential(field);
     const storage = field.length > 0 && isStorageName(field);
-    if (credential && !vaultRef && !carriesSecret) add('credential');
-    if (storage) add('storage-passthrough');
+    if (credential && !vaultRef && !carriesSecret) addNamed('credential');
+    if (storage) addNamed('storage-passthrough');
     if ((role === 'frame' || role === 'outcome') && contentHere) add('content-in-' + role);
     // What arrived is what passes on, so a schema's output must be what it accepted, content
     // included: no transform, default, or fallback, and nothing it doesn't declare dropped
@@ -201,21 +254,19 @@ export function lint(root, { role, carriesSecret = false, checkedElsewhere = [] 
     if (contentHere || checkedElsewhere.includes(schema)) continue;
     // What the user wrote, and a URL, travel only in content, whatever the schema's role. A
     // store's name is the storage rule's to judge.
-    if (field.length > 0 && isContentName(field) && !storage) add('content-unmarked');
-    if (field.length > 0 && isUrlName(field)) add('url-outside-content');
+    if (field.length > 0 && isContentName(field) && !storage) addNamed('content-unmarked');
+    if (field.length > 0 && isUrlName(field)) addNamed('url-outside-content');
     if (pipeActions(schema).some(action => action.type === 'url')) add('url-outside-content');
     if (!strict) continue;
     // A key a caller sends names one of a closed list, never a store's or a setting's key of
     // its own choosing. A credential's name is the credential rule's to judge, and an answer's
     // messageKey is no key a caller picks.
-    if (role === 'payload' && !credential && ['key', 'keys'].includes(field[field.length - 1])) {
-      if (!['picklist', 'literal', 'enum'].includes(unwrapped(schema).type)) add('open-key');
+    if (role === 'payload' && !credential && field[field.length - 1] === 'key') {
+      if (!['picklist', 'literal', 'enum'].includes(unwrapped(schema).type)) addNamed('open-key');
     }
     if (schema.type === 'unknown' || schema.type === 'any') add('untyped');
     if (schema.type === 'loose_object' || schema.type === 'loose_tuple') add('loose-object');
-    if (schema.type === 'string' && !pipeActions(schema).some(action => BOUNDS.has(action.type))) {
-      add('unbounded-string');
-    }
+    if (schema.type === 'string' && !isBounded(schema)) add('unbounded-string');
   }
   // A wrapper and what it wraps can both trip one rule at one path
   return found.filter(
@@ -328,6 +379,11 @@ describe('the contract schema lint (#13, AC5)', () => {
       'headers',
       'authHeader',
       'credentials',
+      'passwords',
+      'refreshTokens',
+      'privateKey',
+      'jwt',
+      'apiKeys',
     ]) {
       const payload = commandPayload('example', { [name]: bounded });
       assert.deepEqual(lint(payload, { role: 'payload' }), [{ rule: 'credential', path: name }], name);
@@ -335,8 +391,11 @@ describe('the contract schema lint (#13, AC5)', () => {
     for (const name of ['maxTokens', 'tokenCount', 'author', 'keyboardLayout', 'secretary']) {
       assert.deepEqual(lint(commandPayload('example', { [name]: count }), { role: 'payload' }), [], name);
     }
-    // A credential is a credential in an answer or a record too
+    // A credential is a credential in an answer or a record too, a list of them included
     assert.deepEqual(lint(v.strictObject({ token: id }), { role: 'result' }), [{ rule: 'credential', path: 'token' }]);
+    assert.deepEqual(lint(v.strictObject({ apiKeys: v.array(id) }), { role: 'result' }), [
+      { rule: 'credential', path: 'apiKeys' },
+    ]);
   });
 
   it("lets #21's vault references and carriesSecret operations through", () => {
@@ -353,6 +412,9 @@ describe('the contract schema lint (#13, AC5)', () => {
       ['an endpoint', { endpoint: bounded }, 'endpoint'],
       ['a url check on any field', { target: v.pipe(v.string(), v.url(), v.maxLength(2048)) }, 'target'],
       ['a list of urls', { pageUrls: v.array(bounded) }, 'pageUrls'],
+      ['a link', { link: bounded }, 'link'],
+      ["a page's link", { pageLink: bounded }, 'pageLink'],
+      ["an image's src", { src: bounded }, 'src'],
     ])) {
       assert.deepEqual(
         lint(commandPayload('example', schema), { role: 'payload' }),
@@ -395,9 +457,23 @@ describe('the contract schema lint (#13, AC5)', () => {
       lint(commandPayload('example', { options: v.looseObject({ size: count }) }), { role: 'payload' }),
       [{ rule: 'loose-object', path: 'options' }],
     );
-    assert.deepEqual(lint(commandPayload('example', { label: v.optional(v.string()) }), { role: 'payload' }), [
-      { rule: 'unbounded-string', path: 'label' },
+    assert.deepEqual(lint(commandPayload('example', { mode: v.optional(v.string()) }), { role: 'payload' }), [
+      { rule: 'unbounded-string', path: 'mode' },
     ]);
+    // A pattern bounds a string only when it's anchored at both ends and repeats nothing
+    // without limit
+    for (const pattern of [/^a/, /a$/, /^a.*$/, /^[a-z]+$/, /^a{2,}$/, /^a\$/]) {
+      const found = lint(commandPayload('example', { mode: v.pipe(v.string(), v.regex(pattern)) }), {
+        role: 'payload',
+      });
+      assert.deepEqual(found, [{ rule: 'unbounded-string', path: 'mode' }], String(pattern));
+    }
+    for (const pattern of [/^\d{4}-\d{2}-\d{2}$/, /^(?:on|off)$/, /^[+*]{1,3}$/]) {
+      const found = lint(commandPayload('example', { mode: v.pipe(v.string(), v.regex(pattern)) }), {
+        role: 'payload',
+      });
+      assert.deepEqual(found, [], String(pattern));
+    }
     // In a content field each is fine, as a block or the insights are
     for (const schema of [v.unknown(), v.looseObject({ id: entityId('block') }), v.string()]) {
       assert.deepEqual(lint(commandPayload('example', { body: content(schema) }), { role: 'payload' }), []);
@@ -446,10 +522,32 @@ describe('the contract schema lint (#13, AC5)', () => {
 
   it('refuses what the user wrote outside content, in a payload, a frame, an answer, or a record', () => {
     const bounded = v.pipe(v.string(), v.maxLength(256));
-    for (const name of ['name', 'title', 'pageTitle', 'preview', 'content', 'previewText', 'insights', 'source']) {
+    for (const name of [
+      'name',
+      'title',
+      'pageTitle',
+      'preview',
+      'content',
+      'previewText',
+      'insights',
+      'source',
+      'heading',
+      'label',
+      'message',
+      'excerpt',
+      'tags',
+      'markdown',
+      'previews',
+      'titleHtml',
+    ]) {
       const found = lint(commandPayload('example', { [name]: v.optional(bounded) }), { role: 'payload' });
       assert.deepEqual(found, [{ rule: 'content-unmarked', path: name }], name);
     }
+    // A list is judged at its item, where its content() mark goes
+    assert.deepEqual(lint(commandPayload('example', { titles: v.array(content(bounded)) }), { role: 'payload' }), []);
+    assert.deepEqual(lint(commandPayload('example', { titles: v.array(bounded) }), { role: 'payload' }), [
+      { rule: 'content-unmarked', path: 'titles' },
+    ]);
     assert.deepEqual(lint(v.strictObject({ frame: v.literal('hint'), title: bounded }), { role: 'frame' }), [
       { rule: 'content-unmarked', path: 'title' },
     ]);
