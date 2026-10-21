@@ -120,7 +120,9 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {(listener: (state: ConnectionState) => void) => () => void} subscribe
  *   Tells `listener` each new state, until the function it returns is called
  * @property {() => void} retry
- *   Connects now when nothing is connecting, as the status region's Retry does
+ *   Connects now, as the status region's Retry does: from idle, once the coordinator was
+ *   unavailable, or instead of waiting out the pause before the next attempt. It does nothing
+ *   while a connection opens or is open.
  * @property {() => boolean} canReload
  *   Whether reloading the page loses nothing: no IME composition, no input the page hasn't
  *   committed, and no command of this client's waiting for its answer
@@ -583,7 +585,15 @@ export function createClient({
         listeners.delete(listener);
       };
     },
-    retry: begin,
+    retry() {
+      if (phase !== 'retrying') {
+        begin();
+        return;
+      }
+      // Instead of the wait before the next attempt, which it counts as
+      timers.clear(retryTimer);
+      connect();
+    },
     canReload() {
       try {
         if (isComposing() || hasPendingCommit()) return false;

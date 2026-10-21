@@ -479,6 +479,29 @@ describe('the client: connection status (#13, "Product and interaction requireme
     assert.equal(coordinator.last.requests().length, 1);
   });
 
+  it('connects at once on retry() while it waits to try again, and does nothing while a connection opens or is open', async () => {
+    const { scheduler, coordinator, client } = watched();
+    coordinator.reach = 'unreachable';
+    void client.query(getNote);
+    await settle();
+    assert.deepEqual([coordinator.attempts, client.state()], [1, 'reconnecting']);
+    client.retry();
+    await settle();
+    assert.equal(coordinator.attempts, 2);
+    // The wait it cut short doesn't try as well, and the next one runs from this attempt
+    await scheduler.advance(RECONNECT_DELAYS_MS[1] - 1);
+    assert.equal(coordinator.attempts, 2);
+    coordinator.reach = 'open';
+    await scheduler.advance(1);
+    assert.equal(coordinator.attempts, 3);
+    client.retry();
+    assert.equal(coordinator.attempts, 3);
+    coordinator.last.welcome();
+    await settle();
+    client.retry();
+    assert.deepEqual([coordinator.attempts, client.state()], [3, 'connected']);
+  });
+
   it('tries again once the coordinator was unavailable, on the next request or Retry, and a welcome resolves it', async () => {
     const { scheduler, coordinator, client, states } = watched();
     coordinator.reach = 'unreachable';
