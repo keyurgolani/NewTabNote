@@ -65,7 +65,8 @@ function warn(logger, event, detail) {
 }
 
 /**
- * A page's side: answers the requests addressed to its session, or to a lock it holds
+ * A page's side: answers the requests addressed to its session, or to a lock it holds, for
+ * as long as its channel is open
  * @param {object} options
  * @param {Channel} options.channel
  * @param {string} options.sessionId - its client's

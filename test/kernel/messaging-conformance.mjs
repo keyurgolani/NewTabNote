@@ -2,8 +2,9 @@
 // JSON codec, with a client on one side and the router on the other: correlation, deadlines,
 // cancellation with too-late, typed errors, the compatibility handshake, round-trip fidelity,
 // and a coordinator that goes away. The in-process transport runs it in
-// conformance-in-process.test.mjs, and the runtime port runs it on the Chrome fake (slice 2b).
-// Streams with backpressure join it with streams (slice 4).
+// conformance-in-process.test.mjs, and the runtime port on the Chrome fake in
+// conformance-runtime-port.test.mjs. Streams with backpressure, and MessagePorts, join it with
+// streams (slice 4).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
