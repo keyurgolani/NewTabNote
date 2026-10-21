@@ -5,7 +5,8 @@
 //   top-level code again after each stop. A worker that can't start, or has no onConnect
 //   listener, ends the port with the lastError Chrome sets, readable only in onDisconnect.
 // - Messages are JSON, as Chrome serializes them, and arrive on a later microtask, in order.
-// - disconnect() tells only the other end. A worker that stops disconnects every port it
+// - disconnect() tells only the other end, after what the port posted before it. A port that
+//   disconnected itself hears nothing more. A worker that stops disconnects every port it
 //   held, and a page that closes every port it opened. A disconnected port throws on
 //   postMessage, as Chrome's does.
 // - A port's sender is what Chrome reports for its page: the extension's id, the page's URL

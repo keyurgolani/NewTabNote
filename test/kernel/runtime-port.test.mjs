@@ -158,6 +158,36 @@ describe('the runtime port: the page side', () => {
     assert.deepEqual(closes, ['closed']);
   });
 
+  it('delivers what an end sent before it closed, then the close, and drops what was on its way to an end that closed, as the in-process transport does', async () => {
+    const fake = createChromeFake();
+    /** @type {Connection[]} */
+    const accepted = [];
+    fake.worker.install(chrome =>
+      installRuntimePort({ runtime: chrome.runtime, router: { accept: connection => accepted.push(connection) } }),
+    );
+    const runtime = fake.page('newtab').chrome.runtime;
+    const link = createRuntimePortTransport({ runtime }).connect();
+    await settle();
+    /** @type {string[]} */
+    const heard = [];
+    accepted[0].link.onMessage(text => heard.push(text));
+    accepted[0].link.onClose(reason => heard.push(`close ${reason}`));
+    link.send('the last command');
+    link.close();
+    await settle();
+    assert.deepEqual(heard, ['the last command', 'close closed']);
+
+    const again = createRuntimePortTransport({ runtime }).connect();
+    await settle();
+    /** @type {string[]} */
+    const back = [];
+    again.onMessage(text => back.push(text));
+    accepted[1].link.send('on its way');
+    again.close();
+    await settle();
+    assert.deepEqual(back, []);
+  });
+
   it('closes as unreachable when the worker could not be woken, and as closed when it stops', async () => {
     const { fake } = installed();
     const runtime = fake.page('newtab').chrome.runtime;

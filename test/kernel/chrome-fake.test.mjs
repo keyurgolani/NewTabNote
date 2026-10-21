@@ -67,6 +67,29 @@ describe('the Chrome fake (#13, "Test plan")', () => {
     assert.throws(() => ports[0].postMessage('late'), /Attempting to use a disconnected port object/);
   });
 
+  it('delivers what a port posted before it disconnected, then the disconnect, and drops what was on its way to a port that disconnected itself', async () => {
+    const { fake, ports, heard } = withWorker();
+    const page = fake.page('newtab');
+    const port = page.chrome.runtime.connect({ name: 'ntn-rpc' });
+    await settle();
+    ports[0].onDisconnect.addListener(() => heard.push('disconnect'));
+    // As a page's last journaled command goes on pagehide, just before its port closes
+    port.postMessage('the last command');
+    port.disconnect();
+    await settle();
+    assert.deepEqual(heard, ['the last command', 'disconnect']);
+
+    const again = page.chrome.runtime.connect({ name: 'ntn-rpc' });
+    await settle();
+    /** @type {unknown[]} */
+    const back = [];
+    again.onMessage.addListener((/** @type {unknown} */ message) => back.push(message));
+    ports[1].postMessage('on its way');
+    again.disconnect();
+    await settle();
+    assert.deepEqual(back, []);
+  });
+
   it('disconnects every port when the worker stops, with no lastError, and runs its top-level code again on the next connect', async () => {
     const { fake } = withWorker();
     const page = fake.page('sidepanel');
