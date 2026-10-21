@@ -9,6 +9,7 @@
  * @property {string[]} names
  * @property {IDBTransactionMode} mode
  * @property {IDBTransactionDurability | undefined} durability
+ * @property {IDBTransaction} tx - fake-indexeddb's, for a test to watch its events
  */
 
 /**
@@ -166,6 +167,7 @@ export function faultyFactory(real) {
           names: [names].flat(),
           mode: mode || 'readonly',
           durability: options && options.durability,
+          tx,
         });
         return wrapTransaction(tx);
       },
