@@ -2,8 +2,10 @@
  * One context's connection to CanvasTabDB (#17, "Transactions" and "Hosting"), opened one of
  * two ways, as #12's legacy adapter opens it:
  * - `versioned` (the new tab and the service worker): at this build's version, upgrading an
- *   older database by creating the stores it lacks, as Storage.open does. A database without
- *   `canvases` or `elements` is refused, `missing-core-stores`.
+ *   older database by creating the stores it lacks, as Storage.open does. A version-8 database
+ *   missing stores keeps them missing, and in a page the open first saves #33's recovery copy
+ *   of it (recovery.js). A database without `canvases` or `elements` is refused then,
+ *   `missing-core-stores`.
  * - `existing` (Popup and Side Panel): at whatever version is on disk, with no upgrade or
  *   repair. On a profile with no database it makes none, `no-database`.
  * A database a newer build upgraded is refused either way, `newer-schema` `version-too-new`,
@@ -26,9 +28,19 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { openFailureOf } from './failures.js';
-import { CORE_STORES, DB_NAME, DB_VERSION, createMissingStores } from './schema.js';
+import { writeMissingStoresCopy } from './recovery.js';
+import { CORE_STORES, DB_NAME, DB_VERSION, STORE_SCHEMAS, createMissingStores } from './schema.js';
 
 /** @typedef {'versioned' | 'existing'} OpenMode */
+/** @typedef {import('./adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('./recovery.js').Locks} Locks */
+/** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
+
+/**
+ * Where a page's versioned open saves its missing-stores copy (recovery.js): null for the
+ * service worker, and for Popup and Side Panel, which never write one
+ * @typedef {{settings: SettingsStore, locks?: Locks, logger: Logger}} Recovery
+ */
 
 /**
  * - `closed`: open() not called yet
@@ -56,10 +68,10 @@ import { CORE_STORES, DB_NAME, DB_VERSION, createMissingStores } from './schema.
 export const OPEN_WITHIN_MS = 5000;
 
 /**
- * @param {{indexedDB: IDBFactory, mode: OpenMode, openWithinMs?: number}} options
+ * @param {{indexedDB: IDBFactory, mode: OpenMode, openWithinMs?: number, recovery?: Recovery | null}} options
  * @returns {Connection}
  */
-export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_MS }) {
+export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_MS, recovery = null }) {
   /** @type {ConnectionState} */
   let state = 'closed';
   /** @type {IDBDatabase | null} */
@@ -112,28 +124,30 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
         fail(openFailureOf(error));
         return;
       }
+      // An older database gets the stores it lacks from the upgrade, and so needs no copy
+      let upgraded = false;
       request.onupgradeneeded = () => {
         // An existing open makes no database, and changes none
         if (mode === 'existing') {
           if (request.transaction) request.transaction.abort();
           return;
         }
+        upgraded = true;
         createMissingStores(request.result);
       };
       request.onblocked = () => {
         if (state === 'opening') state = 'blocked';
       };
-      request.onsuccess = () => {
-        const database = request.result;
+
+      /**
+       * The last checks on an open database, then it's this connection's
+       * @param {IDBDatabase} database
+       */
+      const settle = database => {
         // Closed while it opened: nothing may use it
         if (state === 'gone') {
           database.close();
           reject(new UnavailableError('storage', 'reload-required', false));
-          return;
-        }
-        if (database.version > DB_VERSION) {
-          database.close();
-          fail(new UnavailableError('newer-schema', 'version-too-new', false));
           return;
         }
         if (mode === 'versioned' && CORE_STORES.some(name => !database.objectStoreNames.contains(name))) {
@@ -143,6 +157,41 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
         }
         adopt(database);
         resolve();
+      };
+
+      request.onsuccess = () => {
+        const database = request.result;
+        if (state === 'gone') {
+          settle(database);
+          return;
+        }
+        if (database.version > DB_VERSION) {
+          database.close();
+          fail(new UnavailableError('newer-schema', 'version-too-new', false));
+          return;
+        }
+        // A version-8 database missing stores keeps them missing, as Storage.open keeps them,
+        // and a page saves a copy of it first, even of one it then refuses (recovery.js)
+        const missing =
+          recovery && !upgraded
+            ? Object.keys(STORE_SCHEMAS).filter(name => !database.objectStoreNames.contains(name))
+            : [];
+        if (missing.length === 0) {
+          settle(database);
+          return;
+        }
+        // It closes on versionchange while it copies too, so the copy never blocks an upgrade
+        database.onversionchange = () => {
+          database.close();
+          state = 'gone';
+        };
+        database.onclose = () => {
+          state = 'gone';
+        };
+        const { settings, locks, logger } = /** @type {Recovery} */ (recovery);
+        writeMissingStoresCopy({ db: database, missing, settings, locks })
+          .catch(error => logger.warn('recovery-copy-failed', { missingStores: missing, error }))
+          .then(() => settle(database));
       };
       request.onerror = () => {
         // The upgrade an existing open aborted: there was no database
