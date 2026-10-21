@@ -341,25 +341,25 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
    * database is blocked too. #17's read-only integrity scan moves to the worker root, at most
    * daily, and then to #35's job host.
+   *
+   * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
+   * it opens answers every call with maintenance's failure: when chrome.storage fails it, the
+   * page runs on, and with nothing marking the profile initialized, the next start tries again.
+   * One that can't read what's stored writes nothing, so no default lands over a setting.
    * @param {Work} work
    * @returns {Promise<Outcome>}
    */
   const maintain = async work => {
     // Popup and Side Panel never maintain the database
     if (mode !== 'versioned') return unavailable('adapter', 'maintenance-needs-versioned-open', false);
-    /** @type {Record<string, unknown>} */
-    let stored;
     try {
-      stored = (await settings.get([INITIALIZED_KEY, ...Object.keys(FIRST_RUN_SETTINGS)])) || {};
-    } catch (error) {
-      return unavailableFrom(settingsFailureOf(error, 'read'));
-    }
-    if (stored[INITIALIZED_KEY]) return work.done();
-    const missing = Object.entries(FIRST_RUN_SETTINGS).filter(([key]) => stored[key] === undefined);
-    try {
-      await settings.set({ ...Object.fromEntries(missing), [INITIALIZED_KEY]: true });
-    } catch (error) {
-      return unavailableFrom(settingsFailureOf(error, 'write'));
+      const stored = (await settings.get([INITIALIZED_KEY, ...Object.keys(FIRST_RUN_SETTINGS)])) || {};
+      if (!stored[INITIALIZED_KEY]) {
+        const missing = Object.entries(FIRST_RUN_SETTINGS).filter(([key]) => stored[key] === undefined);
+        await settings.set({ ...Object.fromEntries(missing), [INITIALIZED_KEY]: true });
+      }
+    } catch {
+      // The next start tries again
     }
     return work.done();
   };

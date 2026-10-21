@@ -409,6 +409,44 @@ describe('startup maintenance on the IndexedDB adapter', () => {
     assert.deepEqual([of.chrome.local.setting_theme, of.chrome.local.setting_font], ['dark', 'default']);
   });
 
+  it("doesn't stop the page when chrome.storage fails it, as Storage doesn't, and the next start writes the defaults", async () => {
+    const of = await made();
+    of.chrome.failNextSet();
+    const adapter = adapterOn(of);
+    const ready = adapter.open();
+    // A root that maintains as it opens, as the new tab's does
+    const tab = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+      ready,
+      maintainOnOpen: true,
+    });
+    assert.equal((await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' })).kind, 'committed');
+    assert.equal(of.chrome.local[INITIALIZED_KEY], undefined);
+    const worker = kernelOn(adapter, undefined, CALLERS['worker-internal']);
+    assert.equal((await worker.execute({ type: 'runStartupMaintenance', commandId: 'm2' })).kind, 'committed');
+    assert.deepEqual(legacyEnv.plain(of.chrome.local), await storageFirstRun());
+
+    // One that can't read what's stored writes nothing, so no default lands over a setting
+    const other = await made();
+    other.chrome.local.setting_theme = 'dark';
+    const unreadable = {
+      get: () => Promise.reject(new Error('The read failed')),
+      set: other.chrome.api.storage.local.set,
+    };
+    const reading = adapterOn(other, { settings: unreadable });
+    await reading.open();
+    const outcome = await kernelOn(reading, undefined, CALLERS['worker-internal']).execute({
+      type: 'runStartupMaintenance',
+      commandId: 'm1',
+    });
+    assert.equal(outcome.kind, 'committed');
+    assert.deepEqual(other.chrome.writes(), []);
+  });
+
   it('never runs on a database opened as it is', async () => {
     const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
     const adapter = adapterOn(of, { mode: 'existing' });
