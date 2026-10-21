@@ -1256,6 +1256,28 @@ export function runContractSuite(fixture) {
         }
       });
 
+      it("a derived write can't change a field by changing the record it read in place", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await noteOf('n1');
+        assert.ok(before && typeof before.viewport === 'object' && typeof before.settings === 'object');
+        /** @type {Array<[string, (note: Record<string, any>) => void]>} */
+        const changes = [
+          ['viewport', note => (note.viewport.scale = 9)],
+          ['settings', note => (note.settings.gridType = 'none')],
+          ['name', note => (note.name = 'Renamed')],
+        ];
+        for (const [field, change] of changes) {
+          const outcome = await commitScoped('derived', 'n1', async tx => {
+            const note = await tx.get('notes', 'n1');
+            if (!note) return;
+            change(note);
+            tx.put('notes', { ...note, preview: 'P' });
+          });
+          assertOutsideScope(outcome);
+          assert.deepEqual(await noteOf('n1'), before, field);
+        }
+      });
+
       it('a derived write changes the derived fields it carries, and nothing else it may touch', async () => {
         await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
         const before = await noteOf('n1');

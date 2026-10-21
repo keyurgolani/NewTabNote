@@ -1,12 +1,15 @@
 // Use cases taken apart: the order a unit issues its requests in, what a command does on an
 // adapter that commits each of its units on its own, as the legacy adapter does, and on one
-// that runs a command's units again after a commit that failed, as #17's adapter does.
+// that runs a command's units again after a commit that failed, as #17's adapter does. Then
+// what the derived scope lets a unit write.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
+import { derivedOnly } from '../../js/kernel/core/application/scopes.js';
+import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { dailyDateStr } from '../../js/kernel/core/domain/note.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -214,5 +217,48 @@ describe('units an adapter runs again', () => {
     assert.deepEqual(log, ['getAll notes', 'put blocks k1']);
     assert.deepEqual(work.done().changedIds, ['their-daily']);
     assert.deepEqual(work.primary && work.primary(), { store: 'notes', key: 'their-daily' });
+  });
+});
+
+describe('the derived scope', () => {
+  /**
+   * Runs `run` as a derived unit over a transaction holding `note`
+   * @param {Record<string, unknown> & {id: string}} note
+   * @param {(tx: Tx) => Promise<void>} run
+   */
+  const runDerived = async (note, run) => {
+    /** @type {string[]} */
+    const log = [];
+    /** @type {unknown} */
+    let error;
+    try {
+      await derivedOnly({ stores: ['notes'], run }).run(spyTx(log, { notes: { [note.id]: note } }));
+    } catch (caught) {
+      error = caught;
+    }
+    return { log, error };
+  };
+
+  it('takes a write whose other fields are copies of what it read, since their content is the same', async () => {
+    const note = { id: 'n1', name: 'Plan', viewport: { scale: 1, offsetX: 0 }, tags: ['a'], seenAt: new Date(NOW) };
+    const { log, error } = await runDerived(note, async tx => {
+      const read = await tx.get('notes', 'n1');
+      if (read) tx.put('notes', { ...structuredClone(read), preview: 'P' });
+    });
+    assert.equal(error, undefined);
+    assert.deepEqual(log, ['get notes n1', 'put notes n1']);
+  });
+
+  it("refuses a note with a field it can't compare, such as a Map, even for a write that keeps it", async () => {
+    const note = { id: 'n1', name: 'Plan', extra: new Map([['a', 1]]) };
+    const { log, error } = await runDerived(note, async tx => {
+      const read = await tx.get('notes', 'n1');
+      if (read) tx.put('notes', { ...read, preview: 'P' });
+    });
+    assert.deepEqual(error instanceof UnavailableError && [error.unavailableCause, error.code], [
+      'adapter',
+      'write-outside-scope',
+    ]);
+    assert.deepEqual(log, ['get notes n1']);
   });
 });

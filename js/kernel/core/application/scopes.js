@@ -15,7 +15,8 @@ import { DERIVED_FIELDS } from '../domain/note.js';
 const outsideScope = () => new UnavailableError('adapter', 'write-outside-scope', false);
 
 /**
- * `value` as canonical JSON, keys sorted, or null when it has no JSON form
+ * `value` as canonical JSON, keys sorted, or null when JSON can't write it out whole: a Map,
+ * a Blob, or any object but a plain one or an array
  * @param {unknown} value
  * @returns {string | null}
  */
@@ -26,6 +27,8 @@ function canonical(value) {
    */
   const sorted = (_, item) => {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError('no canonical form');
     const record = /** @type {Record<string, unknown>} */ (item);
     return Object.fromEntries(
       Object.keys(record)
@@ -41,16 +44,34 @@ function canonical(value) {
 }
 
 /**
- * Whether a field holds the same value after a write as before it. A unit spreads the record
- * it read, so a field it left alone is the same value, and one it copied compares by content.
- * @param {unknown} before
+ * A field's value as it was read: a primitive as itself, and an object as its canonical text,
+ * taken before the unit runs on, so a change the unit makes in place to the object still shows.
+ * An object with no canonical form gets a token nothing equals, so a write that keeps it is
+ * refused, since it can't be checked.
+ * @typedef {{value: unknown} | {text: string} | {unchecked: true}} FieldForm
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {FieldForm}
+ */
+function formOf(value) {
+  if (value === null || typeof value !== 'object') return { value };
+  const text = canonical(value);
+  return text === null ? { unchecked: true } : { text };
+}
+
+/**
+ * Whether a field holds the same value after a write as when it was read
+ * @param {FieldForm | undefined} before - undefined for a field the record didn't have
  * @param {unknown} after
  */
 function same(before, after) {
-  if (Object.is(before, after)) return true;
-  if (before === null || after === null || typeof before !== 'object' || typeof after !== 'object') return false;
-  const text = canonical(before);
-  return text !== null && text === canonical(after);
+  if (!before) return after === undefined;
+  const now = formOf(after);
+  if ('value' in before) return 'value' in now && Object.is(before.value, now.value);
+  if ('text' in before) return 'text' in now && before.text === now.text;
+  return false;
 }
 
 /**
@@ -59,13 +80,15 @@ function same(before, after) {
  * @returns {Tx}
  */
 function derivedTx(tx) {
-  /** @type {Map<string, Record<string, unknown> | undefined>} */
+  /** @type {Map<string, Map<string, FieldForm> | undefined>} */
   const read = new Map();
   return {
     get: (store, key) =>
       tx.get(store, key).then(record => {
         // What this transaction read, before the unit can change it
-        if (store === 'notes') read.set(key, record && { ...record });
+        if (store === 'notes') {
+          read.set(key, record && new Map(Object.entries(record).map(([field, value]) => [field, formOf(value)])));
+        }
         return record;
       }),
     getAll: store => tx.getAll(store),
@@ -76,8 +99,8 @@ function derivedTx(tx) {
       const before = store === 'notes' ? read.get(/** @type {string} */ (record.id)) : undefined;
       if (!before) throw outsideScope();
       const after = /** @type {Record<string, unknown>} */ (record);
-      for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-        if (!DERIVED_FIELDS.includes(key) && !same(before[key], after[key])) throw outsideScope();
+      for (const field of new Set([...before.keys(), ...Object.keys(after)])) {
+        if (!DERIVED_FIELDS.includes(field) && !same(before.get(field), after[field])) throw outsideScope();
       }
       tx.put(store, record);
     },
