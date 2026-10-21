@@ -330,12 +330,11 @@ export const noteCommands = {
     let kept = false;
     let renamed = false;
     const derive = changeNote(noteId, note => {
-      // A title set by hand stays, so the derived one is dropped
-      if (note.titleManuallySet) {
-        kept = true;
-        return null;
-      }
-      renamed = note.name !== name;
+      // A title set by hand stays, so the derived one is dropped. Each run decides both afresh,
+      // since an adapter may run the unit again (ports/repository.js, Unit)
+      kept = Boolean(note.titleManuallySet);
+      renamed = !kept && note.name !== name;
+      if (kept) return null;
       /** @type {NoteRecord} */
       const next = { ...note, name, lastAutoTitleAt: now, updatedAt: now };
       if (contentHash !== undefined) next.lastTitleContentHash = contentHash;
@@ -382,6 +381,11 @@ export const noteCommands = {
       {
         stores: ['notes'],
         async run(tx) {
+          // The later units follow what this one decides, and each run decides afresh, since
+          // an adapter may run the units again (ports/repository.js, Unit)
+          dailyId = noteId;
+          dailyName = '';
+          created = false;
           const daily = findDailyNote(await tx.getAll('notes'), now);
           if (daily) {
             dailyId = daily.id;

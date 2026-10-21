@@ -71,6 +71,11 @@ export const STORES = Object.freeze({
 /** @typedef {ReadTx & WriteTx} Tx */
 
 /**
+ * A unit can run more than once. An adapter whose transaction failed before anything in it
+ * committed may run the command's units again, from the first, in a new transaction (#17's
+ * IndexedDB adapter does once, for an abort or an UnknownError). So a run decides only from
+ * what it reads in its own transaction, and sets every value it decides, `when` and the
+ * work's `done`, `primary`, and `revised` included, for the run that commits.
  * @typedef {object} Unit
  * @property {StoreName[]} stores
  * @property {'readonly' | 'readwrite'} [mode] - readwrite unless the unit only reads
