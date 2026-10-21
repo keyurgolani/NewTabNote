@@ -232,7 +232,9 @@ class BlockEditor {
    * Reloading the open note reads it again after any edit typed during the reads
    * is written, so the reads never replace a newer edit.
    * @param {string} noteId - Note ID to load
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} Whether the editor shows that note now; false when the
+   *   load was superseded, refused to keep a deleted note's unsaved text on screen, or
+   *   found no such note
    */
   async loadNote(noteId) {
     const loadSeq = ++this._loadSeq;
@@ -241,10 +243,20 @@ class BlockEditor {
 
     // An import holds saves until it commits; the old note's edits go in after it.
     if (this._holdReleased) await this._holdReleased;
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return false;
+    // "Save as a new note" finishes first, so the text it saves goes with it.
+    if (this._savingAsNew) await this._savingAsNew;
+    if (loadSeq !== this._loadSeq) return false;
 
+    const knewGone = this.noteGone;
     await this.flushSave();
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return false;
+    // The note it shows turned out deleted with edits it couldn't save: it stays, with
+    // the text and the notice, so they aren't lost unseen.
+    if (this.noteGone && !knewGone && noteId !== this.noteId) {
+      this._resumeNoteTimers();
+      return false;
+    }
 
     let noteData = null;
     let blocksData = [];
@@ -252,7 +264,7 @@ class BlockEditor {
     for (let round = 0; ; round++) {
       noteData = await Storage.getNote(noteId);
       blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
-      if (loadSeq !== this._loadSeq) return;
+      if (loadSeq !== this._loadSeq) return false;
       // Switching notes, or nothing written since the reads started: they are current.
       if (noteId !== this.noteId || !this._hasPendingSave()) break;
       // Edits keep arriving during the reads: the editor's copy is the newest one.
@@ -262,14 +274,14 @@ class BlockEditor {
       }
       this._writePendingNow();
       await this._waitForWrites();
-      if (loadSeq !== this._loadSeq) return;
+      if (loadSeq !== this._loadSeq) return false;
     }
 
     if (!noteData) {
       // Keep the note that is loaded rather than pointing the editor at nothing.
       console.error('Note not found:', noteId);
       this._resumeNoteTimers();
-      return;
+      return this.noteId === noteId;
     }
 
     // Edits typed into the old note while the reads ran still belong to it.
@@ -277,9 +289,10 @@ class BlockEditor {
 
     if (keepEditorCopy) {
       this._resumeNoteTimers();
-      return;
+      return true;
     }
 
+    this._clearNoteGone();
     this.noteId = noteId;
     this.noteData = noteData;
     this.blocks = blocksData
@@ -350,10 +363,43 @@ class BlockEditor {
 
     // Render insights section if available (async - checks for extraction state)
     await this.renderInsights();
-    if (loadSeq !== this._loadSeq) return;
+    if (loadSeq !== this._loadSeq) return this.noteId === noteId;
 
     // Start polling if extraction is in progress
     await this.startInsightsPollingIfNeeded();
+    return this.noteId === noteId;
+  }
+
+  /**
+   * Show no note, as a hidden pane does once split view closes: what's
+   * pending is written first, then the note, its blocks, undo history, and
+   * selection go, so the pane keeps no stale copy of a note another pane
+   * shows. A pane keeping a deleted note's unsaved text on screen keeps it.
+   * @returns {Promise<boolean>} Whether the editor now shows no note
+   */
+  async unload() {
+    const loadSeq = ++this._loadSeq;
+    this._stopInsightsPolling();
+    this._stopSnapshotInterval();
+    if (this._holdReleased) await this._holdReleased;
+    if (this._savingAsNew) await this._savingAsNew;
+    await this.flushSave();
+    if (loadSeq !== this._loadSeq) return false;
+    if (this.noteGone) {
+      this._resumeNoteTimers();
+      return false;
+    }
+    this.noteId = null;
+    this.noteData = null;
+    this.blocks = [];
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._contentUndoPending = {};
+    this.clearBlockSelection();
+    this._snapshotDirty = false;
+    this.titleEl.textContent = '';
+    this.renderBlocks();
+    return true;
   }
 
   /**
@@ -2536,6 +2582,17 @@ class BlockEditor {
   }
 
   /**
+   * Whether a keydown or paste on the document is this editor's to handle
+   * (see _takesTypedKey). A hidden pane takes none, so it never undoes,
+   * deletes, or pastes into a stale copy of a note.
+   * @param {Event} e
+   * @returns {boolean}
+   */
+  _ownsDocumentEvent(e) {
+    return this._takesTypedKey(/** @type {any} */ (e && e.target));
+  }
+
+  /**
    * Handle global keydown. Both panes' editors listen on one document, and only
    * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
    * deleting a block selection happen in one pane. A text field outside the
@@ -3010,10 +3067,19 @@ class BlockEditor {
   }
 
   /**
-   * Handle global paste event with smart content detection (Req 34.1–34.6)
+   * Handle global paste event with smart content detection (Req 34.1–34.6).
+   * A paste follows the rules keys do (see onGlobalKeyDown): it is one pane's,
+   * a text field outside the note keeps it, and while a modal, menu, or dialog
+   * is open only a paste with focus in this editor's own pane is the note's.
+   * That last rule reads focus, not the target: with text selected in a block,
+   * the target is that block wherever focus went.
    * @param {ClipboardEvent} e
    */
   onPaste(e) {
+    if (!this._ownsDocumentEvent(e)) return;
+    if (this._inTextField(/** @type {Element} */ (e.target))) return;
+    if (!this._inOwnPane(this.doc.activeElement) && this._overlayOpen()) return;
+
     // Only handle if not in an input/textarea (unless it's our blocks)
     const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
     const isBlock = e.target.closest('.block-content');
@@ -3622,6 +3688,14 @@ class BlockEditor {
     this._holdReleased = null;
     /** @type {((value?: any) => void)|null} */
     this._releaseHold = null;
+    /** True once a save of the loaded note found it deleted: its text stays on screen, unsaved */
+    this.noteGone = false;
+    /** @type {HTMLElement|null} The notice that says so, with "Save as a new note" */
+    this._noteGoneNotice = null;
+    /** @type {Promise<void>|null} "Save as a new note" while it runs; loadNote waits for it */
+    this._savingAsNew = null;
+    /** @type {Set<string>} Deleted notes whose text "Save as a new note" saved under a new ID */
+    this._rescuedIds = new Set();
   }
 
   /**
@@ -3838,7 +3912,10 @@ class BlockEditor {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
       // null: the note was deleted meanwhile, so nothing was written and nothing is retried.
-      if (!(await this._writeSaveState(state))) return;
+      if (!(await this._writeSaveState(state))) {
+        this._onNoteGone(state);
+        return;
+      }
       await this._afterSaveWrite(state, meta.text);
     } catch (error) {
       this._onSaveFailed(error, state);
@@ -4033,7 +4110,11 @@ class BlockEditor {
     try {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      work = this._writeSaveState(state).then((saved) => (saved ? this._afterSaveWrite(state, meta.text) : undefined));
+      work = this._writeSaveState(state).then((saved) => {
+        if (saved) return this._afterSaveWrite(state, meta.text);
+        this._onNoteGone(state);
+        return undefined;
+      });
     } catch (error) {
       work = Promise.reject(error);
     }
@@ -4080,6 +4161,112 @@ class BlockEditor {
    */
   adoptNoteFlags(flags) {
     if (this.noteData) Object.assign(this.noteData, flags);
+  }
+
+  /**
+   * A save found its note deleted, so nothing was written. While the editor
+   * shows that note it says so, keeps the text on screen, and offers "Save as a
+   * new note"; nothing is created on its own. Changes to a note the editor has
+   * left (a failed save's retry) get a toast.
+   * @param {EditorSaveState} state
+   * @returns {void}
+   */
+  _onNoteGone(state) {
+    if (state.noteId !== this.noteId) {
+      // A write that was in flight when "Save as a new note" took the text is moot
+      if (!this._rescuedIds.has(state.noteId)) {
+        Utils.showToast("A note you edited was deleted, so its last changes aren't saved.", 'error');
+      }
+      return;
+    }
+    this.noteGone = true;
+    this.updateSaveStatus('Not saved');
+    if (this._noteGoneNotice) return;
+
+    const notice = this.doc.createElement('div');
+    notice.className = 'note-gone-notice';
+    notice.setAttribute('role', 'alert');
+    const text = this.doc.createElement('p');
+    text.className = 'note-gone-text';
+    text.textContent = "This note was deleted, so these changes aren't saved.";
+    const button = this.doc.createElement('button');
+    button.type = 'button';
+    button.className = 'primary-btn note-gone-btn';
+    button.textContent = 'Save as a new note';
+    button.addEventListener('click', () => this.saveAsNewNote());
+    notice.appendChild(text);
+    notice.appendChild(button);
+    const column = this.root.querySelector('.editor') || this.root;
+    column.insertBefore(notice, column.firstChild);
+    this._noteGoneNotice = notice;
+  }
+
+  /**
+   * @returns {void}
+   */
+  _clearNoteGone() {
+    if (this._noteGoneNotice) this._noteGoneNotice.remove();
+    this._noteGoneNotice = null;
+    this.noteGone = false;
+  }
+
+  /**
+   * "Save as a new note": a deleted note's text, still on screen, becomes a new
+   * active note with the same title, pin, and folder if it still exists. The
+   * editor keeps its blocks, under new IDs so they never share a record with
+   * the deleted note's, and writes them to the new note from here on, and the
+   * note's tab follows. A loadNote called meanwhile waits for it.
+   * @returns {Promise<void>}
+   */
+  saveAsNewNote() {
+    if (!this._savingAsNew && this.noteGone) {
+      this._savingAsNew = this._saveAsNewNote().finally(() => {
+        this._savingAsNew = null;
+      });
+    }
+    return this._savingAsNew || Promise.resolve();
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async _saveAsNewNote() {
+    const goneId = this.noteId;
+    const gone = this.noteData || {};
+    // Its folder only while that's still there (Replace all takes folders too): a note in a missing folder shows nowhere
+    const folder = gone.folderId ? await editorStorage().getFolder(gone.folderId).catch(() => null) : null;
+    let note;
+    try {
+      note = await editorStorage().createNote(gone.name || 'Untitled');
+    } catch (error) {
+      console.error('Save as a new note failed:', error);
+      Utils.showToast("Couldn't save this as a new note. Try again.", 'error');
+      return;
+    }
+    note.titleManuallySet = Boolean(gone.titleManuallySet);
+    note.folderId = folder ? folder.id : null;
+    note.pinned = Boolean(gone.pinned);
+    // The deleted note's pending and failed saves can't land anywhere; the new note gets all the text.
+    this._takePendingSave();
+    this._retryCopies.delete(goneId);
+    this._rescuedIds.add(goneId);
+    this.noteId = note.id;
+    this.noteData = note;
+    for (const block of this.blocks) block.id = Utils.generateId();
+    // Undo history points at the old IDs, and the blocks render again under the new ones
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._contentUndoPending = {};
+    this._clearNoteGone();
+    this.renderBlocks();
+    await this.save();
+    const app = this.getApp();
+    if (!app || !app.tabController) return;
+    try {
+      await app.tabController.noteReplaced(this, goneId, note);
+    } catch (error) {
+      console.error('The tab of a note saved as a new note did not follow it:', error);
+    }
   }
 
   /**

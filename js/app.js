@@ -60,7 +60,7 @@ class App {
     this.calendarMonth = now.getMonth();
     this.calendarYear = now.getFullYear();
     // Tab management
-    this.openTabs = []; // Array of { noteId, name, side }
+    this._openTabs = []; // Until TabController exists; see the openTabs accessor
     this.activeTabIndex = 0;
     // Auto-title
     this.autoTitleIntervalId = null;
@@ -124,6 +124,47 @@ class App {
         this.rebuildSearchIndex();
       }
     }, 300);
+  }
+
+  /**
+   * The open tabs. TabController owns them and replaces the array when it
+   * restores the saved tabs, so this reads its current array, never a copy.
+   * @returns {Array<any>}
+   */
+  get openTabs() {
+    return this.tabController ? this.tabController.openTabs : this._openTabs;
+  }
+
+  /** @param {Array<any>} tabs */
+  set openTabs(tabs) {
+    if (this.tabController) this.tabController.openTabs = tabs;
+    else this._openTabs = tabs;
+  }
+
+  /**
+   * Notes are about to leave the active set (trash, archive, delete): panes on
+   * them write what they have pending and move to other notes
+   * (TabController.forgetNotes). A failure there is logged and never stops the
+   * trash, archive, or delete itself.
+   * @param {Array<string>} ids
+   * @returns {Promise<void>}
+   */
+  async notesLeaving(ids) {
+    if (!this.tabController) return;
+    try {
+      await this.tabController.forgetNotes(ids);
+    } catch (error) {
+      console.error('Moving panes off notes that are leaving failed:', error);
+    }
+  }
+
+  /**
+   * Notes left the active set: the other new tabs refresh their lists.
+   * @param {Array<string>} ids
+   * @returns {void}
+   */
+  notesLeft(ids) {
+    if (this.tabController) this.tabController.announceNotesLeft(ids);
   }
 
   /**
@@ -253,6 +294,10 @@ class App {
         }
         await this.tabController.loadSavedTabs();
       }
+      // From here on, another new tab's trash, archive, or delete refreshes this one's lists
+      this.tabController.workspaceReady();
+      // Trash retention once this tab's panes and tabs can move off what it deletes; the other tabs refresh their lists
+      await this.sidebarController.runTrashCleanup().catch((error) => this.logger.error('App', 'Trash cleanup failed', error));
 
       this.updateEmptyState();
       this.updateBadgeCounts();
@@ -553,6 +598,8 @@ class App {
     this.sidebarController.onConvertNoteToTemplate = (noteId) => this.convertNoteToTemplate(noteId);
     this.sidebarController.onConvertTemplateToNote = (noteId) => this.convertTemplateToNote(noteId);
     this.sidebarController.onImportNote = (file) => this.importNote(file);
+    this.sidebarController.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.sidebarController.onNotesLeft = (ids) => this.notesLeft(ids);
 
     await this.sidebarController.init();
 
@@ -581,14 +628,14 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => Storage.createNote('Untitled');
-    this.tabController.onRefreshNotesList = () => this.refreshNotesList();
+    this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
     this.tabController.onGetNotes = () => this.notes;
+    this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     await this.tabController.init();
 
-    // Sync state back to App for backward compat
-    this.openTabs = this.tabController.openTabs;
+    // Sync state back to App for backward compat (openTabs reads the controller's own array)
     this.activeTabIndex = this.tabController.activeTabIndex;
     this.splitViewEnabled = this.tabController.splitViewEnabled;
     this.activeEditorSide = this.tabController.activeEditorSide;
@@ -666,9 +713,9 @@ class App {
     };
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
     this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
-    this.settingsController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
-    this.settingsController.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
-    this.settingsController.onHandleNoteRemoved = (noteId) => this.handleNoteRemoved(noteId);
+    this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
+    this.settingsController.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.settingsController.onNotesLeft = (ids) => this.notesLeft(ids);
     this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
     this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
@@ -884,7 +931,8 @@ class App {
     // Wire callbacks so the manager can trigger App-level actions
     this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
     this.notesManager.onRenderNotesList = () => this.renderNotesList();
-    this.notesManager.onCloseTabForNote = (noteId) => this.closeTabForNote(noteId);
+    this.notesManager.onNotesLeaving = (ids) => this.notesLeaving(ids);
+    this.notesManager.onNotesLeft = (ids) => this.notesLeft(ids);
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
     this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
@@ -2266,9 +2314,11 @@ class App {
     if (appStorage().missingStores.length > 0) return;
     const retentionDays = await Storage.getSetting('trashRetention', 30);
     if (retentionDays > 0) {
-      const deletedCount = await Storage.cleanupTrash(retentionDays);
-      if (deletedCount > 0) {
-        this.logger.info('App', `Auto-deleted ${deletedCount} expired note(s) from trash`);
+      const ids = await Storage.cleanupTrash(retentionDays);
+      if (ids.length > 0) {
+        this.logger.info('App', `Auto-deleted ${ids.length} expired note(s) from trash`);
+        if (this.notesLeaving) await this.notesLeaving(ids);
+        if (this.notesLeft) this.notesLeft(ids);
         await this.refreshNotesList();
       }
     }
@@ -2339,9 +2389,12 @@ class App {
   }
 
   /**
-   * Refresh notes list from storage
+   * Refresh notes list from storage. With `listsOnly`, as for another tab's
+   * change, the lists and counts refresh and the editor area stays as it is.
+   * @param {{listsOnly?: boolean}} [options]
+   * @returns {Promise<void>}
    */
-  async refreshNotesList() {
+  async refreshNotesList({ listsOnly = false } = {}) {
     this.notes = await Storage.getAllNotes();
     this.archivedNotes = await Storage.getArchivedNotes();
     this.trashedNotes = await Storage.getTrashedNotes();
@@ -2379,7 +2432,7 @@ class App {
     }
 
     this.refreshPageSelector();
-    this.updateEmptyState();
+    if (!listsOnly) this.updateEmptyState();
     if (this.shortcutsManager) {
       if (this.shortcutsManager.isCommandPaletteOpen()) {
         this.shortcutsManager.refreshCommandPaletteResults();

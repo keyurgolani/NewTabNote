@@ -7,7 +7,8 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, plain, note, block, FakeDocument,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
+  runUntil,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -49,49 +50,6 @@ async function openPiP(env, noteId) {
   const pip = allowDeletes(makeEditor(env, pipDoc));
   await pip.loadNote(noteId);
   return { pip, pipWindow };
-}
-
-/**
- * A BlockEditor without its DOM constructor: render methods stubbed, real Storage.
- * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {FakeDocument} [doc]
- */
-function makeEditor(env, doc = env.document) {
-  const BlockEditor = env.get('BlockEditor');
-  const editor = Object.create(BlockEditor.prototype);
-  Object.assign(editor, {
-    root: { querySelector: () => null },
-    doc,
-    noteId: null,
-    noteData: null,
-    blocks: [],
-    titleEl: { textContent: '' },
-    container: { querySelector: () => null },
-    insightsPollingId: null,
-    undoStack: [],
-    redoStack: [],
-    _contentUndoPending: {},
-    selectedBlockIds: new Set(),
-    _snapshotDirty: false,
-    _snapshotInterval: null,
-    hasReceivedFirstContent: false,
-    pendingAutoTitle: false,
-  });
-  editor._initPersistenceState();
-  editor._bindLifecycleFlush();
-  const noop = () => {};
-  Object.assign(editor, {
-    renderBlocks: noop,
-    renderBacklinks: noop,
-    updateTimestampDisplay: noop,
-    updateSaveStatus: noop,
-    clearBlockSelection: noop,
-    placeCaretAtEnd: noop,
-    renderInsights: async () => {},
-    startInsightsPollingIfNeeded: async () => {},
-    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
-  });
-  return editor;
 }
 
 /** Type into the first block of the loaded note, as onBlockInput does. */
@@ -138,17 +96,6 @@ async function setup() {
 async function elementsById(env) {
   const rows = recordsOf(await dumpDatabase(env.indexedDB), 'elements');
   return Object.fromEntries(Object.entries(rows).map(([id, el]) => [id, { canvasId: el.canvasId, content: el.content }]));
-}
-
-/** Keep animation frames flowing until `promise` settles. */
-async function runUntil(env, promise) {
-  let finished = false;
-  const tracked = Promise.resolve(promise).finally(() => { finished = true; });
-  for (let i = 0; i < 400 && !finished; i++) {
-    env.frames();
-    await settle(2);
-  }
-  return tracked;
 }
 
 /**
@@ -588,8 +535,9 @@ describe('BlockEditor saves of a deleted note', () => {
     const db = await dumpDatabase(env.indexedDB);
     return { notes: recordsOf(db, 'canvases'), elements: Object.values(recordsOf(db, 'elements')) };
   };
+  const noticeOf = (ed) => ed.root.querySelector('.note-gone-notice');
 
-  it('an edit still pending when the note is deleted does not bring the note back', async () => {
+  it('an edit still pending when the note is deleted does not bring it back, and stays on screen with a notice', async () => {
     type(editor, 'typed before the delete');
     await Storage.permanentlyDeleteNote('A'); // emptying trash, or another tab
     await runUntil(env, editor.loadNote('B')); // the switch writes the pending edit
@@ -597,16 +545,85 @@ describe('BlockEditor saves of a deleted note', () => {
     const { notes, elements } = await stored();
     assert.equal(notes.A, undefined, 'A stays deleted');
     assert.deepEqual(elements.filter((el) => el.canvasId === 'A'), [], 'its blocks too');
-    assert.deepEqual(feedback.toasts, []);
     assert.equal(editor._retryPending, false, 'no retry');
+
+    assert.equal(editor.noteId, 'A', 'the editor stays on the text instead of loading B');
+    assert.equal(editor.blocks[0].content, 'typed before the delete');
+    assert.equal(editor.noteGone, true);
+    const notice = noticeOf(editor);
+    assert.ok(notice, 'a notice says the text is not saved');
+    assert.equal(notice.getAttribute('role'), 'alert');
+    assert.equal(notice.querySelector('.note-gone-text').textContent, "This note was deleted, so these changes aren't saved.");
+    assert.equal(notice.querySelector('.note-gone-btn').textContent, 'Save as a new note');
+    assert.equal(feedback.statuses.at(-1), 'Not saved');
+    assert.deepEqual(feedback.toasts, []);
   });
 
-  it('trashing an empty untitled note while an edit is pending deletes it for good', async () => {
+  it('"Save as a new note" keeps the text in a new active note, and later typing saves there', async () => {
+    type(editor, 'typed before the delete');
+    await Storage.permanentlyDeleteNote('A');
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true);
+
+    noticeOf(editor).querySelector('.note-gone-btn').click();
+    await runUntil(env, waitFor(() => !editor._savingAsNew && editor.noteId !== 'A', { message: 'the new note' }));
+
+    const copyId = editor.noteId;
+    assert.equal(editor.noteGone, false);
+    assert.equal(noticeOf(editor), null, 'the notice is gone');
+    let { notes, elements } = await stored();
+    assert.equal(notes.A, undefined, 'A stays deleted');
+    assert.equal(notes[copyId].name, 'Note A', 'the new note keeps the title');
+    assert.equal(notes[copyId].trashed, undefined);
+    assert.deepEqual(
+      elements.filter((el) => el.canvasId === copyId).sort((a, b) => a.order - b.order).map((el) => el.content),
+      ['typed before the delete', 'alpha two'],
+    );
+
+    type(editor, 'typed after saving it');
+    await runUntil(env, editor.flushSave());
+    ({ elements } = await stored());
+    assert.ok(elements.some((el) => el.canvasId === copyId && el.content === 'typed after saving it'));
+    assert.deepEqual(feedback.toasts, []);
+  });
+
+  it('a note picked while "Save as a new note" runs opens after it, and each note keeps its own blocks', async () => {
+    type(editor, 'typed before the delete');
+    await Storage.permanentlyDeleteNote('A');
+    await runUntil(env, editor.flushSave());
+
+    const saving = editor.saveAsNewNote();
+    const load = editor.loadNote('B');
+    await runUntil(env, Promise.all([saving, load]));
+
+    assert.equal(editor.noteId, 'B');
+    assert.deepEqual(editor.blocks.map((b) => b.id), ['b1']);
+    const { notes, elements } = await stored();
+    const copy = Object.values(notes).find((n) => n.name === 'Note A');
+    assert.ok(copy, 'the text was saved as a new note');
+    assert.ok(elements.some((el) => el.canvasId === copy.id && el.content === 'typed before the delete'));
+    assert.deepEqual(elements.filter((el) => el.canvasId === 'B').map((el) => el.id), ['b1'], "B's block stays with B");
+  });
+
+  it('moving on from the notice loads the next note', async () => {
+    type(editor, 'typed before the delete');
+    await Storage.permanentlyDeleteNote('A');
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true);
+
+    await runUntil(env, editor.loadNote('B'));
+    assert.equal(editor.noteId, 'B');
+    assert.equal(editor.noteGone, false);
+    assert.equal(noticeOf(editor), null);
+    assert.equal((await stored()).notes.A, undefined, 'A stays deleted');
+  });
+
+  it('trashing an empty untitled note while an edit is pending deletes it for good, and the editor keeps the text', async () => {
     const untitled = await Storage.createNote('Untitled');
     await runUntil(env, editor.loadNote(untitled.id));
     type(editor, 'typed into the untitled note');
 
-    // The sidebar trashes it; with no stored content trashNote deletes it, then opens another note.
+    // Storage alone: with no stored content, trashNote deletes it. The app writes the edit first (forgetNotes).
     const trashed = await Storage.trashNote(untitled.id);
     assert.equal(trashed.permanentlyDeleted, true);
     await runUntil(env, editor.loadNote('B'));
@@ -614,10 +631,13 @@ describe('BlockEditor saves of a deleted note', () => {
     const { notes, elements } = await stored();
     assert.equal(notes[untitled.id], undefined, 'not back as an active note');
     assert.deepEqual(elements.filter((el) => el.canvasId === untitled.id), []);
+    assert.equal(editor.noteId, untitled.id, 'the text stays on screen');
+    assert.equal(editor.blocks[0].content, 'typed into the untitled note');
+    assert.ok(noticeOf(editor));
     assert.deepEqual(feedback.toasts, []);
   });
 
-  it('the retry of a note deleted meanwhile neither brings it back nor shows an error', async () => {
+  it('the retry of a note deleted meanwhile does not bring it back, and a toast says its last changes are lost', async () => {
     failWritesOf(Storage, 'A', 1);
     const load = editor.loadNote('B');
     type(editor, 'typed while switching');
@@ -633,8 +653,10 @@ describe('BlockEditor saves of a deleted note', () => {
     const { notes, elements } = await stored();
     assert.equal(notes.A, undefined);
     assert.deepEqual(elements.filter((el) => el.canvasId === 'A'), []);
-    assert.deepEqual(feedback.toasts, []);
+    assert.deepEqual(feedback.toasts, [{ message: "A note you edited was deleted, so its last changes aren't saved.", kind: 'error' }]);
     assert.ok(!feedback.statuses.includes('Error saving'));
+    assert.equal(editor.noteGone, false, 'the note on screen is fine');
+    assert.equal(noticeOf(editor), null);
   });
 });
 

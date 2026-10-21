@@ -2,10 +2,11 @@
  * Every overlay the editor counts as open (OPEN_OVERLAYS in js/editor.js) closes, and stops
  * counting once it has. While one is open, keys from outside the note stay out of it, so an
  * overlay that never closes, or still counts as open once closed, would hold every key. For
- * each overlay the new tab opens, in either pane: while it's open, keys from outside the
- * note leave the notes and what is stored alone; Escape closes it; a click outside closes it
- * where one should; and once it's closed, letters typed with focus outside the note reach it
- * again. Each test ends with the uncaught-exception check.
+ * each overlay the new tab opens, in either pane: while it's open, keys and pastes from
+ * outside the note leave the notes and what is stored alone; Escape closes it; a click
+ * outside closes it where one should; and once it's closed, letters typed with focus outside
+ * the note reach it again. The pastes are real ones, from the clipboard. Each test ends with
+ * the uncaught-exception check.
  */
 
 const { test, expect, expectNoUncaught } = require('../harness');
@@ -228,6 +229,7 @@ async function newTab(extension, side) {
   await driver.seedNotes(extension, side === 'right' ? [...NOTES, PACKING] : NOTES);
   await extension.worker.evaluate(() => self.Storage.createFolder('Work'));
   const page = await driver.openNewTab(extension);
+  await extension.context.grantPermissions(['clipboard-read', 'clipboard-write']);
   if (side === 'right') {
     await driver.openSplitView(page);
     await driver.clickRightPaneBlock(page, 1);
@@ -253,9 +255,12 @@ async function notesNow(page, overlay) {
   return now;
 }
 
+/** Plain text, and fenced code, which the editor turns into a block */
+const PASTES = [' and cheese', '```\nconst a = 1;\n```'];
+
 /**
- * Press letters, Backspace, Delete, undo, and redo with focus outside the note, and check
- * that the notes and what is stored are as they were
+ * Press letters, Backspace, Delete, undo, and redo, and paste, with focus outside the note,
+ * and check that the notes and what is stored are as they were
  */
 async function keysStayOut(page, overlay) {
   if (overlay.inNote) {
@@ -267,6 +272,10 @@ async function keysStayOut(page, overlay) {
   const before = await notesNow(page, overlay);
   await page.keyboard.type('zap');
   for (const key of ['Backspace', 'Delete', 'ControlOrMeta+z', 'ControlOrMeta+Shift+KeyZ']) await page.keyboard.press(key);
+  for (const text of PASTES) {
+    await page.evaluate(value => navigator.clipboard.writeText(value), text);
+    await page.keyboard.press('ControlOrMeta+KeyV');
+  }
   expect(await notesNow(page, overlay), `the notes and what is stored, with ${overlay.name} open`).toEqual(before);
 }
 
@@ -282,7 +291,7 @@ async function typingReachesNote(page, overlay, how) {
 }
 
 for (const overlay of OVERLAYS) {
-  test(`${overlay.name}: keys from outside the note stay out of it while it's open, Escape${overlay.outside ? ' and a click outside close' : ' closes'} it, and typing reaches the note after`, async ({ extension }) => {
+  test(`${overlay.name}: keys and pastes from outside the note stay out of it while it's open, Escape${overlay.outside ? ' and a click outside close' : ' closes'} it, and typing reaches the note after`, async ({ extension }) => {
     const page = await newTab(extension, overlay.side);
 
     await overlay.open(page);
@@ -309,8 +318,9 @@ for (const [how, close] of [
   ['Escape', page => page.keyboard.press('Escape')],
   ['a click outside', page => page.mouse.click(1000, 60)],
 ]) {
-  test(`onboarding: keys stay out of the welcome note while the walkthrough and the quick-start choice are open, ${how} closes each, and typing reaches the note after`, async ({ extension }) => {
+  test(`onboarding: keys and pastes stay out of the welcome note while the walkthrough and the quick-start choice are open, ${how} closes each, and typing reaches the note after`, async ({ extension }) => {
     const page = await driver.openNewTab(extension, { wait: false });
+    await extension.context.grantPermissions(['clipboard-read', 'clipboard-write']);
     const walkthrough = page.getByRole('dialog', { name: 'Onboarding walkthrough' });
     await expect(walkthrough).toBeVisible();
     await expect(page.locator('#page-title')).toHaveText('Welcome to NewTabNote 🚀');

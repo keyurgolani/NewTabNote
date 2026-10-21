@@ -415,6 +415,46 @@ function createLockManager() {
   };
 }
 
+// ─── BroadcastChannel stub ───
+
+/**
+ * BroadcastChannel between pages. Share one bus between environments to model
+ * extension pages of the same origin. A message reaches every other open
+ * channel of the same name on a later turn, never the one that sent it.
+ */
+function createChannelBus() {
+  /** @type {Map<string, Set<any>>} */
+  const open = new Map();
+  const sent = [];
+  class FakeBroadcastChannel {
+    constructor(name) {
+      this.name = String(name);
+      this.onmessage = null;
+      this.closed = false;
+      if (!open.has(this.name)) open.set(this.name, new Set());
+      open.get(this.name).add(this);
+    }
+
+    postMessage(data) {
+      if (this.closed) throw new Error('InvalidStateError: the channel is closed');
+      const message = structuredClone(data);
+      sent.push({ name: this.name, data: message });
+      for (const other of open.get(this.name)) {
+        if (other === this) continue;
+        setImmediate(() => {
+          if (!other.closed && other.onmessage) other.onmessage({ data: structuredClone(message) });
+        });
+      }
+    }
+
+    close() {
+      this.closed = true;
+      open.get(this.name).delete(this);
+    }
+  }
+  return { BroadcastChannel: FakeBroadcastChannel, sent };
+}
+
 // ─── chrome.* stub ───
 
 function createEventStub() {
@@ -531,6 +571,8 @@ function createChromeStub() {
  * @param {ReturnType<typeof createChromeStub>} [options.chrome] - share chrome.* (and chrome.storage.local) with another environment
  * @param {ReturnType<typeof createLockManager>|null} [options.locks] - share navigator.locks with another
  *   environment, or pass null for a context without it
+ * @param {ReturnType<typeof createChannelBus>} [options.channels] - share BroadcastChannel with another
+ *   environment, as two new tabs do
  */
 function createLegacyEnv(options = {}) {
   const kind = options.context || 'page';
@@ -539,6 +581,7 @@ function createLegacyEnv(options = {}) {
   const frames = [];
   const chrome = options.chrome || createChromeStub();
   const locks = options.locks === null ? undefined : (options.locks || createLockManager());
+  const channels = options.channels || createChannelBus();
   const logs = [];
   const record = (level) => (...args) => { logs.push({ level, args }); };
   const quietConsole = {
@@ -564,6 +607,7 @@ function createLegacyEnv(options = {}) {
     requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     cancelAnimationFrame: () => {},
     chrome: chrome.api,
+    BroadcastChannel: channels.BroadcastChannel,
     navigator: { maxTouchPoints: 0, userAgent: 'node-test', locks },
     location: { reload() { sandbox.__reloads = (sandbox.__reloads || 0) + 1; } },
   };
@@ -612,6 +656,7 @@ function createLegacyEnv(options = {}) {
     indexedDB,
     clock,
     chrome,
+    channels,
     logs,
     loaded,
     load,
@@ -809,15 +854,162 @@ function block(id, canvasId, order, content = `Block ${id}`, fields = {}) {
   };
 }
 
+// ─── The new tab's note workspace, without App ───
+
+/**
+ * A BlockEditor without its DOM constructor: real persistence and Storage,
+ * render methods stubbed. Its root is a pane (`.editor-pane`, active unless
+ * `root` is given) holding the writing column (`.editor`) with the title and
+ * the blocks container, where the editor puts its own notices.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @param {FakeDocument} [doc] - Its own document, as the PiP window has
+ * @param {{root?: FakeElement|null}} [options] - The pane element to use, as App passes #editor-container
+ */
+function makeEditor(env, doc = env.document, { root: pane = null } = {}) {
+  const BlockEditor = env.get('BlockEditor');
+  const editor = Object.create(BlockEditor.prototype);
+  const root = pane || doc.createElement('div');
+  if (!pane) root.className = 'editor-pane active';
+  const column = root.appendChild(doc.createElement('div'));
+  column.className = 'editor';
+  const titleEl = column.appendChild(doc.createElement('div'));
+  titleEl.className = 'page-title';
+  const container = column.appendChild(doc.createElement('div'));
+  container.className = 'blocks-container';
+  Object.assign(editor, {
+    root,
+    doc,
+    noteId: null,
+    noteData: null,
+    blocks: [],
+    titleEl,
+    container,
+    insightsPollingId: null,
+    undoStack: [],
+    redoStack: [],
+    _contentUndoPending: {},
+    selectedBlockIds: new Set(),
+    _snapshotDirty: false,
+    _snapshotInterval: null,
+    hasReceivedFirstContent: false,
+    pendingAutoTitle: false,
+  });
+  editor._initPersistenceState();
+  editor._bindLifecycleFlush();
+  const noop = () => {};
+  Object.assign(editor, {
+    renderBlocks: noop,
+    renderBacklinks: noop,
+    updateTimestampDisplay: noop,
+    updateSaveStatus: noop,
+    clearBlockSelection: noop,
+    placeCaretAtEnd: noop,
+    renderInsights: async () => {},
+    startInsightsPollingIfNeeded: async () => {},
+    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
+  });
+  return editor;
+}
+
+/** Keep animation frames flowing until `promise` settles, as a visible page does. */
+async function runUntil(env, promise) {
+  let finished = false;
+  const tracked = Promise.resolve(promise).finally(() => { finished = true; });
+  for (let i = 0; i < 400 && !finished; i++) {
+    env.frames();
+    await settle(2);
+  }
+  return tracked;
+}
+
+/** What App loads for the note workspace, in its order. */
+const NEW_TAB_FILES = [
+  'js/utils.js',
+  'js/core/storage-error.js',
+  'js/ui/confirm-dialog.js',
+  'js/storage.js',
+  'js/sidebar-utils.js',
+  'js/blocks.js',
+  'js/editor.js',
+  'js/controllers/tab-controller.js',
+  'js/controllers/notes-manager.js',
+  'js/controllers/sidebar-controller.js',
+  'js/controllers/settings-controller.js',
+];
+
+/**
+ * A new tab's note workspace without App: Storage started, the elements the tab
+ * bar and split view touch, and a TabController with both panes, wired the way
+ * App wires it. `page.notes` stands in for App's list of active notes, which
+ * onRefreshNotesList refreshes. `wire(controller)` gives a controller that takes
+ * notes out of the active set App's hooks for it. With `ready: false` the tab
+ * is still starting up: other tabs' messages refresh nothing until `tabs.workspaceReady()`.
+ * `page.refreshes` counts the refreshes, and `page.listsOnly` the ones that asked for lists only.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @param {{files?: Array<string>, ready?: boolean}} [options]
+ */
+async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
+  env.load(...files);
+  const Storage = env.get('Storage');
+  await Storage.init();
+  const panes = env.document.stub([
+    'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
+    'settings-modal', 'sidebar-trash-actions',
+  ]);
+  // The two panes as newtab.html has them, which the editors use as their roots
+  panes['editor-container'].className = 'editor-pane active';
+  panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
+  const TabController = env.get('TabController');
+  const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
+  tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
+  const page = { notes: await Storage.getAllNotes(), refreshes: 0, listsOnly: 0 };
+  tabs.onGetNotes = () => page.notes;
+  tabs.onCreateNote = () => Storage.createNote('Untitled');
+  tabs.onRefreshNotesList = async ({ listsOnly = false } = {}) => {
+    page.notes = await Storage.getAllNotes();
+    page.refreshes += 1;
+    if (listsOnly) page.listsOnly += 1;
+  };
+  tabs.onRenderNotesList = async () => {};
+  tabs.onUpdateEmptyState = () => {};
+  // As App sets window.app, where an editor finds the tab controller
+  env.global.app = { tabController: tabs };
+  await tabs.init();
+  if (ready) tabs.workspaceReady();
+  const wire = (controller) => Object.assign(controller, {
+    onNotesLeaving: (ids) => tabs.forgetNotes(ids),
+    onNotesLeft: (ids) => tabs.announceNotesLeft(ids),
+    onRefreshNotesList: tabs.onRefreshNotesList,
+    onUpdateEmptyState: () => {},
+    onOpenNoteInNewTab: (noteId) => tabs.openNoteInNewTab(noteId),
+    onOpenImportedNote: (noteId) => tabs.openImportedNote(noteId),
+    getEditor: () => tabs.getEditor(),
+  });
+  return { Storage, tabs, page, wire };
+}
+
+/** The tab names the tab bar shows, in order. */
+function shownTabs(env) {
+  const bar = env.document.getElementById('note-tabs');
+  return bar ? bar.querySelectorAll('.note-tab-name').map((name) => name.textContent) : [];
+}
+
 module.exports = {
   DB_NAME,
   SCHEMA_V8,
+  NEW_TAB_FILES,
   FakeClock,
   FakeDocument,
   FakeElement,
   createLegacyEnv,
   createChromeStub,
   createLockManager,
+  createChannelBus,
+  makeEditor,
+  runUntil,
+  bootNewTab,
+  shownTabs,
   createDatabase,
   dumpDatabase,
   recordsOf,
