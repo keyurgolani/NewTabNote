@@ -14,6 +14,7 @@
  */
 
 import { isRecord } from './checks.js';
+import { clone } from './clone.js';
 import { check } from './validate.js';
 
 /** @typedef {import('./validate.js').Operation} Operation */
@@ -60,8 +61,16 @@ export function upcastJournalEntry({ v, command }, lookup, upcasters = JOURNAL_U
   if (!operation || operation.entry.kind !== 'command') return refuse('unknown-operation');
   const { type, commandId } = command;
   const steps = Object.hasOwn(upcasters, type) ? upcasters[type] : {};
+  // The steps get a copy, since a step that edits its input in place and then throws would
+  // otherwise leave #35 half an upcast for the conflict record it keeps of the entry. It's the
+  // kernel's own copy, which takes only what the codec carries, as a journaled command is
   /** @type {Record<string, unknown>} */
-  let current = command;
+  let current;
+  try {
+    current = clone(command);
+  } catch {
+    return refuse('invalid-payload');
+  }
   for (let version = /** @type {number} */ (v); version < operation.entry.version; version++) {
     if (!Object.hasOwn(steps, version)) return refuse('unsupported-version');
     try {

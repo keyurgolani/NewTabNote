@@ -110,6 +110,47 @@ describe('upcastJournalEntry (#13, "Handshake and compatibility")', () => {
     }
   });
 
+  it("leaves the entry's command as it was, even when a step edits its input in place", () => {
+    const fromOne = { type: 'renameNote', commandId: 'c1', noteId: 'n1', title: 'Plan', meta: { tags: ['a'] } };
+    const before = structuredClone(fromOne);
+    /** @param {(input: any) => Record<string, unknown>} edit */
+    const stepThat = edit => /** @type {Upcasters} */ ({ renameNote: { 1: command => edit(command) } });
+    // A step that edits and then throws leaves #35 the entry as it was, for its conflict record
+    const failing = stepThat(input => {
+      input.title = 'half done';
+      input.meta.tags.push('b');
+      throw new Error('step failed');
+    });
+    const refused = upcastJournalEntry({ v: 1, command: fromOne }, renameAt(2), failing);
+    assert.deepEqual(refused, { ok: false, code: 'invalid-payload', issues: [] });
+    assert.deepEqual(fromOne, before);
+    const passing = stepThat(input => {
+      input.name = input.title;
+      input.origin = 'typed';
+      delete input.title;
+      delete input.meta;
+      return input;
+    });
+    assert.deepEqual(upcastJournalEntry({ v: 1, command: fromOne }, renameAt(2), passing), {
+      ok: true,
+      command: rename,
+    });
+    assert.deepEqual(fromOne, before);
+  });
+
+  it("refuses an entry whose command the kernel's copy can't take, before any step or schema runs", () => {
+    /** @type {Record<string, unknown>} */
+    const looped = { ...rename };
+    looped.self = looped;
+    for (const command of [{ ...rename, at: new Date(0) }, { ...rename, step: () => {} }, looped]) {
+      assert.deepEqual(upcastJournalEntry({ v: 1, command }, lookup), {
+        ok: false,
+        code: 'invalid-payload',
+        issues: [],
+      });
+    }
+  });
+
   it('refuses an entry that names no command, a query, or a version that is no positive integer', () => {
     for (const v of [0, -1, 1.5, '1', undefined, null]) {
       assert.deepEqual(upcastJournalEntry({ v, command: rename }, lookup), {
