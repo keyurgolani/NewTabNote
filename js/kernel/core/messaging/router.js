@@ -75,7 +75,8 @@ import { createScopeCheck } from './scope.js';
  *   commit is never cut off halfway.
  * @property {(listener: () => void) => void} onCancel
  *   Tells `listener` once if the router stops waiting for the answer: a query, or a command
- *   that hasn't begun, was cancelled, its deadline came, or its connection closed
+ *   that hasn't begun, was cancelled, its deadline came, or its connection closed. A listener
+ *   added after that is told at once.
  */
 
 /**
@@ -119,6 +120,7 @@ import { createScopeCheck } from './scope.js';
  * @property {boolean} begun - a command's handler has opened its transaction
  * @property {boolean} ended - the router has stopped waiting for its answer
  * @property {boolean} cancelAsked - a cancel came after the command began
+ * @property {boolean} stopped - it ended unanswered, and its handler was told to stop
  * @property {unknown} timer
  * @property {Array<() => void>} listeners - told if it ends unanswered
  */
@@ -298,12 +300,19 @@ export function createRouter({
     timers.clear(running.timer);
     peer.running.delete(requestId);
     if (!tell) return;
-    for (const listener of running.listeners) {
-      try {
-        listener();
-      } catch (error) {
-        warn('router-cancel-listener-failed', { error });
-      }
+    running.stopped = true;
+    for (const listener of running.listeners) stop(listener);
+  };
+
+  /**
+   * Tells a handler its request was stopped
+   * @param {() => void} listener
+   */
+  const stop = listener => {
+    try {
+      listener();
+    } catch (error) {
+      warn('router-cancel-listener-failed', { error });
     }
   };
 
@@ -446,6 +455,7 @@ export function createRouter({
       begun: false,
       ended: false,
       cancelAsked: false,
+      stopped: false,
       timer: undefined,
       listeners: [],
     };
@@ -466,7 +476,9 @@ export function createRouter({
         return true;
       },
       onCancel: (/** @type {() => void} */ listener) => {
-        if (!running.ended) running.listeners.push(listener);
+        // A handler that listens once its request was stopped hears it at once
+        if (running.stopped) stop(listener);
+        else if (!running.ended) running.listeners.push(listener);
       },
     });
 

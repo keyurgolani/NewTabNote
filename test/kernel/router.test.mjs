@@ -643,6 +643,31 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
     assert.equal(scheduler.waiting, 0);
   });
 
+  it('tells a handler that listens after its request was stopped at once, and never one whose request was answered', async () => {
+    const scheduler = testScheduler();
+    /** @type {Dispatch[]} */
+    const contexts = [];
+    const router = makeRouter({
+      ...scheduler,
+      handlers: {
+        getNote: (payload, context) => {
+          contexts.push(context);
+          return /** @type {{noteId: string}} */ (payload).noteId === 'answers' ? noNote() : new Promise(() => {});
+        },
+      },
+    });
+    const peer = await opened(router, 'newtab');
+    peer.send(request('q1', { type: 'getNote', noteId: 'stalls' }, { deadline: NOW + 1000 }));
+    peer.send(request('q2', { type: 'getNote', noteId: 'answers' }));
+    await settle();
+    await scheduler.advance(1000);
+    /** @type {string[]} */
+    const heard = [];
+    contexts[0].onCancel(() => heard.push('stalls'));
+    contexts[1].onCancel(() => heard.push('answers'));
+    assert.deepEqual(heard, ['stalls']);
+  });
+
   it('closes every connection when it closes, and stops what each asked for', async () => {
     const { router, stopped } = holding();
     const first = await opened(router, 'newtab');
