@@ -12,16 +12,19 @@
  * holds that). Issues are for tests and debugging, and nothing puts them in an outcome or a
  * log.
  *
- * The router (#13 slice 2) runs these first, then the sender, surface, entity-scope, and
- * destination checks through #12's PolicyPort.
+ * The router (core/messaging/router.js) runs these first, then the sender, surface,
+ * entity-scope, and destination checks through #12's PolicyPort. A message on the hint
+ * channel is read the same way, as one of that channel's frames (readChannelFrame).
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
 import { CodecError, decode, encodedBytes } from './codec.js';
 import { frameSchema } from './envelope.js';
+import { channelFrameSchema } from './hint-channel.js';
 import { MAX_MESSAGE_BYTES } from './limits.js';
 
 /** @typedef {import('./envelope.js').Frame} Frame */
+/** @typedef {import('./hint-channel.js').ChannelFrame} ChannelFrame */
 /** @typedef {import('./envelope.js').RequestFrame} RequestFrame */
 /** @typedef {import('./transport-codes.js').TransportCode} TransportCode */
 /** @typedef {import('./commands.js').CommandEntry} CommandEntry */
@@ -78,12 +81,13 @@ export function check(schema, value) {
  */
 
 /**
- * A message as it arrived, read as one frame. Any message over MAX_MESSAGE_BYTES fails
- * before it's parsed, as does one that isn't JSON the codec carries.
+ * A message as it arrived, read as one frame of `schema`'s
+ * @template {v.GenericSchema} S
+ * @param {S} schema
  * @param {unknown} text
- * @returns {ReadFrame}
+ * @returns {{ok: true, frame: v.InferOutput<S>, bytes: number} | {ok: false, code: TransportCode, issues: Issue[]}}
  */
-export function readFrame(text) {
+function readAs(schema, text) {
   if (typeof text !== 'string') return { ok: false, code: 'invalid-payload', issues: [] };
   // Each UTF-16 unit takes at least one byte, so a longer text can't fit
   if (text.length > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
@@ -97,9 +101,34 @@ export function readFrame(text) {
     if (error instanceof CodecError) return { ok: false, code: 'invalid-payload', issues: [] };
     throw error;
   }
-  const frame = check(frameSchema, message);
+  const frame = check(schema, message);
   if (!frame.ok) return { ok: false, code: 'invalid-payload', issues: frame.issues };
   return { ok: true, frame: frame.value, bytes };
+}
+
+/**
+ * A message as it arrived, read as one frame. Any message over MAX_MESSAGE_BYTES fails
+ * before it's parsed, as does one that isn't JSON the codec carries.
+ * @param {unknown} text
+ * @returns {ReadFrame}
+ */
+export function readFrame(text) {
+  return readAs(frameSchema, text);
+}
+
+/**
+ * @typedef {{ok: true, frame: ChannelFrame, bytes: number}
+ *   | {ok: false, code: TransportCode, issues: Issue[]}} ReadChannelFrame
+ */
+
+/**
+ * A message from the hint channel, read as one of its frames (contracts/hint-channel.js), as
+ * readFrame reads one from a port
+ * @param {unknown} text
+ * @returns {ReadChannelFrame}
+ */
+export function readChannelFrame(text) {
+  return readAs(channelFrameSchema, text);
 }
 
 /**

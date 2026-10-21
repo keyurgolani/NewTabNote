@@ -22,6 +22,7 @@ import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import * as entities from '../../js/kernel/core/contracts/entities.js';
 import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { content, count, entityId, id } from '../../js/kernel/core/contracts/fields.js';
+import * as hintChannel from '../../js/kernel/core/contracts/hint-channel.js';
 import { commandPayload } from '../../js/kernel/core/contracts/operation.js';
 import { bulkResultSchema, failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
 import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
@@ -322,9 +323,14 @@ describe('the contract schema lint (#13, AC5)', () => {
   });
 
   it('passes every frame, with only its payload and result left to the operation schemas', () => {
-    const checkedElsewhere = [envelope.requestSchema.entries.payload, envelope.responseSchema.entries.result];
-    const frames = schemasIn(envelope);
-    assert.ok(frames.length >= 6);
+    const checkedElsewhere = [
+      envelope.requestSchema.entries.payload,
+      envelope.responseSchema.entries.result,
+      hintChannel.pageRequestSchema.entries.payload,
+      hintChannel.pageResponseSchema.entries.result,
+    ];
+    const frames = [...schemasIn(envelope), ...schemasIn(hintChannel)];
+    assert.ok(frames.length >= 12);
     for (const [name, schema] of frames) assert.deepEqual(lint(schema, { role: 'frame', checkedElsewhere }), [], name);
   });
 
