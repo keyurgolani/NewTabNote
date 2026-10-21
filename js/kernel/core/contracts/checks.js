@@ -47,3 +47,14 @@ export function isIdList(value) {
 export function unknownKeys(values, allowed) {
   return Object.keys(values).filter(key => !allowed.includes(key));
 }
+
+/**
+ * `values` without the keys whose value is undefined. #13's codec leaves such a key out of a
+ * message, so a command that sets values by key does the same in-process, and both paths
+ * agree on what it sets.
+ * @param {Record<string, unknown>} values
+ * @returns {Record<string, unknown>}
+ */
+export function definedValues(values) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
+}

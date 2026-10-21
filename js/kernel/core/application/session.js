@@ -3,7 +3,7 @@
  * is open, and this persists the keys it hands over.
  */
 
-import { isRecord } from '../contracts/checks.js';
+import { definedValues, isRecord } from '../contracts/checks.js';
 import { committed, empty, ready, rejected } from '../contracts/outcomes.js';
 import { WORKSPACE_SESSION_KEYS, sessionIssue } from '../domain/session.js';
 
@@ -20,7 +20,8 @@ import { WORKSPACE_SESSION_KEYS, sessionIssue } from '../domain/session.js';
 /** @type {{saveWorkspaceSession: CommandHandler<'saveWorkspaceSession'>}} */
 export const sessionCommands = {
   saveWorkspaceSession(command) {
-    const { session } = command;
+    // A key that's undefined is left out, as the codec leaves it out of a message
+    const session = isRecord(command.session) ? definedValues(command.session) : command.session;
     if (!isRecord(session) || Object.keys(session).length === 0) return rejected('validation', 'invalid-command');
     if (sessionIssue(session) !== null) return rejected('validation', 'invalid-session');
     const keys = Object.keys(session);

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
+import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -823,6 +824,25 @@ export function runContractSuite(fixture) {
         assert.equal((await kernel.query({ type: 'getPreferences', keys: ['llmApiKey'] })).kind, 'failed');
       });
 
+      it('setPreferences leaves out a value that is undefined, in-process as through the codec', async () => {
+        await run(cmd('setPreferences', { values: { theme: 'dark', font: 'sans' } }));
+        const inProcess = cmd('setPreferences', { values: /** @type {any} */ ({ theme: undefined, font: 'serif' }) });
+        assert.deepEqual((await run(inProcess)).changedIds, ['font']);
+        // The router hands the kernel what the codec decodes, which has no theme
+        const sent = cmd('setPreferences', { values: /** @type {any} */ ({ theme: undefined, font: 'mono' }) });
+        assert.deepEqual((await run(/** @type {Command} */ (decode(encode(sent))))).changedIds, ['font']);
+        const state = await kernel.query({ type: 'getPreferences', keys: ['theme', 'font'] });
+        assert.deepEqual(state.kind === 'ready' && state.data, { theme: 'dark', font: 'mono' });
+        // With nothing left there's nothing to set, either way
+        const nothing = cmd('setPreferences', { values: /** @type {any} */ ({ theme: undefined }) });
+        assertRejected(await kernel.execute(nothing), 'validation', 'invalid-command');
+        assertRejected(
+          await kernel.execute(/** @type {Command} */ (decode(encode(nothing)))),
+          'validation',
+          'invalid-command',
+        );
+      });
+
       it('saveWorkspaceSession stores the keys it carries, checked by type', async () => {
         const session = { openTabs: [{ noteId: 'n1', name: 'Plan' }], activeTabIndex: 0, lastOpenedNoteId: 'n1' };
         await run(cmd('saveWorkspaceSession', { session }));
@@ -835,6 +855,15 @@ export function runContractSuite(fixture) {
           'validation',
           'invalid-session',
         );
+      });
+
+      it('saveWorkspaceSession leaves out a key that is undefined, in-process as through the codec', async () => {
+        const session = /** @type {any} */ ({ openTabs: [{ noteId: 'n1' }], activeTabIndex: undefined });
+        assert.deepEqual((await run(cmd('saveWorkspaceSession', { session }))).changedIds, ['openTabs']);
+        const sent = cmd('saveWorkspaceSession', { session: { ...session, openTabs: [{ noteId: 'n2' }] } });
+        assert.deepEqual((await run(/** @type {Command} */ (decode(encode(sent))))).changedIds, ['openTabs']);
+        const state = await kernel.query({ type: 'getWorkspaceSession' });
+        assert.deepEqual(state.kind === 'ready' && state.data, { openTabs: [{ noteId: 'n2' }] });
       });
 
       it('runStartupMaintenance writes the default preferences once and keeps what is stored', async () => {
