@@ -10,20 +10,26 @@
  * even after every request in it succeeded, so nothing is ever reported saved that didn't
  * commit (failures.js has what each failure answers). A unit that stops the command (a
  * rejection or a conflict), or throws, aborts it, so nothing any of its units wrote commits.
+ *
  * A transaction that aborts with an AbortError or an UnknownError runs once more, in a new
  * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). It runs
  * again only when this adapter has opened no write since, as a later command, such as a newer
- * save of the same note, would land first and be written over; it answers `transaction-failed`,
- * retryable, instead. A transaction that ends before the command's units have finished,
- * because a unit awaited something other than it, isn't run again, and the command answers as
- * it ends rather than wait on the unit: `transaction-ended-early` when it committed, and why
- * it aborted when it aborted. The adapter can tell only by which comes first, so a unit that
- * finishes before an abort reaches it is answered as any other command, retry included.
+ * save of the same note, would land first and be written over; it answers
+ * `transaction-failed`, retryable, instead. That holds within one context only: another
+ * context's save that commits between the abort and the run again is written over, so the
+ * older content wins. It's the two-contexts gap the kernel ledger declares, and once saves
+ * carry an expected revision (#17 slice 2) the run again is a conflict instead.
+ *
+ * A transaction that ends before the command's units have finished, because a unit awaited
+ * something other than it, isn't run again, and the command answers as it ends rather than
+ * wait on the unit: `transaction-ended-early` when it committed, and why it aborted when it
+ * aborted. The adapter can tell only by which comes first, so a unit that finishes before an
+ * abort reaches it is answered as any other command, retry included.
  *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
- * - revisions: false. A content revision is a field on each note record, and #17 slice 1 adds
- *   no field to anything on disk, so a save over a newer write wins, as on the legacy adapter.
+ * - revisions: false. A content revision needs something stored with each note, and #17
+ *   slice 1 adds nothing on disk, so a save over a newer write wins, as on the legacy adapter.
  * - idempotency: false. Persisted outcomes live in #17's `operations` store, which the first
  *   schema change (#17 slice 2) creates, so a resent command runs again.
  *
