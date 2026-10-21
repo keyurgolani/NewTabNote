@@ -3,6 +3,8 @@
  * case, and how its units become the adapter's work.
  */
 
+import { derivedOnly } from './scopes.js';
+
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/commands.js').CommandType} CommandType */
 /** @typedef {import('../contracts/queries.js').QueryType} QueryType */
@@ -14,6 +16,7 @@
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Work} Work */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
+/** @typedef {import('../ports/repository.js').WriteScope} WriteScope */
 /** @typedef {import('../ports/runtime.js').Clock} Clock */
 /** @typedef {import('../ports/runtime.js').Ids} Ids */
 
@@ -59,17 +62,25 @@
  */
 
 /**
- * The adapter's work for a command made of units.
+ * The adapter's work for a command made of units. A derived command's units are held to the
+ * derived fields of the notes they read (scopes.js).
  * @param {Command} command
  * @param {Unit[]} units
  * @param {() => Committed} done
- * @param {{primary?: Work['primary'], revised?: Work['revised']}} [options]
- *   The record the outcome reports the revision of, and whether the command changed its content
+ * @param {{primary?: Work['primary'], revised?: Work['revised'], scope?: WriteScope}} [options]
+ *   The record the outcome reports the revision of, whether the command changed its content,
+ *   and what it writes (content unless given)
  * @returns {Work}
  */
-export function unitsWork(command, units, done, { primary, revised } = {}) {
+export function unitsWork(command, units, done, { primary, revised, scope = 'content' } = {}) {
   /** @type {Work} */
-  const work = { commandId: command.commandId, command, effect: { kind: 'units', units }, done };
+  const work = {
+    commandId: command.commandId,
+    command,
+    scope,
+    effect: { kind: 'units', units: scope === 'derived' ? units.map(derivedOnly) : units },
+    done,
+  };
   if (primary) work.primary = primary;
   if (revised) work.revised = revised;
   return work;

@@ -14,6 +14,12 @@
  *   doesn't have which names #12 as its owner. A later PR may add a row by hand, but only
  *   for a defined rule, owned by another issue. With no ledger at the ref, as in the PR
  *   that seeds it, every row is new.
+ * - with --base: for a rule the ledger at that ref lists in `shrinkOnly` (#17's
+ *   storage-access rules, #17 slice 1), any new row or higher count, so that exemption list
+ *   only shrinks, and a rule dropped from `shrinkOnly`. The one exception is a blind write
+ *   that replaces raw access: a legacyBlindWrite count may rise in a file by as much as its
+ *   getStore and objectStore counts fall in the same PR. The PR that first lists a rule in
+ *   `shrinkOnly` seeds its rows by hand.
  * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
  * hits: count 1, the legacy adapter module as file, which has to exist, and #17 as owner,
  * since #17's adapter closes each gap. That module declares several gaps, told apart by
@@ -37,7 +43,9 @@ const VERIFY = 'npm run check:boundaries';
 const ABOUT = 'Hits of the kernel boundary rules (#12, eslint.config.mjs) each legacy file may still have, '
   + 'per rule. `npm run check:boundaries` fails on a hit no row covers, a count that rises, and a count '
   + 'that falls without its row falling in the same PR. Only `--write-baseline` writes this file; a PR '
-  + 'may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify.';
+  + 'may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify. '
+  + 'The rules in shrinkOnly (#17\'s storage access) take no new row and no higher count, except a '
+  + 'legacyBlindWrite count that rises by no more than the same file\'s getStore and objectStore counts fall.';
 
 // The ledger rules, which #12 defines; each eslint.config.mjs message starts with its rule
 const RULES = {
@@ -55,11 +63,20 @@ const RULES = {
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
+  // #17's storage-access rules (#17 slice 1): their rows are a shrink-only exemption list
+  // Each counts any use of its function but where it's defined: called, bound, passed on, or taken apart
+  objectStore: "an IndexedDB object store opened outside #17's IndexedDB adapter",
+  getStore: 'a use of DatabaseManager.getStore',
+  legacyBlindWrite: 'a write through legacyBlindWrite(), which skips its expected version',
+  'chrome.storage.local': 'chrome.storage.local outside js/kernel/adapters/ and js/kernel/composition/',
 };
 const DECLARED_GAP = 'declared-gap';
 // The one module that declares gaps (its adapter flags), and the issue whose adapter closes them
 const DECLARED_GAP_FILE = 'js/kernel/adapters/legacy/adapter.js';
 const DECLARED_GAP_OWNER = 17;
+// The raw access a blind write may replace in the same file under a shrinkOnly rule: an
+// unconverted caller moves onto #17's adapter, which commits it, before it gets a command
+const CONVERTS_FROM = { legacyBlindWrite: ['getStore', 'objectStore'] };
 
 /**
  * Who removes each kind of hit, for rows --write-baseline seeds: the first entry whose
@@ -67,6 +84,10 @@ const DECLARED_GAP_OWNER = 17;
  */
 const SEED_OWNERS = [
   { rule: 'scheduler-timer', owner: 35, removeWhen: '#8 deletes them' },
+  { rule: 'objectStore', owner: 17, removeWhen: "#17 slice 6 puts every store access behind #17's IndexedDB adapter" },
+  { rule: 'getStore', owner: 17, removeWhen: '#17 slice 6 moves the readers to read-only queries and deletes getStore' },
+  { rule: 'legacyBlindWrite', owner: 17, removeWhen: '#17 slice 6 converts every blind write into a typed command' },
+  { rule: 'chrome.storage.local', owner: 17, removeWhen: "#17 slice 6 moves settings behind the kernel's typed settings repository" },
   { file: 'js/llm.js', owner: 11, removeWhen: '#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows' },
   { file: 'js/services/sync-service.js', owner: 19, removeWhen: "#19's sync engine replaces js/services/sync-service.js" },
   { file: 'js/ui/graph-view.js', owner: 22, removeWhen: '#22 builds the graph view from its own pipeline' },
@@ -173,7 +194,30 @@ function readBase(ref, root) {
 }
 
 /**
- * Parse and validate ledger text. Returns the rows in a Map by keyOf, and each problem.
+ * The rules a ledger's `shrinkOnly` lists: each a hit rule this file defines, once
+ */
+function parseShrinkOnly(value, name, problems) {
+  const rules = new Set();
+  if (value === undefined) return rules;
+  if (!Array.isArray(value)) {
+    problems.push(`${name}: shrinkOnly isn't a list of rules`);
+    return rules;
+  }
+  for (const rule of value) {
+    if (typeof rule !== 'string' || !Object.hasOwn(RULES, rule) || rule === DECLARED_GAP) {
+      problems.push(`${name}: shrinkOnly names ${JSON.stringify(rule)}, which isn't a rule with hits`);
+    } else if (rules.has(rule)) {
+      problems.push(`${name}: shrinkOnly names ${rule} twice`);
+    } else {
+      rules.add(rule);
+    }
+  }
+  return rules;
+}
+
+/**
+ * Parse and validate ledger text. Returns the rows in a Map by rowKey, the rules its
+ * `shrinkOnly` lists, and each problem.
  */
 function parseLedger(text, root, name) {
   const rows = new Map();
@@ -182,9 +226,12 @@ function parseLedger(text, root, name) {
   try {
     data = JSON.parse(text);
   } catch (e) {
-    return { rows, problems: [`${name} isn't valid JSON: ${e.message}`] };
+    return { rows, shrinkOnly: new Set(), problems: [`${name} isn't valid JSON: ${e.message}`] };
   }
-  if (!data || !Array.isArray(data.rows)) return { rows, problems: [`${name} has no "rows" array`] };
+  if (!data || !Array.isArray(data.rows)) {
+    return { rows, shrinkOnly: new Set(), problems: [`${name} has no "rows" array`] };
+  }
+  const shrinkOnly = parseShrinkOnly(data.shrinkOnly, name, problems);
 
   data.rows.forEach((row, index) => {
     let label = row && typeof row.file === 'string' && typeof row.rule === 'string'
@@ -221,12 +268,15 @@ function parseLedger(text, root, name) {
     if (rows.has(key)) fail('appears twice');
     else rows.set(key, row);
   });
-  return { rows, problems };
+  return { rows, shrinkOnly, problems };
 }
 
-function serializeLedger(rows) {
+function serializeLedger(rows, shrinkOnly = new Set()) {
   const sorted = [...rows].sort(byRowKey).map(row => Object.fromEntries(FIELDS.map(field => [field, row[field]])));
-  return `${JSON.stringify({ about: ABOUT, rows: sorted }, null, 2)}\n`;
+  const ledger = shrinkOnly.size > 0
+    ? { about: ABOUT, shrinkOnly: [...shrinkOnly].sort(), rows: sorted }
+    : { about: ABOUT, rows: sorted };
+  return `${JSON.stringify(ledger, null, 2)}\n`;
 }
 
 /**
@@ -272,12 +322,36 @@ function compare(hits, rows) {
 }
 
 /**
- * Compare the ledger with the ledger at the base ref
+ * Compare the ledger with the ledger at the base ref. `shrinkOnly` is the rules the ledger
+ * lists there, and `baseShrinkOnly` the ones the base lists, whose rows only shrink.
  */
-function compareBase(rows, baseRows, ref) {
+function compareBase(rows, baseRows, ref, { shrinkOnly = new Set(), baseShrinkOnly = new Set() } = {}) {
   const problems = [];
+  const countIn = (ledgerRows, file, rule) => (ledgerRows.get(keyOf(file, rule)) || { count: 0 }).count;
+  // How far the hits a blind write may replace fell in `file` since the base
+  const replaced = (file, rule) => (CONVERTS_FROM[rule] || [])
+    .reduce((sum, from) => sum + Math.max(0, countIn(baseRows, file, from) - countIn(rows, file, from)), 0);
+  for (const rule of [...baseShrinkOnly].sort()) {
+    if (!shrinkOnly.has(rule)) {
+      problems.push({ message: `shrinkOnly no longer lists ${rule}, which it lists at ${ref}; that exemption list only shrinks`, at: [] });
+    }
+  }
   for (const row of [...rows.values()].sort(byRowKey)) {
     const was = baseRows.get(rowKey(row));
+    if (baseShrinkOnly.has(row.rule)) {
+      const before = was ? was.count : 0;
+      if (row.count > before + replaced(row.file, row.rule)) {
+        const grew = was ? `count ${was.count} at ${ref} rose to ${row.count}` : `a row added since ${ref}`;
+        const unless = CONVERTS_FROM[row.rule]
+          ? `, except by as much as ${CONVERTS_FROM[row.rule].join(' and ')} hits in the same file fall`
+          : '';
+        problems.push({ message: `${row.file} ${row.rule}: ${grew}, but ${row.rule}'s exemption list only shrinks${unless}`, at: [] });
+      }
+      if (!was && row.owner === KERNEL_ISSUE) {
+        problems.push({ message: `${row.file} ${row.rule}: a row added since ${ref} names #12 as owner; a new row needs another issue as its owner`, at: [] });
+      }
+      continue;
+    }
     if (was && row.count > was.count) {
       problems.push({ message: `${row.file} ${row.rule}: count ${was.count} at ${ref} rose to ${row.count}; fix the new hits instead`, at: [] });
     } else if (!was && row.owner === KERNEL_ISSUE) {
@@ -331,7 +405,9 @@ async function main(argv = process.argv.slice(2), options = {}) {
   const totalHits = [...hits.values()].reduce((sum, hit) => sum + hit.count, 0);
 
   const exists = fs.existsSync(ledgerPath);
-  const ledger = exists ? parseLedger(fs.readFileSync(ledgerPath, 'utf8'), root, LEDGER) : { rows: new Map(), problems: [] };
+  const ledger = exists
+    ? parseLedger(fs.readFileSync(ledgerPath, 'utf8'), root, LEDGER)
+    : { rows: new Map(), shrinkOnly: new Set(), problems: [] };
   if (ledger.problems.length > 0) {
     return fail(`${LEDGER} has ${plural(ledger.problems.length, 'problem')}`, ledger.problems.map(message => ({ message, at: [] })));
   }
@@ -351,7 +427,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
         .filter(row => row.count > 0);
     }
     fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-    fs.writeFileSync(ledgerPath, serializeLedger(rows));
+    fs.writeFileSync(ledgerPath, serializeLedger(rows, ledger.shrinkOnly));
     const byRule = {};
     rows.forEach(row => { byRule[row.rule] = (byRule[row.rule] || 0) + 1; });
     log(`check:boundaries: ${exists ? 'recorded' : 'seeded'} ${LEDGER} with ${plural(rows.length, 'row')} for ${plural(totalHits, 'hit')}`);
@@ -376,8 +452,12 @@ async function main(argv = process.argv.slice(2), options = {}) {
       baseNote = `; ${base} has no ledger, so every row is new`;
     } else {
       const baseLedger = parseLedger(found.text, root, `${LEDGER} at ${base}`);
-      problems.push(...compareBase(ledger.rows, baseLedger.rows, base));
+      problems.push(...compareBase(ledger.rows, baseLedger.rows, base, {
+        shrinkOnly: ledger.shrinkOnly,
+        baseShrinkOnly: baseLedger.shrinkOnly,
+      }));
       baseNote = `; no row rose or was added for #12 since ${base}`;
+      if (baseLedger.shrinkOnly.size > 0) baseNote += `, and no shrinkOnly list grew`;
     }
   }
   if (problems.length > 0) return fail(`${plural(problems.length, 'problem')} against ${LEDGER}`, problems);

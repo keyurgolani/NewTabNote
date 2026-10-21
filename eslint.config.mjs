@@ -180,7 +180,214 @@ const importsRule = {
   },
 };
 
-const kernel = { rules: { imports: importsRule } };
+/** Options every storage-access rule takes: its ledger rule and its message */
+const ACCESS_SCHEMA = [
+  {
+    type: 'object',
+    properties: { rule: { type: 'string' }, message: { type: 'string' } },
+    required: ['rule', 'message'],
+    additionalProperties: false,
+  },
+];
+
+/** The name a member expression's property spells out, or null when it's built at run time */
+const propertyName = member => {
+  if (!member.computed) return member.property.type === 'Identifier' ? member.property.name : null;
+  return specifierOf(member.property);
+};
+
+/** The name a destructuring property's key spells out, or null when it's built at run time */
+const keyName = property => {
+  if (property.computed) return specifierOf(property.key);
+  if (property.key.type === 'Identifier') return property.key.name;
+  return property.key.type === 'Literal' ? String(property.key.value) : null;
+};
+
+/** `node` without the optional chain around it, as in `chrome?.storage` */
+const unchained = node => (node && node.type === 'ChainExpression' ? node.expression : node);
+
+/**
+ * What a destructuring pattern takes apart: the right side of its declaration, assignment, or
+ * default value. Null for a parameter without a default, or a pattern nested in another.
+ */
+const sourceOf = pattern => {
+  const { parent } = pattern;
+  const right =
+    (parent.type === 'VariableDeclarator' && parent.id === pattern && parent.init) ||
+    ((parent.type === 'AssignmentExpression' || parent.type === 'AssignmentPattern') && parent.left === pattern && parent.right);
+  return unchained(right || null);
+};
+
+/** The property a nested pattern is the value of, as `storage` is in `{ storage: { local } }`, or null */
+const holderOf = pattern => {
+  const node = pattern.parent.type === 'AssignmentPattern' && pattern.parent.left === pattern ? pattern.parent : pattern;
+  return node.parent.type === 'Property' && node.parent.value === node ? node.parent : null;
+};
+
+/** Whether a destructured property's value is itself a pattern, as `{ local }` is in `{ storage: { local } }` */
+const destructuresFurther = property => {
+  const value = property.value.type === 'AssignmentPattern' ? property.value.left : property.value;
+  return value.type === 'ObjectPattern' || value.type === 'ArrayPattern';
+};
+
+/** The name a destructured property binds, as `area` in `{ storage: area }`, or null for a pattern */
+const boundName = property => {
+  const value = property.value.type === 'AssignmentPattern' ? property.value.left : property.value;
+  return value.type === 'Identifier' ? value : null;
+};
+
+/** The name an import or export specifier spells out: an identifier, or a string such as `'a-b'` */
+const specifierName = node => (node.type === 'Identifier' ? node.name : String(node.value));
+
+/**
+ * #17's storage-access rules (#17 slice 1, "The architecture test"): any use of a function
+ * named `name` but where it's defined. A call of `name(...)`, a read of `x.name` with any
+ * spelling of the property, whether it's called there or bound, passed on, or called through
+ * `.call` or `.apply`, `name` taken apart from an object, as in `const { name } = x`, and
+ * `name` imported or re-exported under any name, as in `import { name as other }`.
+ */
+const accessRule = name => ({
+  meta: { type: 'problem', schema: ACCESS_SCHEMA },
+  create(context) {
+    const { rule, message } = context.options[0];
+    const report = node => context.report({ node, message: `[${rule}] ${message}` });
+    return {
+      CallExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === name) report(node);
+      },
+      MemberExpression(node) {
+        // `x.name = function () {}` defines it
+        const defined = node.parent.type === 'AssignmentExpression' && node.parent.left === node;
+        if (!defined && propertyName(node) === name) report(node);
+      },
+      'ObjectPattern > Property'(node) {
+        if (keyName(node) === name) report(node);
+      },
+      ImportSpecifier(node) {
+        if (specifierName(node.imported) === name) report(node);
+      },
+      'ExportNamedDeclaration[source] > ExportSpecifier'(node) {
+        if (specifierName(node.local) === name) report(node);
+      },
+    };
+  },
+});
+
+/**
+ * chrome.storage.local, reached through any object, any name bound to a storage or to chrome,
+ * or taken apart: `chrome.storage.local`, `self.chrome.storage.local`, an alias such as
+ * `this._chromeApi().storage.local`, `area.local` once `const area = chrome.storage` (or `let`,
+ * or an assignment, or a chain of them), `local` taken from a storage (`const { local } =
+ * chrome.storage`, `const { storage: { local } } = chrome`), and `storage` taken from chrome
+ * under any name (`const { storage } = chrome`), along with `storage.local` on it. Names are
+ * followed through the file's scopes once it's all read, so a use before its binding counts.
+ */
+const storageLocalRule = {
+  meta: { type: 'problem', schema: ACCESS_SCHEMA },
+  create(context) {
+    const { rule, message } = context.options[0];
+    const { sourceCode } = context;
+    const report = node => context.report({ node, message: `[${rule}] ${message}` });
+    /** Names bound to a value: `const name = value`, `let name = value`, or `name = value` */
+    const bindings = [];
+    /** Every property a pattern takes apart */
+    const properties = [];
+    /** Every `.local` read */
+    const locals = [];
+    /** The variables bound to a storage, and to chrome */
+    const storages = new Set();
+    const chromes = new Set();
+
+    /** The variable an identifier names, or null for a global such as `chrome` */
+    const variableOf = identifier => {
+      for (let scope = sourceCode.getScope(identifier); scope; scope = scope.upper) {
+        const reference = scope.references.find(candidate => candidate.identifier === identifier);
+        if (reference) return reference.resolved;
+        const variable = scope.set.get(identifier.name);
+        if (variable && variable.identifiers.includes(identifier)) return variable;
+      }
+      return null;
+    };
+
+    /** A `.storage` read, a name bound to one, or a value named `storage` */
+    const isStorage = node => {
+      const value = unchained(node);
+      if (!value) return false;
+      if (value.type === 'MemberExpression') return propertyName(value) === 'storage';
+      return value.type === 'Identifier' && (value.name === 'storage' || storages.has(variableOf(value)));
+    };
+
+    /** `chrome`, a `.chrome` read such as `self.chrome`, or a name bound to one */
+    const isChrome = node => {
+      const value = unchained(node);
+      if (!value) return false;
+      if (value.type === 'MemberExpression') return propertyName(value) === 'chrome';
+      if (value.type !== 'Identifier') return false;
+      const variable = variableOf(value);
+      return variable ? chromes.has(variable) : value.name === 'chrome';
+    };
+
+    return {
+      VariableDeclarator(node) {
+        if (node.id.type === 'Identifier' && node.init) bindings.push({ identifier: node.id, value: node.init });
+      },
+      AssignmentExpression(node) {
+        if (node.operator === '=' && node.left.type === 'Identifier') bindings.push({ identifier: node.left, value: node.right });
+      },
+      'ObjectPattern > Property'(node) {
+        properties.push(node);
+      },
+      MemberExpression(node) {
+        if (propertyName(node) === 'local') locals.push(node);
+      },
+      'Program:exit'() {
+        // Which names hold a storage or chrome, through as many bindings as it takes
+        let grew = true;
+        const mark = (set, identifier) => {
+          const variable = variableOf(identifier);
+          if (variable && !set.has(variable)) {
+            set.add(variable);
+            grew = true;
+          }
+        };
+        while (grew) {
+          grew = false;
+          for (const { identifier, value } of bindings) {
+            if (isStorage(value)) mark(storages, identifier);
+            else if (isChrome(value)) mark(chromes, identifier);
+          }
+          for (const property of properties) {
+            const bound = boundName(property);
+            if (!bound || holderOf(property.parent)) continue;
+            const key = keyName(property);
+            if (key === 'storage' && isChrome(sourceOf(property.parent))) mark(storages, bound);
+            else if (key === 'chrome') mark(chromes, bound);
+          }
+        }
+        for (const node of locals) if (isStorage(node.object)) report(node);
+        for (const property of properties) {
+          const key = keyName(property);
+          const holder = holderOf(property.parent);
+          if (key === 'local') {
+            if (holder ? keyName(holder) === 'storage' : isStorage(sourceOf(property.parent))) report(property);
+          } else if (key === 'storage' && !holder && !destructuresFurther(property) && isChrome(sourceOf(property.parent))) {
+            report(property);
+          }
+        }
+      },
+    };
+  },
+};
+
+const kernel = {
+  rules: {
+    imports: importsRule,
+    'object-store': accessRule('objectStore'),
+    'get-store': accessRule('getStore'),
+    'legacy-blind-write': accessRule('legacyBlindWrite'),
+    'chrome-storage-local': storageLocalRule,
+  },
+};
 
 export default [
   { ignores: ['js/lib/**'] },
@@ -228,6 +435,39 @@ export default [
         rule: 'core-import',
         message: 'js/kernel/core/ imports only from itself and js/lib/valibot/.',
         allow: ['js/kernel/core/', 'js/lib/valibot/'],
+      }],
+    },
+  },
+  // #17's storage access: only its IndexedDB adapter opens object stores, and only the
+  // adapters and composition roots reach chrome.storage.local. js/storage.js and the legacy
+  // adapter count too. The kernel ledger's rows for these only shrink (shrinkOnly).
+  {
+    files: ['js/**/*.js', 'js/**/*.mjs'],
+    ignores: ['js/kernel/adapters/indexeddb/**'],
+    plugins: { kernel },
+    rules: {
+      'kernel/object-store': ['error', {
+        rule: 'objectStore',
+        message: "Only #17's IndexedDB adapter opens object stores; use a kernel command or query.",
+      }],
+      'kernel/get-store': ['error', {
+        rule: 'getStore',
+        message: "DatabaseManager.getStore hands out a raw store; #17 slice 6 moves its readers to read-only queries.",
+      }],
+      'kernel/legacy-blind-write': ['error', {
+        rule: 'legacyBlindWrite',
+        message: 'A write that skips its expected version; only the callers the ledger lists may make one, until #17 slice 6.',
+      }],
+    },
+  },
+  {
+    files: ['js/**/*.js', 'js/**/*.mjs'],
+    ignores: ['js/kernel/adapters/**', 'js/kernel/composition/**'],
+    plugins: { kernel },
+    rules: {
+      'kernel/chrome-storage-local': ['error', {
+        rule: 'chrome.storage.local',
+        message: "Settings and session state go through the kernel's settings repository, which #17 keeps in chrome.storage.local.",
       }],
     },
   },

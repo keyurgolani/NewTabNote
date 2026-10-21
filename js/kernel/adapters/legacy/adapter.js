@@ -24,6 +24,10 @@
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+// The store names, setting keys, and request helpers #17's adapter uses, so the two agree
+import { abort, indexValue, result } from '../indexeddb/requests.js';
+import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
+import { settingKey } from '../indexeddb/settings.js';
 
 /** @typedef {import('../../core/ports/repository.js').CommitResult} CommitResult */
 /** @typedef {import('../../core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -57,65 +61,28 @@ import { UnavailableError, unavailable, unavailableFrom } from '../../core/contr
 
 /** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>}} LegacyAdapter */
 
-/** Each kernel store's IndexedDB store, under the names 1.4.x has always used */
-export const IDB_STORES = Object.freeze({
-  notes: 'canvases',
-  blocks: 'elements',
-  folders: 'folders',
-  searchIndex: 'search_index',
-  media: 'media',
-  vectors: 'vectors',
-  snapshots: 'snapshots',
-});
-
 /**
- * Derived from the notes, so a database without it skips its writes, as Storage.createNote
- * and Storage.updateNote do. A write to any other missing store fails the command.
- * @type {readonly StoreName[]}
- */
-const DERIVED_STORES = Object.freeze(['searchIndex']);
-
-/**
- * The chrome.storage.local key a setting lives under: `setting_<key>`, as Storage.setSetting
- * writes it, except the last-opened note, which TabController writes under its own name.
- * @param {SettingsArea | string} area
- * @param {string} key
- * @returns {string}
- */
-const settingKey = (area, key) => (area === 'session' && key === 'lastOpenedNoteId' ? key : `setting_${key}`);
-
-/**
- * The UnavailableError for what DatabaseManager, IndexedDB, or chrome.storage threw.
+ * The UnavailableError for what DatabaseManager, IndexedDB, or chrome.storage threw. Where a
+ * failure is one #17's adapter also answers, the cause and code are the same (#17,
+ * "Transactions"): a newer database is `version-too-new`, and a full disk is `quota`.
  * @param {unknown} error
  * @returns {UnavailableError}
  */
 function storageError(error) {
   if (error instanceof UnavailableError) return error;
   const { code, name, message } = /** @type {{code?: unknown, name?: unknown, message?: unknown}} */ (error || {});
-  if (code === 'NEWER_SCHEMA') return new UnavailableError('newer-schema', 'newer-schema', false);
+  if (code === 'NEWER_SCHEMA') return new UnavailableError('newer-schema', 'version-too-new', false);
   if (code === 'MISSING_CORE_STORES') return new UnavailableError('storage', 'missing-core-stores', false);
   if (code === 'STORE_UNAVAILABLE') return new UnavailableError('storage', 'store-unavailable', false);
   if (code === 'OPEN_FAILED') return new UnavailableError('storage', 'open-failed', true);
   // Popup or Side Panel opened before any new tab made the database
   if (code === 'NO_DATABASE') return new UnavailableError('storage', 'no-database', true);
   if (name === 'QuotaExceededError' || /quota/i.test(String(message))) {
-    return new UnavailableError('quota', 'quota-exceeded', false);
+    return new UnavailableError('quota', 'quota', false);
   }
   if (name === 'InvalidStateError') return new UnavailableError('storage', 'database-closed', true);
   if (name === 'DataCloneError') return new UnavailableError('adapter', 'not-cloneable', false);
   return new UnavailableError('storage', 'transaction-failed', true);
-}
-
-/**
- * @template T
- * @param {IDBRequest<T>} request
- * @returns {Promise<T>}
- */
-function result(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
 }
 
 /**
@@ -131,15 +98,6 @@ function completion(tx) {
   // Handled where it matters; an abort the adapter asked for isn't a failure to report
   done.catch(() => {});
   return /** @type {Promise<void>} */ (done);
-}
-
-/** @param {IDBTransaction | null} tx */
-function abort(tx) {
-  try {
-    if (tx) tx.abort();
-  } catch {
-    // Already finished
-  }
 }
 
 /**
@@ -180,11 +138,13 @@ function view(storage, tx, scope) {
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAll(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAll(key)) : [];
     },
     getKeysByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAllKeys(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
     },
     revision: store => {
       handle(store);

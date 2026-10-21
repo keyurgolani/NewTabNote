@@ -4,7 +4,8 @@
 
 import { createRequire } from 'node:module';
 
-import { IDB_STORES, createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
+import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, testClock, testIds } from './support.mjs';

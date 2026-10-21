@@ -52,8 +52,11 @@ export const STORES = Object.freeze({
  * @property {<S extends StoreName>(store: S, key: string) => Promise<StoreRecords[S] | undefined>} get
  * @property {<S extends StoreName>(store: S) => Promise<StoreRecords[S][]>} getAll
  * @property {<S extends StoreName>(store: S, index: string, value: string) => Promise<StoreRecords[S][]>} getAllByIndex
- *   The records whose `index` field (each index is named after its field) holds `value`
+ *   The records whose `index` field (each index is named after its field) holds `value`, an
+ *   id. Every adapter refuses any other value, `adapter` `invalid-key`, since IndexedDB reads
+ *   null and undefined as no range, which would return every record.
  * @property {(store: StoreName, index: string, value: string) => Promise<string[]>} getKeysByIndex
+ *   The keys of those records, with the same refusal
  * @property {(store: StoreName, key: string) => number | undefined} revision
  *   The record's committed content revision, or undefined from an adapter without revisions.
  *   Ask only after a `get` of the same key in the same transaction: an adapter that keeps the
@@ -71,6 +74,11 @@ export const STORES = Object.freeze({
 /** @typedef {ReadTx & WriteTx} Tx */
 
 /**
+ * A unit can run more than once. An adapter whose transaction failed before anything in it
+ * committed may run the command's units again, from the first, in a new transaction (#17's
+ * IndexedDB adapter does once, for an abort or an UnknownError). So a run decides only from
+ * what it reads in its own transaction, and sets every value it decides, `when` and the
+ * work's `done`, `primary`, and `revised` included, for the run that commits.
  * @typedef {object} Unit
  * @property {StoreName[]} stores
  * @property {'readonly' | 'readwrite'} [mode] - readwrite unless the unit only reads
@@ -91,12 +99,26 @@ export const STORES = Object.freeze({
  */
 
 /**
+ * What a command writes, in the three scopes #17 keeps apart so filing never conflicts with
+ * typing:
+ * - `content`: a note's title and blocks, and what's made with them (the default)
+ * - `placement`: where a record sits and how it's kept: pinned, filed, a template or a Daily
+ *   Note, archived, trashed
+ * - `derived`: what jobs and the editor derive from content: preview, todoProgress, insights
+ * Only content moves a record's content revision, on an adapter with revisions. A derived
+ * command's units are held to the derived fields of notes they read (application/scopes.js),
+ * so it can't change a note's name, placement, or lifecycle.
+ * @typedef {'content' | 'placement' | 'derived'} WriteScope
+ */
+
+/**
  * A command, ready for an adapter to commit.
  * @typedef {object} Work
  * @property {string} commandId
  * @property {Command} command
  *   What an adapter with idempotency compares a resent commandId against, and what one with
  *   revisions keeps when the command conflicts
+ * @property {WriteScope} [scope] - content when left out
  * @property {Effect} effect
  * @property {() => {store: StoreName, key: string} | undefined} [primary]
  *   The record whose revision the committed outcome reports (#13's `committedRevision`),
@@ -104,8 +126,9 @@ export const STORES = Object.freeze({
  * @property {() => boolean} [revised]
  *   Whether the command changed the primary record's content (a note's title or blocks),
  *   asked once the units have run. An adapter with revisions then moves the record's revision
- *   on by one. Placement and derived writes (pin, archive, trash, restore, a folder move,
- *   insights) leave it where it was, so they never turn a save into a conflict.
+ *   on by one, for a content command only. Placement and derived writes (pin, archive, trash,
+ *   restore, a folder move, insights) leave it where it was, so they never turn a save into a
+ *   conflict.
  * @property {() => Committed} done - the outcome once everything committed
  */
 

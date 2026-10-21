@@ -808,6 +808,39 @@ export function runContractSuite(fixture) {
           'folder-into-itself',
         );
       });
+
+      it(
+        'on a database without folders, a move finds no folder and a new one fails to store, as Storage does',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const other = await startWithout(['folders']);
+          try {
+            const tab = other.kernel();
+            /** @param {CommandType} type @param {any} fields */
+            const send = (type, fields) => tab.execute(newCommand(other.ids, type, fields));
+            assertRejected(
+              await send('moveFolder', { folderId: 'f1', parentId: null }),
+              'not-found',
+              'folder-not-found',
+            );
+            assertRejected(
+              await send('createNote', { noteId: 'n1', name: 'Filed', folderId: 'f1' }),
+              'not-found',
+              'folder-not-found',
+            );
+            const created = await send('createFolder', { folderId: 'f1', name: 'Work', parentId: null });
+            assert.deepEqual(
+              created.kind === 'unavailable' && [created.cause, created.code],
+              ['storage', 'store-unavailable'],
+              JSON.stringify(created),
+            );
+            assert.equal((await tab.query({ type: 'listFolders' })).kind, 'empty');
+          } finally {
+            await other.close();
+          }
+        },
+      );
     });
 
     describe('preferences, session, and startup maintenance', () => {
@@ -977,6 +1010,25 @@ export function runContractSuite(fixture) {
         );
         const bad = await kernel.query(/** @type {any} */ ({ type: 'listNotes', view: 'everything' }));
         assert.deepEqual(bad, { kind: 'failed', cause: 'validation', code: 'invalid-query' });
+      });
+
+      it('refuses an index read by anything but an id, since IndexedDB reads null as every record', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
+        for (const value of [null, undefined, '', 0, true, {}]) {
+          for (const read of /** @type {const} */ (['getAllByIndex', 'getKeysByIndex'])) {
+            await assert.rejects(
+              ctx.adapter.read(['blocks'], tx => /** @type {any} */ (tx)[read]('blocks', 'canvasId', value)),
+              error => {
+                const { unavailableCause, code, retryable } = /** @type {any} */ (error);
+                return unavailableCause === 'adapter' && code === 'invalid-key' && retryable === false;
+              },
+              `${read}(${JSON.stringify(value)})`,
+            );
+          }
+        }
+        const keys = await ctx.adapter.read(['blocks'], tx => tx.getKeysByIndex('blocks', 'canvasId', 'n1'));
+        assert.equal(keys.length, 2);
       });
 
       it("another context's kernel over the same storage sees a commit on its next read", async () => {
@@ -1164,6 +1216,156 @@ export function runContractSuite(fixture) {
           'unarchiveNote',
         ]);
       });
+    });
+
+    describe('write scopes (#17: content, placement, derived)', () => {
+      /** @typedef {import('../../js/kernel/core/ports/repository.js').WriteScope} WriteScope */
+      /** @typedef {import('../../js/kernel/core/ports/repository.js').Tx} Tx */
+      /** @typedef {import('../../js/kernel/core/ports/repository.js').Unit} Unit */
+
+      /**
+       * Commits one unit straight to the adapter as a command of `scope` would, with `noteId`
+       * as the record its outcome reports
+       * @param {WriteScope} scope
+       * @param {string} noteId
+       * @param {(tx: Tx) => Promise<void>} run
+       * @param {{revised?: () => boolean}} [options]
+       */
+      const commitScoped = async (scope, noteId, run, { revised } = {}) => {
+        const command = /** @type {Command} */ ({ type: 'attachInsights', commandId: ctx.ids.next(), noteId });
+        /** @type {Unit} */
+        const unit = { stores: ['notes', 'blocks'], run };
+        const work = unitsWork(command, [unit], () => committed('scoped', [noteId]), {
+          scope,
+          primary: () => ({ store: 'notes', key: noteId }),
+          ...(revised ? { revised } : {}),
+        });
+        return (await ctx.adapter.commit(work)).outcome;
+      };
+
+      /** @param {Outcome} outcome */
+      const assertOutsideScope = outcome => {
+        assert.deepEqual(
+          outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+          ['adapter', 'write-outside-scope', false],
+          JSON.stringify(outcome),
+        );
+      };
+
+      it("a derived write can't change a note's name, placement, lifecycle, or updatedAt, and writes nothing when it tries", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        const before = await noteOf('n1');
+        for (const change of [
+          { name: 'Renamed' },
+          { titleManuallySet: true },
+          { pinned: true },
+          { folderId: 'f1' },
+          { isTemplate: true },
+          { isDaily: true, dateStr: '2026-10-20' },
+          { archived: true, archivedAt: NOW },
+          { trashed: true, trashedAt: NOW },
+          { updatedAt: NOW + 5000 },
+        ]) {
+          const outcome = await commitScoped('derived', 'n1', async tx => {
+            const note = await tx.get('notes', 'n1');
+            if (note) tx.put('notes', { ...note, insights: { todos: ['Call'] }, ...change });
+          });
+          assertOutsideScope(outcome);
+          assert.deepEqual(await noteOf('n1'), before, JSON.stringify(change));
+        }
+      });
+
+      it("a derived write can't change a field by changing the record it read in place", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await noteOf('n1');
+        assert.ok(before && typeof before.viewport === 'object' && typeof before.settings === 'object');
+        /** @type {Array<[string, (note: Record<string, any>) => void]>} */
+        const changes = [
+          ['viewport', note => (note.viewport.scale = 9)],
+          ['settings', note => (note.settings.gridType = 'none')],
+          ['name', note => (note.name = 'Renamed')],
+        ];
+        for (const [field, change] of changes) {
+          const outcome = await commitScoped('derived', 'n1', async tx => {
+            const note = await tx.get('notes', 'n1');
+            if (!note) return;
+            change(note);
+            tx.put('notes', { ...note, preview: 'P' });
+          });
+          assertOutsideScope(outcome);
+          assert.deepEqual(await noteOf('n1'), before, field);
+        }
+      });
+
+      it('a derived write changes the derived fields it carries, and nothing else it may touch', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        const before = await noteOf('n1');
+        const derived = {
+          insights: { todos: ['Call'] },
+          lastInsightsExtractedAt: NOW,
+          lastInsightsContentHash: 'h1',
+          preview: 'Line 0',
+          todoProgress: { completed: 0, total: 1 },
+        };
+        committedOf(
+          await commitScoped('derived', 'n1', async tx => {
+            const note = await tx.get('notes', 'n1');
+            if (note) tx.put('notes', { ...note, ...derived });
+          }),
+        );
+        assert.deepEqual(await noteOf('n1'), { ...before, ...derived });
+        // A block is content, and deleting the note is its lifecycle
+        assertOutsideScope(
+          await commitScoped('derived', 'n1', async tx => {
+            await tx.get('notes', 'n1');
+            tx.put('blocks', { ...someBlocks('n1', 1)[0], content: 'Rewritten' });
+          }),
+        );
+        assertOutsideScope(
+          await commitScoped('derived', 'n1', async tx => {
+            await tx.get('notes', 'n1');
+            tx.delete('notes', 'n1');
+          }),
+        );
+        // A note it didn't read in its own transaction can't be checked, so it's refused
+        assertOutsideScope(
+          await commitScoped('derived', 'n1', async tx => {
+            tx.put('notes', { ...before, id: 'n1', insights: null });
+          }),
+        );
+        assert.deepEqual(await noteOf('n1'), { ...before, ...derived });
+        assert.equal((await blocksOf('n1'))[0].content, 'Line 0');
+      });
+
+      it(
+        flags.revisions
+          ? 'revisions: placement and derived writes leave the content revision where it was, even when they say they changed it'
+          : 'no revisions: placement and derived writes report no revision',
+        async () => {
+          const created = await run(cmd('createNote', { noteId: 'n1', name: 'Plan' }));
+          const revised = () => true;
+          for (const scope of /** @type {const} */ (['placement', 'derived'])) {
+            const outcome = committedOf(
+              await commitScoped(
+                scope,
+                'n1',
+                async tx => {
+                  const note = await tx.get('notes', 'n1');
+                  if (note)
+                    tx.put('notes', scope === 'placement' ? { ...note, pinned: true } : { ...note, preview: 'P' });
+                },
+                { revised },
+              ),
+            );
+            assert.equal(outcome.revision, created.revision, scope);
+          }
+          const folder = await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+          await run(cmd('createFolder', { folderId: 'f2', name: 'Home', parentId: null }));
+          // Filing a folder is placement too
+          const moved = await run(cmd('moveFolder', { folderId: 'f1', parentId: 'f2' }));
+          assert.equal(moved.revision, folder.revision);
+        },
+      );
     });
 
     describe(`adapter flags: ${JSON.stringify(flags)}`, () => {

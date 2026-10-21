@@ -1,10 +1,10 @@
 /**
  * The in-memory adapter (#12, "Layout"), with all three flags:
  * - atomicMultiStore: a command's units commit together, or nothing does
- * - revisions: a note has a content revision, which only a change to its title or blocks
- *   moves (Work.revised). Committed outcomes report it, and a stale `expectedRevision` is a
- *   conflict, after which the adapter keeps the command. A note deleted and made again under
- *   its id carries on past the revision it had.
+ * - revisions: a note has a content revision, which only a content command's change to its
+ *   title or blocks moves (Work.scope, Work.revised). Committed outcomes report it, and a
+ *   stale `expectedRevision` is a conflict, after which the adapter keeps the command. A note
+ *   deleted and made again under its id carries on past the revision it had.
  * - idempotency: a commandId sent again with the same command gets its committed or conflict
  *   outcome again, and nothing runs; sent with another command it's `idempotency-key-reuse`.
  *   Rejections and `unavailable` outcomes aren't kept, so sending the command again runs it.
@@ -189,6 +189,18 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         .filter(record => record !== undefined);
     };
     /**
+     * The records whose `index` field holds `value`, which the port takes only as an id. Each
+     * adapter refuses anything else, since IndexedDB reads null and undefined as every record.
+     * @param {StoreName} store
+     * @param {string} index
+     * @param {unknown} value
+     */
+    const byIndex = (store, index, value) => {
+      const all = records(store);
+      if (!isKey(value)) throw new UnavailableError('adapter', 'invalid-key', false);
+      return all.filter(record => record[index] === value);
+    };
+    /**
      * @param {StoreName} store
      * @param {string} key
      * @param {Record<string, unknown> | undefined} record
@@ -209,11 +221,9 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         return record;
       },
       getAll: async store => clone(records(store)),
-      getAllByIndex: async (store, index, value) => clone(records(store).filter(record => record[index] === value)),
+      getAllByIndex: async (store, index, value) => clone(byIndex(store, index, value)),
       getKeysByIndex: async (store, index, value) =>
-        records(store)
-          .filter(record => record[index] === value)
-          .map(record => /** @type {string} */ (record[STORES[store].keyPath])),
+        byIndex(store, index, value).map(record => /** @type {string} */ (record[STORES[store].keyPath])),
       revision: (store, key) => {
         scoped(store);
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
@@ -225,8 +235,9 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   };
 
   /**
-   * The committed outcome, with the primary record's revision: one more than before when the
-   * command changed its content, and where it was otherwise.
+   * The committed outcome, with the primary record's revision: one more than before when a
+   * content command changed its content, and where it was otherwise. A placement or derived
+   * command never moves it (ports/repository.js, WriteScope).
    * @param {Work} work
    * @returns {Outcome}
    */
@@ -234,7 +245,8 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
     const outcome = work.done();
     const primary = work.primary && work.primary();
     if (!primary) return outcome;
-    if (work.revised && work.revised() && storeOf(primary.store).has(primary.key)) {
+    const content = (work.scope || 'content') === 'content';
+    if (content && work.revised && work.revised() && storeOf(primary.store).has(primary.key)) {
       const id = revisionKey(primary.store, primary.key);
       revisions.set(id, (revisions.get(id) || 0) + 1);
     }
