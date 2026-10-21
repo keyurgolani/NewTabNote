@@ -11,11 +11,14 @@ import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import {
   cancelSchema,
   cancelledSchema,
+  errorSchema,
   frameSchema,
+  helloSchema,
   operationName,
   requestSchema,
   responseSchema,
   tooLateSchema,
+  welcomeSchema,
 } from '../../js/kernel/core/contracts/envelope.js';
 import { MAX_DEPTH, MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
@@ -196,6 +199,52 @@ describe('frames (#13, "Topology")', () => {
     assert.equal(check(tooLateSchema, { frame: 'too-late', requestId: 'r1', outcome: items }).ok, true);
     assert.equal(check(tooLateSchema, { frame: 'too-late', requestId: 'r1', outcome: { kind: 'saved' } }).ok, false);
     assert.equal(check(cancelSchema, { frame: 'cancel', requestId: 'r1', reason: 'closed' }).ok, false);
+  });
+
+  it('a hello names the protocol, extension version, surface, and session, and a welcome the coordinator and its status', () => {
+    const hello = {
+      frame: 'hello',
+      protocol: { major: 1, minor: 0 },
+      extensionVersion: '1.4.1',
+      surface: 'popup',
+      sessionId: 's1',
+    };
+    assert.equal(check(helloSchema, hello).ok, true);
+    assert.equal(check(frameSchema, hello).ok, true);
+    const welcome = {
+      frame: 'welcome',
+      protocol: { major: 1, minor: 2 },
+      extensionVersion: '1.4.1',
+      coordinatorId: 'c1',
+      status: 'ready',
+    };
+    assert.equal(check(welcomeSchema, welcome).ok, true);
+    assert.equal(check(frameSchema, { ...welcome, status: 'degraded', reason: 'starting' }).ok, true);
+    for (const fields of [
+      { surface: 'webpage' },
+      { sessionId: '' },
+      { extensionVersion: '1.4.1-beta' },
+      { extensionVersion: '1.2.3.4.5' },
+      { protocol: { major: 1 } },
+      { protocol: { major: -1, minor: 0 } },
+      { origin: 'chrome-extension://abc' },
+    ]) {
+      assert.equal(check(helloSchema, { ...hello, ...fields }).ok, false, JSON.stringify(fields));
+    }
+    for (const fields of [{ status: 'stopped' }, { reason: 'Starting up' }, { coordinatorId: '' }]) {
+      assert.equal(check(welcomeSchema, { ...welcome, ...fields }).ok, false, JSON.stringify(fields));
+    }
+  });
+
+  it('an error carries one transport code for a request the router refused, and nothing else', () => {
+    for (const code of [...VALIDATION_CODES, ...POLICY_CODES, ...NO_ANSWER_CODES]) {
+      assert.equal(check(errorSchema, { frame: 'error', requestId: 'r1', code }).ok, true, code);
+    }
+    assert.equal(check(frameSchema, { frame: 'error', requestId: 'r1', code: 'unknown-operation' }).ok, true);
+    for (const fields of [{ code: 'quota' }, { code: 'conflict' }, { detail: 'too big' }, { requestId: '' }]) {
+      const frame = { frame: 'error', requestId: 'r1', code: 'payload-too-large', ...fields };
+      assert.equal(check(errorSchema, frame).ok, false, JSON.stringify(fields));
+    }
   });
 });
 
