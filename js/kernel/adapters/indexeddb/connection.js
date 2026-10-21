@@ -13,7 +13,8 @@
  * (5 seconds), because another connection blocks its upgrade or for any other reason, lets
  * open() resolve and keeps waiting. Until it finishes, every call answers `blocked-upgrade`,
  * or `open-pending` for an open nothing reported blocked, both retryable, and once it opens,
- * calls go through.
+ * calls go through. An open that fails, before open() answered or after, fails every call from
+ * then on with its cause and code, not retryable, since nothing opens it again.
  *
  * On versionchange the connection closes, so it never blocks another context's upgrade, and a
  * connection Chrome closes itself (the database deleted, or its storage failing) is gone too.
@@ -42,8 +43,8 @@ import { CORE_STORES, DB_NAME, DB_VERSION, createMissingStores } from './schema.
  * @typedef {object} Connection
  * @property {() => Promise<void>} open
  *   Resolves once the database is open, or after `openWithinMs` while it isn't yet. Rejects
- *   with an UnavailableError when the open fails first. Calling it again returns the first
- *   call's promise.
+ *   with an UnavailableError when the open fails first, and with `reload-required`, opening
+ *   nothing, after close(). Calling it again returns the first call's promise.
  * @property {() => IDBDatabase} database
  *   The open database, or a throw of the UnavailableError that says why there's none
  * @property {() => void} lost - for an IDBDatabase call that found the connection closed
@@ -96,7 +97,10 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
         // Closed while it opened, which stays the answer
         if (state !== 'gone') {
           state = 'failed';
-          failure = error;
+          // Every call answers it from then on, and nothing opens the database again before the
+          // page reloads, so no resend gets past it, whatever the open's error said. open()
+          // rejects with that error as it came, and the kernel answers it the same way.
+          failure = new UnavailableError(error.unavailableCause, error.code, false);
         }
         reject(error);
       };
@@ -153,6 +157,12 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
   return Object.freeze({
     open() {
       if (opening) return opening;
+      // close() came first, which stays the answer, so it opens nothing
+      if (state === 'gone') {
+        opening = Promise.reject(new UnavailableError('storage', 'reload-required', false));
+        opening.catch(() => {});
+        return opening;
+      }
       state = 'opening';
       const connected = connect();
       opening = new Promise((resolve, reject) => {

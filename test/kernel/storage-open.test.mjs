@@ -308,6 +308,59 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
       );
     }
   });
+
+  it('an open that fails after open() answered fails every call from then on, not retryable, since nothing opens it again', async () => {
+    /** @type {any} */
+    const request = {};
+    const factory = /** @type {IDBFactory} */ (/** @type {unknown} */ ({ open: () => request }));
+    const chrome = legacyEnv.createChromeStub();
+    const adapter = createIndexedDbAdapter({
+      indexedDB: factory,
+      settings: chrome.api.storage.local,
+      openWithinMs: 20,
+    });
+    await adapter.open();
+    request.error = new DOMException('The open failed', 'UnknownError');
+    request.onerror();
+    const tab = kernelOn(adapter);
+    for (const attempt of [1, 2]) {
+      const outcome = await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+      assert.deepEqual(unavailableAs(outcome), ['storage', 'open-failed', false], `attempt ${attempt}`);
+    }
+    assert.deepEqual(await tab.query({ type: 'getNote', noteId: 'n1' }), {
+      kind: 'failed',
+      cause: 'storage',
+      code: 'open-failed',
+    });
+  });
+
+  it('close() before open() keeps it closed: open() opens nothing and answers reload-required', async () => {
+    let opens = 0;
+    const factory = /** @type {IDBFactory} */ (
+      /** @type {unknown} */ ({
+        open: () => {
+          opens += 1;
+          return {};
+        },
+      })
+    );
+    const chrome = legacyEnv.createChromeStub();
+    const adapter = createIndexedDbAdapter({
+      indexedDB: factory,
+      settings: chrome.api.storage.local,
+      openWithinMs: 20,
+    });
+    adapter.close();
+    await assert.rejects(adapter.open(), error => {
+      const { unavailableCause, code, retryable } = /** @type {any} */ (error);
+      return unavailableCause === 'storage' && code === 'reload-required' && retryable === false;
+    });
+    assert.equal(opens, 0);
+    assert.deepEqual(
+      unavailableAs(await kernelOn(adapter).execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' })),
+      ['storage', 'reload-required', false],
+    );
+  });
 });
 
 describe('startup maintenance on the IndexedDB adapter', () => {
