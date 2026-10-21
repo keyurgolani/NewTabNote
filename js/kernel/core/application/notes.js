@@ -210,12 +210,20 @@ function setFields(command, code, change) {
 /** @type {{[T in NoteCommandType]: CommandHandler<T>}} */
 export const noteCommands = {
   createNote(command, { clock }) {
-    const { noteId, name = 'Untitled', folderId = null, blocks = [] } = command;
+    const {
+      noteId,
+      name = 'Untitled',
+      folderId = null,
+      blocks = [],
+      pinned = false,
+      titleManuallySet = false,
+    } = command;
     if (!isId(noteId) || typeof name !== 'string' || !isIdOrNull(folderId)) return invalid();
+    if (typeof pinned !== 'boolean' || typeof titleManuallySet !== 'boolean') return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
-    const note = newNoteRecord({ id: noteId, name, now, folderId });
+    const note = newNoteRecord({ id: noteId, name, now, folderId, pinned, titleManuallySet });
     /** @type {Unit[]} */
     const units = [];
     if (folderId !== null) {
