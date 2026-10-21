@@ -9,7 +9,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, note } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, note,
+} = require('./helpers/legacy-env');
 const { loadPageModule } = require('./helpers/page-module');
 
 const AT = 1700000000000;
@@ -105,6 +107,37 @@ describe('what Popup shows', () => {
   it('says there are no notes yet, on a profile with no notes and one with no database', async () => {
     assert.equal((await popup({ canvases: [] })).recent(), 'No notes yet');
     assert.equal((await popup(null)).recent(), 'No notes yet');
+  });
+});
+
+describe("Popup's quick note", () => {
+  // #12: Popup's notes take createNote's record and search entry, the one record-shape change it allows
+  it("saves the record and search entry the new tab's Storage.createNote saves, and lists the note first", async () => {
+    const { env, els, recent } = await popup({ canvases: notes() });
+    const input = els['quick-note-input'];
+    input.value = '  Call the plumber  ';
+    input.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await waitFor(() => recent()[0] === 'Call the plumber', { message: 'the quick note listed first' });
+    assert.equal(input.value, '');
+
+    // The new tab's own createNote, on the same profile
+    const page = createLegacyEnv({ indexedDB: env.indexedDB, chrome: env.chrome });
+    page.load('js/utils.js', 'js/storage.js');
+    const Storage = page.get('Storage');
+    await Storage.open();
+    const { id: referenceId } = await Storage.createNote('Reference');
+    Storage.db.close();
+
+    const dump = await dumpDatabase(env.indexedDB);
+    const saved = Object.values(recordsOf(dump, 'canvases')).find((record) => record.name === 'Call the plumber');
+    const reference = recordsOf(dump, 'canvases')[referenceId];
+    const fields = ({ id, name, createdAt, updatedAt, ...rest }) => rest;
+    assert.deepEqual(fields(saved), fields(reference));
+    assert.equal(typeof saved.createdAt, 'number');
+    assert.equal(saved.updatedAt, saved.createdAt);
+    assert.deepEqual(recordsOf(dump, 'search_index')[saved.id], {
+      content: '', name: 'Call the plumber', noteId: saved.id, updatedAt: saved.updatedAt,
+    });
   });
 });
 

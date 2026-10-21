@@ -10,7 +10,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| kernel command, slice 4 | 56 | #12 slice 4 (notes and blocks) routes it through the command. |
+| kernel command, slice 4 | 55 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 17 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 37 | #12 slice 6 (preferences and session) routes it through the command. |
 | deleted in slice 7 | 43 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
@@ -19,7 +19,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
 | ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
-| Total | 175 | |
+| Total | 174 | |
 
 No row is UI-only. Presentation state (panels, the palette index, selection mode, the calendar month) isn't persisted, and every persisted preference goes through the settings port.
 
@@ -28,7 +28,7 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | Command | Status | Rows |
 | --- | --- | --- |
 | `runStartupMaintenance` | kernel command, slice 4 | 1 |
-| `createNote` | kernel command, slice 4 | 15 |
+| `createNote` | kernel command, slice 4 | 14 |
 | `importNote` | kernel command, slice 4 | 8 |
 | `ensureDailyNote` | kernel command, slice 4 | 7 |
 | `captureToDailyNote` | kernel command, slice 4 | 0 |
@@ -247,7 +247,6 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/onboarding.js` | [49](../../js/onboarding.js#L49) | `OnboardingManager.setupFirstRun` | `Storage.setSetting('autoTitleEnabled', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/onboarding.js` | [50](../../js/onboarding.js#L50) | `OnboardingManager.setupFirstRun` | `Storage.setSetting('insightsEnabled', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/onboarding.js` | [66](../../js/onboarding.js#L66) | `OnboardingManager.markComplete` | `Storage.setSetting('hasCompletedOnboarding', …)` | `completeOnboarding` | kernel command, slice 6 |
-| `js/popup.js` | [120](../../js/popup.js#L120) | `PopupStorage.createNote` | `objectStore('canvases').add(…)` | `createNote` | kernel command, slice 4 |
 | `js/services/sync-service.js` | [300](../../js/services/sync-service.js#L300) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [302](../../js/services/sync-service.js#L302) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [326](../../js/services/sync-service.js#L326) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |

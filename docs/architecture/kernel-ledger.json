@@ -256,22 +256,6 @@
       "verify": "npm run check:boundaries"
     },
     {
-      "file": "js/popup.js",
-      "rule": "indexedDB",
-      "count": 1,
-      "owner": 12,
-      "removeWhen": "#12 slice 4: Popup lists notes and saves its quick note through its composition root's client",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/popup.js",
-      "rule": "objectStore",
-      "count": 3,
-      "owner": 17,
-      "removeWhen": "#12 slice 4 moves Popup to its composition root's client, over #17's IndexedDB adapter (#17 slice 1, AC4)",
-      "verify": "npm run check:boundaries"
-    },
-    {
       "file": "js/services/sync-service.js",
       "rule": "fetch",
       "count": 4,
@@ -293,22 +277,6 @@
       "count": 15,
       "owner": 19,
       "removeWhen": "#19's sync engine replaces js/services/sync-service.js",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/sidepanel.js",
-      "rule": "indexedDB",
-      "count": 1,
-      "owner": 12,
-      "removeWhen": "#12 slice 4: Side Panel reads notes through its composition root's client",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/sidepanel.js",
-      "rule": "objectStore",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "#12 slice 4 moves Side Panel to its composition root's client, over #17's IndexedDB adapter (#17 slice 1, AC4)",
       "verify": "npm run check:boundaries"
     },
     {

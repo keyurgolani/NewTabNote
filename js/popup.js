@@ -1,6 +1,14 @@
 /**
- * Popup script for New Tab Note extension
+ * Popup script for New Tab Note extension. It reads notes, and saves its quick note, through
+ * the client its composition root hands it.
  */
+
+// storage.js puts Storage on window, where Popup's root finds it
+import './storage.js';
+import { createPopupClient } from './kernel/composition/popup.js';
+
+/** @typedef {import('./kernel/composition/host.js').Client} Client */
+/** @typedef {import('./kernel/core/domain/note.js').NoteRecord} NoteRecord */
 
 /** Shown instead of the popup when a newer build upgraded the notes database. */
 const POPUP_GUARD_TEXT = {
@@ -8,120 +16,74 @@ const POPUP_GUARD_TEXT = {
   body: "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.",
 };
 
-class PopupStorage {
-  constructor() {
-    this.dbName = 'CanvasTabDB';
-    /** The schema version this build writes (storage.js dbVersion). */
-    this.supportedVersion = 8;
-    this.db = null;
-  }
+/**
+ * Why Popup can't show its notes, from a query that failed or a kernel that couldn't open:
+ * with code NEWER_SCHEMA for a database a newer build upgraded, which shows the guard.
+ * @param {{cause: string, code: string}} failure
+ * @returns {Error & {code?: string}}
+ */
+function readFailure({ cause, code }) {
+  const error = /** @type {Error & {code?: string}} */ (new Error(`Notes can't be read (${cause}: ${code})`));
+  if (cause === 'newer-schema') error.code = 'NEWER_SCHEMA';
+  return error;
+}
 
-  /**
-   * Initialize the database connection. A database a newer build upgraded is
-   * closed again without reading or writing, and init rejects with code NEWER_SCHEMA.
-   * @returns {Promise<void>}
-   */
-  async init() {
-    return new Promise((resolve, reject) => {
-      // Open without a version to use whatever version currently exists.
-      // The popup only reads data, so it should never trigger onupgradeneeded.
-      const request = indexedDB.open(this.dbName);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const db = request.result;
-        if (db.version > this.supportedVersion) {
-          db.close();
-          const error = /** @type {Error & {code: string}} */ (new Error(`Notes database version ${db.version} is newer than this build supports`));
-          error.code = 'NEWER_SCHEMA';
-          reject(error);
-          return;
-        }
-        this.db = db;
-        resolve();
-      };
-    });
-  }
+/**
+ * Whether the kernel couldn't open because no new tab has made the database yet. Popup shows
+ * no notes then, as it did when its own open made an empty one.
+ * @param {{code: string} | null} failure
+ * @returns {boolean}
+ */
+function noDatabase(failure) {
+  return Boolean(failure) && failure.code === 'no-database';
+}
 
-  /**
-   * Check if an object store exists in the database.
-   * @param {string} name - Store name
-   * @returns {boolean} True if the store exists
-   */
-  hasStore(name) {
-    return this.db.objectStoreNames.contains(name);
-  }
+/**
+ * The data a query answered, or `none` when it found nothing or there's no database yet. A
+ * failed read throws.
+ * @template T
+ * @param {import('./kernel/core/contracts/outcomes.js').QueryState<T>} state
+ * @param {T} none
+ * @returns {T}
+ */
+function dataOf(state, none) {
+  if (state.kind === 'ready' || state.kind === 'stale') return state.data;
+  if (state.kind === 'failed' && !noDatabase(state)) throw readFailure(state);
+  // Empty, and loading, which no query answers once whenReady has resolved
+  return none;
+}
 
-  /**
-   * Get all active (non-archived, non-trashed) notes.
-   * @returns {Promise<Array<Object>>} Active notes sorted by updatedAt descending
-   */
-  async getAllNotes() {
-    if (!this.hasStore('canvases')) return [];
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('canvases', 'readonly');
-      const store = tx.objectStore('canvases');
-      const request = store.index('updatedAt').getAll();
-      request.onsuccess = () => {
-        const activeNotes = request.result.filter(note => !note.archivedAt && !note.trashedAt);
-        resolve(activeNotes.reverse());
-      };
-      request.onerror = () => reject(request.error);
-    });
-  }
+/**
+ * Popup's notes as it has always listed them: none archived or trashed by date, templates
+ * included, newest first.
+ * @param {Client} kernel
+ * @returns {Promise<NoteRecord[]>}
+ */
+async function listNotes(kernel) {
+  return dataOf(await kernel.query({ type: 'listNotes', view: 'popup' }), []);
+}
 
-  /**
-   * Get notes that have AI-extracted insights.
-   * @returns {Promise<Array<Object>>} Notes with insights
-   */
-  async getNotesWithInsights() {
-    const notes = await this.getAllNotes();
-    return notes.filter(note => note.insights && (
-      (note.insights.todos && note.insights.todos.length > 0) ||
-      (note.insights.reminders && note.insights.reminders.length > 0) ||
-      (note.insights.deadlines && note.insights.deadlines.length > 0)
-    ));
-  }
+/**
+ * Whether to show the day's summary: insightsEnabled in IndexedDB's settings store, as Popup
+ * has always read it (#4 moves it to the setting the new tab saves).
+ * @param {Client} kernel
+ * @returns {Promise<boolean>}
+ */
+async function insightsEnabled(kernel) {
+  return dataOf(await kernel.query({ type: 'getPopupInsightsEnabled' }), { insightsEnabled: false }).insightsEnabled;
+}
 
-  /**
-   * Get a setting value from the settings store.
-   * @param {string} key - Setting key
-   * @param {*} [defaultValue=null] - Default value if not found
-   * @returns {Promise<*>} Setting value
-   */
-  async getSetting(key, defaultValue = null) {
-    if (!this.hasStore('settings')) return defaultValue;
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('settings', 'readonly');
-      const store = tx.objectStore('settings');
-      const request = store.get(key);
-      request.onsuccess = () => {
-        resolve(request.result?.value ?? defaultValue);
-      };
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  /**
-   * Create a new note.
-   * @param {string} name - Note name
-   * @returns {Promise<Object>} Created note object
-   */
-  async createNote(name) {
-    const note = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      name,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('canvases', 'readwrite');
-      const store = tx.objectStore('canvases');
-      const request = store.add(note);
-      request.onsuccess = () => resolve(note);
-      request.onerror = () => reject(request.error);
-    });
-  }
+/**
+ * The notes with AI-extracted insights: a todo, a reminder, or a deadline.
+ * @param {Array<Object>} notes
+ * @returns {Array<Object>}
+ */
+function withInsights(notes) {
+  return notes.filter(note => note.insights && (
+    (note.insights.todos && note.insights.todos.length > 0) ||
+    (note.insights.reminders && note.insights.reminders.length > 0) ||
+    (note.insights.deadlines && note.insights.deadlines.length > 0)
+  ));
 }
 
 function formatDate(timestamp) {
@@ -375,17 +337,17 @@ function renderStorageGuard() {
 
 
 async function init() {
-  const storage = new PopupStorage();
+  const kernel = createPopupClient();
   const quickNoteInput = /** @type {HTMLInputElement} */ (document.getElementById('quick-note-input'));
   let guarded = false;
 
   try {
-    await storage.init();
+    const failure = await kernel.whenReady();
+    if (failure && !noDatabase(failure)) throw readFailure(failure);
 
     let hasSummary = false;
-    const insightsEnabled = await storage.getSetting('insightsEnabled', false);
-    if (insightsEnabled) {
-      const notesWithInsights = await storage.getNotesWithInsights();
+    if (await insightsEnabled(kernel)) {
+      const notesWithInsights = withInsights(await listNotes(kernel));
       const summary = generateDailySummary(notesWithInsights);
       if (summary && (
         summary.todayDeadlines.length > 0 ||
@@ -403,8 +365,7 @@ async function init() {
       document.getElementById('main-content').classList.add('no-summary');
     }
 
-    const notes = await storage.getAllNotes();
-    renderRecentNotes(notes);
+    renderRecentNotes(await listNotes(kernel));
   } catch (error) {
     if (error && error.code === 'NEWER_SCHEMA') {
       guarded = true;
@@ -423,7 +384,7 @@ async function init() {
     return;
   }
 
-  // Quick Note input — creates a new note on Enter
+  // Quick Note input — creates a new note on Enter, with the record and search entry the new tab's notes get
   quickNoteInput.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     const text = quickNoteInput.value.trim();
@@ -431,11 +392,16 @@ async function init() {
 
     quickNoteInput.disabled = true;
     try {
-      await storage.createNote(text);
+      const outcome = await kernel.execute({
+        type: 'createNote',
+        commandId: kernel.ids.next(),
+        noteId: kernel.ids.next(),
+        name: text,
+      });
+      if (outcome.kind !== 'committed') throw new Error(`The quick note wasn't saved (${outcome.kind}: ${outcome.code})`);
       quickNoteInput.value = '';
       // Refresh the recent notes list
-      const updatedNotes = await storage.getAllNotes();
-      renderRecentNotes(updatedNotes);
+      renderRecentNotes(await listNotes(kernel));
     } catch (err) {
       console.error('Failed to create quick note:', err);
     } finally {

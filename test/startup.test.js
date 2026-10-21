@@ -13,8 +13,10 @@ const path = require('node:path');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
-// The service worker is a module worker; this runs it the way Chrome does
+// The service worker is a module worker, and Popup and Side Panel load module entries; these
+// run them the way Chrome does
 const { startWorker } = require('./helpers/load-background');
+const { loadPageModule } = require('./helpers/page-module');
 
 const TEST_KEY = 'test-only-api-key';
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
@@ -429,7 +431,7 @@ describe('a version-9 database (AC7)', () => {
       { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
       'main-content', 'daily-summary', 'summary-content', 'page-list',
     ]);
-    env.load('js/popup.js');
+    await loadPageModule(env, 'js/popup.js');
     await Promise.all(env.document.fire('DOMContentLoaded'));
 
     const guard = els['main-content'].querySelector('.storage-guard');
@@ -456,7 +458,8 @@ describe('a version-9 database (AC7)', () => {
     const openButton = env.document.createElement('button');
     openButton.setAttribute('data-open-notes', '');
     env.document.body.appendChild(openButton);
-    env.load('js/insights-summary.js', 'js/sidepanel.js');
+    env.load('js/insights-summary.js');
+    await loadPageModule(env, 'js/sidepanel.js');
     await Promise.all(env.document.fire('DOMContentLoaded'));
 
     const guard = els.sections.querySelector('.storage-guard');

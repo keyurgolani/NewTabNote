@@ -1,6 +1,13 @@
 /**
- * Side panel intelligence dashboard for New Tab Note.
+ * Side panel intelligence dashboard for New Tab Note. It reads the notes it summarizes
+ * through the client its composition root hands it.
  */
+
+// storage.js puts Storage on window, where Side Panel's root finds it
+import './storage.js';
+import { createSidePanelClient } from './kernel/composition/sidepanel.js';
+
+/** @typedef {import('./kernel/composition/host.js').Client} Client */
 
 /** Shown instead of the panel when a newer build upgraded the notes database. */
 const SIDEPANEL_GUARD_TEXT = {
@@ -8,53 +15,33 @@ const SIDEPANEL_GUARD_TEXT = {
   body: "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.",
 };
 
-class SidePanelStorage {
-  constructor() {
-    this.dbName = 'CanvasTabDB';
-    /** The schema version this build writes (storage.js dbVersion). */
-    this.supportedVersion = 8;
-    this.db = null;
-  }
+/**
+ * Why Side Panel can't read its notes, from a query that failed or a kernel that couldn't
+ * open: with code NEWER_SCHEMA for a database a newer build upgraded, which shows the guard.
+ * @param {{cause: string, code: string}} failure
+ * @returns {Error & {code?: string}}
+ */
+function readFailure({ cause, code }) {
+  const error = /** @type {Error & {code?: string}} */ (new Error(`Notes can't be read (${cause}: ${code})`));
+  if (cause === 'newer-schema') error.code = 'NEWER_SCHEMA';
+  return error;
+}
 
-  /**
-   * Open the database read-only. One a newer build upgraded is closed again
-   * without reading, and init rejects with code NEWER_SCHEMA.
-   * @returns {Promise<void>}
-   */
-  async init() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const db = request.result;
-        if (db.version > this.supportedVersion) {
-          db.close();
-          const error = /** @type {Error & {code: string}} */ (new Error(`Notes database version ${db.version} is newer than this build supports`));
-          error.code = 'NEWER_SCHEMA';
-          reject(error);
-          return;
-        }
-        this.db = db;
-        resolve();
-      };
-    });
-  }
-
-  hasStore(name) {
-    return this.db.objectStoreNames.contains(name);
-  }
-
-  async getAllNotes() {
-    if (!this.hasStore('canvases')) return [];
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('canvases', 'readonly');
-      const store = tx.objectStore('canvases');
-      const request = store.index('updatedAt').getAll();
-      request.onsuccess = () => resolve(request.result.reverse());
-      request.onerror = () => reject(request.error);
-    });
-  }
+/**
+ * Every note the updatedAt index lists, newest first, as Side Panel has always read them.
+ * None when no new tab has made the database yet, as when Side Panel's own open made an
+ * empty one.
+ * @param {Client} kernel
+ * @returns {Promise<Array<Object>>}
+ */
+async function readNotes(kernel) {
+  const failure = await kernel.whenReady();
+  if (failure && failure.code === 'no-database') return [];
+  if (failure) throw readFailure(failure);
+  const listed = await kernel.query({ type: 'listNotes', view: 'sidePanel' });
+  if (listed.kind === 'ready' || listed.kind === 'stale') return listed.data;
+  if (listed.kind === 'failed') throw readFailure(listed);
+  return [];
 }
 
 const SECTION_CONFIG = [
@@ -188,10 +175,8 @@ async function init() {
   document.getElementById('open-notes').addEventListener('click', openNotes);
   document.querySelector('[data-open-notes]').addEventListener('click', openNotes);
 
-  const storage = new SidePanelStorage();
   try {
-    await storage.init();
-    const notes = await storage.getAllNotes();
+    const notes = await readNotes(createSidePanelClient());
     const summary = InsightsSummary.buildInsightsSummary(notes, { maxItems: 8 });
     renderSummary(summary);
   } catch (error) {
