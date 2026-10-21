@@ -8,6 +8,10 @@
  * The roots are the manifest's background.service_worker and every <script src> in the
  * pages. Module scripts are followed through their static imports and `export ... from`;
  * a classic service worker through its importScripts() calls with string arguments.
+ *
+ * Each page's modules are also kept by depth, for its <link rel="modulepreload"> hints
+ * (scripts/module-preloads.js): a module two or more imports from the page's own module
+ * scripts is one the browser only finds after it has loaded another module.
  */
 
 const fs = require('fs');
@@ -40,6 +44,21 @@ function attribute(attributes, name) {
   const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i').exec(attributes);
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3];
+}
+
+/**
+ * The modules a page asks the browser to preload, in order: the href of each
+ * <link rel="modulepreload">, outside comments
+ */
+function preloadLinks(html) {
+  const text = html.replace(/<!--[\s\S]*?-->/g, '');
+  const links = [];
+  for (const match of text.matchAll(/<link\b([^>]*)>/gi)) {
+    const rel = attribute(match[1], 'rel');
+    const href = attribute(match[1], 'href');
+    if (rel !== null && rel.trim().toLowerCase() === 'modulepreload' && href !== null) links.push(href);
+  }
+  return links;
 }
 
 /**
@@ -124,6 +143,9 @@ function inspect(text, file, { module = false } = {}) {
  * @property {Set<string>} classic - files loaded as classic scripts
  * @property {Set<string>} workerFiles - every file the service worker loads
  * @property {Set<string>} pages - the pages read, the manifest's included
+ * @property {Map<string, Array<{file: string, depth: number}>>} pageModules - each page's
+ *   modules, its own module scripts at depth 0 and each import one deeper than the closest
+ *   module that imports it, in the order a breadth-first walk of the imports reaches them
  * @property {number} references - script tags, imports, and importScripts names resolved
  * @property {Array<{from: string, message: string}>} problems - what can't load, in the
  *   order found
@@ -145,6 +167,7 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
     classic: new Set(),
     workerFiles: new Set(),
     pages: new Set(),
+    pageModules: new Map(),
     references: 0,
     problems: [],
   };
@@ -158,6 +181,8 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
   const inspected = new Map();
   // Modules followed from a page; graph.workerFiles holds those followed from the worker
   const pageModules = new Set();
+  // Each module's imports that resolve, in order
+  const importsOf = new Map();
 
   // A file is read as a module or as a classic script, the way it's loaded
   const read = (file, module) => {
@@ -211,10 +236,28 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
       found.dynamicImports.forEach(at => problem(file, `${file} calls import() at ${at}, which a service worker can't`));
       found.importScripts.forEach(({ at }) => problem(file, `${file} calls importScripts() at ${at}, which throws in a module service worker`));
     }
+    const targets = [];
     for (const { specifier } of found.imports) {
       const target = resolve(file, 'imports', specifier, path.posix.dirname(file), { bare: true });
-      if (target) followModule(target, inWorker);
+      if (target) targets.push(target);
     }
+    importsOf.set(file, targets);
+    targets.forEach(target => followModule(target, inWorker));
+  };
+
+  // A page's modules by depth, breadth first from its own module scripts
+  const modulesOfPage = entries => {
+    const depths = new Map(entries.map(file => [file, 0]));
+    const pending = [...entries];
+    while (pending.length > 0) {
+      const file = pending.shift();
+      for (const target of importsOf.get(file) || []) {
+        if (depths.has(target)) continue;
+        depths.set(target, depths.get(file) + 1);
+        pending.push(target);
+      }
+    }
+    return [...depths].map(([file, depth]) => ({ file, depth }));
   };
 
   const followClassicWorker = file => {
@@ -271,11 +314,13 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
   for (const page of [...new Set(pageList)].sort()) {
     if (!fs.existsSync(path.join(root, page))) continue;
     graph.pages.add(page);
+    const entries = [];
     for (const tag of scriptTags(fs.readFileSync(path.join(root, page), 'utf8'))) {
       const file = resolve(page, `loads <script${tag.module ? ' type="module"' : ''} src>`, tag.src, path.posix.dirname(page));
       if (!file) continue;
       if (tag.module) {
         followModule(file, false);
+        entries.push(file);
       } else {
         graph.classic.add(file);
         if (inspectClassic && read(file, false).imports.length > 0) {
@@ -283,9 +328,10 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
         }
       }
     }
+    graph.pageModules.set(page, modulesOfPage(entries));
   }
 
   return graph;
 }
 
-module.exports = { readScriptGraph, scriptTags, inspect };
+module.exports = { readScriptGraph, scriptTags, preloadLinks, inspect };

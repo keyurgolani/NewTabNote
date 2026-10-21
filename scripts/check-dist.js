@@ -11,7 +11,9 @@
  *
  * Every module under #13's contract and messaging directories, and Valibot's build, must be
  * in the build too, whether or not anything reached from a page or the worker imports it yet
- * (#13, AC7). A missing one would break whichever context loads it next.
+ * (#13, AC7). A missing one would break whichever context loads it next. And each page has to
+ * preload exactly the modules its graph reaches two or more imports deep
+ * (scripts/module-preloads.js).
  *
  *   npm run check:dist                 check dist/
  *   node scripts/check-dist.js <dir>   check another build
@@ -20,6 +22,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readScriptGraph } = require('./lib/script-graph');
+const { preloadProblems } = require('./module-preloads');
 
 const ROOT_DIR = path.join(__dirname, '..');
 
@@ -86,7 +89,7 @@ function main(argv = process.argv.slice(2), { log = console.log, error = console
   }
 
   const graph = readScriptGraph(dir, { pages: pagesIn(dir), inspectClassic: true });
-  const problems = [...graph.problems, ...missingModules(dir, sources)];
+  const problems = [...graph.problems, ...missingModules(dir, sources), ...preloadProblems(dir, pagesIn(dir))];
   if (problems.length > 0) {
     error(`check:dist failed: ${plural(problems.length, 'problem')} in ${name}/`);
     problems.forEach(({ message }) => error(`  - ${message}`));
