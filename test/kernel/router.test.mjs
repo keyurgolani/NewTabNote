@@ -689,7 +689,12 @@ describe('the router: system.messagingHealth (#13, "Security and privacy")', () 
 
   it('answers system.messagingHealth itself, to the surfaces its entry lists, and no handler takes its place', async () => {
     const scheduler = testScheduler();
-    const router = makeRouter({ ...scheduler, handlers: { 'system.messagingHealth': () => ready(NOW, 'taken') } });
+    // It knows its own queries whatever lookup it's given, and no lookup can replace them
+    const router = makeRouter({
+      ...scheduler,
+      lookup: createLookup({ 'system.messagingHealth': OPERATIONS.getNote }),
+      handlers: { 'system.messagingHealth': () => ready(NOW, 'taken') },
+    });
     const peer = await opened(router, 'newtab');
     peer.send(request('h1', { type: 'system.messagingHealth' }));
     await settle();

@@ -41,6 +41,7 @@ import { POLICY_CODES, VALIDATION_CODES } from '../contracts/transport-codes.js'
 import { check, checkRequest, checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
 import { createLookup } from './operations.js';
+import { SYSTEM_OPERATIONS } from './system-operations.js';
 import { createScopeCheck } from './scope.js';
 
 /** @typedef {import('../contracts/envelope.js').HelloFrame} HelloFrame */
@@ -170,6 +171,8 @@ export function createRouter({
   status = () => ({ status: 'ready' }),
   logger = silentLogger,
 }) {
+  /** @type {Lookup} the coordinator's own queries first, which nothing it's given replaces */
+  const find = name => (Object.hasOwn(SYSTEM_OPERATIONS, name) ? SYSTEM_OPERATIONS[name] : lookup(name));
   const inScope = createScopeCheck();
   /** @type {Set<Peer>} */
   const peers = new Set();
@@ -408,7 +411,7 @@ export function createRouter({
       tally(counts.refusals, 'invalid-payload');
       return;
     }
-    const checked = checkRequest(frame, bytes, lookup);
+    const checked = checkRequest(frame, bytes, find);
     if (!checked.ok) return refuse(peer, requestId, checked.code);
     const { operation, payload } = checked;
     // A name the lookup found is the catalog's, so this counts nothing a sender chose
