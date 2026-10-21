@@ -17,10 +17,26 @@
  *   never sent is definitely unavailable.
  * - An answer counts once its operation's result schema takes it, so a reply is as strict as
  *   a request.
+ *
+ * Its connection state is what the status region (adapters/messaging/status-region.js)
+ * announces ("Product and interaction requirements"). Connecting is silent. Reconnecting shows
+ * once a user-visible request has waited RECONNECTING_AFTER_MS with no welcome, or at once when
+ * the coordinator can't be woken, and when the first attempt and one more after each wait in
+ * RECONNECT_DELAYS_MS have all failed, the coordinator is unavailable and what waits is
+ * refused. A coordinator whose protocol has another major version gets nothing more, and the
+ * page offers Reload only while reloading loses nothing. A worker that stops while nothing
+ * waits changes nothing, and no keep-alive runs: the next request reconnects.
  */
 
 import { encode, encodedBytes } from '../contracts/codec.js';
-import { DEADLINE_GRACE_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../contracts/limits.js';
+import {
+  DEADLINE_GRACE_MS,
+  HANDSHAKE_TIMEOUT_MS,
+  MAX_MESSAGE_BYTES,
+  PROTOCOL_VERSION,
+  RECONNECTING_AFTER_MS,
+  RECONNECT_DELAYS_MS,
+} from '../contracts/limits.js';
 import { commandOutcome, queryFailure } from '../contracts/transport-codes.js';
 import { checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
@@ -57,6 +73,8 @@ import { silentLogger } from '../ports/runtime.js';
 /**
  * @typedef {object} CallOptions
  * @property {CancelSignal} [signal]
+ * @property {boolean} [userVisible] - whether the user waits on it, which only such a call
+ *   shows Reconnecting for. True unless a caller says otherwise.
  */
 
 /**
@@ -73,6 +91,12 @@ import { silentLogger } from '../ports/runtime.js';
  */
 
 /**
+ * What a surface shows of its connection. `idle` and `connecting` show nothing, and
+ * `connected` shows only as the end of a problem shown before.
+ * @typedef {'idle' | 'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'unsupported'} ConnectionState
+ */
+
+/**
  * @typedef {object} ClientOptions
  * @property {Transport} transport
  * @property {Surface} surface - the surface this client's context is, which the router checks
@@ -82,6 +106,8 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {Clock} clock
  * @property {Timers} timers
  * @property {Logger} [logger]
+ * @property {() => boolean} [isComposing] - whether an IME composition is open on the page
+ * @property {() => boolean} [hasPendingCommit] - whether the page holds input not yet committed
  */
 
 /**
@@ -89,6 +115,14 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {string} sessionId - this context's, which the router takes as its contextId
  * @property {(command: CommandInput, options?: CallOptions) => Promise<Outcome | BulkOutcome>} execute
  * @property {(query: QueryInput, options?: CallOptions) => Promise<QueryState<unknown>>} query
+ * @property {() => ConnectionState} state
+ * @property {(listener: (state: ConnectionState) => void) => () => void} subscribe
+ *   Tells `listener` each new state, until the function it returns is called
+ * @property {() => void} retry
+ *   Connects now when nothing is connecting, as the status region's Retry does
+ * @property {() => boolean} canReload
+ *   Whether reloading the page loses nothing: no IME composition, no input the page hasn't
+ *   committed, and no command of this client's waiting for its answer
  * @property {() => CoordinatorInfo | null} coordinator
  * @property {() => void} close - settles every call and refuses any after
  */
@@ -102,6 +136,8 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {Record<string, unknown>} payload
  * @property {string} commandId
  * @property {string} requestId
+ * @property {boolean} visible - the user waits on it
+ * @property {number} since - when it was made
  * @property {boolean} sent
  * @property {unknown} timer
  * @property {(answer: unknown) => void} resolve
@@ -121,24 +157,43 @@ export function createClient({
   clock,
   timers,
   logger = silentLogger,
+  isComposing = () => false,
+  hasPendingCommit = () => false,
 }) {
   const sessionId = ids.next();
   /**
-   * - idle: no connection, and nothing waiting
+   * - idle: no connection, and nothing to send
    * - connecting: a connection open, and its welcome not yet come
+   * - retrying: waiting to try again after an attempt failed
    * - open: welcomed
+   * - unavailable: every attempt failed, until the next request or retry()
+   * - unsupported: the coordinator speaks another major version
    * - closed: close() was called
-   * @type {'idle' | 'connecting' | 'open' | 'closed'}
+   * @type {'idle' | 'connecting' | 'retrying' | 'open' | 'unavailable' | 'unsupported' | 'closed'}
    */
   let phase = 'idle';
   /** @type {Link | null} */
   let link = null;
   /** @type {CoordinatorInfo | null} */
   let coordinator = null;
-  /** @type {Call[]} calls waiting for the welcome */
+  /** How many attempts have failed since the last welcome */
+  let failures = 0;
+  /** Whether Reconnecting shows while it connects */
+  let showing = false;
+  /** @type {unknown} */
+  let handshakeTimer;
+  /** @type {unknown} */
+  let retryTimer;
+  /** @type {unknown} */
+  let showTimer = null;
+  /** @type {Call[]} calls waiting for the welcome, oldest first */
   let waiting = [];
   /** @type {Map<string, Call>} calls sent, by requestId */
   const sent = new Map();
+  /** @type {Set<(state: ConnectionState) => void>} */
+  const listeners = new Set();
+  /** @type {ConnectionState} */
+  let told = 'idle';
 
   /**
    * Tells the logger, whose own failure changes no answer
@@ -150,6 +205,28 @@ export function createClient({
       logger.warn(event, detail);
     } catch {
       // Nothing to tell
+    }
+  };
+
+  /** @returns {ConnectionState} */
+  const state = () => {
+    if (phase === 'open') return 'connected';
+    if (phase === 'unavailable' || phase === 'unsupported') return phase;
+    if (phase === 'connecting' || phase === 'retrying') return showing ? 'reconnecting' : 'connecting';
+    return 'idle';
+  };
+
+  /** Tells the listeners the state, when it changed */
+  const tell = () => {
+    const now = state();
+    if (now === told) return;
+    told = now;
+    for (const listener of [...listeners]) {
+      try {
+        listener(now);
+      } catch (error) {
+        warn('client-status-listener-failed', { error });
+      }
     }
   };
 
@@ -173,6 +250,41 @@ export function createClient({
     waiting = waiting.filter(other => other !== call);
     call.unlisten();
     call.resolve(answer);
+  };
+
+  /**
+   * Settles every call still waiting to be sent, which definitely never started
+   * @param {TransportCode} code
+   */
+  const refuseWaiting = code => {
+    for (const call of [...waiting]) settle(call, answerFor(call, code, false));
+  };
+
+  /**
+   * Ends every call sent on the connection that just went, since none of their answers can
+   * come: a command's reply was lost, and a query's coordinator went
+   */
+  const loseSent = () => {
+    for (const call of [...sent.values()]) {
+      settle(call, answerFor(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true));
+    }
+  };
+
+  /** Stops the waits that belong to connecting, once it's over */
+  const stopConnecting = () => {
+    timers.clear(handshakeTimer);
+    timers.clear(retryTimer);
+    timers.clear(showTimer);
+    showTimer = null;
+    showing = false;
+    failures = 0;
+  };
+
+  /** Closes the connection from this end, which tells only the other */
+  const hangUp = () => {
+    const open = link;
+    link = null;
+    open?.close();
   };
 
   /**
@@ -220,34 +332,70 @@ export function createClient({
   };
 
   /**
-   * Ends every call sent on the connection that just went, since none of their answers can
-   * come: a command's reply was lost, and a query's coordinator went
+   * Shows Reconnecting once the oldest user-visible call waiting has waited
+   * RECONNECTING_AFTER_MS, unless a welcome comes first
    */
-  const loseSent = () => {
-    for (const call of [...sent.values()]) {
-      settle(call, answerFor(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true));
-    }
+  const watch = () => {
+    if (showing || showTimer !== null || (phase !== 'connecting' && phase !== 'retrying')) return;
+    const oldest = waiting.find(call => call.visible);
+    if (!oldest) return;
+    showTimer = timers.set(
+      () => {
+        showTimer = null;
+        if (phase !== 'connecting' && phase !== 'retrying') return;
+        const first = waiting.find(call => call.visible);
+        if (!first) return;
+        if (clock.now() - first.since < RECONNECTING_AFTER_MS) {
+          watch();
+          return;
+        }
+        showing = true;
+        tell();
+      },
+      Math.max(0, oldest.since + RECONNECTING_AFTER_MS - clock.now()),
+    );
   };
 
   /**
-   * A connection that went before its welcome, or with calls still sent on it
+   * An attempt that ended without a welcome. Waking the worker failing shows Reconnecting at
+   * once. After the last retry, the coordinator is unavailable.
+   * @param {CloseReason} reason
+   */
+  const failed = reason => {
+    timers.clear(handshakeTimer);
+    warn('client-connection-failed', { reason, failures });
+    if (reason === 'unreachable') showing = true;
+    if (failures >= RECONNECT_DELAYS_MS.length) {
+      stopConnecting();
+      phase = 'unavailable';
+      refuseWaiting('unavailable');
+      tell();
+      return;
+    }
+    phase = 'retrying';
+    retryTimer = timers.set(connect, RECONNECT_DELAYS_MS[failures]);
+    failures += 1;
+    tell();
+  };
+
+  /**
+   * The connection went: before its welcome, an attempt failed, and after it, whatever was
+   * sent on it has no answer coming
    * @param {Link} gone
    * @param {CloseReason} reason
    */
   const closed = (gone, reason) => {
     if (gone !== link) return;
     link = null;
-    const welcomed = phase === 'open';
-    phase = 'idle';
-    loseSent();
-    if (welcomed && waiting.length > 0) {
-      connect();
+    if (phase === 'connecting') {
+      failed(reason);
       return;
     }
-    if (!welcomed) {
-      warn('client-connection-failed', { reason });
-      for (const call of [...waiting]) settle(call, answerFor(call, 'unavailable', false));
-    }
+    if (phase !== 'open') return;
+    phase = 'idle';
+    loseSent();
+    if (waiting.length > 0) begin();
+    else tell();
   };
 
   /** @param {WelcomeFrame} frame */
@@ -255,8 +403,17 @@ export function createClient({
     if (phase !== 'connecting') return;
     coordinator = { coordinatorId: frame.coordinatorId, status: frame.status };
     if (frame.reason !== undefined) coordinator.reason = frame.reason;
+    stopConnecting();
+    if (frame.protocol.major !== PROTOCOL_VERSION.major) {
+      phase = 'unsupported';
+      hangUp();
+      refuseWaiting('unsupported-version');
+      tell();
+      return;
+    }
     phase = 'open';
     flush();
+    tell();
   };
 
   /**
@@ -283,7 +440,7 @@ export function createClient({
   };
 
   /** Opens a connection and says hello */
-  const connect = () => {
+  function connect() {
     phase = 'connecting';
     /** @type {Link} */
     let opened;
@@ -292,9 +449,7 @@ export function createClient({
     } catch (error) {
       // As chrome.runtime.connect() throws once the extension context is gone
       warn('client-connect-threw', { error });
-      link = null;
-      phase = 'idle';
-      for (const call of [...waiting]) settle(call, answerFor(call, 'unavailable', false));
+      failed('unreachable');
       return;
     }
     link = opened;
@@ -308,9 +463,27 @@ export function createClient({
     try {
       opened.send(encode({ frame: 'hello', protocol: PROTOCOL_VERSION, extensionVersion, surface, sessionId }));
     } catch {
-      // It closed already, and its close settles what waits
+      // It closed already, and its close counts the attempt
     }
-  };
+    handshakeTimer = timers.set(() => {
+      if (opened !== link || phase !== 'connecting') return;
+      hangUp();
+      failed('closed');
+    }, HANDSHAKE_TIMEOUT_MS);
+    tell();
+  }
+
+  /**
+   * Starts connecting, from idle or once the coordinator was unavailable, which a surface has
+   * shown, so connecting again shows Reconnecting
+   */
+  function begin() {
+    if (phase !== 'idle' && phase !== 'unavailable') return;
+    showing = phase === 'unavailable';
+    failures = 0;
+    connect();
+    watch();
+  }
 
   /**
    * @param {'command' | 'query'} kind
@@ -318,7 +491,7 @@ export function createClient({
    * @param {CallOptions} options
    * @returns {Promise<unknown>}
    */
-  const ask = (kind, input, { signal } = {}) =>
+  const ask = (kind, input, { signal, userVisible = true } = {}) =>
     new Promise(resolve => {
       const name = typeof input?.type === 'string' ? input.type : '';
       const operation = name === '' ? undefined : lookup(name);
@@ -330,6 +503,8 @@ export function createClient({
         payload: /** @type {Record<string, unknown>} */ (input),
         commandId: typeof input?.commandId === 'string' ? input.commandId : '',
         requestId: '',
+        visible: userVisible,
+        since: clock.now(),
         sent: false,
         timer: undefined,
         resolve,
@@ -339,6 +514,7 @@ export function createClient({
       const refuse = code => resolve(answerFor(call, code, false));
       if (!operation || operation.entry.kind !== kind) return refuse('unknown-operation');
       if (phase === 'closed') return refuse('unavailable');
+      if (phase === 'unsupported') return refuse('unsupported-version');
       if (signal?.aborted) return refuse('cancelled');
       call.requestId = ids.next();
       // Checked as it would be sent, so a call that can't go is refused before it waits
@@ -359,7 +535,8 @@ export function createClient({
       }
       if (phase === 'open' && transmit(call, text)) return;
       waiting.push(call);
-      if (phase === 'idle') connect();
+      begin();
+      watch();
     });
 
   /**
@@ -383,15 +560,31 @@ export function createClient({
     sessionId,
     execute: (command, options) => /** @type {Promise<Outcome | BulkOutcome>} */ (ask('command', command, options)),
     query: (query, options) => /** @type {Promise<QueryState<unknown>>} */ (ask('query', query, options)),
+    state,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    retry: begin,
+    canReload() {
+      try {
+        if (isComposing() || hasPendingCommit()) return false;
+      } catch {
+        return false;
+      }
+      return ![...waiting, ...sent.values()].some(call => call.kind === 'command');
+    },
     coordinator: () => (coordinator ? { ...coordinator } : null),
     close() {
       if (phase === 'closed') return;
-      const open = link;
-      link = null;
+      stopConnecting();
       phase = 'closed';
-      open?.close();
+      hangUp();
       loseSent();
-      for (const waitingCall of [...waiting]) settle(waitingCall, answerFor(waitingCall, 'unavailable', false));
+      refuseWaiting('unavailable');
+      tell();
     },
   });
 }

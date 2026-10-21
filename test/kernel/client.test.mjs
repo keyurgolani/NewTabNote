@@ -10,8 +10,11 @@ import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,
+  HANDSHAKE_TIMEOUT_MS,
   PROTOCOL_VERSION,
   QUERY_DEADLINE_MS,
+  RECONNECTING_AFTER_MS,
+  RECONNECT_DELAYS_MS,
   SMALL_MESSAGE_BYTES,
 } from '../../js/kernel/core/contracts/limits.js';
 import { committed, failed, ready, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
@@ -61,14 +64,16 @@ async function welcomed(options = {}) {
   const scheduler = testScheduler();
   const coordinator = scriptedCoordinator();
   const client = makeClient(coordinator.transport, scheduler, options);
-  // A query of the coordinator's own opens the connection, and its answer is ignored
-  void client.query({ type: 'system.messagingHealth' });
+  client.retry();
   await settle();
   coordinator.last.welcome();
   await settle();
   coordinator.last.frames.length = 0;
   return { scheduler, coordinator, client, connection: coordinator.last };
 }
+
+/** A getNote, the query the status tests wait on */
+const getNote = { type: 'getNote', noteId: 'n1' };
 
 describe('the client: requests (#13, "Topology")', () => {
   it('opens its connection on the first request, says hello, and sends the request once welcomed', async () => {
@@ -307,5 +312,192 @@ describe('the client: requests (#13, "Topology")', () => {
     assert.deepEqual(await command, unknown('outcome-unknown', 'c-n1'));
     assert.equal(connection.closed, true);
     assert.deepEqual(await client.query({ type: 'getNote', noteId: 'n1' }), failed('coordinator', 'unavailable'));
+  });
+});
+
+describe('the client: connection status (#13, "Product and interaction requirements" and AC3)', () => {
+  /**
+   * A client over a coordinator the test plays, and every state its listeners heard
+   * @param {Partial<ClientOptions>} [options]
+   */
+  function watched(options = {}) {
+    const scheduler = testScheduler();
+    const coordinator = scriptedCoordinator();
+    const client = makeClient(coordinator.transport, scheduler, options);
+    /** @type {string[]} */
+    const states = [];
+    client.subscribe(state => states.push(state));
+    return { scheduler, coordinator, client, states };
+  }
+
+  it('opens nothing while idle, and a worker that stops while nothing waits changes nothing on screen', async () => {
+    const { scheduler, coordinator, client, states } = watched();
+    assert.equal(client.state(), 'idle');
+    await scheduler.advance(60_000);
+    assert.equal(coordinator.attempts, 0);
+    const answer = client.query(getNote);
+    await settle();
+    coordinator.last.welcome();
+    await settle();
+    const [sent] = coordinator.last.requests();
+    coordinator.last.send({ frame: 'response', requestId: sent.requestId, result: noNote });
+    await answer;
+    // The worker stops while idle: no Reconnecting, no reconnect, and no keep-alive
+    coordinator.last.close();
+    await settle();
+    assert.deepEqual(states, ['connecting', 'connected', 'idle']);
+    assert.equal(scheduler.waiting, 0);
+    await scheduler.advance(60_000);
+    assert.equal(coordinator.attempts, 1);
+  });
+
+  it('shows Reconnecting only once a user-visible request has waited RECONNECTING_AFTER_MS without a welcome', async () => {
+    const { scheduler, coordinator, client, states } = watched();
+    // A request the user isn't waiting on shows nothing
+    void client.query(getNote, { userVisible: false });
+    await scheduler.advance(RECONNECTING_AFTER_MS);
+    assert.deepEqual(states, ['connecting']);
+    void client.query(getNote);
+    await scheduler.advance(RECONNECTING_AFTER_MS - 1);
+    assert.deepEqual(states, ['connecting']);
+    await scheduler.advance(1);
+    assert.deepEqual(states, ['connecting', 'reconnecting']);
+    coordinator.last.welcome();
+    await settle();
+    assert.deepEqual(states, ['connecting', 'reconnecting', 'connected']);
+    assert.equal(coordinator.attempts, 1);
+  });
+
+  it('shows Reconnecting at once when waking the worker fails, and Coordinator unavailable after the third retry, at 0.5, 1, and 2 s', async () => {
+    const { scheduler, coordinator, client, states } = watched();
+    coordinator.reach = 'unreachable';
+    const answer = client.execute(pin('n1'));
+    await settle();
+    assert.deepEqual(states, ['connecting', 'reconnecting']);
+    /** @type {number[]} */
+    const attempts = [];
+    for (const delay of RECONNECT_DELAYS_MS) {
+      await scheduler.advance(delay - 1);
+      attempts.push(coordinator.attempts);
+      await scheduler.advance(1);
+      attempts.push(coordinator.attempts);
+    }
+    assert.deepEqual(attempts, [1, 2, 2, 3, 3, 4]);
+    assert.deepEqual(states, ['connecting', 'reconnecting', 'unavailable']);
+    // It was never sent, so it definitely didn't run
+    assert.deepEqual(await answer, unavailable('coordinator', 'unavailable', true));
+    assert.equal(scheduler.waiting, 0);
+
+    // A page whose extension context is gone can't connect either
+    const gone = watched();
+    gone.coordinator.reach = 'throws';
+    void gone.client.query(getNote);
+    await settle();
+    assert.deepEqual(gone.states, ['reconnecting']);
+  });
+
+  it('counts a handshake that never answers as a failed attempt, HANDSHAKE_TIMEOUT_MS on', async () => {
+    const { scheduler, coordinator, client } = watched();
+    void client.query(getNote);
+    await scheduler.advance(HANDSHAKE_TIMEOUT_MS - 1);
+    assert.equal(coordinator.last.closed, false);
+    await scheduler.advance(1);
+    assert.equal(coordinator.last.closed, true);
+    await scheduler.advance(RECONNECT_DELAYS_MS[0]);
+    assert.equal(coordinator.attempts, 2);
+    // The request has waited past RECONNECTING_AFTER_MS all the while
+    assert.equal(client.state(), 'reconnecting');
+    coordinator.last.welcome();
+    await settle();
+    assert.equal(client.state(), 'connected');
+    assert.equal(coordinator.last.requests().length, 1);
+  });
+
+  it('tries again once the coordinator was unavailable, on the next request or Retry, and a welcome resolves it', async () => {
+    const { scheduler, coordinator, client, states } = watched();
+    coordinator.reach = 'unreachable';
+    void client.query(getNote);
+    await scheduler.advance(RECONNECT_DELAYS_MS.reduce((sum, delay) => sum + delay, 0));
+    assert.equal(client.state(), 'unavailable');
+    coordinator.reach = 'open';
+    client.retry();
+    await settle();
+    coordinator.last.welcome();
+    await settle();
+    assert.deepEqual(states, ['connecting', 'reconnecting', 'unavailable', 'reconnecting', 'connected']);
+    // The next request after an idle stop, by contrast, reconnects silently
+    coordinator.last.close();
+    await settle();
+    void client.query(getNote);
+    await settle();
+    coordinator.last.welcome();
+    await settle();
+    assert.deepEqual(states.slice(-3), ['idle', 'connecting', 'connected']);
+  });
+
+  it('sends nothing more on a major-version mismatch, and offers Reload only with no composition or pending commit', async () => {
+    let composing = false;
+    let pendingCommit = false;
+    const { coordinator, client, states } = watched({
+      isComposing: () => composing,
+      hasPendingCommit: () => pendingCommit,
+    });
+    const answer = client.execute(pin('n1'));
+    await settle();
+    coordinator.last.welcome({ protocol: { major: PROTOCOL_VERSION.major + 1, minor: 0 } });
+    await settle();
+    assert.deepEqual(states, ['connecting', 'unsupported']);
+    assert.deepEqual(await answer, rejected('validation', 'unsupported-version'));
+    assert.equal(coordinator.last.closed, true);
+    assert.deepEqual(coordinator.last.requests(), []);
+    assert.deepEqual(await client.query(getNote), failed('validation', 'unsupported-version'));
+    client.retry();
+    await settle();
+    assert.equal(coordinator.attempts, 1);
+
+    assert.equal(client.canReload(), true);
+    composing = true;
+    assert.equal(client.canReload(), false);
+    composing = false;
+    pendingCommit = true;
+    assert.equal(client.canReload(), false);
+  });
+
+  it("doesn't offer Reload while a command of its own waits for its answer, or a check it asks throws", async () => {
+    const { connection, client } = await welcomed();
+    assert.equal(client.canReload(), true);
+    const command = client.execute(pin('n1'));
+    await settle();
+    assert.equal(client.canReload(), false);
+    const [sent] = connection.requests();
+    connection.send({ frame: 'response', requestId: sent.requestId, result: committed('note-pinned', ['n1']) });
+    await command;
+    assert.equal(client.canReload(), true);
+    const broken = await welcomed({
+      isComposing: () => {
+        throw new Error('broken');
+      },
+    });
+    assert.equal(broken.client.canReload(), false);
+  });
+
+  it('keeps a status listener that throws from stopping the others, and one that unsubscribed hears nothing', async () => {
+    /** @type {string[]} */
+    const reported = [];
+    const { coordinator, client } = watched({ logger: { warn: event => reported.push(event) } });
+    client.subscribe(() => {
+      throw new Error('a broken listener');
+    });
+    /** @type {string[]} */
+    const heard = [];
+    const stop = client.subscribe(state => heard.push(state));
+    client.retry();
+    await settle();
+    assert.deepEqual(heard, ['connecting']);
+    assert.ok(reported.includes('client-status-listener-failed'));
+    stop();
+    coordinator.last.welcome();
+    await settle();
+    assert.deepEqual(heard, ['connecting']);
   });
 });

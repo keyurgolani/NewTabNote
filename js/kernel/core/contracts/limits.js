@@ -40,6 +40,21 @@ export const MAINTENANCE_DEADLINE_MS = 120_000;
  */
 export const DEADLINE_GRACE_MS = 1000;
 
+/**
+ * How long a user-visible request waits with no welcomed connection before its surface shows
+ * Reconnecting, so a worker that starts cold never flashes it
+ */
+export const RECONNECTING_AFTER_MS = 2000;
+
+/**
+ * The waits before each reconnect once an attempt fails. When the attempt after the last of
+ * them fails too, the coordinator is unavailable.
+ */
+export const RECONNECT_DELAYS_MS = Object.freeze(/** @type {const} */ ([500, 1000, 2000]));
+
+/** How long a client waits for the welcome before it counts the attempt failed */
+export const HANDSHAKE_TIMEOUT_MS = 5000;
+
 /** The most one stream chunk may encode to, in bytes: 256 KiB */
 export const MAX_CHUNK_BYTES = 256 * 1024;
 
