@@ -33,6 +33,28 @@ export const QUERY_DEADLINE_MS = 15_000;
 /** How long startup maintenance has, since its integrity check reads every note */
 export const MAINTENANCE_DEADLINE_MS = 120_000;
 
+/**
+ * How long past a request's deadline a client waits for its answer before it gives up. The
+ * router answers at the deadline itself, so this only covers the answer's way back, and no
+ * client timeout is shorter than the deadline.
+ */
+export const DEADLINE_GRACE_MS = 1000;
+
+/**
+ * How long a user-visible request waits with no welcomed connection before its surface shows
+ * Reconnecting, so a worker that starts cold never flashes it
+ */
+export const RECONNECTING_AFTER_MS = 2000;
+
+/**
+ * The waits before each reconnect once an attempt fails. When the attempt after the last of
+ * them fails too, the coordinator is unavailable.
+ */
+export const RECONNECT_DELAYS_MS = Object.freeze(/** @type {const} */ ([500, 1000, 2000]));
+
+/** How long a client waits for the welcome before it counts the attempt failed */
+export const HANDSHAKE_TIMEOUT_MS = 5000;
+
 /** The most one stream chunk may encode to, in bytes: 256 KiB */
 export const MAX_CHUNK_BYTES = 256 * 1024;
 
@@ -41,3 +63,9 @@ export const STREAM_CREDIT = 16;
 
 /** How deep a message may nest objects and arrays, so a hostile one can't exhaust the stack */
 export const MAX_DEPTH = 64;
+
+/**
+ * The upper bounds of the latency buckets system.messagingHealth counts answers in, in
+ * milliseconds. An answer slower than the last falls in the bucket past it.
+ */
+export const LATENCY_BUCKETS_MS = Object.freeze(/** @type {const} */ ([10, 50, 100, 500, 1000, 5000]));

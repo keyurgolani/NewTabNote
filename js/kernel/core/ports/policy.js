@@ -12,6 +12,7 @@
 import { COMMANDS } from '../contracts/commands.js';
 import { QUERIES } from '../contracts/queries.js';
 import { SURFACES } from '../contracts/surfaces.js';
+import { SYSTEM_QUERIES } from '../contracts/system.js';
 
 /** @typedef {import('../contracts/surfaces.js').Surface} Surface */
 /** @typedef {{surface: Surface, contextId: string}} Caller */
@@ -47,7 +48,9 @@ function isCaller(caller) {
 }
 
 /**
- * The surfaces a catalog entry allows, or undefined when no entry has that type.
+ * The surfaces a catalog entry allows, or undefined when no entry has that type: the kernel's
+ * commands and queries, and the coordinator's own queries, which the router answers
+ * (contracts/system.js)
  * @param {unknown} type
  * @returns {readonly Surface[] | undefined}
  */
@@ -55,6 +58,9 @@ function allowedSurfaces(type) {
   if (typeof type !== 'string') return undefined;
   if (Object.hasOwn(COMMANDS, type)) return COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces;
   if (Object.hasOwn(QUERIES, type)) return QUERIES[/** @type {keyof typeof QUERIES} */ (type)].surfaces;
+  if (Object.hasOwn(SYSTEM_QUERIES, type)) {
+    return SYSTEM_QUERIES[/** @type {keyof typeof SYSTEM_QUERIES} */ (type)].surfaces;
+  }
   return undefined;
 }
 

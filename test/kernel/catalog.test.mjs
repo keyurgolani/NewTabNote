@@ -15,10 +15,11 @@ import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { ENTITY_TYPES } from '../../js/kernel/core/contracts/fields.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
+import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { entityTypesIn, walk } from './schema-walk.mjs';
+import { entityTypesIn, walk } from '../../js/kernel/core/contracts/schema-walk.js';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
@@ -88,9 +89,19 @@ const QUERY_SAMPLES = {
   getWorkspaceSession: {},
 };
 
+/** The coordinator's own queries, which take no field */
+const SYSTEM_SAMPLES = { 'system.messagingHealth': {} };
+
+/**
+ * Every entry of every catalog: the kernel's commands and queries, and the coordinator's own
+ * queries (contracts/system.js)
+ * @type {Array<[string, CommandEntry | QueryEntry]>}
+ */
+const ENTRIES = [...Object.entries(COMMANDS), ...Object.entries(QUERIES), ...Object.entries(SYSTEM_QUERIES)];
+
 /** @type {Map<string, SchemaModule>} */
 const modules = new Map();
-for (const [name, entry] of [...Object.entries(COMMANDS), ...Object.entries(QUERIES)]) {
+for (const [name, entry] of ENTRIES) {
   modules.set(name, await import(new URL(entry.schema, CATALOG_URL).href));
 }
 
@@ -171,6 +182,13 @@ describe('the catalog (#13, "Desired behavior")', () => {
     );
     assert.deepEqual(Object.keys(COMMAND_SAMPLES).sort(), [...COMMAND_TYPES].sort());
     assert.deepEqual(Object.keys(QUERY_SAMPLES).sort(), [...QUERY_TYPES].sort());
+    // The coordinator answers its own queries, so none shares a name with the kernel's
+    const kernelNames = new Set([...COMMAND_TYPES, ...QUERY_TYPES]);
+    assert.deepEqual(
+      Object.keys(SYSTEM_QUERIES).filter(name => kernelNames.has(/** @type {any} */ (name))),
+      [],
+    );
+    assert.deepEqual(Object.keys(SYSTEM_SAMPLES).sort(), Object.keys(SYSTEM_QUERIES).sort());
   });
 
   it('gives every command a full entry', () => {
@@ -203,7 +221,7 @@ describe('the catalog (#13, "Desired behavior")', () => {
   });
 
   it('gives every query a full entry', () => {
-    for (const [type, entry] of Object.entries(QUERIES)) {
+    for (const [type, entry] of [...Object.entries(QUERIES), ...Object.entries(SYSTEM_QUERIES)]) {
       assert.ok(Object.isFrozen(entry) && Object.isFrozen(entry.surfaces), type);
       assert.deepEqual(
         Object.keys(entry).sort(),
@@ -231,7 +249,7 @@ describe('the catalog (#13, "Desired behavior")', () => {
 
   it('holds every entry to the limits: versions from 1, sizes up to 1 MiB, journaled ones exactly that', () => {
     /** @type {Array<[string, CommandEntry | QueryEntry]>} */
-    const entries = [...Object.entries(COMMANDS), ...Object.entries(QUERIES)];
+    const entries = ENTRIES;
     for (const [name, entry] of entries) {
       assert.ok(Number.isSafeInteger(entry.version) && entry.version >= 1, name);
       assert.ok(Number.isSafeInteger(entry.maxBytes) && entry.maxBytes > 0, name);
@@ -253,8 +271,8 @@ describe('the catalog (#13, "Desired behavior")', () => {
   });
 
   it("names each operation's own schema module, whose payload is that operation's and nothing more", () => {
-    for (const [name, entry] of [...Object.entries(COMMANDS), ...Object.entries(QUERIES)]) {
-      assert.equal(entry.schema, `./operations/${kebab(name)}.js`, name);
+    for (const [name, entry] of ENTRIES) {
+      assert.equal(entry.schema, `./operations/${kebab(name).replace(/\./g, '-')}.js`, name);
       const { payload, result } = moduleOf(name);
       assert.equal(payload.type, 'strict_object', name);
       assert.equal(typeof result?.['~run'], 'function', name);
@@ -282,13 +300,13 @@ describe('the catalog (#13, "Desired behavior")', () => {
   });
 
   it('declares exactly the entity types its payload ids name', () => {
-    for (const [name, entry] of [...Object.entries(COMMANDS), ...Object.entries(QUERIES)]) {
+    for (const [name, entry] of ENTRIES) {
       assert.deepEqual([...entry.entityTypes].sort(), entityTypesIn(moduleOf(name).payload), name);
     }
   });
 
   it('loads no schema: the catalog modules reach Valibot through no static import', () => {
-    for (const file of ['commands.js', 'queries.js']) {
+    for (const file of ['commands.js', 'queries.js', 'system.js']) {
       const graph = [...importGraph(path.join(CONTRACTS_DIR, file))].map(full => path.relative(CONTRACTS_DIR, full));
       assert.deepEqual(graph.sort(), [file, 'limits.js'].sort(), file);
     }
@@ -304,10 +322,38 @@ describe('schema modules (#13, AC1)', () => {
       assert.equal(v.safeParse(payload, { ...command, extra: 'x' }).success, false, type);
       assert.equal(v.safeParse(payload, { ...fields, type }).success, false, type);
     }
-    for (const [type, fields] of Object.entries(QUERY_SAMPLES)) {
+    for (const [type, fields] of [...Object.entries(QUERY_SAMPLES), ...Object.entries(SYSTEM_SAMPLES)]) {
       const { payload } = moduleOf(type);
       assert.equal(v.safeParse(payload, { ...fields, type }).success, true, type);
       assert.equal(v.safeParse(payload, { ...fields, type, extra: 'x' }).success, false, type);
+    }
+  });
+
+  it('system.messagingHealth answers counters only: no content, no key a sender chose', () => {
+    const health = {
+      protocol: { major: 1, minor: 0 },
+      coordinatorId: 'c1',
+      connections: 2,
+      handshakes: 3,
+      reconnects: 1,
+      requests: [{ operation: 'system.messagingHealth', count: 4 }],
+      outcomes: [{ code: 'ready', count: 4 }],
+      rejections: [{ reason: 'validation', code: 'unknown-operation', count: 1 }],
+      latency: [
+        { underMs: 10, count: 3 },
+        { underMs: null, count: 1 },
+      ],
+    };
+    const { result } = moduleOf('system.messagingHealth');
+    assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data: health }).success, true);
+    assert.equal(v.safeParse(result, { kind: 'failed', cause: 'coordinator', code: 'unavailable' }).success, true);
+    for (const data of [
+      { ...health, lastError: 'boom' },
+      { ...health, requests: [{ operation: 'Bad Name', count: 1 }] },
+      { ...health, rejections: [{ reason: 'storage', code: 'x', count: 1 }] },
+      { ...health, latency: [{ underMs: 7, count: 1 }] },
+    ]) {
+      assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success, false, JSON.stringify(data));
     }
   });
 

@@ -1,13 +1,14 @@
-// The schema walk the contract tests share (schema-walk.mjs). Every rule the lint and the
-// catalog test hold schemas to sees only what walk() reaches, so it fails closed: a schema
-// holding another schema somewhere walk() doesn't follow is an error, not a part left unread.
+// The schema walk the contract tests and the router share (contracts/schema-walk.js). Every
+// rule the lint and the catalog test hold schemas to, and every entity id the router checks,
+// sees only what walk() reaches, so it fails closed: a schema holding another schema
+// somewhere walk() doesn't follow is an error, not a part left unread.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { content, entityId } from '../../js/kernel/core/contracts/fields.js';
-import { entityTypesIn, walk } from './schema-walk.mjs';
+import { entityTypesIn, walk } from '../../js/kernel/core/contracts/schema-walk.js';
 
 const bounded = v.pipe(v.string(), v.maxLength(64));
 
