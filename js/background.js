@@ -302,7 +302,10 @@ async function captureToDailyNote(item) {
   try {
     const failure = await kernel.whenReady();
     if (failure) {
-      notifyCapture('Not captured', captureRefusal(failure) || "NewTabNote couldn't open your notes, so nothing was saved.");
+      const refusal = captureRefusal(failure);
+      // Its cause and code: a refusal warns, as 1.4.x did at open, and any other failure is an error
+      (refusal ? console.warn : console.error)('Storage not opened in background:', failure);
+      notifyCapture('Not captured', refusal || "NewTabNote couldn't open your notes, so nothing was saved.");
       return;
     }
     const outcome = await kernel.execute({
@@ -316,8 +319,11 @@ async function captureToDailyNote(item) {
         : { type: 'text', content: item.content, source: item.source },
     });
     if (outcome.kind !== 'committed') {
+      const refusal = captureRefusal(outcome);
+      // An outcome holds its kind, cause, and code, and never what was captured
+      (refusal ? console.warn : console.error)('Failed to capture to daily note:', outcome);
       const reason = CAPTURE_FAILURES[outcome.messageKey] || CAPTURE_FAILED;
-      notifyCapture('Not captured', captureRefusal(outcome) || `Saving to today's note failed: ${reason}`);
+      notifyCapture('Not captured', refusal || `Saving to today's note failed: ${reason}`);
       return;
     }
     notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');

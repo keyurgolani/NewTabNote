@@ -64,27 +64,29 @@ import { settingKey } from '../indexeddb/settings.js';
 /** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>}} LegacyAdapter */
 
 /**
- * The UnavailableError for what DatabaseManager, IndexedDB, or chrome.storage threw. Where a
- * failure is one #17's adapter also answers, the cause and code are the same (#17,
- * "Transactions"): a newer database is `version-too-new`, and a full disk is `quota`.
+ * The UnavailableError for what DatabaseManager, IndexedDB, or chrome.storage threw, which it
+ * keeps as its cause, for a log. Where a failure is one #17's adapter also answers, the cause
+ * and code are the same (#17, "Transactions"): a newer database is `version-too-new`, and a
+ * full disk is `quota`.
  * @param {unknown} error
  * @returns {UnavailableError}
  */
 function storageError(error) {
   if (error instanceof UnavailableError) return error;
   const { code, name, message } = /** @type {{code?: unknown, name?: unknown, message?: unknown}} */ (error || {});
-  if (code === 'NEWER_SCHEMA') return new UnavailableError('newer-schema', 'version-too-new', false);
-  if (code === 'MISSING_CORE_STORES') return new UnavailableError('storage', 'missing-core-stores', false);
-  if (code === 'STORE_UNAVAILABLE') return new UnavailableError('storage', 'store-unavailable', false);
-  if (code === 'OPEN_FAILED') return new UnavailableError('storage', 'open-failed', true);
+  const thrown = { cause: error };
+  if (code === 'NEWER_SCHEMA') return new UnavailableError('newer-schema', 'version-too-new', false, thrown);
+  if (code === 'MISSING_CORE_STORES') return new UnavailableError('storage', 'missing-core-stores', false, thrown);
+  if (code === 'STORE_UNAVAILABLE') return new UnavailableError('storage', 'store-unavailable', false, thrown);
+  if (code === 'OPEN_FAILED') return new UnavailableError('storage', 'open-failed', true, thrown);
   // Popup or Side Panel opened before any new tab made the database
-  if (code === 'NO_DATABASE') return new UnavailableError('storage', 'no-database', true);
+  if (code === 'NO_DATABASE') return new UnavailableError('storage', 'no-database', true, thrown);
   if (name === 'QuotaExceededError' || /quota/i.test(String(message))) {
-    return new UnavailableError('quota', 'quota', false);
+    return new UnavailableError('quota', 'quota', false, thrown);
   }
-  if (name === 'InvalidStateError') return new UnavailableError('storage', 'database-closed', true);
-  if (name === 'DataCloneError') return new UnavailableError('adapter', 'not-cloneable', false);
-  return new UnavailableError('storage', 'transaction-failed', true);
+  if (name === 'InvalidStateError') return new UnavailableError('storage', 'database-closed', true, thrown);
+  if (name === 'DataCloneError') return new UnavailableError('adapter', 'not-cloneable', false, thrown);
+  return new UnavailableError('storage', 'transaction-failed', true, thrown);
 }
 
 /**
@@ -342,7 +344,9 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
         const refused = storageError(error);
         // An error with no code of its own reads as a failed transaction, but this was the
         // open, as openExisting's OPEN_FAILED says
-        throw refused.code === 'transaction-failed' ? new UnavailableError('storage', 'open-failed', true) : refused;
+        throw refused.code === 'transaction-failed'
+          ? new UnavailableError('storage', 'open-failed', true, { cause: error })
+          : refused;
       }
     },
 

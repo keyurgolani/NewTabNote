@@ -195,16 +195,18 @@ export function isOutcome(value) {
 /**
  * What a port throws when storage can't do what was asked. The kernel turns it into an
  * `unavailable` outcome, or a `failed` query state. Its message holds only the cause and
- * the code.
+ * the code, and `cause`, when given, what storage threw, so a log can say what happened. An
+ * outcome never carries it.
  */
 export class UnavailableError extends Error {
   /**
    * @param {UnavailableCause} unavailableCause
    * @param {string} code
    * @param {boolean} retryable
+   * @param {{cause?: unknown}} [options] - what storage threw
    */
-  constructor(unavailableCause, code, retryable) {
-    super(`${unavailableCause}: ${code}`);
+  constructor(unavailableCause, code, retryable, options) {
+    super(`${unavailableCause}: ${code}`, options);
     this.name = 'UnavailableError';
     this.unavailableCause = unavailableCause;
     this.code = code;
