@@ -41,7 +41,7 @@
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
-import { abort, result } from './requests.js';
+import { abort, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 
@@ -142,11 +142,13 @@ function view(db, tx, scope, writable) {
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAll(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAll(key)) : [];
     },
     getKeysByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAllKeys(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
     },
     revision: store => {
       handle(store);

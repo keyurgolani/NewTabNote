@@ -189,6 +189,18 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         .filter(record => record !== undefined);
     };
     /**
+     * The records whose `index` field holds `value`, which the port takes only as an id. Each
+     * adapter refuses anything else, since IndexedDB reads null and undefined as every record.
+     * @param {StoreName} store
+     * @param {string} index
+     * @param {unknown} value
+     */
+    const byIndex = (store, index, value) => {
+      const all = records(store);
+      if (!isKey(value)) throw new UnavailableError('adapter', 'invalid-key', false);
+      return all.filter(record => record[index] === value);
+    };
+    /**
      * @param {StoreName} store
      * @param {string} key
      * @param {Record<string, unknown> | undefined} record
@@ -209,11 +221,9 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
         return record;
       },
       getAll: async store => clone(records(store)),
-      getAllByIndex: async (store, index, value) => clone(records(store).filter(record => record[index] === value)),
+      getAllByIndex: async (store, index, value) => clone(byIndex(store, index, value)),
       getKeysByIndex: async (store, index, value) =>
-        records(store)
-          .filter(record => record[index] === value)
-          .map(record => /** @type {string} */ (record[STORES[store].keyPath])),
+        byIndex(store, index, value).map(record => /** @type {string} */ (record[STORES[store].keyPath])),
       revision: (store, key) => {
         scoped(store);
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);

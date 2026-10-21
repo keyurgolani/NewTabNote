@@ -52,8 +52,11 @@ export const STORES = Object.freeze({
  * @property {<S extends StoreName>(store: S, key: string) => Promise<StoreRecords[S] | undefined>} get
  * @property {<S extends StoreName>(store: S) => Promise<StoreRecords[S][]>} getAll
  * @property {<S extends StoreName>(store: S, index: string, value: string) => Promise<StoreRecords[S][]>} getAllByIndex
- *   The records whose `index` field (each index is named after its field) holds `value`
+ *   The records whose `index` field (each index is named after its field) holds `value`, an
+ *   id. Every adapter refuses any other value, `adapter` `invalid-key`, since IndexedDB reads
+ *   null and undefined as no range, which would return every record.
  * @property {(store: StoreName, index: string, value: string) => Promise<string[]>} getKeysByIndex
+ *   The keys of those records, with the same refusal
  * @property {(store: StoreName, key: string) => number | undefined} revision
  *   The record's committed content revision, or undefined from an adapter without revisions.
  *   Ask only after a `get` of the same key in the same transaction: an adapter that keeps the

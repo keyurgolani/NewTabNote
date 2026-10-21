@@ -25,7 +25,7 @@
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
-import { abort, result } from '../indexeddb/requests.js';
+import { abort, indexValue, result } from '../indexeddb/requests.js';
 import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
 import { settingKey } from '../indexeddb/settings.js';
 
@@ -138,11 +138,13 @@ function view(storage, tx, scope) {
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAll(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAll(key)) : [];
     },
     getKeysByIndex: async (store, index, value) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.index(index).getAllKeys(value)) : [];
+      const key = indexValue(value);
+      return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
     },
     revision: store => {
       handle(store);

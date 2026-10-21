@@ -1012,6 +1012,25 @@ export function runContractSuite(fixture) {
         assert.deepEqual(bad, { kind: 'failed', cause: 'validation', code: 'invalid-query' });
       });
 
+      it('refuses an index read by anything but an id, since IndexedDB reads null as every record', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
+        for (const value of [null, undefined, '', 0, true, {}]) {
+          for (const read of /** @type {const} */ (['getAllByIndex', 'getKeysByIndex'])) {
+            await assert.rejects(
+              ctx.adapter.read(['blocks'], tx => /** @type {any} */ (tx)[read]('blocks', 'canvasId', value)),
+              error => {
+                const { unavailableCause, code, retryable } = /** @type {any} */ (error);
+                return unavailableCause === 'adapter' && code === 'invalid-key' && retryable === false;
+              },
+              `${read}(${JSON.stringify(value)})`,
+            );
+          }
+        }
+        const keys = await ctx.adapter.read(['blocks'], tx => tx.getKeysByIndex('blocks', 'canvasId', 'n1'));
+        assert.equal(keys.length, 2);
+      });
+
       it("another context's kernel over the same storage sees a commit on its next read", async () => {
         await createNote({ noteId: 'n1', name: 'Shared' });
         const panel = ctx.kernel(CALLERS.sidepanel);
