@@ -196,7 +196,7 @@
       "rule": "declared-gap",
       "count": 1,
       "owner": 17,
-      "removeWhen": "#17's IndexedDB adapter passes the atomicMultiStore check: a command's stores commit together or not at all",
+      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the atomicMultiStore check (a command's stores commit together or not at all), so the gap lasts as long as the legacy adapter ships",
       "verify": "npm run test:kernel: the atomicMultiStore check in test/kernel/contract.mjs"
     },
     {
