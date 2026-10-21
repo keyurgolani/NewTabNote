@@ -103,10 +103,16 @@ function failWrites(storage, failing, abortingOnCommit) {
 /**
  * @param {LegacyContext} context
  * @param {OpenMode} [mode]
+ * @param {{reopen?: boolean}} [options] - `reopen`, as the worker's root sets it
  * @returns {LegacyAdapter}
  */
-export function adapterFor(context, mode = 'versioned') {
-  return createLegacyAdapter({ storage: context.storage, settings: context.env.chrome.api.storage.local, mode });
+export function adapterFor(context, mode = 'versioned', { reopen = false } = {}) {
+  return createLegacyAdapter({
+    storage: context.storage,
+    settings: context.env.chrome.api.storage.local,
+    mode,
+    reopen,
+  });
 }
 
 /**
