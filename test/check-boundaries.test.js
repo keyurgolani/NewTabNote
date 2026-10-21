@@ -33,10 +33,10 @@ function row(file, rule, count, owner = 12, extra = {}) {
   return { file, rule, count, owner, removeWhen: 'the hits are gone', verify: 'npm run check:boundaries', ...extra };
 }
 
-function writeLedger(root, rows) {
+function writeLedger(root, rows, extra = {}) {
   const file = path.join(root, boundaries.LEDGER);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ about: 'test', rows }, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify({ about: 'test', ...extra, rows }, null, 2)}\n`);
 }
 
 function readRows(root) {
@@ -44,8 +44,8 @@ function readRows(root) {
 }
 
 /**
- * Run the check on `root` with canned hits; `base` maps a ref to the rows of its ledger,
- * or null for a ref without one
+ * Run the check on `root` with canned hits; `base` maps a ref to the rows of its ledger, or
+ * to the whole ledger (with its shrinkOnly), or to null for a ref without one
  */
 async function run(root, argv, { hits = [], errors = [], base = {} } = {}) {
   const lines = [];
@@ -54,7 +54,9 @@ async function run(root, argv, { hits = [], errors = [], base = {} } = {}) {
     lint: async () => ({ hits: hitMap(hits), errors, files: 3 }),
     readBase: ref => {
       if (!Object.hasOwn(base, ref)) throw new Error(`git can't resolve ${ref} to a commit`);
-      return base[ref] === null ? { missing: true } : { text: JSON.stringify({ about: 'base', rows: base[ref] }) };
+      if (base[ref] === null) return { missing: true };
+      const ledger = Array.isArray(base[ref]) ? { about: 'base', rows: base[ref] } : base[ref];
+      return { text: JSON.stringify(ledger) };
     },
     log: line => lines.push(line),
     error: line => lines.push(line),
@@ -262,6 +264,99 @@ describe('scripts/check-boundaries.js with canned hits', () => {
     assert.equal((await run(root, ['--base'])).code, 2);
     assert.equal((await run(root, ['--write-baseline', '--base', 'origin/next'])).code, 2);
   });
+
+  describe("#17's storage-access rules, whose exemption list only shrinks", () => {
+    const SHRINK_ONLY = ['chrome.storage.local', 'getStore', 'legacyBlindWrite', 'objectStore'];
+    const seeded = [
+      row('js/storage.js', 'getStore', 3, 17),
+      row('js/storage.js', 'objectStore', 2, 17),
+      row('js/popup.js', 'objectStore', 1, 17),
+      row('js/storage.js', 'chrome.storage.local', 2, 17),
+    ];
+    const hitsOf = rows => rows.map(({ file, rule, count }) => ({ file, rule, count }));
+    const base = { 'origin/next': { about: 'base', shrinkOnly: SHRINK_ONLY, rows: seeded } };
+
+    it('seeds its rows by hand in the PR that first lists the rules in shrinkOnly', async () => {
+      const root = tempRoot();
+      writeLedger(root, seeded, { shrinkOnly: SHRINK_ONLY });
+      const result = await run(root, ['--base', 'origin/next'], { hits: hitsOf(seeded), base: { 'origin/next': [] } });
+      assert.equal(result.code, 0, result.output);
+    });
+
+    it('--base fails on a new row or a higher count for a rule the base lists in shrinkOnly, even owned by #17', async () => {
+      const root = tempRoot();
+      const rows = [
+        row('js/storage.js', 'getStore', 4, 17),
+        row('js/storage.js', 'objectStore', 2, 17),
+        row('js/popup.js', 'objectStore', 1, 17),
+        row('js/storage.js', 'chrome.storage.local', 2, 17),
+        row('js/editor.js', 'chrome.storage.local', 1, 25),
+        row('js/editor.js', 'legacyBlindWrite', 1, 17),
+      ];
+      writeLedger(root, rows, { shrinkOnly: SHRINK_ONLY });
+      assertFails(await run(root, ['--base', 'origin/next'], { hits: hitsOf(rows), base }),
+        "js/storage.js getStore: count 3 at origin/next rose to 4, but getStore's exemption list only shrinks",
+        "js/editor.js chrome.storage.local: a row added since origin/next, but chrome.storage.local's exemption list only shrinks",
+        "js/editor.js legacyBlindWrite: a row added since origin/next, but legacyBlindWrite's exemption list only shrinks, except by as much as getStore and objectStore hits in the same file fall");
+      // Lower counts and dropped rows are what it's for
+      const shrunk = [row('js/storage.js', 'getStore', 1, 17), row('js/storage.js', 'objectStore', 2, 17)];
+      writeLedger(root, shrunk, { shrinkOnly: SHRINK_ONLY });
+      const ok = await run(root, ['--base', 'origin/next'], { hits: hitsOf(shrunk), base });
+      assert.equal(ok.code, 0, ok.output);
+      assert.match(ok.output, /, and no shrinkOnly list grew$/);
+    });
+
+    it('lets a blind write replace raw access in the same file, by as much as that access falls and no more', async () => {
+      const root = tempRoot();
+      // Two getStore calls and one objectStore call in storage.js become blind writes
+      const converted = [
+        row('js/storage.js', 'getStore', 1, 17),
+        row('js/storage.js', 'objectStore', 1, 17),
+        row('js/storage.js', 'legacyBlindWrite', 3, 17),
+        row('js/popup.js', 'objectStore', 1, 17),
+        row('js/storage.js', 'chrome.storage.local', 2, 17),
+      ];
+      writeLedger(root, converted, { shrinkOnly: SHRINK_ONLY });
+      const ok = await run(root, ['--base', 'origin/next'], { hits: hitsOf(converted), base });
+      assert.equal(ok.code, 0, ok.output);
+      // One more than the raw access that went, or one in a file whose raw access stayed
+      const over = [
+        ...converted.filter(r => r.rule !== 'legacyBlindWrite'),
+        row('js/storage.js', 'legacyBlindWrite', 4, 17),
+        row('js/popup.js', 'legacyBlindWrite', 1, 17),
+      ];
+      writeLedger(root, over, { shrinkOnly: SHRINK_ONLY });
+      assertFails(await run(root, ['--base', 'origin/next'], { hits: hitsOf(over), base }),
+        'js/storage.js legacyBlindWrite: a row added since origin/next',
+        'js/popup.js legacyBlindWrite: a row added since origin/next');
+    });
+
+    it('--base fails when shrinkOnly drops a rule the base lists, and the ledger fails on a bad shrinkOnly', async () => {
+      const root = tempRoot();
+      writeLedger(root, seeded, { shrinkOnly: ['getStore', 'legacyBlindWrite', 'objectStore'] });
+      assertFails(await run(root, ['--base', 'origin/next'], { hits: hitsOf(seeded), base }),
+        'shrinkOnly no longer lists chrome.storage.local, which it lists at origin/next; that exemption list only shrinks');
+      for (const [shrinkOnly, problem] of [
+        ['getStore', "shrinkOnly isn't a list of rules"],
+        [['getStore', 'getStore'], 'shrinkOnly names getStore twice'],
+        [['localStorage'], 'shrinkOnly names "localStorage", which isn\'t a rule with hits'],
+        [['declared-gap'], 'shrinkOnly names "declared-gap", which isn\'t a rule with hits'],
+      ]) {
+        writeLedger(root, seeded, { shrinkOnly });
+        assertFails(await run(root, [], { hits: hitsOf(seeded) }), problem);
+      }
+    });
+
+    it('--write-baseline keeps shrinkOnly as it lowers counts', async () => {
+      const root = tempRoot();
+      writeLedger(root, seeded, { shrinkOnly: SHRINK_ONLY });
+      const lower = hitsOf(seeded).map(hit => (hit.rule === 'getStore' ? { ...hit, count: 2 } : hit));
+      assert.equal((await run(root, ['--write-baseline'], { hits: lower })).code, 0);
+      const written = JSON.parse(fs.readFileSync(path.join(root, boundaries.LEDGER), 'utf8'));
+      assert.deepEqual(written.shrinkOnly, SHRINK_ONLY);
+      assert.equal(written.rows.find(r => r.rule === 'getStore').count, 2);
+    });
+  });
 });
 
 describe('eslint.config.mjs boundary rules', () => {
@@ -275,7 +370,7 @@ describe('eslint.config.mjs boundary rules', () => {
           messages.push(...globals.map(entry => [name, entry.message]));
         } else if (name === 'no-restricted-syntax') {
           messages.push(...options.map(entry => [name, entry.message]));
-        } else if (name === 'kernel/imports') {
+        } else if (name.startsWith('kernel/')) {
           messages.push([name, `[${options[0].rule}] ${options[0].message}`]);
         } else {
           assert.equal(name, 'no-undef', `${name} has no ledger rule; give its messages one or drop it`);
@@ -405,5 +500,57 @@ describe('eslint.config.mjs boundary rules', () => {
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/core\/event-bus\.js/);
     assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 25, output);
+  });
+
+  it("counts #17's storage access in a copy of js/: object stores, getStore, blind writes, and chrome.storage.local", async () => {
+    const root = tempRoot();
+    fs.cpSync(path.join(ROOT, 'js'), path.join(root, 'js'), { recursive: true });
+    fs.cpSync(path.join(ROOT, 'eslint.config.mjs'), path.join(root, 'eslint.config.mjs'));
+    fs.cpSync(path.join(ROOT, 'docs', 'architecture'), path.join(root, 'docs', 'architecture'), { recursive: true });
+    const append = (file, text) => fs.appendFileSync(path.join(root, file), `\n${text}\n`);
+    const write = (file, text) => {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), text);
+    };
+
+    append('js/sidebar-utils.js', [
+      "export const probeStore = tx => tx.objectStore('canvases');",
+      "export const probeComputed = tx => tx['objectStore']('elements');",
+      "export const probeGet = storage => storage.getStore('links');",
+      "export const probeBlind = adapter => adapter.legacyBlindWrite(['notes'], () => {});",
+      "export const probeLocal = () => chrome.storage.local.get('x');",
+      // Through an alias, a computed property, and optional chaining, as storage.js reaches it
+      'export const probeAlias = api => api.storage.local.set({});',
+      "export const probeSelf = () => self.chrome['storage']['local'];",
+      'export const probeOptional = () => chrome.storage?.local;',
+    ].join('\n'));
+    // js/storage.js is outside #12's rules, but not #17's
+    append('js/storage.js', "function probeBlind(adapter) { return adapter.legacyBlindWrite(['notes'], () => {}); }");
+    // Kernel core isn't exempt
+    write('js/kernel/core/probe-store.js', "export const raw = tx => tx.objectStore('canvases');\n");
+    // Allowed: #17's adapter opens stores, and adapters and composition roots reach
+    // chrome.storage.local; a method named getStore is only counted when it's called
+    write('js/kernel/adapters/indexeddb/probe.js', "export const raw = tx => tx.objectStore('canvases');\nexport const get = s => s.getStore('x');\n");
+    write('js/kernel/adapters/legacy/probe.js', 'export const settings = () => chrome.storage.local;\n');
+    write('js/kernel/composition/probe.js', 'export const settings = () => chrome.storage.local;\n');
+    append('js/search.js', 'export const holder = { getStore() { return null; } };');
+
+    const lines = [];
+    const code = await boundaries.main([], { root, log: line => lines.push(line), error: line => lines.push(line) });
+    const output = lines.join('\n');
+    assert.equal(code, 1, output);
+    for (const expected of [
+      'js/sidebar-utils.js: 2 objectStore hits no ledger row covers',
+      'js/sidebar-utils.js: 1 getStore hit no ledger row covers',
+      'js/sidebar-utils.js: 1 legacyBlindWrite hit no ledger row covers',
+      'js/sidebar-utils.js: 4 chrome.storage.local hits no ledger row covers',
+      'js/sidebar-utils.js: 3 chrome.storage hits no ledger row covers',
+      'js/storage.js: 1 legacyBlindWrite hit no ledger row covers',
+      'js/kernel/core/probe-store.js: 1 objectStore hit no ledger row covers',
+    ]) {
+      assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
+    }
+    assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/search\.js/);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 7, output);
   });
 });

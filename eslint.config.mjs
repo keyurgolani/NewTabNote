@@ -180,7 +180,69 @@ const importsRule = {
   },
 };
 
-const kernel = { rules: { imports: importsRule } };
+/** Options every storage-access rule takes: its ledger rule and its message */
+const ACCESS_SCHEMA = [
+  {
+    type: 'object',
+    properties: { rule: { type: 'string' }, message: { type: 'string' } },
+    required: ['rule', 'message'],
+    additionalProperties: false,
+  },
+];
+
+/** The name a member expression's property spells out, or null when it's built at run time */
+const propertyName = member => {
+  if (!member.computed) return member.property.type === 'Identifier' ? member.property.name : null;
+  return specifierOf(member.property);
+};
+
+/**
+ * #17's storage-access rules (#17 slice 1, "The architecture test"): a call of a function
+ * named `name`, as `name(...)` or `x.name(...)`, with any spelling of the property
+ */
+const callRule = name => ({
+  meta: { type: 'problem', schema: ACCESS_SCHEMA },
+  create(context) {
+    const { rule, message } = context.options[0];
+    return {
+      CallExpression(node) {
+        const { callee } = node;
+        const called =
+          (callee.type === 'Identifier' && callee.name === name) ||
+          (callee.type === 'MemberExpression' && propertyName(callee) === name);
+        if (called) context.report({ node, message: `[${rule}] ${message}` });
+      },
+    };
+  },
+});
+
+/**
+ * chrome.storage.local, reached through any object: `chrome.storage.local`,
+ * `self.chrome.storage.local`, or an alias such as `this._chromeApi().storage.local`
+ */
+const storageLocalRule = {
+  meta: { type: 'problem', schema: ACCESS_SCHEMA },
+  create(context) {
+    const { rule, message } = context.options[0];
+    return {
+      MemberExpression(node) {
+        const local =
+          propertyName(node) === 'local' && node.object.type === 'MemberExpression' && propertyName(node.object) === 'storage';
+        if (local) context.report({ node, message: `[${rule}] ${message}` });
+      },
+    };
+  },
+};
+
+const kernel = {
+  rules: {
+    imports: importsRule,
+    'object-store': callRule('objectStore'),
+    'get-store': callRule('getStore'),
+    'legacy-blind-write': callRule('legacyBlindWrite'),
+    'chrome-storage-local': storageLocalRule,
+  },
+};
 
 export default [
   { ignores: ['js/lib/**'] },
@@ -228,6 +290,39 @@ export default [
         rule: 'core-import',
         message: 'js/kernel/core/ imports only from itself and js/lib/valibot/.',
         allow: ['js/kernel/core/', 'js/lib/valibot/'],
+      }],
+    },
+  },
+  // #17's storage access: only its IndexedDB adapter opens object stores, and only the
+  // adapters and composition roots reach chrome.storage.local. js/storage.js and the legacy
+  // adapter count too. The kernel ledger's rows for these only shrink (shrinkOnly).
+  {
+    files: ['js/**/*.js', 'js/**/*.mjs'],
+    ignores: ['js/kernel/adapters/indexeddb/**'],
+    plugins: { kernel },
+    rules: {
+      'kernel/object-store': ['error', {
+        rule: 'objectStore',
+        message: "Only #17's IndexedDB adapter opens object stores; use a kernel command or query.",
+      }],
+      'kernel/get-store': ['error', {
+        rule: 'getStore',
+        message: "DatabaseManager.getStore hands out a raw store; #17 slice 6 moves its readers to read-only queries.",
+      }],
+      'kernel/legacy-blind-write': ['error', {
+        rule: 'legacyBlindWrite',
+        message: 'A write that skips its expected version; only the callers the ledger lists may make one, until #17 slice 6.',
+      }],
+    },
+  },
+  {
+    files: ['js/**/*.js', 'js/**/*.mjs'],
+    ignores: ['js/kernel/adapters/**', 'js/kernel/composition/**'],
+    plugins: { kernel },
+    rules: {
+      'kernel/chrome-storage-local': ['error', {
+        rule: 'chrome.storage.local',
+        message: "Settings and session state go through the kernel's settings repository, which #17 keeps in chrome.storage.local.",
       }],
     },
   },
