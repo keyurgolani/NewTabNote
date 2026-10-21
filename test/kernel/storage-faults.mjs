@@ -20,9 +20,11 @@
  * @property {(store: string, name: string) => void} throwOnNextWrite
  *   The next put or delete on `store` throws a DOMException called `name`, as a request the
  *   browser refuses at once does (DataCloneError, DataError)
- * @property {(store: string, name: string) => void} abortAfterNextWrite
+ * @property {(store: string, name: string) => Promise<void>} abortAfterNextWrite
  *   The next put or delete on `store` succeeds, then its transaction aborts with a DOMException
- *   called `name`, as one the disk refuses at commit does (QuotaExceededError, UnknownError)
+ *   called `name`, as one the disk refuses at commit does (QuotaExceededError, UnknownError).
+ *   Resolves once the abort has reached every listener the transaction had when it aborted,
+ *   the adapter's included, so a unit that awaits it is still away when the adapter hears.
  * @property {(store: string, name: string) => void} failNextRead
  *   The next read of `store` fails with a DOMException called `name` and its transaction aborts,
  *   as a read of a damaged file does (NotReadableError, UnknownError)
@@ -30,8 +32,10 @@
 
 /**
  * Takes one planned fault for `store`, or undefined
- * @param {Array<{store: string, name: string}>} plans
+ * @template {{store: string, name: string}} P
+ * @param {P[]} plans
  * @param {string} store
+ * @returns {P | undefined}
  */
 function take(plans, store) {
   const index = plans.findIndex(plan => plan.store === store);
@@ -69,7 +73,7 @@ export function faultyFactory(real) {
   const connections = [];
   /** @type {Array<{store: string, name: string}>} */
   const throwing = [];
-  /** @type {Array<{store: string, name: string}>} */
+  /** @type {Array<{store: string, name: string, delivered: () => void}>} */
   const aborting = [];
   /** @type {Array<{store: string, name: string}>} */
   const unreadable = [];
@@ -133,7 +137,13 @@ export function faultyFactory(real) {
             if (refused) throw new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
             const request = /** @type {any} */ (store)[method](...args);
             const late = take(aborting, name);
-            if (late) request.addEventListener('success', () => abortWith(late.name));
+            if (late) {
+              request.addEventListener('success', () => {
+                abortWith(late.name);
+                // Added after every listener the transaction already had, so it hears last
+                tx.addEventListener('abort', late.delivered, { once: true });
+              });
+            }
             return request;
           };
         return wrap(store, {
@@ -200,9 +210,10 @@ export function faultyFactory(real) {
     throwOnNextWrite: (store, name) => {
       throwing.push({ store, name });
     },
-    abortAfterNextWrite: (store, name) => {
-      aborting.push({ store, name });
-    },
+    abortAfterNextWrite: (store, name) =>
+      new Promise(resolve => {
+        aborting.push({ store, name, delivered: () => resolve(undefined) });
+      }),
     failNextRead: (store, name) => {
       unreadable.push({ store, name });
     },

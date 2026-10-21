@@ -232,16 +232,6 @@ describe('failures on the IndexedDB adapter', () => {
     const { of, adapter, tab } = await opened();
     await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
     const command = /** @type {Command} */ ({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'X' });
-    /** @type {Unit} */
-    const unit = {
-      stores: ['notes'],
-      async run(tx) {
-        const note = await tx.get('notes', 'n1');
-        if (note) tx.put('notes', { ...note, name: 'X' });
-        // The disk refuses that write while the unit is away
-        await new Promise(resolve => setTimeout(resolve, 5));
-      },
-    };
     // An AbortError would run again anywhere else, but not while the unit may still be running
     /** @type {Array<[string, unknown]>} */
     const cases = [
@@ -249,7 +239,17 @@ describe('failures on the IndexedDB adapter', () => {
       ['AbortError', ['storage', 'transaction-failed', true]],
     ];
     for (const [name, answer] of cases) {
-      of.faults.abortAfterNextWrite('canvases', name);
+      // The disk refuses the write while the unit is away, waiting until the adapter has heard
+      const aborted = of.faults.abortAfterNextWrite('canvases', name);
+      /** @type {Unit} */
+      const unit = {
+        stores: ['notes'],
+        async run(tx) {
+          const note = await tx.get('notes', 'n1');
+          if (note) tx.put('notes', { ...note, name: 'X' });
+          await aborted;
+        },
+      };
       const before = of.faults.transactions.length;
       const { outcome } = await adapter.commit(unitsWork(command, [unit], () => committed('renamed', ['n1'])));
       assert.deepEqual(unavailableAs(outcome), answer, name);

@@ -14,9 +14,11 @@
  * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). It runs
  * again only when this adapter has opened no write since, as a later command, such as a newer
  * save of the same note, would land first and be written over; it answers `transaction-failed`,
- * retryable, instead. One that ends while a unit still runs, because the unit awaited
- * something other than it, never runs again, so no command waits for ever: it answers
- * `transaction-ended-early` when it committed, and why it aborted when it aborted.
+ * retryable, instead. A transaction that ends before the command's units have finished,
+ * because a unit awaited something other than it, isn't run again, and the command answers as
+ * it ends rather than wait on the unit: `transaction-ended-early` when it committed, and why
+ * it aborted when it aborted. The adapter can tell only by which comes first, so a unit that
+ * finishes before an abort reaches it is answered as any other command, retry included.
  *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
