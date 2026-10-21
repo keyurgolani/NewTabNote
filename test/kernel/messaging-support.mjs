@@ -1,6 +1,7 @@
 // Shared by #13's messaging tests: timers on a clock the test moves, a way to let messages
-// already sent arrive, the catalog as the router and client look it up, and a raw end of a
-// connection that speaks frames to the router, as a client would.
+// already sent arrive, the catalog as the router and client look it up, a raw end of a
+// connection that speaks frames to the router, as a client would, and a coordinator the test
+// plays for a client.
 
 import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
@@ -13,6 +14,7 @@ import { NOW } from './support.mjs';
 /** @typedef {import('../../js/kernel/core/contracts/validate.js').Operation} Operation */
 /** @typedef {import('../../js/kernel/core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../../js/kernel/core/messaging/link.js').Connection} Connection */
+/** @typedef {import('../../js/kernel/core/messaging/link.js').Link} Link */
 /** @typedef {import('../../js/kernel/core/ports/runtime.js').Timers} Timers */
 
 /** The extension version the tests' peers run */
@@ -156,3 +158,107 @@ export const request = (requestId, payload, { version = 1, deadline = NOW + 10_0
   deadline,
   payload,
 });
+
+/**
+ * A link whose other end was never there, as a runtime port is when waking the worker
+ * fails: it takes what's sent until it closes, on a later microtask, as unreachable
+ * @returns {Link}
+ */
+function unreachableLink() {
+  /** @type {Array<(reason: import('../../js/kernel/core/messaging/link.js').CloseReason) => void>} */
+  const closes = [];
+  let open = true;
+  Promise.resolve().then(() => {
+    open = false;
+    for (const listener of closes) listener('unreachable');
+  });
+  return {
+    send() {
+      if (!open) throw new Error('The link is closed');
+    },
+    onMessage() {},
+    onClose: listener => closes.push(listener),
+    close() {
+      open = false;
+    },
+  };
+}
+
+/**
+ * One connection a client opened to a scriptedCoordinator(), which the test answers
+ * @typedef {object} Scripted
+ * @property {Array<Record<string, any>>} frames - what the client sent, decoded
+ * @property {() => Array<Record<string, any>>} requests - the request frames among them
+ * @property {(frame: unknown) => void} send
+ * @property {(fields?: Record<string, unknown>) => void} welcome - a welcome, with `fields` over a ready one's
+ * @property {() => void} close
+ * @property {boolean} closed - the client closed it
+ */
+
+/**
+ * A transport whose far end the test plays, for what a router wouldn't do on its own: a
+ * welcome that never comes or speaks another protocol, an answer out of order or outside its
+ * schema, a worker that stops. `reach` says what each connect() finds: the coordinator, no
+ * coordinator (the link closes as unreachable), or a page whose extension context is gone
+ * (connect() throws, as chrome.runtime.connect() does once the extension has reloaded).
+ */
+export function scriptedCoordinator() {
+  /** @type {'open' | 'unreachable' | 'throws'} */
+  let reach = 'open';
+  /** @type {Scripted[]} */
+  const connections = [];
+  let attempts = 0;
+  /** @type {import('../../js/kernel/core/messaging/link.js').Transport} */
+  const transport = {
+    connect() {
+      attempts += 1;
+      if (reach === 'throws') throw new Error('Extension context invalidated.');
+      if (reach === 'unreachable') return unreachableLink();
+      const [near, far] = linkPair();
+      /** @type {Array<Record<string, any>>} */
+      const frames = [];
+      let closed = false;
+      far.onMessage(text => frames.push(/** @type {Record<string, any>} */ (decode(text))));
+      far.onClose(() => {
+        closed = true;
+      });
+      connections.push({
+        frames,
+        requests: () => frames.filter(frame => frame.frame === 'request'),
+        send: frame => far.send(encode(frame)),
+        welcome: (fields = {}) =>
+          far.send(
+            encode({
+              frame: 'welcome',
+              protocol: PROTOCOL_VERSION,
+              extensionVersion: VERSION,
+              coordinatorId: 'coordinator-1',
+              status: 'ready',
+              ...fields,
+            }),
+          ),
+        close: () => far.close(),
+        get closed() {
+          return closed;
+        },
+      });
+      return near;
+    },
+  };
+  return {
+    transport,
+    connections,
+    /** How many times connect() was called, whatever it found */
+    get attempts() {
+      return attempts;
+    },
+    /** The connection opened last */
+    get last() {
+      return /** @type {Scripted} */ (connections.at(-1));
+    },
+    /** @param {'open' | 'unreachable' | 'throws'} value */
+    set reach(value) {
+      reach = value;
+    },
+  };
+}
