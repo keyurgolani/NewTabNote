@@ -38,12 +38,13 @@ async function pageCommandSavesBookmark(worker) {
   assert.deepEqual(await capturedToday(worker), [{ type: 'bookmark', url: worker.tab.url, title: worker.tab.title }]);
 }
 
-test('the worker listens to messages, install, startup, the toolbar action, its context menus, and commands', async () => {
+test("the worker listens to messages, install, startup, the toolbar action, its context menus, commands, and #13's port", async () => {
   const worker = await loadBackground();
   assert.deepEqual(worker.listenerCounts(), {
     'runtime.onMessage': 1,
     'runtime.onInstalled': 1,
     'runtime.onStartup': 1,
+    'runtime.onConnect': 1,
     'contextMenus.onClicked': 1,
     'commands.onCommand': 1,
     'action.onClicked': 1,

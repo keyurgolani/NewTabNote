@@ -11,13 +11,21 @@
 // utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
 import './utils.js';
 import './storage.js';
-import { createWorkerClient } from './kernel/composition/background.js';
+import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 
 /**
  * The worker's kernel. It opens the database and runs startup maintenance now, as
  * Storage.init() did here, and a capture waits for both.
  */
 const kernel = createWorkerClient();
+
+/**
+ * #13's router, which takes each port this extension's pages open by its name. It's installed
+ * here at the top level, synchronously, so Chrome finds its listener when a port wakes the
+ * worker. It serves only the handshake and system.messagingHealth until #35, and it never
+ * throws.
+ */
+installWorkerRouter();
 
 /**
  * The worker's global. A module's top-level functions aren't globals, so captureToDailyNote

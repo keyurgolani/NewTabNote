@@ -17,6 +17,7 @@
  * extractSelection reads it (1.4.0 never calls it).
  */
 
+const { webcrypto } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -88,6 +89,11 @@ async function startWorker(env) {
   }
   if (env.kind !== 'worker') throw new Error("startWorker needs createLegacyEnv({ context: 'worker' })");
   env.global.importScripts = () => { throw new TypeError(MODULE_IMPORT_SCRIPTS); };
+  // What Chrome gives the worker that #13's router reads as it installs: the manifest, for
+  // the extension's version, and crypto.randomUUID(), for the coordinator's id
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  env.chrome.api.runtime.getManifest = () => structuredClone(manifest);
+  env.global.crypto = webcrypto;
 
   const modules = new Map();
   const moduleFor = file => {
