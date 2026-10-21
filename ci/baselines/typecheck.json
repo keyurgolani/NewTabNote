@@ -331,7 +331,6 @@
       "TS2339": {
         "Property 'BlockEditor' does not exist on type 'Window & typeof globalThis'.": 1,
         "Property 'LLM' does not exist on type 'Window & typeof globalThis'.": 1,
-        "Property 'app' does not exist on type 'Window & typeof globalThis'.": 1,
         "Property 'autoTitleNoteId' does not exist on type 'BlockEditor'.": 1,
         "Property 'clientX' does not exist on type 'Event'.": 1,
         "Property 'clientY' does not exist on type 'Event'.": 1,
