@@ -27,6 +27,10 @@
  * transaction. A command that has runs to its outcome: a cancel gets `too-late` with that
  * outcome, then the response. A connection that closes stops what it asked for the same way.
  *
+ * The `sessions` hooks hear of each connection's session as the router welcomes it in this
+ * major, and again when that connection closes, by its surface and sessionId alone, so #35's
+ * coordinator knows which pages are there and when one goes.
+ *
  * It answers system.messagingHealth itself, from counters only (#13, "Security and privacy"):
  * connections, handshakes, reconnects, requests by the catalog's operation names, outcomes and
  * refusals by code, and answers by latency bucket. Nothing a sender chose is counted by name,
@@ -95,6 +99,25 @@ import { createScopeCheck } from './scope.js';
  */
 
 /**
+ * The session one connection's hello named
+ * @typedef {object} Session
+ * @property {import('../contracts/surfaces.js').Surface} surface - what its transport verified
+ * @property {string} sessionId - its hello's, the contextId of every request it sends
+ */
+
+/**
+ * What #35's coordinator hears of the sessions its pages open. `opened` is told once the
+ * router welcomes a connection's hello in this major, and `closed` once when that connection
+ * closes, from either end or by close(), with the same frozen Session. A connection that
+ * never opened is told of neither. Each connection is told apart, so a session that
+ * reconnects can open its next connection before its last one's close arrives. A hook that
+ * throws changes no answer.
+ * @typedef {object} SessionHooks
+ * @property {(session: Session) => void} [opened]
+ * @property {(session: Session) => void} [closed]
+ */
+
+/**
  * @typedef {object} RouterOptions
  * @property {Lookup} [lookup] - the operations it knows besides the coordinator's own queries
  * @property {Readonly<Record<string, Handler>>} [handlers] - by operation name
@@ -104,6 +127,7 @@ import { createScopeCheck } from './scope.js';
  * @property {string} coordinatorId - this instance's id, new each time the worker starts
  * @property {string} extensionVersion
  * @property {() => CoordinatorStatus} [status]
+ * @property {SessionHooks} [sessions]
  * @property {Logger} [logger]
  */
 
@@ -133,6 +157,7 @@ import { createScopeCheck } from './scope.js';
  * @property {import('../contracts/surfaces.js').Surface} surface
  * @property {'new' | 'open' | 'incompatible' | 'closed'} phase
  * @property {string} sessionId
+ * @property {Session | null} session - what the session hooks were told it opened, if they were
  * @property {Map<string, Running>} running - by requestId
  */
 
@@ -169,6 +194,7 @@ export function createRouter({
   coordinatorId,
   extensionVersion,
   status = () => ({ status: 'ready' }),
+  sessions = {},
   logger = silentLogger,
 }) {
   /** @type {Lookup} the coordinator's own queries first, which nothing it's given replaces */
@@ -176,8 +202,8 @@ export function createRouter({
   const inScope = createScopeCheck();
   /** @type {Set<Peer>} */
   const peers = new Set();
-  /** @type {Set<string>} */
-  const sessions = new Set();
+  /** @type {Set<string>} the sessions it has seen, by sessionId */
+  const seen = new Set();
   const counts = {
     handshakes: 0,
     reconnects: 0,
@@ -240,12 +266,12 @@ export function createRouter({
   /** @param {Peer} peer */
   const countHandshake = peer => {
     counts.handshakes += 1;
-    if (sessions.has(peer.sessionId)) {
+    if (seen.has(peer.sessionId)) {
       counts.reconnects += 1;
       return;
     }
-    sessions.add(peer.sessionId);
-    if (sessions.size > MAX_SESSIONS) sessions.delete(/** @type {string} */ (sessions.values().next().value));
+    seen.add(peer.sessionId);
+    if (seen.size > MAX_SESSIONS) seen.delete(/** @type {string} */ (seen.values().next().value));
   };
 
   /**
@@ -258,6 +284,21 @@ export function createRouter({
       logger.warn(event, detail);
     } catch {
       // Nothing to tell
+    }
+  };
+
+  /**
+   * Tells a session hook, whose failure changes no answer either
+   * @param {'opened' | 'closed'} event
+   * @param {Session} session
+   */
+  const tellSessions = (event, session) => {
+    const hook = sessions[event];
+    if (typeof hook !== 'function') return;
+    try {
+      hook(session);
+    } catch (error) {
+      warn('router-session-hook-failed', { event, error });
     }
   };
 
@@ -330,6 +371,7 @@ export function createRouter({
     for (const [requestId, running] of [...peer.running]) {
       end(peer, requestId, running, !(running.isCommand && running.begun));
     }
+    if (peer.session) tellSessions('closed', peer.session);
   };
 
   /** @param {Peer} peer */
@@ -375,6 +417,9 @@ export function createRouter({
     peer.phase = frame.protocol.major === PROTOCOL_VERSION.major ? 'open' : 'incompatible';
     countHandshake(peer);
     send(peer, { frame: 'welcome', protocol: PROTOCOL_VERSION, extensionVersion, coordinatorId, ...statusNow() });
+    if (peer.phase !== 'open') return;
+    peer.session = Object.freeze({ surface: peer.surface, sessionId: peer.sessionId });
+    tellSessions('opened', peer.session);
   };
 
   /**
@@ -577,7 +622,7 @@ export function createRouter({
   return Object.freeze({
     accept({ link, surface }) {
       /** @type {Peer} */
-      const peer = { link, surface, phase: 'new', sessionId: '', running: new Map() };
+      const peer = { link, surface, phase: 'new', sessionId: '', session: null, running: new Map() };
       peers.add(peer);
       link.onMessage(text => hear(peer, text));
       link.onClose(() => drop(peer));
