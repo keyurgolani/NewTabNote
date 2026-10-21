@@ -15,10 +15,20 @@ import { check } from '../../js/kernel/core/contracts/validate.js';
 import { createLookup, operationOf } from '../../js/kernel/core/messaging/operations.js';
 import { createRouter } from '../../js/kernel/core/messaging/router.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { NOW, testClock } from './support.mjs';
-import { OPERATIONS, VERSION, hello, lookup, rawConnection, request, settle } from './messaging-support.mjs';
+import { NOW } from './support.mjs';
+import {
+  OPERATIONS,
+  VERSION,
+  hello,
+  lookup,
+  rawConnection,
+  request,
+  settle,
+  testScheduler,
+} from './messaging-support.mjs';
 
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Handler} Handler */
+/** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').RouterOptions} RouterOptions */
 /** @typedef {import('../../js/kernel/core/ports/policy.js').PolicyPort} PolicyPort */
 
@@ -30,7 +40,7 @@ const makeRouter = (options = {}) =>
   createRouter({
     lookup,
     policy: createBaselinePolicy(),
-    clock: testClock(),
+    ...testScheduler(),
     coordinatorId: 'coordinator-1',
     extensionVersion: VERSION,
     ...options,
@@ -54,6 +64,19 @@ const noNote = () => ({ kind: 'failed', cause: 'storage', code: 'note-not-found'
 
 /** @type {PolicyPort} */
 const allowAll = { authorize: () => ({ allowed: true }) };
+
+/**
+ * A setPinned for `noteId`, whose commandId names it too
+ * @param {string} noteId
+ */
+const pin = noteId => ({ type: 'setPinned', commandId: `c-${noteId}`, noteId, pinned: true });
+
+/**
+ * The frames that came back, as `frame code` by requestId
+ * @param {Array<Record<string, any>>} frames
+ */
+const byRequest = frames =>
+  Object.fromEntries(frames.map(frame => [frame.requestId, [frame.frame, frame.code].filter(Boolean).join(' ')]));
 
 describe('the router: handshake (#13, "Handshake and compatibility")', () => {
   it('welcomes a hello with its protocol, extension version, instance, and status', async () => {
@@ -397,12 +420,6 @@ describe('the router: answers', () => {
       },
     };
     const peer = await opened(makeRouter({ handlers }), 'newtab');
-    const pin = (/** @type {string} */ noteId) => ({
-      type: 'setPinned',
-      commandId: `c-${noteId}`,
-      noteId,
-      pinned: true,
-    });
     peer.send(request('c1', pin('throws-first')));
     peer.send(request('c2', pin('throws-after')));
     peer.send(request('c3', pin('invalid')));
@@ -411,7 +428,7 @@ describe('the router: answers', () => {
     peer.send(request('q3', { type: 'getNoteBlocks', noteId: 'unencodable' }));
     peer.send(request('q4', { type: 'getNoteBlocks', noteId: 'too-large' }));
     await settle();
-    assert.deepEqual(Object.fromEntries(peer.frames.map(frame => [frame.requestId, `${frame.frame} ${frame.code}`])), {
+    assert.deepEqual(byRequest(peer.frames), {
       c1: 'error unavailable',
       c2: 'error outcome-unknown',
       c3: 'error outcome-unknown',
@@ -463,5 +480,161 @@ describe('the router: answers', () => {
     assert.deepEqual(second.frames, [{ frame: 'response', requestId: 'r1', result: noNote() }]);
     // The operations a composition root hands the router are the catalog's own
     assert.equal(lookup('getNote'), OPERATIONS.getNote);
+  });
+});
+
+describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines, payloads")', () => {
+  /**
+   * A router whose getNote and setPinned handlers keep each request's context and answer only
+   * when the test does. A setPinned for a note whose id starts `begins` opens its transaction
+   * at once. `stopped` lists the requests whose handlers were told to stop, by noteId.
+   */
+  function holding() {
+    const scheduler = testScheduler();
+    /** @type {Map<string, Dispatch>} */
+    const contexts = new Map();
+    /** @type {Map<string, (answer: unknown) => void>} */
+    const answers = new Map();
+    /** @type {string[]} */
+    const stopped = [];
+    /** @type {Handler} */
+    const hold = (payload, context) => {
+      const { noteId } = /** @type {{noteId: string}} */ (payload);
+      contexts.set(noteId, context);
+      context.onCancel(() => stopped.push(noteId));
+      if (noteId.startsWith('begins')) context.begin();
+      return new Promise(resolve => answers.set(noteId, resolve));
+    };
+    const router = makeRouter({ ...scheduler, handlers: { getNote: hold, setPinned: hold } });
+    return { scheduler, router, contexts, answers, stopped };
+  }
+
+  it("ends a query and a command that hasn't begun at the deadline, and tells their handlers, but lets a begun command finish", async () => {
+    const { scheduler, router, contexts, answers, stopped } = holding();
+    const peer = await opened(router, 'newtab');
+    peer.send(request('q1', { type: 'getNote', noteId: 'query' }, { deadline: NOW + 1000 }));
+    peer.send(request('c1', pin('waits'), { deadline: NOW + 1000 }));
+    peer.send(request('c2', pin('begins'), { deadline: NOW + 1000 }));
+    await scheduler.advance(999);
+    assert.deepEqual(peer.frames, []);
+    await scheduler.advance(1);
+    assert.deepEqual(byRequest(peer.frames), { q1: 'error deadline-exceeded', c1: 'error deadline-exceeded' });
+    assert.deepEqual(stopped.sort(), ['query', 'waits']);
+    // A command whose deadline came opens no transaction, and its late answer goes nowhere
+    assert.equal(contexts.get('waits')?.begin(), false);
+    answers.get('waits')?.(committed('note-pinned', ['waits']));
+    // A command that began runs to its outcome, which the router still sends
+    answers.get('begins')?.(committed('note-pinned', ['begins']));
+    await settle();
+    assert.deepEqual(byRequest(peer.frames), {
+      q1: 'error deadline-exceeded',
+      c1: 'error deadline-exceeded',
+      c2: 'response',
+    });
+    assert.equal(scheduler.waiting, 0);
+  });
+
+  it("holds a request to its entry's deadline, however far off the request puts it", async () => {
+    const { scheduler, router, contexts } = holding();
+    const peer = await opened(router, 'newtab');
+    peer.send(request('q1', { type: 'getNote', noteId: 'query' }, { deadline: NOW + 60 * 60_000 }));
+    await settle();
+    assert.equal(contexts.get('query')?.deadline, NOW + QUERY_DEADLINE_MS);
+    await scheduler.advance(QUERY_DEADLINE_MS);
+    assert.deepEqual(peer.frames, [{ frame: 'error', requestId: 'q1', code: 'deadline-exceeded' }]);
+  });
+
+  it("cancels a query, and a command that hasn't begun, and tells their handlers", async () => {
+    const { scheduler, router, contexts, answers, stopped } = holding();
+    const peer = await opened(router, 'newtab');
+    peer.send(request('q1', { type: 'getNote', noteId: 'query' }));
+    peer.send(request('c1', pin('waits')));
+    await settle();
+    peer.send({ frame: 'cancel', requestId: 'q1' });
+    peer.send({ frame: 'cancel', requestId: 'c1' });
+    await settle();
+    assert.deepEqual(peer.frames, [
+      { frame: 'cancelled', requestId: 'q1' },
+      { frame: 'cancelled', requestId: 'c1' },
+    ]);
+    assert.deepEqual(stopped, ['query', 'waits']);
+    assert.equal(contexts.get('waits')?.begin(), false);
+    // Their answers, if they come, go nowhere
+    answers.get('query')?.(noNote());
+    answers.get('waits')?.(committed('note-pinned', ['waits']));
+    await settle();
+    assert.equal(peer.frames.length, 2);
+    assert.equal(scheduler.waiting, 0);
+  });
+
+  it('answers a cancel that came after the command began with too-late and its outcome, then its response', async () => {
+    const { router, answers, stopped } = holding();
+    const peer = await opened(router, 'newtab');
+    peer.send(request('c1', pin('begins')));
+    peer.send(request('c2', pin('begins-badly')));
+    await settle();
+    peer.send({ frame: 'cancel', requestId: 'c1' });
+    peer.send({ frame: 'cancel', requestId: 'c2' });
+    await settle();
+    assert.deepEqual(peer.frames, []);
+    const outcome = committed('note-pinned', ['begins']);
+    answers.get('begins')?.(outcome);
+    // An outcome its schema refuses leaves a too-late nothing to carry
+    answers.get('begins-badly')?.({ kind: 'committed' });
+    await settle();
+    assert.deepEqual(peer.frames, [
+      { frame: 'too-late', requestId: 'c1', outcome },
+      { frame: 'response', requestId: 'c1', result: outcome },
+      { frame: 'error', requestId: 'c2', code: 'outcome-unknown' },
+    ]);
+    assert.deepEqual(stopped, []);
+  });
+
+  it("ignores a cancel for a request it isn't running or another connection sent, and a request reusing a running one's id", async () => {
+    const { router, answers, stopped } = holding();
+    const peer = await opened(router, 'newtab');
+    const other = await opened(router, 'popup');
+    peer.send(request('r1', { type: 'getNote', noteId: 'query' }));
+    await settle();
+    peer.send({ frame: 'cancel', requestId: 'nothing' });
+    other.send({ frame: 'cancel', requestId: 'r1' });
+    // A second request by a running one's id would make its answer ambiguous
+    peer.send(request('r1', { type: 'getNote', noteId: 'again' }));
+    await settle();
+    assert.deepEqual([peer.frames, other.frames, stopped], [[], [], []]);
+    answers.get('query')?.(noNote());
+    await settle();
+    assert.deepEqual(peer.frames, [{ frame: 'response', requestId: 'r1', result: noNote() }]);
+    assert.equal(answers.has('again'), false);
+  });
+
+  it('stops what a closed connection asked for, except a command that began, which finishes unanswered', async () => {
+    const { scheduler, router, contexts, answers, stopped } = holding();
+    const peer = await opened(router, 'newtab');
+    peer.send(request('q1', { type: 'getNote', noteId: 'query' }));
+    peer.send(request('c1', pin('waits')));
+    peer.send(request('c2', pin('begins')));
+    await settle();
+    peer.close();
+    await settle();
+    assert.deepEqual(stopped.sort(), ['query', 'waits']);
+    assert.equal(contexts.get('waits')?.begin(), false);
+    answers.get('begins')?.(committed('note-pinned', ['begins']));
+    await settle();
+    assert.deepEqual(peer.frames, []);
+    assert.equal(scheduler.waiting, 0);
+  });
+
+  it('closes every connection when it closes, and stops what each asked for', async () => {
+    const { router, stopped } = holding();
+    const first = await opened(router, 'newtab');
+    const second = await opened(router, 'sidepanel');
+    first.send(request('q1', { type: 'getNote', noteId: 'first' }));
+    second.send(request('q1', { type: 'getNote', noteId: 'second' }));
+    await settle();
+    router.close();
+    await settle();
+    assert.deepEqual([first.closed, second.closed], [true, true]);
+    assert.deepEqual(stopped.sort(), ['first', 'second']);
   });
 });
