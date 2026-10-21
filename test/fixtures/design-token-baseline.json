@@ -1,0 +1,115 @@
+{
+  "about": "Per-file counts from scripts/design-token-scan.js (#16). Counts only fall: a higher count, or a count in a file with no entry, fails. A lower count fails until it's recorded with `npm run design-token-scan -- --update`. Entries are never added, except that an entry follows a file moved or renamed verbatim in the same PR, and a <style> block moved verbatim into a stylesheet takes its counts along.",
+  "patterns": {
+    "color-literal": "Raw colors: hex, rgb(), hsl(), and the other color functions, and named colors in color properties",
+    "theme-branching": "Theme branching outside the token output: [data-theme] and [data-scheme] selectors, prefers-color-scheme, the data-theme attribute and dataset.theme, and comparisons with 'dark' or 'light'",
+    "runtime-style": "Runtime <style> creation: createElement('style') and markup strings with <style",
+    "inline-style-block": "Inline <style> blocks in HTML",
+    "style-attribute": "style= attributes in HTML and markup strings, and setAttribute('style')",
+    "undefined-var": "var() with no fallback of a property nothing defines: no token, stylesheet, or script, and for an HTML page, not the page itself",
+    "unregistered-read": "getPropertyValue() of a custom property the token output doesn't register with @property, or of a computed name",
+    "gradient-text": "Gradient text: a rule with background-clip: text",
+    "backdrop-filter": "backdrop-filter",
+    "hard-shadow": "box-shadow with a nonzero offset and zero blur",
+    "one-sided-border": "A one-sided border of 2px or more",
+    "transition-all": "transition: all, or a transition with no property, reading var() of a duration or easing token as timing",
+    "px-font-size": "A px font size: font-size and font in CSS and style writes, canvas fonts, and Chart.js font sizes",
+    "alias-use": "var() of a legacy name (legacy.aliases in design/quiet-atlas.tokens.json)"
+  },
+  "files": {
+    "css/editor.css": {
+      "color-literal": 134,
+      "theme-branching": 7,
+      "undefined-var": 8,
+      "hard-shadow": 1,
+      "one-sided-border": 6,
+      "transition-all": 47,
+      "px-font-size": 176,
+      "alias-use": 604
+    },
+    "css/premium-chat.css": {
+      "color-literal": 93,
+      "theme-branching": 1,
+      "backdrop-filter": 4,
+      "px-font-size": 23,
+      "alias-use": 101
+    },
+    "css/stats.css": {
+      "undefined-var": 4,
+      "gradient-text": 1,
+      "transition-all": 1,
+      "alias-use": 14
+    },
+    "js/app.js": {
+      "color-literal": 2,
+      "style-attribute": 3
+    },
+    "js/controllers/ai-chat-controller.js": {
+      "style-attribute": 3,
+      "alias-use": 3
+    },
+    "js/controllers/analytics-controller.js": {
+      "color-literal": 16
+    },
+    "js/controllers/settings-controller.js": {
+      "color-literal": 12,
+      "theme-branching": 2,
+      "unregistered-read": 4
+    },
+    "js/controllers/tab-controller.js": {
+      "runtime-style": 2,
+      "alias-use": 1
+    },
+    "js/controllers/theme-builder-controller.js": {
+      "color-literal": 2,
+      "theme-branching": 2
+    },
+    "js/storage.js": {
+      "color-literal": 1
+    },
+    "js/theme-engine.js": {
+      "color-literal": 25,
+      "theme-branching": 8
+    },
+    "js/ui/confirm-dialog.js": {
+      "color-literal": 22,
+      "runtime-style": 1,
+      "transition-all": 1,
+      "px-font-size": 4,
+      "alias-use": 18
+    },
+    "js/ui/formatting-toolbar.js": {
+      "color-literal": 12,
+      "runtime-style": 1,
+      "px-font-size": 3,
+      "alias-use": 8
+    },
+    "js/ui/graph-view.js": {
+      "color-literal": 4,
+      "unregistered-read": 3,
+      "px-font-size": 2
+    },
+    "js/utils.js": {
+      "color-literal": 2,
+      "style-attribute": 2
+    },
+    "newtab.html": {
+      "style-attribute": 2
+    },
+    "popup.html": {
+      "color-literal": 54,
+      "theme-branching": 2,
+      "inline-style-block": 1,
+      "transition-all": 2,
+      "px-font-size": 16,
+      "alias-use": 37
+    },
+    "sidepanel.html": {
+      "color-literal": 21,
+      "theme-branching": 1,
+      "inline-style-block": 1,
+      "px-font-size": 13,
+      "alias-use": 33
+    }
+  }
+}

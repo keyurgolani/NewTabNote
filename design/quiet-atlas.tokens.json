@@ -1,0 +1,555 @@
+{
+  "name": "Quiet Atlas",
+  "version": 1,
+  "about": [
+    "The one source for NewTabNote's design tokens (#16). `npm run design-tokens` writes css/design-tokens.css and js/design/tokens.generated.js from it, and js/design/contrast.js validates every variant against the pair matrix below.",
+    "Each token belongs to exactly one axis, and a variant only changes the tokens of its own axis.",
+    "status: `approved` values come from the owner-approved table, DESIGN.md, or a rule the issue settles. `candidate` values ship until the owner answers (owner inputs 1 to 3 on #16).",
+    "Plane naming (owner input 4): the shipped planes stand, --surface-collection sage-tinted and --surface-intelligence mist-tinted, as in the selected Quiet Atlas sketch and the review board."
+  ],
+  "pending": [
+    {
+      "input": 2,
+      "cells": ["dark", "darkMore"],
+      "types": ["color"],
+      "about": "Quiet Atlas dark values. Until the owner supplies them, each dark color takes the legacy dark value for its role and anchors stay fills, so every dark color value is a candidate."
+    }
+  ],
+  "axes": {
+    "color": { "label": "Color", "dimensions": ["scheme", "contrast", "forcedColors"] },
+    "typography": { "label": "Typography", "dimensions": ["readingFont"] },
+    "density": { "label": "Density", "dimensions": ["density"] },
+    "shape": { "label": "Shape and elevation", "dimensions": [] },
+    "motion": { "label": "Motion", "dimensions": ["motion"] },
+    "layout": { "label": "Layout", "dimensions": ["canvasWidth"] }
+  },
+  "dimensions": {
+    "scheme": {
+      "attribute": "data-scheme",
+      "values": ["light", "dark", "system"],
+      "default": "light",
+      "system": { "value": "system", "media": "(prefers-color-scheme: dark)", "matched": "dark", "unmatched": "light" },
+      "about": "No attribute and no JS means light, whatever the OS. Only `system` follows prefers-color-scheme."
+    },
+    "contrast": {
+      "attribute": "data-contrast",
+      "values": ["system", "more"],
+      "default": "system",
+      "media": { "query": "(prefers-contrast: more)", "value": "more" },
+      "about": "prefers-contrast: more applies whatever the attribute says, since no value opts out of it."
+    },
+    "forcedColors": {
+      "values": ["none", "active"],
+      "default": "none",
+      "media": { "query": "(forced-colors: active)", "value": "active" },
+      "about": "Forced colors replace every color token with a system color, marked !important so custom overrides can't win."
+    },
+    "motion": {
+      "attribute": "data-motion",
+      "values": ["system", "reduce"],
+      "default": "system",
+      "media": { "query": "(prefers-reduced-motion: reduce)", "value": "reduce" },
+      "about": "An OS reduce-motion setting beats any in-app choice."
+    },
+    "density": {
+      "attribute": "data-density",
+      "values": ["comfortable", "compact"],
+      "default": "comfortable"
+    },
+    "readingFont": {
+      "attribute": "data-reading-font",
+      "values": ["sans", "serif", "mono"],
+      "default": "sans",
+      "about": "Applies to the canvas and note content only, on today's system stacks for serif and mono."
+    },
+    "canvasWidth": {
+      "attribute": "data-canvas-width",
+      "values": ["narrow", "default", "wide", "full"],
+      "default": "default",
+      "advisory": {
+        "wide": "Lines can run past the 72ch reading measure.",
+        "full": "Lines can run past the 72ch reading measure. Owner input 3: canvas at 100% as today, or text capped at 72ch."
+      }
+    }
+  },
+  "rules": {
+    "ratios": { "text": 4.5, "non-text": 3, "focus": 3 },
+    "typography": {
+      "unit": "rem",
+      "floor": "--type-label-size",
+      "about": "Font sizes are rem, or clamp() with rem bounds, and never below the label size, the floor for functional text."
+    },
+    "targets": { "token": "--target-min", "minimum": "44px" },
+    "motion": {
+      "reducedDuration": "1ms",
+      "about": "Reduced motion keeps opacity and color feedback at 1ms durations, so transitionend still fires, and drops translation and scaling."
+    },
+    "focus": {
+      "width": "--focus-width",
+      "offset": "--focus-offset",
+      "minimumWidth": { "no-preference": "2px", "more": "3px" },
+      "minimumOffset": "2px",
+      "about": "A --focus-width outline in --focus-ring, offset --focus-offset, with an inner ring of --focus-ring-inner filling the offset. Focus Blue is under 3:1 on slate, sage, and every dark surface, so there the inner ring carries the contrast. A focus pair passes when the outer ring reaches 3:1 on the surface, or the inner ring reaches 3:1 against both the outer ring and the surface."
+    },
+    "forcedColors": {
+      "focus": { "token": "--focus-ring", "value": "Highlight", "surfaces": ["Canvas"] },
+      "boundaries": ["--seam", "--seam-strong", "--control-boundary"],
+      "border": "1px solid transparent",
+      "pairs": {
+        "Canvas": ["CanvasText", "LinkText", "VisitedText", "ActiveText", "GrayText", "ButtonBorder"],
+        "ButtonFace": ["ButtonText"],
+        "Field": ["FieldText"],
+        "Mark": ["MarkText"],
+        "Highlight": ["HighlightText"],
+        "SelectedItem": ["SelectedItemText"],
+        "AccentColor": ["AccentColorText"]
+      },
+      "about": "Every pair is one of the legible system pairs in CSS Color 4 section 6.2, its foreground listed for its background, so a component that keeps its colors with forced-color-adjust: none stays readable. Focus is Highlight, drawn against Canvas: on a Canvas surface, or on the Canvas inner ring over any other. The focus ring isn't registered with @property, because a registered <color> computes Highlight to a fixed color and forced colors then repaint the outline. Planes, cards, inputs, and selected states get a 1px solid transparent border or outline, which forced colors paint. The static check covers token values; whether components draw that border needs rendered DOM (#24)."
+    },
+    "disabled": {
+      "state": "disabled",
+      "opacity": "--disabled-opacity",
+      "about": "Disabled pairs are composited at --disabled-opacity over their backdrop and reported as advisories. WCAG 2.x SC 1.4.3 and 1.4.11 set no contrast requirement for inactive components."
+    }
+  },
+  "tokens": {
+    "--surface-app": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Mineral Ground: the application field",
+      "values": { "light": "#F4F6F3", "dark": { "value": "#252525", "legacy": "--bg-secondary" }, "forced": "Canvas" }
+    },
+    "--surface-navigation": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Deep Slate: navigation and structural anchors",
+      "values": { "light": "#253443", "dark": { "value": "#253443", "note": "Anchors stay fills." }, "forced": "Canvas" }
+    },
+    "--surface-paper": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Paper Canvas: active note and task surfaces, the brightest and quietest plane",
+      "values": { "light": "#FFFFFF", "dark": { "value": "#191919", "legacy": "--bg-primary" }, "forced": "Canvas" }
+    },
+    "--surface-collection": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Collection plane, sage-tinted",
+      "values": { "light": "#E7EDEB", "dark": { "value": "#252525", "legacy": "--bg-secondary" }, "forced": "Canvas" }
+    },
+    "--surface-intelligence": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Intelligence plane, mist-tinted",
+      "values": { "light": "#E9EDF3", "dark": { "value": "#252525", "legacy": "--bg-secondary" }, "forced": "Canvas" }
+    },
+    "--surface-muted": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Quiet fills, such as a quiet button's hover",
+      "values": { "light": "#E8ECEA", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+    },
+    "--surface-code": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": true,
+      "role": "Code blocks and inline code",
+      "values": { "light": "#F4F6F3", "dark": { "value": "#2A2A2A", "legacy": "--code-bg" }, "forced": "Canvas" }
+    },
+    "--text-primary": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Deep Slate: primary text",
+      "values": { "light": "#253443", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--text-secondary": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Secondary text",
+      "values": {
+        "light": "#52616A",
+        "dark": { "value": "#9B9B9B", "legacy": "--text-secondary" },
+        "more": { "ref": "--text-primary", "note": "Contrast-more swaps secondary text for primary text." },
+        "forced": "CanvasText"
+      }
+    },
+    "--text-on-dark": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Text on slate",
+      "values": { "light": "#F7F9F8", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--text-on-sage": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Paper text on sage fills, such as the active nav field",
+      "values": { "light": "#FFFFFF", "dark": { "value": "#FFFFFF", "legacy": "white text on accent and danger fills" }, "forced": "SelectedItemText" }
+    },
+    "--text-on-action": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Paper text on action fills: the primary and destructive buttons, as DESIGN.md gives the primary button paper text",
+      "values": { "light": "#FFFFFF", "dark": { "value": "#FFFFFF", "legacy": "white text on accent and danger fills" }, "forced": "ButtonText" }
+    },
+    "--text-link": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Links, underlined",
+      "values": { "light": { "ref": "--text-primary" }, "dark": { "ref": "--text-primary" }, "forced": "LinkText" }
+    },
+    "--action-primary": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Deep Slate: the one primary action",
+      "values": { "light": "#253443", "dark": { "value": "#253443", "note": "Anchors stay fills." }, "forced": "ButtonFace" }
+    },
+    "--action-destructive": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Destructive fills: the danger color as a fill under --text-on-action",
+      "values": { "light": { "ref": "--state-danger" }, "dark": { "ref": "--state-danger" }, "forced": "ButtonFace" }
+    },
+    "--state-local": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Private Sage: local or private state, success, trusted actions, intelligence ownership, the active nav field. Forced colors paint the field as a selected item.",
+      "values": { "light": "#526F69", "dark": { "value": "#526F69", "note": "Anchors stay fills." }, "forced": "SelectedItem" }
+    },
+    "--state-info": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Collection Mist: linked context, collection surfaces, secondary information, non-urgent intelligence. Never a fill under text.",
+      "values": { "light": "#7184A3", "dark": { "value": "#7184A3", "note": "Anchors stay fills." }, "forced": "CanvasText" }
+    },
+    "--state-urgent": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Urgency Clay: explicit deadlines, attention, recoverable warnings. Never text, and never a fill under text.",
+      "values": { "light": "#B78E76", "dark": { "value": "#B78E76", "note": "Anchors stay fills." }, "forced": "CanvasText" }
+    },
+    "--state-pending": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Supporting Sand: pending, supporting, resurfaced",
+      "values": { "light": "#DED7BA", "dark": { "value": "#DED7BA", "note": "Anchors stay fills." }, "forced": "CanvasText" }
+    },
+    "--state-danger": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Danger text and markers. Destructive fills take --action-destructive, so forced colors can pair each.",
+      "values": { "light": "#934F47", "dark": { "value": "#E03E3E", "legacy": "--danger-color" }, "forced": "CanvasText" }
+    },
+    "--ink-local": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Local ink: text and sole-cue markers in the local tone",
+      "alternatives": ["#315B52"],
+      "values": { "light": "#526F69", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--ink-info": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Info ink: text and sole-cue markers in the info tone",
+      "values": { "light": "#425B7D", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--ink-urgent": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Urgent ink: text and sole-cue markers in the urgent tone",
+      "values": { "light": "#604C34", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--ink-pending": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Pending ink: text and sole-cue markers in the pending tone",
+      "values": { "light": "#68624B", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--tint-local": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Local tint, the board's --surface-proposed",
+      "values": { "light": "#EDF2EF", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+    },
+    "--tint-info": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Info tint",
+      "values": { "light": "#F2F4F8", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+    },
+    "--tint-urgent": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Urgent tint",
+      "values": { "light": "#F6EEE9", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+    },
+    "--tint-pending": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Pending tint",
+      "values": { "light": "#F7F4E8", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+    },
+    "--seam": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": true,
+      "role": "Quiet Seam: 1px plane registration and toggle guides",
+      "values": {
+        "light": "#CBD5D1",
+        "dark": { "value": "#333333", "legacy": "--border-color" },
+        "more": { "ref": "--control-boundary", "note": "Contrast-more swaps the seam for the control boundary." },
+        "forced": "CanvasText"
+      }
+    },
+    "--seam-strong": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "The 1px inline-start rule on quote blocks, snapshot quotes, and AI blockquotes",
+      "values": { "light": "#AAB9B4", "dark": { "value": "#3A3A3A", "legacy": "--bg-active, the dark code border" }, "forced": "CanvasText" }
+    },
+    "--control-boundary": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Boundary of inputs and controls, 3.39:1 or better on every light surface",
+      "values": { "light": "#778179", "dark": { "value": "#9B9B9B", "legacy": "--text-secondary" }, "forced": "CanvasText" }
+    },
+    "--focus-ring": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "registered": false,
+      "about": "Not registered with @property: a registered <color> computes Highlight to a fixed color, and forced colors then repaint the outline in their own default. Unregistered, outline-color gets the Highlight keyword. It isn't overridable, so it doesn't need the fallback registration gives an invalid value.",
+      "role": "Focus Blue: focus only",
+      "values": { "light": "#315F8A", "dark": { "value": "#315F8A", "note": "2.62:1 on #191919, so dark focus relies on the inner ring." }, "forced": "Highlight" }
+    },
+    "--focus-ring-inner": {
+      "type": "color", "axis": "color", "status": "approved", "overridable": false,
+      "role": "The focus ring's inner ring: paper in light, --text-on-dark in dark",
+      "values": { "light": { "ref": "--surface-paper" }, "dark": { "ref": "--text-on-dark" }, "forced": "Canvas" }
+    },
+    "--selection-bg": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": true,
+      "role": "Selection and selected states: mist at 30%. Selected text takes --text-on-selection.",
+      "values": { "light": "#7184A34D", "dark": { "value": "#2383E240", "legacy": "--selection-bg" }, "forced": "Highlight" }
+    },
+    "--text-on-selection": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Selected text: --text-primary, and HighlightText in forced colors",
+      "values": { "light": { "ref": "--text-primary" }, "dark": { "ref": "--text-primary" }, "forced": "HighlightText" }
+    },
+    "--mark-bg": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "mark on the sand fill, with --text-on-mark",
+      "values": { "light": "#DED7BA", "dark": { "value": "#4A4000", "legacy": "dark .block-content mark" }, "forced": "Mark" }
+    },
+    "--text-on-mark": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Text in a mark: --text-primary, and MarkText in forced colors",
+      "values": { "light": { "ref": "--text-primary" }, "dark": { "ref": "--text-primary" }, "forced": "MarkText" }
+    },
+    "--scrim": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Scrim behind dialogs: slate at 40%",
+      "values": { "light": "#25344366", "dark": { "value": "#00000099", "legacy": "--modal-bg" }, "forced": "Canvas" }
+    },
+    "--chart-1": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Chart scale step 1",
+      "values": { "light": "#253443", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+    },
+    "--chart-2": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Chart scale step 2",
+      "values": { "light": "#3B5065", "dark": { "value": "#9B9B9B", "legacy": "--text-secondary" }, "forced": "CanvasText" }
+    },
+    "--chart-3": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Chart scale step 3",
+      "values": { "light": "#536C86", "dark": { "value": "#7089A2", "note": "Light chart step 4." }, "forced": "CanvasText" }
+    },
+    "--chart-4": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Chart scale step 4",
+      "values": { "light": "#7089A2", "dark": { "value": "#536C86", "note": "Light chart step 3." }, "forced": "CanvasText" }
+    },
+    "--focus-width": {
+      "type": "dimension", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Focus outline width; contrast-more widens it",
+      "values": { "light": "2px", "more": "3px" }
+    },
+    "--focus-offset": {
+      "type": "dimension", "axis": "color", "status": "approved", "overridable": false,
+      "role": "Focus outline offset, filled by the inner ring",
+      "values": { "light": "2px" }
+    },
+    "--disabled-opacity": {
+      "type": "number", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Opacity of disabled controls, which keep their label. The review board's value.",
+      "values": { "light": "0.55" }
+    },
+    "--font-sans": {
+      "type": "font-family", "axis": "typography", "status": "approved", "overridable": false,
+      "role": "Interface family, bundled locally",
+      "values": { "default": "\"Source Sans 3 Variable\", system-ui, sans-serif" }
+    },
+    "--font-reading": {
+      "type": "font-family", "axis": "typography", "status": "approved", "overridable": false,
+      "role": "Canvas and note content family",
+      "values": {
+        "default": { "ref": "--font-sans" },
+        "serif": "Georgia, 'Times New Roman', serif",
+        "mono": "'SF Mono', 'Fira Code', 'Consolas', monospace"
+      }
+    },
+    "--font-mono": {
+      "type": "font-family", "axis": "typography", "status": "approved", "overridable": false,
+      "role": "Code, on today's monospace stack",
+      "values": { "default": "'SF Mono', 'Fira Code', 'Consolas', monospace" }
+    },
+    "--type-display-size": { "type": "font-size", "axis": "typography", "status": "approved", "overridable": false, "role": "Display: rare product-defining statements", "values": { "default": "clamp(2.2rem, 4vw, 4.8rem)" } },
+    "--type-display-weight": { "type": "font-weight", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "720" } },
+    "--type-display-line-height": { "type": "line-height", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "0.98" } },
+    "--type-display-letter-spacing": { "type": "letter-spacing", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "-0.04em" } },
+    "--type-headline-size": { "type": "font-size", "axis": "typography", "status": "approved", "overridable": false, "role": "Headline: note titles and section propositions", "values": { "default": "clamp(1.8rem, 3vw, 3rem)" } },
+    "--type-headline-weight": { "type": "font-weight", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "720" } },
+    "--type-headline-line-height": { "type": "line-height", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "1.02" } },
+    "--type-headline-letter-spacing": { "type": "letter-spacing", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "-0.035em" } },
+    "--type-title-size": { "type": "font-size", "axis": "typography", "status": "approved", "overridable": false, "role": "Title: surface and panel headings", "values": { "default": "1.55rem" } },
+    "--type-title-weight": { "type": "font-weight", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "700" } },
+    "--type-title-line-height": { "type": "line-height", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "1.2" } },
+    "--type-body-size": { "type": "font-size", "axis": "typography", "status": "approved", "overridable": false, "role": "Body: writing, explanations, decision support", "values": { "default": "1rem" } },
+    "--type-body-weight": { "type": "font-weight", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "400" } },
+    "--type-body-line-height": { "type": "line-height", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "1.6" } },
+    "--type-label-size": { "type": "font-size", "axis": "typography", "status": "approved", "overridable": false, "role": "Label: controls, states, provenance, compact metadata. The floor for functional text.", "values": { "default": "0.8rem" } },
+    "--type-label-weight": { "type": "font-weight", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "700" } },
+    "--type-label-line-height": { "type": "line-height", "axis": "typography", "status": "approved", "overridable": false, "values": { "default": "1" } },
+    "--space-compact": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "role": "Compact relationships", "values": { "default": "0.45rem" } },
+    "--space-control": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "role": "Control interiors", "values": { "default": "0.75rem" } },
+    "--space-region": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "role": "Region padding; compact drops it one step", "values": { "default": "1rem", "compact": "0.75rem" } },
+    "--space-layer": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "role": "Layer separation; compact drops it one step", "values": { "default": "1.5rem", "compact": "1rem" } },
+    "--padding-button": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "values": { "default": "0.68rem 1rem" } },
+    "--padding-chip": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "values": { "default": "0.3rem 0.6rem" } },
+    "--padding-card": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "values": { "default": "0.85rem" } },
+    "--padding-canvas": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "values": { "default": "clamp(1.5rem, 4vw, 3.25rem)" } },
+    "--target-min": { "type": "dimension", "axis": "density", "status": "approved", "overridable": false, "role": "Smallest pointer target side, in CSS px; compact keeps it", "values": { "default": "44px" } },
+    "--radius-control": { "type": "dimension", "axis": "shape", "status": "approved", "overridable": false, "values": { "default": "10px" } },
+    "--radius-card": { "type": "dimension", "axis": "shape", "status": "approved", "overridable": false, "values": { "default": "14px" } },
+    "--radius-shell": { "type": "dimension", "axis": "shape", "status": "approved", "overridable": false, "values": { "default": "20px" } },
+    "--radius-pill": { "type": "dimension", "axis": "shape", "status": "approved", "overridable": false, "role": "Chips, compact state, and mode indicators only", "values": { "default": "999px" } },
+    "--shadow-layer": { "type": "shadow", "axis": "shape", "status": "approved", "overridable": false, "role": "Shells and the Moment canvas", "values": { "default": "0 14px 38px rgb(37 52 67 / 12%)" } },
+    "--shadow-card": { "type": "shadow", "axis": "shape", "status": "approved", "overridable": false, "role": "Active cards and selected notes", "values": { "default": "0 5px 18px rgb(37 52 67 / 8%)" } },
+    "--motion-standard": { "type": "duration", "axis": "motion", "status": "approved", "overridable": false, "role": "State changes", "values": { "default": "180ms", "reduce": "1ms" } },
+    "--motion-layer": { "type": "duration", "axis": "motion", "status": "approved", "overridable": false, "role": "Registered layers", "values": { "default": "240ms", "reduce": "1ms" } },
+    "--ease-out": { "type": "easing", "axis": "motion", "status": "approved", "overridable": false, "role": "Opacity and position only, no overshoot", "values": { "default": "cubic-bezier(0.22, 1, 0.36, 1)" } },
+    "--canvas-width": {
+      "type": "dimension", "axis": "layout", "status": "approved", "overridable": false,
+      "role": "Writing canvas width",
+      "values": {
+        "default": "72ch",
+        "narrow": "540px",
+        "wide": "900px",
+        "full": { "value": "100%", "status": "candidate", "note": "Owner input 3." }
+      }
+    },
+    "--reading-measure": { "type": "dimension", "axis": "layout", "status": "approved", "overridable": false, "role": "Body text measure", "values": { "default": "72ch" } },
+    "--layout-min-width": { "type": "dimension", "axis": "layout", "status": "approved", "overridable": false, "role": "Narrowest container every surface recomposes down to", "values": { "default": "320px" } },
+    "--breakpoint-narrow": { "type": "dimension", "axis": "layout", "status": "approved", "overridable": false, "values": { "default": "390px" } },
+    "--breakpoint-recompose": { "type": "dimension", "axis": "layout", "status": "approved", "overridable": false, "role": "Container recomposition", "values": { "default": "720px" } },
+    "--breakpoint-compact-shell": { "type": "dimension", "axis": "layout", "status": "approved", "overridable": false, "values": { "default": "1100px" } }
+  },
+  "pairs": [
+    { "id": "plane-paper/rest/text-primary", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "plane-paper/rest/text-secondary", "kind": "text", "fg": "--text-secondary", "bg": "--surface-paper" },
+    { "id": "plane-app/rest/text-primary", "kind": "text", "fg": "--text-primary", "bg": "--surface-app" },
+    { "id": "plane-app/rest/text-secondary", "kind": "text", "fg": "--text-secondary", "bg": "--surface-app" },
+    { "id": "plane-collection/rest/text-primary", "kind": "text", "fg": "--text-primary", "bg": "--surface-collection" },
+    { "id": "plane-collection/rest/text-secondary", "kind": "text", "fg": "--text-secondary", "bg": "--surface-collection" },
+    { "id": "plane-intelligence/rest/text-primary", "kind": "text", "fg": "--text-primary", "bg": "--surface-intelligence" },
+    { "id": "plane-intelligence/rest/text-secondary", "kind": "text", "fg": "--text-secondary", "bg": "--surface-intelligence" },
+    { "id": "plane-muted/rest/text-primary", "kind": "text", "fg": "--text-primary", "bg": "--surface-muted" },
+    { "id": "plane-muted/rest/text-secondary", "kind": "text", "fg": "--text-secondary", "bg": "--surface-muted" },
+    { "id": "code/rest/text", "kind": "text", "fg": "--text-primary", "bg": "--surface-code" },
+    { "id": "link/rest/on-paper", "kind": "text", "fg": "--text-link", "bg": "--surface-paper" },
+    { "id": "link/rest/on-app", "kind": "text", "fg": "--text-link", "bg": "--surface-app" },
+    { "id": "link/rest/on-collection", "kind": "text", "fg": "--text-link", "bg": "--surface-collection" },
+    { "id": "link/rest/on-intelligence", "kind": "text", "fg": "--text-link", "bg": "--surface-intelligence" },
+    { "id": "error-text/rest/on-paper", "kind": "text", "fg": "--state-danger", "bg": "--surface-paper" },
+    { "id": "error-text/rest/on-app", "kind": "text", "fg": "--state-danger", "bg": "--surface-app" },
+    { "id": "error-text/rest/on-collection", "kind": "text", "fg": "--state-danger", "bg": "--surface-collection" },
+    { "id": "error-text/rest/on-intelligence", "kind": "text", "fg": "--state-danger", "bg": "--surface-intelligence" },
+    { "id": "tone-local/rest/on-paper", "kind": "text", "fg": "--ink-local", "bg": "--surface-paper" },
+    { "id": "tone-local/rest/on-app", "kind": "text", "fg": "--ink-local", "bg": "--surface-app" },
+    { "id": "tone-info/rest/on-paper", "kind": "text", "fg": "--ink-info", "bg": "--surface-paper" },
+    { "id": "tone-info/rest/on-app", "kind": "text", "fg": "--ink-info", "bg": "--surface-app" },
+    { "id": "tone-urgent/rest/on-paper", "kind": "text", "fg": "--ink-urgent", "bg": "--surface-paper" },
+    { "id": "tone-urgent/rest/on-app", "kind": "text", "fg": "--ink-urgent", "bg": "--surface-app" },
+    { "id": "tone-pending/rest/on-paper", "kind": "text", "fg": "--ink-pending", "bg": "--surface-paper" },
+    { "id": "tone-pending/rest/on-app", "kind": "text", "fg": "--ink-pending", "bg": "--surface-app" },
+    { "id": "selection/rest/on-paper", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-paper" },
+    { "id": "selection/rest/on-app", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-app" },
+    { "id": "selection/rest/on-collection", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-collection" },
+    { "id": "selection/rest/on-intelligence", "kind": "text", "fg": "--text-on-selection", "bg": "--selection-bg", "over": "--surface-intelligence" },
+    { "id": "mark/rest/text", "kind": "text", "fg": "--text-on-mark", "bg": "--mark-bg" },
+    { "id": "nav-item/rest/label", "kind": "text", "fg": "--text-on-dark", "bg": "--surface-navigation" },
+    { "id": "nav-item/active/label", "kind": "text", "fg": "--text-on-sage", "bg": "--state-local" },
+    { "id": "nav-item/active/marker", "kind": "non-text", "fg": "--text-on-sage", "bg": "--state-local" },
+    { "id": "button-primary/rest/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-primary" },
+    { "id": "button-primary/disabled/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-primary", "over": "--surface-paper" },
+    { "id": "button-secondary/rest/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "button-secondary/rest/boundary-on-paper", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper" },
+    { "id": "button-secondary/rest/boundary-on-app", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-app" },
+    { "id": "button-secondary/rest/boundary-on-collection", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-collection" },
+    { "id": "button-secondary/rest/boundary-on-intelligence", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-intelligence" },
+    { "id": "button-secondary/disabled/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper", "over": "--surface-paper" },
+    { "id": "button-quiet/rest/label-on-paper", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "button-quiet/rest/label-on-app", "kind": "text", "fg": "--text-primary", "bg": "--surface-app" },
+    { "id": "button-quiet/rest/label-on-collection", "kind": "text", "fg": "--text-primary", "bg": "--surface-collection" },
+    { "id": "button-quiet/rest/label-on-intelligence", "kind": "text", "fg": "--text-primary", "bg": "--surface-intelligence" },
+    { "id": "button-quiet/hover/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-muted" },
+    { "id": "button-quiet/disabled/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper", "over": "--surface-paper" },
+    { "id": "button-destructive/rest/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-destructive" },
+    { "id": "button-destructive/disabled/label", "kind": "text", "fg": "--text-on-action", "bg": "--action-destructive", "over": "--surface-paper" },
+    { "id": "chip-neutral/rest/label", "kind": "text", "fg": "--text-secondary", "bg": "--surface-muted" },
+    { "id": "chip-neutral/rest/marker", "kind": "non-text", "fg": "--text-secondary", "bg": "--surface-muted" },
+    { "id": "chip-local/rest/label", "kind": "text", "fg": "--ink-local", "bg": "--tint-local" },
+    { "id": "chip-local/rest/marker", "kind": "non-text", "fg": "--ink-local", "bg": "--tint-local" },
+    { "id": "chip-info/rest/label", "kind": "text", "fg": "--ink-info", "bg": "--tint-info" },
+    { "id": "chip-info/rest/marker", "kind": "non-text", "fg": "--ink-info", "bg": "--tint-info" },
+    { "id": "chip-urgent/rest/label", "kind": "text", "fg": "--ink-urgent", "bg": "--tint-urgent" },
+    { "id": "chip-urgent/rest/marker", "kind": "non-text", "fg": "--ink-urgent", "bg": "--tint-urgent" },
+    { "id": "chip-pending/rest/label", "kind": "text", "fg": "--ink-pending", "bg": "--tint-pending" },
+    { "id": "chip-pending/rest/marker", "kind": "non-text", "fg": "--ink-pending", "bg": "--tint-pending" },
+    { "id": "chip-danger/rest/label", "kind": "text", "fg": "--state-danger", "bg": "--surface-muted" },
+    { "id": "chip-danger/rest/marker", "kind": "non-text", "fg": "--state-danger", "bg": "--surface-muted" },
+    { "id": "toast/rest/text", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "toast-neutral/rest/marker", "kind": "non-text", "fg": "--text-secondary", "bg": "--surface-paper" },
+    { "id": "toast-local/rest/marker", "kind": "non-text", "fg": "--ink-local", "bg": "--surface-paper" },
+    { "id": "toast-info/rest/marker", "kind": "non-text", "fg": "--ink-info", "bg": "--surface-paper" },
+    { "id": "toast-urgent/rest/marker", "kind": "non-text", "fg": "--ink-urgent", "bg": "--surface-paper" },
+    { "id": "toast-pending/rest/marker", "kind": "non-text", "fg": "--ink-pending", "bg": "--surface-paper" },
+    { "id": "toast-danger/rest/marker", "kind": "non-text", "fg": "--state-danger", "bg": "--surface-paper" },
+    { "id": "input-text/rest/value", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "input-text/rest/placeholder", "kind": "text", "fg": "--text-secondary", "bg": "--surface-paper" },
+    { "id": "input-text/rest/boundary-on-paper", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper" },
+    { "id": "input-text/rest/boundary-on-app", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-app" },
+    { "id": "input-text/rest/boundary-on-collection", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-collection" },
+    { "id": "input-text/rest/boundary-on-intelligence", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-intelligence" },
+    { "id": "input-text/error/boundary", "kind": "non-text", "fg": "--state-danger", "bg": "--surface-paper" },
+    { "id": "input-text/error/message", "kind": "text", "fg": "--state-danger", "bg": "--surface-paper" },
+    { "id": "input-text/disabled/value", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper", "over": "--surface-paper" },
+    { "id": "input-radio/rest/ring", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper" },
+    { "id": "input-radio/checked/mark", "kind": "non-text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "input-radio/disabled/ring", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper", "over": "--surface-paper" },
+    { "id": "card/rest/title", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" },
+    { "id": "card/rest/meta", "kind": "text", "fg": "--text-secondary", "bg": "--surface-paper" },
+    { "id": "edge-peek/rest/label-on-collection", "kind": "text", "fg": "--text-secondary", "bg": "--surface-collection" },
+    { "id": "edge-peek/rest/label-on-intelligence", "kind": "text", "fg": "--text-secondary", "bg": "--surface-intelligence" },
+    { "id": "focus-ring/focus/on-paper", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-paper" },
+    { "id": "focus-ring/focus/on-app", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-app" },
+    { "id": "focus-ring/focus/on-collection", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-collection" },
+    { "id": "focus-ring/focus/on-intelligence", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-intelligence" },
+    { "id": "focus-ring/focus/on-muted", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-muted" },
+    { "id": "focus-ring/focus/on-navigation", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--surface-navigation" },
+    { "id": "focus-ring/focus/on-sage", "kind": "focus", "fg": "--focus-ring", "inner": "--focus-ring-inner", "bg": "--state-local" },
+    { "id": "chart/rest/step-1", "kind": "non-text", "fg": "--chart-1", "bg": "--surface-paper" },
+    { "id": "chart/rest/step-2", "kind": "non-text", "fg": "--chart-2", "bg": "--surface-paper" },
+    { "id": "chart/rest/step-3", "kind": "non-text", "fg": "--chart-3", "bg": "--surface-paper" },
+    { "id": "chart/rest/step-4", "kind": "non-text", "fg": "--chart-4", "bg": "--surface-paper" },
+    { "id": "graph/rest/node", "kind": "non-text", "fg": "--state-info", "bg": "--surface-paper" },
+    { "id": "graph/rest/edge", "kind": "non-text", "fg": "--control-boundary", "bg": "--surface-paper" },
+    { "id": "graph/rest/label", "kind": "text", "fg": "--text-primary", "bg": "--surface-paper" }
+  ],
+  "legacyDark": {
+    "schemes": ["dark"],
+    "about": "Pairs that fail in dark today because dark runs on legacy values: the legacy danger red on legacy surfaces, and white on it. The validator reports them without blocking and blocks any other dark pair below its ratio. The list only shrinks, and the PR that lands the owner's dark values (owner input 2) empties it.",
+    "pairs": [
+      "error-text/rest/on-paper",
+      "error-text/rest/on-app",
+      "error-text/rest/on-collection",
+      "error-text/rest/on-intelligence",
+      "button-destructive/rest/label",
+      "chip-danger/rest/label",
+      "input-text/error/message"
+    ]
+  },
+  "legacy": {
+    "about": "Every custom property the legacy new tab, Popup, and Side Panel define or read that isn't a Quiet Atlas token. #16 slice 2 maps each onto tokens in css/legacy-aliases.css, and scripts/design-token-scan.js counts var() uses of these names as alias uses. Two names aren't here: --primary-gradient goes with the gradient text, and --block-indent-level is a per-block value set through CSSOM, not a theme name.",
+    "aliases": [
+      "--accent", "--accent-bg", "--accent-color", "--accent-color-alpha", "--accent-dark", "--accent-darker", "--accent-hover",
+      "--accent-light", "--accent-light-bold", "--accent-primary", "--accent-rgb", "--bg", "--bg-active", "--bg-hover",
+      "--bg-primary", "--bg-secondary", "--bg-tertiary", "--block-indent-size", "--border-color", "--border-hover", "--code-bg",
+      "--danger-color", "--deadline", "--duration-fast", "--duration-normal", "--duration-shimmer", "--duration-slow",
+      "--editor-width", "--editor-width-default", "--editor-width-full", "--editor-width-narrow", "--editor-width-wide",
+      "--faint", "--font-serif", "--glass-bg", "--glass-blur", "--glass-border", "--header-height", "--highlight", "--ink",
+      "--line", "--modal-bg", "--muted", "--panel", "--reminder", "--scrollbar-hover", "--scrollbar-thumb", "--shadow",
+      "--shadow-elevated", "--shadow-lg", "--shadow-md", "--shadow-overlay", "--shadow-sm", "--sidebar-width", "--spacing-2xl",
+      "--spacing-3xl", "--spacing-lg", "--spacing-md", "--spacing-sm", "--spacing-xl", "--spacing-xs", "--summary-bg",
+      "--summary-border", "--summary-category-bg", "--surface-base", "--surface-elevated", "--surface-overlay", "--text-faint",
+      "--text-muted", "--text-placeholder", "--text-tertiary", "--todo", "--transition", "--transition-sidebar"
+    ]
+  }
+}
