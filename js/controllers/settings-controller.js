@@ -35,10 +35,14 @@ class SettingsController {
     this.onRenderNotesList = null;
     this.onUpdateSmartSuggestions = null;
     this.onRenderAIPromptTemplateSettings = null;
+    /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
+    this.onSaveOpenEditors = null;
     /** @type {function|null} */
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */
     this._shortcutsFocusTrapCleanup = null;
+    /** @type {HTMLElement|null} Where focus was when Keyboard Shortcuts opened */
+    this._shortcutsReturnFocus = null;
   }
 
   /** Initialize settings: wire DOM listeners, check backup status. */
@@ -565,33 +569,77 @@ class SettingsController {
 
   // ─── Shortcuts modal ───
 
+  /**
+   * Open or close Keyboard Shortcuts. It opens on ? as well as from its
+   * button, so focus moves into it, where the keys pressed while it's open
+   * stay. Closing it puts focus back where it was, if focus is still in it
+   * (a shortcut such as Mod+K may have moved it out), and otherwise off the
+   * hidden close button.
+   * @param {boolean} [force] - Open (true) or close (false); toggles without it
+   * @returns {void}
+   */
   toggleShortcutsModal(force) {
     const modal = document.getElementById('shortcuts-modal');
     if (!modal) return;
 
-    const show = force !== undefined ? force : modal.classList.contains('hidden');
+    const open = !modal.classList.contains('hidden');
+    const show = force !== undefined ? force : !open;
+    if (show === open) return;
     if (show) {
+      this._shortcutsReturnFocus = /** @type {HTMLElement|null} */ (document.activeElement);
       modal.classList.remove('hidden');
       this._shortcutsFocusTrapCleanup = Utils.trapFocus(modal);
+      const closeBtn = /** @type {HTMLElement|null} */ (modal.querySelector('.close-btn'));
+      if (closeBtn) closeBtn.focus();
     } else {
       modal.classList.add('hidden');
       if (this._shortcutsFocusTrapCleanup) { this._shortcutsFocusTrapCleanup(); this._shortcutsFocusTrapCleanup = null; }
+      const previous = this._shortcutsReturnFocus;
+      this._shortcutsReturnFocus = null;
+      const focused = /** @type {HTMLElement|null} */ (document.activeElement);
+      if (!focused || !modal.contains(focused)) return;
+      if (previous && previous !== document.body && previous.isConnected) previous.focus();
+      else focused.blur();
     }
   }
 
   // ─── Export / Import / Backup ───
 
+  /**
+   * Export JSON: download the full export (Storage.exportAllAsBlob) as a file,
+   * after the open editors have written their pending edits.
+   * @returns {Promise<boolean>} True once the file is handed to the browser
+   */
   async exportAll() {
     try {
-      const data = await this.storage.exportAll();
-      const json = JSON.stringify(data, null, 2);
+      if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
+      const file = await this.storage.exportAllAsBlob();
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-export-${timestamp}.json`);
-      Utils.showToast('All notes exported as JSON', 'success');
-      await this.storage.setSetting('lastBackupAt', Date.now());
+      Utils.downloadFile(file, `new-tab-note-export-${timestamp}.json`);
     } catch (error) {
       console.error('Export failed:', error);
       Utils.showToast('Export failed', 'error');
+      return false;
+    }
+    Utils.showToast('All notes exported as JSON', 'success');
+    await this._afterFullExport({ backup: true });
+    return true;
+  }
+
+  /**
+   * Once a full export (Export JSON, Create Backup) is the browser's: the
+   * receipt the export notice listens for, and for Export JSON the time auto
+   * backup counts from. Best-effort, since the file is already handed over.
+   * @param {{backup?: boolean}} [what]
+   * @returns {Promise<void>}
+   */
+  async _afterFullExport({ backup = false } = {}) {
+    const at = Date.now();
+    try {
+      await this.storage.setSetting('lastFullExportAt', at);
+      if (backup) await this.storage.setSetting('lastBackupAt', at);
+    } catch (error) {
+      console.warn('The export was handed to the browser, but its time was not saved:', error);
     }
   }
 
@@ -670,22 +718,29 @@ class SettingsController {
     }
   }
 
+  /**
+   * Create Backup: the full export with backup fields, downloaded as a file,
+   * after the open editors have written their pending edits.
+   * @returns {Promise<boolean>} True once the file is handed to the browser
+   */
   async createBackup() {
     try {
-      const data = await this.storage.exportAll();
-
-      data.backupType = 'full-backup';
-      data.backupCreatedAt = new Date().toISOString();
-      data.backupVersion = 1;
-
-      const json = JSON.stringify(data, null, 2);
+      if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
+      const file = await this.storage.exportAllAsBlob({
+        backupType: 'full-backup',
+        backupCreatedAt: new Date().toISOString(),
+        backupVersion: 1,
+      });
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      Utils.downloadFile(json, `new-tab-note-backup-${timestamp}.json`);
-      Utils.showToast('Backup created', 'success');
+      Utils.downloadFile(file, `new-tab-note-backup-${timestamp}.json`);
     } catch (error) {
       console.error('Backup failed:', error);
       Utils.showToast('Backup failed', 'error');
+      return false;
     }
+    Utils.showToast('Backup created', 'success');
+    await this._afterFullExport();
+    return true;
   }
 
   /**

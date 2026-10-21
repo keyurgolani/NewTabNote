@@ -304,7 +304,7 @@ const Utils = {
 
   /**
    * Download data as file
-   * @param {string} data - File content
+   * @param {string|Blob} data - File content
    * @param {string} filename - Download filename
    * @param {string} [type='application/json'] - MIME type
    * @returns {void}

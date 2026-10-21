@@ -30,7 +30,9 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
       }
     },
     onChanged: {
-      addListener: () => { }
+      addListener: () => { },
+      // onSettingsChange's unsubscribe calls it
+      removeListener: () => { }
     }
   };
   const mockRuntime = {
@@ -1133,62 +1135,29 @@ class DatabaseManager {
   }
 
   /**
-   * Check if a note is empty (has no meaningful content)
+   * Whether a note holds nothing: every block is an empty text block (see
+   * isEmptyTextBlock), or it has none. trashNote deletes an untitled note like
+   * that for good instead of moving it to trash.
+   * @param {string} noteId
+   * @returns {Promise<boolean>}
    */
   async isNoteEmpty(noteId) {
     const elements = await this.getElementsByNote(noteId);
+    return elements.every((element) => this.isEmptyTextBlock(element));
+  }
 
-    // No elements means empty
-    if (elements.length === 0) {
-      return true;
-    }
-
-    // Check if all elements have no meaningful content
-    for (const el of elements) {
-      // Check text content
-      if (el.content) {
-        // Strip HTML tags and check for actual text
-        const textContent = el.content.replace(/<[^>]*>/g, '').trim();
-        if (textContent.length > 0) {
-          return false;
-        }
-      }
-
-      // Check for media content
-      if (el.imageUrl || el.fileData || el.videoUrl) {
-        return false;
-      }
-
-      // Check for table data
-      if (el.tableData && Array.isArray(el.tableData)) {
-        const hasContent = el.tableData.some(row =>
-          row.some(cell => cell && cell.trim() && !cell.startsWith('Header '))
-        );
-        if (hasContent) {
-          return false;
-        }
-      }
-
-      // Check for bookmark
-      if (el.url && el.title) {
-        return false;
-      }
-
-      // Check for toggle children content
-      if (el.children) {
-        const childContent = el.children.replace(/<[^>]*>/g, '').trim();
-        if (childContent.length > 0) {
-          return false;
-        }
-      }
-
-      // Check for equation
-      if (el.equation && el.equation.trim()) {
-        return false;
-      }
-    }
-
-    return true;
+  /**
+   * Whether a block holds nothing: a text block whose content is only spaces,
+   * line breaks, and non-breaking spaces. Any other block holds something, an
+   * image, a table, or a divider included, and so does a text block with any
+   * other markup, such as a pasted image. The one rule for an empty note, here
+   * and in the export notice.
+   * @param {Object} block - A block record
+   * @returns {boolean}
+   */
+  isEmptyTextBlock(block) {
+    if ((block.type || 'text') !== 'text') return false;
+    return String(block.content || '').replace(/<br\s*\/?>|&nbsp;/gi, '').trim() === '';
   }
 
   /**
@@ -1868,18 +1837,39 @@ class DatabaseManager {
   // Settings use chrome.storage.local for cross-tab synchronization
 
   /**
-   * Get setting from chrome.storage.local
+   * Get setting from chrome.storage.local: readSetting, with `defaultValue`
+   * when there's none or the read fails
+   * @param {string} key
+   * @param {*} [defaultValue=null]
+   * @returns {Promise<*>}
    */
   async getSetting(key, defaultValue = null) {
-    return new Promise((resolve) => {
+    try {
+      const value = await this.readSetting(key);
+      return value !== undefined ? value : defaultValue;
+    } catch (error) {
+      console.warn('Error getting setting:', error);
+      return defaultValue;
+    }
+  }
+
+  /**
+   * Read a setting, rejecting when chrome.storage fails, where getSetting
+   * resolves its default, for a caller that has to tell "none" from "unknown".
+   * @param {string} key
+   * @returns {Promise<*>} The value, or undefined when there's none
+   */
+  readSetting(key) {
+    const chromeApi = this._chromeApi();
+    return new Promise((resolve, reject) => {
       const storageKey = `setting_${key}`;
-      chrome.storage.local.get([storageKey], (result) => {
-        if (chrome.runtime.lastError) {
-          console.warn('Error getting setting:', chrome.runtime.lastError);
-          resolve(defaultValue);
+      chromeApi.storage.local.get([storageKey], (result) => {
+        const error = chromeApi.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message || `couldn't read ${key}`));
           return;
         }
-        resolve(result[storageKey] !== undefined ? result[storageKey] : defaultValue);
+        resolve(result[storageKey]);
       });
     });
   }
@@ -1926,11 +1916,18 @@ class DatabaseManager {
 
   /**
    * Add listener for settings changes (for cross-tab sync)
+   * @param {(changes: Object<string, {oldValue: *, newValue: *}>) => void} callback
+   * @returns {() => void} Removes the listener
    */
   onSettingsChange(callback) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
+    /**
+     * @param {Object<string, {oldValue?: *, newValue?: *}>} changes
+     * @param {string} areaName
+     */
+    const listener = (changes, areaName) => {
       if (areaName !== 'local') return;
 
+      /** @type {Object<string, {oldValue: *, newValue: *}>} */
       const settingChanges = {};
       for (const [key, change] of Object.entries(changes)) {
         if (key.startsWith('setting_')) {
@@ -1945,7 +1942,10 @@ class DatabaseManager {
       if (Object.keys(settingChanges).length > 0) {
         callback(settingChanges);
       }
-    });
+    };
+    const chromeApi = this._chromeApi();
+    chromeApi.storage.onChanged.addListener(listener);
+    return () => chromeApi.storage.onChanged.removeListener(listener);
   }
 
   /**
@@ -2018,38 +2018,84 @@ class DatabaseManager {
    * @returns {Promise<Object>} {version, exportedAt, canvases, elements, media, folders}
    */
   async exportAll() {
-    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
-    const noteIds = new Set(notes.map((note) => note.id));
-    const allElements = [];
-
-    for (const note of notes) {
-      const elements = await this.getElementsByNote(note.id);
-      allElements.push(...elements);
-    }
-
-    // Only media whose note is exported (1.4.0 exported the whole store)
-    const allMedia = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
+    const { notes, elements, media, folders } = await this._readExport();
 
     // Convert blobs to base64 for export
-    const mediaWithBase64 = await Promise.all(
-      allMedia.map(async (m) => {
-        if (m.blob instanceof Blob) {
-          const base64 = await Utils.readFileAsDataURL(m.blob);
-          return { ...m, blob: base64 };
-        }
-        return m;
-      })
-    );
+    const mediaWithBase64 = await Promise.all(media.map((m) => this._exportMediaRow(m)));
 
     return {
       version: 1,
       exportedAt: Date.now(),
       // Key name 'canvases' kept for backward compatibility with existing exports
       canvases: notes,
-      elements: allElements,
+      elements,
       media: mediaWithBase64,
-      folders: await this.getAllFolders(),
+      folders,
     };
+  }
+
+  /**
+   * exportAll as a JSON file (`extra` fields after folders), written record by
+   * record: each note, block, media row, and folder goes through its own
+   * JSON.stringify, so no string ever holds the whole export, however many
+   * images and files its blocks carry as data URLs. Same JSON as exportAll,
+   * without indentation, so 1.4.0 and importData read it the same.
+   * @param {Object<string, *>} [extra] - More top-level fields, as Create Backup adds
+   * @returns {Promise<Blob>}
+   */
+  async exportAllAsBlob(extra = {}) {
+    const { notes, elements, media, folders } = await this._readExport();
+    /** @type {Array<string>} */
+    const parts = [`{"version":1,"exportedAt":${Date.now()}`];
+    /**
+     * @param {string} key
+     * @param {Array<Object>} rows
+     */
+    const list = (key, rows) => {
+      parts.push(`,${JSON.stringify(key)}:[`);
+      rows.forEach((row, i) => parts.push((i === 0 ? '' : ',') + JSON.stringify(row)));
+      parts.push(']');
+    };
+    // Key name 'canvases' kept for backward compatibility with existing exports
+    list('canvases', notes);
+    list('elements', elements);
+    parts.push(',"media":[');
+    for (let i = 0; i < media.length; i++) {
+      parts.push((i === 0 ? '' : ',') + JSON.stringify(await this._exportMediaRow(media[i])));
+      media[i] = null; // its Blob can go once it's written out
+    }
+    parts.push(']');
+    list('folders', folders);
+    for (const [key, value] of Object.entries(extra)) parts.push(`,${JSON.stringify(key)}:${JSON.stringify(value)}`);
+    parts.push('}');
+    return new Blob(parts, { type: 'application/json' });
+  }
+
+  /**
+   * What exportAll exports: every note outside trash, their blocks note by
+   * note, the media of those notes, and every folder.
+   * @returns {Promise<{notes: Array<Object>, elements: Array<Object>, media: Array<Object>, folders: Array<Object>}>}
+   */
+  async _readExport() {
+    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
+    const noteIds = new Set(notes.map((note) => note.id));
+    const elements = [];
+    for (const note of notes) {
+      elements.push(...(await this.getElementsByNote(note.id)));
+    }
+    // Only media whose note is exported (1.4.0 exported the whole store)
+    const media = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
+    return { notes, elements, media, folders: await this.getAllFolders() };
+  }
+
+  /**
+   * A media row as exports hold it, its Blob as a data URL.
+   * @param {Object} row
+   * @returns {Promise<Object>}
+   */
+  async _exportMediaRow(row) {
+    if (!(row.blob instanceof Blob)) return row;
+    return { ...row, blob: await Utils.readFileAsDataURL(row.blob) };
   }
 
   /**

@@ -137,6 +137,15 @@ class TabController {
   }
 
   /**
+   * Write what every open editor has pending, as Export JSON and Create
+   * Backup do before they read, so the file has the last edit.
+   * @returns {Promise<void>}
+   */
+  async saveOpenEditors() {
+    await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave()));
+  }
+
+  /**
    * Before an import commits: hold saves in every open editor, then write what
    * each one has pending, so nothing written later carries pre-import flags.
    * @returns {Promise<void>}

@@ -18,7 +18,7 @@ const TEST_KEY = 'test-only-api-key';
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const APP_FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/core/event-bus.js', 'js/core/dom-refs.js', 'js/core/logger.js',
-  'js/storage.js', 'js/search.js', 'js/app.js',
+  'js/ui/export-notice.js', 'js/storage.js', 'js/search.js', 'js/app.js',
 ];
 const GUARD_TITLE = 'Your notes were upgraded by a newer NewTabNote version';
 const GUARD_BODY = "This version can't open them safely, so it won't change anything. Update NewTabNote to keep working, or export a copy now.";
@@ -490,6 +490,35 @@ describe('a version-9 database (AC7)', () => {
   });
 });
 
+describe('the export notice in the guard states (NTN-18 slice 0)', () => {
+  for (const [label, spec, openState] of [
+    ['a version-9 database', { version: 9 }, 'newer-version'],
+    ['a version-8 database without elements', { omit: ['elements'] }, 'missing-core-stores'],
+  ]) {
+    it(`${label}: the new tab shows the guard without deciding on the notice, which isn't due there`, async () => {
+      const decided = [];
+      const { env } = await startApp(spec, (page) => {
+        const { prototype } = page.get('ExportNotice');
+        const isDue = prototype.isDue;
+        prototype.isDue = function recordedIsDue(...args) {
+          decided.push(this);
+          return isDue.apply(this, args);
+        };
+      });
+      assert.ok(env.document.querySelector('.storage-guard'));
+      assert.deepEqual(decided, [], 'App.init stops at Storage.init, before the decision');
+
+      const Storage = env.get('Storage');
+      assert.equal(Storage.openState, openState);
+      const writes = env.chrome.writes().length;
+      const notice = new (env.get('ExportNotice'))({ storage: Storage, onExport: async () => true });
+      assert.equal(await notice.isDue(), false);
+      assert.equal(env.chrome.writes().length, writes, 'and records nothing');
+      assert.equal(env.chrome.local.setting_preMigrationNotice, undefined);
+    });
+  }
+});
+
 describe('background capture on a version-8 database', () => {
   it('saves to the daily note and notifies', async () => {
     const env = createLegacyEnv({ context: 'worker' });
@@ -518,8 +547,8 @@ describe('background capture on a version-8 database', () => {
   });
 });
 
-/** Run App.init against a fixture with a stub #app element. */
-async function startApp(spec) {
+/** Run App.init against a fixture with a stub #app element, after `beforeInit(env)`. */
+async function startApp(spec, beforeInit = () => {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   await fixture(env.indexedDB, spec);
   const before = await dumpDatabase(env.indexedDB);
@@ -528,6 +557,7 @@ async function startApp(spec) {
   const downloads = [];
   env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
   env.get('Utils').showToast = () => {};
+  beforeInit(env);
   const App = env.get('App');
   const app = new App();
   await app.init();

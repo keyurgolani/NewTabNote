@@ -2,7 +2,8 @@
  * The `test` and `expect` every spec under e2e/ imports. The `extension` fixture launches
  * the built extension (launchExtension in extension.js) on a fresh profile for each test
  * and closes it afterwards. When the test fails it attaches the session log; the config
- * keeps the trace and a screenshot of every page.
+ * keeps the trace and a screenshot of every page. `expectNoUncaught` (uncaught.js) is the
+ * uncaught-exception check a spec ends with.
  *
  *   test('...', async ({ extension }) => {
  *     await extension.seedOnboarded();
@@ -12,6 +13,7 @@
 
 const { test: base, expect } = require('@playwright/test');
 const { launchExtension, resolveDist, SURFACES, VIEWPORT } = require('./extension');
+const { expectNoUncaught } = require('./uncaught');
 
 const test = base.extend({
   extension: async ({ playwright, headless }, use, testInfo) => {
@@ -25,4 +27,4 @@ const test = base.extend({
   },
 });
 
-module.exports = { test, expect, launchExtension, resolveDist, SURFACES, VIEWPORT };
+module.exports = { test, expect, expectNoUncaught, launchExtension, resolveDist, SURFACES, VIEWPORT };

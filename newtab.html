@@ -384,6 +384,11 @@
             <div id="page-title" class="page-title" contenteditable="true" data-placeholder="Untitled"
               spellcheck="false"></div>
             <div id="page-timestamp" class="page-timestamp"></div>
+            <!-- The one-time export notice (js/ui/export-notice.js) fills this. The live region is here from
+                 the start, and below the title, so the title stays the first stop after the header. -->
+            <section id="export-notice" class="export-notice">
+              <div class="export-notice-text" aria-live="polite"></div>
+            </section>
             <div id="blocks-container" class="blocks-container"></div>
             <div id="add-block-hint" class="add-block-hint">
               <span>Press Enter to add a new block, or type / for commands</span>
@@ -1020,7 +1025,8 @@
                 <div class="setting-row" style="margin-top: 8px;">
                   <button id="import-btn" class="secondary-btn">Import / Restore</button>
                 </div>
-                <p class="setting-hint" id="export-contents-hint">Export JSON and Create Backup include active and archived notes, templates, folders, and media. Not included: trash, themes, version history, AI chat history, and settings. The Markdown ZIP holds active notes only. Backlinks rebuild when each note is next saved.</p>
+                <!-- Filled from js/ui/export-notice.js, which says the same in the export notice -->
+                <p class="setting-hint" id="export-contents-hint"></p>
               </div>
               <div class="settings-section" data-setting-label="auto backup" data-setting-desc="automatic backup reminders frequency">
                 <h3>Auto Backup</h3>

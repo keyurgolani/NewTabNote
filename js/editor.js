@@ -12,6 +12,23 @@ function editorStorage() {
 }
 
 /**
+ * What keeps keys pressed outside the note off it while it's open
+ * (BlockEditor's _overlayOpen): the modals (Settings, Keyboard Shortcuts,
+ * Theme Builder, the command palette, the AI insert preview, a snapshot's
+ * preview), the note and folder menus, the slash, link, and template menus,
+ * the block, Turn into, and table menus, the confirm dialogs, onboarding, and
+ * any other dialog or menu. A <dialog> counts only with `open`.
+ */
+const OPEN_OVERLAYS = [
+  '.modal', '.context-menu', '.slash-menu', '.block-action-menu', '.turn-into-menu', '.table-context-menu',
+  '.confirm-dialog-overlay', '.onboarding-overlay', 'dialog[open]',
+  '[role="dialog"]', '[role="alertdialog"]', '[role="menu"]', '[aria-modal="true"]',
+].join(', ');
+
+/** Input types that take no typed text, so an input of one isn't a text field (BlockEditor's _inTextField) */
+const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
+
+/**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
  * before the transaction opens, so a block deleted in between isn't written back.
@@ -167,10 +184,16 @@ class BlockEditor {
     // Slash menu
     this.slashMenu.addEventListener('click', (e) => this.onSlashMenuClick(e));
 
-    // Close slash menu on outside click
+    // Close the slash, link, and template menus on a click outside them
     this.doc.addEventListener('click', (e) => {
       if (!this.slashMenu.contains(e.target) && this.slashMenuVisible) {
         this.hideSlashMenu();
+      }
+      if (this.wikiMenu && !this.wikiMenu.contains(e.target) && this.wikiMenuVisible) {
+        this.hideWikiMenu();
+      }
+      if (this.templateMenu && !this.templateMenu.contains(e.target) && this.templateMenuVisible) {
+        this.hideTemplateMenu();
       }
     });
 
@@ -270,6 +293,8 @@ class BlockEditor {
 
     // Clear multi-block selection
     this.clearBlockSelection();
+    // The menus opened on the note being left close with it
+    this.hideMenus();
 
     // Reset snapshot tracking for new note (Req 31.1)
     this._snapshotDirty = false;
@@ -305,10 +330,13 @@ class BlockEditor {
     // Set editor width
     const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
 
-    // Focus first block, then ensure scroll is at top
+    // Focus first block, then ensure scroll is at top. Not while focus is in an
+    // open modal, menu, or dialog: it stays there, as on the onboarding
+    // walkthrough's button over the welcome note, so keys typed there don't
+    // edit the note
     setTimeout(() => {
       const firstContent = this.container.querySelector('.block-content');
-      if (firstContent) {
+      if (firstContent && !this._focusInOverlay()) {
         firstContent.focus();
         this.placeCaretAtEnd(firstContent);
       }
@@ -1163,7 +1191,8 @@ class BlockEditor {
     const content = el.querySelector('.block-content');
     if (content) {
       content.focus();
-      if (atEnd) {
+      // Only where focus went: a caret in a hidden pane's block would swallow every key typed after it
+      if (atEnd && this.doc.activeElement === content) {
         this.placeCaretAtEnd(content);
       }
     }
@@ -2507,9 +2536,22 @@ class BlockEditor {
   }
 
   /**
-   * Handle global keydown
+   * Handle global keydown. Both panes' editors listen on one document, and only
+   * the one the key is for acts on it (see _takesTypedKey), so undo, redo, and
+   * deleting a block selection happen in one pane. A text field outside the
+   * note keeps its keys (see _inTextField), so Backspace, Delete, and undo
+   * there edit the field. While a modal, menu, or dialog is open (see
+   * _overlayOpen), only a key pressed in this editor's own pane is the note's.
    */
   onGlobalKeyDown(e) {
+    if (!this._takesTypedKey(e.target)) return;
+    if (this._inTextField(e.target)) return;
+    if (!this._inOwnPane(e.target) && this._overlayOpen()) {
+      // The browser's own undo, redo, and delete would still edit the note through the caret left in it
+      if (BlockEditor.editsThroughCaret(e)) e.preventDefault();
+      return;
+    }
+
     // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0) {
       e.preventDefault();
@@ -2532,17 +2574,16 @@ class BlockEditor {
       return;
     }
 
-    // Start typing anywhere to create/focus block
+    // Type anywhere: a printable key goes to the note, moving focus there before
+    // the key types, unless something took it already, what has focus keeps it,
+    // or a modal, menu, or dialog is open
     if (
-      !e.target.closest('#editor') &&
-      !e.target.closest('.modal') &&
-      !e.target.closest('.sidebar') &&
-      !e.target.closest('.ai-sidebar') &&
-      !e.target.closest('#ai-chat-input') &&
+      !e.defaultPrevented &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
-      e.key.length === 1
+      e.key.length === 1 &&
+      !this._keyStaysAt(e)
     ) {
       // Focus last block or create new one
       if (this.blocks.length > 0) {
@@ -2552,6 +2593,130 @@ class BlockEditor {
         this.addBlockAtEnd();
       }
     }
+  }
+
+  /**
+   * Whether a key pressed at `target` is this editor's. Both panes listen on
+   * one document, so a key pressed in a pane is that pane's, and any other key
+   * is the active pane's while it shows. Picture-in-Picture's pane is always
+   * active in its own window.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _takesTypedKey(target) {
+    const pane = target && typeof target.closest === 'function' ? target.closest('.editor-pane') : null;
+    if (pane) return pane === this.root;
+    const classes = this.root.classList;
+    return Boolean(classes) && classes.contains('active') && !classes.contains('hidden');
+  }
+
+  /**
+   * Whether the browser's default for a key edits the page through its caret
+   * or its undo history, wherever focus is: Backspace, Delete, undo, and redo.
+   * A caret left in a block when focus moved to a button still takes them.
+   * @param {KeyboardEvent} e
+   * @returns {boolean}
+   */
+  static editsThroughCaret(e) {
+    if (e.key === 'Backspace' || e.key === 'Delete') return true;
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    return modKey && !e.altKey && (e.key === 'z' || e.key === 'Z' || (!isMac && e.key === 'y'));
+  }
+
+  /**
+   * Whether `target` is in this editor's own pane: its title, its blocks, or
+   * anything else the pane holds. Picture-in-Picture's pane is its window's
+   * editor.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _inOwnPane(target) {
+    return Boolean(target) && typeof this.root.contains === 'function' && this.root.contains(target);
+  }
+
+  /**
+   * Whether `target` is in a text field that handles its own keys: an input
+   * that takes text, a textarea, or a select, anywhere (a bookmark's URL input
+   * included), or editable text that isn't this editor's own title or blocks.
+   * The search box, Settings, the AI chat input, and the command palette are.
+   * @param {Element} target - Where the key was pressed
+   * @returns {boolean}
+   */
+  _inTextField(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    const control = /** @type {any} */ (target.closest('input, textarea, select'));
+    if (control) {
+      if (control.tagName !== 'INPUT') return true;
+      return !NON_TEXT_INPUTS.includes(String(control.type || control.getAttribute('type') || 'text').toLowerCase());
+    }
+    const editable = /** @type {any} */ (target).isContentEditable;
+    const isEditable = typeof editable === 'boolean' ? editable : Boolean(target.closest('[contenteditable]'));
+    return isEditable && !this.root.contains(target);
+  }
+
+  /**
+   * Whether a printable key stays where it was pressed instead of going to
+   * the note: a text control (input, textarea, select, editable text),
+   * another control that takes keys itself (summary, details, media
+   * controls), or a modal, menu, listbox, or dialog has focus, one is open
+   * wherever focus is, the app takes the key as a shortcut (? opens Keyboard
+   * Shortcuts), or it's Space on a button, which presses it, or on a link,
+   * where the browser does what it does (links open on Enter). Enter isn't
+   * printable, so it never goes either.
+   * @param {KeyboardEvent} e
+   * @returns {boolean}
+   */
+  _keyStaysAt(e) {
+    const target = /** @type {Element} */ (e.target);
+    if (target.closest('input, textarea, select, [contenteditable], summary, details, audio[controls], video[controls]')) return true;
+    if (target.closest('.modal, dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return true;
+    if (this._overlayOpen()) return true;
+    // Only the new tab's window has the app's shortcuts; in Picture-in-Picture a ? is typed
+    if (this.doc === document && BlockEditor.isAppShortcut(e)) return true;
+    return e.key === ' ' && Boolean(target.closest('button, a[href], [role="button"], [role="link"]'));
+  }
+
+  /**
+   * Whether the app takes a key as one of its shortcuts. ShortcutsManager
+   * listens on window, so it hears a key after the editors do, and a key it
+   * takes (? opens Keyboard Shortcuts) mustn't move focus into the note first.
+   * It reads the key as ShortcutsManager does.
+   * @param {KeyboardEvent} e
+   * @returns {boolean}
+   */
+  static isAppShortcut(e) {
+    const shortcuts = /** @type {any} */ (window).ShortcutUtils;
+    if (!shortcuts) return false;
+    const target = /** @type {Element} */ (e.target);
+    const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.getAttribute('contenteditable') === 'true';
+    const modKey = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? e.metaKey : e.ctrlKey;
+    return shortcuts.getAppShortcutAction({
+      code: e.code, key: e.key, modKey, shiftKey: e.shiftKey, altKey: e.altKey, isInput,
+    }) !== null;
+  }
+
+  /**
+   * Whether a modal, menu, or dialog is open in this editor's window. The
+   * modals leave focus on the button that opened them, and a right-click
+   * leaves it where it was, so while one is open typed letters stay out of
+   * the note wherever focus is, and undo, redo, and delete act on it only
+   * from its own pane. Open means in the page with no `hidden` class on it or
+   * around it (see OPEN_OVERLAYS).
+   * @returns {boolean}
+   */
+  _overlayOpen() {
+    return Array.from(this.doc.querySelectorAll(OPEN_OVERLAYS)).some((element) => !element.closest('.hidden'));
+  }
+
+  /**
+   * Whether focus is in an open modal, menu, or dialog (see _overlayOpen)
+   * @returns {boolean}
+   */
+  _focusInOverlay() {
+    const focused = this.doc.activeElement;
+    const overlay = focused && typeof focused.closest === 'function' ? focused.closest(OPEN_OVERLAYS) : null;
+    return Boolean(overlay) && !overlay.closest('.hidden');
   }
 
   // ============ Slash Menu ============
@@ -2605,8 +2770,23 @@ class BlockEditor {
    * Hide slash menu
    */
   hideSlashMenu() {
-    this.slashMenu.classList.add('hidden');
+    if (this.slashMenu) this.slashMenu.classList.add('hidden');
     this.slashMenuVisible = false;
+  }
+
+  /**
+   * Close every menu this editor opens: the slash, link, and template menus,
+   * a block's menu with Turn into, a selection's Turn into, and a table's
+   * menu. Escape does this in both panes (App.closeAllModals), since an open
+   * menu holds the keys pressed outside the note.
+   * @returns {void}
+   */
+  hideMenus() {
+    this.hideSlashMenu();
+    this.hideWikiMenu();
+    this.hideTemplateMenu();
+    this.hideBlockActionMenu();
+    this.hideTableContextMenu();
   }
 
   /**

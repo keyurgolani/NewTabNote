@@ -129,6 +129,7 @@ class OnboardingManager {
       document.body.appendChild(tooltip);
 
       const cleanup = () => {
+        document.removeEventListener('keydown', onKeydown);
         overlay.remove();
         tooltip.remove();
         // Remove any highlight from previous step
@@ -210,12 +211,9 @@ class OnboardingManager {
       // Dismiss on overlay click
       overlay.addEventListener('click', cleanup);
 
-      // Dismiss on Escape
+      // Dismiss on Escape; every dismissal stops listening (cleanup)
       const onKeydown = (e) => {
-        if (e.key === 'Escape') {
-          document.removeEventListener('keydown', onKeydown);
-          cleanup();
-        }
+        if (e.key === 'Escape') cleanup();
       };
       document.addEventListener('keydown', onKeydown);
 
@@ -303,11 +301,17 @@ class OnboardingManager {
         { id: 'import', icon: '📥', label: 'Import existing notes', desc: 'Bring in notes from Markdown or JSON' }
       ];
 
+      // Escape, like a click outside, opens the sample note
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') cleanup('sample');
+      };
       const cleanup = (choice) => {
+        document.removeEventListener('keydown', onKeydown);
         overlay.remove();
         dialog.remove();
         resolve(choice);
       };
+      document.addEventListener('keydown', onKeydown);
 
       choices.forEach((choice) => {
         const btn = document.createElement('button');

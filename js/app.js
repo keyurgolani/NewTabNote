@@ -140,8 +140,25 @@ class App {
       await Storage.init();
       this.reportMissingStores();
 
+      // The export notice decides now, before any note renders and before a first note exists
+      this.exportNotice = new ExportNotice({
+        storage: appStorage(),
+        onExport: () => this.settingsController.exportAll(),
+        onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
+      });
+      const startupReads = Promise.all([
+        Onboarding.hasCompleted(),
+        this.exportNotice.isDue().catch((error) => {
+          console.error('Export notice: could not decide whether to show it', error);
+          return false;
+        }),
+      ]);
+
       // Populate DOM cache after document is ready
       this.domRefs.init();
+      // Settings > Data & Backup says what the export holds in the notice's words
+      const exportHint = document.getElementById('export-contents-hint');
+      if (exportHint) exportHint.textContent = ExportNotice.TEXT.hint;
 
       // Initialize LLM service
       await LLM.init();
@@ -215,8 +232,11 @@ class App {
       await this.initThemeBuilderController();
 
       // Check if we have notes to display
-      const hasCompletedOnboarding = await Onboarding.hasCompleted();
-      if (this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding) {
+      const [hasCompletedOnboarding, exportNoticeDue] = await startupReads;
+      const runsOnboarding = this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding;
+      // Before a note loads, so the note lays out once
+      if (exportNoticeDue && !runsOnboarding) this.showExportNotice();
+      if (runsOnboarding) {
         // First-run: show onboarding walkthrough
         await this.runOnboarding();
       } else if (this.notes.length === 0 && this.archivedNotes.length === 0) {
@@ -262,6 +282,57 @@ class App {
       } else {
         this.showErrorState(error);
       }
+    }
+  }
+
+  /**
+   * Show the one-time notice to export a copy before the next update changes
+   * how notes are stored (js/ui/export-notice.js), in #export-notice between
+   * the note's title and its blocks. Nothing here stops the new tab from starting.
+   * @returns {void}
+   */
+  showExportNotice() {
+    try {
+      this.exportNotice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
+    } catch (error) {
+      console.error('Export notice failed to show:', error);
+    }
+  }
+
+  /**
+   * The export notice closed while it held focus: focus goes back where it was
+   * in a pane before it moved into the notice, caret included. Else to the end
+   * of the active pane's first text block, else that pane's title, else the
+   * pane itself, never the page body.
+   * @param {{element: Element|null, range: Range|null}|null} returnFocus
+   * @returns {void}
+   */
+  focusAfterExportNotice(returnFocus) {
+    const previous = /** @type {HTMLElement|null} */ (returnFocus && returnFocus.element);
+    if (previous && previous.isConnected && previous.closest('.editor-pane')) {
+      previous.focus();
+      const selection = document.getSelection();
+      if (returnFocus.range && selection) {
+        selection.removeAllRanges();
+        selection.addRange(returnFocus.range);
+      }
+      return;
+    }
+    const editor = this.getEditor();
+    const textBlock = editor.blocks.find((block) => {
+      const element = editor.getBlockElement(block.id);
+      return Boolean(element && element.querySelector('.block-content'));
+    });
+    if (textBlock) {
+      editor.focusBlock(textBlock.id, true);
+    } else if (editor.noteId) {
+      editor.titleEl.focus();
+    } else {
+      // Focusable only until focus moves on
+      const pane = editor.root;
+      pane.setAttribute('tabindex', '-1');
+      pane.addEventListener('blur', () => pane.removeAttribute('tabindex'), { once: true });
+      pane.focus();
     }
   }
 
@@ -582,6 +653,7 @@ class App {
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
     this.settingsController.onFlushEditors = () => this.tabController.flushEditorsForImport();
+    this.settingsController.onSaveOpenEditors = () => this.tabController.saveOpenEditors();
     this.settingsController.onReloadEditors = (trashedIds, trashedAt) =>
       this.tabController.reloadEditorsAfterImport(trashedIds, trashedAt);
     this.settingsController.onApplyTheme = () => this.applyTheme();
@@ -6783,6 +6855,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Close all open modals and menus
    */
   closeAllModals() {
+    // Keyboard Shortcuts gives focus back where it was
+    if (this.settingsController) this.settingsController.toggleShortcutsModal(false);
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     document.querySelectorAll('.context-menu').forEach(m => m.classList.add('hidden'));
 
@@ -6794,9 +6868,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.themeBuilderController && this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
     if (this.shortcutsManager && this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
 
-    // Also close slash menu if open in active editor
-    this.getEditor()?.hideSlashMenu();
-    this.getEditor()?.hideWikiMenu();
+    // The editors' menus, in both panes: an open one holds the keys pressed outside the note
+    for (const editor of [this.editor, this.secondaryEditor]) {
+      if (editor) editor.hideMenus();
+    }
   }
 
   /**
