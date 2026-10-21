@@ -6,9 +6,10 @@
  * across reconnects. Every call answers with #12's outcome union or a query state, however it
  * ended, so a caller handles one union whichever way its request traveled:
  *
- * - A request goes once the coordinator has welcomed this client, and waits until then. One
- *   it can't send at all, for an operation it doesn't know, a payload the codec can't carry,
- *   or one over its operation's size, is refused without a message.
+ * - A request goes once the coordinator has welcomed this client, and waits until then, with
+ *   its payload as it was when it was called. One it can't send at all, for an operation it
+ *   doesn't know, a payload the codec can't carry, or one over its operation's size, is
+ *   refused without a message.
  * - Each request carries its deadline, from when it's sent, which the router enforces. The
  *   client waits DEADLINE_GRACE_MS past it before it gives up, so no client timeout is
  *   shorter, and giving up never starts a second way to run it.
@@ -28,7 +29,7 @@
  * waits changes nothing, and no keep-alive runs: the next request reconnects.
  */
 
-import { encode, encodedBytes } from '../contracts/codec.js';
+import { decode, encode, encodedBytes } from '../contracts/codec.js';
 import {
   DEADLINE_GRACE_MS,
   HANDSHAKE_TIMEOUT_MS,
@@ -302,15 +303,24 @@ export function createClient({
     });
 
   /**
-   * Sends a call on the open connection. A link that has closed under it leaves it waiting,
-   * since it definitely didn't go.
+   * Sends a call on the open connection. A frame that can't be encoded settles the call, which
+   * definitely never went, and a link that closed under it leaves it waiting for the next one.
    * @param {Call} call
    * @param {string} [text] - its request frame, if it was just encoded
-   * @returns {boolean} whether it went
+   * @returns {boolean} whether it's done waiting: sent, or settled
    */
-  const transmit = (call, text = frameOf(call)) => {
+  const transmit = (call, text) => {
+    let frame = text;
+    if (frame === undefined) {
+      try {
+        frame = frameOf(call);
+      } catch {
+        settle(call, answerFor(call, 'invalid-payload', false));
+        return true;
+      }
+    }
     try {
-      /** @type {Link} */ (link).send(text);
+      /** @type {Link} */ (link).send(frame);
     } catch {
       return false;
     }
@@ -323,11 +333,14 @@ export function createClient({
     return true;
   };
 
-  /** Sends every call that was waiting for the welcome, in order */
+  /** Sends every call that was waiting for the welcome, in order, each with its deadline from now */
   const flush = () => {
     while (waiting.length > 0 && phase === 'open') {
-      if (!transmit(waiting[0])) return;
-      waiting.shift();
+      const call = /** @type {Call} */ (waiting.shift());
+      if (!transmit(call)) {
+        waiting.unshift(call);
+        return;
+      }
     }
   };
 
@@ -534,6 +547,9 @@ export function createClient({
         call.unlisten = () => signal.removeEventListener('abort', cancel);
       }
       if (phase === 'open' && transmit(call, text)) return;
+      // A call that waits keeps the payload as it was called, as kernel.execute() copies a
+      // command, so nothing its caller changes after reaches the coordinator
+      call.payload = /** @type {{payload: Record<string, unknown>}} */ (decode(text)).payload;
       waiting.push(call);
       begin();
       watch();

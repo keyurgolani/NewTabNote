@@ -11,6 +11,7 @@ import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,
   HANDSHAKE_TIMEOUT_MS,
+  MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   QUERY_DEADLINE_MS,
   RECONNECTING_AFTER_MS,
@@ -302,6 +303,71 @@ describe('the client: requests (#13, "Topology")', () => {
       coordinator.last.frames.map(frame => [frame.frame, frame.sessionId]),
       [['hello', client.sessionId]],
     );
+  });
+
+  it('sends what a call held when it was made, whatever its caller changes before the welcome', async () => {
+    const scheduler = testScheduler();
+    const coordinator = scriptedCoordinator();
+    const client = makeClient(coordinator.transport, scheduler);
+    /** @type {Record<string, any>} */
+    const command = pin('n1');
+    /** @type {Record<string, any>} */
+    const query = { type: 'getNote', noteId: 'n1' };
+    /** @type {Record<string, any>} */
+    const save = { type: 'createNote', commandId: 'c-save', noteId: 'n2', blocks: [{ id: 'b1', content: 'Line' }] };
+    const answers = [
+      client.execute(/** @type {any} */ (command)),
+      client.query(/** @type {any} */ (query)),
+      client.execute(/** @type {any} */ (save)),
+    ];
+    // Each change would have changed the command under the same commandId, made it unencodable,
+    // or grown it past what its entry takes
+    command.pinned = false;
+    command.at = new Date(NOW);
+    query.noteId = 'n2';
+    save.blocks[0].content = 'x'.repeat(MAX_MESSAGE_BYTES);
+    await settle();
+    coordinator.last.welcome();
+    await settle();
+    const sent = coordinator.last.requests();
+    assert.deepEqual(
+      sent.map(frame => frame.payload),
+      [
+        pin('n1'),
+        { type: 'getNote', noteId: 'n1' },
+        { type: 'createNote', commandId: 'c-save', noteId: 'n2', blocks: [{ id: 'b1', content: 'Line' }] },
+      ],
+    );
+    const results = [committed('note-pinned', ['n1']), noNote, committed('note-created', ['n2'])];
+    sent.forEach((frame, index) =>
+      coordinator.last.send({ frame: 'response', requestId: frame.requestId, result: results[index] }),
+    );
+    assert.deepEqual(await Promise.all(answers), results);
+  });
+
+  it("settles a waiting call whose frame can't be encoded when it goes, and keeps serving the rest", async () => {
+    const scheduler = testScheduler();
+    const coordinator = scriptedCoordinator();
+    let broken = false;
+    // A clock that reads NaN makes a deadline no frame can carry
+    const client = makeClient(coordinator.transport, scheduler, {
+      clock: { now: () => (broken ? Number.NaN : scheduler.clock.now()) },
+    });
+    const waiting = [client.execute(pin('n1')), client.query({ type: 'getNote', noteId: 'n1' })];
+    await settle();
+    broken = true;
+    assert.doesNotThrow(() => coordinator.last.welcome());
+    await settle();
+    assert.deepEqual(await Promise.all(waiting), [
+      rejected('validation', 'invalid-payload'),
+      failed('validation', 'invalid-payload'),
+    ]);
+    broken = false;
+    const later = client.query({ type: 'getNote', noteId: 'n1' });
+    await settle();
+    const [sent] = coordinator.last.requests();
+    coordinator.last.send({ frame: 'response', requestId: sent.requestId, result: noNote });
+    assert.deepEqual([await later, client.state()], [noNote, 'connected']);
   });
 
   it('refuses every call once closed, and settles what it had', async () => {
