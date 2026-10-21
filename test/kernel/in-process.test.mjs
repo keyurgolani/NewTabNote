@@ -43,7 +43,7 @@ describe('the in-process transport (#13, "Topology")', () => {
     assert.deepEqual(closes, ['far closed']);
   });
 
-  it('drops a message still on its way when its end closes, so nothing arrives after the close', async () => {
+  it('drops a message still on its way to an end that closed, so nothing reaches it after its own close', async () => {
     const [near, far] = linkPair();
     /** @type {string[]} */
     const heard = [];
@@ -52,6 +52,19 @@ describe('the in-process transport (#13, "Topology")', () => {
     far.close();
     await settle();
     assert.deepEqual(heard, []);
+  });
+
+  it('delivers what an end sent before it closed, then the close, as a runtime port does', async () => {
+    const [near, far] = linkPair();
+    /** @type {string[]} */
+    const heard = [];
+    far.onMessage(text => heard.push(text));
+    far.onClose(reason => heard.push(`close ${reason}`));
+    // As a page's last journaled command goes on pagehide, just before its port closes
+    near.send('the last command');
+    near.close();
+    await settle();
+    assert.deepEqual(heard, ['the last command', 'close closed']);
   });
 
   it('keeps a listener that throws from stopping the others', async () => {

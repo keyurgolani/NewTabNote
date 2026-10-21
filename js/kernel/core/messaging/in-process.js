@@ -13,8 +13,9 @@
 /** @typedef {import('../contracts/surfaces.js').Surface} Surface */
 
 /**
- * Two linked ends. A listener that throws doesn't stop the others, and `report` hears what it
- * threw.
+ * Two linked ends. Once either end closes, neither can send, and what an end sent before it
+ * closed still arrives, as on a port, unless the end it's for has closed. A listener that
+ * throws doesn't stop the others, and `report` hears what it threw.
  * @param {{report?: (error: unknown) => void}} [options]
  * @returns {[Link, Link]}
  */
@@ -34,8 +35,11 @@ export function linkPair({ report = () => {} } = {}) {
       }
     }
   };
-  /** @returns {{messages: Array<(text: string) => void>, closes: Array<(reason: CloseReason) => void>}} */
-  const listeners = () => ({ messages: [], closes: [] });
+  /**
+   * Each end's listeners, and whether it closed itself
+   * @returns {{messages: Array<(text: string) => void>, closes: Array<(reason: CloseReason) => void>, closed: boolean}}
+   */
+  const listeners = () => ({ messages: [], closes: [], closed: false });
   const ends = [listeners(), listeners()];
 
   /**
@@ -43,23 +47,25 @@ export function linkPair({ report = () => {} } = {}) {
    * @returns {Link}
    */
   const end = self => {
+    const mine = ends[self];
     const other = ends[1 - self];
     return {
       send(text) {
         if (!open) throw new Error('The link is closed');
         Promise.resolve().then(() => {
-          if (open) tell(other.messages, text);
+          if (!other.closed) tell(other.messages, text);
         });
       },
       onMessage(listener) {
-        ends[self].messages.push(listener);
+        mine.messages.push(listener);
       },
       onClose(listener) {
-        ends[self].closes.push(listener);
+        mine.closes.push(listener);
       },
       close() {
         if (!open) return;
         open = false;
+        mine.closed = true;
         Promise.resolve().then(() => tell(other.closes, /** @type {CloseReason} */ ('closed')));
       },
     };
