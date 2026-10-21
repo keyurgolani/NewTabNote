@@ -84,7 +84,7 @@ class FakeEvent {
  * One extension context: a page, the worker, a content script, or another extension's page
  * @typedef {object} Context
  * @property {Sender} sender - what a port it opens reports
- * @property {{runtime: Record<string, any>}} chrome
+ * @property {{runtime: any}} chrome - typed loosely, so it stands in for chrome.runtime
  * @property {new (name: string) => FakeBroadcastChannel} BroadcastChannel - on its origin
  * @property {Set<FakePort>} ports - the port ends it holds
  * @property {Set<FakeBroadcastChannel>} channels
