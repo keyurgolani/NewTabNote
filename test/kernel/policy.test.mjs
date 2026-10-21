@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
+import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { SURFACES, createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS } from './support.mjs';
 
@@ -56,6 +57,22 @@ describe('the baseline policy', () => {
     }
     const shared = COMMAND_TYPES.filter(type => /** @type {readonly string[]} */ (QUERY_TYPES).includes(type));
     assert.deepEqual(shared, [], 'a command and a query share a name, so the policy could read the wrong entry');
+  });
+
+  it("reads the coordinator's own queries from their entries too, and lets the pages ask for messaging health", () => {
+    for (const [type, entry] of Object.entries(SYSTEM_QUERIES)) {
+      for (const surface of SURFACES) {
+        assert.equal(
+          policy.authorize({ type }, CALLERS[surface]).allowed,
+          entry.surfaces.includes(surface),
+          `${surface} ${type}`,
+        );
+      }
+    }
+    const asking = SURFACES.filter(
+      surface => policy.authorize({ type: 'system.messagingHealth' }, CALLERS[surface]).allowed,
+    );
+    assert.deepEqual(asking, ['newtab', 'popup', 'sidepanel', 'recovery']);
   });
 
   it('rejects a request the catalog lacks, from every surface', () => {

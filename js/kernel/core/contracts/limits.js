@@ -41,3 +41,9 @@ export const STREAM_CREDIT = 16;
 
 /** How deep a message may nest objects and arrays, so a hostile one can't exhaust the stack */
 export const MAX_DEPTH = 64;
+
+/**
+ * The upper bounds of the latency buckets system.messagingHealth counts answers in, in
+ * milliseconds. An answer slower than the last falls in the bucket past it.
+ */
+export const LATENCY_BUCKETS_MS = Object.freeze(/** @type {const} */ ([10, 50, 100, 500, 1000, 5000]));

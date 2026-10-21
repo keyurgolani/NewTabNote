@@ -26,6 +26,7 @@ import { commandPayload } from '../../js/kernel/core/contracts/operation.js';
 import { bulkResultSchema, failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
 import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import * as settings from '../../js/kernel/core/contracts/settings.js';
+import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { isContent, walk } from './schema-walk.mjs';
 
 /** @typedef {import('./schema-walk.mjs').Schema} Schema */
@@ -279,7 +280,11 @@ const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import
 
 /** @type {Array<{name: string, entry: Record<string, unknown>, payload: unknown, result: unknown}>} */
 const operations = [];
-for (const [name, entry] of [...Object.entries(COMMANDS), ...Object.entries(QUERIES)]) {
+for (const [name, entry] of [
+  ...Object.entries(COMMANDS),
+  ...Object.entries(QUERIES),
+  ...Object.entries(SYSTEM_QUERIES),
+]) {
   const { payload, result } = await import(new URL(entry.schema, CATALOG_URL).href);
   operations.push({ name, entry, payload, result });
 }
@@ -307,7 +312,10 @@ function contentPaths(schema) {
 
 describe('the contract schema lint (#13, AC5)', () => {
   it('passes every operation payload', () => {
-    assert.equal(operations.length, Object.keys(COMMANDS).length + Object.keys(QUERIES).length);
+    assert.equal(
+      operations.length,
+      Object.keys(COMMANDS).length + Object.keys(QUERIES).length + Object.keys(SYSTEM_QUERIES).length,
+    );
     for (const { name, entry, payload } of operations) {
       assert.deepEqual(lint(payload, { role: 'payload', carriesSecret: entry.carriesSecret === true }), [], name);
     }
