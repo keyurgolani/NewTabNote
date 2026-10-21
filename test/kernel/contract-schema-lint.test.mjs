@@ -355,7 +355,7 @@ describe('the contract schema lint (#13, AC5)', () => {
     assert.deepEqual(marked, {
       createNote: ['blocks.[]', 'name'],
       renameNote: ['name'],
-      saveNoteContent: ['blocks.[]', 'preview'],
+      saveNoteContent: ['blocks.[]', 'linkedNames.[]', 'name', 'preview'],
       applyDerivedTitle: ['name'],
       attachInsights: ['insights'],
       captureToDailyNote: ['capture.content', 'capture.source', 'capture.title', 'capture.url'],
