@@ -196,7 +196,6 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
  */
 const RULES = [
   { command: 'runStartupMaintenance', op: 'init' },
-  { command: 'captureToDailyNote', file: 'js/background.js', method: 'captureToDailyNote', op: ['ensureDailyNote', 'saveElement'] },
   { command: 'createNote', file: 'js/popup.js', op: 'add', key: 'canvases' },
   { command: 'ensureDailyNote', op: ['ensureDailyNote', 'ensureDailyNoteForDate'] },
   { command: 'importNote', method: /\.importNote$/, op: ['createNote', 'saveElement'] },

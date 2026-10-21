@@ -10,7 +10,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| kernel command, slice 4 | 59 | #12 slice 4 (notes and blocks) routes it through the command. |
+| kernel command, slice 4 | 56 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 17 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 37 | #12 slice 6 (preferences and session) routes it through the command. |
 | deleted in slice 7 | 43 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
@@ -19,7 +19,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
 | ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
-| Total | 178 | |
+| Total | 175 | |
 
 No row is UI-only. Presentation state (panels, the palette index, selection mode, the calendar month) isn't persisted, and every persisted preference goes through the settings port.
 
@@ -27,11 +27,11 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 
 | Command | Status | Rows |
 | --- | --- | --- |
-| `runStartupMaintenance` | kernel command, slice 4 | 2 |
+| `runStartupMaintenance` | kernel command, slice 4 | 1 |
 | `createNote` | kernel command, slice 4 | 15 |
 | `importNote` | kernel command, slice 4 | 8 |
 | `ensureDailyNote` | kernel command, slice 4 | 7 |
-| `captureToDailyNote` | kernel command, slice 4 | 2 |
+| `captureToDailyNote` | kernel command, slice 4 | 0 |
 | `saveNoteContent` | kernel command, slice 4 | 4 |
 | `insertBlocks` | kernel command, slice 4 | 9 |
 | `deleteBlocks` | kernel command, slice 4 | 4 |
@@ -133,9 +133,6 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/app.js` | [4635](../../js/app.js#L4635) | `App.initIndexer > onmessage` | `Storage.setSearchIndex(…)` | `updateSearchIndex` | deleted in slice 7 |
 | `js/app.js` | [4696](../../js/app.js#L4696) | `App.updateMissingEmbeddings` | `Storage.saveVector(…)` | `saveVector` | deleted in slice 7 |
 | `js/app.js` | [4946](../../js/app.js#L4946) | `App.setupShortcuts > keydown listener` | `Storage.ensureDailyNote()` | `ensureDailyNote` | deleted in slice 7 |
-| `js/background.js` | [26](../../js/background.js#L26) | `(top level)` | `Storage.init()` | `runStartupMaintenance` | kernel command, slice 4 |
-| `js/background.js` | [297](../../js/background.js#L297) | `captureToDailyNote` | `Storage.ensureDailyNote()` | `captureToDailyNote` | kernel command, slice 4 |
-| `js/background.js` | [321](../../js/background.js#L321) | `captureToDailyNote` | `Storage.saveElement(…)` | `captureToDailyNote` | kernel command, slice 4 |
 | `js/controllers/ai-chat-controller.js` | [158](../../js/controllers/ai-chat-controller.js#L158) | `AIChatController.setupAI > keydown listener` | `this.storage.ensureDailyNote()` | `ensureDailyNote` | kernel command, slice 4 |
 | `js/controllers/ai-chat-controller.js` | [275](../../js/controllers/ai-chat-controller.js#L275) | `AIChatController.setupAISidebarResize > onResizeEnd` | `this.storage.setSetting('aiSidebarWidth', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/controllers/ai-chat-controller.js` | [370](../../js/controllers/ai-chat-controller.js#L370) | `AIChatController.saveNoteChatHistory` | `this.storage.setSetting('aiChatHistory', …)` | `saveChatHistory` | kernel command, slice 6 |

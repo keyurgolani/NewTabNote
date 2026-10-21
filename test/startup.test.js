@@ -539,13 +539,63 @@ describe('background capture on a version-8 database', () => {
     await fixture(env.indexedDB);
     await startWorker(env);
     await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
-    env.get('Storage').saveElement = async () => { throw new Error('disk full'); };
-    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
-      { url: 'https://example.test/', title: 'x' });
-    await waitFor(() => env.chrome.notifications.length === 1, { message: 'failure notification' });
+    // The capture's block write fails: first for a full disk, then for something else
+    const Storage = env.get('Storage');
+    const transaction = Storage.transaction.bind(Storage);
+    const failures = [
+      new DOMException('disk full', 'QuotaExceededError'),
+      new DOMException('Internal error writing to the backing store', 'UnknownError'),
+    ];
+    Storage.transaction = (stores, mode) => {
+      if (mode === 'readwrite' && [].concat(stores).includes('elements')) throw failures.shift();
+      return transaction(stores, mode);
+    };
+    for (const count of [1, 2]) {
+      env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
+        { url: 'https://example.test/', title: 'x' });
+      await waitFor(() => env.chrome.notifications.length === count, { message: `failure notification ${count}` });
+    }
+    // An outcome carries no error message, so each says why in words of its own
+    assert.deepEqual(env.chrome.notifications, [
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: there is no room left to store it" },
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
+    ]);
+  });
+
+  it('refuses on a database without its blocks store and changes nothing', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB, { omit: ['elements'] });
+    const before = await dumpDatabase(env.indexedDB);
+    await startWorker(env);
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, { url: 'https://example.test/', title: 'x' });
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'refusal notification' });
     assert.deepEqual(env.chrome.notifications[0], {
-      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: disk full",
+      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured',
+      message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
     });
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it("lets a newer build upgrade the database, and refuses the next capture as it would have at start", async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB);
+    await startWorker(env);
+    const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
+    // A newer build opens the database at version 9, which an open connection would block
+    const upgraded = await new Promise((resolve, reject) => {
+      const request = env.indexedDB.open('CanvasTabDB', 9);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("the worker's connection blocked the upgrade"));
+    });
+    upgraded.close();
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    await waitFor(() => env.chrome.notifications.length === 2, { message: 'refusal notification' });
+    assert.equal(env.chrome.notifications[1].title, 'Not captured');
+    assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
   });
 });
 

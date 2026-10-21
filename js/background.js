@@ -8,43 +8,52 @@
  * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
  */
 
-// utils.js and storage.js put Utils and Storage on self
+// utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
 import './utils.js';
 import './storage.js';
-import './kernel/composition/background.js';
+import { createWorkerClient } from './kernel/composition/background.js';
+
+/**
+ * The worker's kernel. It opens the database and runs startup maintenance now, as
+ * Storage.init() did here, and a capture waits for both.
+ */
+const kernel = createWorkerClient();
 
 /**
  * The worker's global. A module's top-level functions aren't globals, so captureToDailyNote
  * is published here for #34's harness, and the listeners call it through this name, as
- * they did in the classic worker. #12 slice 4 points it at the kernel's command.
+ * they did in the classic worker. It runs the kernel's captureToDailyNote command.
  * @type {any}
  */
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
 
-// Global Storage instance for background (instantiated in storage.js)
-let storageReady = Storage.init().catch(e => {
-  if (e && (e.code === 'NEWER_SCHEMA' || e.code === 'MISSING_CORE_STORES')) {
-    console.warn('Storage not opened in background:', e.message);
-  } else {
-    console.error('Storage init failed in background:', e);
-  }
-});
+/** Why a capture can't be saved (the reasons the new tab shows) */
+const CAPTURE_REFUSALS = {
+  newerSchema: "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
+  missingCoreStores: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+};
 
 /**
- * The shared DatabaseManager from storage.js. The bare `Storage` global also
- * names the DOM's Web Storage type, so typed reads go through this.
- * @returns {DatabaseManager}
+ * The refusal for a kernel answer that says the database can't be opened safely: a newer
+ * build upgraded it, or it's missing its notes or blocks. Null for any other answer.
+ * @param {{cause?: string, code: string}} answer
+ * @returns {string | null}
  */
-function workerStorage() {
-  return /** @type {any} */ (self).Storage;
+function captureRefusal({ cause, code }) {
+  if (cause === 'newer-schema') return CAPTURE_REFUSALS.newerSchema;
+  if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
+  return null;
 }
 
-/** Why a capture can't be saved, by Storage.openState (same reason the new tab shows). */
-const CAPTURE_REFUSALS = {
-  'newer-version': "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
-  'missing-core-stores': "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+/**
+ * Why a capture failed otherwise, in words, by the outcome's messageKey: an outcome carries
+ * no error message, which is what 1.4.x showed here. #26 gives every outcome its copy.
+ */
+const CAPTURE_FAILURES = {
+  'unavailable.quota': 'there is no room left to store it',
 };
+const CAPTURE_FAILED = "the notes database couldn't store it";
 
 let creatingOffscreen;
 
@@ -283,46 +292,35 @@ function notifyCapture(title, message) {
 }
 
 /**
- * Capture content to daily note. Saved, refused (the database can't be
- * opened safely), and failed captures each end with a notification.
+ * Capture a page, or selected text and the page it came from, to today's Daily Note with the
+ * kernel's captureToDailyNote command. Saved, refused (the database can't be opened safely),
+ * and failed captures each end with a notification.
+ * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
+ * @returns {Promise<void>}
  */
 async function captureToDailyNote(item) {
   try {
-    await storageReady;
-    const openState = workerStorage().openState;
-    if (openState !== 'open') {
-      notifyCapture('Not captured', CAPTURE_REFUSALS[openState] || "NewTabNote couldn't open your notes, so nothing was saved.");
+    const failure = await kernel.whenReady();
+    if (failure) {
+      notifyCapture('Not captured', captureRefusal(failure) || "NewTabNote couldn't open your notes, so nothing was saved.");
       return;
     }
-    const note = await Storage.ensureDailyNote();
-
-    // Create new block
-    let blockData;
-    if (item.type === 'bookmark') {
-      blockData = {
-        id: Utils.generateId(),
-        type: 'bookmark',
-        content: '',
-        url: item.url,
-        title: item.title,
-        canvasId: note.id,
-        order: Date.now() // Simple order for now
-      };
-    } else {
-      blockData = {
-        id: Utils.generateId(),
-        type: 'text',
-        content: item.content + (item.source ? ` (Source: ${item.source})` : ''),
-        canvasId: note.id,
-        order: Date.now()
-      };
+    const outcome = await kernel.execute({
+      type: 'captureToDailyNote',
+      commandId: kernel.ids.next(),
+      // The Daily Note's id if this capture makes it, and the captured block's
+      noteId: kernel.ids.next(),
+      blockId: kernel.ids.next(),
+      capture: item.type === 'bookmark'
+        ? { type: 'bookmark', url: item.url, title: item.title }
+        : { type: 'text', content: item.content, source: item.source },
+    });
+    if (outcome.kind !== 'committed') {
+      const reason = CAPTURE_FAILURES[outcome.messageKey] || CAPTURE_FAILED;
+      notifyCapture('Not captured', captureRefusal(outcome) || `Saving to today's note failed: ${reason}`);
+      return;
     }
-
-    await Storage.saveElement(blockData);
-
-    // Notify user
     notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
-
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
     notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);

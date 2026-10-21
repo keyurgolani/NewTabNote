@@ -81,11 +81,24 @@ expectFailure("KD-002 the capture-selection command saves the selected text and 
 // Self-tests: the capture checks fail on a worker that writes more than one capture's worth
 const CAPTURE_CHECKS = [selectionMenuSavesText, pageMenuSavesBookmark, pageCommandSavesBookmark];
 
+// Every block written to the elements store is written a second time under another id
 function saveEachBlockTwice(worker) {
-  const save = worker.Storage.saveElement.bind(worker.Storage);
-  worker.Storage.saveElement = async element => {
-    await save(element);
-    return save({ ...element, id: `${element.id}-again` });
+  const storage = worker.Storage;
+  const transaction = storage.transaction.bind(storage);
+  storage.transaction = (stores, mode) => {
+    const tx = transaction(stores, mode);
+    const objectStore = tx.objectStore.bind(tx);
+    tx.objectStore = name => {
+      const store = objectStore(name);
+      if (name !== 'elements') return store;
+      const put = store.put.bind(store);
+      store.put = element => {
+        put({ ...element, id: `${element.id}-again` });
+        return put(element);
+      };
+      return store;
+    };
+    return tx;
   };
 }
 
