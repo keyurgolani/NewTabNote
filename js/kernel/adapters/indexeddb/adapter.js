@@ -38,7 +38,7 @@
  * `existing` for Popup and Side Panel (connection.js). No shipped entry point does yet.
  */
 
-import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { abort, indexValue, result } from './requests.js';
@@ -356,9 +356,10 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
    * daily, and then to #35's job host.
    *
    * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
-   * it opens answers every call with maintenance's failure: when chrome.storage fails it, the
-   * page runs on, and with nothing marking the profile initialized, the next start tries again.
-   * One that can't read what's stored writes nothing, so no default lands over a setting.
+   * it opens answers every call with maintenance's failure: when chrome.storage fails it, it
+   * still commits, as `maintenance-deferred` at warning severity, so the page runs on, and with
+   * nothing marking the profile initialized, the next start tries again. One that can't read
+   * what's stored writes nothing, so no default lands over a setting.
    * @param {Work} work
    * @returns {Promise<Outcome>}
    */
@@ -372,7 +373,7 @@ export function createIndexedDbAdapter({ indexedDB, settings, mode = 'versioned'
         await settings.set({ ...Object.fromEntries(missing), [INITIALIZED_KEY]: true });
       }
     } catch {
-      // The next start tries again
+      return committed('maintenance-deferred', [], { severity: 'warning' });
     }
     return work.done();
   };

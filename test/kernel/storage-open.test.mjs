@@ -426,8 +426,15 @@ describe('startup maintenance on the IndexedDB adapter', () => {
     });
     assert.equal((await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' })).kind, 'committed');
     assert.equal(of.chrome.local[INITIALIZED_KEY], undefined);
+    // Asked again, it says so: committed, so a maintaining root runs on, but not as done
     const worker = kernelOn(adapter, undefined, CALLERS['worker-internal']);
-    assert.equal((await worker.execute({ type: 'runStartupMaintenance', commandId: 'm2' })).kind, 'committed');
+    of.chrome.failNextSet();
+    /** @param {Outcome} outcome */
+    const codeOf = outcome => outcome.kind === 'committed' && [outcome.code, outcome.severity];
+    const deferred = await worker.execute({ type: 'runStartupMaintenance', commandId: 'm2' });
+    assert.deepEqual(codeOf(deferred), ['maintenance-deferred', 'warning']);
+    const ran = await worker.execute({ type: 'runStartupMaintenance', commandId: 'm3' });
+    assert.deepEqual(codeOf(ran), ['maintenance-ran', 'success']);
     assert.deepEqual(legacyEnv.plain(of.chrome.local), await storageFirstRun());
 
     // One that can't read what's stored writes nothing, so no default lands over a setting
@@ -443,7 +450,7 @@ describe('startup maintenance on the IndexedDB adapter', () => {
       type: 'runStartupMaintenance',
       commandId: 'm1',
     });
-    assert.equal(outcome.kind, 'committed');
+    assert.deepEqual(codeOf(outcome), ['maintenance-deferred', 'warning']);
     assert.deepEqual(other.chrome.writes(), []);
   });
 
