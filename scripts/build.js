@@ -89,9 +89,11 @@ const JS_FILES = [
 
 // Directories shipped without a list: every .js and .mjs file under each, sorted, after
 // JS_FILES. Nothing else in them ships, so js/kernel/package.json (Node's "type": "module")
-// stays out of dist/.
+// stays out of dist/, and so do Valibot's index.d.mts declarations and vendor.json. Valibot's
+// license ships through STATIC_FILES.
 const JS_DIRS = [
   'js/kernel/',
+  'js/lib/valibot/',
 ];
 
 const CSS_FILES = [
@@ -111,16 +113,18 @@ const STATIC_FILES = [
   'manifest.json',
   'LICENSE',
   'THIRD_PARTY_NOTICES',
+  'js/lib/valibot/LICENSE.md',
 ];
 
 const STATIC_DIRS = [
   'icons',
 ];
 
-// JS_FILES entries copied byte for byte instead of minified, such as vendored code
-// terser can't parse. An entry ending in '/' covers every listed file under it.
-// js/lib/ keeps its license headers this way (Fuse.js's has no @license tag, so even
-// a comment filter would drop it); `npm run check:notices` fails if one changes.
+// JS_FILES entries, and files a JS_DIRS walk finds, copied byte for byte instead of
+// minified, such as vendored code terser can't parse. An entry ending in '/' covers every
+// such file under it. js/lib/ keeps its license headers this way (Fuse.js's has no
+// @license tag, so even a comment filter would drop it), and js/lib/valibot/index.mjs ships
+// as Valibot publishes it; `npm run check:notices` fails if one changes.
 const COPY_AS_IS = [
   'js/lib/',
 ];

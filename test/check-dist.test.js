@@ -47,9 +47,10 @@ function packageCopy(edits = {}) {
   return dir;
 }
 
-function run(dir) {
+/** check:dist on `dir`, built from the repository's sources unless `sources` names others */
+function run(dir, sources = ROOT) {
   const lines = [];
-  const code = checkDist.main([dir], { log: line => lines.push(line), error: line => lines.push(line) });
+  const code = checkDist.main([dir], { log: line => lines.push(line), error: line => lines.push(line), sources });
   return { code, output: lines.join('\n') };
 }
 
@@ -74,6 +75,30 @@ describe('scripts/check-dist.js', () => {
     const lines = excerpt(log, MARKERS.build).split('\n');
     assert.match(lines[0], /^check:dist failed: 1 problem in /);
     assert.match(lines[1], /kernel\/composition\/background\.js is missing/);
+  });
+
+  it("fails when a contract module or Valibot's build is missing, though nothing imports them yet (#13, AC7)", () => {
+    assert.deepEqual(checkDist.SHIPPED_DIRS, [
+      'js/kernel/core/contracts/',
+      'js/kernel/core/messaging/',
+      'js/kernel/adapters/messaging/',
+      'js/lib/valibot/',
+    ]);
+    const result = run(packageCopy({
+      'js/kernel/core/contracts/codec.js': null,
+      'js/kernel/core/contracts/operations/create-note.js': null,
+      'js/lib/valibot/index.mjs': null,
+    }));
+    assertFails(result,
+      'check:dist failed: 3 problems in ',
+      'js/kernel/core/contracts/codec.js is missing; every module under js/kernel/core/contracts/ ships, imported yet or not',
+      'js/kernel/core/contracts/operations/create-note.js is missing; every module under js/kernel/core/contracts/ ships',
+      'js/lib/valibot/index.mjs is missing; every module under js/lib/valibot/ ships');
+    // Only modules count: the declarations and the vendor record don't ship
+    assert.deepEqual(checkDist.missingModules(packageCopy({
+      'js/lib/valibot/index.d.mts': null,
+      'js/lib/valibot/vendor.json': null,
+    })), []);
   });
 
   it("fails when a page's script, a page's import, or the manifest's service worker is missing", () => {
@@ -123,14 +148,15 @@ describe('scripts/check-dist.js', () => {
   });
 
   it('follows a classic service worker through importScripts, as the 1.4.x worker loads', () => {
+    // A build of its own sources, which have no contract modules
     const dir = tempDir();
     fs.mkdirSync(path.join(dir, 'js'));
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ background: { service_worker: 'js/worker.js' } }));
     fs.writeFileSync(path.join(dir, 'js', 'worker.js'), "importScripts('utils.js', 'gone.js');\n");
     fs.writeFileSync(path.join(dir, 'js', 'utils.js'), 'self.Utils = {};\n');
-    assertFails(run(dir), 'js/worker.js imports scripts "gone.js", but js/gone.js is missing');
+    assertFails(run(dir, dir), 'js/worker.js imports scripts "gone.js", but js/gone.js is missing');
     fs.writeFileSync(path.join(dir, 'js', 'gone.js'), '');
-    const { code, output } = run(dir);
+    const { code, output } = run(dir, dir);
     assert.equal(code, 0, output);
     assert.match(output, /a classic service worker \(js\/worker\.js, 3 files\)$/);
   });

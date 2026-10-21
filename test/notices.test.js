@@ -79,6 +79,25 @@ describe('js/lib/README.md (AC9)', () => {
     const readme = read('js/lib/README.md').replace(/^\| `fuse\.js`.*$/m, '');
     assert.deepEqual(checkLibReadme(readme, vendoredFiles()), ['js/lib/README.md has no row for fuse.js']);
   });
+
+  it('a directory row covers the files under it, and only those', () => {
+    const readme = read('js/lib/README.md');
+    assert.deepEqual(checkLibReadme(readme, ['valibot/index.mjs', 'valibot/LICENSE.md']), []);
+    assert.deepEqual(checkLibReadme(readme, ['valibotx.js']), ['js/lib/README.md has no row for valibotx.js']);
+    assert.deepEqual(checkLibReadme(readme.replace(/^\| `valibot\/`.*$/m, ''), vendoredFiles()), [
+      'js/lib/README.md has no row for valibot/LICENSE.md',
+      'js/lib/README.md has no row for valibot/index.mjs',
+    ]);
+  });
+});
+
+describe('vendored files that ship (AC8)', () => {
+  it("are js/lib's files, with Valibot's build and license but not its declarations or vendor record", () => {
+    const valibot = JSON.parse(read('js/lib/valibot/vendor.json'));
+    const shipped = Object.keys(valibot.files).filter((name) => valibot.files[name].ships).map((name) => `valibot/${name}`);
+    assert.deepEqual(vendoredFiles(), ['chart.js', 'fuse.js', 'jszip.min.js', 'transformers.js', ...shipped].sort());
+    assert.deepEqual(shipped.sort(), ['valibot/LICENSE.md', 'valibot/index.mjs']);
+  });
 });
 
 describe('license notices (AC8)', () => {
@@ -95,7 +114,7 @@ describe('license notices (AC8)', () => {
     for (const heading of [
       'Chart.js 4.4.1', '@kurkle/color 0.3.2', 'Fuse.js 7.1.0', 'JSZip 3.10.1', 'pako 1.0.11',
       '@xenova/transformers (Transformers.js) 2.17.1', '@huggingface/jinja 0.2.2', 'onnxruntime-web 1.14.0',
-      'onnxruntime-common 1.14.0', 'ONNX Runtime 1.14.0 third-party notices',
+      'onnxruntime-common 1.14.0', 'ONNX Runtime 1.14.0 third-party notices', 'Valibot 1.5.0',
     ]) {
       assert.match(notices, new RegExp(`^\\d+\\. ${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'), heading);
     }
@@ -106,13 +125,18 @@ describe('license notices (AC8)', () => {
     assert.match(notices, /window\.transformers=__webpack_exports__;/, 'the transformers.js change is stated');
   });
 
-  it('the build copies every js/lib file byte for byte and ships both notice files', () => {
+  it('the build copies every js/lib file that ships byte for byte and ships both notice files', () => {
     const build = require('../scripts/build.js');
     for (const name of vendoredFiles()) {
       const file = `js/lib/${name}`;
-      assert.ok(build.JS_FILES.includes(file), `${file} isn't in JS_FILES`);
+      // STATIC_FILES are copied as they are
+      if (build.STATIC_FILES.includes(file)) continue;
+      const walked = /\.m?js$/.test(file) && build.JS_DIRS.some((dir) => file.startsWith(dir));
+      assert.ok(build.JS_FILES.includes(file) || walked, `${file} isn't in JS_FILES or under a JS_DIRS directory`);
       assert.ok(build.isCopiedAsIs(file), `${file} isn't in COPY_AS_IS, so terser would strip its header`);
     }
+    assert.ok(build.JS_DIRS.includes('js/lib/valibot/'));
+    assert.ok(build.STATIC_FILES.includes('js/lib/valibot/LICENSE.md'));
     assert.ok(build.STATIC_FILES.includes('LICENSE'));
     assert.ok(build.STATIC_FILES.includes('THIRD_PARTY_NOTICES'));
   });

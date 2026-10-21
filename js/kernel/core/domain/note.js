@@ -22,7 +22,7 @@
  * @property {string} lastInsightsContentHash
  * @property {string} preview
  * @property {boolean} pinned
- * @property {unknown} todoProgress
+ * @property {{completed: number, total: number} | null} todoProgress - null for a note with no todos
  * @property {boolean} isDaily
  * @property {string | null} dateStr
  * @property {boolean} isTemplate
@@ -152,6 +152,7 @@ export function isEmpty(blocks) {
  * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates'} NoteView
  */
 
+/** @type {readonly NoteView[]} */
 export const NOTE_VIEWS = Object.freeze(['active', 'withArchived', 'archived', 'trashed', 'templates']);
 
 /**

@@ -3,14 +3,16 @@
  * data, and the records the in-memory adapter stores. A caller that changes an object after
  * handing it over can't change what the kernel stores.
  *
- * It copies what #13's JSON codec carries: plain objects (from any realm), arrays, strings,
- * booleans, null, and finite numbers. Dates, BigInts, NaN and the infinities, functions,
- * symbols, cycles, and instances of any other class are refused with NotCloneableError, so a
- * command the kernel takes in-process is one #35 can send over a port without a caller
- * changing. A key is copied as data, so an own `__proto__` key that JSON.parse made stays a key
- * and never re-parents the copy. A field whose value is `undefined` is copied as it is, since
- * stored records have them (a page with no title captures as a bookmark with
- * `title: undefined`), and #13's codec decides what an encoded message does with one.
+ * It copies what #13's JSON codec (contracts/codec.js) carries: plain objects, arrays,
+ * strings, booleans, null, and finite numbers. Dates, BigInts, NaN and the infinities,
+ * functions, symbols, cycles, and instances of any other class are refused with
+ * NotCloneableError, so a command the kernel takes in-process is one #35 can send over a port
+ * without a caller changing. It copies another realm's plain objects too, which the codec
+ * refuses, since it can't tell their prototype from one that hides a toJSON. A key is copied
+ * as data, so an own `__proto__` key that JSON.parse made stays a key and never re-parents the
+ * copy. A field whose value is `undefined` is copied as it is, since stored records have them
+ * (a page with no title captures as a bookmark with `title: undefined`), and the codec leaves
+ * such a field out, as JSON does, so a message sent through the router arrives without it.
  */
 
 export class NotCloneableError extends Error {

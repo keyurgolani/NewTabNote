@@ -3,7 +3,7 @@
  * every open tab through chrome.storage.local, as before.
  */
 
-import { isRecord, unknownKeys } from '../contracts/checks.js';
+import { definedValues, isRecord, unknownKeys } from '../contracts/checks.js';
 import { committed, empty, failed, ready, rejected } from '../contracts/outcomes.js';
 import { PREFERENCE_KEYS } from '../domain/preferences.js';
 
@@ -20,7 +20,8 @@ import { PREFERENCE_KEYS } from '../domain/preferences.js';
 /** @type {{setPreferences: CommandHandler<'setPreferences'>}} */
 export const preferenceCommands = {
   setPreferences(command) {
-    const { values } = command;
+    // A value that's undefined is left out, as the codec leaves it out of a message
+    const values = isRecord(command.values) ? definedValues(command.values) : command.values;
     if (!isRecord(values) || Object.keys(values).length === 0) return rejected('validation', 'invalid-command');
     if (unknownKeys(values, PREFERENCE_KEYS).length > 0) return rejected('validation', 'unknown-preference');
     const keys = Object.keys(values);

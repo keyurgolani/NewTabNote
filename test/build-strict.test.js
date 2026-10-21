@@ -181,11 +181,18 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
     assert.ok(fs.statSync(path.join(dist, OTHER_LEVEL_2_CSS)).size > 0);
   });
 
-  it('ships every file under js/kernel/ but its package.json, and minifies each file the way it loads', async () => {
+  it('ships every file under js/kernel/ but its package.json, Valibot as published, and minifies each file the way it loads', async () => {
     const { code, output, dist } = await runBuild(tree(), ['--strict']);
     assert.equal(code, 0, brief(output));
     assert.equal(fs.existsSync(path.join(dist, 'js/kernel/composition/background.js')), true);
     assert.equal(fs.existsSync(path.join(dist, 'js/kernel/package.json')), false);
+    // Valibot's build and license ship byte for byte, and its declarations and vendor record stay out
+    for (const file of ['js/lib/valibot/index.mjs', 'js/lib/valibot/LICENSE.md']) {
+      assert.ok(fs.readFileSync(path.join(dist, file)).equals(fs.readFileSync(path.join(ROOT, file))), file);
+    }
+    for (const file of ['js/lib/valibot/index.d.mts', 'js/lib/valibot/vendor.json']) {
+      assert.equal(fs.existsSync(path.join(dist, file)), false, file);
+    }
 
     const line = file => output.split('\n').find(l => l.includes(` ${file}: `)) || '';
     for (const file of ['js/popup.js', 'js/sidepanel.js', 'js/background.js', 'js/utils.js', 'js/app.js', 'js/kernel/composition/background.js']) {
