@@ -52,7 +52,14 @@ const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import
 const COMMAND_SAMPLES = {
   runStartupMaintenance: {},
   createFolder: { folderId: 'f0', name: 'Work', parentId: null },
-  createNote: { noteId: 'n1', name: 'Plan', folderId: 'f0', blocks: [{ id: 'b1', type: 'text', content: 'Line' }] },
+  createNote: {
+    noteId: 'n1',
+    name: 'Plan',
+    folderId: 'f0',
+    blocks: [{ id: 'b1', type: 'text', content: 'Line' }],
+    pinned: false,
+    titleManuallySet: false,
+  },
   renameNote: { noteId: 'n1', name: 'Plan 2', origin: 'typed' },
   setPinned: { noteId: 'n1', pinned: true },
   saveNoteContent: {
