@@ -125,6 +125,42 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
+  it('createNote with a pin, a folder, and a hand-set title, then a save, leave what Storage did for a note saved as a new one', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({ folders: [folder('f1', null)] });
+    // "Save as a new note": Storage.createNote made the record, the editor set the deleted
+    // note's pin, folder, and title flag on it, and its save wrote the record with the blocks
+    const made = await viaStorage.storage.createNote('Plan');
+    Object.assign(made, { titleManuallySet: true, folderId: 'f1', pinned: true, preview: 'Milk', todoProgress: null });
+    const blocks = [legacyEnv.block('b1', made.id, 0, 'Milk')];
+    await viaStorage.storage.saveNoteWithBlocks(made, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex(made.id, 'Plan');
+    const noteId = made.id;
+    assertCommitted(
+      await kernel.execute({
+        type: 'createNote',
+        commandId: 'c1',
+        noteId,
+        name: 'Plan',
+        folderId: 'f1',
+        pinned: true,
+        titleManuallySet: true,
+      }),
+    );
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c2',
+        noteId,
+        blocks,
+        preview: 'Milk',
+        todoProgress: null,
+      }),
+    );
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+  });
+
   it('createFolder writes the folder Storage.createFolder writes', async () => {
     const { viaStorage, viaKernel, kernel } = await twin({ folders: [folder('f0', null)] });
     const made = legacyEnv.plain(await viaStorage.storage.createFolder('Work', 'f0'));

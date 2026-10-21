@@ -240,6 +240,25 @@ export function runContractSuite(fixture) {
         );
       });
 
+      it('createNote keeps the pin and the hand-set title of a note the editor saves as a new one', async () => {
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        const outcome = await run(
+          cmd('createNote', { noteId: 'n1', name: 'Plan', folderId: 'f1', pinned: true, titleManuallySet: true }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['note-created', ['n1']]);
+        assert.deepEqual(await noteOf('n1'), {
+          ...storageNote('n1', 'Plan', NOW),
+          folderId: 'f1',
+          pinned: true,
+          titleManuallySet: true,
+        });
+        assertRejected(
+          await kernel.execute(cmd('createNote', { noteId: 'n2', pinned: /** @type {any} */ ('yes') })),
+          'validation',
+          'invalid-command',
+        );
+      });
+
       it("createNote into a folder that doesn't exist, or with a note's id, is rejected and writes nothing", async () => {
         assertRejected(
           await kernel.execute(cmd('createNote', { noteId: 'n1', folderId: 'nowhere' })),

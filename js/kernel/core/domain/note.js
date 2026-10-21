@@ -75,11 +75,18 @@ export const INSIGHT_FIELDS = Object.freeze(['insights', 'lastInsightsExtractedA
 export const DERIVED_FIELDS = Object.freeze(['preview', 'todoProgress', ...INSIGHT_FIELDS]);
 
 /**
- * A new note, field for field the one Storage.createNote has written since 1.4.0.
- * @param {{id: string, name: string, now: number, folderId?: string | null}} fields
+ * A new note, field for field the one Storage.createNote has written since 1.4.0, pinned or with
+ * a title set by hand when it carries over a note the editor saved as a new one.
+ * @param {object} fields
+ * @param {string} fields.id
+ * @param {string} fields.name
+ * @param {number} fields.now
+ * @param {string | null} [fields.folderId]
+ * @param {boolean} [fields.pinned]
+ * @param {boolean} [fields.titleManuallySet]
  * @returns {NoteRecord}
  */
-export function newNoteRecord({ id, name, now, folderId = null }) {
+export function newNoteRecord({ id, name, now, folderId = null, pinned = false, titleManuallySet = false }) {
   return {
     id,
     name,
@@ -87,12 +94,12 @@ export function newNoteRecord({ id, name, now, folderId = null }) {
     updatedAt: now,
     archived: false,
     archivedAt: null,
-    titleManuallySet: false,
+    titleManuallySet,
     lastAutoTitleAt: null,
     insights: null,
     lastInsightsExtractedAt: null,
     preview: '',
-    pinned: false,
+    pinned,
     todoProgress: null,
     isDaily: false,
     dateStr: null,
