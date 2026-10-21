@@ -184,6 +184,45 @@ describe('the kernel', () => {
     assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'system' });
   });
 
+  it('whenReady resolves once storage opened and maintenance ran, or with the failure every command answers', async () => {
+    /** @type {() => void} */
+    let open = () => {};
+    const ready = new Promise(resolve => {
+      open = () => resolve(undefined);
+    });
+    const kernel = createKernel({
+      adapter: createMemoryAdapter(),
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+      ready,
+      maintainOnOpen: true,
+    });
+    let settled = false;
+    const waiting = kernel.whenReady().then(failure => {
+      settled = true;
+      return failure;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    open();
+    assert.equal(await waiting, null);
+    // Maintenance has run by then, so a read sees its defaults at once
+    const theme = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
+    assert.deepEqual(theme.kind === 'ready' && theme.data, { theme: 'system' });
+
+    const refused = kernelWith({ ready: Promise.reject(new UnavailableError('newer-schema', 'newer-schema', false)) });
+    const failure = await refused.whenReady();
+    assert.deepEqual(failure && [failure.kind, failure.cause, failure.code, failure.retryable], [
+      'unavailable',
+      'newer-schema',
+      'newer-schema',
+      false,
+    ]);
+    assert.equal(await kernelWith().whenReady(), null);
+  });
+
   it('when startup maintenance fails as a root opens, commands and queries answer with its cause, not retryable, and it runs once', async () => {
     const memory = createMemoryAdapter();
     let maintenanceRuns = 0;

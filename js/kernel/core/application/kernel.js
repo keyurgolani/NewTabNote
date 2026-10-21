@@ -130,10 +130,14 @@ const QUERY_HANDLERS = Object.freeze({ ...noteQueries, ...folderQueries, ...pref
  */
 
 /**
- * The client a composition root hands out.
+ * The client a composition root hands out. `whenReady` resolves once storage has opened, and
+ * startup maintenance has run for a root that sets maintainOnOpen: with null when the kernel
+ * is ready, or with the `unavailable` outcome every command answers from then on, so a page
+ * can show why it can't start.
  * @typedef {Execute & {
  *   query: <T extends QueryType>(query: QueryOf<T>) => Promise<QueryState<QueryData[T]>>,
  *   subscribe: (listener: CommitListener) => () => void,
+ *   whenReady: () => Promise<Unavailable | null>,
  * }} KernelClient
  */
 
@@ -390,6 +394,7 @@ export function createKernel({
     execute,
     query,
     subscribe: feed.subscribe,
+    whenReady: () => opened.then(() => (status === 'ready' ? null : { ...failure })),
     flags: adapter.flags,
     caller: Object.freeze({ ...caller }),
   });
