@@ -196,9 +196,10 @@ export function runContractSuite(fixture) {
       }));
 
     /**
-     * Puts records no command writes (media, vectors, snapshots), through the adapter's own
-     * commit, so any adapter can run the cases that need them.
-     * @param {'media' | 'vectors' | 'snapshots'} store
+     * Puts records no command writes (media, vectors, snapshots, and notes in states no command
+     * reaches yet, such as a template), through the adapter's own commit, so any adapter can run
+     * the cases that need them.
+     * @param {'media' | 'vectors' | 'snapshots' | 'notes'} store
      * @param {Array<{id: string} & Record<string, unknown>>} records
      */
     const seed = async (store, records) => {
@@ -998,6 +999,27 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await idsIn('archived'), ['arch']);
         assert.deepEqual(await idsIn('trashed'), []);
         assert.equal((await kernel.query({ type: 'listNotes', view: 'trashed' })).kind, 'empty');
+      });
+
+      it("lists Popup's view by archivedAt and trashedAt, templates included, and Side Panel's with every note", async () => {
+        await createNote({ noteId: 'kept', name: 'Kept' });
+        ctx.clock.advance();
+        await createNote({ noteId: 'arch', name: 'Archived' });
+        await run(cmd('archiveNote', { noteId: 'arch' }));
+        ctx.clock.advance();
+        await createNote({ noteId: 'gone', name: 'Trashed' });
+        await run(cmd('trashNote', { noteId: 'gone' }));
+        ctx.clock.advance();
+        await seed('notes', [
+          { ...storageNote('template', 'Template', ctx.clock.now()), isTemplate: true },
+          { ...storageNote('flags', 'Flags only', ctx.clock.advance()), archived: true, trashed: true },
+        ]);
+        assert.deepEqual(await idsIn('popup'), ['flags', 'template', 'kept']);
+        assert.deepEqual(await idsIn('sidePanel'), ['flags', 'template', 'gone', 'arch', 'kept']);
+        for (const caller of [CALLERS.popup, CALLERS.sidepanel]) {
+          const state = await ctx.kernel(caller).query({ type: 'listNotes', view: 'popup' });
+          assert.equal(state.kind, 'ready');
+        }
       });
 
       it('returns empty for a note with nothing stored, blocks in note order, and failed for a bad query', async () => {

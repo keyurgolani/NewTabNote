@@ -89,6 +89,21 @@ describe('notes', () => {
     assert.deepEqual(ids(notesInView(notes, 'templates')), ['template']);
   });
 
+  it('notesInView lists what Popup and Side Panel have always read: no archivedAt or trashedAt, and every indexed note', () => {
+    const notes = [
+      note('flags', { updatedAt: NOW + 4, archived: true, trashed: true }),
+      note('archived', { updatedAt: NOW + 3, archived: true, archivedAt: NOW + 3 }),
+      note('template', { updatedAt: NOW + 2, isTemplate: true }),
+      note('trashed', { updatedAt: NOW + 1, trashed: true, trashedAt: NOW + 1 }),
+      note('b', { updatedAt: NOW }),
+      note('a', { updatedAt: NOW }),
+      note('noTime', { updatedAt: undefined }),
+    ];
+    const ids = /** @param {NoteRecord[]} list */ list => list.map(n => n.id);
+    assert.deepEqual(ids(notesInView(notes, 'popup')), ['flags', 'template', 'b', 'a']);
+    assert.deepEqual(ids(notesInView(notes, 'sidePanel')), ['flags', 'archived', 'template', 'trashed', 'b', 'a']);
+  });
+
   it('inBlockOrder sorts by order, then id', () => {
     const blocks = [block({ id: 'c', order: 1 }), block({ id: 'b', order: 0 }), block({ id: 'a', order: 1 })];
     assert.deepEqual(

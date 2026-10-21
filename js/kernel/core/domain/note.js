@@ -155,11 +155,24 @@ export function isEmpty(blocks) {
  * - `archived`: archived and not trashed, latest archived first
  * - `trashed`: latest trashed first
  * - `templates`: templates not trashed, latest updated first
- * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates'} NoteView
+ *
+ * And what Popup and Side Panel have read since 1.4.0, which #4 and #5 replace when they
+ * rebuild them:
+ * - `popup`: no `archivedAt` or `trashedAt`, templates included, latest updated first
+ * - `sidePanel`: every note, latest updated first
+ * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates' | 'popup' | 'sidePanel'} NoteView
  */
 
 /** @type {readonly NoteView[]} */
-export const NOTE_VIEWS = Object.freeze(['active', 'withArchived', 'archived', 'trashed', 'templates']);
+export const NOTE_VIEWS = Object.freeze([
+  'active',
+  'withArchived',
+  'archived',
+  'trashed',
+  'templates',
+  'popup',
+  'sidePanel',
+]);
 
 /**
  * The order of two IndexedDB keys of the kinds `updatedAt` holds: numbers, then Dates,
@@ -222,6 +235,10 @@ export function notesInView(notes, view) {
       return indexed
         .filter(note => note.isTemplate && !note.trashed)
         .sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt));
+    case 'popup':
+      return indexed.reverse().filter(note => !note.archivedAt && !note.trashedAt);
+    case 'sidePanel':
+      return indexed.reverse();
   }
 }
 
