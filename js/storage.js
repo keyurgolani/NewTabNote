@@ -185,9 +185,17 @@ class DatabaseManager {
    * build's version (8), with the same refusals. The kernel's legacy adapter
    * opens the new tab's and the service worker's database with this, and runs
    * maintenance as the runStartupMaintenance command (#12).
+   *
+   * With `watchConnection`, the connection closes when another context upgrades
+   * or deletes the database, as openExisting()'s does, and openState says so:
+   * 'version-changed', or 'closed-by-browser' when Chrome closed it. Only the
+   * service worker asks for it, and it opens again on its next capture. A page's
+   * connection waits out the other context's upgrade, as before, until #12
+   * slice 4b moves the new tab's editor to its kernel.
+   * @param {{watchConnection?: boolean}} [options]
    * @returns {Promise<void>}
    */
-  async open() {
+  async open({ watchConnection = false } = {}) {
     this.openState = 'closed';
     this.onDiskVersion = null;
     this.missingStores = [];
@@ -225,6 +233,7 @@ class DatabaseManager {
       this.db = null;
       throw error;
     }
+    if (watchConnection) this._watchConnection(db);
     this.openState = 'open';
   }
 
@@ -258,7 +267,20 @@ class DatabaseManager {
       this.openState = 'newer-version';
       throw this._newerSchemaError();
     }
-    // Only the connection this holds says it's gone, not one a later openExisting() replaced
+    this._watchConnection(db);
+    this.db = db;
+    this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
+    this.openState = 'open';
+  }
+
+  /**
+   * Close `db` when another context upgrades or deletes the database, so it never
+   * blocks that context, and mark openState when the connection goes. Only the
+   * connection this holds says it's gone, not one a later open replaced.
+   * @param {IDBDatabase} db
+   * @returns {void}
+   */
+  _watchConnection(db) {
     db.onversionchange = () => {
       db.close();
       if (this.db === db) this.openState = 'version-changed';
@@ -267,9 +289,6 @@ class DatabaseManager {
     db.onclose = () => {
       if (this.db === db) this.openState = 'closed-by-browser';
     };
-    this.db = db;
-    this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
-    this.openState = 'open';
   }
 
   /**

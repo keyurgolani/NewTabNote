@@ -26,8 +26,12 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('./operations/list-folders.js').ListFolders} ListFolders */
 /** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
 /** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
+/** @typedef {import('./operations/get-popup-insights-enabled.js').GetPopupInsightsEnabled} GetPopupInsightsEnabled */
 
-/** @typedef {ListNotes | GetNote | GetNoteBlocks | ListFolders | GetPreferences | GetWorkspaceSession} Query */
+/**
+ * @typedef {ListNotes | GetNote | GetNoteBlocks | ListFolders | GetPreferences | GetWorkspaceSession
+ *   | GetPopupInsightsEnabled} Query
+ */
 /** @typedef {Query['type']} QueryType */
 
 /**
@@ -45,6 +49,7 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  * @property {FolderRecord[]} listFolders
  * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
+ * @property {{insightsEnabled: boolean}} getPopupInsightsEnabled
  */
 
 /**
@@ -75,14 +80,15 @@ const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sid
  * A version 1 entry
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {EntityType[]} entityTypes
+ * @param {readonly Surface[]} [surfaces]
  * @returns {QueryEntry}
  */
-const entry = (module, entityTypes) =>
+const entry = (module, entityTypes, surfaces = READERS) =>
   Object.freeze({
     kind: /** @type {const} */ ('query'),
     version: 1,
     schema: `./operations/${module}.js`,
-    surfaces: READERS,
+    surfaces,
     maxBytes: SMALL_MESSAGE_BYTES,
     deadlineMs: QUERY_DEADLINE_MS,
     cancellable: /** @type {const} */ ('any-time'),
@@ -100,6 +106,8 @@ export const QUERIES = Object.freeze({
   listFolders: entry('list-folders', []),
   getPreferences: entry('get-preferences', []),
   getWorkspaceSession: entry('get-workspace-session', []),
+  // Only Popup has read it, and #4 replaces it
+  getPopupInsightsEnabled: entry('get-popup-insights-enabled', [], Object.freeze(/** @type {Surface[]} */ (['popup']))),
 });
 
 /** @type {readonly QueryType[]} */

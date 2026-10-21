@@ -24,6 +24,7 @@
  */
 
 import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
 import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
@@ -33,6 +34,7 @@ import { settingKey } from '../indexeddb/settings.js';
 /** @typedef {import('../../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../core/ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../../core/ports/repository.js').SettingsArea} SettingsArea */
+/** @typedef {import('../../core/ports/repository.js').ReadableSettingsArea} ReadableSettingsArea */
 /** @typedef {import('../../core/ports/repository.js').Tx} Tx */
 /** @typedef {import('../../core/ports/repository.js').Unit} Unit */
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
@@ -44,7 +46,7 @@ import { settingKey } from '../indexeddb/settings.js';
  * @typedef {object} LegacyStorage
  * @property {(name: string) => boolean} hasStore
  * @property {(storeNames: string | string[], mode?: IDBTransactionMode) => IDBTransaction} transaction
- * @property {() => Promise<void>} open
+ * @property {(options?: {watchConnection?: boolean}) => Promise<void>} open
  * @property {() => Promise<void>} openExisting
  * @property {() => Promise<void>} runStartupMaintenance
  * @property {string} openState - `version-changed` or `closed-by-browser` once a connection openExisting opened is gone
@@ -110,6 +112,18 @@ function presentStores(storage, stores) {
 }
 
 /**
+ * The object store `name` in `tx`. This is the one place the legacy adapter opens a store
+ * (#17's objectStore rule): for its transaction view, and for the read of IndexedDB's
+ * settings store Popup has always made.
+ * @param {IDBTransaction} tx
+ * @param {string} name
+ * @returns {IDBObjectStore}
+ */
+function storeIn(tx, name) {
+  return tx.objectStore(name);
+}
+
+/**
  * The kernel's view of one transaction over `scope`. A store the database lacks reads as
  * empty, as DatabaseManager's reads of auxiliary stores do.
  * @param {LegacyStorage} storage
@@ -125,7 +139,7 @@ function view(storage, tx, scope) {
   const handle = store => {
     if (!scope.includes(store)) throw new UnavailableError('adapter', 'store-outside-transaction', false);
     const name = IDB_STORES[store];
-    return tx && storage.hasStore(name) ? tx.objectStore(name) : null;
+    return tx && storage.hasStore(name) ? storeIn(tx, name) : null;
   };
   return /** @type {Tx} */ ({
     get: async (store, key) => {
@@ -193,21 +207,65 @@ function runUnit(storage, unit) {
 }
 
 /**
- * @param {{storage: LegacyStorage, settings: SettingsStore, mode?: OpenMode}} options
+ * `reopen`, for a `versioned` open, watches the connection, and opens the database again when
+ * it goes, before the next IndexedDB call: the service worker's root sets it, since a worker
+ * has no page to reload. A reopen after a newer build's upgrade is refused as `newer-schema`,
+ * and the next call tries again. A command that reopens awaits the open before its first
+ * transaction, so only the worker, which runs no editor save, sets it.
+ * @param {{storage: LegacyStorage, settings: SettingsStore, mode?: OpenMode, reopen?: boolean}} options
  * @returns {LegacyAdapter}
  */
-export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
+export function createLegacyAdapter({ storage, settings, mode = 'versioned', reopen = false }) {
   /**
-   * Whether this page's connection is gone for good: another context upgraded the database,
-   * or Chrome closed the connection itself. Only a reload opens it again (#17: pages ask for
-   * a reload), so every IndexedDB call answers `reload-required`, which no resend fixes. Each
-   * read, and each unit of a command, checks first, since one that finds a store missing on
-   * the old connection would attempt no transaction to fail.
+   * Whether the connection is gone: another context upgraded or deleted the database, or
+   * Chrome closed the connection itself. A page's only comes back with a reload (#17: pages
+   * ask for a reload), so every IndexedDB call answers `reload-required`, which no resend
+   * fixes, and the worker's opens again (`reopen`). Each read, and each unit of a command,
+   * checks first, since one that finds a store missing on the old connection would attempt no
+   * transaction to fail.
    * @returns {boolean}
    */
   const reloadRequired = () => storage.openState === 'version-changed' || storage.openState === 'closed-by-browser';
 
   const reloadError = () => new UnavailableError('storage', 'reload-required', false);
+
+  const reopens = reopen && mode === 'versioned';
+
+  /**
+   * The reopen running now, which every call that finds the connection gone waits for, so two
+   * captures share one open
+   * @type {Promise<void> | null}
+   */
+  let reopening = null;
+
+  /**
+   * Whether the next IndexedDB call has to reconnect first: the connection went, or, for an
+   * adapter that reopens, a reopen is running or the last one was refused. It's synchronous,
+   * so nothing is awaited while the connection is there.
+   * @returns {boolean}
+   */
+  const mustReconnect = () => (reopens ? reopening !== null || storage.openState !== 'open' : reloadRequired());
+
+  /**
+   * Before the next IndexedDB call, once mustReconnect says so: open the database again if
+   * this adapter reopens, or fail with `reload-required` if it doesn't
+   * @returns {Promise<void>}
+   */
+  const reconnect = () => {
+    if (!reopens) return Promise.reject(reloadError());
+    if (!reopening) {
+      reopening = storage.open({ watchConnection: true }).then(
+        () => {
+          reopening = null;
+        },
+        error => {
+          reopening = null;
+          throw storageError(error);
+        },
+      );
+    }
+    return reopening;
+  };
 
   /**
    * What a failed IndexedDB call means here: `reload-required` when the connection went
@@ -218,6 +276,32 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
   const databaseError = error => (reloadRequired() ? reloadError() : storageError(error));
 
   /**
+   * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
+   * Popup has read them. A database without the store has none.
+   * @param {readonly string[]} keys
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const readIdbSettings = async keys => {
+    if (keys.some(key => !IDB_SETTINGS_KEYS.includes(key))) {
+      throw new UnavailableError('adapter', 'setting-not-served', false);
+    }
+    if (mustReconnect()) await reconnect();
+    /** @type {Record<string, unknown>} */
+    const values = {};
+    try {
+      if (!storage.hasStore('settings')) return values;
+      const store = storeIn(storage.transaction('settings', 'readonly'), 'settings');
+      for (const key of keys) {
+        const record = /** @type {{value?: unknown} | undefined} */ (await result(store.get(key)));
+        if (record && record.value !== undefined) values[key] = record.value;
+      }
+      return values;
+    } catch (error) {
+      throw databaseError(error);
+    }
+  };
+
+  /**
    * @param {Work} work
    * @param {Unit[]} units
    * @returns {Promise<Outcome>}
@@ -226,8 +310,9 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
     try {
       for (const unit of units) {
         if (unit.when && !unit.when()) continue;
-        // Each unit commits on its own, so the connection can go between one and the next
-        if (reloadRequired()) return unavailableFrom(reloadError());
+        // Each unit commits on its own, so the connection can go between one and the next. Nothing
+        // is awaited while it's there, so a save still opens its transaction in the calling task
+        if (mustReconnect()) await reconnect();
         const stop = await runUnit(storage, unit);
         if (stop) return stop;
       }
@@ -251,10 +336,13 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
 
     async open() {
       try {
-        if (mode === 'versioned') await storage.open();
+        if (mode === 'versioned') await storage.open({ watchConnection: reopens });
         else await storage.openExisting();
       } catch (error) {
-        throw storageError(error);
+        const refused = storageError(error);
+        // An error with no code of its own reads as a failed transaction, but this was the
+        // open, as openExisting's OPEN_FAILED says
+        throw refused.code === 'transaction-failed' ? new UnavailableError('storage', 'open-failed', true) : refused;
       }
     },
 
@@ -290,7 +378,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
       for (const store of stores) {
         if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
       }
-      if (reloadRequired()) throw reloadError();
+      if (mustReconnect()) await reconnect();
       try {
         const names = presentStores(storage, stores);
         const tx = names.length > 0 ? storage.transaction(names, 'readonly') : null;
@@ -301,6 +389,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned' }) {
     },
 
     async readSettings(area, keys) {
+      if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));
       /** @type {Record<string, unknown>} */
       let stored;

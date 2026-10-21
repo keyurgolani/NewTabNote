@@ -341,6 +341,32 @@ document.addEventListener('DOMContentLoaded', () => { const app = new App(); win
     ]);
   });
 
+  it("reaches App's methods from the new-tab root, which starts App in place of app.js's bootstrap", () => {
+    const { rows } = rowsOf({
+      'js/app.js': `class App {
+  constructor() { this.sidebarController = null; }
+  init() {
+    this.sidebarController = new SidebarController();
+    this.sidebarController.onToggleSidebar = () => this.toggleSidebar();
+  }
+  toggleSidebar() {
+    Storage.setSetting('sidebarWidth', 1);
+  }
+}
+window.App = App;
+`,
+      'js/kernel/composition/newtab.js': `export function startNewTab() {
+  document.addEventListener('DOMContentLoaded', () => {
+    const app = new globalThis.App({});
+    globalThis.app = app;
+    return app.init();
+  });
+}
+`,
+    });
+    assert.deepEqual(rows, ["App.toggleSidebar | Storage.setSetting('sidebarWidth', …) | setPreferences | kernel command, slice 6"]);
+  });
+
   it('marks a write in a method nothing calls as having no live caller', () => {
     const { rows } = rowsOf({
       'js/controllers/notes-manager.js': `class NotesManager {

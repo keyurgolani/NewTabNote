@@ -110,7 +110,7 @@ async function startWorker(env) {
 }
 
 /**
- * Start js/background.js on an empty profile and wait for its startup Storage.init().
+ * Start js/background.js on an empty profile and wait until it has opened the database.
  * `mutate`, for the self-tests that check these assertions catch a broken worker, gets the
  * worker's global once it has started, to break something in it.
  * @param {{mutate?: (worker: any) => void}} [options]
@@ -140,13 +140,13 @@ async function loadBackground({ mutate } = {}) {
   };
 
   await startWorker(env);
-  // background.js keeps its startup Storage.init() as storageReady, which captures await
-  // too. A module's top-level bindings aren't globals, so wait until the worker is idle,
-  // when that init has settled, and check it opened the database.
+  // background.js's kernel opens the database and runs startup maintenance as the worker
+  // starts, and captures wait for it. A module's top-level bindings aren't globals, so wait
+  // until the worker is idle, when that has settled, and check it opened the database.
   await drain();
   const { openState } = env.global.Storage;
   if (openState !== 'open') {
-    throw new Error(`The worker's startup Storage.init() left Storage.openState at '${openState}' on an empty profile`);
+    throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
   }
   if (mutate) mutate(env.global);
 

@@ -146,6 +146,7 @@ const folderTypesMatch = true;
  *   listFolders: typeof import('../../js/kernel/core/contracts/operations/list-folders.js').result,
  *   getPreferences: typeof import('../../js/kernel/core/contracts/operations/get-preferences.js').result,
  *   getWorkspaceSession: typeof import('../../js/kernel/core/contracts/operations/get-workspace-session.js').result,
+ *   getPopupInsightsEnabled: typeof import('../../js/kernel/core/contracts/operations/get-popup-insights-enabled.js').result,
  * }} ResultSchemas
  */
 
@@ -163,6 +164,7 @@ const queryDataMatches = {
   listFolders: true,
   getPreferences: true,
   getWorkspaceSession: true,
+  getPopupInsightsEnabled: true,
 };
 
 /**

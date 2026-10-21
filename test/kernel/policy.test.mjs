@@ -12,12 +12,15 @@ import { CALLERS } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/ports/policy.js').Surface} Surface */
 
+/** The reads of notes, folders, and settings the new tab, Popup, and Side Panel all make */
+const READS = ['listNotes', 'getNote', 'getNoteBlocks', 'listFolders', 'getPreferences', 'getWorkspaceSession'];
+
 // Written out by hand, so a change to a catalog entry's surfaces has to change this too
 /** @type {Record<Surface, {commands: string[] | 'all', queries: string[] | 'all'}>} */
 const TODAY = {
-  newtab: { commands: 'all', queries: 'all' },
-  popup: { commands: ['createNote'], queries: 'all' },
-  sidepanel: { commands: [], queries: 'all' },
+  newtab: { commands: 'all', queries: READS },
+  popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },
+  sidepanel: { commands: [], queries: READS },
   offscreen: { commands: [], queries: [] },
   'worker-internal': { commands: ['captureToDailyNote', 'runStartupMaintenance'], queries: [] },
   recovery: { commands: [], queries: [] },

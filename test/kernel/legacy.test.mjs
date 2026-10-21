@@ -193,6 +193,22 @@ describe('the legacy adapter', () => {
     assert.deepEqual(await page.env.indexedDB.databases(), []);
   });
 
+  it('answers open-failed for an open that fails for a reason with no code of its own, in both modes', async () => {
+    for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
+      const page = context();
+      // As when Chrome can't open the database's backing store
+      const failing = () =>
+        Promise.reject(new DOMException('Internal error opening backing store for indexedDB.open.', 'UnknownError'));
+      page.storage.open = failing;
+      page.storage.openExisting = failing;
+      await assert.rejects(adapterFor(page, mode).open(), error => {
+        const { unavailableCause, code } = /** @type {any} */ (error);
+        assert.deepEqual([unavailableCause, code], ['storage', 'open-failed'], mode);
+        return true;
+      });
+    }
+  });
+
   it("never blocks a new tab's upgrade from the database Popup or Side Panel holds open", async () => {
     for (const version of [7, 8]) {
       const panel = context();
@@ -327,6 +343,115 @@ describe('the legacy adapter', () => {
     // Its search entry's unit never ran
     assert.equal(calls, 1);
     storage.transaction = transaction;
+  });
+
+  it('watches a versioned connection only when its root asks, which only the worker does in slice 4a', async () => {
+    // A page's connection waits out another context's upgrade, as in 1.4.x, until the new tab's
+    // editor moves to its kernel (slice 4b) and can keep the text while it asks for a reload
+    for (const adapter of [adapterFor(context()), adapterFor(context(), 'versioned', { reopen: false })]) {
+      await adapter.open();
+    }
+    const page = context();
+    await page.storage.open();
+    const pageDb = /** @type {IDBDatabase} */ (page.storage.db);
+    const handled = (/** @type {IDBDatabase} */ db) =>
+      [db.onversionchange, db.onclose].map(handler => typeof handler === 'function');
+    assert.deepEqual(handled(pageDb), [false, false]);
+    pageDb.close();
+    const worker = context();
+    await adapterFor(worker, 'versioned', { reopen: true }).open();
+    const workerDb = /** @type {IDBDatabase} */ (worker.storage.db);
+    assert.deepEqual(handled(workerDb), [true, true]);
+    workerDb.close();
+  });
+
+  it("reopens the worker's connection once it goes, and answers newer-schema past a newer build's upgrade", async () => {
+    const worker = context();
+    const adapter = adapterFor(worker, 'versioned', { reopen: true });
+    await adapter.open();
+    const kernel = kernelFor(adapter, { ids: testIds(), clock: { now: () => Date.now() } }, CALLERS['worker-internal']);
+    /** @param {string} id */
+    const capture = id =>
+      kernel.execute({
+        type: 'captureToDailyNote',
+        commandId: `c-${id}`,
+        noteId: `d-${id}`,
+        blockId: `b-${id}`,
+        capture: { type: 'text', content: id },
+      });
+    assertKind(await capture('first'), 'committed');
+    // Another context deletes the database: the worker's connection closes instead of blocking it,
+    // and the next capture opens a new one
+    await legacyEnv.requestToPromise(worker.env.indexedDB.deleteDatabase('CanvasTabDB'));
+    assert.equal(worker.storage.openState, 'version-changed');
+    assertKind(await capture('second'), 'committed');
+    assert.equal((await worker.storage.getTodayNote()).id, 'd-second');
+    // Chrome closes the connection itself
+    const db = /** @type {IDBDatabase} */ (worker.storage.db);
+    db.close();
+    /** @type {any} */ (db.onclose).call(db, new Event('close'));
+    assert.equal(worker.storage.openState, 'closed-by-browser');
+    assertKind(await capture('third'), 'committed');
+    // A newer build's upgrade: the connection closes for it, and the reopen finds the newer version
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 9));
+    /** @type {IDBDatabase} */ (upgraded).close();
+    const refused = await capture('fourth');
+    assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
+      'newer-schema',
+      'version-too-new',
+    ]);
+  });
+
+  it('shares one reopen between captures that find the connection gone, and tries a refused one again', async () => {
+    const worker = context();
+    const adapter = adapterFor(worker, 'versioned', { reopen: true });
+    await adapter.open();
+    const kernel = kernelFor(adapter, { ids: testIds(), clock: { now: () => Date.now() } }, CALLERS['worker-internal']);
+    /** @param {string} id */
+    const capture = id =>
+      kernel.execute({
+        type: 'captureToDailyNote',
+        commandId: `c-${id}`,
+        noteId: `d-${id}`,
+        blockId: `b-${id}`,
+        capture: { type: 'text', content: id },
+      });
+    assertKind(await capture('first'), 'committed');
+    const { storage } = worker;
+    const open = storage.open;
+    let opens = 0;
+    storage.open = (/** @type {unknown[]} */ ...args) => {
+      opens++;
+      return open.apply(storage, args);
+    };
+    // Chrome closes the connection, and two captures come in before it's open again
+    const db = /** @type {IDBDatabase} */ (storage.db);
+    db.close();
+    /** @type {any} */ (db.onclose).call(db, new Event('close'));
+    const both = await Promise.all([capture('second'), capture('third')]);
+    assert.deepEqual(
+      both.map(outcome => outcome.kind),
+      ['committed', 'committed'],
+    );
+    assert.equal(opens, 1);
+    const blocks = await storage.getElementsByNote('d-first');
+    assert.deepEqual(blocks.map((/** @type {{id: string}} */ block) => block.id).sort(), [
+      'b-first',
+      'b-second',
+      'b-third',
+    ]);
+    // A newer build's upgrade refuses the reopen, and the next capture tries again and is refused the same way
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 9));
+    /** @type {IDBDatabase} */ (upgraded).close();
+    for (const id of ['fourth', 'fifth']) {
+      const refused = await capture(id);
+      assert.deepEqual(
+        refused.kind === 'unavailable' && [refused.cause, refused.code],
+        ['newer-schema', 'version-too-new'],
+        id,
+      );
+    }
+    assert.equal(opens, 3);
   });
 
   it('lets only the connection openExisting() holds now mark it gone, not one it replaced', async () => {
@@ -472,6 +597,32 @@ describe('the legacy adapter', () => {
     assert.deepEqual(order, ['open', 'maintenance']);
     assert.equal(page.storage.openState, 'open');
     assert.equal(page.env.chrome.local.setting_storageInitialized, true);
+  });
+
+  it("reads Popup's insightsEnabled from IndexedDB's settings store, and serves no other key from it", async () => {
+    const page = context();
+    await legacyEnv.createDatabase(page.env.indexedDB, {
+      records: {
+        settings: [
+          { key: 'insightsEnabled', value: true },
+          { key: 'llmApiKey', value: 'test-only-value' },
+        ],
+      },
+    });
+    const adapter = adapterFor(page, 'existing');
+    await adapter.open();
+    const popup = kernelFor(adapter, runtime(), CALLERS.popup);
+    const state = await popup.query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(state.kind === 'ready' && state.data, { insightsEnabled: true });
+    // The store also holds 1.4.x's provider keys, which nothing in the kernel may read
+    await assert.rejects(adapter.readSettings('idbSettings', ['llmApiKey']), { code: 'setting-not-served' });
+
+    const without = context();
+    await legacyEnv.createDatabase(without.env.indexedDB, { omit: ['settings'] });
+    const bare = adapterFor(without, 'existing');
+    await bare.open();
+    const none = await kernelFor(bare, runtime(), CALLERS.popup).query({ type: 'getPopupInsightsEnabled' });
+    assert.deepEqual(none.kind === 'ready' && none.data, { insightsEnabled: false });
   });
 
   it('works on a database missing stores, the way Storage does: the search index is skipped, folders fail', async () => {

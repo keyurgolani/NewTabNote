@@ -13,8 +13,10 @@ const path = require('node:path');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
-// The service worker is a module worker; this runs it the way Chrome does
+// The service worker is a module worker, and Popup and Side Panel load module entries; these
+// run them the way Chrome does
 const { startWorker } = require('./helpers/load-background');
+const { loadPageModule } = require('./helpers/page-module');
 
 const TEST_KEY = 'test-only-api-key';
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
@@ -429,7 +431,7 @@ describe('a version-9 database (AC7)', () => {
       { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
       'main-content', 'daily-summary', 'summary-content', 'page-list',
     ]);
-    env.load('js/popup.js');
+    await loadPageModule(env, 'js/popup.js');
     await Promise.all(env.document.fire('DOMContentLoaded'));
 
     const guard = els['main-content'].querySelector('.storage-guard');
@@ -456,7 +458,8 @@ describe('a version-9 database (AC7)', () => {
     const openButton = env.document.createElement('button');
     openButton.setAttribute('data-open-notes', '');
     env.document.body.appendChild(openButton);
-    env.load('js/insights-summary.js', 'js/sidepanel.js');
+    env.load('js/insights-summary.js');
+    await loadPageModule(env, 'js/sidepanel.js');
     await Promise.all(env.document.fire('DOMContentLoaded'));
 
     const guard = els.sections.querySelector('.storage-guard');
@@ -492,6 +495,27 @@ describe('a version-9 database (AC7)', () => {
   });
 });
 
+describe("the new tab when its kernel can't open storage for another reason", () => {
+  it('shows the error state saying why in words, with Reload, and writes nothing', async () => {
+    for (const [failure, words] of [
+      // As when Chrome can't open the database's backing store
+      [new DOMException('Internal error opening backing store for indexedDB.open.', 'UnknownError'), "NewTabNote couldn't open your notes."],
+      [new DOMException('The quota has been exceeded.', 'QuotaExceededError'), "There's no room left to store your notes."],
+    ]) {
+      const { env, before } = await startApp({}, (page) => {
+        page.get('Storage').open = async () => { throw failure; };
+      });
+      const appEl = env.document.getElementById('app');
+      assert.equal(appEl.querySelector('h2').textContent, 'Failed to initialize');
+      // An outcome carries no error message, so the words are the new tab's own
+      assert.equal(appEl.querySelector('p').textContent, words);
+      assert.deepEqual(appEl.querySelectorAll('button').map((b) => b.textContent), ['Reload']);
+      assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+      assert.deepEqual(env.chrome.writes(), []);
+    }
+  });
+});
+
 describe('the export notice in the guard states (NTN-18 slice 0)', () => {
   for (const [label, spec, openState] of [
     ['a version-9 database', { version: 9 }, 'newer-version'],
@@ -508,7 +532,7 @@ describe('the export notice in the guard states (NTN-18 slice 0)', () => {
         };
       });
       assert.ok(env.document.querySelector('.storage-guard'));
-      assert.deepEqual(decided, [], 'App.init stops at Storage.init, before the decision');
+      assert.deepEqual(decided, [], "App.init stops when the tab's kernel can't open storage, before the decision");
 
       const Storage = env.get('Storage');
       assert.equal(Storage.openState, openState);
@@ -539,17 +563,71 @@ describe('background capture on a version-8 database', () => {
     await fixture(env.indexedDB);
     await startWorker(env);
     await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
-    env.get('Storage').saveElement = async () => { throw new Error('disk full'); };
-    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
-      { url: 'https://example.test/', title: 'x' });
-    await waitFor(() => env.chrome.notifications.length === 1, { message: 'failure notification' });
+    // The capture's block write fails: first for a full disk, then for something else
+    const Storage = env.get('Storage');
+    const transaction = Storage.transaction.bind(Storage);
+    const failures = [
+      new DOMException('disk full', 'QuotaExceededError'),
+      new DOMException('Internal error writing to the backing store', 'UnknownError'),
+    ];
+    Storage.transaction = (stores, mode) => {
+      if (mode === 'readwrite' && [].concat(stores).includes('elements')) throw failures.shift();
+      return transaction(stores, mode);
+    };
+    for (const count of [1, 2]) {
+      env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
+        { url: 'https://example.test/', title: 'x' });
+      await waitFor(() => env.chrome.notifications.length === count, { message: `failure notification ${count}` });
+    }
+    // An outcome carries no error message, so each says why in words of its own
+    assert.deepEqual(env.chrome.notifications, [
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: there is no room left to store it" },
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
+    ]);
+  });
+
+  it('refuses on a database without its blocks store and changes nothing', async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB, { omit: ['elements'] });
+    const before = await dumpDatabase(env.indexedDB);
+    await startWorker(env);
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, { url: 'https://example.test/', title: 'x' });
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'refusal notification' });
     assert.deepEqual(env.chrome.notifications[0], {
-      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: disk full",
+      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured',
+      message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
     });
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    assert.deepEqual(env.chrome.writes(), []);
+  });
+
+  it("lets a newer build upgrade the database, and refuses the next capture as it would have at start", async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await fixture(env.indexedDB);
+    await startWorker(env);
+    const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
+    // A newer build opens the database at version 9, which an open connection would block
+    const upgraded = await new Promise((resolve, reject) => {
+      const request = env.indexedDB.open('CanvasTabDB', 9);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("the worker's connection blocked the upgrade"));
+    });
+    upgraded.close();
+    env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+    await waitFor(() => env.chrome.notifications.length === 2, { message: 'refusal notification' });
+    assert.equal(env.chrome.notifications[1].title, 'Not captured');
+    assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
   });
 });
 
-/** Run App.init against a fixture with a stub #app element, after `beforeInit(env)`. */
+/**
+ * Start the new tab against a fixture with a stub #app element, after `beforeInit(env)`, as
+ * js/main.js starts it: its composition root constructs App with the tab's kernel once the
+ * DOM is ready, and runs App.init.
+ */
 async function startApp(spec, beforeInit = () => {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   await fixture(env.indexedDB, spec);
@@ -560,8 +638,8 @@ async function startApp(spec, beforeInit = () => {}) {
   env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
   env.get('Utils').showToast = () => {};
   beforeInit(env);
-  const App = env.get('App');
-  const app = new App();
-  await app.init();
-  return { env, app, before, downloads };
+  const { startNewTab } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  startNewTab();
+  await Promise.all(env.document.fire('DOMContentLoaded'));
+  return { env, app: env.global.app, before, downloads };
 }

@@ -195,9 +195,6 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
  * or a method also names its ops, so a new call there fails until it's classified.
  */
 const RULES = [
-  { command: 'runStartupMaintenance', op: 'init' },
-  { command: 'captureToDailyNote', file: 'js/background.js', method: 'captureToDailyNote', op: ['ensureDailyNote', 'saveElement'] },
-  { command: 'createNote', file: 'js/popup.js', op: 'add', key: 'canvases' },
   { command: 'ensureDailyNote', op: ['ensureDailyNote', 'ensureDailyNoteForDate'] },
   { command: 'importNote', method: /\.importNote$/, op: ['createNote', 'saveElement'] },
   // A new note and its first blocks are one intent
@@ -917,13 +914,24 @@ function classify(hit) {
   return { ...row, command: rule.command, status: statusOf(rule.command, hit) };
 }
 
+/**
+ * The new-tab composition root, which constructs App and calls init in place of the
+ * bootstrap app.js had (#12, "Layout"). It's in js/kernel/, so no write of its counts, but
+ * the App methods it calls are where App's live code starts.
+ */
+const APP_ROOT = 'js/kernel/composition/newtab.js';
+
 /** Every write path in js/, classified, and what keeps the doc from being written */
 function collect(root = ROOT_DIR) {
   const files = listFiles(root);
   const texts = new Map(files.map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
   const sources = new Map(files.map(file => [file, ts.createSourceFile(file, texts.get(file), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)]));
   const members = storageMembers(root);
-  const appCalls = appCallsOf(sources);
+  const appRoot = path.join(root, APP_ROOT);
+  const appCallers = fs.existsSync(appRoot)
+    ? new Map([...sources, [APP_ROOT, ts.createSourceFile(APP_ROOT, fs.readFileSync(appRoot, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)]])
+    : sources;
+  const appCalls = appCallsOf(appCallers);
   const index = referencesOf(sources);
   const rows = [];
   const problems = [];

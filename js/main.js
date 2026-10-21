@@ -4,7 +4,8 @@
  * Each source file is loaded as a side-effect import. The files set up
  * their globals (window.Utils, window.Storage, etc.) when they execute.
  * This single entry point replaces the individual <script> tags that
- * were previously listed in newtab.html.
+ * were previously listed in newtab.html. Last, the new tab's composition
+ * root (#12) starts App.
  *
  * Vendored libraries (fuse.js, jszip, chart.js, transformers.js) are
  * loaded via regular <script> tags before this module, since they are
@@ -64,5 +65,9 @@ import './controllers/notes-manager.js';
 import './controllers/shortcuts-manager.js';
 import './controllers/export-import-service.js';
 
-// App (includes DOMContentLoaded listener that initializes everything)
+// App, which the new tab's composition root constructs with the tab's kernel and starts
+// once the DOM is ready
 import './app.js';
+import { startNewTab } from './kernel/composition/newtab.js';
+
+startNewTab();

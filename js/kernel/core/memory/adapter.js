@@ -26,7 +26,7 @@ import { COMMANDS } from '../contracts/commands.js';
 import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
-import { STORES } from '../ports/repository.js';
+import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
@@ -34,6 +34,7 @@ import { STORES } from '../ports/repository.js';
 /** @typedef {import('../ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../ports/repository.js').SettingsArea} SettingsArea */
+/** @typedef {import('../ports/repository.js').ReadableSettingsArea} ReadableSettingsArea */
 /** @typedef {import('../ports/repository.js').Tx} Tx */
 /** @typedef {import('../ports/repository.js').ReadTx} ReadTx */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
@@ -107,8 +108,8 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   const outcomes = new Map();
   /** @type {KeptConflict[]} */
   const conflicts = [];
-  /** @type {Record<SettingsArea, Map<string, unknown>>} */
-  const settings = { preferences: new Map(), session: new Map() };
+  /** @type {Record<ReadableSettingsArea, Map<string, unknown>>} */
+  const settings = { preferences: new Map(), session: new Map(), idbSettings: new Map() };
   /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
 
@@ -364,6 +365,9 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
 
     readSettings(area, keys) {
       return serial(async () => {
+        if (area === 'idbSettings' && keys.some(key => !IDB_SETTINGS_KEYS.includes(key))) {
+          throw new UnavailableError('adapter', 'setting-not-served', false);
+        }
         /** @type {Record<string, unknown>} */
         const values = {};
         for (const key of keys) if (settings[area].has(key)) values[key] = clone(settings[area].get(key));

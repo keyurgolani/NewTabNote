@@ -34,12 +34,18 @@ export const preferenceCommands = {
   },
 };
 
-/** @type {{getPreferences: QueryHandler<'getPreferences'>}} */
+/** @type {{getPreferences: QueryHandler<'getPreferences'>, getPopupInsightsEnabled: QueryHandler<'getPopupInsightsEnabled'>}} */
 export const preferenceQueries = {
   async getPreferences({ keys = [...PREFERENCE_KEYS] }, { adapter, clock }) {
     if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string')) return failed('validation', 'invalid-query');
     if (keys.some(key => !PREFERENCE_KEYS.includes(key))) return failed('validation', 'unknown-preference');
     const values = await adapter.readSettings('preferences', keys);
     return Object.keys(values).length > 0 ? ready(clock.now(), values) : empty(clock.now());
+  },
+
+  // Popup shows the day's summary for any truthy stored value, so the answer is its truthiness
+  async getPopupInsightsEnabled(query, { adapter, clock }) {
+    const { insightsEnabled } = await adapter.readSettings('idbSettings', ['insightsEnabled']);
+    return ready(clock.now(), { insightsEnabled: Boolean(insightsEnabled) });
   },
 };
