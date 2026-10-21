@@ -29,6 +29,30 @@ const OPEN_OVERLAYS = [
 const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
 
 /**
+ * What an editor asks of the page around it: its navigation port. App gives it to the editors
+ * it makes, and TabController to the PiP editor, in place of the window.app lookup getApp made.
+ * @typedef {Object} EditorNavigation
+ * @property {(name: string) => void} titleChanged - The note's title changed, so its tab shows it
+ * @property {(note: Object) => void} noteSaved - The note was saved, so search and the sidebar catch up
+ * @property {(noteId: string) => void} openNote - Open a note, as a backlink does
+ * @property {(name: string) => void} openNoteByName - Open the note a wiki link names
+ * @property {(editor: BlockEditor, goneId: string, note: Object) => Promise<void>} noteReplaced
+ *   The editor saved a deleted note's text as `note`, so the tab that showed it follows
+ */
+
+/**
+ * What an editor with no page around it asks of none, such as one a test makes on its own
+ * @type {EditorNavigation}
+ */
+const NO_NAVIGATION = Object.freeze({
+  titleChanged() {},
+  noteSaved() {},
+  openNote() {},
+  openNoteByName() {},
+  noteReplaced: async () => {},
+});
+
+/**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
  * before the transaction opens, so a block deleted in between isn't written back.
@@ -49,6 +73,8 @@ class BlockEditor {
     this.noteData = null;
     this.blocks = [];
     this.onChange = config.onChange || null;
+    /** @type {EditorNavigation} */
+    this.navigation = config.navigation || NO_NAVIGATION;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -124,14 +150,6 @@ class BlockEditor {
     if (this.isTouchDevice) {
       this.doc.body.classList.add('touch-device');
     }
-  }
-
-  /**
-   * Helper to get the app instance, searching opener if in PiP.
-   * @returns {Object|null} App instance
-   */
-  getApp() {
-    return window.app || (window.opener && window.opener.app);
   }
 
   /**
@@ -1298,11 +1316,7 @@ class BlockEditor {
 
       if (this.onChange) this.onChange();
 
-      // Notify app to update tab name
-      const app = this.getApp();
-      if (app && app.updateCurrentTabName) {
-        app.updateCurrentTabName(this.noteData.name);
-      }
+      this.navigation.titleChanged(this.noteData.name);
     }
   }
 
@@ -1325,11 +1339,7 @@ class BlockEditor {
 
       if (this.onChange) this.onChange();
 
-      // Notify app to update tab name
-      const app = this.getApp();
-      if (app && app.updateCurrentTabName) {
-        app.updateCurrentTabName(title);
-      }
+      this.navigation.titleChanged(title);
     }
   }
 
@@ -2243,10 +2253,7 @@ class BlockEditor {
     if (e.target.closest('.wiki-link')) {
       e.preventDefault();
       const noteName = e.target.closest('.wiki-link').dataset.noteName;
-      const app = this.getApp();
-      if (noteName && app) {
-        app.openNoteByName(noteName);
-      }
+      if (noteName) this.navigation.openNoteByName(noteName);
       return;
     }
 
@@ -3647,12 +3654,7 @@ class BlockEditor {
       titleDiv.className = 'backlink-item-title';
       titleDiv.textContent = note.name || 'Untitled';
       item.appendChild(titleDiv);
-      item.addEventListener('click', () => {
-        const app = this.getApp();
-        if (app) {
-          app.openNote(note.id);
-        }
-      });
+      item.addEventListener('click', () => this.navigation.openNote(note.id));
       list.appendChild(item);
     });
   }
@@ -3995,14 +3997,8 @@ class BlockEditor {
 
     this.updateSaveStatus('Saved');
 
-    // Trigger background indexing and sidebar preview refresh
-    const app = this.getApp();
-    if (app && app.triggerIndexing) {
-      app.triggerIndexing(state.noteId);
-    }
-    if (app && app.updateSidebarNotePreview) {
-      app.updateSidebarNotePreview(state.noteData);
-    }
+    // Search indexing and the sidebar's preview catch up
+    this.navigation.noteSaved(state.noteData);
   }
 
   /**
@@ -4260,10 +4256,8 @@ class BlockEditor {
     this._clearNoteGone();
     this.renderBlocks();
     await this.save();
-    const app = this.getApp();
-    if (!app || !app.tabController) return;
     try {
-      await app.tabController.noteReplaced(this, goneId, note);
+      await this.navigation.noteReplaced(this, goneId, note);
     } catch (error) {
       console.error('The tab of a note saved as a new note did not follow it:', error);
     }

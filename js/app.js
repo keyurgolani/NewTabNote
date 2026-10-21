@@ -259,13 +259,16 @@ class App {
         }
       }, 2000);
 
+      this.editorPorts = { navigation: this.editorNavigation() };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
-        onChange: editorChangeHandler
+        onChange: editorChangeHandler,
+        ...this.editorPorts,
       });
       this.secondaryEditor = new BlockEditor({
         root: document.getElementById('secondary-editor-container'),
-        onChange: editorChangeHandler
+        onChange: editorChangeHandler,
+        ...this.editorPorts,
       });
 
       // Wire version history button (Req 31.2)
@@ -651,9 +654,10 @@ class App {
       logger: this.logger,
     });
 
-    // Share editor references
+    // Share editor references, and what the PiP editor gets
     this.tabController.editor = this.editor;
     this.tabController.secondaryEditor = this.secondaryEditor;
+    this.tabController.editorPorts = this.editorPorts;
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => Storage.createNote('Untitled');
@@ -2192,6 +2196,25 @@ class App {
     if (this.tabController) {
       this.tabController.openTabs = this.openTabs;
     }
+  }
+
+  /**
+   * The navigation port the note editors get in place of window.app (#12 slice 4): what an
+   * editor asks of the page around it. See EditorNavigation in js/editor.js.
+   * @returns {Object}
+   */
+  editorNavigation() {
+    return {
+      titleChanged: (name) => this.updateCurrentTabName(name),
+      noteSaved: (note) => {
+        this.triggerIndexing(note.id);
+        this.updateSidebarNotePreview(note);
+      },
+      // A backlink opens its note: 1.4.x called an App.openNote that never existed, so it threw
+      openNote: (noteId) => this.openNoteById(noteId),
+      openNoteByName: (name) => this.openNoteByName(name),
+      noteReplaced: (editor, goneId, note) => this.tabController.noteReplaced(editor, goneId, note),
+    };
   }
 
   /**

@@ -30,6 +30,8 @@ class TabController {
     // Editor references (set by App after construction)
     this.editor = null;
     this.secondaryEditor = null;
+    // What App gives every editor it makes, which the PiP editor gets too (set by App)
+    this.editorPorts = {};
 
     // App-level callbacks (set by App after construction)
     this.onCreateNote = null;       // () => Promise<Note>
@@ -1087,7 +1089,8 @@ class TabController {
 
       // Initialize editor in PiP window
       this.pipEditor = new BlockEditor({
-        root: wrapper
+        root: wrapper,
+        ...this.editorPorts,
       });
 
       await this.pipEditor.loadNote(noteId);
