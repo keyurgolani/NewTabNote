@@ -20,6 +20,7 @@ import {
   inBlockOrder,
   isEmpty,
   isUntitled,
+  linkTargets,
   newNoteRecord,
   newSearchEntry,
   notesInView,
@@ -112,6 +113,39 @@ function renameSearchEntry(noteId, name, now) {
 }
 
 /**
+ * Units that replace the wiki links from `noteId` with links to the notes `names` name, as
+ * Storage.updateNoteLinks has: the notes are read in one transaction, as it read them with
+ * getAllNotes, and the links replaced in another, which only ever spans the links store. With
+ * no names, the note's links are only deleted, as Storage.clearLinksFromNote deletes them.
+ * @param {string} noteId
+ * @param {readonly string[]} names
+ * @param {{now: number, nextId: () => string}} stamp
+ * @returns {Unit[]}
+ */
+function replaceLinks(noteId, names, { now, nextId }) {
+  /** @type {string[]} */
+  let targets = [];
+  return [
+    {
+      stores: ['notes'],
+      mode: 'readonly',
+      when: () => names.length > 0,
+      // Each run decides afresh, since an adapter may run the units again (ports/repository.js, Unit)
+      async run(tx) {
+        targets = linkTargets(await tx.getAll('notes'), names, noteId);
+      },
+    },
+    {
+      stores: ['links'],
+      async run(tx) {
+        for (const key of await tx.getKeysByIndex('links', 'fromNoteId', noteId)) tx.delete('links', key);
+        for (const toNoteId of targets) tx.put('links', { id: nextId(), fromNoteId: noteId, toNoteId, createdAt: now });
+      },
+    },
+  ];
+}
+
+/**
  * The blocks a command carries, as records of `noteId`. A block of another note, or two
  * blocks with one id, are refused.
  * @param {unknown} blocks
@@ -139,6 +173,12 @@ function blockRecords(blocks, noteId) {
  * @returns {value is undefined | string}
  */
 const isOptionalString = value => value === undefined || typeof value === 'string';
+
+/**
+ * @param {unknown} value
+ * @returns {value is string[]}
+ */
+const isStringList = value => Array.isArray(value) && value.every(item => typeof item === 'string');
 
 /**
  * @param {unknown} value
@@ -291,9 +331,10 @@ export const noteCommands = {
     });
   },
 
-  saveNoteContent(command, { clock }) {
-    const { noteId, blocks, preview, todoProgress, expectedRevision } = command;
-    if (!isId(noteId) || !isOptionalString(preview)) return invalid();
+  saveNoteContent(command, { clock, ids }) {
+    const { noteId, blocks, preview, todoProgress, name, linkedNames, expectedRevision } = command;
+    if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
+    if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
     if (expectedRevision !== undefined && !Number.isInteger(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
@@ -316,10 +357,22 @@ export const noteCommands = {
         const next = { ...note, updatedAt: now };
         if (preview !== undefined) next.preview = preview;
         if (todoProgress !== undefined) next.todoProgress = todoProgress;
+        // A typed title goes in with the blocks, as 1.4.x's editor save wrote it, marked as set
+        // by hand, as the editor marked it when the user typed it
+        if (name !== undefined) {
+          next.name = name;
+          next.titleManuallySet = true;
+        }
         tx.put('notes', next);
       },
     };
-    return unitsWork(command, [save], () => committed('content-saved', [noteId]), {
+    /** @type {Unit[]} */
+    const units = [save];
+    // The search entry's name and the wiki links follow in their own units, as 1.4.x's save
+    // updated them after the note and its blocks were stored
+    if (name !== undefined) units.push(renameSearchEntry(noteId, name, now));
+    if (linkedNames !== undefined) units.push(...replaceLinks(noteId, linkedNames, { now, nextId: () => ids.next() }));
+    return unitsWork(command, units, () => committed('content-saved', [noteId]), {
       primary: noteRecord(noteId),
       revised: contentChanged,
     });

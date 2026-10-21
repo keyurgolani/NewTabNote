@@ -31,6 +31,7 @@ export const STORES = Object.freeze({
   media: Object.freeze({ keyPath: 'id' }),
   vectors: Object.freeze({ keyPath: 'id' }),
   snapshots: Object.freeze({ keyPath: 'id' }),
+  links: Object.freeze({ keyPath: 'id' }),
 });
 
 /** @typedef {keyof typeof STORES} StoreName */
@@ -44,6 +45,7 @@ export const STORES = Object.freeze({
  * @property {{id: string, canvasId?: unknown} & Record<string, unknown>} media
  * @property {{id: string} & Record<string, unknown>} vectors
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
+ * @property {import('../domain/note.js').LinkRecord} links
  */
 
 /**

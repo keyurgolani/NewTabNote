@@ -386,6 +386,83 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
+  it('saveNoteContent with a typed title leaves the note, blocks, and search entry the editor saved it with', async () => {
+    const stored = legacyEnv.note('n1', { name: 'Draft' });
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [stored],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      search_index: [{ noteId: 'n1', name: 'Draft', content: 'Milk', updatedAt: SEEDED_AT }],
+    });
+    const blocks = [legacyEnv.block('b1', 'n1', 0, 'Milk and eggs')];
+    // The title edit set the name and titleManuallySet on the editor's copy, its save wrote the
+    // copy with the blocks, and then the search entry's name
+    const editorCopy = { ...stored, name: 'Groceries', titleManuallySet: true, preview: 'Milk and eggs' };
+    await viaStorage.storage.saveNoteWithBlocks(editorCopy, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex('n1', 'Groceries');
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c1',
+        noteId: 'n1',
+        blocks,
+        preview: 'Milk and eggs',
+        name: 'Groceries',
+      }),
+    );
+    const stores = ['canvases', 'elements', 'search_index'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it("saveNoteContent's wiki links are the ones Storage.updateNoteLinks writes after the save", async () => {
+    const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [
+        legacyEnv.note('n1', { name: 'Plan', updatedAt: at(1) }),
+        legacyEnv.note('old', { name: 'groceries', updatedAt: at(2) }),
+        legacyEnv.note('new', { name: 'Groceries', updatedAt: at(3) }),
+        legacyEnv.note('archived', { name: 'Archive me', archived: true, archivedAt: at(4) }),
+        legacyEnv.note('trashed', { name: 'Trash me', trashed: true, trashedAt: at(5) }),
+        legacyEnv.note('template', { name: 'Template', isTemplate: true }),
+        legacyEnv.note('n2', { name: 'Linker' }),
+      ],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      links: [
+        { id: 'l-old', fromNoteId: 'n1', toNoteId: 'old', createdAt: SEEDED_AT },
+        { id: 'l-in', fromNoteId: 'n2', toNoteId: 'n1', createdAt: SEEDED_AT },
+      ],
+    });
+    const linkedNames = ['GROCERIES', 'Archive me', 'Trash me', 'Template', 'Plan', 'Nowhere', 'groceries'];
+    const blocks = [legacyEnv.block('b1', 'n1', 0, '[[Groceries]] and the rest')];
+    const stored = legacyEnv.plain(await viaStorage.storage.getNote('n1'));
+    await viaStorage.storage.saveNoteWithBlocks(stored, blocks);
+    await viaStorage.storage.updateNoteLinks('n1', linkedNames);
+    assertCommitted(
+      await kernel.execute({ type: 'saveNoteContent', commandId: 'c1', noteId: 'n1', blocks, linkedNames }),
+    );
+    // Each side gives its links ids of its own, so they compare by what they link
+    /** @param {LegacyContext} context */
+    const links = async context =>
+      Object.values((await recordsIn(context, ['links'])).links)
+        .map(({ id, ...link }) => link)
+        .sort((a, b) => `${a.fromNoteId}>${a.toNoteId}`.localeCompare(`${b.fromNoteId}>${b.toNoteId}`));
+    assert.deepEqual(await links(viaKernel), await links(viaStorage));
+    assert.deepEqual(
+      (await links(viaKernel)).map(link => [link.fromNoteId, link.toNoteId]),
+      [
+        ['n1', 'archived'],
+        ['n1', 'new'],
+        ['n2', 'n1'],
+      ],
+    );
+
+    // A save with no links clears them, as Storage.clearLinksFromNote does
+    await viaStorage.storage.updateNoteLinks('n1', []);
+    assertCommitted(
+      await kernel.execute({ type: 'saveNoteContent', commandId: 'c2', noteId: 'n1', blocks, linkedNames: [] }),
+    );
+    assert.deepEqual(await links(viaKernel), await links(viaStorage));
+  });
+
   it("moveFolder refuses the moves SidebarController.isChildFolder refuses, and writes what the sidebar's move writes", async () => {
     const folders = [
       folder('f1', null),
