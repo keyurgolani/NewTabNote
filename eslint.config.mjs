@@ -230,11 +230,21 @@ const destructuresFurther = property => {
   return value.type === 'ObjectPattern' || value.type === 'ArrayPattern';
 };
 
+/** The name a destructured property binds, as `area` in `{ storage: area }`, or null for a pattern */
+const boundName = property => {
+  const value = property.value.type === 'AssignmentPattern' ? property.value.left : property.value;
+  return value.type === 'Identifier' ? value : null;
+};
+
+/** The name an import or export specifier spells out: an identifier, or a string such as `'a-b'` */
+const specifierName = node => (node.type === 'Identifier' ? node.name : String(node.value));
+
 /**
  * #17's storage-access rules (#17 slice 1, "The architecture test"): any use of a function
  * named `name` but where it's defined. A call of `name(...)`, a read of `x.name` with any
  * spelling of the property, whether it's called there or bound, passed on, or called through
- * `.call` or `.apply`, and `name` taken apart from an object, as in `const { name } = x`.
+ * `.call` or `.apply`, `name` taken apart from an object, as in `const { name } = x`, and
+ * `name` imported or re-exported under any name, as in `import { name as other }`.
  */
 const accessRule = name => ({
   meta: { type: 'problem', schema: ACCESS_SCHEMA },
@@ -253,47 +263,116 @@ const accessRule = name => ({
       'ObjectPattern > Property'(node) {
         if (keyName(node) === name) report(node);
       },
+      ImportSpecifier(node) {
+        if (specifierName(node.imported) === name) report(node);
+      },
+      'ExportNamedDeclaration[source] > ExportSpecifier'(node) {
+        if (specifierName(node.local) === name) report(node);
+      },
     };
   },
 });
 
-/** A `.storage` read, or a value named `storage`, which `chrome.storage` was taken apart into */
-const isStorage = node => {
-  const value = unchained(node);
-  if (!value) return false;
-  return (value.type === 'MemberExpression' && propertyName(value) === 'storage') || (value.type === 'Identifier' && value.name === 'storage');
-};
-
-/** `chrome`, or a `.chrome` read such as `self.chrome` */
-const isChrome = node => {
-  const value = unchained(node);
-  if (!value) return false;
-  return (value.type === 'Identifier' && value.name === 'chrome') || (value.type === 'MemberExpression' && propertyName(value) === 'chrome');
-};
-
 /**
- * chrome.storage.local, reached through any object or taken apart: `chrome.storage.local`,
- * `self.chrome.storage.local`, an alias such as `this._chromeApi().storage.local`, `local`
- * taken from a storage (`const { local } = chrome.storage`, `const { storage: { local } } =
- * chrome`), and `storage` taken from chrome under any name (`const { storage } = chrome`), along
- * with `storage.local` on it
+ * chrome.storage.local, reached through any object, any name bound to a storage or to chrome,
+ * or taken apart: `chrome.storage.local`, `self.chrome.storage.local`, an alias such as
+ * `this._chromeApi().storage.local`, `area.local` once `const area = chrome.storage` (or `let`,
+ * or an assignment, or a chain of them), `local` taken from a storage (`const { local } =
+ * chrome.storage`, `const { storage: { local } } = chrome`), and `storage` taken from chrome
+ * under any name (`const { storage } = chrome`), along with `storage.local` on it. Names are
+ * followed through the file's scopes once it's all read, so a use before its binding counts.
  */
 const storageLocalRule = {
   meta: { type: 'problem', schema: ACCESS_SCHEMA },
   create(context) {
     const { rule, message } = context.options[0];
+    const { sourceCode } = context;
     const report = node => context.report({ node, message: `[${rule}] ${message}` });
+    /** Names bound to a value: `const name = value`, `let name = value`, or `name = value` */
+    const bindings = [];
+    /** Every property a pattern takes apart */
+    const properties = [];
+    /** Every `.local` read */
+    const locals = [];
+    /** The variables bound to a storage, and to chrome */
+    const storages = new Set();
+    const chromes = new Set();
+
+    /** The variable an identifier names, or null for a global such as `chrome` */
+    const variableOf = identifier => {
+      for (let scope = sourceCode.getScope(identifier); scope; scope = scope.upper) {
+        const reference = scope.references.find(candidate => candidate.identifier === identifier);
+        if (reference) return reference.resolved;
+        const variable = scope.set.get(identifier.name);
+        if (variable && variable.identifiers.includes(identifier)) return variable;
+      }
+      return null;
+    };
+
+    /** A `.storage` read, a name bound to one, or a value named `storage` */
+    const isStorage = node => {
+      const value = unchained(node);
+      if (!value) return false;
+      if (value.type === 'MemberExpression') return propertyName(value) === 'storage';
+      return value.type === 'Identifier' && (value.name === 'storage' || storages.has(variableOf(value)));
+    };
+
+    /** `chrome`, a `.chrome` read such as `self.chrome`, or a name bound to one */
+    const isChrome = node => {
+      const value = unchained(node);
+      if (!value) return false;
+      if (value.type === 'MemberExpression') return propertyName(value) === 'chrome';
+      if (value.type !== 'Identifier') return false;
+      const variable = variableOf(value);
+      return variable ? chromes.has(variable) : value.name === 'chrome';
+    };
+
     return {
-      MemberExpression(node) {
-        if (propertyName(node) === 'local' && isStorage(node.object)) report(node);
+      VariableDeclarator(node) {
+        if (node.id.type === 'Identifier' && node.init) bindings.push({ identifier: node.id, value: node.init });
+      },
+      AssignmentExpression(node) {
+        if (node.operator === '=' && node.left.type === 'Identifier') bindings.push({ identifier: node.left, value: node.right });
       },
       'ObjectPattern > Property'(node) {
-        const key = keyName(node);
-        const holder = holderOf(node.parent);
-        if (key === 'local') {
-          if (holder ? keyName(holder) === 'storage' : isStorage(sourceOf(node.parent))) report(node);
-        } else if (key === 'storage' && !holder && !destructuresFurther(node) && isChrome(sourceOf(node.parent))) {
-          report(node);
+        properties.push(node);
+      },
+      MemberExpression(node) {
+        if (propertyName(node) === 'local') locals.push(node);
+      },
+      'Program:exit'() {
+        // Which names hold a storage or chrome, through as many bindings as it takes
+        let grew = true;
+        const mark = (set, identifier) => {
+          const variable = variableOf(identifier);
+          if (variable && !set.has(variable)) {
+            set.add(variable);
+            grew = true;
+          }
+        };
+        while (grew) {
+          grew = false;
+          for (const { identifier, value } of bindings) {
+            if (isStorage(value)) mark(storages, identifier);
+            else if (isChrome(value)) mark(chromes, identifier);
+          }
+          for (const property of properties) {
+            const bound = boundName(property);
+            if (!bound || holderOf(property.parent)) continue;
+            const key = keyName(property);
+            if (key === 'storage' && isChrome(sourceOf(property.parent))) mark(storages, bound);
+            else if (key === 'chrome') mark(chromes, bound);
+          }
+        }
+        for (const node of locals) if (isStorage(node.object)) report(node);
+        for (const property of properties) {
+          const key = keyName(property);
+          const holder = holderOf(property.parent);
+          if (key === 'local') {
+            if (holder ? keyName(holder) === 'storage' : isStorage(sourceOf(property.parent))) report(property);
+          } else if (key === 'storage' && !holder && !destructuresFurther(property) && isChrome(sourceOf(property.parent))) {
+            report(property);
+          }
         }
       },
     };

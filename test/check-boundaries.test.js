@@ -541,8 +541,27 @@ describe('eslint.config.mjs boundary rules', () => {
       // Where it's defined isn't a use
       'export const defines = holder => { holder.getStore = () => null; };',
     ].join('\n'));
+    // Through a name bound to a storage or to chrome, before or after it's bound, and a blind
+    // write imported or passed on under another name
+    write('js/probe-alias.js', [
+      "import { legacyBlindWrite as write } from './probe-blind.js';",
+      "export { legacyBlindWrite as blind } from './probe-blind.js';",
+      "export const viaConst = () => { const area = chrome.storage; return area.local.get('x'); };",
+      'export const viaLet = () => { let area; area = self.chrome.storage; return area.local; };',
+      "export const viaAlias = () => { const area = chrome.storage; const again = area; return again['local']; };",
+      'export const viaRenamed = () => { const { storage: area } = chrome; return area.local; };',
+      'export const fromAlias = () => { const area = chrome.storage; const { local } = area; return local; };',
+      'export const fromChromeAlias = () => { const api = chrome; const { storage } = api; return storage; };',
+      'export const early = () => later.local;',
+      'const later = chrome.storage;',
+      // An alias bound, in reading order, before what it's bound to
+      'export const backward = () => { const copy = forward; return copy.local; };',
+      'const forward = chrome.storage;',
+      'export const writes = () => write;',
+    ].join('\n'));
     // js/storage.js is outside #12's rules, but not #17's
     append('js/storage.js', "function probeBlind(adapter) { return adapter.legacyBlindWrite(['notes'], () => {}); }");
+    append('js/storage.js', 'function probeAlias() { const area = chrome.storage; return area.local; }');
     // Kernel core isn't exempt
     write('js/kernel/core/probe-store.js', "export const raw = tx => tx.objectStore('canvases');\n");
     // Allowed: #17's adapter opens stores, and adapters and composition roots reach
@@ -569,12 +588,17 @@ describe('eslint.config.mjs boundary rules', () => {
       // `storage` taken from chrome, then storage.local on it, is two
       'js/probe-access.js: 5 chrome.storage.local hits no ledger row covers',
       'js/probe-access.js: 1 chrome.storage hit no ledger row covers',
+      // `storage` taken from chrome, then `area.local` on it, is two again
+      'js/probe-alias.js: 9 chrome.storage.local hits no ledger row covers',
+      'js/probe-alias.js: 6 chrome.storage hits no ledger row covers',
+      'js/probe-alias.js: 2 legacyBlindWrite hits no ledger row covers',
       'js/storage.js: 1 legacyBlindWrite hit no ledger row covers',
+      'js/storage.js: 13 chrome.storage.local hits, 12 allowed by the ledger',
       'js/kernel/core/probe-store.js: 1 objectStore hit no ledger row covers',
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/search\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 12, output);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 16, output);
   });
 });
