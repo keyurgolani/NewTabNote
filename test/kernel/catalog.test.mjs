@@ -60,6 +60,8 @@ const COMMAND_SAMPLES = {
     blocks: [{ id: 'b1', type: 'text', content: 'Line', order: 0 }],
     preview: 'Line',
     todoProgress: { completed: 0, total: 1 },
+    name: 'Plan 3',
+    linkedNames: ['Plan 3', 'Elsewhere'],
     expectedRevision: 1,
   },
   applyDerivedTitle: { noteId: 'n1', name: 'Derived', contentHash: 'h1' },

@@ -40,17 +40,19 @@ export const IDB_STORES = Object.freeze({
   media: 'media',
   vectors: 'vectors',
   snapshots: 'snapshots',
+  links: 'links',
 });
 
 /** Without these the notes can't be read, so a versioned open refuses the database, as Storage.open does */
 export const CORE_STORES = Object.freeze(['canvases', 'elements']);
 
 /**
- * Derived from the notes, so a database without it skips its writes, as Storage.createNote
- * and Storage.updateNote do. A write to any other missing store fails the command.
+ * Derived from the notes, so a database without one skips its writes: the search index, as
+ * Storage.createNote and Storage.updateNote skip it, and the wiki links, as
+ * Storage.updateNoteLinks does. A write to any other missing store fails the command.
  * @type {readonly StoreName[]}
  */
-export const DERIVED_STORES = Object.freeze(['searchIndex']);
+export const DERIVED_STORES = Object.freeze(['searchIndex', 'links']);
 
 /**
  * Creates each version-8 store `db` lacks, with its indexes. Runs only inside the upgrade, and

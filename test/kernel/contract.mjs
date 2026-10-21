@@ -480,6 +480,141 @@ export function runContractSuite(fixture) {
         assert.equal((await blocksOf('n1')).length, 1);
       });
 
+      it('writes a typed title with the blocks, marked as set by hand, and the search entry follows', async () => {
+        await createNote({ noteId: 'n1', name: 'Draft' });
+        const before = await noteOf('n1');
+        ctx.clock.advance();
+        // The title and the first line were typed inside one debounce, so one save carries both
+        const outcome = await run(
+          cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Line 0', name: 'Groceries' }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['content-saved', ['n1']]);
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          name: 'Groceries',
+          titleManuallySet: true,
+          preview: 'Line 0',
+          updatedAt: NOW + 1000,
+        });
+        assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 1));
+        assert.deepEqual(await searchEntryOf('n1'), {
+          noteId: 'n1',
+          name: 'Groceries',
+          content: '',
+          updatedAt: NOW + 1000,
+        });
+      });
+
+      it('commits a typed title and the blocks together on every adapter', async () => {
+        await createNote({ noteId: 'n1', name: 'Draft', blocks: someBlocks('n1', 1) });
+        const before = await noteOf('n1');
+        const entry = await searchEntryOf('n1');
+        ctx.failNextWrite('blocks');
+        const outcome = await kernel.execute(
+          cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2), name: 'Groceries' }),
+        );
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual(await noteOf('n1'), before);
+        assert.equal((await blocksOf('n1')).length, 1);
+        assert.deepEqual(await searchEntryOf('n1'), entry);
+      });
+
+      it('a save with no typed title leaves the stored one, so a rename made elsewhere stays', async () => {
+        await createNote({ noteId: 'n1', name: 'Draft' });
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Renamed in another tab' }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), preview: 'Line 0' }));
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.name, note?.preview], ['Renamed in another tab', 'Line 0']);
+        assert.equal((await searchEntryOf('n1'))?.name, 'Renamed in another tab');
+      });
+
+      /**
+       * The notes `noteId`'s wiki links point at, in the order they were stored
+       * @param {string} noteId
+       */
+      const linksFrom = async noteId => {
+        const links = await ctx.adapter.read(['links'], tx => tx.getAllByIndex('links', 'fromNoteId', noteId));
+        for (const link of links) {
+          assert.deepEqual(Object.keys(link).sort(), ['createdAt', 'fromNoteId', 'id', 'toNoteId']);
+          assert.equal(typeof link.id, 'string');
+        }
+        return [...links].sort((a, b) => (a.id < b.id ? -1 : 1)).map(link => [link.toNoteId, link.createdAt]);
+      };
+
+      it("replaces the note's wiki links with links to the notes its text names, as Storage.updateNoteLinks finds them", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'old', name: 'groceries' });
+        ctx.clock.advance();
+        // Of two notes with one name, whatever the case, the one updated last
+        await createNote({ noteId: 'new', name: 'Groceries' });
+        await createNote({ noteId: 'archived', name: 'Archive me' });
+        await run(cmd('archiveNote', { noteId: 'archived' }));
+        await createNote({ noteId: 'trashed', name: 'Trash me' });
+        await run(cmd('trashNote', { noteId: 'trashed' }));
+        await seed('notes', [{ ...storageNote('template', 'Template', NOW), isTemplate: true }]);
+        ctx.clock.advance();
+        const linkedNames = ['GROCERIES', 'Archive me', 'Trash me', 'Template', 'Plan', 'Nowhere', 'groceries'];
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), linkedNames }));
+        assert.deepEqual(await linksFrom('n1'), [
+          ['new', NOW + 2000],
+          ['archived', NOW + 2000],
+        ]);
+      });
+
+      it('a later save replaces the links, one with no names deletes them, and one that carries none keeps them', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'n2', name: 'Groceries' });
+        await createNote({ noteId: 'n3', name: 'Recipes' });
+        /** @param {Partial<CommandOf<'saveNoteContent'>>} fields */
+        const save = fields => run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), ...fields }));
+        await save({ linkedNames: ['Groceries'] });
+        await save({ linkedNames: ['Recipes'] });
+        assert.deepEqual(await linksFrom('n1'), [['n3', NOW]]);
+        await save({});
+        assert.deepEqual(await linksFrom('n1'), [['n3', NOW]]);
+        await save({ linkedNames: [] });
+        assert.deepEqual(await linksFrom('n1'), []);
+        // A note linking here keeps its own links
+        await run(cmd('saveNoteContent', { noteId: 'n2', blocks: someBlocks('n2', 1), linkedNames: ['Plan'] }));
+        await save({ linkedNames: [] });
+        assert.deepEqual(await linksFrom('n2'), [['n1', NOW]]);
+      });
+
+      it('writes no links for a note deleted since the editor loaded it', async () => {
+        await createNote({ noteId: 'n2', name: 'Groceries' });
+        assertRejected(
+          await kernel.execute(
+            cmd('saveNoteContent', { noteId: 'gone', blocks: someBlocks('gone', 1), linkedNames: ['Groceries'] }),
+          ),
+          'not-found',
+          'note-not-found',
+        );
+        assert.deepEqual(await linksFrom('gone'), []);
+      });
+
+      it(
+        'on a database without the links store, a save stores the note and its blocks and skips the links, as Storage does',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const other = await startWithout(['links']);
+          try {
+            const tab = other.kernel();
+            /** @param {Command} command */
+            const send = async command => committedOf(await tab.execute(command));
+            await send(newCommand(other.ids, 'createNote', { noteId: 'n1', name: 'Plan' }));
+            await send(newCommand(other.ids, 'createNote', { noteId: 'n2', name: 'Groceries' }));
+            const blocks = someBlocks('n1', 1);
+            await send(newCommand(other.ids, 'saveNoteContent', { noteId: 'n1', blocks, linkedNames: ['Groceries'] }));
+            await send(newCommand(other.ids, 'saveNoteContent', { noteId: 'n1', blocks, linkedNames: [] }));
+            const stored = await tab.query({ type: 'getNoteBlocks', noteId: 'n1' });
+            assert.deepEqual(stored.kind === 'ready' && stored.data, blocks);
+          } finally {
+            await other.close();
+          }
+        },
+      );
+
       it('refuses a block of another note and two blocks with one id', async () => {
         await createNote({ noteId: 'n1' });
         assertRejected(
