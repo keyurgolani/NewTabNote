@@ -495,6 +495,44 @@ function createChromeStub() {
     try { fn(); } finally { runtime.lastError = undefined; }
   };
 
+  // As in Chrome, chrome.storage.onChanged (with the area name) and chrome.storage.local.onChanged
+  // tell every context sharing this stub, the writing one included, what a write changed: each
+  // key's oldValue when it had one and newValue when it has one. A write that changes nothing
+  // fires neither. tests/chrome-storage-conformance.test.js holds this to Chromium.
+  const storageChanged = createEventStub();
+  const localChanged = createEventStub();
+  const listenerErrors = [];
+  const announce = (changes) => {
+    if (Object.keys(changes).length === 0) return;
+    const deliver = (listener, args) => {
+      // Chrome logs a listener that throws and goes on to the next
+      try { listener(...args); } catch (error) { listenerErrors.push(error); }
+    };
+    storageChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes), 'local']));
+    localChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes)]));
+  };
+  // Chrome compares stored values as JSON values, so key order in an object doesn't count
+  const canonical = (value) => JSON.stringify(value, (key, item) => (
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((k) => [k, item[k]]))
+      : item
+  ));
+  // Finish a write the way Chrome does: its changes go out, then its callback runs or its promise settles
+  const finish = (failure, changes, callback) => {
+    if (callback) {
+      later(() => {
+        if (!failure) announce(changes);
+        withLastError(failure, () => callback());
+      });
+      return undefined;
+    }
+    return new Promise((resolve, reject) => later(() => {
+      if (failure) { reject(failure); return; }
+      announce(changes);
+      resolve();
+    }));
+  };
+
   const storageLocal = {
     get(keys, callback) {
       const failure = getFailures.shift();
@@ -520,22 +558,37 @@ function createChromeStub() {
     set(items, callback) {
       const failure = setFailures.shift();
       calls.push({ method: 'set', keys: Object.keys(items), failed: Boolean(failure) });
-      if (!failure) Object.keys(items).forEach((k) => { local[k] = toJson(items[k]); });
-      if (callback) { later(() => withLastError(failure, () => callback())); return undefined; }
-      return failure ? Promise.reject(failure) : Promise.resolve();
+      const changes = {};
+      if (!failure) {
+        Object.keys(items).forEach((k) => {
+          // Chrome leaves a key whose value is undefined as it was, as JSON.stringify drops it
+          if (items[k] === undefined) return;
+          const value = toJson(items[k]);
+          const had = Object.hasOwn(local, k);
+          if (had && canonical(local[k]) === canonical(value)) return;
+          changes[k] = had ? { oldValue: local[k], newValue: value } : { newValue: value };
+          local[k] = value;
+        });
+      }
+      return finish(failure, changes, callback);
     },
     remove(keys, callback) {
       const list = Array.isArray(keys) ? keys : [keys];
       calls.push({ method: 'remove', keys: list });
-      list.forEach((k) => { delete local[k]; });
-      if (callback) { later(() => withLastError(null, () => callback())); return undefined; }
-      return Promise.resolve();
+      const changes = {};
+      list.forEach((k) => {
+        if (!Object.hasOwn(local, k)) return;
+        changes[k] = { oldValue: local[k] };
+        delete local[k];
+      });
+      return finish(null, changes, callback);
     },
+    onChanged: localChanged,
   };
 
   const api = {
     runtime,
-    storage: { local: storageLocal, onChanged: createEventStub() },
+    storage: { local: storageLocal, onChanged: storageChanged },
     notifications: {
       create(idOrOptions, maybeOptions, callback) {
         const options = typeof idOrOptions === 'string' ? maybeOptions : idOrOptions;
@@ -566,6 +619,8 @@ function createChromeStub() {
     failNextSet(error = new Error('QUOTA_BYTES quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
+    /** What onChanged listeners threw, which Chrome would log as "Error in event handler". */
+    listenerErrors,
     /** set and remove calls, which are the writes. */
     writes() { return calls.filter((c) => c.method === 'set' || c.method === 'remove'); },
   };
