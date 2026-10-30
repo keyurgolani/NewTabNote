@@ -599,41 +599,57 @@
                   "canvases": {
                     "count": 5,
                     "idSetHash": "fe7714162b38449702e6b6bf61d0213caf10d62eb5ab5a47156cb2a2c18a5fa1",
+                    "contentHash": "b22a482cd02ec74b5865a9b535e4fa9ed4babdc1142d71c894977b18ea97553a",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "elements": {
                     "count": 5,
                     "idSetHash": "abd445ffc45f95d6f73c93380c312a0c600f466c0865ac46f2a5f581557a0792",
+                    "contentHash": "7a875501aa275d4088b513cdbc63d15a5a35223a2f84b60121271c34789744ed",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "folders": {
                     "count": 1,
                     "idSetHash": "68540ac78c050df4f3f14159f11e1817763706a7b8c1bef20ef994f42b6c4abd",
+                    "contentHash": "de2cbd9a18a0ffafa8dec8fc6736513c42bffe521e4d6ee485544b60e6951cd2",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "links": {
                     "count": 1,
                     "idSetHash": "ea9c4dbc5412411f1ec5e97dcceb6b52014f603fea19a0b02b88413a32d82efb",
+                    "contentHash": "db2b259c1e001a6cb733233b899c7d7aee1176b458e39836a9f7a9b926cdbfad",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "media": {
                     "count": 1,
                     "idSetHash": "cb4f24676a7936d89f2c0d7872a91cb219b100a6da965992a1c039ea335cf28c",
+                    "contentHash": "d6712985bde16d1ddbea6b1f86359d94d8f16ae9bc613a108cb65cb1018c31d9",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "search_index": {
                     "count": 5,
                     "idSetHash": "fe7714162b38449702e6b6bf61d0213caf10d62eb5ab5a47156cb2a2c18a5fa1",
+                    "contentHash": "c9e58e15e249b8f412872a1416367e81097d74ee78a40ee7cb3dfa6ff3ca1ec1",
+                    "keyPath": "noteId",
                     "purged": []
                   },
                   "themes": {
                     "count": 1,
                     "idSetHash": "16f073933b00620ba996be4804d63d0b7a21229330a7c09904d7b9f7fb57a6b2",
+                    "contentHash": "17732f4c72255f1e3cd61779aa3c17bf422fdd26430be48eca4eb73d0a376159",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "vectors": {
                     "count": 1,
                     "idSetHash": "28b32306972eff0553aabfed25fc92541d3ffcac36c6debd9f7428b6b153ad1b",
+                    "contentHash": "cc32c492933da4bb85b410419c19cd06c5176d4d0be37195413a56ed397a899c",
+                    "keyPath": "id",
                     "purged": []
                   }
                 }

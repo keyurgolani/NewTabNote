@@ -23,7 +23,13 @@ import {
   storesToCopy,
   verifyPoint,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { approximateBytes, recordSha256, taggedJson } from '../../js/kernel/adapters/indexeddb/records.js';
+import {
+  approximateBytes,
+  contentEntry,
+  recordSha256,
+  subtractHashes,
+  taggedJson,
+} from '../../js/kernel/adapters/indexeddb/records.js';
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { KeyRange, Killed, legacyEnv, newProfile, profileWith, run, synthesized } from './migration-support.mjs';
 import { NOW } from './support.mjs';
@@ -97,6 +103,24 @@ async function firstRow(of, pointId, store) {
   return row;
 }
 
+/**
+ * Every row of a point for `store`, read raw
+ * @param {Profile} of
+ * @param {string} pointId
+ * @param {string} store
+ * @returns {Promise<any[]>}
+ */
+async function rowsOf(of, pointId, store) {
+  const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+  const tx = recovery.transaction(ROWS_STORE, 'readonly');
+  const request = tx.objectStore(ROWS_STORE).getAll(KeyRange.bound([pointId, store], [pointId, `${store}\u0000`], false, true));
+  const rows = await new Promise(resolve => {
+    request.onsuccess = () => resolve(request.result);
+  });
+  recovery.close();
+  return /** @type {any[]} */ (rows);
+}
+
 describe('a record hash', () => {
   it('sees what IndexedDB keeps: Blob bytes and type, binary data, Dates, undefined, Maps, Sets, -0, and an escaped $type', async () => {
     const hash = (/** @type {unknown} */ value) => recordSha256(value, crypto);
@@ -140,7 +164,7 @@ describe('verification', () => {
     recovery.close();
   });
 
-  /** @type {Array<[string, (row: any, store: IDBObjectStore) => void, string]>} */
+  /** @type {Array<[string, (row: any, store: IDBObjectStore, rows: Record<string, any[]>) => void | Promise<void>, string]>} */
   const DAMAGE = [
     [
       'a changed record',
@@ -155,21 +179,67 @@ describe('verification', () => {
     ['a missing id', (row, store) => store.delete([row.pointId, row.store, row.key]), 'count-mismatch'],
     [
       'an extra row (the count off by one)',
-      (row, store) => store.put({ ...row, key: `${row.key}-extra` }),
+      async (row, store, rows) => {
+        rows.pending.push({ ...row, key: `${row.key}-extra`, value: { ...row.value, id: `${row.key}-extra` } });
+      },
       'count-mismatch',
     ],
     [
       'a key swapped for another, the count kept',
-      (row, store) => {
-        store.delete([row.pointId, row.store, row.key]);
-        store.put({ ...row, key: `${row.key}-other` });
+      async (row, store, rows) => {
+        rows.removed.push([row.pointId, row.store, row.key]);
+        rows.pending.push({ ...row, key: `${row.key}-other`, value: { ...row.value, id: `${row.key}-other` } });
       },
       'id-set-mismatch',
+    ],
+    [
+      "a value whose key field no longer names its row's key, its row hash recomputed",
+      async (row, store, rows) => {
+        rows.pending.push({ ...row, value: { ...row.value, id: 'someone-else' } });
+      },
+      'key-mismatch',
     ],
     [
       'a row under a store the point never copied',
       (row, store) => store.put({ ...row, store: 'zz-not-copied' }),
       'count-mismatch',
+    ],
+    // Review R61's probes: each row agreeing with itself isn't enough
+    [
+      "a notes row holding a block's value and hash (probe A)",
+      (row, store, rows) => store.put({ ...row, value: rows.elements[0].value, sha256: rows.elements[0].sha256 }),
+      'key-mismatch',
+    ],
+    [
+      'two notes rows with their values and hashes swapped (probe B)',
+      (row, store, rows) => {
+        const [a, b] = rows.canvases;
+        store.put({ ...a, value: b.value, sha256: b.sha256 });
+        store.put({ ...b, value: a.value, sha256: a.sha256 });
+      },
+      'key-mismatch',
+    ],
+    [
+      'a changed record with its row hash recomputed (probe C)',
+      async (row, store, rows) => {
+        rows.pending.push({ ...row, value: { ...row.value, name: 'changed' } });
+      },
+      'content-mismatch',
+    ],
+    [
+      'two notes rows swapped with their ids fixed and their hashes recomputed',
+      async (row, store, rows) => {
+        const [a, b] = rows.canvases;
+        rows.pending.push({ ...a, value: { ...b.value, id: a.key } }, { ...b, value: { ...a.value, id: b.key } });
+      },
+      'content-mismatch',
+    ],
+    [
+      "a block's value moved under a notes key, with its id and hash made to fit",
+      async (row, store, rows) => {
+        rows.pending.push({ ...row, value: { ...rows.elements[0].value, id: row.key } });
+      },
+      'content-mismatch',
     ],
   ];
   for (const [what, damage, code] of DAMAGE) {
@@ -179,7 +249,26 @@ describe('verification', () => {
       recovery.close();
       const store = what.includes('Blob') ? 'media' : 'canvases';
       const row = await firstRow(of, point.id, store);
-      await tamper(of, rows => damage(row, rows));
+      /** @type {Record<string, any[]>} */
+      const rows = {
+        canvases: await rowsOf(of, point.id, 'canvases'),
+        elements: await rowsOf(of, point.id, 'elements'),
+        pending: [],
+        removed: [],
+      };
+      // Rows a case rewrites with a fresh hash, worked out before the transaction opens
+      const rewrites = damage.constructor.name === 'AsyncFunction';
+      if (rewrites) await damage(row, /** @type {any} */ (null), rows);
+      /** @type {any[]} */
+      const rehashed = [];
+      for (const changed of rows.pending) rehashed.push({ ...changed, sha256: await recordSha256(changed.value, crypto) });
+      await tamper(of, target => {
+        if (rewrites) {
+          for (const key of rows.removed) target.delete(key);
+          for (const changed of rehashed) target.put(changed);
+        }
+        else damage(row, target, rows);
+      });
       const reopened = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
       assert.deepStrictEqual(await verifyPoint({ recovery: reopened, point, io }), { ok: false, code });
       reopened.close();
@@ -207,11 +296,19 @@ describe('purged ids (#17 PR 2, Q16)', () => {
     const { recovery, point } = await copied(of);
     recovery.close();
     const row = await firstRow(of, point.id, 'canvases');
+    // As PR 2's purge will: the key on the purge list, and the row's entry out of the content hash
+    const entry = await contentEntry('canvases', await recordSha256(row.key, crypto), row.sha256, crypto);
+    const canvases = point.manifest.canvases;
     /** @type {Point} */
     const purged = {
       ...point,
-      manifest: { ...point.manifest, canvases: { ...point.manifest.canvases, purged: [row.key] } },
+      manifest: {
+        ...point.manifest,
+        canvases: { ...canvases, purged: [row.key], contentHash: subtractHashes(canvases.contentHash, entry) },
+      },
     };
+    /** @type {Point} */
+    const listedOnly = { ...point, manifest: { ...point.manifest, canvases: { ...canvases, purged: [row.key] } } };
     const check = async (/** @type {Point} */ which) => {
       const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
       const verdict = await verifyPoint({ recovery: db, point: which, io });
@@ -222,6 +319,8 @@ describe('purged ids (#17 PR 2, Q16)', () => {
     await tamper(of, rows => rows.delete([row.pointId, row.store, row.key]));
     assert.deepStrictEqual(await check(purged), { ok: true });
     assert.deepStrictEqual(await check(point), { ok: false, code: 'count-mismatch' });
+    // A purge that left the content hash as it was doesn't verify either
+    assert.deepStrictEqual(await check(listedOnly), { ok: false, code: 'content-mismatch' });
   });
 });
 
@@ -319,8 +418,9 @@ describe('which points stay', () => {
 
   it('the first verified pre-migration point is pinned; later ones keep only the newest beside it', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
-    for (const id of ['first', 'second', 'third']) {
-      const { recovery, point } = await copied(of, { id });
+    // Before steps 9, 10, and 11, as #17's later PRs will make them
+    for (const [id, target] of /** @type {const} */ ([['first', 9], ['second', 10], ['third', 11]])) {
+      const { recovery, point } = await copied(of, { id, target });
       const ticking = { now: () => NOW + ['first', 'second', 'third'].indexOf(id) };
       await keepVerified({ recovery, point: { ...point, createdAt: ticking.now() }, clock: ticking, io });
       recovery.close();
@@ -335,6 +435,22 @@ describe('which points stay', () => {
       ],
     );
     for (const point of points) assert.deepStrictEqual(await verifyPoint({ recovery: db, point, io }), { ok: true });
+    db.close();
+  });
+
+  it('a point remade before the same target replaces the older one, and takes its pin', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    for (const id of ['old', 'remade']) {
+      const { recovery, point } = await copied(of, { id, target: 9 });
+      const ticking = { now: () => NOW + ['old', 'remade'].indexOf(id) };
+      await keepVerified({ recovery, point: { ...point, createdAt: ticking.now() }, clock: ticking, io });
+      recovery.close();
+    }
+    const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    assert.deepStrictEqual(
+      (await listPoints(db)).map(p => [p.id, p.target, p.pinned]),
+      [['remade', 9, true]],
+    );
     db.close();
   });
 

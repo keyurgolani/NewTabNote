@@ -9,10 +9,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { webcrypto } from 'node:crypto';
+
+import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
+import { committed } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES, STEPS, legacySchema } from '../../js/kernel/adapters/indexeddb/registry.js';
-import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
+import { detectShape, inspect, openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import {
+  KeyRange,
   Killed,
   legacyEnv,
   asDumped,
@@ -25,6 +30,7 @@ import {
   start,
   synthesized,
 } from './migration-support.mjs';
+import { NOW } from './support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -544,4 +550,148 @@ describe('step 9 inside its versionchange', () => {
       }
     });
   }
+});
+
+describe('a verified point reused only while it matches the live data (review R61, Q3)', () => {
+  it('a note written on 8 after the point was verified makes the next run remake it, and the pin moves', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const first = await run(of, {
+      hooks: {
+        between: label => {
+          if (label === 'verified') throw new Killed();
+        },
+      },
+    });
+    assert.equal(first.status, 'failed');
+    // The user keeps writing on 8 before the worker runs again
+    const db = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const tx = db.transaction('canvases', 'readwrite');
+    const done = committed(tx);
+    tx.objectStore('canvases').put({ ...legacyEnv.note('written-after-point'), name: 'Later' });
+    await done;
+    db.close();
+
+    const second = await run(of);
+    assert.equal(second.status, 'migrated');
+    assert.equal(second.recoveryPointId, `pre-migration-${NOW}-2`);
+    assert.ok(of.logs.some(line => line.event === 'storage-recovery-point-stale'));
+    const points = recordsIn(await dump(of), 'NewTabNoteRecovery', 'points').map(record => record.value);
+    assert.deepStrictEqual(
+      points.map(point => [point.id, point.pinned]),
+      [[`pre-migration-${NOW}-2`, true]],
+    );
+    const exported = await exportPoint({
+      indexedDB: of.real,
+      keyRange: KeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      clock: { now: () => NOW },
+      pointId: /** @type {string} */ (await exportablePoint({ indexedDB: of.real })),
+    });
+    assert.ok(exported.canvases.some(note => /** @type {any} */ (note).id === 'written-after-point'));
+  });
+
+  it('a point that still matches is reused as it is, with nothing copied again', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    await run(of, {
+      hooks: {
+        between: label => {
+          if (label === 'verified') throw new Killed();
+        },
+      },
+    });
+    const before = of.faults.transactions.length;
+    const second = await run(of);
+    assert.equal(second.recoveryPointId, `pre-migration-${NOW}`);
+    const copies = of.faults.transactions.slice(before).filter(tx => tx.names.includes('rows') && tx.mode === 'readwrite');
+    assert.deepStrictEqual(copies, []);
+  });
+});
+
+describe('an empty CanvasTabDB at or above the version a run opens at', () => {
+  /**
+   * A profile whose CanvasTabDB is at `version`, with `stores` (name to key path)
+   * @param {number} version
+   * @param {Record<string, string>} [stores]
+   */
+  async function made(version, stores = {}) {
+    const of = newProfile();
+    await new Promise((resolve, reject) => {
+      const request = of.real.open('CanvasTabDB', version);
+      request.onupgradeneeded = () => {
+        for (const [name, keyPath] of Object.entries(stores)) {
+          request.result.createObjectStore(name, { keyPath }).put({ [keyPath]: 'kept', text: 'still here' });
+        }
+      };
+      request.onsuccess = () => {
+        request.result.close();
+        resolve(undefined);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    return of;
+  }
+
+  for (const version of [9, 12]) {
+    it(`at version ${version}: deleted on its own connection, made again at 9, logged and receipted`, async () => {
+      const of = await made(version);
+      const outcome = await run(of);
+      assert.deepStrictEqual([outcome.status, outcome.to], ['migrated', 9]);
+      assert.deepStrictEqual(of.faults.deletes, ['CanvasTabDB']);
+      const expected = expectedFor('none.basic');
+      const dumped = await dump(of, expected.header);
+      const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));
+      const want = /** @type {any} */ (asDumped(expected).databases.find(candidate => candidate.name === 'CanvasTabDB'));
+      assert.deepStrictEqual(
+        db.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
+        want.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
+      );
+      assert.deepStrictEqual(
+        recordsIn(dumped, 'CanvasTabDB', 'migrations').map(record => record.value.id),
+        ['recreate-empty', 'structural-9'],
+      );
+      assert.equal(recordsIn(dumped, 'CanvasTabDB', 'migrations')[0].value.from, version);
+      assert.deepStrictEqual(
+        of.logs.filter(line => line.event === 'storage-migration-recreated-empty').map(line => line.detail),
+        [{ fromVersion: version }],
+      );
+      assert.equal((await run(of)).status, 'current');
+    });
+  }
+
+  it('a connection that blocks the delete is answered blocked-upgrade, and the run waits for it', async () => {
+    const of = await made(9);
+    const old = await new Promise((resolve, reject) => {
+      const request = of.real.open('CanvasTabDB');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const started = start(of, { openWithinMs: 50 });
+    assert.deepStrictEqual(await started.answer, { status: 'blocked-upgrade', retryable: true });
+    /** @type {IDBDatabase} */ (old).close();
+    assert.equal((await started.done).status, 'migrated');
+  });
+
+  // The lead's condition: a database with even one store is never deleted, at any version
+  for (const version of [1, 2, 7, 8, 9, 10, 12, 40]) {
+    for (const stores of [{ canvases: 'id' }, { mystery: 'id' }, { meta: 'key' }]) {
+      it(`at version ${version} with only ${Object.keys(stores)[0]}: never deleted, and its record kept`, async () => {
+        const of = await made(version, stores);
+        await run(of);
+        await run(of);
+        assert.deepStrictEqual(of.faults.deletes, []);
+        const [name] = Object.keys(stores);
+        const kept = recordsIn(await dump(of), 'CanvasTabDB', name);
+        assert.deepStrictEqual(
+          kept.map(record => record.value.text),
+          ['still here'],
+        );
+      });
+    }
+  }
+
+  it('an empty database below 9 upgrades in place, and nothing is deleted', async () => {
+    const of = await made(1);
+    assert.equal((await run(of)).status, 'migrated');
+    assert.deepStrictEqual(of.faults.deletes, []);
+  });
 });

@@ -4,7 +4,8 @@
  * - `points` (keyPath `id`): `{id, kind, pinned, status, sourceShape, sourceVersion,
  *   structuralVersion, logicalVersion, target, stores, createdAt, verifiedAt, manifest}`, where
  *   `status` is `copying`, `verified`, or `failed`, and `manifest` gives each copied store's
- *   `{count, idSetHash, purged}`. Ids, versions, counts, and hashes only, never content.
+ *   `{count, idSetHash, contentHash, keyPath, purged}`. Ids, versions, counts, key paths, and
+ *   hashes only, never content.
  * - `rows` (keyPath `['pointId', 'store', 'key']`): `{pointId, store, key, value, sha256}`, each
  *   copied record as it was read, with the SHA-256 records.js took of it then.
  * - `progress` (keyPath `pointId`): where a copy got to, so a cut-off one resumes.
@@ -17,16 +18,25 @@
  * against what it read.
  *
  * Verified means read back and matched (#17): each store's count, its ID set (records.js's
- * order-free sum of key hashes), and each row's SHA-256 recomputed from the row against the
- * one taken when it was read. Only a failed verification discards a point, along with a
+ * order-free sum of key hashes), each row's SHA-256 recomputed from the row against the one
+ * taken when it was read, the key each value holds at its store's key path against the row's
+ * key, and the store's content hash: the sum, taken as the copy read, of one hash per record
+ * over its store, its key's hash, and its value's hash (records.js's contentEntry). The
+ * content hash is what ties a value to its key and its store, so a value under another key or
+ * store, or a changed value whose row hash was recomputed, fails it (review R61). Only a
+ * failed verification discards a point, along with a
  * partial point the disk ran out of room for (Q7), which never verified. The first verified
  * `pre-migration` point is pinned while the legacy stores exist, which is as long as #17 runs;
  * otherwise the newest verified point of each kind is kept.
  *
  * Permanent deletion (#17 PR 2, Q16) will purge a note's rows from every point, the pinned one
- * included, and add their keys to that store's `purged` list. Verification counts them: a
- * store's rows plus its purged keys must give the count and the ID set the copy recorded, and
- * a purged key mustn't still be there.
+ * included: in one transaction, delete each row, add its key to that store's `purged` list, and
+ * take its contentEntry out of `contentHash` (records.js's subtractHashes). Verification counts
+ * them: a store's rows plus its purged keys must give the count and the ID set the copy
+ * recorded, its rows alone the content hash, and a purged key mustn't still be there.
+ *
+ * Before a run reuses a verified point, matchesSource reads the live stores the same way and
+ * compares them with the manifest, so a point older than the data it stands for is remade.
  *
  * Only migrate.js writes points, under Web Lock `storage.migrate`, so each point is changed by
  * one writer at a time and its record is kept in memory between batches.
@@ -34,7 +44,7 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf } from './failures.js';
-import { EMPTY_SET_HASH, addHashes, approximateBytes, recordSha256 } from './records.js';
+import { EMPTY_SET_HASH, addHashes, approximateBytes, contentEntry, keyAt, recordSha256 } from './records.js';
 import { result } from './requests.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -63,6 +73,8 @@ const STRICT = Object.freeze({ durability: 'strict' });
  * @typedef {object} StoreManifest
  * @property {number} count - records copied
  * @property {string} idSetHash - the sum of their keys' hashes (records.js)
+ * @property {string} contentHash - the sum of their contentEntry hashes (records.js)
+ * @property {string | string[] | null} keyPath - the store's key path, null before the first batch
  * @property {IDBValidKey[]} purged - keys permanent deletion took out since (#17 PR 2)
  */
 
@@ -205,11 +217,12 @@ function rowRange(keyRange, pointId, store) {
  * @param {IDBValidKey | null} after
  * @param {IDBKeyRange | null} range - the range to stay inside, when not the whole store
  * @param {Pick<Io, 'keyRange' | 'limits'>} io
- * @returns {Promise<{entries: Array<{key: IDBValidKey, value: any}>, end: boolean}>}
+ * @returns {Promise<{entries: Array<{key: IDBValidKey, value: any}>, end: boolean, keyPath: string | string[] | null}>}
  */
 export function readBatch(db, store, after, range, { keyRange, limits }) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readonly');
+    const { keyPath } = tx.objectStore(store);
     /** @type {IDBKeyRange | undefined} */
     let bounds = range || undefined;
     if (after !== null) {
@@ -239,7 +252,7 @@ export function readBatch(db, store, after, range, { keyRange, limits }) {
       cursor.continue();
     };
     tx.oncomplete = () => {
-      if (answered) resolve({ entries, end });
+      if (answered) resolve({ entries, end, keyPath });
       else reject(new DOMException('The read ended before its cursor answered', 'UnknownError'));
     };
     tx.onabort = () => reject(tx.error);
@@ -287,7 +300,9 @@ export function storesToCopy(db) {
 function newPoint(fields) {
   /** @type {Record<string, StoreManifest>} */
   const manifest = {};
-  for (const store of fields.stores) manifest[store] = { count: 0, idSetHash: EMPTY_SET_HASH, purged: [] };
+  for (const store of fields.stores) {
+    manifest[store] = { count: 0, idSetHash: EMPTY_SET_HASH, contentHash: EMPTY_SET_HASH, keyPath: null, purged: [] };
+  }
   return { ...fields, pinned: false, status: 'copying', verifiedAt: null, manifest };
 }
 
@@ -350,10 +365,13 @@ export async function copyPoint({ source, recovery, point, progress, io, hooks =
       const batch = await readBatch(source, store, after, null, io);
       /** @type {Array<{pointId: string, store: string, key: IDBValidKey, value: unknown, sha256: string}>} */
       const rows = [];
-      let idSetHash = point.manifest[store].idSetHash;
+      let { idSetHash, contentHash } = point.manifest[store];
       for (const { key, value } of batch.entries) {
-        rows.push({ pointId: point.id, store, key, value, sha256: await recordSha256(value, crypto) });
-        idSetHash = addHashes(idSetHash, await recordSha256(key, crypto));
+        const sha256 = await recordSha256(value, crypto);
+        const keyHash = await recordSha256(key, crypto);
+        rows.push({ pointId: point.id, store, key, value, sha256 });
+        idSetHash = addHashes(idSetHash, keyHash);
+        contentHash = addHashes(contentHash, await contentEntry(store, keyHash, sha256, crypto));
       }
       if (hooks.between) await hooks.between('copy-read');
 
@@ -364,7 +382,13 @@ export async function copyPoint({ source, recovery, point, progress, io, hooks =
         ...point,
         manifest: {
           ...point.manifest,
-          [store]: { ...point.manifest[store], count: point.manifest[store].count + rows.length, idSetHash },
+          [store]: {
+            ...point.manifest[store],
+            count: point.manifest[store].count + rows.length,
+            idSetHash,
+            contentHash,
+            keyPath: batch.keyPath,
+          },
         },
       };
       /** @type {Progress} */
@@ -390,6 +414,23 @@ export async function copyPoint({ source, recovery, point, progress, io, hooks =
 }
 
 /**
+ * The keys a store's purge list holds, as hashes, and their sum
+ * @param {StoreManifest} expected
+ * @param {Digester} crypto
+ */
+async function purgedOf(expected, crypto) {
+  /** @type {Set<string>} */
+  const hashes = new Set();
+  let sum = EMPTY_SET_HASH;
+  for (const key of expected.purged || []) {
+    const hash = await recordSha256(key, crypto);
+    hashes.add(hash);
+    sum = addHashes(sum, hash);
+  }
+  return { hashes, sum };
+}
+
+/**
  * Reads `point` back and matches it (see the top of this file). Writes nothing.
  * @param {{recovery: IDBDatabase, point: Point, io: Io}} options
  * @returns {Promise<{ok: true} | {ok: false, code: string}>}
@@ -403,13 +444,9 @@ export async function verifyPoint({ recovery, point, io }) {
   let total = 0;
   for (const store of point.stores) {
     const expected = point.manifest[store];
-    const purged = new Set();
-    let idSetHash = EMPTY_SET_HASH;
-    for (const key of expected.purged || []) {
-      const hash = await recordSha256(key, crypto);
-      purged.add(hash);
-      idSetHash = addHashes(idSetHash, hash);
-    }
+    const purged = await purgedOf(expected, crypto);
+    let idSetHash = purged.sum;
+    let contentHash = EMPTY_SET_HASH;
     let count = 0;
     /** @type {IDBValidKey | null} */
     let after = null;
@@ -418,17 +455,27 @@ export async function verifyPoint({ recovery, point, io }) {
       const batch = await readBatch(recovery, ROWS_STORE, after, range, io);
       for (const { value: row } of batch.entries) {
         if (!row || row.pointId !== point.id || row.store !== store) return { ok: false, code: 'row-mismatch' };
-        if ((await recordSha256(row.value, crypto)) !== row.sha256) return { ok: false, code: 'record-mismatch' };
+        const valueHash = await recordSha256(row.value, crypto);
+        if (valueHash !== row.sha256) return { ok: false, code: 'record-mismatch' };
         const keyHash = await recordSha256(row.key, crypto);
-        if (purged.has(keyHash)) return { ok: false, code: 'purged-row-present' };
+        // Every legacy store keys its records inline: the value must hold the row's key
+        if (expected.keyPath !== null && expected.keyPath !== undefined) {
+          const held = keyAt(row.value, expected.keyPath);
+          if (held === undefined || (await recordSha256(held, crypto)) !== keyHash) {
+            return { ok: false, code: 'key-mismatch' };
+          }
+        }
+        if (purged.hashes.has(keyHash)) return { ok: false, code: 'purged-row-present' };
         idSetHash = addHashes(idSetHash, keyHash);
+        contentHash = addHashes(contentHash, await contentEntry(store, keyHash, valueHash, crypto));
         count += 1;
       }
       if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
       if (batch.end || batch.entries.length === 0) break;
     }
-    if (count + purged.size !== expected.count) return { ok: false, code: 'count-mismatch' };
+    if (count + purged.hashes.size !== expected.count) return { ok: false, code: 'count-mismatch' };
     if (idSetHash !== expected.idSetHash) return { ok: false, code: 'id-set-mismatch' };
+    if (contentHash !== expected.contentHash) return { ok: false, code: 'content-mismatch' };
     total += count;
   }
   // No row outside the stores the point copied
@@ -436,6 +483,43 @@ export async function verifyPoint({ recovery, point, io }) {
   const rows = await result(tx.objectStore(ROWS_STORE).count(rowRange(io.keyRange, point.id)));
   if (rows !== total) return { ok: false, code: 'count-mismatch' };
   return { ok: true };
+}
+
+/**
+ * Whether `source` still holds what `point` copied: each store's count, ID set, and content
+ * hash, read now in the same bounded readonly batches, against the manifest (purged keys
+ * accounted for). Writes nothing. A point that doesn't match is older than the data it stands
+ * for, and a run makes a new one instead of reusing it (review R61, Q3).
+ * @param {{source: IDBDatabase, point: Point, io: Io}} options
+ * @returns {Promise<boolean>}
+ */
+export async function matchesSource({ source, point, io }) {
+  const { crypto } = io;
+  for (const store of point.stores) {
+    if (!source.objectStoreNames.contains(store)) return false;
+    const expected = point.manifest[store];
+    const purged = await purgedOf(expected, crypto);
+    let idSetHash = purged.sum;
+    let contentHash = EMPTY_SET_HASH;
+    let count = 0;
+    /** @type {IDBValidKey | null} */
+    let after = null;
+    for (;;) {
+      const batch = await readBatch(source, store, after, null, io);
+      for (const { key, value } of batch.entries) {
+        const keyHash = await recordSha256(key, crypto);
+        const valueHash = await recordSha256(value, crypto);
+        idSetHash = addHashes(idSetHash, keyHash);
+        contentHash = addHashes(contentHash, await contentEntry(store, keyHash, valueHash, crypto));
+        count += 1;
+      }
+      if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
+      if (batch.end || batch.entries.length === 0) break;
+    }
+    if (count + purged.hashes.size !== expected.count) return false;
+    if (idSetHash !== expected.idSetHash || contentHash !== expected.contentHash) return false;
+  }
+  return true;
 }
 
 /**
@@ -490,24 +574,28 @@ export async function discardPoint(recovery, pointId, { keyRange, limits }) {
 }
 
 /**
- * Marks `point` verified, pins it when it's the first verified pre-migration point, and
- * deletes older verified points of its kind that aren't pinned, so the pinned one and the
- * newest stay
+ * Marks `point` verified and settles which points stay:
+ * - Verified points of its kind made before the same target are older copies of what it now
+ *   holds (a reuse found them stale, review R61): they go, and when one of them was pinned the
+ *   pin moves to `point`.
+ * - Otherwise the first verified pre-migration point is pinned, and older verified points of
+ *   the kind that aren't pinned go, so the pinned one and the newest stay.
+ * The new point is saved first, so a run cut off in between never leaves fewer points.
  * @param {{recovery: IDBDatabase, point: Point, clock: Clock, io: Pick<Io, 'keyRange' | 'limits'>}} options
  * @returns {Promise<Point>}
  */
 export async function keepVerified({ recovery, point, clock, io }) {
   const others = (await listPoints(recovery)).filter(other => other.id !== point.id);
+  const sameKind = others.filter(other => other.kind === point.kind && other.status === 'verified');
+  const replaced = sameKind.filter(other => other.target === point.target);
+  const pinnedElsewhere = sameKind.some(other => other.pinned && other.target !== point.target);
   const pinned =
-    point.kind === 'pre-migration' &&
-    !others.some(other => other.kind === 'pre-migration' && other.pinned && other.status === 'verified');
+    point.kind === 'pre-migration' && (replaced.some(other => other.pinned) || !pinnedElsewhere);
   /** @type {Point} */
   const verified = { ...point, status: 'verified', verifiedAt: clock.now(), pinned };
   await savePoint(recovery, verified, null);
-  for (const other of others) {
-    if (other.kind === point.kind && other.status === 'verified' && !other.pinned) {
-      await discardPoint(recovery, other.id, io);
-    }
+  for (const other of sameKind) {
+    if (other.target === point.target || !other.pinned) await discardPoint(recovery, other.id, io);
   }
   return verified;
 }

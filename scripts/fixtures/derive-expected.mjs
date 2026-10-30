@@ -15,6 +15,9 @@
 //   CanvasTabDB at 9 with the stores it lacked (empty, version-8 indexes), meta, and the
 //   receipt naming the point. No record changes.
 // - Already at 9 with its receipt: nothing changes, and no recovery database appears.
+// - A point's manifest gives each store its count, ID-set hash (the sum of its keys' hashes
+//   mod 2^256), content hash (the sum of SHA-256([store, key hash, value hash]) per record),
+//   key path, and an empty purge list.
 // - missing-core, an extra store, or a newer database: CanvasTabDB stays exactly as it was,
 //   and a point is made with no target (Q13).
 // The run's clock is test/kernel/support.mjs's NOW, held still, so every time is NOW.
@@ -42,6 +45,14 @@ const sha256 = data => createHash('sha256').update(data).digest('hex');
 function hashForm(value) {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(hashForm);
+  // A sparse array, or one with extra keys: its holes tagged, its extra keys beside it
+  if (value[TAG] === 'Array') {
+    const items = [];
+    for (let i = 0; i < value.length; i++) {
+      items.push(Object.hasOwn(value.items, String(i)) ? hashForm(value.items[String(i)]) : { [TAG]: 'hole' });
+    }
+    return { [TAG]: 'Array', items, props: hashForm(value.props || {}) };
+  }
   if (BINARY.has(value[TAG]) && typeof value.base64 === 'string') {
     const bytes = Buffer.from(value.base64, 'base64');
     return value[TAG] === 'Blob'
@@ -97,15 +108,20 @@ function recoveryOf(fixture, db, target) {
     const original = db.stores.find(store => store.name === name);
     const hashed = filled.stores.find(store => store.name === name);
     let idSetHash = ZERO;
+    let contentHash = ZERO;
     original.records.forEach((record, i) => {
       const filledRecord = hashed.records[i];
-      idSetHash = addHash(idSetHash, recordHash(filledRecord.key));
+      const keyHash = recordHash(filledRecord.key);
+      const valueHash = recordHash(filledRecord.value);
+      idSetHash = addHash(idSetHash, keyHash);
+      // One entry per record over its store, key hash, and value hash (review R61)
+      contentHash = addHash(contentHash, sha256(canonical([name, keyHash, valueHash])));
       rows.push({
         key: [POINT_ID, name, record.key],
-        value: { pointId: POINT_ID, store: name, key: record.key, value: record.value, sha256: recordHash(filledRecord.value) },
+        value: { pointId: POINT_ID, store: name, key: record.key, value: record.value, sha256: valueHash },
       });
     });
-    manifest[name] = { count: original.records.length, idSetHash, purged: [] };
+    manifest[name] = { count: original.records.length, idSetHash, contentHash, keyPath: original.keyPath, purged: [] };
   }
   rows.sort((a, b) => compareKeys(a.key, b.key));
   const point = {
