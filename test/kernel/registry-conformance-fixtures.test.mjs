@@ -4,11 +4,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { defineFamily } from '../../js/kernel/registry/family.js';
 import {
   CONFORMANCE_CASES,
   CONFORMANCE_RUNS,
   assertBuiltInsValid,
+  assertRootValid,
+  builtInProbeFailures,
   builtInProblems,
+  chromePermissionsOutsideManifest,
   describeRegistryConformance,
 } from './registry-conformance.mjs';
 import {
@@ -19,13 +23,17 @@ import {
   navigationBuiltIns,
   producerBuiltIns,
   producers,
+  providerBuiltIns,
+  providers,
 } from './registry-fixtures.mjs';
 
-for (const { family, builtIns, sample } of FIXTURE_FAMILIES) {
+for (const entry of FIXTURE_FAMILIES) {
+  const { family, builtIns, sample } = entry;
   describeRegistryConformance(family.id, {
     family,
     builtIns,
     sample,
+    alongside: 'alongside' in entry ? entry.alongside : [],
     fixtures: {
       'sample-note': (contribution, implementation) => {
         const { produce } = /** @type {{produce: (note: {words: number}) => unknown}} */ (implementation);
@@ -120,5 +128,40 @@ describe('registry conformance: a built-in that breaks a rule fails npm test', (
       'lazy',
     ]);
     assert.deepEqual([...CONFORMANCE_RUNS.keys()].sort(), FIXTURE_FAMILIES.map(({ family }) => family.id).sort());
+  });
+});
+
+describe('registry conformance: whole roots, the manifest, and probes', () => {
+  it("checks built-ins with the families they need, so a cross-family requirement isn't missing", () => {
+    assert.ok(builtInProblems(commands, commandBuiltIns).some(problem => problem.includes('open-settings missing-dependency')));
+    assert.deepEqual(builtInProblems(commands, commandBuiltIns, { alongside: [[navigation, navigationBuiltIns]] }), []);
+    assertRootValid([
+      [commands, commandBuiltIns],
+      [navigation, navigationBuiltIns],
+    ]);
+  });
+
+  it('finds a requires cycle that crosses families among built-ins', () => {
+    const settings = { ...navigationBuiltIns[0], requires: ['fixture-commands:open-settings'] };
+    assert.throws(
+      () =>
+        assertRootValid([
+          [commands, commandBuiltIns],
+          [navigation, [settings, ...navigationBuiltIns.slice(1)]],
+        ]),
+      /dependency-cycle/,
+    );
+  });
+
+  it("checks a family's Chrome permission ceiling against manifest.json", () => {
+    assert.deepEqual(chromePermissionsOutsideManifest(commands), []);
+    const wide = defineFamily({ id: 'fixture-wide', apiVersion: 1, groups: ['main'], ceilings: { chromePermissions: ['contextMenus', 'tabs', 'debugger'] } });
+    assert.deepEqual(chromePermissionsOutsideManifest(wide), ['debugger', 'tabs']);
+  });
+
+  it("runs every built-in's probe once, and fails on one that can't answer", async () => {
+    assert.deepEqual(await builtInProbeFailures(providers, providerBuiltIns), []);
+    const broken = [{ ...providerBuiltIns[0], probe: () => { throw new Error('no'); } }];
+    assert.deepEqual(await builtInProbeFailures(providers, broken), ['fixture-providers:webdav on workspace', 'fixture-providers:webdav on sidepanel']);
   });
 });

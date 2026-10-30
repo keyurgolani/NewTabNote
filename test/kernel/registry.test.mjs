@@ -860,7 +860,7 @@ describe('registry resolution report', () => {
   it('is a pure function of the resolution: one row per contribution with code-owned text', () => {
     const resolution = resolveAll('workspace', [
       [providers, providerBuiltIns],
-      [plain, [item('a', 1), item('a', 2), item('Bad Id', 3)]],
+      [plain, [item('a', 1), item('a', 2), item('Bad Id', 3), item('BadId', 4)]],
     ]);
     const report = resolutionReport(resolution);
     assert.deepEqual(resolutionReport(resolution), report);
@@ -870,13 +870,15 @@ describe('registry resolution report', () => {
       [
         ['fixture-plain', 'a', 'unresolved', 'duplicate-id'],
         ['fixture-plain', 'a', 'unresolved', 'duplicate-id'],
-        ['fixture-plain', 'Bad Id', 'unresolved', 'invalid-id'],
+        // An invalid id is reported only when it has an id's characters, so no free text gets in
+        ['fixture-plain', null, 'unresolved', 'invalid-id'],
+        ['fixture-plain', 'BadId', 'unresolved', 'invalid-id'],
         ['fixture-providers', 'webdav', 'enabled', 'ok'],
         ['fixture-providers', 'gdrive', 'not-implemented', 'not-implemented'],
         ['fixture-providers', 'dropbox', 'not-implemented', 'not-implemented'],
       ],
     );
-    const gdrive = /** @type {import('../../js/kernel/registry/report.js').ReportRow} */ (report[4]);
+    const gdrive = /** @type {import('../../js/kernel/registry/report.js').ReportRow} */ (report[5]);
     assert.equal(gdrive.message, 'Not available in this version.');
     assert.equal(gdrive.message, REASONS['not-implemented'].message);
   });
@@ -937,5 +939,109 @@ describe('registry resolution report', () => {
     const text = JSON.stringify(report);
     assert.ok(!text.includes('4321') && !text.includes('Private note'), text);
     assert.ok(!text.includes('Item throws'), 'the report holds a label');
+  });
+});
+
+describe('registry review fixes', () => {
+  it('keeps what a root resolves fixed after the lock, however a registered descriptor changes', () => {
+    const descriptor = {
+      ...item('a', 1),
+      requires: /** @type {string[]} */ ([]),
+      keywords: ['first'],
+    };
+    const chorded = {
+      ...commandBuiltIns[1],
+      chords: { default: ['Alt+N'] },
+      contexts: ['global'],
+    };
+    const root = createRegistryRoot({ host: 'workspace' });
+    root.register(plain, [descriptor]);
+    root.register(commands, [chorded]);
+    const before = root.resolve();
+    /** @type {any} */ (descriptor.hosts)[0] = 'popup';
+    descriptor.requires.push('absent');
+    descriptor.keywords.push('second');
+    chorded.chords.default.push('Mod+Shift+N');
+    /** @type {any} */ (chorded.contexts)[0] = 'nowhere';
+    const after = root.resolve();
+    for (const ref of ['fixture-plain:a', 'fixture-commands:new-note']) {
+      assert.deepEqual(stateOf(after, ref), stateOf(before, ref), ref);
+      assert.deepEqual(stateOf(after, ref), ['enabled', 'ok'], ref);
+    }
+    assert.deepEqual(after.get('fixture-plain:a')?.data.keywords, ['first']);
+    assert.deepEqual(after.get('fixture-commands:new-note')?.chords?.windows, ['Alt+N']);
+  });
+
+  it('loads only what is enabled now: not while a probe is pending, says no, or a requirement is unavailable', async () => {
+    let loads = 0;
+    const load = async () => {
+      loads++;
+      return { run() {} };
+    };
+    /** @type {((answer: unknown) => void)[]} */
+    const answers = [];
+    const resolution = resolveAll('workspace', [
+      [
+        plain,
+        [
+          item('probed', 1, { load, probe: () => new Promise(resolve => answers.push(resolve)) }),
+          item('setup', 2, { load, probe: () => ({ state: 'needs-setup' }) }),
+          item('dependent', 3, { load, requires: ['setup'] }),
+        ],
+      ],
+    ]);
+    const runtime = createRuntime(resolution);
+    assert.deepEqual(await runtime.load('fixture-plain:probed'), {
+      ok: false,
+      state: 'temporarily-unavailable',
+      reason: 'probe-pending',
+    });
+    const probing = runtime.probe();
+    answers[0]({ state: 'enabled' });
+    await probing;
+    assert.deepEqual(await runtime.load('fixture-plain:setup'), { ok: false, state: 'needs-setup', reason: 'needs-setup' });
+    assert.deepEqual(await runtime.load('fixture-plain:dependent'), {
+      ok: false,
+      state: 'temporarily-unavailable',
+      reason: 'dependency-unavailable',
+    });
+    assert.equal(loads, 0);
+    assert.equal((await runtime.load('fixture-plain:probed')).ok, true);
+    assert.equal(loads, 1);
+  });
+
+  it('finds chord conflicts only between contributions that share a host', () => {
+    /** @param {string} id @param {number} rank @param {Host[]} hosts @returns {Descriptor} */
+    const chord = (id, rank, hosts) => ({
+      ...commandBuiltIns[1],
+      id,
+      rank,
+      hosts,
+      chords: { default: ['Mod+K'] },
+    });
+    const apart = resolveAll('workspace', [[commands, [chord('here', 1, ['workspace']), chord('there', 2, ['popup'])]]]);
+    assert.deepEqual(stateOf(apart, 'fixture-commands:here'), ['enabled', 'ok']);
+    assert.deepEqual(stateOf(apart, 'fixture-commands:there'), ['not-applicable', 'other-host']);
+    const together = resolveAll('popup', [
+      [commands, [chord('here', 1, ['workspace', 'popup']), chord('there', 2, ['popup'])]],
+    ]);
+    assert.deepEqual(stateOf(together, 'fixture-commands:here'), ['unresolved', 'chord-conflict']);
+    assert.deepEqual(stateOf(together, 'fixture-commands:there'), ['unresolved', 'chord-conflict']);
+  });
+
+  it('orders repeated ids by version too, so registration order never shows', () => {
+    const descriptors = [item('a', 1, { version: 2 }), item('a', 1, { version: 1 }), item('a', 1, { version: 3 })];
+    const versions = (/** @type {Descriptor[]} */ list) =>
+      resolveAll('workspace', [[plain, list]]).contributions.map(contribution => contribution.version);
+    assert.deepEqual(versions(descriptors), [1, 2, 3]);
+    assert.deepEqual(versions([...descriptors].reverse()), [1, 2, 3]);
+  });
+
+  it("doesn't count a malformed apiVersion as compatible, so it has no place in browse order", () => {
+    const resolution = resolveAll('workspace', [[plain, [item('a', 0, { apiVersion: 'one' }), item('b', 1)]]]);
+    assert.deepEqual(
+      resolution.list('fixture-plain').map(contribution => contribution.rawId),
+      ['b', 'a'],
+    );
   });
 });

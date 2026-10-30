@@ -87,6 +87,26 @@ export const commandBuiltIns = [
  * @param {number} rank
  * @returns {Descriptor}
  */
+/**
+ * A command that needs another family's contribution, so its family's conformance run has to
+ * resolve it with navigation alongside
+ * @type {Descriptor}
+ */
+export const openSettings = {
+  id: 'open-settings',
+  version: 1,
+  apiVersion: 1,
+  group: 'navigate',
+  rank: 20,
+  hosts: ['workspace'],
+  requires: ['fixture-navigation:settings'],
+  label: 'Open settings',
+  description: 'Go to settings.',
+  contexts: ['global'],
+  implementation: { run: () => 'settings' },
+};
+commandBuiltIns.push(openSettings);
+
 export const commandSample = (id, rank) => ({
   id,
   version: 1,
@@ -301,10 +321,61 @@ export const producerSample = (id, rank) => ({
   load: async () => ({ produce: () => 0 }),
 });
 
-/** Every fixture family, with its built-ins and sample */
+export const workers = defineFamily({
+  id: 'fixture-workers',
+  apiVersion: 1,
+  groups: ['listeners'],
+  hosts: ['background'],
+  ceilings: { chromePermissions: ['contextMenus'] },
+});
+
+/** @type {Descriptor[]} */
+export const workerBuiltIns = [
+  {
+    id: 'context-menus',
+    version: 1,
+    apiVersion: 1,
+    group: 'listeners',
+    rank: 10,
+    hosts: ['background'],
+    label: 'Context menus',
+    chromePermissions: ['contextMenus'],
+    probe: () => ({ state: 'enabled' }),
+    implementation: { register: () => true },
+  },
+];
+
+/**
+ * @param {string} id
+ * @param {number} rank
+ * @returns {Descriptor}
+ */
+export const workerSample = (id, rank) => ({
+  id,
+  version: 1,
+  apiVersion: 1,
+  group: 'listeners',
+  rank: 100 + rank,
+  hosts: ['background'],
+  label: `Sample ${id}`,
+  implementation: { register: () => true },
+});
+
+/**
+ * Every fixture family, with its built-ins and sample, and the families its built-ins need
+ * beside it
+ */
 export const FIXTURE_FAMILIES = Object.freeze([
-  { family: commands, builtIns: commandBuiltIns, sample: commandSample },
+  {
+    family: commands,
+    builtIns: commandBuiltIns,
+    sample: commandSample,
+    alongside: /** @type {[import('../../js/kernel/registry/family.js').Family, readonly Descriptor[]][]} */ ([
+      [navigation, navigationBuiltIns],
+    ]),
+  },
   { family: navigation, builtIns: navigationBuiltIns, sample: navigationSample },
   { family: providers, builtIns: providerBuiltIns, sample: providerSample },
   { family: producers, builtIns: producerBuiltIns, sample: producerSample },
+  { family: workers, builtIns: workerBuiltIns, sample: workerSample },
 ]);
