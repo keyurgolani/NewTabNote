@@ -148,6 +148,8 @@ const folderTypesMatch = true;
  *   getPreferences: typeof import('../../js/kernel/core/contracts/operations/get-preferences.js').result,
  *   getWorkspaceSession: typeof import('../../js/kernel/core/contracts/operations/get-workspace-session.js').result,
  *   getPopupInsightsEnabled: typeof import('../../js/kernel/core/contracts/operations/get-popup-insights-enabled.js').result,
+ *   getInsightsPending: typeof import('../../js/kernel/core/contracts/operations/get-insights-pending.js').result,
+ *   getJobRuns: typeof import('../../js/kernel/core/contracts/operations/get-job-runs.js').result,
  * }} ResultSchemas
  */
 
@@ -167,6 +169,8 @@ const queryDataMatches = {
   getPreferences: true,
   getWorkspaceSession: true,
   getPopupInsightsEnabled: true,
+  getInsightsPending: true,
+  getJobRuns: true,
 };
 
 /**

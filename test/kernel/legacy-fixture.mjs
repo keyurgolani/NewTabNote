@@ -163,7 +163,7 @@ async function startLegacy(missing) {
       };
     },
     failNextWrite: target => {
-      if (target === 'preferences' || target === 'session') first.env.chrome.failNextSet();
+      if (target === 'preferences' || target === 'session' || target === 'jobs') first.env.chrome.failNextSet();
       else first.failing.push(target);
     },
     close: async () => closeAll(contexts),

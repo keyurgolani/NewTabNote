@@ -100,7 +100,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   /** @type {KeptConflict[]} */
   const conflicts = [];
   /** @type {Record<ReadableSettingsArea, Map<string, unknown>>} */
-  const settings = { preferences: new Map(), session: new Map(), idbSettings: new Map() };
+  const settings = { preferences: new Map(), session: new Map(), jobs: new Map(), idbSettings: new Map() };
   /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
 

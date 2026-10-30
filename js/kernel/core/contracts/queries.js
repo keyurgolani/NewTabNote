@@ -28,10 +28,12 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
 /** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
 /** @typedef {import('./operations/get-popup-insights-enabled.js').GetPopupInsightsEnabled} GetPopupInsightsEnabled */
+/** @typedef {import('./operations/get-insights-pending.js').GetInsightsPending} GetInsightsPending */
+/** @typedef {import('./operations/get-job-runs.js').GetJobRuns} GetJobRuns */
 
 /**
  * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | ListFolders | GetPreferences
- *   | GetWorkspaceSession | GetPopupInsightsEnabled} Query
+ *   | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -52,6 +54,8 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
  * @property {{insightsEnabled: boolean}} getPopupInsightsEnabled
+ * @property {{since: number | null}} getInsightsPending
+ * @property {{lastAutoTitleRun: number, lastInsightsRun: number}} getJobRuns
  */
 
 /**
@@ -77,6 +81,9 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  * service worker reads nothing through the kernel.
  */
 const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel']));
+
+/** Only the new tab reads it */
+const NEW_TAB = Object.freeze(/** @type {Surface[]} */ (['newtab']));
 
 /**
  * A version 1 entry
@@ -106,12 +113,15 @@ export const QUERIES = Object.freeze({
   getNote: entry('get-note', ['note']),
   getNoteBlocks: entry('get-note-blocks', ['note']),
   // Only the new tab's editor has shown backlinks
-  getBacklinks: entry('get-backlinks', ['note'], Object.freeze(/** @type {Surface[]} */ (['newtab']))),
+  getBacklinks: entry('get-backlinks', ['note'], NEW_TAB),
   listFolders: entry('list-folders', []),
   getPreferences: entry('get-preferences', []),
   getWorkspaceSession: entry('get-workspace-session', []),
   // Only Popup has read it, and #4 replaces it
   getPopupInsightsEnabled: entry('get-popup-insights-enabled', [], Object.freeze(/** @type {Surface[]} */ (['popup']))),
+  // The new tab's auto-title and insights jobs, and its editor, read their bookkeeping
+  getInsightsPending: entry('get-insights-pending', ['note'], NEW_TAB),
+  getJobRuns: entry('get-job-runs', [], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */

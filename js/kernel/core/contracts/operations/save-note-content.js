@@ -5,8 +5,10 @@
  * `name` is a title set in the editor since the last save, which the save writes with the
  * blocks, as 1.4.x's editor save did, and which the search entry gets too. `titleOrigin` says
  * who set it: `typed` (the default), the user, which writes `titleManuallySet`, or
- * `generated`, the AI, which writes `lastAutoTitleAt` instead. A save with no title leaves
- * the stored one as it is.
+ * `generated`, the AI, which writes `lastAutoTitleAt` instead. A generated title is dropped
+ * when the note has a title set by hand, as applyDerivedTitle drops one: the rest of the save
+ * lands and it answers `content-saved-title-kept`. A save with no title leaves the stored one
+ * as it is.
  * `linkedNames` are the note names the text's `[[wiki links]]` hold, which replace the links
  * the note had, as 1.4.x's save replaced them after the note was stored. Note fields and
  * blocks commit together on every adapter. `expectedRevision`, on an adapter with revisions,

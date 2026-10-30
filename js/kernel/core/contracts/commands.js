@@ -40,13 +40,16 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/set-preferences.js').SetPreferences} SetPreferences */
 /** @typedef {import('./operations/save-workspace-session.js').SaveWorkspaceSession} SaveWorkspaceSession */
 /** @typedef {import('./operations/run-startup-maintenance.js').RunStartupMaintenance} RunStartupMaintenance */
+/** @typedef {import('./operations/set-insights-pending.js').SetInsightsPending} SetInsightsPending */
+/** @typedef {import('./operations/record-job-run.js').RecordJobRun} RecordJobRun */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
 /**
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
  *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | RunBulkAction
- *   | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance} Command
+ *   | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance
+ *   | SetInsightsPending | RecordJobRun} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -56,7 +59,11 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  * @typedef {Extract<Command, {type: T}>} CommandOf
  */
 
-/** @typedef {'note' | 'folder' | 'preferences' | 'session' | 'system'} Aggregate */
+/**
+ * What the commit feed names a commit by. `job` is the jobs' own bookkeeping, which changes
+ * no note, so a note list ignores it.
+ * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'system'} Aggregate
+ */
 
 /**
  * A command's catalog entry. `maxBytes` caps its encoded request, envelope included, and a
@@ -148,6 +155,9 @@ export const COMMANDS = Object.freeze({
     entityTypes: [],
     deadlineMs: MAINTENANCE_DEADLINE_MS,
   }),
+  // The auto-title and insights jobs run in the new tab until #35 moves them
+  setInsightsPending: entry('set-insights-pending', 'job', ['newtab'], { entityTypes: ['note'] }),
+  recordJobRun: entry('record-job-run', 'job', ['newtab'], { entityTypes: [] }),
 });
 
 /** @type {readonly CommandType[]} */

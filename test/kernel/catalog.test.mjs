@@ -88,6 +88,8 @@ const COMMAND_SAMPLES = {
   moveFolder: { folderId: 'f0', parentId: null },
   setPreferences: { values: { theme: 'dark', sidebarWidth: 300, dailyNoteTemplate: '' } },
   saveWorkspaceSession: { session: { openTabs: [{ noteId: 'n1', title: 'Plan' }], activeTabIndex: 0 } },
+  setInsightsPending: { noteId: 'n1', pending: true },
+  recordJobRun: { job: 'insights' },
 };
 
 /** @type {{[T in QueryType]: Omit<QueryOf<T>, 'type'>}} */
@@ -100,6 +102,8 @@ const QUERY_SAMPLES = {
   getPreferences: { keys: ['theme', 'sidebarWidth'] },
   getWorkspaceSession: {},
   getPopupInsightsEnabled: {},
+  getInsightsPending: { noteId: 'n1' },
+  getJobRuns: {},
 };
 
 /** The coordinator's own queries, which take no field */

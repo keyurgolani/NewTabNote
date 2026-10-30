@@ -357,10 +357,14 @@ export const noteCommands = {
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
+    // A generated title the save drops, since the note has a title set by hand
+    let titleKept = false;
     /** @type {Unit} */
     const save = {
       stores: ['notes', 'blocks'],
       async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        titleKept = false;
         // The block puts go out before anything is awaited, as in Storage.saveNoteWithBlocks,
         // so a page-hide flush still stores them if the page goes before the read returns
         for (const block of records) tx.put('blocks', block);
@@ -377,11 +381,16 @@ export const noteCommands = {
         if (todoProgress !== undefined) next.todoProgress = todoProgress;
         // A title goes in with the blocks, as 1.4.x's editor save wrote it: a typed one marked as
         // set by hand, as the editor marked it when the user typed it, and one the AI made with
-        // the time it was made, as BlockEditor.setTitleProgrammatically stamped it
+        // the time it was made, as BlockEditor.setTitleProgrammatically stamped it. A generated
+        // one is dropped when the note as committed has a title set by hand, as
+        // applyDerivedTitle drops it, and the blocks still land.
         if (name !== undefined) {
-          next.name = name;
-          if (titleOrigin === 'typed') next.titleManuallySet = true;
-          else next.lastAutoTitleAt = now;
+          titleKept = titleOrigin === 'generated' && Boolean(note.titleManuallySet);
+          if (!titleKept) {
+            next.name = name;
+            if (titleOrigin === 'typed') next.titleManuallySet = true;
+            else next.lastAutoTitleAt = now;
+          }
         }
         tx.put('notes', next);
       },
@@ -390,12 +399,17 @@ export const noteCommands = {
     const units = [save];
     // The search entry's name and the wiki links follow in their own units, as 1.4.x's save
     // updated them after the note and its blocks were stored
-    if (name !== undefined) units.push(renameSearchEntry(noteId, name, now));
+    if (name !== undefined) units.push({ ...renameSearchEntry(noteId, name, now), when: () => !titleKept });
     if (linkedNames !== undefined) units.push(...replaceLinks(noteId, linkedNames, { now, nextId: () => ids.next() }));
-    return unitsWork(command, units, () => committed('content-saved', [noteId]), {
-      primary: noteRecord(noteId),
-      revised: contentChanged,
-    });
+    return unitsWork(
+      command,
+      units,
+      () =>
+        titleKept
+          ? committed('content-saved-title-kept', [noteId], { severity: 'info' })
+          : committed('content-saved', [noteId]),
+      { primary: noteRecord(noteId), revised: contentChanged },
+    );
   },
 
   deleteBlocks(command) {

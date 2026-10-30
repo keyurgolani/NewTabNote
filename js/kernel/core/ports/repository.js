@@ -90,7 +90,12 @@ export const STORES = Object.freeze({
  *   adapter with atomicMultiStore nothing the earlier units wrote either
  */
 
-/** @typedef {'preferences' | 'session'} SettingsArea */
+/**
+ * Where a settings effect writes: the preferences, the workspace session, or `jobs`, the
+ * bookkeeping the auto-title and insights jobs keep (when each last ran, and which note's
+ * insights are being extracted), under the keys 1.4.x's Storage.setSetting wrote
+ * @typedef {'preferences' | 'session' | 'jobs'} SettingsArea
+ */
 
 /**
  * A settings area a query may read: one a command writes, or `idbSettings`, the settings 1.4.x
