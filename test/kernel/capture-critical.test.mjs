@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import * as captureCritical from '../../js/kernel/core/messaging/capture-critical.js';
-import { importGraph } from './import-graph.mjs';
+import { dynamicImportsIn, importGraph } from './import-graph.mjs';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const ENTRY = path.join(ROOT, 'js', 'kernel', 'core', 'messaging', 'capture-critical.js');
@@ -61,6 +61,10 @@ describe('capture-critical.js (#13, AC1)', () => {
       ),
       [],
     );
+  });
+
+  it('loads everything up front: no import() anywhere it reaches', () => {
+    assert.deepEqual(dynamicImportsIn(graph.map(file => path.join(ROOT, file))), []);
   });
 
   it('loads as plain modules: core and Valibot only', () => {
