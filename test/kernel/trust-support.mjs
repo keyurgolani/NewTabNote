@@ -6,6 +6,7 @@
 import { createRequire } from 'node:module';
 
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
+import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { faultyFactory } from './storage-faults.mjs';
@@ -136,7 +137,34 @@ export const realTimers = Object.freeze({
  */
 export function hexIds(prefix = 'a1b2') {
   let n = 0;
-  return { next: () => `${prefix}${(++n).toString(16).padStart(8, '0')}` };
+  return { next: () => `${prefix}${(++n).toString(16).padStart(4, '0')}-0000-4000-8000-000000000000` };
+}
+
+/**
+ * `store` with runs a test can make fail: the next `count` runs reject with an
+ * UnavailableError of `code`, as a store whose writes the disk refuses does
+ * @param {TrustStore} store
+ */
+export function flakyStore(store) {
+  const plan = { count: 0, cause: /** @type {import('../../js/kernel/core/contracts/outcomes.js').UnavailableCause} */ ('storage'), code: 'unreadable' };
+  return {
+    store: /** @type {TrustStore} */ ({
+      open: () => store.open(),
+      close: () => store.close(),
+      run: (stores, mode, unit) => {
+        if (plan.count > 0) {
+          plan.count--;
+          return Promise.reject(new UnavailableError(plan.cause, plan.code, false));
+        }
+        return store.run(stores, mode, unit);
+      },
+    }),
+    /** @param {number} count @param {string} [code] */
+    failNext(count, code = 'unreadable') {
+      plan.count = count;
+      plan.code = code;
+    },
+  };
 }
 
 /**
