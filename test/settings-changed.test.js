@@ -53,15 +53,16 @@ describe('settings.changed (#13)', () => {
     settings.onAISidebarWidthChanged = (value) => applied.push(['aiSidebarWidth', value]);
     settings.onAIPromptTemplatesChanged = (value) => applied.push(['aiPromptTemplates', value]);
     settings.onLLMSettingsChanged = () => applied.push(['llm']);
-    settings.setupSettingsSync();
 
-    // Another tab writes, and this tab hears of it
+    // Another tab writes, and this tab hears of it. Settings listens only after the seed, since
+    // the stub's set fires onChanged itself, so the report below is the only notice it gets.
     await new Promise((resolve) => env.chrome.api.storage.local.set({
       setting_sidebarWidth: 320,
       setting_aiSidebarWidth: 410,
       setting_aiPromptTemplates: [{ id: 't1', label: 'Sum', prompt: 'Summarize' }],
       setting_llmApiKey: SECRET_NEW,
     }, resolve));
+    settings.setupSettingsSync();
     report({
       setting_sidebarWidth: { oldValue: 280, newValue: 320 },
       setting_aiSidebarWidth: { newValue: 410 },
@@ -82,8 +83,8 @@ describe('settings.changed (#13)', () => {
     const settings = new SettingsController({ storage: Storage, domRefs: null, logger: null });
     const applied = [];
     settings.onSidebarStateChanged = (key, value) => applied.push([key, value]);
-    settings.setupSettingsSync();
     await new Promise((resolve) => env.chrome.api.storage.local.set({ setting_sidebarOpen: true, setting_sidebarWidth: 300 }, resolve));
+    settings.setupSettingsSync();
     // The read of sidebarOpen fails, and the one of sidebarWidth after it doesn't
     env.chrome.failNextGet();
     report({ setting_sidebarOpen: { newValue: true }, setting_sidebarWidth: { newValue: 300 } });
