@@ -130,8 +130,21 @@ test('still sees what the worker throws after it restarts, and fails while it is
   await cdp.send('ServiceWorker.stopAllWorkers');
   await expect(extension.uncaught()).rejects.toThrow('may be stopped');
 
-  // A message wakes the worker, and background.js answers PING
-  expect(await page.evaluate(() => chrome.runtime.sendMessage({ type: 'PING' }))).toEqual({ status: 'ok' });
+  // Opening #13's port wakes the worker, and its router answers the hello
+  expect(await page.evaluate(() => new Promise((resolve) => {
+    const port = chrome.runtime.connect({ name: 'ntn-rpc' });
+    port.onMessage.addListener((text) => {
+      port.disconnect();
+      resolve(JSON.parse(text).frame);
+    });
+    port.postMessage(JSON.stringify({
+      frame: 'hello',
+      protocol: { major: 1, minor: 0 },
+      extensionVersion: chrome.runtime.getManifest().version,
+      surface: 'popup',
+      sessionId: 'harness-self-test',
+    }));
+  }))).toBe('welcome');
   expect(await instance(), 'the worker restarted').not.toBe(before);
   await extension.worker.evaluate(() => {
     setTimeout(() => { throw new Error('self-test: thrown after a restart'); }, 0);

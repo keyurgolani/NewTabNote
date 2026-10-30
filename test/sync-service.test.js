@@ -90,23 +90,32 @@ describe('SyncService', () => {
     assert.equal(service.getState().status, 'idle');
   });
 
-  it('destroy stops auto sync and drops every listener init added', async () => {
-    // The event bus as the service sees it, counting its listeners per event, so nothing is emitted
+  it('listens for nothing on the bus, since nothing emits note:saved, and destroy stops auto sync (#13)', async () => {
+    // The event bus as the service sees it, keeping what it's asked for
     const bus = createEventBus();
-    const listening = new Map();
+    const asked = [];
     const counted = {
-      on(event, handler) { listening.set(event, (listening.get(event) || 0) + 1); bus.on(event, handler); },
-      off(event, handler) { listening.set(event, (listening.get(event) || 0) - 1); bus.off(event, handler); },
+      on(event, handler) { asked.push(`on ${event}`); bus.on(event, handler); },
+      off(event, handler) { asked.push(`off ${event}`); bus.off(event, handler); },
       emit: bus.emit,
     };
     const watched = new SyncService({ storage, eventBus: counted, logger });
     await watched.init();
-    assert.ok([...listening.values()].some((n) => n > 0), 'init listens for something');
     watched.startAutoSync(60000);
     assert.notEqual(watched._syncInterval, null);
     watched.destroy();
     assert.equal(watched._syncInterval, null);
-    assert.deepEqual([...listening].filter(([, n]) => n !== 0), [], 'listeners left after destroy');
+    assert.deepEqual(asked, []);
+  });
+
+  it('applies remote data without emitting sync:remoteApplied, which nothing hears (#13)', async () => {
+    const emitted = [];
+    const bus = { on() {}, off() {}, emit: (event) => emitted.push(event) };
+    const imported = [];
+    const quiet = new SyncService({ storage: { ...storage, importAll: async (data) => imported.push(data) }, eventBus: bus, logger });
+    await quiet._applyRemoteData({ version: 1 });
+    assert.deepEqual(imported, [{ version: 1 }]);
+    assert.deepEqual(emitted, []);
   });
 
   for (const [name, label] of [['gdrive', 'Google Drive'], ['dropbox', 'Dropbox']]) {

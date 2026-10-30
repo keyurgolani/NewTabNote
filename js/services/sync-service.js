@@ -253,7 +253,6 @@ class SyncService {
     };
 
     this._syncInterval = null;
-    this._pendingTracker = null;
   }
 
   /** Initialize the sync service, restoring saved state. */
@@ -264,21 +263,11 @@ class SyncService {
       this.state.provider = savedProvider;
       this.state.lastSyncAt = savedLastSync || null;
     }
-
-    // Track pending changes via note:saved events
-    this._pendingTracker = () => {
-      this.state.pendingChanges++;
-      this._emitStateChange();
-    };
-    this.eventBus.on('note:saved', this._pendingTracker);
   }
 
-  /** Tear down intervals and listeners. */
+  /** Tear down intervals. */
   destroy() {
     this.stopAutoSync();
-    if (this._pendingTracker) {
-      this.eventBus.off('note:saved', this._pendingTracker);
-    }
   }
 
   /**
@@ -518,7 +507,6 @@ class SyncService {
     } else {
       this.logger.warn('SyncService', 'storage.importAll not available, skipping remote data apply');
     }
-    this.eventBus.emit('sync:remoteApplied', {});
   }
 
   /**

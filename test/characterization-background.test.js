@@ -51,6 +51,14 @@ test("the worker listens to messages, install, startup, the toolbar action, its 
   });
 });
 
+test('answers no PING, which nothing sends: only API_REQUEST gets an answer (#13)', async () => {
+  const worker = await loadBackground();
+  const answers = [];
+  await worker.dispatch('runtime.onMessage', { type: 'PING' }, { id: 'test-extension' }, (answer) => answers.push(answer));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(answers, []);
+});
+
 test('installing creates the page and selection context menus', async () => {
   const worker = await loadBackground();
   assert.deepEqual(worker.contextMenus(), []);
