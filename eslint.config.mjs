@@ -5,8 +5,8 @@
  * #29 (PR CI) adds the rest of the lint config and leaves these to check:boundaries.
  *
  * Every message starts with the ledger rule it counts under, in brackets. no-undef's can't
- * carry one, and check:boundaries counts it as registry-global in js/kernel/registry/ and as
- * core-global everywhere else.
+ * carry one, and check:boundaries counts it as registry-global in js/kernel/registry/, as
+ * trust-global in js/trust/core/, and as core-global everywhere else.
  */
 
 import fs from 'node:fs';
@@ -457,6 +457,27 @@ export default [
         rule: 'registry-import',
         message: 'js/kernel/registry/ imports only from itself and js/lib/valibot/.',
         allow: ['js/kernel/registry/', 'js/lib/valibot/'],
+      }],
+    },
+  },
+  // #20's trust core is host-neutral under the same rules: no browser API, no legacy global,
+  // and imports only from itself, kernel core, the registry kit, and the vendored Valibot.
+  // NewTabNoteTrust, chrome.storage.local, and Web Locks reach it only through the ports its
+  // composition root injects.
+  {
+    files: ['js/trust/core/**/*.js', 'js/trust/core/**/*.mjs'],
+    plugins: { kernel },
+    languageOptions: { globals: { window: 'off', self: 'off' } },
+    rules: {
+      'no-undef': ['error', { typeof: true }],
+      'no-restricted-globals': ['error', {
+        name: 'globalThis',
+        message: '[trust-global] js/trust/core/ is host-neutral: no browser API or legacy global, globalThis included.',
+      }],
+      'kernel/imports': ['error', {
+        rule: 'trust-import',
+        message: 'js/trust/core/ imports only from itself, js/kernel/core/, js/kernel/registry/, and js/lib/valibot/.',
+        allow: ['js/trust/core/', 'js/kernel/core/', 'js/kernel/registry/', 'js/lib/valibot/'],
       }],
     },
   },
