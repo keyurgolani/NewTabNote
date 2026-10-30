@@ -34,7 +34,8 @@ export const ROOT = path.join(import.meta.dirname, '..', '..');
 export const IMPLEMENTATION_DIRS = Object.freeze(['js/kernel/adapters/', 'js/kernel/core/memory/']);
 
 const SCANNED = ['js', 'test', 'e2e'];
-const SKIPPED = new Set(['node_modules', 'lib']);
+// js/lib holds vendored bundles
+const SKIPPED = new Set(['js/lib']);
 const MODULE = /\.(m?js|cjs)$/;
 const TEST_FILE = /\.test\.(m?js|cjs)$/;
 const SUITE_EXPORT = /^(describe[A-Z]\w*|run\w*Suite)$/;
@@ -53,8 +54,7 @@ export function repoTree(root = ROOT) {
     for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
       const file = path.posix.join(dir, entry.name);
       if (entry.isDirectory()) {
-        // js/lib holds vendored bundles
-        if (!SKIPPED.has(entry.name) || (entry.name === 'lib' && !dir.startsWith('js'))) walk(file);
+        if (!SKIPPED.has(file) && entry.name !== 'node_modules') walk(file);
       } else if (MODULE.test(entry.name)) {
         files.push(file);
       }
