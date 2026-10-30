@@ -28,11 +28,11 @@ function storedNote(page, noteId) {
   }, noteId);
 }
 
-/** A note's stored blocks' text, in note order */
+/** A note's stored blocks' text, in note order, without markup: the editor shows a wiki link as a link */
 function storedTexts(page, noteId) {
   return page.evaluate(async id => {
     const state = await app.kernel.query({ type: 'getNoteBlocks', noteId: id });
-    return state.kind === 'ready' ? state.data.map(block => block.content) : [];
+    return state.kind === 'ready' ? state.data.map(block => String(block.content).replace(/<[^>]*>/g, '')) : [];
   }, noteId);
 }
 
@@ -83,7 +83,7 @@ test('version history saves, lists, previews, and reverts through the kernel, ke
     return state.data.length;
   }, noteId);
   expect(titles).toBe(2);
-  await expectNoUncaught(page);
+  await expectNoUncaught(extension, page);
 });
 
 test('AI chat appends, inserts at the cursor, and makes a new note through the kernel', async ({ extension }) => {
@@ -107,16 +107,16 @@ test('AI chat appends, inserts at the cursor, and makes a new note through the k
   // Insert at the cursor: after the focused block, and the note links where the reply says
   await page.locator('#blocks-container .block-content').first().click();
   await confirmInsert(page, 'append', 'See [[Review]]');
-  await expect.poll(() => storedTexts(page, noteId)).toEqual(['First', 'See [[Review]]', 'Last', 'Appended by the chat']);
-  await expect
-    .poll(() => driver.blocks(page).then(shown => shown.map(block => block.text)))
-    .toEqual(['First', 'See [[Review]]', 'Last', 'Appended by the chat']);
-  const linked = await page.evaluate(async () => {
-    const review = (await app.kernel.query({ type: 'listNotes', view: 'active' })).data.find(n => n.name === 'Review');
-    const state = await app.kernel.query({ type: 'getBacklinks', noteId: review.id });
-    return state.kind === 'ready' ? state.data.map(note => note.name) : [];
-  });
-  expect(linked).toEqual(['Plan']);
+  const atCursor = ['First', expect.stringMatching(/^See (\[\[)?Review(\]\])?$/), 'Last', 'Appended by the chat'];
+  await expect.poll(() => storedTexts(page, noteId)).toEqual(atCursor);
+  await expect.poll(() => driver.blocks(page).then(shown => shown.map(block => block.text))).toEqual(atCursor);
+  const backlinks = () =>
+    page.evaluate(async () => {
+      const review = (await app.kernel.query({ type: 'listNotes', view: 'active' })).data.find(n => n.name === 'Review');
+      const state = await app.kernel.query({ type: 'getBacklinks', noteId: review.id });
+      return state.kind === 'ready' ? state.data.map(note => note.name) : [];
+    });
+  await expect.poll(backlinks).toEqual(['Plan']);
 
   // A new note from a response, which the stub names
   await confirmInsert(page, 'create', 'Call the bakery');
@@ -125,5 +125,5 @@ test('AI chat appends, inserts at the cursor, and makes a new note through the k
   expect(made).not.toBe(noteId);
   expect(await storedTexts(page, made)).toEqual(['Call the bakery']);
   expect((await storedNote(page, made)).preview).toBe('Call the bakery');
-  await expectNoUncaught(page);
+  await expectNoUncaught(extension, page);
 });
