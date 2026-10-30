@@ -65,5 +65,6 @@ test('a new tab opens the newest of notes seeded one after another, and the side
   const page = await driver.openNewTab(extension);
   expect(await driver.noteTitle(page)).toBe('Six');
   await driver.showNotes(page);
-  expect(await driver.listedNoteNames(page)).toEqual([...names].reverse());
+  // Choosing Notes renders the list after the click
+  await expect.poll(() => driver.listedNoteNames(page)).toEqual([...names].reverse());
 });
