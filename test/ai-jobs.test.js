@@ -8,7 +8,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient,
+  createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient, quietNavigation,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -587,5 +587,140 @@ describe('the editor shows committed titles and insights without saving', () => 
       [editor.noteData.name, editor.noteData.pinned, plain(editor.noteData.insights), editor.noteData.lastInsightsExtractedAt],
       ['Note A', false, { todos: ['x'] }, 5],
     );
+  });
+});
+
+describe("the sidebar lists a committed title (review F1, as 4b1's save showed it)", () => {
+  /** App's note arrays and the sidebar's, wired to the editor as App.editorNavigation wires them */
+  async function appWithSidebar() {
+    const { env, Storage } = await setup({
+      notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
+    });
+    env.load('js/core/event-bus.js', 'js/core/dom-refs.js', 'js/core/logger.js', 'js/search.js', 'js/app.js');
+    const App = env.get('App');
+    const listed = async () => plain(await Storage.getAllNotes());
+    const sidebar = { notes: await listed(), archivedNotes: [], renders: 0, renderNotesList() { sidebar.renders += 1; } };
+    const page = { notes: await listed(), archivedNotes: [], sidebarController: sidebar, renderNotesList: () => sidebar.renderNotesList() };
+    const ai = heldAI();
+    const editor = makeEditor(env, env.document, {
+      navigation: {
+        ...quietNavigation(),
+        noteSaved: (saved) => App.prototype.updateSidebarNotePreview.call(page, saved),
+      },
+    });
+    editor.ai = ai.port;
+    await drive(env, editor.loadNote('A'));
+    return { env, Storage, ai, editor, page, sidebar };
+  }
+
+  /** What the sidebar's array says of A, and whether A sorts first by updatedAt */
+  function sidebarView(sidebar) {
+    const a = sidebar.notes.find((n) => n.id === 'A');
+    const newest = [...sidebar.notes].sort((x, y) => y.updatedAt - x.updatedAt)[0];
+    return { name: a.name, first: newest.id };
+  }
+
+  it('after the auto-title job names the open note', async () => {
+    const { env, Storage, ai, editor, page, sidebar } = await appWithSidebar();
+    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const job = manager.runAutoTitle();
+    await ai.answer('generateTitle', 'Groceries');
+    await drive(env, job);
+    assert.deepEqual(sidebarView(sidebar), { name: 'Groceries', first: 'A' });
+    assert.equal(page.notes.find((n) => n.id === 'A').name, 'Groceries');
+    assert.ok(sidebar.renders > 0);
+  });
+
+  it("after Generate title and AI chat's confirmed title", async () => {
+    const { env, Storage, ai, editor, sidebar } = await appWithSidebar();
+    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const job = manager.generateTitleForNote('A');
+    await ai.answer('generateTitle', 'Groceries');
+    await drive(env, job);
+    assert.deepEqual(sidebarView(sidebar), { name: 'Groceries', first: 'A' });
+
+    const chat = aiChat(env, Storage, { ai: ai.port, editor });
+    await drive(env, chat.applyGeneratedTitle('Weekly shop', 'A'));
+    assert.deepEqual(sidebarView(sidebar), { name: 'Weekly shop', first: 'A' });
+  });
+
+  it('not after a title kept out by a hand-set one, which changed nothing', async () => {
+    const { env, Storage, ai, editor, sidebar } = await appWithSidebar();
+    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const job = manager.runAutoTitle();
+    await ai.waitFor('generateTitle');
+    await execute(env, 'renameNote', { noteId: 'A', name: 'Mine' });
+    await ai.answer('generateTitle', 'Groceries');
+    await drive(env, job);
+    assert.equal(sidebar.notes.find((n) => n.id === 'A').name, 'Untitled');
+    assert.equal(sidebar.renders, 0);
+  });
+});
+
+describe('the editor draws insights, with its real render and poller (review F2)', () => {
+  const MINUTE = 60 * 1000;
+  const INSIGHTS = { todos: ['Call the bakery'], reminders: [], deadlines: [], highlights: [], tags: ['errands'] };
+
+  /** An editor that renders insights with BlockEditor's own methods, not makeEditor's stubs */
+  async function realInsightsEditor({ mark, stored = null } = {}) {
+    const { env, Storage } = await setup({ notes: [note('A', { insights: stored }), note('B')] });
+    if (mark !== undefined) await env.chrome.api.storage.local.set({ setting_insightsExtracting_A: mark });
+    const BlockEditor = env.get('BlockEditor');
+    const editor = editorWith(env, heldAI().port);
+    editor.renderInsights = BlockEditor.prototype.renderInsights;
+    editor.startInsightsPollingIfNeeded = BlockEditor.prototype.startInsightsPollingIfNeeded;
+    editor.loading = 0;
+    editor.showInsightsLoadingInEditor = () => { editor.loading += 1; };
+    await drive(env, editor.loadNote('A'));
+    return { env, Storage, editor };
+  }
+
+  /** The insights section the editor drew, as text, or null */
+  const drawn = (editor) => {
+    const section = editor.root.querySelector('.note-insights');
+    return section ? section.textContent : null;
+  };
+
+  it("draws a note's stored insights when it loads", async () => {
+    const { editor } = await realInsightsEditor({ stored: INSIGHTS });
+    assert.match(drawn(editor), /Call the bakery/);
+    assert.match(drawn(editor), /errands/);
+    assert.equal(editor.loading, 0);
+  });
+
+  it('clears a mark older than 5 minutes and draws the insights; a fresh one shows "Extracting..." and stays', async () => {
+    const stale = await realInsightsEditor({ mark: Date.now() - 6 * MINUTE, stored: INSIGHTS });
+    assert.equal(await stale.Storage.getSetting('insightsExtracting_A', 'unset'), null, 'cleared under its 1.4.x key');
+    assert.match(drawn(stale.editor), /Call the bakery/);
+    assert.equal(stale.editor.loading, 0);
+
+    const fresh = await realInsightsEditor({ mark: Date.now() - MINUTE, stored: INSIGHTS });
+    assert.equal(fresh.editor.loading, 1);
+    assert.equal(drawn(fresh.editor), null);
+    assert.equal(typeof (await fresh.Storage.getSetting('insightsExtracting_A', null)), 'number', 'still set');
+    assert.ok(fresh.editor.insightsPollingId, 'and it polls');
+  });
+
+  it('polls until another tab clears the mark, then draws only the insight fields of what that tab stored', async () => {
+    const { env, Storage, editor } = await realInsightsEditor({ mark: Date.now() });
+    // Another tab, 1.4.x's or this build's, stores insights and a new name, then clears the mark
+    await execute(env, 'attachInsights', { noteId: 'A', insights: INSIGHTS });
+    await execute(env, 'renameNote', { noteId: 'A', name: 'Renamed elsewhere' });
+    await Storage.setSetting('insightsExtracting_A', null);
+    env.clock.tick(2000);
+    await waitFor(() => drawn(editor), { message: 'the insights drawn' });
+    assert.match(drawn(editor), /Call the bakery/);
+    assert.deepEqual([editor.noteData.name, editor.insightsPollingId], ['Note A', null]);
+  });
+
+  it('a note switch stops the poller, and the next note gets nothing of the first', async () => {
+    const { env, editor } = await realInsightsEditor({ mark: Date.now() });
+    assert.ok(editor.insightsPollingId);
+    await drive(env, editor.loadNote('B'));
+    await execute(env, 'attachInsights', { noteId: 'A', insights: INSIGHTS });
+    await env.chrome.api.storage.local.set({ setting_insightsExtracting_A: null });
+    env.clock.tick(4000);
+    await settle(20);
+    assert.deepEqual([editor.noteId, editor.noteData.insights ?? null, drawn(editor)], ['B', null, null]);
   });
 });

@@ -59,6 +59,9 @@ test('auto-title, insights, and AI chat title and insights land through the kern
   await expect.poll(async () => (await storedNote(page, noteId)).name).toBe('Groceries');
   await expect.poll(() => driver.noteTitle(page)).toBe('Groceries');
   await expect(page.locator('#note-tabs .note-tab.active .note-tab-name')).toHaveText('Groceries');
+  // And the sidebar lists the new name, as it did when the title came in with a save
+  await expect.poll(() => driver.listedNoteNames(page)).toContain('Groceries');
+  expect(await driver.listedNoteNames(page)).not.toContain('Untitled');
   let stored = await storedNote(page, noteId);
   expect([stored.titleManuallySet, stored.pinned]).toEqual([false, true]);
 
@@ -83,6 +86,7 @@ test('auto-title, insights, and AI chat title and insights land through the kern
   await page.evaluate(id => app.aiChatController.applyGeneratedTitle('Weekly shop', id), noteId);
   await expect.poll(async () => (await storedNote(page, noteId)).name).toBe('Weekly shop');
   await expect.poll(() => driver.noteTitle(page)).toBe('Weekly shop');
+  await expect.poll(() => driver.listedNoteNames(page)).toContain('Weekly shop');
   stored = await storedNote(page, noteId);
   expect([stored.pinned, stored.titleManuallySet, stored.insights.todos]).toEqual([true, false, ['Buy milk']]);
 
