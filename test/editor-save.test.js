@@ -854,7 +854,7 @@ describe('BlockEditor saves keep trash and archive state', () => {
 
   /** Refresh insights, with an AI that finds one to-do */
   async function refreshInsights() {
-    editor.getLLM = () => ({ isConfigured: () => true, extractInsights: async () => ({ todos: ['call'] }) });
+    editor.ai = { isConfigured: () => true, extractInsights: async () => ({ todos: ['call'] }) };
     await runUntil(env, editor.refreshInsights());
     return Storage.getNote('A');
   }

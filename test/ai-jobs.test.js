@@ -150,8 +150,6 @@ function aiChat(env, Storage, { ai, editor, tabs = [] }) {
 function editorWith(env, ai) {
   const editor = makeEditor(env);
   editor.ai = ai;
-  // What 1.4.x's editor asked for instead, so these tests show the same failure on it
-  editor.getLLM = () => ai;
   return editor;
 }
 

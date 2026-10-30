@@ -3,7 +3,9 @@
  * page's kernel client. The new tab's root makes it, and App gives it to every editor it
  * makes, the PiP editor's included, in place of Storage. The editor's reads (its note and
  * blocks, the notes that link to it, the names a wiki link can take, the templates) are
- * queries, and its writes are commands.
+ * queries, and its writes are commands. The note jobs (auto-title and insights, in
+ * NotesManager, the editor, and AI chat) read and write through it too: each write names the
+ * note it means, and none takes a note record.
  *
  * A read rejects when its query fails, as the Storage call it replaces rejected, so the
  * editor fails where it always has. A write answers the command's outcome and never rejects,
@@ -42,6 +44,23 @@
  * @property {() => Promise<NoteRecord[]>} templates
  * @property {(noteId: string) => Promise<BlockRecord[]>} blocksOf - a note's blocks in note order
  * @property {() => string} newId - an id for a note or block the editor makes
+ * @property {(noteId: string, name: string, contentHash?: string) => Promise<Outcome>} deriveTitle
+ *   A title a job derived (applyDerivedTitle): dropped, `title-kept`, when the note has a title
+ *   set by hand
+ * @property {(noteId: string, name: string, origin: 'typed' | 'generated') => Promise<Outcome>} renameNote
+ *   A title the user asked for (renameNote), a generated one included
+ * @property {(noteId: string, insights: unknown, contentHash?: string) => Promise<Outcome>} attachInsights
+ *   Writes the note's insight fields and nothing else
+ * @property {(noteId: string, pending: boolean) => Promise<Outcome>} setInsightsPending
+ * @property {(noteId: string) => Promise<number | null>} insightsPending
+ *   Since when the note's insights have been being extracted, or null
+ * @property {(job: 'autoTitle' | 'insights') => Promise<Outcome>} recordJobRun
+ * @property {() => Promise<{lastAutoTitleRun: number, lastInsightsRun: number}>} jobRuns
+ *   When each job last started, 0 for never
+ * @property {(keys: Array<keyof import('../core/contracts/settings.js').PreferenceValues>) =>
+ *   Promise<import('../core/contracts/settings.js').PreferenceValues>} preferences
+ *   The stored preferences of `keys`; one with nothing stored is left out, for its caller's default
+ * @property {() => Promise<NoteRecord[]>} activeNotes - the active notes, newest first, as Storage.getAllNotes listed them
  * @property {() => boolean} connectionOpen
  *   Whether the page's connection to the database is open now, so a save started now opens
  *   its first transaction, which a closing connection lets finish
@@ -118,6 +137,43 @@ export function createDocumentClient(
     blocksOf: noteId => read({ type: 'getNoteBlocks', noteId }, []),
 
     newId: () => client.ids.next(),
+
+    deriveTitle: (noteId, name, contentHash) =>
+      client.execute({
+        type: 'applyDerivedTitle',
+        commandId: client.ids.next(),
+        noteId,
+        name,
+        ...(contentHash === undefined ? {} : { contentHash }),
+      }),
+
+    renameNote: (noteId, name, origin) =>
+      client.execute({ type: 'renameNote', commandId: client.ids.next(), noteId, name, origin }),
+
+    attachInsights: (noteId, insights, contentHash) =>
+      client.execute({
+        type: 'attachInsights',
+        commandId: client.ids.next(),
+        noteId,
+        insights,
+        ...(contentHash === undefined ? {} : { contentHash }),
+      }),
+
+    setInsightsPending: (noteId, pending) =>
+      client.execute({ type: 'setInsightsPending', commandId: client.ids.next(), noteId, pending }),
+
+    async insightsPending(noteId) {
+      const found = await read({ type: 'getInsightsPending', noteId }, null);
+      return found ? found.since : null;
+    },
+
+    recordJobRun: job => client.execute({ type: 'recordJobRun', commandId: client.ids.next(), job }),
+
+    jobRuns: () => read({ type: 'getJobRuns' }, { lastAutoTitleRun: 0, lastInsightsRun: 0 }),
+
+    preferences: keys => read({ type: 'getPreferences', keys }, {}),
+
+    activeNotes: () => read({ type: 'listNotes', view: 'active' }, []),
 
     beforeConnectionCloses,
 

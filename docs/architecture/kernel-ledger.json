@@ -18,7 +18,7 @@
     {
       "file": "js/app.js",
       "rule": "LLM",
-      "count": 23,
+      "count": 22,
       "owner": 11,
       "removeWhen": "#11 replaces the LLM global with the injected AI port",
       "verify": "npm run check:boundaries"
@@ -58,7 +58,7 @@
     {
       "file": "js/controllers/ai-chat-controller.js",
       "rule": "this.storage",
-      "count": 41,
+      "count": 36,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -90,7 +90,7 @@
     {
       "file": "js/controllers/notes-manager.js",
       "rule": "this.storage",
-      "count": 57,
+      "count": 35,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -145,26 +145,10 @@
     },
     {
       "file": "js/editor.js",
-      "rule": "LLM",
-      "count": 1,
-      "owner": 11,
-      "removeWhen": "#11 replaces the LLM global with the injected AI port",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/editor.js",
       "rule": "Storage",
-      "count": 15,
+      "count": 8,
       "owner": 12,
       "removeWhen": "#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/editor.js",
-      "rule": "window.opener",
-      "count": 2,
-      "owner": 12,
-      "removeWhen": "#12 slice 4: getLLM's lookups become the injected AI port, re-pointed to #11 if they stay here",
       "verify": "npm run check:boundaries"
     },
     {
@@ -237,6 +221,14 @@
       "count": 5,
       "owner": 12,
       "removeWhen": "#12 slice 6: onboarding writes go through kernel commands",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/services/ai-port.mjs",
+      "rule": "LLM",
+      "count": 1,
+      "owner": 11,
+      "removeWhen": "#11's provider registry injects the AI port in place of the LLM global",
       "verify": "npm run check:boundaries"
     },
     {

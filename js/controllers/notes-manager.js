@@ -7,15 +7,30 @@
  * @param {EventBus} deps.eventBus
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
- * @param {LLMService} deps.llm
+ * @param {Object} deps.llm - The AI port (js/services/ai-port.mjs) the jobs call the provider through
+ * @param {Object} [deps.documentClient] - What the title and insights jobs read and write
+ *   through (js/kernel/composition/document.js): each write names its note, and none takes a
+ *   note record
  */
+/**
+ * The error a job throws when the kernel didn't store its write: its kind and code, never the
+ * note's content
+ * @param {string} what
+ * @param {{kind: string, code?: string}} outcome
+ * @returns {Error}
+ */
+function notStored(what, outcome) {
+  return new Error(`Not stored: ${what} (${outcome.kind}: ${outcome.code})`);
+}
+
 class NotesManager {
-  constructor({ storage, eventBus, domRefs, logger, llm }) {
+  constructor({ storage, eventBus, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
     this.eventBus = eventBus;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;
+    this.documentClient = documentClient;
 
     // Auto-title state
     this.autoTitleIntervalId = null;
@@ -428,18 +443,13 @@ class NotesManager {
 
     try {
       // Get note and its content
-      const note = await this.storage.getNote(noteId);
+      const note = await this.documentClient.readNote(noteId);
       if (!note) {
         Utils.showToast('Note not found', 'error');
         return;
       }
 
-      const blocks = await this.storage.getElementsByNote(noteId);
-      const content = blocks
-        .sort((a, b) => (a.order || 0) - (b.order || 0))
-        .map(b => this.extractBlockText(b))
-        .filter(t => t.trim())
-        .join('\n\n');
+      const content = this.noteText(await this.documentClient.blocksOf(noteId));
 
       if (content.trim().length < 10) {
         Utils.showToast('Not enough content to generate title', 'error');
@@ -453,27 +463,16 @@ class NotesManager {
         return;
       }
 
-      // Update note with new title
-      note.name = newTitle;
-      note.lastAutoTitleAt = Date.now();
-      await this.storage.updateNote(note);
-
-      // Update UI if this note is currently open in editor
-      if (isCurrentNote) {
-        editor.setTitleProgrammatically(newTitle);
+      // The user asked for it, so it goes over a title set by hand too, as 1.4.x put it, and it
+      // goes to the note it was asked for, whichever note is open now
+      const outcome = await this.documentClient.renameNote(noteId, newTitle, 'generated');
+      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') {
+        Utils.showToast('Note not found', 'error');
+        return;
       }
+      if (outcome.kind !== 'committed') throw notStored('title', outcome);
 
-      // Update tab name if open
-      const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = newTitle;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-
-      // Update sidebar
-      if (this.onRenderNotesList) this.onRenderNotesList();
+      await this.showCommittedTitle(noteId, newTitle);
 
       Utils.showToast(`Title updated: "${newTitle}"`, 'success');
     } catch (error) {
@@ -505,7 +504,7 @@ class NotesManager {
     }
 
     // Mark extraction as in progress (persisted across page refreshes)
-    await this.storage.setSetting(`insightsExtracting_${noteId}`, Date.now());
+    await this.markInsightsPending(noteId, true);
 
     // Show loading state on sidebar item
     const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
@@ -520,20 +519,17 @@ class NotesManager {
       this.showInsightsLoading();
     }
 
+    /** @type {Object|null} The insights stored, which the editor shows once the mark is cleared */
+    let stored = null;
     try {
       // Get note and its content
-      const note = await this.storage.getNote(noteId);
+      const note = await this.documentClient.readNote(noteId);
       if (!note) {
         Utils.showToast('Note not found', 'error');
         return;
       }
 
-      const blocks = await this.storage.getElementsByNote(noteId);
-      const content = blocks
-        .sort((a, b) => (a.order || 0) - (b.order || 0))
-        .map(b => this.extractBlockText(b))
-        .filter(t => t.trim())
-        .join('\n\n');
+      const content = this.noteText(await this.documentClient.blocksOf(noteId));
 
       if (content.trim().length < 20) {
         Utils.showToast('Not enough content to extract insights', 'error');
@@ -548,17 +544,14 @@ class NotesManager {
         return;
       }
 
-      // Update note with insights
-      note.insights = insights;
-      note.lastInsightsExtractedAt = Date.now();
-      note.lastInsightsContentHash = this.generateContentHash(content);
-      await this.storage.updateNote(note);
-
-      // Update UI if this note is currently open in editor
-      if (isCurrentNote) {
-        editor.noteData = note;
-        editor.renderInsights();
+      // The insight fields of the note it was asked for, and nothing else of it
+      const outcome = await this.documentClient.attachInsights(noteId, insights, this.generateContentHash(content));
+      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') {
+        Utils.showToast('Note not found', 'error');
+        return;
       }
+      if (outcome.kind !== 'committed') throw notStored('insights', outcome);
+      stored = insights;
 
       // Count extracted items
       const itemCount = (insights.todos?.length || 0) +
@@ -570,13 +563,13 @@ class NotesManager {
     } catch (error) {
       console.error('Failed to extract insights:', error);
       Utils.showToast('Failed to extract insights: ' + error.message, 'error');
-      // Remove loading state from insights on error
-      if (isCurrentNote) {
+      // Remove loading state from insights on error, while the editor still shows that note
+      if (this.editorHolds(noteId)) {
         this.hideInsightsLoading();
       }
     } finally {
       // Clear extraction state
-      await this.storage.setSetting(`insightsExtracting_${noteId}`, null);
+      await this.markInsightsPending(noteId, false);
 
       // Remove loading state
       const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
@@ -584,6 +577,125 @@ class NotesManager {
         updatedSidebarItem.classList.remove('generating');
       }
     }
+    // Shown after the mark is cleared, so the editor draws the insights rather than "Extracting..."
+    if (stored) this.showCommittedInsights(noteId, stored);
+  }
+
+  // ─── Jobs: what they read and write through the document client ───
+
+  /**
+   * The text the jobs send the provider: a note's blocks in order, as 1.4.x joined them
+   * @param {Array<Object>} blocks
+   * @returns {string}
+   */
+  noteText(blocks) {
+    return blocks
+      .slice()
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map(b => this.extractBlockText(b))
+      .filter(t => t.trim())
+      .join('\n\n');
+  }
+
+  /**
+   * Whether the editor getEditor answers holds `noteId` now
+   * @param {string} noteId
+   * @returns {boolean}
+   */
+  editorHolds(noteId) {
+    const editor = this.getEditor ? this.getEditor() : null;
+    return Boolean(editor && editor.noteId === noteId);
+  }
+
+  /**
+   * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
+   * holds that note (display only, no save), in the note's tab, and in the list. A title the
+   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async showCommittedTitle(noteId, name) {
+    const editor = this.getEditor ? this.getEditor() : null;
+    const shown = editor && typeof editor.showCommittedTitle === 'function'
+      ? editor.showCommittedTitle(noteId, name)
+      : 'not-open';
+    if (shown !== 'typed-title-pending') {
+      const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
+      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
+      if (tabIndex !== -1) {
+        openTabs[tabIndex].name = name;
+        if (this.onRenderTabs) this.onRenderTabs();
+        if (this.onSaveTabs) await this.onSaveTabs();
+      }
+    }
+    if (this.onRenderNotesList) this.onRenderNotesList();
+  }
+
+  /**
+   * Show insights the kernel committed for `noteId` in the editor, if it holds that note
+   * (display only, no save)
+   * @param {string} noteId
+   * @param {Object} insights
+   * @returns {void}
+   */
+  showCommittedInsights(noteId, insights) {
+    const editor = this.getEditor ? this.getEditor() : null;
+    if (editor && typeof editor.showCommittedInsights === 'function') {
+      editor.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
+    }
+  }
+
+  /**
+   * Mark `noteId`'s insights as being extracted, or clear the mark. A mark that isn't stored is
+   * logged, as 1.4.x logged a failed setSetting, and the extraction goes on.
+   * @param {string} noteId
+   * @param {boolean} pending
+   * @returns {Promise<void>}
+   */
+  async markInsightsPending(noteId, pending) {
+    const outcome = await this.documentClient.setInsightsPending(noteId, pending);
+    if (outcome.kind !== 'committed') console.error('Insights: the extraction mark was not stored', outcome.kind, outcome.code);
+  }
+
+  /**
+   * The stored preferences of `keys`, or none when the read fails, as 1.4.x's getSetting
+   * answered its defaults
+   * @param {Array<string>} keys
+   * @returns {Promise<Object>}
+   */
+  async jobPreferences(keys) {
+    try {
+      return await this.documentClient.preferences(keys);
+    } catch (error) {
+      console.warn('NotesManager: could not read the job settings', error && error.message);
+      return {};
+    }
+  }
+
+  /**
+   * When each job last started, 0 for never or when the read fails, as 1.4.x's getSetting
+   * answered its default
+   * @returns {Promise<{lastAutoTitleRun: number, lastInsightsRun: number}>}
+   */
+  async jobRuns() {
+    try {
+      return await this.documentClient.jobRuns();
+    } catch (error) {
+      console.warn('NotesManager: could not read when the jobs last ran', error && error.message);
+      return { lastAutoTitleRun: 0, lastInsightsRun: 0 };
+    }
+  }
+
+  /**
+   * Record that `job` starts a run now. A run whose start isn't stored stops, as 1.4.x's did
+   * when its setSetting failed.
+   * @param {'autoTitle'|'insights'} job
+   * @returns {Promise<void>}
+   */
+  async recordJobRun(job) {
+    const outcome = await this.documentClient.recordJobRun(job);
+    if (outcome.kind !== 'committed') throw notStored(`the ${job} run`, outcome);
   }
 
   /**
@@ -638,8 +750,8 @@ class NotesManager {
    * Setup auto-title feature
    */
   async setupAutoTitle() {
-    const enabled = await this.storage.getSetting('autoTitleEnabled', false);
-    const interval = await this.storage.getSetting('autoTitleInterval', 15);
+    const { autoTitleEnabled: enabled = false, autoTitleInterval: interval = 15 } =
+      await this.jobPreferences(['autoTitleEnabled', 'autoTitleInterval']);
 
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedAutoTitles(interval);
@@ -651,7 +763,7 @@ class NotesManager {
    * Check for missed auto-title generations (browser was closed)
    */
   async checkMissedAutoTitles(intervalMinutes) {
-    const lastRunTimestamp = await this.storage.getSetting('lastAutoTitleRun', 0);
+    const { lastAutoTitleRun: lastRunTimestamp } = await this.jobRuns();
     const oneHourMs = 60 * 60 * 1000;
 
     if (lastRunTimestamp && (Date.now() - lastRunTimestamp) > oneHourMs) {
@@ -704,11 +816,13 @@ class NotesManager {
     this.autoTitleRunning = true;
 
     try {
-      await this.storage.setSetting('lastAutoTitleRun', Date.now());
+      await this.recordJobRun('autoTitle');
 
-      const notes = await this.storage.getAllNotes();
+      const notes = await this.documentClient.activeNotes();
 
       for (const note of notes) {
+        // The note this pass is for, whichever note the editor shows when the provider answers
+        const noteId = note.id;
         if (note.titleManuallySet) continue;
 
         const currentTitle = (note.name || '').trim();
@@ -718,12 +832,7 @@ class NotesManager {
 
         if (!isUntitled) continue;
 
-        const blocks = await this.storage.getElementsByNote(note.id);
-        const content = blocks
-          .sort((a, b) => (a.order || 0) - (b.order || 0))
-          .map(b => this.extractBlockText(b))
-          .filter(t => t.trim())
-          .join('\n\n');
+        const content = this.noteText(await this.documentClient.blocksOf(noteId));
 
         if (content.trim().length < 20) continue;
 
@@ -731,12 +840,11 @@ class NotesManager {
         if (note.lastTitleContentHash && note.lastTitleContentHash === contentHash) continue;
 
         try {
-          this.logger.debug('NotesManager', `Generating title for note: ${note.id}`);
+          this.logger.debug('NotesManager', `Generating title for note: ${noteId}`);
 
-          const editor = this.getEditor ? this.getEditor() : null;
-          const isCurrentNote = editor && editor.noteId === note.id;
+          const isCurrentNote = this.editorHolds(noteId);
           const pageTitle = document.getElementById('page-title');
-          const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${note.id}"]`);
+          const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
 
           if (isCurrentNote && pageTitle) {
             pageTitle.classList.add('title-generating');
@@ -750,41 +858,29 @@ class NotesManager {
           if (pageTitle) {
             pageTitle.classList.remove('title-generating');
           }
-          const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${note.id}"]`);
+          const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
           if (updatedSidebarItem) {
             updatedSidebarItem.classList.remove('generating');
           }
 
           if (newTitle && newTitle.trim()) {
-            note.name = newTitle;
-            note.lastAutoTitleAt = Date.now();
-            note.lastTitleContentHash = contentHash;
-            await this.storage.updateNote(note);
-
-            if (isCurrentNote) {
-              editor.setTitleProgrammatically(newTitle);
+            // Checked against the note as committed: a title set by hand meanwhile keeps it
+            const outcome = await this.documentClient.deriveTitle(noteId, newTitle, contentHash);
+            if (outcome.kind === 'committed' && outcome.code === 'title-derived') {
+              await this.showCommittedTitle(noteId, newTitle);
+              this.logger.info('NotesManager', `Auto-title generated for note ${noteId}`);
+            } else if (outcome.kind !== 'committed') {
+              console.error(`Auto-title for note ${noteId} was not stored:`, outcome.kind, outcome.code);
             }
-
-            const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-            const tabIndex = openTabs.findIndex(t => t.noteId === note.id);
-            if (tabIndex !== -1) {
-              openTabs[tabIndex].name = newTitle;
-              if (this.onRenderTabs) this.onRenderTabs();
-              if (this.onSaveTabs) await this.onSaveTabs();
-            }
-
-            if (this.onRenderNotesList) this.onRenderNotesList();
-
-            this.logger.info('NotesManager', `Auto-title generated: "${newTitle}" for note ${note.id}`);
           }
         } catch (error) {
-          console.error(`Failed to generate title for note ${note.id}:`, error);
+          console.error(`Failed to generate title for note ${noteId}:`, error);
 
           const pageTitle = document.getElementById('page-title');
           if (pageTitle) {
             pageTitle.classList.remove('title-generating');
           }
-          const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${note.id}"]`);
+          const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
           if (sidebarItem) {
             sidebarItem.classList.remove('generating');
           }
@@ -819,8 +915,8 @@ class NotesManager {
    * Setup insights extraction feature
    */
   async setupInsightsExtraction() {
-    const enabled = await this.storage.getSetting('insightsEnabled', false);
-    const interval = await this.storage.getSetting('insightsInterval', 360);
+    const { insightsEnabled: enabled = false, insightsInterval: interval = 360 } =
+      await this.jobPreferences(['insightsEnabled', 'insightsInterval']);
 
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedInsightsExtraction(interval);
@@ -832,7 +928,7 @@ class NotesManager {
    * Check for missed insights extractions (browser was closed)
    */
   async checkMissedInsightsExtraction(intervalMinutes) {
-    const lastRunTimestamp = await this.storage.getSetting('lastInsightsRun', 0);
+    const { lastInsightsRun: lastRunTimestamp } = await this.jobRuns();
     const intervalMs = intervalMinutes * 60 * 1000;
 
     if (lastRunTimestamp && (Date.now() - lastRunTimestamp) > intervalMs) {
@@ -885,21 +981,18 @@ class NotesManager {
     this.insightsRunning = true;
 
     try {
-      await this.storage.setSetting('lastInsightsRun', Date.now());
+      await this.recordJobRun('insights');
 
-      const notes = await this.storage.getAllNotes();
+      const notes = await this.documentClient.activeNotes();
       let extractedCount = 0;
       let authError = false;
 
       for (const note of notes) {
         if (authError) break;
+        // The note this pass is for, whichever note the editor shows when the provider answers
+        const noteId = note.id;
 
-        const blocks = await this.storage.getElementsByNote(note.id);
-        const content = blocks
-          .sort((a, b) => (a.order || 0) - (b.order || 0))
-          .map(b => this.extractBlockText(b))
-          .filter(t => t.trim())
-          .join('\n\n');
+        const content = this.noteText(await this.documentClient.blocksOf(noteId));
 
         if (content.trim().length < 50) continue;
 
@@ -907,25 +1000,20 @@ class NotesManager {
         if (note.lastInsightsContentHash && note.lastInsightsContentHash === contentHash) continue;
 
         try {
-          this.logger.debug('NotesManager', `Extracting insights for note: ${note.id} (${note.name || 'Untitled'})`);
+          this.logger.debug('NotesManager', `Extracting insights for note: ${noteId}`);
 
           const insights = await this.llm.extractInsights(content, note.name);
 
           if (insights) {
-            note.insights = insights;
-            note.lastInsightsExtractedAt = Date.now();
-            note.lastInsightsContentHash = contentHash;
-            await this.storage.updateNote(note);
-
-            const editor = this.getEditor ? this.getEditor() : null;
-            const isCurrentNote = editor && editor.noteId === note.id;
-            if (isCurrentNote) {
-              editor.noteData = note;
-              editor.renderInsights();
+            // The insight fields and nothing else, so an edit, pin, or trash made meanwhile stays
+            const outcome = await this.documentClient.attachInsights(noteId, insights, contentHash);
+            if (outcome.kind === 'committed') {
+              this.showCommittedInsights(noteId, insights);
+              extractedCount++;
+              this.logger.debug('NotesManager', `Insights extracted for note: ${noteId}`);
+            } else {
+              console.error(`Insights for note ${noteId} were not stored:`, outcome.kind, outcome.code);
             }
-
-            extractedCount++;
-            this.logger.debug('NotesManager', `Insights extracted for note: ${note.name || 'Untitled'}`);
           }
         } catch (error) {
           const errorMsg = (error.message || '').toLowerCase();

@@ -55,6 +55,34 @@ const NO_NAVIGATION = Object.freeze({
 });
 
 /**
+ * The provider calls an editor makes: its AI port (js/services/ai-port.mjs), which App gives
+ * the editors it makes, and TabController the PiP editor, in place of the LLM global getLLM
+ * looked up.
+ * @typedef {Object} EditorAI
+ * @property {() => boolean} isConfigured
+ * @property {(text: string) => Promise<string|null>} generateTitle
+ * @property {(text: string, name?: string) => Promise<Object|null>} extractInsights
+ * @property {(messages: Array<{role: string, content: string}>) => Promise<string>} chat
+ */
+
+/**
+ * What an editor with no page around it has: no provider
+ * @type {EditorAI}
+ */
+const NO_AI = Object.freeze({
+  isConfigured: () => false,
+  generateTitle: async () => null,
+  extractInsights: async () => null,
+  chat: async () => '',
+});
+
+/** The note fields insights write (the kernel's attachInsights), and all a job shows of them */
+const INSIGHT_FIELDS = ['insights', 'lastInsightsExtractedAt', 'lastInsightsContentHash'];
+
+/** How long an "insights are being extracted" mark is trusted before the editor clears it */
+const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
  * before the transaction opens, so a block deleted in between isn't written back.
@@ -93,6 +121,8 @@ class BlockEditor {
      * @type {any}
      */
     this.documentClient = config.documentClient || null;
+    /** @type {EditorAI} */
+    this.ai = config.ai || NO_AI;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -171,11 +201,11 @@ class BlockEditor {
   }
 
   /**
-   * Helper to get the LLM instance, searching opener if in PiP.
-   * @returns {Object|null} LLM service instance
+   * The AI port, or none for an editor made without one
+   * @returns {EditorAI}
    */
-  getLLM() {
-    return window.LLM || (window.opener && window.opener.LLM);
+  _aiPort() {
+    return this.ai || NO_AI;
   }
 
   /**
@@ -479,33 +509,52 @@ class BlockEditor {
    * Start polling for insights extraction completion if needed
    */
   async startInsightsPollingIfNeeded() {
+    // The note is taken now, and every read after an await is checked against it
     const noteId = this.noteId;
-    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${noteId}`, null);
-    if (!extractingTimestamp || noteId !== this.noteId) {
+    if (!noteId) return;
+    const since = await this._insightsPendingSince(noteId);
+    if (!since || noteId !== this.noteId) {
       return;
     }
 
     // Check if extraction started within the last 5 minutes
-    const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
-    if (extractingTimestamp <= fiveMinutesAgo) {
+    if (since <= Date.now() - INSIGHTS_PENDING_TIMEOUT_MS) {
       return;
     }
 
     // Poll every 2 seconds to check if extraction completed (one poller at a time)
     this._stopInsightsPolling();
-    this.insightsPollingId = setInterval(async () => {
-      const stillExtracting = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
-
-      if (!stillExtracting) {
-        // Extraction completed - reload note data and render insights
-        clearInterval(this.insightsPollingId);
-        this.insightsPollingId = null;
-
-        // Reload note data to get updated insights
-        this.noteData = await Storage.getNote(this.noteId);
-        await this.renderInsights();
+    const pollingId = setInterval(async () => {
+      // A note switch stops the poller; one still running when it does stops here
+      if (this.insightsPollingId !== pollingId || noteId !== this.noteId) {
+        clearInterval(pollingId);
+        return;
       }
+      const stillExtracting = await this._insightsPendingSince(noteId);
+      if (stillExtracting || this.insightsPollingId !== pollingId) return;
+
+      // Extraction completed: show the insights it stored, and nothing else of the note
+      clearInterval(pollingId);
+      this.insightsPollingId = null;
+      const stored = await this.documentClient.readNote(noteId);
+      if (stored) this.showCommittedInsights(noteId, stored);
     }, 2000);
+    this.insightsPollingId = pollingId;
+  }
+
+  /**
+   * Since when `noteId`'s insights have been being extracted, or null, read as 1.4.x read
+   * it: a failed read counts as none
+   * @param {string} noteId
+   * @returns {Promise<number|null>}
+   */
+  async _insightsPendingSince(noteId) {
+    try {
+      return await this.documentClient.insightsPending(noteId);
+    } catch (error) {
+      console.warn('Insights: could not read whether extraction is running', error && error.message);
+      return null;
+    }
   }
 
   /**
@@ -522,20 +571,26 @@ class BlockEditor {
       return;
     }
 
-    // Check if extraction is in progress for this note
-    const extractingTimestamp = await Storage.getSetting(`insightsExtracting_${this.noteId}`, null);
-    if (extractingTimestamp) {
+    // Check if extraction is in progress for this note, the one loaded now
+    const noteId = this.noteId;
+    const since = await this._insightsPendingSince(noteId);
+    // Another note loaded meanwhile renders its own
+    if (noteId !== this.noteId || !this.noteData) return;
+    if (since) {
       // Check if extraction started within the last 5 minutes (timeout protection)
-      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
-      if (extractingTimestamp > fiveMinutesAgo) {
+      if (since > Date.now() - INSIGHTS_PENDING_TIMEOUT_MS) {
         // Show loading state
         this.showInsightsLoadingInEditor();
         return;
-      } else {
-        // Extraction timed out, clear the stale state
-        await Storage.setSetting(`insightsExtracting_${this.noteId}`, null);
       }
+      // Extraction timed out, clear the stale state
+      const outcome = await this.documentClient.setInsightsPending(noteId, false);
+      if (outcome.kind !== 'committed') console.warn('Insights: the stale mark stays', outcome.kind, outcome.code);
+      if (noteId !== this.noteId || !this.noteData) return;
     }
+    // A render that started earlier may have drawn one meanwhile
+    const drawn = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
+    if (drawn) drawn.remove();
 
     // Check if note has insights
     if (!this.noteData.insights) {
@@ -797,11 +852,50 @@ class BlockEditor {
   }
 
   /**
+   * Show a title the kernel committed for `noteId` (a derived or generated one), without
+   * saving anything: only while this editor holds that note, and not over a title the user
+   * typed that no save has stored yet, which wins once its save lands. A generated title
+   * waiting to save is dropped, since the committed one is newer.
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {'shown'|'typed-title-pending'|'not-open'}
+   */
+  showCommittedTitle(noteId, name) {
+    if (!this.noteData || this.noteId !== noteId) return 'not-open';
+    const pending = this._unsavedTitle;
+    if (pending && pending.noteId === noteId) {
+      if (pending.origin === 'typed') return 'typed-title-pending';
+      this._unsavedTitle = null;
+    }
+    this.noteData.name = name;
+    this.titleEl.textContent = name;
+    return 'shown';
+  }
+
+  /**
+   * Show insights the kernel committed for `noteId`, without saving anything: only the
+   * insight fields go onto the editor's copy of the note, and only while it holds that note.
+   * @param {string} noteId
+   * @param {Object} fields - The note's insight fields, or a note record to take them from
+   * @returns {boolean} Whether this editor showed them
+   */
+  showCommittedInsights(noteId, fields) {
+    if (!this.noteData || this.noteId !== noteId) return false;
+    for (const field of INSIGHT_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(fields, field)) this.noteData[field] = fields[field];
+    }
+    Promise.resolve(this.renderInsights()).catch((error) => {
+      console.warn('Insights: could not show them', error && error.message);
+    });
+    return true;
+  }
+
+  /**
    * Refresh insights for current note
    */
   async refreshInsights() {
-    const llm = this.getLLM();
-    if (!this.noteId || !llm || !llm.isConfigured()) {
+    const ai = this._aiPort();
+    if (!this.noteId || !this.noteData || !ai.isConfigured()) {
       Utils.showToast('AI not configured', 'error');
       return;
     }
@@ -812,6 +906,10 @@ class BlockEditor {
       refreshBtn.textContent = 'Extracting...';
     }
 
+    // The note and its text are taken now: the insights go to this note, whichever is open
+    // when the provider answers
+    const noteId = this.noteId;
+    const name = this.noteData.name;
     try {
       const content = this.getAllBlocksTextContent();
       if (content.trim().length < 20) {
@@ -819,20 +917,21 @@ class BlockEditor {
         return;
       }
 
-      const insights = await llm.extractInsights(content, this.noteData.name);
+      const insights = await ai.extractInsights(content, name);
 
       if (insights) {
-        this.noteData.insights = insights;
-        this.noteData.lastInsightsExtractedAt = Date.now();
-        // Onto the note as stored (_storedNote), as attachInsights will write them
-        const stored = await this._storedNote();
-        if (stored) {
-          stored.insights = insights;
-          stored.lastInsightsExtractedAt = this.noteData.lastInsightsExtractedAt;
-          await Storage.updateNote(stored);
+        // The insight fields and nothing else, so a pin, trash, or title set meanwhile stays
+        const outcome = await this.documentClient.attachInsights(noteId, insights);
+        if (outcome.kind === 'committed') {
+          this.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
+          Utils.showToast('Insights updated', 'success');
+        } else if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') {
+          // Deleted meanwhile, and it stays deleted
+          Utils.showToast('Note not found', 'error');
+        } else {
+          if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') this._onReloadRequired();
+          throw new Error(`The insights were not stored (${outcome.kind}: ${outcome.code})`);
         }
-        this.renderInsights();
-        Utils.showToast('Insights updated', 'success');
       } else {
         Utils.showToast('No insights found', 'info');
       }
@@ -1502,37 +1601,56 @@ class BlockEditor {
       return; // Title is already set
     }
 
-    // Check if auto-title is enabled and LLM is configured
-    const autoTitleEnabled = await Storage.getSetting('autoTitleEnabled', false);
-    if (!autoTitleEnabled) {
-      return;
-    }
-
-    const llm = this.getLLM();
-    if (!llm || !llm.isConfigured()) {
-      return;
-    }
-
-    // Check if title was manually set
-    if (this.noteData?.titleManuallySet) {
-      return;
-    }
-
+    // The note is taken now: the title goes to this note, whichever is open when it comes
+    const noteId = this.noteId;
+    if (!noteId) return;
     // Prevent duplicate calls
     this.pendingAutoTitle = true;
 
     try {
-      console.debug('First content detected, generating auto-title for note:', this.noteId);
-      const newTitle = await llm.generateTitle(currentContent);
+      // Check if auto-title is enabled and the AI is configured
+      if (!(await this._autoTitleEnabled())) return;
+      const ai = this._aiPort();
+      if (!ai.isConfigured()) return;
 
-      if (newTitle && newTitle.trim()) {
+      // Check if title was manually set
+      if (noteId !== this.noteId || this.noteData?.titleManuallySet) return;
+
+      console.debug('First content detected, generating auto-title for note:', noteId);
+      const newTitle = await ai.generateTitle(currentContent);
+      if (!newTitle || !newTitle.trim()) return;
+
+      if (noteId === this.noteId && this.noteData) {
+        // A title the user typed meanwhile wins
+        const pending = this._unsavedTitle;
+        if (this.noteData.titleManuallySet || (pending && pending.noteId === noteId && pending.origin === 'typed')) return;
+        // Into the next save, with the blocks, as 1.4.x saved it
         this.setTitleProgrammatically(newTitle);
-        console.debug(`Auto-title generated on first content: "${newTitle}"`);
+      } else {
+        // The editor moved on, and the save that left the note is written: the note gets the
+        // title as a derived one, which a title set by hand keeps out
+        const outcome = await this.documentClient.deriveTitle(noteId, newTitle);
+        if (outcome.kind !== 'committed') console.warn('Auto-title: not stored', outcome.kind, outcome.code);
       }
+      console.debug('Auto-title generated on first content for note:', noteId);
     } catch (error) {
       console.error('Failed to generate auto-title on first content:', error);
     } finally {
-      this.pendingAutoTitle = false;
+      if (noteId === this.noteId) this.pendingAutoTitle = false;
+    }
+  }
+
+  /**
+   * Whether auto-title is on, as 1.4.x read it: off when nothing is stored or the read fails
+   * @returns {Promise<boolean>}
+   */
+  async _autoTitleEnabled() {
+    try {
+      const { autoTitleEnabled = false } = await this.documentClient.preferences(['autoTitleEnabled']);
+      return Boolean(autoTitleEnabled);
+    } catch (error) {
+      console.warn('Auto-title: could not read whether it is on', error && error.message);
+      return false;
     }
   }
 
@@ -3768,12 +3886,32 @@ class BlockEditor {
   }
 
   /**
-   * The loaded note as stored, for the two writes that still put a whole note record
-   * (refreshInsights and _revertToSnapshot): they set their own fields on it, so a pin, folder,
-   * trash, or archive set elsewhere stays. The editor's copy no longer takes the stored state
-   * from each save, as Storage.saveNoteWithBlocks gave it. Null when the note was deleted
-   * meanwhile, which they leave deleted. #12 slice 4b2 moves them to attachInsights and
-   * restoreSnapshot.
+   * Show the title stored for `noteId` once a save found it set by hand and kept out the
+   * generated one it carried: in the title, the editor's copy, and the tab, while this editor
+   * holds that note and no newer title waits to save. Schedules no save.
+   * @param {string} noteId
+   * @returns {void}
+   */
+  _showStoredTitle(noteId) {
+    this.documentClient.readNote(noteId).then((stored) => {
+      if (!stored || noteId !== this.noteId || !this.noteData) return;
+      const pending = this._unsavedTitle;
+      if (pending && pending.noteId === noteId) return;
+      this.noteData.name = stored.name;
+      this.noteData.titleManuallySet = stored.titleManuallySet;
+      this.titleEl.textContent = stored.name || '';
+      this.navigation.titleChanged(stored.name);
+    }, (error) => {
+      console.warn('Could not read the title the note kept', error && error.message);
+    });
+  }
+
+  /**
+   * The loaded note as stored, for the one write that still puts a whole note record
+   * (_revertToSnapshot): it sets its own fields on it, so a pin, folder, trash, or archive set
+   * elsewhere stays. The editor's copy no longer takes the stored state from each save, as
+   * Storage.saveNoteWithBlocks gave it. Null when the note was deleted meanwhile, which it
+   * leaves deleted. #12 slice 4b2b moves it to restoreSnapshot.
    * @returns {Promise<Object|null>}
    */
   _storedNote() {
@@ -4082,7 +4220,8 @@ class BlockEditor {
    * the links follow in the same command, as 1.4.x's save updated them after the note.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
-   * @returns {Promise<'saved'|'stored'|'gone'|'reload'>} 'gone' when the note no longer exists and
+   * @returns {Promise<'saved'|'title-kept'|'stored'|'gone'|'reload'>} 'title-kept' when it saved
+   *   everything but a generated title, which a title set by hand kept out; 'gone' when the note no longer exists and
    *   nothing was written; 'reload' when the page had lost its connection to the database, so
    *   nothing was written; 'stored' when the connection closed while the save ran: its
    *   note-and-blocks transaction had opened, and a closing connection lets it finish, but the
@@ -4107,6 +4246,8 @@ class BlockEditor {
       ? this.documentClient.connectionOpen()
       : true;
     return this.documentClient.saveContent(save).then((outcome) => {
+      // The note had a title set by hand by the time it committed, so the generated one it carried was dropped
+      if (outcome.kind === 'committed' && outcome.code === 'content-saved-title-kept') return 'title-kept';
       if (outcome.kind === 'committed') return 'saved';
       if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'gone';
       if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return openAtStart ? 'stored' : 'reload';
@@ -4119,10 +4260,11 @@ class BlockEditor {
    * What follows a save's answer: "Saved", and search indexing and the sidebar's preview
    * catching up; or the notice for a deleted note, or for a page that has to reload.
    * @param {EditorSaveState} state
-   * @param {'saved'|'stored'|'gone'|'reload'} result
+   * @param {'saved'|'title-kept'|'stored'|'gone'|'reload'} result
    * @returns {void}
    */
   _afterSaveWrite(state, result) {
+    if (result === 'title-kept') this._showStoredTitle(state.noteId);
     if (result === 'gone') {
       this._onNoteGone(state);
       return;
@@ -4139,7 +4281,7 @@ class BlockEditor {
       this._onReloadRequired();
       return;
     }
-    // The title it carried is stored, unless a newer one was set meanwhile
+    // The title it carried is stored, or was kept out, unless a newer one was set meanwhile
     if (state.title && this._unsavedTitle === state.title) this._unsavedTitle = null;
     state.noteData.updatedAt = Date.now();
     if (!this.reloadRequired) this.updateSaveStatus('Saved');
@@ -5089,10 +5231,10 @@ class BlockEditor {
    * @param {'rewrite'|'expand'|'summarize'|'translate'} action - The AI action
    */
   async handleInlineAIAction(blockId, action) {
-    const llm = this.getLLM();
+    const ai = this._aiPort();
 
     // Req 20.4: toast if AI not configured
-    if (!llm || !llm.isConfigured()) {
+    if (!ai.isConfigured()) {
       Utils.showToast('AI not configured. Please set up in Settings.', 'error');
       return;
     }
@@ -5126,7 +5268,7 @@ class BlockEditor {
         { role: 'user', content: text },
       ];
 
-      const result = await llm.chat(messages);
+      const result = await ai.chat(messages);
 
       if (result && result.trim()) {
         // Record undo before replacing content (Req 20.3)

@@ -66,13 +66,16 @@ const MISSING_STORE_FEATURES = {
 class App {
   /**
    * The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
-   * tab's kernel client (js/kernel/composition/host.js describes it), and the document client
-   * every editor reads and writes its note through (js/kernel/composition/document.js).
-   * @param {{kernel?: any, documentClient?: any}} [options]
+   * tab's kernel client (js/kernel/composition/host.js describes it), the document client
+   * every editor reads and writes its note through (js/kernel/composition/document.js), and
+   * the AI port every editor and NotesManager call the provider through
+   * (js/services/ai-port.mjs).
+   * @param {{kernel?: any, documentClient?: any, ai?: any}} [options]
    */
-  constructor({ kernel, documentClient } = {}) {
+  constructor({ kernel, documentClient, ai } = {}) {
     this.kernel = kernel;
     this.documentClient = documentClient;
+    this.ai = ai;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -261,7 +264,8 @@ class App {
         }
       }, 2000);
 
-      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation() };
+      // The PiP editor gets the same ports from TabController
+      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation(), ai: this.ai };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
         onChange: editorChangeHandler,
@@ -688,6 +692,7 @@ class App {
       domRefs: this.domRefs,
       logger: this.logger,
       llm: LLM,
+      documentClient: this.documentClient,
     });
 
     // Share search engine reference
@@ -950,7 +955,8 @@ class App {
       eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
-      llm: LLM,
+      llm: this.ai,
+      documentClient: this.documentClient,
     });
 
     // Share data
