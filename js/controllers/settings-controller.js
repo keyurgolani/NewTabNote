@@ -995,8 +995,22 @@ class SettingsController {
     const storage = this.storage;
     storage.onSettingsChange(async ({ keys }) => {
       const changed = new Set(keys);
-      /** @param {string} key */
-      const read = (key) => storage.getSetting(key, undefined);
+      /**
+       * Reads `key` again and gives its value to `apply`, unless the read fails: a value it
+       * couldn't read is left as this tab has it, never applied as missing
+       * @param {string} key
+       * @param {(value: *) => void} apply
+       */
+      const reread = async (key, apply) => {
+        let value;
+        try {
+          value = await storage.readSetting(key);
+        } catch (error) {
+          this.logger?.warn?.('SettingsController', `Couldn't read ${key} again after another tab changed it`, error);
+          return;
+        }
+        apply(value);
+      };
 
       // Apply theme changes
       if (changed.has('theme')) {
@@ -1015,12 +1029,14 @@ class SettingsController {
 
       // Apply sidebar state changes (delegate to App for backward compat)
       for (const key of ['sidebarOpen', 'sidebarWidth', 'sidebarViewMode', 'sidebarSortMode']) {
-        if (changed.has(key) && this.onSidebarStateChanged) this.onSidebarStateChanged(key, await read(key));
+        if (changed.has(key) && this.onSidebarStateChanged) {
+          await reread(key, (value) => this.onSidebarStateChanged(key, value));
+        }
       }
 
       // Apply AI sidebar width changes
       if (changed.has('aiSidebarWidth')) {
-        if (this.onAISidebarWidthChanged) this.onAISidebarWidthChanged(await read('aiSidebarWidth'));
+        if (this.onAISidebarWidthChanged) await reread('aiSidebarWidth', (value) => this.onAISidebarWidthChanged(value));
       }
 
       // Reinitialize LLM if provider settings changed
@@ -1029,7 +1045,9 @@ class SettingsController {
       }
 
       if (changed.has('aiPromptTemplates')) {
-        if (this.onAIPromptTemplatesChanged) this.onAIPromptTemplatesChanged(await read('aiPromptTemplates'));
+        if (this.onAIPromptTemplatesChanged) {
+          await reread('aiPromptTemplates', (value) => this.onAIPromptTemplatesChanged(value));
+        }
       }
 
       // Update auto-title settings

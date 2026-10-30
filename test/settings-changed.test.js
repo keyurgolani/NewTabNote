@@ -76,4 +76,19 @@ describe('settings.changed (#13)', () => {
       ['aiPromptTemplates', [{ id: 't1', label: 'Sum', prompt: 'Summarize' }]],
     ]);
   });
+  it("applies nothing for a setting it couldn't read again, rather than a missing value", async () => {
+    const { env, Storage, report } = await setup();
+    const SettingsController = env.get('SettingsController');
+    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: null });
+    const applied = [];
+    settings.onSidebarStateChanged = (key, value) => applied.push([key, value]);
+    settings.setupSettingsSync();
+    await new Promise((resolve) => env.chrome.api.storage.local.set({ setting_sidebarOpen: true, setting_sidebarWidth: 300 }, resolve));
+    // The read of sidebarOpen fails, and the one of sidebarWidth after it doesn't
+    env.chrome.failNextGet();
+    report({ setting_sidebarOpen: { newValue: true }, setting_sidebarWidth: { newValue: 300 } });
+    for (let tries = 0; applied.length < 1 && tries < 50; tries += 1) await settle();
+    await settle();
+    assert.deepEqual(plain(applied), [['sidebarWidth', 300]]);
+  });
 });

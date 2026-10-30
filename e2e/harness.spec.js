@@ -130,10 +130,20 @@ test('still sees what the worker throws after it restarts, and fails while it is
   await cdp.send('ServiceWorker.stopAllWorkers');
   await expect(extension.uncaught()).rejects.toThrow('may be stopped');
 
-  // Opening #13's port wakes the worker, and its router answers the hello
-  expect(await page.evaluate(() => new Promise((resolve) => {
+  // Opening #13's port wakes the worker, and its router answers the hello. A port that closes
+  // first, or no answer within 10 s, fails the test rather than hanging it.
+  expect(await page.evaluate(() => new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: 'ntn-rpc' });
+    const timer = setTimeout(() => {
+      port.disconnect();
+      reject(new Error('The worker never answered the hello'));
+    }, 10_000);
+    port.onDisconnect.addListener(() => {
+      clearTimeout(timer);
+      reject(new Error(`The port closed: ${chrome.runtime.lastError ? chrome.runtime.lastError.message : 'by the worker'}`));
+    });
     port.onMessage.addListener((text) => {
+      clearTimeout(timer);
       port.disconnect();
       resolve(JSON.parse(text).frame);
     });
