@@ -37,8 +37,10 @@ import * as inventory from './conformance-inventory.mjs';
 export const ROOT = path.join(import.meta.dirname, '..', '..');
 
 const SCANNED = ['js', 'test', 'e2e'];
-// js/lib holds vendored bundles
-const SKIPPED = new Set(['js/lib']);
+// js/lib holds vendored bundles, and test/fixtures/storage/releases the v1.4.0 and v1.4.1
+// js/storage.js and js/utils.js frozen byte for byte as #17's rollback and import fixtures
+// (Q11), release artifacts that implement nothing here
+const SKIPPED = new Set(['js/lib', 'test/fixtures/storage/releases']);
 const MODULE = /\.(m?js|cjs)$/;
 const TEST_FILE = /\.test\.(m?js|cjs)$/;
 const SPEC_FILE = /\.spec\.js$/;

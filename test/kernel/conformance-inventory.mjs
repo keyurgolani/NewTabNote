@@ -167,6 +167,36 @@ export const UNSHARED = Object.freeze({
     implements: "the status region over #13's client (StatusSource)",
     tests: 'test/kernel/status-region.test.mjs',
   },
+  // #17 PR 1a's migration framework, which no shipped root loads until PR 1b; one runner, one
+  // recovery database, one registry, so nothing to share a suite with
+  'js/kernel/adapters/indexeddb/migrate.js': {
+    implements: "#17's migration runner (startMigrations, runMigrations), under Web Lock storage.migrate",
+    tests: 'test/kernel/storage-migrate.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/registry.js': {
+    implements: "#17's sequential migration registry and step 9",
+    tests: 'test/kernel/storage-migrate.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/shapes.js': {
+    implements: "#17's shape detection for CanvasTabDB",
+    tests: 'test/kernel/storage-migrate.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/space.js': {
+    implements: "#17's space check before a recovery point",
+    tests: 'test/kernel/storage-migrate.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/recovery-points.js': {
+    implements: "#17's verified recovery points in NewTabNoteRecovery",
+    tests: 'test/kernel/storage-recovery-points.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/records.js': {
+    implements: "#17's record, set, and content hashes for recovery points",
+    tests: 'test/kernel/storage-recovery-points.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/legacy-export.js': {
+    implements: "#17's export of a pre-migration point as 1.4.1's import file",
+    tests: 'test/kernel/storage-legacy-export.test.mjs',
+  },
 });
 
 /**
