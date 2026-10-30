@@ -192,14 +192,22 @@ describe('a blocked upgrade', () => {
       request.onerror = () => reject(request.error);
     });
     let blocked = 0;
-    const started = start(of, { openWithinMs: 50, onBlocked: () => (blocked += 1) });
-    const answer = await started.answer;
-    assert.deepStrictEqual(answer, { status: 'blocked-upgrade', retryable: true });
-    assert.equal(started.state(), 'blocked-upgrade');
-    assert.equal(blocked, 1);
-    // Nothing structural ran (any other open now would queue behind the upgrade)
-    assert.equal(/** @type {IDBDatabase} */ (old).version, 8);
-    /** @type {IDBDatabase} */ (old).close();
+    // Long enough for the point to be made on a loaded machine first, so the answer is the block
+    const within = 3000;
+    const began = Date.now();
+    const started = start(of, { openWithinMs: within, onBlocked: () => (blocked += 1) });
+    try {
+      const answer = await started.answer;
+      assert.deepStrictEqual(answer, { status: 'blocked-upgrade', retryable: true });
+      assert.ok(Date.now() - began < within + 1000, 'answered late');
+      assert.equal(started.state(), 'blocked-upgrade');
+      assert.equal(blocked, 1);
+      // Nothing structural ran (any other open now would queue behind the upgrade)
+      assert.equal(/** @type {IDBDatabase} */ (old).version, 8);
+    } finally {
+      // Even when an assertion fails, so the run ends and the file can exit
+      /** @type {IDBDatabase} */ (old).close();
+    }
     const outcome = await started.done;
     assert.equal(outcome.status, 'migrated');
     const expected = expectedFor('v8.basic');
@@ -634,7 +642,7 @@ describe('a verified point reused only while it matches the live data (review R6
   });
 });
 
-describe('an empty CanvasTabDB at or above the version a run opens at', () => {
+describe('an empty CanvasTabDB, and a database with any store, are never deleted', () => {
   /**
    * A profile whose CanvasTabDB is at `version`, with `stores` (name to key path)
    * @param {number} version
@@ -659,46 +667,20 @@ describe('an empty CanvasTabDB at or above the version a run opens at', () => {
   }
 
   for (const version of [9, 12]) {
-    it(`at version ${version}: deleted on its own connection, made again at 9, logged and receipted`, async () => {
+    it(`at version ${version}: unknown, left exactly as it is, and nothing deleted (#33's AC6)`, async () => {
       const of = await made(version);
+      const before = await dump(of);
       const outcome = await run(of);
-      assert.deepStrictEqual([outcome.status, outcome.to], ['migrated', 9]);
-      assert.deepStrictEqual(of.faults.deletes, ['CanvasTabDB']);
-      const expected = expectedFor('none.basic');
-      const dumped = await dump(of, expected.header);
-      const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));
-      const want = /** @type {any} */ (
-        asDumped(expected).databases.find(candidate => candidate.name === 'CanvasTabDB')
-      );
       assert.deepStrictEqual(
-        db.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
-        want.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
+        [outcome.status, outcome.shape, outcome.failure],
+        ['refused', 'unknown', { code: 'unknown-shape' }],
       );
-      assert.deepStrictEqual(
-        recordsIn(dumped, 'CanvasTabDB', 'migrations').map(record => record.value.id),
-        ['recreate-empty', 'structural-9'],
-      );
-      assert.equal(recordsIn(dumped, 'CanvasTabDB', 'migrations')[0].value.from, version);
-      assert.deepStrictEqual(
-        of.logs.filter(line => line.event === 'storage-migration-recreated-empty').map(line => line.detail),
-        [{ fromVersion: version }],
-      );
-      assert.equal((await run(of)).status, 'current');
+      assert.deepStrictEqual(detectShape(await inspect(of.real)), { kind: 'unknown', reason: 'empty-at-target' });
+      assert.deepStrictEqual(of.faults.deletes, []);
+      assert.deepStrictEqual(await dump(of), before);
+      assert.equal((await run(of)).status, 'refused');
     });
   }
-
-  it('a connection that blocks the delete is answered blocked-upgrade, and the run waits for it', async () => {
-    const of = await made(9);
-    const old = await new Promise((resolve, reject) => {
-      const request = of.real.open('CanvasTabDB');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const started = start(of, { openWithinMs: 50 });
-    assert.deepStrictEqual(await started.answer, { status: 'blocked-upgrade', retryable: true });
-    /** @type {IDBDatabase} */ (old).close();
-    assert.equal((await started.done).status, 'migrated');
-  });
 
   // The lead's condition: a database with even one store is never deleted, at any version
   for (const version of [1, 2, 7, 8, 9, 10, 12, 40]) {
@@ -721,34 +703,6 @@ describe('an empty CanvasTabDB at or above the version a run opens at', () => {
       });
     }
   }
-
-  it('the zero-store check is made again on the connection that deletes: a store that appeared since inspection stops it', async () => {
-    const of = await made(9);
-    const outcome = await run(of, {
-      hooks: {
-        between: async label => {
-          if (label !== 'inspected') return;
-          // Something gives the database a store after the run read it as empty
-          await new Promise((resolve, reject) => {
-            const request = of.real.open('CanvasTabDB', 10);
-            request.onupgradeneeded = () =>
-              request.result.createObjectStore('mystery', { keyPath: 'id' }).put({ id: 'kept', text: 'still here' });
-            request.onsuccess = () => {
-              request.result.close();
-              resolve(undefined);
-            };
-            request.onerror = () => reject(request.error);
-          });
-        },
-      },
-    });
-    assert.deepStrictEqual([outcome.status, outcome.failure], ['failed', { code: 'shape-changed' }]);
-    assert.deepStrictEqual(of.faults.deletes, []);
-    assert.deepStrictEqual(
-      recordsIn(await dump(of), 'CanvasTabDB', 'mystery').map(record => record.value.text),
-      ['still here'],
-    );
-  });
 
   it('an empty database below 9 upgrades in place, and nothing is deleted', async () => {
     const of = await made(1);

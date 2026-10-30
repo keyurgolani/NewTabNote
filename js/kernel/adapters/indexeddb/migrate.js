@@ -13,29 +13,6 @@
  *    with ids, versions, times, and a code, never content.
  * A `newer`, `missing-core`, or `unknown` database gets a point and no step (Q13): it's left as
  * it is, and #33's refusal stays the answer.
- *
- * The one database a run deletes is a CanvasTabDB with no object store at all at or above the
- * version it opens at (an aborted or foreign open can leave one), since opening that runs no
- * upgrade and it would never migrate. The lead's conditions (2026-10-30), against #33's and
- * #17's "nothing deletes CanvasTabDB on its own": the zero-store check is made on the run's own
- * connection, under `storage.migrate`, and the delete is requested while that connection is
- * still open, so nothing can be queued between the check and the delete; a database with any
- * store is never deleted, at any version (storage-migrate.test.mjs); and the delete is logged,
- * `storage-migration-recreated-empty`, and receipted, `recreate-empty`, with its old version
- * only.
- *
- * Every run can be cut off anywhere and run again. A point resumes from its progress record,
- * a verified one is reused while the live stores, read now, still match its manifest (count,
- * ID set, content hash) and remade when they don't, its pin moving to the new one, and the
- * point is verified as its record on disk reads, and a database whose `versionchange` committed but whose receipt
- * didn't reads as `current` and gets the receipt, since the second transaction's check is the
- * same read. A run that finds nothing to do writes nothing, receipts included.
- *
- * When another connection blocks the upgrade, the run waits, and `answer` resolves with
- * `blocked-upgrade` within `openWithinMs` (5 seconds, connection.js's OPEN_WITHIN_MS) while
- * `done` keeps waiting for the upgrade.
- *
- * Outcomes and log lines hold shape kinds, versions, step and point ids, and codes only.
  */
 
 import { OPEN_WITHIN_MS } from './connection.js';
@@ -207,38 +184,6 @@ function upgrade({ indexedDB, version, steps, logicalVersion, onBlocked }) {
     };
     request.onerror = () => reject(request.error);
   });
-}
-
-/**
- * Deletes CanvasTabDB if, read on this connection right before the delete, it holds no object
- * store. Resolves its old version, or null when it held a store or was gone, and deleted
- * nothing. A connection that blocks the delete is answered as a blocked upgrade.
- * @param {{indexedDB: IDBFactory, logger: Logger, onBlocked: () => void}} options
- * @returns {Promise<number | null>}
- */
-async function deleteIfEmpty({ indexedDB, logger, onBlocked }) {
-  const db = await openWithoutUpgrade(indexedDB, DB_NAME);
-  if (!db) return null;
-  if (db.objectStoreNames.length !== 0) {
-    db.close();
-    return null;
-  }
-  const version = db.version;
-  /** @type {IDBOpenDBRequest} */
-  let request;
-  try {
-    // Requested while the connection that saw no store is open, so it's next in the queue
-    request = indexedDB.deleteDatabase(DB_NAME);
-  } finally {
-    db.close();
-  }
-  logger.warn('storage-migration-recreated-empty', { fromVersion: version });
-  await new Promise((resolve, reject) => {
-    request.onblocked = () => onBlocked();
-    request.onsuccess = () => resolve(undefined);
-    request.onerror = () => reject(request.error);
-  });
-  return version;
 }
 
 /**
@@ -502,17 +447,6 @@ async function migrate(options, status) {
     logger.warn('storage-migration-blocked', { shape: shape.kind, to: target });
     if (options.onBlocked) options.onBlocked();
   };
-  // An empty database at or above the target opens with no upgrade, so it's made again
-  /** @type {number | null} */
-  let recreatedFrom = null;
-  if (shape.kind === 'none' && inspection.exists && inspection.version >= target) {
-    recreatedFrom = await deleteIfEmpty({ indexedDB, logger, onBlocked });
-    if (recreatedFrom === null) {
-      return outcome({ status: 'failed', shape: shape.kind, failure: { code: 'shape-changed' } });
-    }
-    status.phase = 'running';
-    await between('recreated');
-  }
   const db = await upgrade({ indexedDB, version: target, steps, logicalVersion, onBlocked });
   status.phase = 'running';
   try {
@@ -549,18 +483,6 @@ async function migrate(options, status) {
       recoveryPointId,
       failure: null,
     }));
-    if (recreatedFrom !== null) {
-      receipts.unshift({
-        id: 'recreate-empty',
-        from: recreatedFrom,
-        to: 0,
-        status: 'completed',
-        startedAt,
-        completedAt,
-        recoveryPointId: null,
-        failure: null,
-      });
-    }
     await writeReceipts(db, receipts);
     await between('receipts');
     return outcome({
