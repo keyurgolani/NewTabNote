@@ -514,15 +514,18 @@ function createChromeStub() {
   // As in Chrome, chrome.storage.onChanged (with the area name) and chrome.storage.local.onChanged
   // tell every context sharing this stub, the writing one included, what a write changed: each
   // key's oldValue when it had one and newValue when it has one. A write that changes nothing
-  // fires neither. test/chrome-storage-conformance.test.js holds this to Chromium.
+  // fires neither. The writer's own listeners hear a write before its callback runs or its
+  // promise settles, which is the order Chromium shows in the writing context; Chromium promises
+  // no order for another context, and neither does this. e2e/chrome-storage.spec.js runs the
+  // same cases on Chromium as test/chrome-storage-conformance.test.js runs here.
   const storageChanged = createEventStub();
   const localChanged = createEventStub();
-  const listenerErrors = [];
   const announce = (changes) => {
     if (Object.keys(changes).length === 0) return;
     const deliver = (listener, args) => {
-      // Chrome logs a listener that throws and goes on to the next
-      try { listener(...args); } catch (error) { listenerErrors.push(error); }
+      // Chrome logs a listener that throws and goes on to the next. Here it goes on too, and the
+      // error is thrown again on a later tick, so the test that made it fails
+      try { listener(...args); } catch (error) { setImmediate(() => { throw error; }); }
     };
     storageChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes), 'local']));
     localChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes)]));
@@ -635,8 +638,6 @@ function createChromeStub() {
     failNextSet(error = new Error('Resource::kQuotaBytes quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
-    /** What onChanged listeners threw, which Chrome would log as "Error in event handler". */
-    listenerErrors,
     /** set and remove calls, which are the writes. */
     writes() { return calls.filter((c) => c.method === 'set' || c.method === 'remove'); },
   };
