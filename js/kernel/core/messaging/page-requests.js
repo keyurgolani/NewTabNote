@@ -5,9 +5,11 @@
  * entries of kind query, with idempotency none, and they carry ids only. BroadcastChannel has
  * no sender identity, so the addressed page checks the frame, the operation and its version,
  * the size, the payload schema, its entity ids, and the deadline, and an operation's allowed
- * surfaces apply only where a port or in-process caller exists. Only the addressed page
- * answers, a refusal included, and every other page stays silent. A requester that hears no
- * valid answer by its deadline gets a failed state.
+ * surfaces apply only where a port or in-process caller exists. Every page hears what's
+ * posted, so the requester runs the same operation, size, schema, and entity checks first and
+ * posts nothing they refuse. Only the addressed page answers, a refusal included, and every
+ * other page stays silent. A requester that hears no valid answer by its deadline gets a
+ * failed state.
  */
 
 import { encode, encodedBytes } from '../contracts/codec.js';
@@ -158,6 +160,7 @@ export function createPageResponder({
  * @param {{channel: Channel, lookup: Lookup, ids: Ids, clock: Clock, timers: Timers, logger?: Logger}} options
  */
 export function createPageRequester({ channel, lookup, ids, clock, timers, logger = silentLogger }) {
+  const inScope = createScopeCheck();
   /**
    * @typedef {object} Waiting
    * @property {string} requestId
@@ -226,9 +229,16 @@ export function createPageRequester({ channel, lookup, ids, clock, timers, logge
         } catch {
           return resolve(queryFailure('invalid-payload'));
         }
-        if (encodedBytes(text) > Math.min(maxBytes, MAX_MESSAGE_BYTES)) {
-          return resolve(queryFailure('payload-too-large'));
-        }
+        const bytes = encodedBytes(text);
+        if (bytes > Math.min(maxBytes, MAX_MESSAGE_BYTES)) return resolve(queryFailure('payload-too-large'));
+        // Every page hears what's posted, so what the addressed page would refuse never goes
+        const checked = checkRequest(
+          { frame: 'request', requestId, operation: name, version, deadline: 0, payload: query },
+          bytes,
+          lookup,
+        );
+        if (!checked.ok) return resolve(queryFailure(checked.code));
+        if (!inScope(operation, query)) return resolve(queryFailure('forbidden-for-surface'));
         /** @type {Waiting} */
         const call = {
           requestId,

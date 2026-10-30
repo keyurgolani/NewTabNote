@@ -156,54 +156,69 @@ describe('page-addressed requests (#13, "Topology")', () => {
     });
     assert.deepEqual(
       await Promise.all([
-        requester.request({ type: 'test.whoHas', noteId: '' }, to),
-        requester.request({ ...ask, folderId: 'f1' }, to),
         requester.request({ type: 'test.whoHas', noteId: 'throws' }, to),
         requester.request({ type: 'test.whoHas', noteId: 'invalid' }, to),
         stale.request(ask, to),
       ]),
       [
-        failed('validation', 'invalid-payload'),
-        failed('policy', 'forbidden-for-surface'),
         failed('coordinator', 'unavailable'),
         failed('coordinator', 'unavailable'),
         failed('validation', 'unsupported-version'),
       ],
     );
-    // Refused before anything is posted: a command, or no operation at all
+    // Refused before anything is posted, so no page hears it: a command, no operation at all,
+    // a payload its schema refuses, an id of a type its entry doesn't declare, or no target
     assert.deepEqual(
       await Promise.all([
         requester.request({ type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true }, to),
         requester.request({ type: 'noSuchThing' }, to),
+        requester.request({ type: 'test.whoHas', noteId: '' }, to),
+        requester.request({ ...ask, folderId: 'f1' }, to),
         requester.request(ask, /** @type {any} */ ({ kind: 'tab', tabId: 4 })),
       ]),
       [
         failed('validation', 'unknown-operation'),
         failed('validation', 'unknown-operation'),
         failed('validation', 'invalid-payload'),
+        failed('policy', 'forbidden-for-surface'),
+        failed('validation', 'invalid-payload'),
       ],
     );
-    // A command posted by hand is no page-addressed request, whatever the page knows of it
+    assert.equal(posted.filter(frame => frame === 'page-request').length, 3);
+    // Posted by hand, the addressed page refuses the same: a command is no page-addressed
+    // request, whatever the page knows of it, and the payload and scope checks hold there too
     const raw = new (fake.page('newtab').BroadcastChannel)(HINT_CHANNEL);
-    /** @type {unknown[]} */
-    const answers = [];
+    /** @type {Record<string, unknown>} */
+    const answers = {};
     raw.addEventListener('message', (/** @type {{data: unknown}} */ event) => {
       const frame = /** @type {any} */ (decode(event.data));
-      if (frame.requestId === 'raw-1') answers.push(frame.result);
+      if (frame.frame === 'page-response') answers[frame.requestId] = frame.result;
     });
-    raw.postMessage(
-      encode({
-        frame: 'page-request',
-        requestId: 'raw-1',
-        operation: 'setPinned',
-        version: 1,
-        deadline: NOW + 1000,
-        target: to,
-        payload: { type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true },
-      }),
-    );
+    /**
+     * @param {string} requestId
+     * @param {Record<string, unknown>} payload
+     */
+    const post = (requestId, payload) =>
+      raw.postMessage(
+        encode({
+          frame: 'page-request',
+          requestId,
+          operation: payload.type,
+          version: 1,
+          deadline: NOW + 1000,
+          target: to,
+          payload,
+        }),
+      );
+    post('raw-1', { type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true });
+    post('raw-2', { type: 'test.whoHas', noteId: '' });
+    post('raw-3', { ...ask, folderId: 'f1' });
     await settle();
-    assert.deepEqual(answers, [failed('validation', 'unknown-operation')]);
+    assert.deepEqual(answers, {
+      'raw-1': failed('validation', 'unknown-operation'),
+      'raw-2': failed('validation', 'invalid-payload'),
+      'raw-3': failed('policy', 'forbidden-for-surface'),
+    });
     // Six went, and only the addressed page answered each
     assert.equal(posted.filter(frame => frame === 'page-request').length, 6);
     assert.equal(posted.filter(frame => frame === 'page-response').length, 6);
