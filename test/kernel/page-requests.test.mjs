@@ -46,15 +46,28 @@ const whoHas = operationOf(addressed, {
   result: queryStateSchema(v.strictObject({ sessionId: id })),
 });
 
+/** One that answers with a number, which its schema takes whatever it is */
+const measure = operationOf(
+  { ...addressed, schema: './operations/test-measure.js' },
+  {
+    payload: v.strictObject({ type: v.literal('test.measure'), noteId: entityId('note') }),
+    result: queryStateSchema(v.strictObject({ n: v.number() })),
+  },
+);
+
 /** What each page and the worker know */
-const lookup = createLookup({ 'test.whoHas': whoHas, setPinned: OPERATIONS.setPinned });
+const lookup = createLookup({ 'test.whoHas': whoHas, 'test.measure': measure, setPinned: OPERATIONS.setPinned });
 
 /**
  * The worker as requester, and three pages, each answering for its own session and the locks
- * it holds. `posted` counts the frames each kind the channel carried.
- * @param {{handler?: (session: string) => PageHandler}} [options]
+ * it holds. `posted` counts the frames each kind the channel carried, and `warnings` the
+ * events the pages warned of.
+ * @param {{handler?: (session: string) => PageHandler, measured?: PageHandler}} [options]
  */
-function pages({ handler = session => () => ready(NOW, { sessionId: session }) } = {}) {
+function pages({
+  handler = session => () => ready(NOW, { sessionId: session }),
+  measured = () => ready(NOW, { n: 1 }),
+} = {}) {
   const fake = createChromeFake();
   fake.worker.install(() => {});
   fake.worker.start();
@@ -64,6 +77,8 @@ function pages({ handler = session => () => ready(NOW, { sessionId: session }) }
     openHintChannel({ origin: fake.origin, BroadcastChannel: context.BroadcastChannel });
   /** @type {Record<string, string[]>} */
   const locks = { 's-editor': ['ntn-editor:n1'], 's-other': [], 's-offscreen': ['job:j1'] };
+  /** @type {string[]} */
+  const warnings = [];
   for (const [sessionId, held] of Object.entries(locks)) {
     createPageResponder({
       channel: channelOf(fake.page(sessionId === 's-offscreen' ? 'offscreen' : 'newtab')),
@@ -71,8 +86,13 @@ function pages({ handler = session => () => ready(NOW, { sessionId: session }) }
       holds: lock => held.includes(lock),
       lookup,
       // A handler under a command's name serves nothing, since no command is page-addressed
-      handlers: { 'test.whoHas': handler(sessionId), setPinned: () => committed('note-pinned', ['n1']) },
+      handlers: {
+        'test.whoHas': handler(sessionId),
+        'test.measure': measured,
+        setPinned: () => committed('note-pinned', ['n1']),
+      },
       clock: scheduler.clock,
+      logger: { warn: event => warnings.push(event) },
     });
   }
   // A page that only watches what the channel carries
@@ -88,7 +108,7 @@ function pages({ handler = session => () => ready(NOW, { sessionId: session }) }
     ids: testIds('page-request'),
     ...scheduler,
   });
-  return { fake, scheduler, requester, posted };
+  return { fake, scheduler, requester, posted, warnings };
 }
 
 const ask = { type: 'test.whoHas', noteId: 'n1' };
@@ -187,6 +207,20 @@ describe('page-addressed requests (#13, "Topology")', () => {
     // Six went, and only the addressed page answered each
     assert.equal(posted.filter(frame => frame === 'page-request').length, 6);
     assert.equal(posted.filter(frame => frame === 'page-response').length, 6);
+  });
+
+  it("answer unavailable at once, and warn, when the codec can't carry what the handler gave", async () => {
+    const { requester, warnings, posted } = pages({ measured: () => ready(NOW, { n: Infinity }) });
+    /** @type {unknown[]} */
+    const answers = [];
+    void requester
+      .request({ type: 'test.measure', noteId: 'n1' }, { kind: 'session', sessionId: 's-other' })
+      .then(state => answers.push(state));
+    await settle();
+    await settle();
+    assert.deepEqual(answers, [failed('coordinator', 'unavailable')]);
+    assert.deepEqual(warnings, ['page-handler-unencodable-answer']);
+    assert.deepEqual(posted, ['page-request', 'page-response']);
   });
 
   it('take only a valid answer to their own request, whoever else posts one', async () => {

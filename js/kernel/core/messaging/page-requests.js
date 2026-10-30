@@ -104,7 +104,15 @@ export function createPageResponder({
 
     /** @param {unknown} result */
     const answer = result => {
-      let message = encode({ frame: 'page-response', requestId: frame.requestId, result });
+      /** @type {string} */
+      let message;
+      try {
+        message = encode({ frame: 'page-response', requestId: frame.requestId, result });
+      } catch {
+        // An answer its schema took can still hold what JSON can't, such as Infinity
+        warn(logger, 'page-handler-unencodable-answer', { operation: frame.operation });
+        message = encode({ frame: 'page-response', requestId: frame.requestId, result: queryFailure('unavailable') });
+      }
       if (encodedBytes(message) > MAX_MESSAGE_BYTES) {
         message = encode({
           frame: 'page-response',
