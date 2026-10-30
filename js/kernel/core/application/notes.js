@@ -18,12 +18,15 @@ import {
   dailyNoteName,
   findDailyNote,
   inBlockOrder,
+  insertLinkText,
   isEmpty,
   isUntitled,
   linkTargets,
   newNoteRecord,
   newSearchEntry,
+  noteSaveMetadata,
   notesInView,
+  wikiLinkNames,
 } from '../domain/note.js';
 import { contentChanged, unitsWork } from './work.js';
 
@@ -48,7 +51,7 @@ import { contentChanged, unitsWork } from './work.js';
 
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
- *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'applyDerivedTitle' | 'attachInsights'
+ *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'insertBlocks' | 'applyDerivedTitle' | 'attachInsights'
  *   | 'captureToDailyNote' | 'runBulkAction'} NoteCommandType
  */
 
@@ -58,8 +61,8 @@ import { contentChanged, unitsWork } from './work.js';
  *   NoteQueryType
  */
 
-const invalid = () => rejected('validation', 'invalid-command');
-const noteNotFound = () => rejected('not-found', 'note-not-found');
+export const invalid = () => rejected('validation', 'invalid-command');
+export const noteNotFound = () => rejected('not-found', 'note-not-found');
 
 /**
  * What a bulk command is refused for before any of it runs: an action it doesn't know, or
@@ -78,7 +81,7 @@ export function bulkRefusal({ action, noteIds }) {
  * @param {string} noteId
  * @returns {() => {store: StoreName, key: string}}
  */
-const noteRecord = noteId => () => ({ store: 'notes', key: noteId });
+export const noteRecord = noteId => () => ({ store: 'notes', key: noteId });
 
 /**
  * A unit that reads the note and puts what `change` makes of it, in one transaction.
@@ -107,7 +110,7 @@ function changeNote(noteId, change) {
  * @param {number} now
  * @returns {Unit}
  */
-function renameSearchEntry(noteId, name, now) {
+export function renameSearchEntry(noteId, name, now) {
   return {
     stores: ['searchIndex'],
     async run(tx) {
@@ -127,7 +130,7 @@ function renameSearchEntry(noteId, name, now) {
  * @param {{now: number, nextId: () => string}} stamp
  * @returns {Unit[]}
  */
-function replaceLinks(noteId, names, { now, nextId }) {
+export function replaceLinks(noteId, names, { now, nextId }) {
   /** @type {string[]} */
   let targets = [];
   return [
@@ -157,7 +160,7 @@ function replaceLinks(noteId, names, { now, nextId }) {
  * @param {string} noteId
  * @returns {BlockRecord[] | Rejected}
  */
-function blockRecords(blocks, noteId) {
+export function blockRecords(blocks, noteId) {
   if (!Array.isArray(blocks)) return invalid();
   const seen = new Set();
   /** @type {BlockRecord[]} */
@@ -441,6 +444,60 @@ export const noteCommands = {
       primary: noteRecord(noteId),
       revised: () => deleted,
     });
+  },
+
+  insertBlocks(command, { clock, ids }) {
+    const { noteId, blocks, atOrder } = command;
+    if (!isId(noteId) || (atOrder !== undefined && !(Number.isSafeInteger(atOrder) && atOrder >= 0))) return invalid();
+    const records = blockRecords(blocks, noteId);
+    if (!Array.isArray(records)) return records;
+    if (records.length === 0) return invalid();
+    const now = clock.now();
+    /** The names the note's wiki links hold once the blocks are in, which the link units replace its links with */
+    const linkedNames = /** @type {string[]} */ ([]);
+    /** @type {Unit} */
+    const insert = {
+      stores: ['notes', 'blocks'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        linkedNames.length = 0;
+        const note = await tx.get('notes', noteId);
+        if (!note) return noteNotFound();
+        for (const block of records) {
+          const stored = await tx.get('blocks', block.id);
+          if (stored && stored.canvasId !== noteId) return rejected('validation', 'block-of-another-note');
+          if (stored) return rejected('validation', 'duplicate-block');
+        }
+        const existing = await tx.getAllByIndex('blocks', 'canvasId', noteId);
+        // After the last block, as the note's next order, when no place is given
+        const start = atOrder ?? existing.reduce((next, block) => Math.max(next, (Number(block.order) || 0) + 1), 0);
+        // The blocks at or past the place move down by as many as come in, as AI chat moved them
+        const placed = existing.map(block =>
+          (Number(block.order) || 0) >= start ? { ...block, order: (Number(block.order) || 0) + records.length } : block,
+        );
+        placed.forEach((block, index) => {
+          if (block !== existing[index]) tx.put('blocks', block);
+        });
+        const added = records.map((block, index) => ({
+          ...block,
+          order: start + index,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        for (const block of added) tx.put('blocks', block);
+        // What the note shows and links to comes from its blocks as stored, in note order
+        const stored = inBlockOrder([...placed, ...added]);
+        const { preview, todoProgress } = noteSaveMetadata(stored);
+        tx.put('notes', { ...note, preview, todoProgress, updatedAt: now });
+        linkedNames.push(...wikiLinkNames(insertLinkText(stored)));
+      },
+    };
+    return unitsWork(
+      command,
+      [insert, ...replaceLinks(noteId, linkedNames, { now, nextId: () => ids.next() })],
+      () => committed('blocks-inserted', [noteId]),
+      { primary: noteRecord(noteId), revised: contentChanged },
+    );
   },
 
   applyDerivedTitle(command, { clock }) {

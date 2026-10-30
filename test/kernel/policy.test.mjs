@@ -28,6 +28,8 @@ const TODAY = {
       'listSearchEntries',
       'getInsightsPending',
       'getJobRuns',
+      'listSnapshots',
+      'getSnapshot',
     ],
   },
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },

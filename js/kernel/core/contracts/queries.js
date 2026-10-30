@@ -34,11 +34,16 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/get-popup-insights-enabled.js').GetPopupInsightsEnabled} GetPopupInsightsEnabled */
 /** @typedef {import('./operations/get-insights-pending.js').GetInsightsPending} GetInsightsPending */
 /** @typedef {import('./operations/get-job-runs.js').GetJobRuns} GetJobRuns */
+/** @typedef {import('./operations/list-snapshots.js').ListSnapshots} ListSnapshots */
+/** @typedef {import('./operations/get-snapshot.js').GetSnapshot} GetSnapshot */
+/** @typedef {import('../domain/snapshot.js').SnapshotRecord} SnapshotRecord */
+/** @typedef {import('../domain/snapshot.js').SnapshotSummary} SnapshotSummary */
 
 /**
  * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | GetNoteList | GetNotesByIds | ListSearchEntries
  *   | ListFolders
- *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns} Query
+ *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
+ *   | ListSnapshots | GetSnapshot} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -64,6 +69,8 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {{insightsEnabled: boolean}} getPopupInsightsEnabled
  * @property {{since: number | null}} getInsightsPending
  * @property {{lastAutoTitleRun: number, lastInsightsRun: number}} getJobRuns
+ * @property {SnapshotSummary[]} listSnapshots
+ * @property {SnapshotRecord} getSnapshot
  */
 
 /**
@@ -134,6 +141,9 @@ export const QUERIES = Object.freeze({
   // The new tab's auto-title and insights jobs, and its editor, read their bookkeeping
   getInsightsPending: entry('get-insights-pending', ['note'], NEW_TAB),
   getJobRuns: entry('get-job-runs', [], NEW_TAB),
+  // Only the new tab's editor has shown version history
+  listSnapshots: entry('list-snapshots', ['note'], NEW_TAB),
+  getSnapshot: entry('get-snapshot', ['snapshot'], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */
