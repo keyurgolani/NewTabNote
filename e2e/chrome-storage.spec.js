@@ -20,12 +20,17 @@ const OVER_QUOTA_BYTES = 11 * 1024 * 1024;
 /** A copy of the build without unlimitedStorage, in a temp dir outside the repo */
 function quotaBuild() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-quota-'));
-  fs.cpSync(resolveDist(), dir, { recursive: true });
-  const file = path.join(dir, 'manifest.json');
-  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-  manifest.permissions = manifest.permissions.filter(permission => permission !== 'unlimitedStorage');
-  fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
-  return dir;
+  try {
+    fs.cpSync(resolveDist(), dir, { recursive: true });
+    const file = path.join(dir, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    manifest.permissions = manifest.permissions.filter(permission => permission !== 'unlimitedStorage');
+    fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+    return dir;
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function contextOf(target, name) {

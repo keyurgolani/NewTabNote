@@ -219,6 +219,22 @@ const CASES = [
     }
   }],
 
+  ['set stores null as a value, and get answers it', async ({ contexts }, p) => {
+    const [writer, other] = contexts;
+    const seen = await writer.evaluate(async ({ p }) => {
+      await chrome.storage.local.set({ [`${p}a`]: 'before' });
+      await chrome.storage.local.set({ [`${p}a`]: null, [`${p}b`]: null });
+      const answer = await chrome.storage.local.get([`${p}a`, `${p}b`]);
+      return { answer, keys: Object.keys(answer).sort(), defaults: await chrome.storage.local.get({ [`${p}b`]: 'default' }) };
+    }, { p });
+    assert.deepEqual(seen, {
+      answer: { [`${p}a`]: null, [`${p}b`]: null },
+      keys: [`${p}a`, `${p}b`],
+      defaults: { [`${p}b`]: null },
+    });
+    assert.deepEqual(await other.evaluate(readAll, { prefix: p }), { [`${p}a`]: null, [`${p}b`]: null });
+  }],
+
   ['set leaves a key whose value is undefined as it was', async ({ contexts }, p) => {
     const [writer] = contexts;
     const seen = await writer.evaluate(async ({ p }) => {
@@ -261,6 +277,30 @@ const CASES = [
       // Each listener hears the three in the order they were made
       assert.deepEqual(byVia(events), byVia(bothEvents(changes)), context.name);
     }
+  }],
+
+  ["the writer's own listeners hear a write before its callback runs, and before its promise settles", async ({ contexts }, p) => {
+    // Chromium promises no order for another context, so this checks only the writer's
+    const [writer] = contexts;
+    await writer.evaluate(record, { prefix: p });
+    const heard = await writer.evaluate(({ p }) => new Promise((resolve) => {
+      const events = globalThis.__ntnStorageEvents[p];
+      chrome.storage.local.set({ [`${p}viaCallback`]: 1 }, () => {
+        const inCallback = events.map((event) => event.via);
+        chrome.storage.local.set({ [`${p}viaPromise`]: 2 }).then(() => {
+          resolve({ inCallback, afterAwait: events.map((event) => `${event.via} ${Object.keys(event.changes).join(',')}`) });
+        });
+      });
+    }), { p });
+    assert.deepEqual({ inCallback: [...heard.inCallback].sort(), afterAwait: [...heard.afterAwait].sort() }, {
+      inCallback: ['storage.local.onChanged', 'storage.onChanged'],
+      afterAwait: [
+        `storage.local.onChanged ${p}viaCallback`,
+        `storage.local.onChanged ${p}viaPromise`,
+        `storage.onChanged ${p}viaCallback`,
+        `storage.onChanged ${p}viaPromise`,
+      ],
+    });
   }],
 
   ['a write that changes nothing fires no onChanged', async ({ contexts }, p) => {
