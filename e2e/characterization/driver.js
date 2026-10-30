@@ -433,18 +433,24 @@ async function workerStorageSettled(extension) {
  * Write `notes` ([{ name, blocks: [element fields], archived, isTemplate }]) through the
  * worker's Storage global, blocks in order, then archive the archived ones and make the
  * templates templates. Run it before the first new tab opens, so the app starts on these
- * notes.
+ * notes. Each note starts in a later millisecond than the one before it was last written,
+ * as when a user writes them one after another, so the last one is the newest: the app
+ * lists it first and a new tab opens it. Notes that share an updatedAt sort by their
+ * random IDs.
  */
 async function seedNotes(extension, notes) {
   await workerStorageSettled(extension);
   await extension.worker.evaluate(async notes => {
+    let lastWrite = 0;
     for (const { name, blocks = [], archived = false, isTemplate = false } of notes) {
+      while (Date.now() <= lastWrite) await new Promise(resolve => setTimeout(resolve, 1));
       const note = await self.Storage.createNote(name);
       for (const [order, block] of blocks.entries()) {
         await self.Storage.saveElement({ id: self.Utils.generateId(), canvasId: note.id, order, ...block });
       }
       if (archived) await self.Storage.archiveNote(note.id);
       if (isTemplate) await self.Storage.updateNote({ ...(await self.Storage.getNote(note.id)), isTemplate: true });
+      lastWrite = (await self.Storage.getNote(note.id)).updatedAt;
     }
   }, notes);
 }
