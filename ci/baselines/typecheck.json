@@ -219,7 +219,7 @@
         "Property 'onAIPromptTemplatesChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'onAISidebarWidthChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'onLLMSettingsChanged' does not exist on type 'SettingsController'.": 2,
-        "Property 'onSidebarStateChanged' does not exist on type 'SettingsController'.": 8,
+        "Property 'onSidebarStateChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'style' does not exist on type 'Element'.": 5,
         "Property 'value' does not exist on type 'EventTarget'.": 8,
         "Property 'value' does not exist on type 'HTMLElement'.": 10

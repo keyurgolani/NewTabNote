@@ -199,10 +199,18 @@ class ExportNotice {
     card.classList.add('is-shown');
 
     card.addEventListener('focusin', this.onFocusIn);
-    this.unsubscribe = this.storage.onSettingsChange((changes) => {
-      const recorded = changes[EXPORT_NOTICE_SETTING];
-      if (recorded && ExportNotice.isRecorded(recorded.newValue)) this.close();
-      else if (changes[EXPORT_RECEIPT_SETTING]) this._askToConfirm();
+    // settings.changed names the keys only, so the choice another tab recorded is read again,
+    // from the storage the listener is on
+    const storage = this.storage;
+    this.unsubscribe = storage.onSettingsChange(async ({ keys }) => {
+      if (keys.includes(EXPORT_NOTICE_SETTING)) {
+        const recorded = await storage.getSetting(EXPORT_NOTICE_SETTING, undefined);
+        if (ExportNotice.isRecorded(recorded)) {
+          this.close();
+          return;
+        }
+      }
+      if (keys.includes(EXPORT_RECEIPT_SETTING)) this._askToConfirm();
     });
   }
 

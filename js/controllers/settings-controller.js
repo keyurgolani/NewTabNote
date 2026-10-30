@@ -992,60 +992,55 @@ class SettingsController {
   // ─── Cross-tab settings sync ───
 
   setupSettingsSync() {
-    this.storage.onSettingsChange(async (changes) => {
+    // settings.changed names the keys only, so each value applied is read again, from the
+    // storage the listener is on (#12 slice 7's settings port replaces both)
+    const storage = this.storage;
+    storage.onSettingsChange(async ({ keys }) => {
+      const changed = new Set(keys);
+      /** @param {string} key */
+      const read = (key) => storage.getSetting(key, undefined);
+
       // Apply theme changes
-      if (changes.theme) {
+      if (changed.has('theme')) {
         if (this.onApplyTheme) this.onApplyTheme();
       }
 
       // Apply font changes
-      if (changes.font) {
+      if (changed.has('font')) {
         await this.applyFont();
       }
 
       // Apply width changes
-      if (changes.width) {
+      if (changed.has('width')) {
         await this.applyWidth();
       }
 
       // Apply sidebar state changes (delegate to App for backward compat)
-      if (changes.sidebarOpen !== undefined) {
-        if (this.onSidebarStateChanged) this.onSidebarStateChanged('sidebarOpen', changes.sidebarOpen.newValue);
-      }
-
-      if (changes.sidebarWidth) {
-        if (this.onSidebarStateChanged) this.onSidebarStateChanged('sidebarWidth', changes.sidebarWidth.newValue);
-      }
-
-      if (changes.sidebarViewMode) {
-        if (this.onSidebarStateChanged) this.onSidebarStateChanged('sidebarViewMode', changes.sidebarViewMode.newValue);
-      }
-
-      if (changes.sidebarSortMode) {
-        if (this.onSidebarStateChanged) this.onSidebarStateChanged('sidebarSortMode', changes.sidebarSortMode.newValue);
+      for (const key of ['sidebarOpen', 'sidebarWidth', 'sidebarViewMode', 'sidebarSortMode']) {
+        if (changed.has(key) && this.onSidebarStateChanged) this.onSidebarStateChanged(key, await read(key));
       }
 
       // Apply AI sidebar width changes
-      if (changes.aiSidebarWidth) {
-        if (this.onAISidebarWidthChanged) this.onAISidebarWidthChanged(changes.aiSidebarWidth.newValue);
+      if (changed.has('aiSidebarWidth')) {
+        if (this.onAISidebarWidthChanged) this.onAISidebarWidthChanged(await read('aiSidebarWidth'));
       }
 
       // Reinitialize LLM if provider settings changed
-      if (changes.llmProvider || changes.llmApiKey || changes.llmModel || changes.ollamaUrl) {
+      if (['llmProvider', 'llmApiKey', 'llmModel', 'ollamaUrl'].some((key) => changed.has(key))) {
         if (this.onLLMSettingsChanged) this.onLLMSettingsChanged();
       }
 
-      if (changes.aiPromptTemplates) {
-        if (this.onAIPromptTemplatesChanged) this.onAIPromptTemplatesChanged(changes.aiPromptTemplates.newValue);
+      if (changed.has('aiPromptTemplates')) {
+        if (this.onAIPromptTemplatesChanged) this.onAIPromptTemplatesChanged(await read('aiPromptTemplates'));
       }
 
       // Update auto-title settings
-      if (changes.autoTitleEnabled !== undefined || changes.autoTitleInterval) {
+      if (changed.has('autoTitleEnabled') || changed.has('autoTitleInterval')) {
         if (this.onSetupAutoTitle) this.onSetupAutoTitle();
       }
 
       // Update insights settings
-      if (changes.insightsEnabled !== undefined || changes.insightsInterval) {
+      if (changed.has('insightsEnabled') || changed.has('insightsInterval')) {
         if (this.onSetupInsightsExtraction) this.onSetupInsightsExtraction();
       }
     });

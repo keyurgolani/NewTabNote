@@ -396,7 +396,11 @@ describe('the notice', () => {
     const { card } = showNotice(env, Storage);
     assert.equal(listeners.length, before + 1);
 
-    listeners.slice().forEach((listener) => listener({ [KEY]: { newValue: { version: 1, outcome: 'dismissed', at: 1 } } }, 'local'));
+    // Another tab writes the choice, and this tab hears which setting changed
+    const recorded = { version: 1, outcome: 'dismissed', at: 1 };
+    await new Promise((resolve) => env.chrome.api.storage.local.set({ [KEY]: recorded }, resolve));
+    listeners.slice().forEach((listener) => listener({ [KEY]: { newValue: recorded } }, 'local'));
+    await waitFor(() => !shown(card));
     assert.equal(shown(card), false);
     assert.equal(listeners.length, before, 'the settings listener is gone');
   });

@@ -2054,32 +2054,29 @@ class DatabaseManager {
   }
 
   /**
+   * #13's settings.changed notice: which settings changed, by key name only. It never carries a
+   * value, so no listener is handed llmApiKey's old or new value, and a listener reads the
+   * values it needs again (getSetting), as the write it hears of has already landed.
+   * @typedef {Readonly<{type: 'settings.changed', keys: readonly string[]}>} SettingsChanged
+   */
+
+  /**
    * Add listener for settings changes (for cross-tab sync)
-   * @param {(changes: Object<string, {oldValue: *, newValue: *}>) => void} callback
+   * @param {(notice: SettingsChanged) => void} callback
    * @returns {() => void} Removes the listener
    */
   onSettingsChange(callback) {
     /**
-     * @param {Object<string, {oldValue?: *, newValue?: *}>} changes
+     * @param {Object<string, unknown>} changes - chrome.storage's, whose values never go further
      * @param {string} areaName
      */
     const listener = (changes, areaName) => {
       if (areaName !== 'local') return;
-
-      /** @type {Object<string, {oldValue: *, newValue: *}>} */
-      const settingChanges = {};
-      for (const [key, change] of Object.entries(changes)) {
-        if (key.startsWith('setting_')) {
-          const settingKey = key.substring(8);
-          settingChanges[settingKey] = {
-            oldValue: change.oldValue,
-            newValue: change.newValue
-          };
-        }
-      }
-
-      if (Object.keys(settingChanges).length > 0) {
-        callback(settingChanges);
+      const keys = Object.keys(changes)
+        .filter((key) => key.startsWith('setting_'))
+        .map((key) => key.substring(8));
+      if (keys.length > 0) {
+        callback(Object.freeze({ type: 'settings.changed', keys: Object.freeze(keys) }));
       }
     };
     const chromeApi = this._chromeApi();
