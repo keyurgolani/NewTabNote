@@ -37,7 +37,17 @@ const TITLE = 'Canary title: plans for 7Q9';
 const CREDENTIAL = 'sk-CaNaRy-9xQ2Lp7Zt';
 const URL_CANARY = 'https://canary.example.test/n/7Q9';
 const MESSAGE = 'Canary failure while saving note 7Q9';
-const CANARIES = [TITLE, CREDENTIAL, URL_CANARY, MESSAGE, 'Canary', 'CaNaRy', 'canary.example'];
+const CANARIES = [
+  TITLE,
+  CREDENTIAL,
+  URL_CANARY,
+  MESSAGE,
+  'Canary',
+  'CaNaRy',
+  'canary.example',
+  'AKIAIOSFODNN7EXAMPLE',
+  'canary-divorce',
+];
 
 /**
  * Fails when any canary appears in `text`
@@ -97,6 +107,12 @@ const CANARY_FIELDS = [
   { subjectId: TITLE },
   { subjectId: URL_CANARY },
   { subjectId: `Bearer ${CREDENTIAL}` },
+  { subjectId: CREDENTIAL },
+  { subjectId: 'canary.example.test' },
+  { exception: 'CaNaRyError' },
+  { exception: 'AKIAIOSFODNN7EXAMPLE' },
+  { errorCode: 'canary-divorce-plans' },
+  { faultCode: 'canary-divorce-plans' },
   { surface: URL_CANARY },
   { count: TITLE },
 ];
@@ -125,7 +141,6 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
       'bytes',
       'capture',
       'cause',
-      'code',
       'commandId',
       'costClass',
       'count',
@@ -136,7 +151,6 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
       'faultCode',
       'incidentId',
       'lag',
-      'operation',
       'packageHash',
       'pending',
       'providerId',
@@ -216,6 +230,7 @@ describe('logger.event (#20 slice 1, AC3)', () => {
       'field-not-allowed': 1,
       'value-not-allowed': 1,
       'not-an-object': 0,
+      'write-failed': 0,
     });
     const events = await records.events();
     assert.deepEqual(
@@ -244,13 +259,13 @@ describe('logger.event (#20 slice 1, AC3)', () => {
     journal.event('capture.failed', {
       surface: 'worker-internal',
       errorCode: 'store-unavailable',
-      subjectId: 'daily-2026-10-30',
+      subjectId: '1730246400000-daily',
     });
     await journal.flush();
     const incidents = await records.incidents();
     assert.deepEqual(incidents.map(incident => [incident.key, incident.severity, incident.occurrences]).sort(), [
       ['backup/auto-backup-failed/-', 'data-risk', 1],
-      ['capture/capture-failed/daily-2026-10-30', 'capture-risk', 1],
+      ['capture/capture-failed/1730246400000-daily', 'capture-risk', 1],
       ['index/indexer-start-failed/-', 'degraded', 1],
       ['local-inference/load-failed/-', 'degraded', 1],
       ['storage/open-failed/-', 'capture-risk', 2],

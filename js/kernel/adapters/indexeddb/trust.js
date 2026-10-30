@@ -62,7 +62,11 @@ export const TRUST_DB_STORES = Object.freeze({
   }),
 });
 
-/** How long open() waits for an open that hasn't finished, as connection.js waits */
+/**
+ * How long open() waits for an open that hasn't finished, as connection.js waits. It then
+ * answers `open-pending` and keeps connecting, and the next open() answers once the connection
+ * has. An open that failed is tried again by the next open().
+ */
 export const TRUST_OPEN_WITHIN_MS = 5000;
 
 /** @type {IDBTransactionOptions} */
@@ -111,8 +115,8 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
   let db = null;
   /** @type {UnavailableError | null} */
   let failure = null;
-  /** @type {Promise<void> | null} */
-  let opening = null;
+  /** @type {Promise<unknown> | null} */
+  let connecting = null;
   // Read when a range is first needed, so a host without the global can still open
   const ranges = () =>
     keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
@@ -236,16 +240,25 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
 
   return {
     open() {
-      if (opening) return opening;
+      if (state === 'open') return Promise.resolve();
       if (state === 'gone') return Promise.reject(new UnavailableError('storage', 'reload-required', false));
-      state = 'opening';
-      const connected = connect();
-      opening = new Promise((resolve, reject) => {
+      // One connection attempt at a time; a failed one leaves the next open() to try again
+      if (!connecting) {
+        state = 'opening';
+        connecting = connect();
+        connecting.catch(() => {
+          connecting = null;
+        });
+      }
+      const connected = connecting;
+      // Answers within openWithinMs; an open that answered open-pending keeps connecting, and
+      // the next open() answers once it has
+      const answer = new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new UnavailableError('storage', 'open-pending', true)), openWithinMs);
         connected.then(
           () => {
             clearTimeout(timer);
-            resolve();
+            resolve(undefined);
           },
           error => {
             clearTimeout(timer);
@@ -253,8 +266,8 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
           },
         );
       });
-      opening.catch(() => {});
-      return opening;
+      answer.catch(() => {});
+      return /** @type {Promise<void>} */ (answer);
     },
 
     async run(stores, mode, unit) {

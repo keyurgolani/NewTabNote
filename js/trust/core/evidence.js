@@ -6,17 +6,17 @@
  * nothing else: no note text, title, URL, credential, prompt, model output, or error message.
  * Titles resolve at render from the ids.
  *
- * Every string here is bounded and patterned, so free text can't pass as one of them: an id
- * has no space or slash, a code is lowercase words joined by hyphens, and an exception is an
- * Error or DOMException name such as `QuotaExceededError`. A field outside this list, or a
- * value its schema refuses, is refused whole.
+ * No string here is free: an id has a record id's shape (a UUID or a legacy id) or a
+ * contribution id's, a subject is a record id or a registered name, and every code, reason,
+ * exception, and capability is one codes.js lists. So no title, key, host, or message fits in
+ * any field. A field outside this list, or a value its schema refuses, is refused whole.
  */
 
 import * as v from '../../lib/valibot/index.mjs';
-import { operationName } from '../../kernel/core/contracts/envelope.js';
-import { code, commitSeq, count, revision, timestamp } from '../../kernel/core/contracts/fields.js';
+import { commitSeq, count, revision, timestamp } from '../../kernel/core/contracts/fields.js';
 import { FAIL_CAUSES } from '../../kernel/core/contracts/outcomes.js';
 import { SURFACES } from '../../kernel/core/contracts/surfaces.js';
+import { CAPABILITIES, ERROR_CODES, EXCEPTION_NAMES, FAULT_CODES, REASON_CODES, SUBJECT_NAMES } from './codes.js';
 import {
   CAPTURE_STATES,
   COST_CLASSES,
@@ -28,14 +28,44 @@ import {
 } from './vocabulary.js';
 
 /**
- * An opaque id: what a record, a command, or a provider is keyed by, never a label. It
- * starts with a letter or digit and holds only letters, digits, `_`, `.`, `:`, and `-`, so no
- * sentence, path, or URL fits in one.
+ * A record's id, which the host's ids port makes: a UUID (crypto.randomUUID), or the id
+ * Utils.generateId has always made (a millisecond time, a hyphen, and base-36 letters). No
+ * word, key, host, or path has either shape.
  */
-export const opaqueId = v.pipe(v.string(), v.regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/));
+export const recordId = v.pipe(
+  v.string(),
+  v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{1,12})$/),
+);
 
-/** An Error's or DOMException's name, such as `QuotaExceededError`, never its message */
-export const exceptionName = v.pipe(v.string(), v.regex(/^[A-Z][A-Za-z0-9]{0,63}$/));
+/**
+ * A contribution's id, as a provider or remediation descriptor declares it: lowercase words
+ * joined by hyphens, in dotted segments, 64 characters at most. Code owns these, so none is
+ * ever a value a user typed.
+ */
+export const contributionId = v.pipe(
+  v.string(),
+  v.regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/),
+  v.maxLength(64),
+);
+
+/** What an incident is about: a record's id, a named database, store, or permission, or a legacy copy's key */
+export const subjectId = v.union([
+  recordId,
+  v.picklist(SUBJECT_NAMES),
+  v.pipe(v.string(), v.regex(/^(?:auto|recovery)_backup_[0-9]{10,16}$/)),
+]);
+
+/** An Error's or DOMException's name, from the known ones, never its message */
+export const exceptionName = v.picklist(EXCEPTION_NAMES);
+
+/** A registered error code (codes.js) */
+export const errorCode = v.picklist(ERROR_CODES);
+
+/** A registered fault code (codes.js) */
+export const faultCode = v.picklist(FAULT_CODES);
+
+/** A registered capability (codes.js) */
+export const capability = v.picklist(CAPABILITIES);
 
 /** A dotted version such as an extension's `1.4.1` or a browser's `131.0.6778.85` */
 export const dottedVersion = v.pipe(v.string(), v.regex(/^[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}$/));
@@ -51,19 +81,18 @@ const integerVersion = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
  * @type {Readonly<Record<string, v.GenericSchema>>}
  */
 export const EVIDENCE_FIELDS = Object.freeze({
-  // Opaque ids
-  providerId: opaqueId,
-  incidentId: opaqueId,
-  runId: opaqueId,
-  commandId: opaqueId,
-  subjectId: opaqueId,
-  recoveryPointId: opaqueId,
-  remediationId: opaqueId,
-  // Codes, enums, and exception names
-  code,
-  faultCode: code,
-  errorCode: code,
-  reason: code,
+  // Ids
+  providerId: contributionId,
+  remediationId: contributionId,
+  incidentId: recordId,
+  runId: recordId,
+  commandId: recordId,
+  recoveryPointId: recordId,
+  subjectId,
+  // Registered codes, enums, and exception names
+  faultCode,
+  errorCode,
+  reason: v.picklist(REASON_CODES),
   cause: v.picklist(FAIL_CAUSES),
   exception: exceptionName,
   status: v.picklist(PROVIDER_STATUSES),
@@ -71,7 +100,6 @@ export const EVIDENCE_FIELDS = Object.freeze({
   severity: v.picklist(SEVERITIES),
   state: v.picklist([...RUN_STATES, ...INCIDENT_STATES]),
   surface: v.picklist(SURFACES),
-  operation: operationName,
   trigger: v.picklist(TRIGGERS),
   costClass: v.picklist(COST_CLASSES),
   retryable: v.boolean(),
@@ -171,10 +199,10 @@ export function checkEvidence(fields, allowed) {
 }
 
 /**
- * Whether `value` is a list of codes, as an incident's affected and preserved capabilities are
+ * Whether `value` is a list of registered capabilities, as an incident's affected and preserved ones are
  * @param {unknown} value
  * @returns {value is string[]}
  */
 export function isCodeList(value) {
-  return Array.isArray(value) && value.length <= 32 && value.every(item => v.is(code, item));
+  return Array.isArray(value) && value.length <= 32 && value.every(item => v.is(capability, item));
 }

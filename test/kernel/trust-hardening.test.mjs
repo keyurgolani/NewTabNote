@@ -103,7 +103,10 @@ describe("#68's review round", () => {
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
     assert.equal(records.state(), 'open');
     const stored = await database.run(['journal'], 'readonly', tx => tx.getAll('journal'));
-    assert.ok(stored.some(event => event.code === 'trust.reconciled'), 'the held event never reached the store');
+    assert.ok(
+      stored.some(event => event.code === 'trust.reconciled'),
+      'the held event never reached the store',
+    );
   });
 
   it('2: credentials, titles, and hosts fit no evidence field, and no exception name is copied unless it is a known one', () => {
@@ -136,7 +139,11 @@ describe("#68's review round", () => {
     profile.settings.get = async keys => {
       const found = await get(keys);
       if (keys.includes(KEY) && !raisedMeanwhile) {
-        raisedMeanwhile = a.records.raise({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' });
+        raisedMeanwhile = a.records.raise({
+          providerId: 'capture',
+          faultCode: 'capture-failed',
+          severity: 'capture-risk',
+        });
       }
       return found;
     };
@@ -157,30 +164,56 @@ describe("#68's review round", () => {
   it('4: the memory fallback drops resolved incidents and finished runs first, and counts what open ones it drops', async () => {
     const profile = trustProfile();
     const { records, clock } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile);
-    for (let n = 0; n < 50; n++) {
-      await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: `17300000000${String(n).padStart(2, '0')}-a`, severity: 'degraded' });
+    /** @param {number} n */
+    const subject = n => `17300000000${String(n).padStart(2, '0')}-a`;
+    for (let n = 0; n < 49; n++) {
+      await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(n), severity: 'degraded' });
       clock.advance(1);
     }
     await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
     await records.resolve('sync', []);
+    clock.advance(1);
+    // The 51st held incident: the resolved one goes, not an open one
+    await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(49), severity: 'degraded' });
     const kept = await records.incidents();
     assert.equal(kept.length, 50);
-    assert.equal(kept.filter(incident => incident.state === 'open').length, 50, 'an open incident was dropped before a resolved one');
+    assert.equal(
+      kept.filter(incident => incident.state === 'open').length,
+      50,
+      'an open incident was dropped before a resolved one',
+    );
+    assert.equal(records.dropped().incidents, 0);
     clock.advance(1);
     await records.raise({ providerId: 'backup', faultCode: 'stale-backup', severity: 'data-risk' });
     assert.equal((await records.incidents()).length, 50);
     assert.equal(records.dropped().incidents, 1);
     assert.ok((await records.events()).some(event => event.code === 'trust.fallback-dropped'));
     // Runs: a running one outlives finished ones
-    await records.putRun({ id: hexIds('eeee').next(), commandId: 'retry-open', incidentId: null, state: 'running', outcome: null, startedAt: 0, updatedAt: 0 });
+    await records.putRun({
+      id: hexIds('eeee').next(),
+      commandId: 'retry-open',
+      incidentId: null,
+      state: 'running',
+      outcome: null,
+      startedAt: 0,
+      updatedAt: 0,
+    });
     const runIds = hexIds('ffff');
     for (let n = 0; n < 60; n++) {
-      await records.putRun({ id: runIds.next(), commandId: 'retry-open', incidentId: null, state: 'failed', outcome: 'retries-exhausted', startedAt: n + 1, updatedAt: n + 1 });
+      await records.putRun({
+        id: runIds.next(),
+        commandId: 'retry-open',
+        incidentId: null,
+        state: 'failed',
+        outcome: 'retries-exhausted',
+        startedAt: n + 1,
+        updatedAt: n + 1,
+      });
     }
     assert.ok((await records.runs()).some(run => run.state === 'running'));
   });
 
-  it("5: refused events are counted in memory, and never crowd real events out of the journal", async () => {
+  it('5: refused events are counted in memory, and never crowd real events out of the journal', async () => {
     const profile = trustProfile();
     const database = databaseOn(profile);
     opened.push(database);
@@ -190,7 +223,10 @@ describe("#68's review round", () => {
     for (let n = 0; n < BOUNDS.journalEvents + 5; n++) journal.event('note.saved', {});
     await journal.flush();
     const events = await records.events();
-    assert.ok(events.some(event => event.code === 'capture.failed'), 'refusals evicted a real event');
+    assert.ok(
+      events.some(event => event.code === 'capture.failed'),
+      'refusals evicted a real event',
+    );
     assert.ok(events.filter(event => event.code === 'diagnostics.rejected').length <= 2);
     assert.equal(journal.rejected()['unregistered-code'], BOUNDS.journalEvents + 5);
   });
@@ -242,7 +278,7 @@ describe("#68's review round", () => {
     assert.deepEqual(await records.incidents(), []);
   });
 
-  it("9: a reconcile that runs twice after a transient abort counts once, and leaves a remediating incident remediating", async () => {
+  it('9: a reconcile that runs twice after a transient abort counts once, and leaves a remediating incident remediating', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const down = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
@@ -259,7 +295,9 @@ describe("#68's review round", () => {
     );
     // An incident a remediation is working on stays remediating when a held copy reconciles
     const [incident] = await up.records.incidents();
-    await database.run(['incidents'], 'readwrite', async tx => tx.put('incidents', { ...incident, state: 'remediating' }));
+    await database.run(['incidents'], 'readwrite', async tx =>
+      tx.put('incidents', { ...incident, state: 'remediating' }),
+    );
     clock.advance(10);
     await down.records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' });
     const database2 = databaseOn(profile);
@@ -323,7 +361,13 @@ describe("#68's review round", () => {
     assert.ok(exported.notices.includes('install-id-stable'));
     const failing = settingsArea();
     failing.failGets = 99;
-    const without = createTrustRecords({ store: createMemoryTrustStore(), settings: failing, clock, ids: hexIds(), locks: lockManager() });
+    const without = createTrustRecords({
+      store: createMemoryTrustStore(),
+      settings: failing,
+      clock,
+      ids: hexIds(),
+      locks: lockManager(),
+    });
     await without.open();
     const exportedWithout = /** @type {any} */ (await useCases(without, clock).trust.exportDiagnostics());
     assert.equal(exportedWithout.kind, 'diagnostics');

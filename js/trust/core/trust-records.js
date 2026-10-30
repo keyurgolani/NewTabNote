@@ -7,29 +7,43 @@
  *   receipt before it. Each provider keeps its latest receipt and its 20 newest transitions.
  * - An incident is keyed by provider, fault, and subject, so a repeat updates the one record:
  *   one more occurrence, a later lastSeenAt, the worse severity while it's open, and the
- *   dismissed flag cleared. A resolved incident that comes back reopens. Open incidents,
- *   dismissed included, always stay; resolved ones stay 90 days, 200 at most.
+ *   dismissed flag cleared. A resolved incident that comes back reopens, and one a remediation
+ *   is working on stays `remediating`. Open incidents, dismissed included, always stay;
+ *   resolved ones stay 90 days, 200 at most.
  * - Runs keep the newest 200, and any still running.
  * - The journal keeps 2,000 events, none older than 14 days.
+ * Reads apply the age bounds too, so a quiet month with no write shows nothing past them, and
+ * opening prunes the store.
  *
- * When NewTabNoteTrust won't open, or a write to it fails, the records fall back to memory:
- * incidents by key, the latest receipt per provider, runs, and journal events, each bounded.
- * The latest storage incident (capture or storage) also goes to chrome.storage.local, through
- * the settings port, under `trust.lastStorageIncident`, so it outlives the context. The next
- * open that succeeds reconciles all of it into the database and clears the key. Reconciling
- * twice adds nothing, since an incident already stored as late as the copy is left alone.
+ * When NewTabNoteTrust won't open, or a write to it fails, the records are in `fallback`:
+ * - What the write would have stored is held in memory: incidents by key, each with the
+ *   occurrences added since it was last reconciled, the latest receipt per provider, runs, and
+ *   journal events. Each is bounded. Resolved incidents and finished runs go first, and an open
+ *   incident or a running run that still has to go is counted (`dropped()`) and journaled.
+ * - Reads still go to the store whenever it answers, with what memory holds laid over it, so
+ *   one failed write never hides what NewTabNoteTrust already holds.
+ * - Every later write tries the store again (a store that never opened is retried at most
+ *   every 30 seconds), and the first that succeeds reconciles what memory holds and leaves
+ *   `fallback`.
+ * - The latest storage incident (capture or storage) also goes to chrome.storage.local, under
+ *   `trust.lastStorageIncident`, with the occurrences it adds, so it outlives the context.
+ *   Each occurrence is counted in one place: the copy, or, when the copy can't be written or a
+ *   newer storage incident replaces it, this context's memory. Whichever context next opens
+ *   NewTabNoteTrust takes the copy under Web Lock `trust.lastStorageIncident` (the lock a
+ *   context holding a copy takes too) by clearing it, then reconciles it once. A clear that
+ *   fails leaves the copy for later, and a reconcile that fails puts it back.
  *
  * A random `trust.installId` is written to the settings area once, under a Web Lock when the
  * host has them, and stamps every receipt.
  *
  * Every record is checked against its schema (records.js) before it's written, so nothing
- * outside the evidence allowlist reaches a store or the fallback.
+ * outside the evidence allowlist reaches a store, the settings area, or memory.
  */
 
 import * as v from '../../lib/valibot/index.mjs';
-import { code } from '../../kernel/core/contracts/fields.js';
+import { count } from '../../kernel/core/contracts/fields.js';
 import { UnavailableError } from '../../kernel/core/contracts/outcomes.js';
-import { checkEvidence, isCodeList, opaqueId } from './evidence.js';
+import { capability, checkEvidence, contributionId, faultCode, recordId, subjectId } from './evidence.js';
 import { SETTINGS_KEYS } from './ports.js';
 import {
   BOUNDS,
@@ -45,6 +59,7 @@ import {
 import { FINISHED_RUN_STATES, SEVERITIES, STORAGE_PROVIDERS } from './vocabulary.js';
 
 /** @typedef {import('./ports.js').TrustStore} TrustStore */
+/** @typedef {import('./ports.js').TrustStoreName} TrustStoreName */
 /** @typedef {import('./ports.js').TrustTx} TrustTx */
 /** @typedef {import('./ports.js').SettingsPort} SettingsPort */
 /** @typedef {import('./ports.js').Locks} Locks */
@@ -59,8 +74,32 @@ import { FINISHED_RUN_STATES, SEVERITIES, STORAGE_PROVIDERS } from './vocabulary
 /** How much the memory fallback holds of each kind */
 export const FALLBACK_LIMITS = Object.freeze({ incidents: 50, receipts: 64, runs: 50, events: 200 });
 
+/** How long a context whose store never opened waits before a write tries to open it again */
+export const RETRY_OPEN_MS = 30_000;
+
+/** The Web Lock a context holds while it writes or takes the settings copy */
+const COPY_LOCK = 'trust.lastStorageIncident';
+
 /** The journal event schema without the seq the store assigns */
 const newEventSchema = v.omit(journalEventSchema, ['seq']);
+
+/**
+ * The settings copy of the latest storage incident: the incident as it was last seen, the
+ * occurrences it holds that no store has counted, and a token that names this copy
+ */
+export const storageCopySchema = v.strictObject({
+  incident: incidentSchema,
+  added: v.pipe(count, v.minValue(1)),
+  token: recordId,
+});
+
+/** @typedef {v.InferOutput<typeof storageCopySchema>} StorageCopy */
+
+/**
+ * An incident memory holds: what it should look like, and the occurrences it adds to the
+ * stored record that no store or copy has counted yet
+ * @typedef {{incident: Incident, added: number}} HeldIncident
+ */
 
 /**
  * An incident as recovery.raise and the journal raise it
@@ -79,9 +118,10 @@ const newEventSchema = v.omit(journalEventSchema, ['seq']);
  * @typedef {Omit<HealthReceipt, 'id' | 'installId' | 'transition'>} ReceiptInput
  */
 
-/**
- * @typedef {'closed' | 'open' | 'fallback'} RecordsState
- */
+/** @typedef {'closed' | 'open' | 'fallback'} RecordsState */
+
+/** What the memory fallback had to drop that it would have kept: open incidents, running runs, and events */
+/** @typedef {{incidents: number, runs: number, events: number}} Dropped */
 
 /**
  * @template T
@@ -106,7 +146,47 @@ const causeOf = error => (error instanceof UnavailableError ? error.unavailableC
  * Orders by a numeric field, then by id, oldest first
  * @param {string} field
  */
-const byTime = field => (/** @type {any} */ a, /** @type {any} */ b) => a[field] - b[field] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const byTime =
+  field =>
+  (/** @type {any} */ a, /** @type {any} */ b) =>
+    a[field] - b[field] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/**
+ * The incident `held` makes of the stored record `stored`, adding `added` occurrences: the
+ * stored record's id, ref, and first sighting, and from what's held its latest sighting,
+ * severity, capabilities, evidence, and dismissed flag. A resolution held here resolves it
+ * unless the store saw the fault again later. A remediating incident stays remediating.
+ * @param {Incident | undefined} stored
+ * @param {Incident} held
+ * @param {number} added
+ * @returns {Incident}
+ */
+export function combine(stored, held, added) {
+  const occurrences = Math.max(1, (stored ? stored.occurrences : 0) + added);
+  if (!stored) return { ...held, occurrences };
+  if (held.state === 'resolved') {
+    if (stored.state !== 'resolved' && stored.lastSeenAt > held.lastSeenAt) return { ...stored, occurrences };
+    return { ...stored, state: 'resolved', resolvedAt: held.resolvedAt, dismissed: false, occurrences };
+  }
+  if (added === 0) {
+    // Nothing new happened: only a dismissal, or the fields of a sighting another copy counts
+    return stored.state === 'resolved' ? { ...stored } : { ...stored, dismissed: held.dismissed };
+  }
+  const reopened = stored.state === 'resolved';
+  return {
+    ...stored,
+    severity: reopened ? held.severity : worseSeverity(stored.severity, held.severity),
+    state: stored.state === 'remediating' ? 'remediating' : 'open',
+    resolvedAt: null,
+    dismissed: held.dismissed,
+    firstSeenAt: Math.min(stored.firstSeenAt, held.firstSeenAt),
+    lastSeenAt: Math.max(stored.lastSeenAt, held.lastSeenAt),
+    occurrences,
+    affected: held.affected,
+    preserved: held.preserved,
+    evidence: held.evidence,
+  };
+}
 
 /**
  * @param {{
@@ -120,45 +200,80 @@ const byTime = field => (/** @type {any} */ a, /** @type {any} */ b) => a[field]
 export function createTrustRecords({ store, settings, clock, ids, locks = null }) {
   /** @type {RecordsState} */
   let state = 'closed';
+  /** Whether the store opened in this context */
+  let opened = false;
+  /** When this context last tried to open a store that never opened */
+  let triedOpenAt = Number.NEGATIVE_INFINITY;
   /** @type {string | null} */
   let failureCode = null;
-  /** @type {Map<string, Incident>} */
-  const pendingIncidents = new Map();
+  /** Read through a call, so a check after an await sees what the await changed */
+  const currentFailure = () => failureCode;
+  /** @type {Map<string, HeldIncident>} */
+  const heldIncidents = new Map();
   /** @type {Map<string, HealthReceipt>} */
-  const pendingReceipts = new Map();
+  const heldReceipts = new Map();
   /** @type {Map<string, RemediationRun>} */
-  const pendingRuns = new Map();
+  const heldRuns = new Map();
   /** @type {Omit<JournalEvent, 'seq'>[]} */
-  const pendingEvents = [];
+  const heldEvents = [];
+  /** @type {Dropped} */
+  const dropped = { incidents: 0, runs: 0, events: 0 };
   /** @type {Promise<string> | null} */
   let installing = null;
+  /** @type {Promise<unknown>} */
+  let reconciling = Promise.resolve();
 
   // ============ The memory fallback ============
 
-  /**
-   * Keeps `map` to `limit` entries, dropping the oldest by `field`
-   * @template {Record<string, any>} R
-   * @param {Map<string, R>} map
-   * @param {number} limit
-   * @param {string} field
-   */
-  const trim = (map, limit, field) => {
-    while (map.size > limit) {
-      const [oldest] = [...map.entries()].sort(([, a], [, b]) => a[field] - b[field]);
-      map.delete(oldest[0]);
+  /** @param {Omit<JournalEvent, 'seq'>} event */
+  const holdEvent = event => {
+    heldEvents.push(event);
+    if (heldEvents.length > FALLBACK_LIMITS.events) {
+      dropped.events += heldEvents.length - FALLBACK_LIMITS.events;
+      heldEvents.splice(0, heldEvents.length - FALLBACK_LIMITS.events);
+    }
+  };
+
+  /** Keeps held incidents within their limit: resolved ones go first, then the oldest open one, counted */
+  const trimIncidents = () => {
+    while (heldIncidents.size > FALLBACK_LIMITS.incidents) {
+      const entries = [...heldIncidents.values()];
+      const resolved = entries.filter(entry => entry.incident.state === 'resolved');
+      const pool = resolved.length > 0 ? resolved : entries;
+      const [victim] = pool.sort((a, b) => a.incident.lastSeenAt - b.incident.lastSeenAt);
+      heldIncidents.delete(victim.incident.key);
+      if (resolved.length === 0) {
+        dropped.incidents++;
+        holdEvent({ at: clock.now(), code: 'trust.fallback-dropped', fields: { count: dropped.incidents, state: 'open' } });
+      }
+    }
+  };
+
+  /** Keeps held runs within their limit: finished ones go first, then the oldest running one, counted */
+  const trimRuns = () => {
+    while (heldRuns.size > FALLBACK_LIMITS.runs) {
+      const runs = [...heldRuns.values()];
+      const finished = runs.filter(run => /** @type {readonly string[]} */ (FINISHED_RUN_STATES).includes(run.state));
+      const pool = finished.length > 0 ? finished : runs;
+      const [victim] = pool.sort(byTime('startedAt'));
+      heldRuns.delete(victim.id);
+      if (finished.length === 0) {
+        dropped.runs++;
+        holdEvent({ at: clock.now(), code: 'trust.fallback-dropped', fields: { count: dropped.runs, state: 'running' } });
+      }
+    }
+  };
+
+  /** Keeps held receipts within their limit, the oldest going first */
+  const trimReceipts = () => {
+    while (heldReceipts.size > FALLBACK_LIMITS.receipts) {
+      const [oldest] = [...heldReceipts.values()].sort(byTime('verifiedAt'));
+      heldReceipts.delete(oldest.providerId);
     }
   };
 
   /**
-   * @param {Omit<JournalEvent, 'seq'>} event
-   */
-  const holdEvent = event => {
-    pendingEvents.push(event);
-    if (pendingEvents.length > FALLBACK_LIMITS.events) pendingEvents.splice(0, pendingEvents.length - FALLBACK_LIMITS.events);
-  };
-
-  /**
-   * Falls back to memory after `error`, which a store threw, and journals it once
+   * Notes that the store failed with `error`, and journals it once per spell
    * @param {unknown} error
    */
   const fallBack = error => {
@@ -169,41 +284,81 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     state = 'fallback';
   };
 
-  /**
-   * Holds `incident` in memory, and in the settings area when it's a storage incident
-   * @param {Incident} incident
-   */
-  const holdIncident = async incident => {
-    pendingIncidents.set(incident.key, incident);
-    trim(pendingIncidents, FALLBACK_LIMITS.incidents, 'lastSeenAt');
-    if (!(/** @type {readonly string[]} */ (STORAGE_PROVIDERS).includes(incident.providerId))) return;
-    try {
-      await settings.set({ [SETTINGS_KEYS.lastStorageIncident]: incident });
-    } catch {
-      // Memory still holds it
-    }
-  };
-
-  /** The storage incident the settings area holds, when it's a valid one */
-  const storedFallbackIncident = async () => {
-    try {
-      const stored = (await settings.get([SETTINGS_KEYS.lastStorageIncident]))[SETTINGS_KEYS.lastStorageIncident];
-      return v.is(incidentSchema, stored) ? /** @type {Incident} */ (stored) : null;
-    } catch {
-      return null;
-    }
-  };
+  /** Whether memory holds anything a store hasn't */
+  const holding = () => heldIncidents.size + heldReceipts.size + heldRuns.size + heldEvents.length > 0;
 
   /**
-   * Runs `unit` on the store, or answers null after falling back when the store can't
+   * Runs `run` under the copy's Web Lock, when the host has locks
    * @template T
-   * @param {readonly import('./ports.js').TrustStoreName[]} stores
+   * @param {() => Promise<T>} run
+   * @returns {Promise<T>}
+   */
+  const underCopyLock = run => (locks ? locks.request(COPY_LOCK, run) : run());
+
+  /**
+   * The settings copy, when there's a valid one. Rejects when the settings area can't be read.
+   * @returns {Promise<StorageCopy | null>}
+   */
+  const readCopy = async () => {
+    const stored = (await settings.get([SETTINGS_KEYS.lastStorageIncident]))[SETTINGS_KEYS.lastStorageIncident];
+    return v.is(storageCopySchema, stored) ? /** @type {StorageCopy} */ (stored) : null;
+  };
+
+  /**
+   * Counts one occurrence of the storage incident `incident` in the settings copy. A copy of
+   * another incident moves its occurrences into this context's memory first, since this copy
+   * replaces it. Answers false when the settings area failed, so memory counts it instead.
+   * @param {Incident} incident
+   * @returns {Promise<boolean>}
+   */
+  const holdCopy = incident =>
+    underCopyLock(async () => {
+      const before = await readCopy();
+      const same = before !== null && before.incident.key === incident.key;
+      await settings.set({
+        [SETTINGS_KEYS.lastStorageIncident]: { incident, added: (same ? before.added : 0) + 1, token: ids.next() },
+      });
+      if (before && !same) {
+        const entry = heldIncidents.get(before.incident.key);
+        heldIncidents.set(before.incident.key, {
+          incident: entry ? entry.incident : before.incident,
+          added: (entry ? entry.added : 0) + before.added,
+        });
+        trimIncidents();
+      }
+      return true;
+    }).catch(() => false);
+
+  // ============ The store ============
+
+  /**
+   * Whether the store can be tried: it opened in this context, or it opens now. A store that
+   * never opened is tried again at most every RETRY_OPEN_MS.
+   */
+  const reachable = async () => {
+    if (opened) return true;
+    if (clock.now() - triedOpenAt < RETRY_OPEN_MS) return false;
+    triedOpenAt = clock.now();
+    try {
+      await store.open();
+      opened = true;
+      return true;
+    } catch (error) {
+      fallBack(error);
+      return false;
+    }
+  };
+
+  /**
+   * Runs `unit` on the store. Answers {ok: false} after falling back when the store can't.
+   * @template T
+   * @param {readonly TrustStoreName[]} stores
    * @param {'readonly' | 'readwrite'} mode
    * @param {(tx: TrustTx) => Promise<T>} unit
    * @returns {Promise<{ok: true, value: T} | {ok: false}>}
    */
-  const attempt = async (stores, mode, unit) => {
-    if (state !== 'open') return { ok: false };
+  const run = async (stores, mode, unit) => {
+    if (!(await reachable())) return { ok: false };
     try {
       return { ok: true, value: await store.run(stores, mode, unit) };
     } catch (error) {
@@ -211,6 +366,23 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       fallBack(error);
       return { ok: false };
     }
+  };
+
+  /**
+   * A write. Once it succeeds the records are open again, and what memory holds is reconciled.
+   * @template T
+   * @param {readonly TrustStoreName[]} stores
+   * @param {(tx: TrustTx) => Promise<T>} unit
+   * @returns {Promise<{ok: true, value: T} | {ok: false}>}
+   */
+  const write = async (stores, unit) => {
+    const done = await run(stores, 'readwrite', unit);
+    if (!done.ok) return done;
+    const wasDown = state !== 'open';
+    state = 'open';
+    failureCode = null;
+    if (wasDown || holding()) await reconcile({ withCopy: false });
+    return done;
   };
 
   // ============ Bounds, each inside the write that could pass it ============
@@ -229,52 +401,128 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     for (const receipt of all) if (!keep.has(receipt.id)) tx.delete('receipts', receipt.id);
   };
 
-  /**
-   * @param {TrustTx} tx
-   */
+  /** @param {Incident} incident */
+  const resolvedTooLongAgo = incident =>
+    incident.state === 'resolved' && (incident.resolvedAt ?? 0) < clock.now() - BOUNDS.resolvedIncidentAgeMs;
+
+  /** @param {TrustTx} tx */
   const pruneIncidents = async tx => {
     const resolved = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'state', 'resolved'));
-    const cutoff = clock.now() - BOUNDS.resolvedIncidentAgeMs;
     const newestFirst = resolved.sort((a, b) => (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0) || (a.id < b.id ? -1 : 1));
     newestFirst.forEach((incident, index) => {
-      if (index >= BOUNDS.resolvedIncidents || (incident.resolvedAt ?? 0) < cutoff) tx.delete('incidents', incident.id);
+      if (index >= BOUNDS.resolvedIncidents || resolvedTooLongAgo(incident)) tx.delete('incidents', incident.id);
     });
   };
 
-  /**
-   * @param {TrustTx} tx
-   */
+  /** @param {TrustTx} tx */
   const pruneRuns = async tx => {
     const all = /** @type {RemediationRun[]} */ (await tx.getAll('runs'));
     if (all.length <= BOUNDS.runs) return;
     const finished = all
-      .filter(run => /** @type {readonly string[]} */ (FINISHED_RUN_STATES).includes(run.state))
+      .filter(item => /** @type {readonly string[]} */ (FINISHED_RUN_STATES).includes(item.state))
       .sort(byTime('startedAt'));
     let over = all.length - BOUNDS.runs;
-    for (const run of finished) {
+    for (const item of finished) {
       if (over-- <= 0) break;
-      tx.delete('runs', run.id);
+      tx.delete('runs', item.id);
     }
   };
 
-  /**
-   * @param {TrustTx} tx
-   */
+  /** @param {TrustTx} tx */
   const pruneJournal = async tx => {
     for (const seq of await tx.keys('journal', { index: 'at', below: clock.now() - BOUNDS.journalAgeMs })) {
       tx.delete('journal', seq);
     }
-    const count = await tx.count('journal');
-    if (count > BOUNDS.journalEvents) {
-      for (const seq of await tx.keys('journal', { limit: count - BOUNDS.journalEvents })) tx.delete('journal', seq);
+    const total = await tx.count('journal');
+    if (total > BOUNDS.journalEvents) {
+      for (const seq of await tx.keys('journal', { limit: total - BOUNDS.journalEvents })) tx.delete('journal', seq);
     }
+  };
+
+  // ============ Reconciling ============
+
+  /**
+   * Writes what memory holds, and with `withCopy` the settings copy, into the store, in one
+   * transaction, and prunes. Reconciles run one at a time, each taking what's held when it
+   * starts, so nothing is written twice.
+   * @param {{withCopy: boolean}} options
+   */
+  const reconcile = ({ withCopy }) => {
+    const turn = reconciling.then(() => (withCopy ? underCopyLock(() => reconcileOnce(true)) : reconcileOnce(false)));
+    reconciling = turn.catch(() => {});
+    return turn;
+  };
+
+  /**
+   * @param {boolean} withCopy
+   */
+  const reconcileOnce = async withCopy => {
+    // The copy is taken by clearing it first, under the lock a context holding one takes, so
+    // no newer copy is lost and none is counted twice: a clear that fails leaves it for later
+    /** @type {StorageCopy | null} */
+    let taken = null;
+    if (withCopy) {
+      try {
+        taken = await readCopy();
+        if (taken) await settings.set({ [SETTINGS_KEYS.lastStorageIncident]: null });
+      } catch {
+        taken = null;
+      }
+    }
+    const incidents = [...heldIncidents.values()];
+    const receipts = [...heldReceipts.values()];
+    const runs = [...heldRuns.values()];
+    const events = [...heldEvents];
+    const done = await run(['incidents', 'receipts', 'runs', 'journal'], 'readwrite', async tx => {
+      let reconciled = 0;
+      /** @type {Map<string, Incident>} */
+      const next = new Map();
+      /** @param {Incident} held @param {number} added */
+      const apply = async (held, added) => {
+        const before = next.get(held.key) || (await tx.getAllByIndex('incidents', 'key', held.key))[0];
+        next.set(held.key, combine(before, held, added));
+      };
+      if (taken) await apply(taken.incident, taken.added);
+      for (const entry of incidents) await apply(entry.incident, entry.added);
+      for (const incident of next.values()) {
+        tx.put('incidents', parseRecord(incidentSchema, incident, 'incident'));
+        reconciled++;
+      }
+      await pruneIncidents(tx);
+      for (const receipt of receipts) {
+        const all = /** @type {HealthReceipt[]} */ (
+          await tx.getAllByIndex('receipts', 'providerId', receipt.providerId)
+        ).sort(byTime('verifiedAt'));
+        const before = all[all.length - 1];
+        tx.put('receipts', { ...receipt, transition: !before || before.status !== receipt.status });
+        await pruneReceipts(tx, receipt.providerId);
+      }
+      for (const item of runs) tx.put('runs', item);
+      await pruneRuns(tx);
+      for (const event of events) await tx.append('journal', event);
+      if (reconciled > 0) await tx.append('journal', { at: clock.now(), code: 'trust.reconciled', fields: { count: reconciled } });
+      await pruneJournal(tx);
+      return reconciled;
+    });
+    if (!done.ok) {
+      // Put the copy back for whichever context opens the store next
+      if (taken) await settings.set({ [SETTINGS_KEYS.lastStorageIncident]: taken }).catch(() => {});
+      return;
+    }
+    state = 'open';
+    failureCode = null;
+    // Only what this reconcile wrote leaves memory; anything held since stays for the next
+    for (const entry of incidents) if (heldIncidents.get(entry.incident.key) === entry) heldIncidents.delete(entry.incident.key);
+    for (const receipt of receipts) if (heldReceipts.get(receipt.providerId) === receipt) heldReceipts.delete(receipt.providerId);
+    for (const item of runs) if (heldRuns.get(item.id) === item) heldRuns.delete(item.id);
+    heldEvents.splice(0, events.length);
   };
 
   // ============ Writes ============
 
   /**
    * The incident `input` makes on top of `existing`, at `at`
-   * @param {Incident | undefined} existing
+   * @param {Incident | undefined | null} existing
    * @param {RaiseInput} input
    * @param {Readonly<Record<string, unknown>>} evidence
    * @param {number} at
@@ -322,20 +570,22 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
 
   /**
    * Checks what recovery.raise and the journal pass in, so nothing outside the allowlist is
-   * stored. Throws a TypeError naming only the field's rule.
+   * stored, and every key it makes is a valid one. Throws a TypeError naming only the rule.
    * @param {RaiseInput} input
    */
   const checkRaise = input => {
-    if (!v.is(opaqueId, input.providerId)) throw new TypeError('recovery.raise: providerId must be an opaque id');
-    if (!v.is(code, input.faultCode)) throw new TypeError('recovery.raise: faultCode must be a code');
-    if (input.subjectId != null && !v.is(opaqueId, input.subjectId)) {
-      throw new TypeError('recovery.raise: subjectId must be an opaque id');
+    if (!v.is(contributionId, input.providerId)) throw new TypeError('recovery.raise: providerId must be a contribution id');
+    if (!v.is(faultCode, input.faultCode)) throw new TypeError('recovery.raise: faultCode must be a registered fault');
+    if (input.subjectId != null && !v.is(subjectId, input.subjectId)) {
+      throw new TypeError("recovery.raise: subjectId must be a record's id or a registered subject");
     }
     if (!(/** @type {readonly string[]} */ (SEVERITIES).includes(input.severity))) {
       throw new TypeError('recovery.raise: severity must be one of the severities');
     }
     for (const list of [input.affected, input.preserved]) {
-      if (list !== undefined && !isCodeList(list)) throw new TypeError('recovery.raise: capabilities must be codes');
+      if (list !== undefined && !(Array.isArray(list) && list.length <= 32 && list.every(item => v.is(capability, item)))) {
+        throw new TypeError('recovery.raise: capabilities must be registered ones');
+      }
     }
     const evidence = checkEvidence(input.evidence);
     if (!evidence.ok) {
@@ -346,7 +596,18 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
   };
 
   /**
-   * Raises an incident, or updates the one with its key
+   * The stored incident with `key`, when the store answers
+   * @param {string} key
+   * @returns {Promise<Incident | undefined>}
+   */
+  const storedIncident = async key => {
+    const found = await run(['incidents'], 'readonly', async tx => (await tx.getAllByIndex('incidents', 'key', key))[0]);
+    return found.ok ? /** @type {Incident | undefined} */ (found.value) : undefined;
+  };
+
+  /**
+   * Raises an incident, or updates the one with its key. `held` says it's only in memory and,
+   * for a storage incident, the settings copy.
    * @param {RaiseInput} input
    * @returns {Promise<{incident: Incident, created: boolean, held: boolean}>}
    */
@@ -354,7 +615,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     const evidence = checkRaise(input);
     const at = clock.now();
     const key = incidentKey(input.providerId, input.faultCode, input.subjectId);
-    const stored = await attempt(['incidents'], 'readwrite', async tx => {
+    const stored = await write(['incidents'], async tx => {
       const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', key));
       const incident = parseRecord(incidentSchema, merged(existing, input, evidence, at), 'incident');
       tx.put('incidents', incident);
@@ -362,9 +623,16 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       return { incident, created: !existing };
     });
     if (stored.ok) return { ...stored.value, held: false };
-    const incident = parseRecord(incidentSchema, merged(pendingIncidents.get(key), input, evidence, at), 'incident');
-    await holdIncident(incident);
-    return { incident, created: incident.occurrences === 1, held: true };
+    const entry = heldIncidents.get(key);
+    const base = await storedIncident(key);
+    const incident = parseRecord(incidentSchema, merged(entry ? entry.incident : base, input, evidence, at), 'incident');
+    const copied =
+      /** @type {readonly string[]} */ (STORAGE_PROVIDERS).includes(input.providerId) && (await holdCopy(incident));
+    const added = (entry ? entry.added : 0) + (copied ? 0 : 1);
+    heldIncidents.set(key, { incident, added });
+    trimIncidents();
+    const shown = (await incidents()).find(item => item.key === key) || incident;
+    return { incident: shown, created: !entry && !base, held: true };
   };
 
   /**
@@ -378,7 +646,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     const at = clock.now();
     /** @param {Incident} incident @returns {Incident} */
     const resolved = incident => ({ ...incident, state: 'resolved', resolvedAt: at, dismissed: false });
-    const stored = await attempt(['incidents'], 'readwrite', async tx => {
+    const stored = await write(['incidents'], async tx => {
       const open = [
         ...(/** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'state', 'open'))),
         ...(/** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'state', 'remediating'))),
@@ -389,11 +657,15 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       return done;
     });
     if (stored.ok) return stored.value;
-    const done = [...pendingIncidents.values()]
-      .filter(incident => incident.providerId === providerId && incident.state !== 'resolved' && !still.includes(incident.key))
-      .map(resolved);
-    for (const incident of done) pendingIncidents.set(incident.key, incident);
-    return done;
+    const done = (await incidents()).filter(
+      incident => incident.providerId === providerId && incident.state !== 'resolved' && !still.includes(incident.key),
+    );
+    for (const incident of done) {
+      const entry = heldIncidents.get(incident.key);
+      heldIncidents.set(incident.key, { incident: resolved(entry ? entry.incident : incident), added: entry ? entry.added : 0 });
+    }
+    trimIncidents();
+    return done.map(resolved);
   };
 
   /**
@@ -403,7 +675,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @returns {Promise<Incident | null>}
    */
   const dismiss = async (id, dismissed) => {
-    const stored = await attempt(['incidents'], 'readwrite', async tx => {
+    const stored = await write(['incidents'], async tx => {
       const incident = /** @type {Incident | undefined} */ (await tx.get('incidents', id));
       if (!incident || incident.state === 'resolved') return null;
       const next = { ...incident, dismissed };
@@ -411,11 +683,11 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       return next;
     });
     if (stored.ok) return stored.value;
-    const held = [...pendingIncidents.values()].find(incident => incident.id === id);
-    if (!held || held.state === 'resolved') return null;
-    const next = { ...held, dismissed };
-    pendingIncidents.set(next.key, next);
-    return next;
+    const shown = (await incidents()).find(incident => incident.id === id);
+    if (!shown || shown.state === 'resolved') return null;
+    const entry = heldIncidents.get(shown.key);
+    heldIncidents.set(shown.key, { incident: { ...(entry ? entry.incident : shown), dismissed }, added: entry ? entry.added : 0 });
+    return { ...shown, dismissed };
   };
 
   /** The random id that stamps receipts, written once */
@@ -424,7 +696,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     const read = async () => {
       const key = SETTINGS_KEYS.installId;
       const stored = (await settings.get([key]))[key];
-      if (v.is(opaqueId, stored)) return /** @type {string} */ (stored);
+      if (v.is(recordId, stored)) return /** @type {string} */ (stored);
       const id = ids.next();
       await settings.set({ [key]: id });
       return id;
@@ -444,7 +716,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
   const record = async input => {
     const stamped = { ...input, id: ids.next(), installId: await installId(), transition: true };
     parseRecord(receiptSchema, stamped, 'receipt');
-    const stored = await attempt(['receipts'], 'readwrite', async tx => {
+    const stored = await write(['receipts'], async tx => {
       const all = /** @type {HealthReceipt[]} */ (await tx.getAllByIndex('receipts', 'providerId', input.providerId)).sort(
         byTime('verifiedAt'),
       );
@@ -455,28 +727,28 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       return receipt;
     });
     if (stored.ok) return stored.value;
-    const before = pendingReceipts.get(input.providerId);
+    const before = heldReceipts.get(input.providerId);
     const receipt = { ...stamped, transition: !before || before.status !== input.status };
-    pendingReceipts.set(input.providerId, receipt);
-    trim(pendingReceipts, FALLBACK_LIMITS.receipts, 'verifiedAt');
+    heldReceipts.set(input.providerId, receipt);
+    trimReceipts();
     return receipt;
   };
 
   /**
    * Stores a remediation run, or its next state
-   * @param {RemediationRun} run
+   * @param {RemediationRun} item
    * @returns {Promise<RemediationRun>}
    */
-  const putRun = async run => {
-    const checked = parseRecord(runSchema, run, 'run');
-    const stored = await attempt(['runs'], 'readwrite', async tx => {
+  const putRun = async item => {
+    const checked = parseRecord(runSchema, item, 'run');
+    const stored = await write(['runs'], async tx => {
       tx.put('runs', checked);
       await pruneRuns(tx);
       return checked;
     });
     if (stored.ok) return stored.value;
-    pendingRuns.set(checked.id, checked);
-    trim(pendingRuns, FALLBACK_LIMITS.runs, 'startedAt');
+    heldRuns.set(checked.id, checked);
+    trimRuns();
     return checked;
   };
 
@@ -487,101 +759,38 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    */
   const append = async event => {
     const checked = /** @type {Omit<JournalEvent, 'seq'>} */ (parseRecord(newEventSchema, event, 'journal event'));
-    const stored = await attempt(['journal'], 'readwrite', async tx => {
+    const stored = await write(['journal'], async tx => {
       await tx.append('journal', checked);
       await pruneJournal(tx);
     });
     if (!stored.ok) holdEvent(checked);
   };
 
-  // ============ Opening and reconciling ============
-
-  /** Writes what the fallback holds into the store, and clears it */
-  const reconcile = async () => {
-    const fromSettings = await storedFallbackIncident();
-    const incidents = [...pendingIncidents.values()];
-    if (fromSettings && !incidents.some(incident => incident.key === fromSettings.key)) incidents.push(fromSettings);
-    let count = 0;
-    const done = await attempt(['incidents', 'receipts', 'runs', 'journal'], 'readwrite', async tx => {
-      for (const held of incidents) {
-        const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', held.key));
-        // Already reconciled, or the store saw it as late
-        if (existing && existing.lastSeenAt >= held.lastSeenAt) continue;
-        const next = existing
-          ? {
-              ...existing,
-              severity: existing.state === 'resolved' ? held.severity : worseSeverity(existing.severity, held.severity),
-              state: held.state === 'resolved' ? existing.state : 'open',
-              resolvedAt: held.state === 'resolved' ? existing.resolvedAt : null,
-              dismissed: false,
-              lastSeenAt: held.lastSeenAt,
-              occurrences: existing.occurrences + held.occurrences,
-              affected: held.affected,
-              preserved: held.preserved,
-              evidence: held.evidence,
-            }
-          : held;
-        tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
-        count++;
-      }
-      await pruneIncidents(tx);
-      for (const receipt of pendingReceipts.values()) {
-        const all = /** @type {HealthReceipt[]} */ (await tx.getAllByIndex('receipts', 'providerId', receipt.providerId)).sort(
-          byTime('verifiedAt'),
-        );
-        const before = all[all.length - 1];
-        tx.put('receipts', { ...receipt, transition: !before || before.status !== receipt.status });
-        await pruneReceipts(tx, receipt.providerId);
-      }
-      for (const run of pendingRuns.values()) tx.put('runs', run);
-      await pruneRuns(tx);
-      const held = pendingEvents.length + (count > 0 ? 1 : 0);
-      for (const event of pendingEvents) await tx.append('journal', event);
-      if (count > 0) await tx.append('journal', { at: clock.now(), code: 'trust.reconciled', fields: { count } });
-      await pruneJournal(tx);
-      return held;
-    });
-    if (!done.ok) return;
-    pendingIncidents.clear();
-    pendingReceipts.clear();
-    pendingRuns.clear();
-    pendingEvents.length = 0;
-    if (fromSettings) {
-      try {
-        await settings.set({ [SETTINGS_KEYS.lastStorageIncident]: null });
-      } catch {
-        // The next open finds it already reconciled
-      }
-    }
-  };
-
   /**
-   * Opens NewTabNoteTrust and reconciles what a fallback held. When it won't open, the
-   * records fall back to memory and the settings area, and the incident the settings area
-   * held is read back so this context still reports it.
+   * Opens NewTabNoteTrust, reconciles the settings copy and what memory holds, and prunes.
+   * When it won't open, the records are in fallback, and every later write tries again.
    * @returns {Promise<{ok: true} | {ok: false, code: string}>}
    */
   const open = async () => {
-    try {
-      await store.open();
-    } catch (error) {
-      fallBack(error);
-      const held = await storedFallbackIncident();
-      if (held && !pendingIncidents.has(held.key)) pendingIncidents.set(held.key, held);
+    triedOpenAt = Number.NEGATIVE_INFINITY;
+    if (!(await reachable())) {
+      if (state !== 'fallback') state = 'fallback';
       return { ok: false, code: /** @type {string} */ (failureCode) };
     }
     state = 'open';
     failureCode = null;
-    await reconcile();
-    return { ok: true };
+    await reconcile({ withCopy: true });
+    // The reconcile may have found the store failing after all
+    const failed = currentFailure();
+    return failed === null ? { ok: true } : { ok: false, code: failed };
   };
 
-  // ============ Reads ============
+  // ============ Reads: the store, with what memory and the copy hold laid over it ============
 
-  /** @returns {Promise<HealthReceipt[]>} every stored receipt, oldest first */
+  /** @returns {Promise<HealthReceipt[]>} every receipt, oldest first */
   const receipts = async () => {
-    const stored = await attempt(['receipts'], 'readonly', tx => tx.getAll('receipts'));
-    return copy(stored.ok ? stored.value : [...pendingReceipts.values()]).sort(byTime('verifiedAt'));
+    const stored = await run(['receipts'], 'readonly', tx => tx.getAll('receipts'));
+    return copy([...(stored.ok ? stored.value : []), ...heldReceipts.values()]).sort(byTime('verifiedAt'));
   };
 
   /** @returns {Promise<HealthReceipt[]>} each provider's latest receipt */
@@ -592,23 +801,45 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     return [...latest.values()];
   };
 
-  /** @returns {Promise<Incident[]>} every incident, oldest first */
+  /** @returns {Promise<Incident[]>} every incident within its bounds, oldest first */
   const incidents = async () => {
-    const stored = await attempt(['incidents'], 'readonly', tx => tx.getAll('incidents'));
-    return copy(stored.ok ? stored.value : [...pendingIncidents.values()]).sort(byTime('firstSeenAt'));
+    const stored = await run(['incidents'], 'readonly', tx => tx.getAll('incidents'));
+    /** @type {Map<string, Incident>} */
+    const byKey = new Map((stored.ok ? /** @type {Incident[]} */ (stored.value) : []).map(item => [item.key, item]));
+    if (state !== 'open') {
+      /** @type {StorageCopy | null} */
+      let held = null;
+      try {
+        held = await readCopy();
+      } catch {
+        held = null;
+      }
+      if (held) byKey.set(held.incident.key, combine(byKey.get(held.incident.key), held.incident, held.added));
+    }
+    for (const entry of heldIncidents.values()) {
+      byKey.set(entry.incident.key, combine(byKey.get(entry.incident.key), entry.incident, entry.added));
+    }
+    return copy([...byKey.values()].filter(item => !resolvedTooLongAgo(item))).sort(byTime('firstSeenAt'));
   };
 
   /** @returns {Promise<RemediationRun[]>} every run, oldest first */
   const runs = async () => {
-    const stored = await attempt(['runs'], 'readonly', tx => tx.getAll('runs'));
-    return copy(stored.ok ? stored.value : [...pendingRuns.values()]).sort(byTime('startedAt'));
+    const stored = await run(['runs'], 'readonly', tx => tx.getAll('runs'));
+    /** @type {Map<string, RemediationRun>} */
+    const byId = new Map((stored.ok ? /** @type {RemediationRun[]} */ (stored.value) : []).map(item => [item.id, item]));
+    for (const item of heldRuns.values()) byId.set(item.id, item);
+    return copy([...byId.values()]).sort(byTime('startedAt'));
   };
 
-  /** @returns {Promise<JournalEvent[]>} every journal event, oldest first */
+  /** @returns {Promise<JournalEvent[]>} every journal event within its bounds, oldest first */
   const events = async () => {
-    const stored = await attempt(['journal'], 'readonly', tx => tx.getAll('journal'));
-    if (stored.ok) return copy(stored.value);
-    return pendingEvents.map((event, index) => ({ ...copy(event), seq: index + 1 }));
+    const stored = await run(['journal'], 'readonly', tx => tx.getAll('journal'));
+    /** @type {JournalEvent[]} */
+    const all = stored.ok ? copy(stored.value) : [];
+    let seq = all.reduce((highest, event) => Math.max(highest, event.seq), 0);
+    for (const event of heldEvents) all.push({ ...copy(event), seq: ++seq });
+    const cutoff = clock.now() - BOUNDS.journalAgeMs;
+    return all.filter(event => event.at >= cutoff).slice(-BOUNDS.journalEvents);
   };
 
   return Object.freeze({
@@ -627,8 +858,10 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     events,
     /** @returns {RecordsState} */
     state: () => state,
-    /** @returns {string | null} why NewTabNoteTrust isn't open, as a code */
+    /** @returns {string | null} why NewTabNoteTrust isn't taking writes, as a code */
     failureCode: () => failureCode,
+    /** @returns {Readonly<Dropped>} what the memory fallback had to drop that it would have kept */
+    dropped: () => Object.freeze({ ...dropped }),
   });
 }
 

@@ -57,6 +57,7 @@ describe('conformance coverage', () => {
       'messaging-transport',
       'registry-family',
       'chrome-storage-local',
+      'trust-store',
     ]);
     for (const row of rows) assert.ok(row.runs.length > 0, row.id);
   });

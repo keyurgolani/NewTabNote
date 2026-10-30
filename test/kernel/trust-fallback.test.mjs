@@ -39,7 +39,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
 
     const held = /** @type {any} */ (profile.settings.items.get(KEY));
-    assert.equal(held.key, 'capture/capture-failed/-', 'the latest storage incident is the one kept');
+    assert.equal(held.incident.key, 'capture/capture-failed/-', 'the latest storage incident is the one kept');
     assert.ok(
       profile.settings.sets.every(set => Object.keys(set).every(key => key === KEY || key === 'trust.installId')),
     );
@@ -72,7 +72,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     );
   });
 
-  it('the next open reconciles the held incident into NewTabNoteTrust, once', async () => {
+  it('the next open reconciles the held incident into NewTabNoteTrust once, and one that cannot clear the copy leaves it for later', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const down = createTrustRecords({
@@ -92,10 +92,18 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     clock.advance(10);
     await down.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' });
 
+    // The first open can't clear the copy, so it leaves it for later and counts none of it
+    profile.settings.failSets = 1;
     const store = databaseOn(profile);
     opened.push(store);
-    const up = await openRecords(store, profile, { clock });
-    assert.equal(up.opened.ok, true);
+    const first = await openRecords(store, profile, { clock });
+    assert.equal(first.opened.ok, true);
+    assert.deepEqual(await first.records.incidents(), []);
+    assert.equal(/** @type {any} */ (profile.settings.items.get(KEY)).added, 2);
+
+    const store2 = databaseOn(profile);
+    opened.push(store2);
+    const up = await openRecords(store2, profile, { clock });
     const [incident] = await up.records.incidents();
     assert.equal(incident.key, 'storage/open-failed/-');
     assert.equal(incident.occurrences, 2);
@@ -106,11 +114,10 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
       ['trust.reconciled'],
     );
 
-    // Opening again, or a copy left behind when clearing the key failed, adds nothing
-    profile.settings.items.set(KEY, JSON.parse(JSON.stringify((await down.incidents())[0])));
-    const store2 = databaseOn(profile);
-    opened.push(store2);
-    const again = await openRecords(store2, profile, { clock });
+    // Opening again adds nothing
+    const store3 = databaseOn(profile);
+    opened.push(store3);
+    const again = await openRecords(store3, profile, { clock });
     const after = await again.records.incidents();
     assert.equal(after.length, 1);
     assert.equal(after[0].occurrences, 2);
@@ -161,12 +168,19 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
 
   it('memory keeps a bounded number of incidents and events', async () => {
     const profile = trustProfile();
-    const { records } = await openRecords(createTrustDatabase({ indexedDB: brokenFactory }), profile);
+    const { records, clock } = await openRecords(createTrustDatabase({ indexedDB: brokenFactory }), profile);
     for (let n = 0; n < 80; n++) {
-      await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: `s${n}`, severity: 'degraded' });
+      await records.raise({
+        providerId: 'index',
+        faultCode: 'lagging',
+        subjectId: `${1730000000000 + n}-s`,
+        severity: 'degraded',
+      });
     }
-    for (let n = 0; n < 250; n++) await records.append({ at: n, code: 'trust.reconciled', fields: { count: n } });
+    for (let n = 0; n < 250; n++)
+      await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: n } });
     assert.equal((await records.incidents()).length, 50);
+    assert.equal(records.dropped().incidents, 30);
     assert.equal((await records.events()).length, 200);
   });
 });
