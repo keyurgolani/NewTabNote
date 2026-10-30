@@ -221,13 +221,13 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/controllers/tab-controller.js` | [603](../../js/controllers/tab-controller.js#L603) | `TabController.cacheLastOpenedNoteId` | `chrome.storage.local.set({lastOpenedNoteId})` | `saveWorkspaceSession` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [70](../../js/controllers/theme-builder-controller.js#L70) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.saveCustomTheme(…)` | `saveTheme` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [71](../../js/controllers/theme-builder-controller.js#L71) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.setSetting('theme', …)` | `setPreferences` | kernel command, slice 6 |
-| `js/editor.js` | [526](../../js/editor.js#L526) | `BlockEditor.renderInsights` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | kernel command, slice 4 |
-| `js/editor.js` | [817](../../js/editor.js#L817) | `BlockEditor.refreshInsights` | `Storage.updateNote({insights, lastInsightsExtractedAt})` | `attachInsights` | kernel command, slice 4 |
-| `js/editor.js` | [5202](../../js/editor.js#L5202) | `BlockEditor._autoSnapshot` | `Storage.saveSnapshot(…)` | `saveSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5400](../../js/editor.js#L5400) | `BlockEditor._revertToSnapshot` | `Storage.saveSnapshot(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5409](../../js/editor.js#L5409) | `BlockEditor._revertToSnapshot` | `Storage.deleteElements(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5422](../../js/editor.js#L5422) | `BlockEditor._revertToSnapshot` | `Storage.saveElement(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5429](../../js/editor.js#L5429) | `BlockEditor._revertToSnapshot` | `Storage.updateNote({name})` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [536](../../js/editor.js#L536) | `BlockEditor.renderInsights` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | kernel command, slice 4 |
+| `js/editor.js` | [832](../../js/editor.js#L832) | `BlockEditor.refreshInsights` | `Storage.updateNote({insights, lastInsightsExtractedAt})` | `attachInsights` | kernel command, slice 4 |
+| `js/editor.js` | [5267](../../js/editor.js#L5267) | `BlockEditor._autoSnapshot` | `Storage.saveSnapshot(…)` | `saveSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5465](../../js/editor.js#L5465) | `BlockEditor._revertToSnapshot` | `Storage.saveSnapshot(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5474](../../js/editor.js#L5474) | `BlockEditor._revertToSnapshot` | `Storage.deleteElements(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5487](../../js/editor.js#L5487) | `BlockEditor._revertToSnapshot` | `Storage.saveElement(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5498](../../js/editor.js#L5498) | `BlockEditor._revertToSnapshot` | `Storage.updateNote({name})` | `restoreSnapshot` | kernel command, slice 4 |
 | `js/llm.js` | [130](../../js/llm.js#L130) | `LLMService.setEndpoint` | `Storage.setSetting('llmEndpoint', …)` | `saveProviderSettings` | no live caller |
 | `js/llm.js` | [662](../../js/llm.js#L662) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [674](../../js/llm.js#L674) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |

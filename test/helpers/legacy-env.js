@@ -899,6 +899,7 @@ function testDocumentClient(client) {
     createNote: (fields) => client.createNote(fields),
     newId: () => client.newId(),
     beforeConnectionCloses: (flush) => client.beforeConnectionCloses(flush),
+    connectionOpen: () => client.connectionOpen(),
   };
 }
 
