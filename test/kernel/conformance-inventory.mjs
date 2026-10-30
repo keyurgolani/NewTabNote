@@ -101,8 +101,8 @@ export const HELPERS = Object.freeze({
 /**
  * Modules under js/kernel/adapters/ that are the only implementation of what they implement,
  * so there's nothing to share a suite with: each names that interface and the test that
- * covers it. A second implementation of the same interface needs a shared suite, and the
- * check fails until the interface moves to PORTS.
+ * covers it. The PR that adds a second implementation of one of them moves the interface to
+ * PORTS with a shared suite, since the new module fails the check until it's classified.
  * @type {Readonly<Record<string, {implements: string, tests: string}>>}
  */
 export const UNSHARED = Object.freeze({
