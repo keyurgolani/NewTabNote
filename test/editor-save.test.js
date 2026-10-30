@@ -8,7 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
-  runUntil,
+  runUntil, startEditorClient, startNewTabKernel, quietNavigation,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -89,6 +89,7 @@ async function setup() {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  await startEditorClient(env);
   return { env, Storage };
 }
 
@@ -99,20 +100,22 @@ async function elementsById(env) {
 }
 
 /**
- * Make the next `times` writes of `noteId` fail, as a quota or I/O error does.
- * @returns {Array<string>} The note ID of every write attempted
+ * Make the next `times` saves of `noteId` fail, as a full disk does: the page's document
+ * client answers them `unavailable`, as the kernel does when the transaction fails.
+ * @returns {Array<string>} The note ID of every save attempted
  */
-function failWritesOf(Storage, noteId, times) {
-  const real = Storage.saveNoteWithBlocks.bind(Storage);
+function failWritesOf(env, noteId, times) {
+  const client = env.documentClient;
+  const real = client.saveContent;
   const attempts = [];
   let left = times;
-  Storage.saveNoteWithBlocks = (n, els) => {
-    attempts.push(n.id);
-    if (n.id === noteId && left > 0) {
+  client.saveContent = (save) => {
+    attempts.push(save.noteId);
+    if (save.noteId === noteId && left > 0) {
       left -= 1;
-      return Promise.reject(new Error('QuotaExceededError'));
+      return Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
     }
-    return real(n, els);
+    return real(save);
   };
   return attempts;
 }
@@ -231,9 +234,7 @@ describe('BlockEditor save and load (AC1)', () => {
   });
 
   it('a pending retry counts: switching notes runs it before loading the next note', async () => {
-    const realSave = Storage.saveNoteWithBlocks.bind(Storage);
-    let failures = 1;
-    Storage.saveNoteWithBlocks = (n, els) => (failures-- > 0 ? Promise.reject(new Error('disk busy')) : realSave(n, els));
+    failWritesOf(env, 'A', 1);
 
     type(editor, 'retry me');
     env.clock.tick(500);
@@ -344,9 +345,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('a pending retry is written by pagehide', async () => {
-    const realSave = Storage.saveNoteWithBlocks.bind(Storage);
-    let failures = 1;
-    Storage.saveNoteWithBlocks = (n, els) => (failures-- > 0 ? Promise.reject(new Error('disk busy')) : realSave(n, els));
+    failWritesOf(env, 'A', 1);
     type(editor, 'retry on close');
     env.clock.tick(500);
     env.frames();
@@ -638,7 +637,7 @@ describe('BlockEditor saves of a deleted note', () => {
   });
 
   it('the retry of a note deleted meanwhile does not bring it back, and a toast says its last changes are lost', async () => {
-    failWritesOf(Storage, 'A', 1);
+    failWritesOf(env, 'A', 1);
     const load = editor.loadNote('B');
     type(editor, 'typed while switching');
     env.frames();
@@ -683,7 +682,7 @@ describe('BlockEditor failed save before a note switch', () => {
 
   it('the retry writes the failed copy of the note that was left, not the note now open', async () => {
     const { statuses, toasts } = watchFeedback(env, editor);
-    const attempts = failWritesOf(Storage, 'A', 1);
+    const attempts = failWritesOf(env, 'A', 1);
     await switchWhileTyping('typed while switching');
     assert.equal(statuses[statuses.length - 1], 'Retrying...');
 
@@ -700,7 +699,7 @@ describe('BlockEditor failed save before a note switch', () => {
 
   it('a second failure of that copy shows the error toast', async () => {
     const { statuses, toasts } = watchFeedback(env, editor);
-    const attempts = failWritesOf(Storage, 'A', 2);
+    const attempts = failWritesOf(env, 'A', 2);
     await switchWhileTyping('never stored');
 
     env.clock.tick(1000);
@@ -713,7 +712,7 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 
   it('typing in the open note before the retry fires keeps the retry', async () => {
-    failWritesOf(Storage, 'A', 1);
+    failWritesOf(env, 'A', 1);
     await switchWhileTyping('kept for the retry');
 
     type(editor, 'bravo edited'); // re-arms the shared timer at 500 ms
@@ -726,7 +725,7 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 
   it('flushSave counts that retry as pending', async () => {
-    failWritesOf(Storage, 'A', 1);
+    failWritesOf(env, 'A', 1);
     await switchWhileTyping('flushed retry');
 
     await runUntil(env, editor.flushSave()); // before the 1 s retry timer fires
@@ -736,7 +735,7 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 
   it('closing the tab writes that retry right away', async () => {
-    failWritesOf(Storage, 'A', 1);
+    failWritesOf(env, 'A', 1);
     await switchWhileTyping('retry on close');
 
     const opened = spyTransactions(Storage);
@@ -778,17 +777,18 @@ describe('BlockEditor reloading the open note', () => {
   });
 
   it('keeps the blocks in the editor when edits keep racing the reads', async () => {
-    const realRead = Storage.getElementsByNote.bind(Storage);
+    const client = env.documentClient;
+    const realRead = client.openNote;
     let races = 0;
-    Storage.getElementsByNote = async (id) => {
-      const rows = await realRead(id);
+    client.openNote = async (id) => {
+      const opened = await realRead(id);
       races += 1;
       type(editor, `race ${races}`);
-      return rows;
+      return opened;
     };
     const reload = editor.loadNote('A');
     await runUntil(env, reload);
-    Storage.getElementsByNote = realRead;
+    client.openNote = realRead;
 
     assert.equal(editor.blocks[0].content, `race ${races}`, 'the newest edit is still in the editor');
     await runUntil(env, editor.flushSave());
@@ -831,8 +831,10 @@ describe('BlockEditor saves keep trash and archive state', () => {
     const stored = await saveEdit('edited in an older copy');
     assert.equal(stored.trashed, true);
     assert.equal(stored.trashedAt, 42);
-    assert.equal(editor.noteData.trashed, true, 'the editor picks up the stored state');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'edited in an older copy' });
+    // A save writes no trash or archive field at all, so the next one keeps the trash too
+    const again = await saveEdit('edited again');
+    assert.deepEqual([again.trashed, again.trashedAt], [true, 42]);
   });
 
   it('or out of the archive', async () => {
@@ -901,5 +903,327 @@ describe('BlockEditor save hold (import)', () => {
     await load;
     assert.equal(editor.noteId, 'B');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'switch during import' });
+  });
+});
+
+/**
+ * Record what each readwrite transaction puts, by store: `{stores, puts: [{store, record}]}`.
+ * @returns {Array<{stores: Array<string>, puts: Array<{store: string, record: Object}>}>}
+ */
+function spyPuts(storage) {
+  const db = storage.db;
+  const original = db.transaction.bind(db);
+  const writes = [];
+  db.transaction = (stores, mode) => {
+    const tx = original(stores, mode);
+    if (mode !== 'readwrite') return tx;
+    const entry = { stores: [].concat(stores), puts: [] };
+    writes.push(entry);
+    const objectStore = tx.objectStore.bind(tx);
+    const spied = new Set();
+    tx.objectStore = (name) => {
+      const store = objectStore(name);
+      if (spied.has(store)) return store;
+      spied.add(store);
+      const put = store.put.bind(store);
+      store.put = (record, ...rest) => {
+        entry.puts.push({ store: name, record: plain(record) });
+        return put(record, ...rest);
+      };
+      return store;
+    };
+    return tx;
+  };
+  return writes;
+}
+
+/** Type a title, as the title element's input handler does. */
+function typeTitle(editor, title) {
+  editor.titleEl.textContent = title;
+  editor.onTitleChange();
+}
+
+/** Give a note a search entry, as Storage.createNote does */
+function putSearchEntry(Storage, noteId, name) {
+  return new Promise((resolve, reject) => {
+    const tx = Storage.db.transaction('search_index', 'readwrite');
+    tx.objectStore('search_index').put({ noteId, name, content: '', updatedAt: 1 });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/** The search entry of a note, as stored */
+function searchEntryOf(Storage, noteId) {
+  return new Promise((resolve, reject) => {
+    const request = Storage.db.transaction('search_index').objectStore('search_index').get(noteId);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+describe("BlockEditor saves write the note's content only (#12)", () => {
+  let env;
+  let Storage;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env, Storage } = await setup());
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  /** Type into A and let the save finish. */
+  async function saveEdit(text) {
+    type(editor, text);
+    await runUntil(env, editor.flushSave());
+    return Storage.getNote('A');
+  }
+
+  it("moving the open note into a folder survives the editor's next save", async () => {
+    const folder = await Storage.createFolder('Work');
+    await Storage.moveNoteToFolder('A', folder.id); // the sidebar's move
+    const stored = await saveEdit('typed after the move');
+    assert.equal(stored.folderId, folder.id, 'the save left the folder alone');
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed after the move' });
+  });
+
+  it("converting the open note to a template survives the editor's next save", async () => {
+    // As NotesManager.convertNoteToTemplate writes it
+    const stored = await Storage.getNote('A');
+    Object.assign(stored, { isTemplate: true, folderId: null });
+    await Storage.updateNote(stored);
+    assert.equal((await saveEdit('typed after converting')).isTemplate, true, 'still a template');
+  });
+
+  it("pinning the open note survives the editor's next save", async () => {
+    await Storage.updateNote({ ...(await Storage.getNote('A')), pinned: true }); // the sidebar's pin
+    assert.equal((await saveEdit('typed after pinning')).pinned, true);
+  });
+
+  it('a title and text typed inside one debounce both land, in the one transaction that writes the blocks', async () => {
+    const writes = spyPuts(Storage);
+    typeTitle(editor, 'Groceries');
+    type(editor, 'eggs');
+    await runUntil(env, editor.flushSave());
+
+    const saves = writes.filter((w) => w.puts.some((p) => p.store === 'elements'));
+    assert.equal(saves.length, 1, 'one save');
+    assert.deepEqual(saves[0].stores.slice().sort(), ['canvases', 'elements']);
+    const written = saves[0].puts.find((p) => p.store === 'canvases').record;
+    assert.equal(written.name, 'Groceries', 'the typed title went in with the blocks');
+    assert.equal(written.titleManuallySet, true);
+    assert.ok(saves[0].puts.some((p) => p.store === 'elements' && p.record.id === 'a1' && p.record.content === 'eggs'));
+    const stored = await Storage.getNote('A');
+    assert.deepEqual([stored.name, stored.titleManuallySet, stored.preview], ['Groceries', true, 'eggs']);
+  });
+
+  it("a content save of a note opened with its title marks nothing as set by hand, and moves updatedAt as Storage.saveNoteWithBlocks did", async () => {
+    const writes = spyPuts(Storage);
+    const before = Date.now();
+    const stored = await saveEdit('content only');
+    const after = Date.now();
+    assert.deepEqual([stored.name, stored.titleManuallySet], ['Note A', false]);
+    assert.ok(stored.updatedAt >= before && stored.updatedAt <= after, 'updatedAt is the time of the save');
+    const written = writes.flatMap((w) => w.puts).filter((p) => p.store === 'canvases');
+    assert.equal(written.length, 1, 'the note record is written once, with the blocks');
+  });
+
+  it('a content save after a generated title landed leaves it, and marks nothing as set by hand', async () => {
+    // NotesManager's auto-title: it stores the title, then shows it in the editor
+    await Storage.updateNote({ ...(await Storage.getNote('A')), name: 'Generated', lastAutoTitleAt: 5 });
+    editor.setTitleProgrammatically('Generated');
+    await runUntil(env, editor.flushSave());
+    let stored = await Storage.getNote('A');
+    assert.deepEqual([stored.name, stored.titleManuallySet], ['Generated', false]);
+
+    stored = await saveEdit('typed after the title came');
+    assert.deepEqual([stored.name, stored.titleManuallySet], ['Generated', false]);
+  });
+
+  it('a title element input that changes nothing sends no title', async () => {
+    const writes = spyPuts(Storage);
+    typeTitle(editor, 'Note A');
+    type(editor, 'content');
+    await runUntil(env, editor.flushSave());
+    const stored = await Storage.getNote('A');
+    assert.deepEqual([stored.name, stored.titleManuallySet], ['Note A', false]);
+    assert.ok(writes.some((w) => w.puts.some((p) => p.store === 'elements')), 'the content was saved');
+  });
+
+  it('a save with no typed title leaves a rename made elsewhere, and marks nothing as set by hand', async () => {
+    await Storage.updateNote({ ...(await Storage.getNote('A')), name: 'Renamed in the sidebar' });
+    const stored = await saveEdit('typed after the rename');
+    assert.equal(stored.name, 'Renamed in the sidebar');
+    assert.equal(stored.titleManuallySet, false);
+  });
+
+  it('a title the AI set goes in with the blocks without marking it as set by hand', async () => {
+    const writes = spyPuts(Storage);
+    editor.setTitleProgrammatically('Weekly plan');
+    type(editor, 'monday');
+    await runUntil(env, editor.flushSave());
+
+    const saves = writes.filter((w) => w.puts.some((p) => p.store === 'elements'));
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0].puts.find((p) => p.store === 'canvases').record.name, 'Weekly plan');
+    const stored = await Storage.getNote('A');
+    assert.deepEqual([stored.name, stored.titleManuallySet, typeof stored.lastAutoTitleAt], ['Weekly plan', false, 'number']);
+  });
+
+  it('a typed title whose save failed goes in with the newer save that supersedes its retry', async () => {
+    failWritesOf(env, 'A', 1);
+    typeTitle(editor, 'Retried title');
+    env.clock.tick(500);
+    env.frames();
+    await settle();
+    assert.equal(editor._retryPending, true);
+    type(editor, 'typed before the retry');
+    await runUntil(env, editor.flushSave());
+    const stored = await Storage.getNote('A');
+    assert.deepEqual([stored.name, stored.titleManuallySet], ['Retried title', true]);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed before the retry' });
+  });
+
+  it("a save renames the note's search entry and replaces its wiki links", async () => {
+    await Storage.updateNote({ ...(await Storage.getNote('B')), name: 'Bravo' });
+    await putSearchEntry(Storage, 'A', 'Note A');
+    typeTitle(editor, 'Alpha');
+    type(editor, 'see [[bravo]] and [[Alpha]]');
+    await runUntil(env, editor.flushSave());
+    assert.deepEqual(plain((await Storage.getBacklinks('B')).map((n) => n.id)), ['A'], 'a link to B, none to itself');
+    assert.equal((await searchEntryOf(Storage, 'A')).name, 'Alpha');
+
+    type(editor, 'no links now');
+    await runUntil(env, editor.flushSave());
+    assert.deepEqual(plain(await Storage.getBacklinks('B')), []);
+  });
+});
+
+describe('BlockEditor "Save as a new note" (#12)', () => {
+  let env;
+  let Storage;
+  let editor;
+
+  /** A in a folder, pinned, its title set by hand, deleted with an edit pending; then "Save as a new note". */
+  async function saveGoneNoteAsNew({ folderGone }) {
+    ({ env, Storage } = await setup());
+    const folder = await Storage.createFolder('Work');
+    await Storage.updateNote({ ...(await Storage.getNote('A')), folderId: folder.id, pinned: true, titleManuallySet: true });
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+    type(editor, 'typed before the delete');
+    if (folderGone) await Storage.deleteFolder(folder.id);
+    await Storage.permanentlyDeleteNote('A');
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true);
+    await runUntil(env, editor.saveAsNewNote());
+    assert.notEqual(editor.noteId, 'A');
+    return { folder, copy: await Storage.getNote(editor.noteId) };
+  }
+
+  it('keeps the pin, the hand-set title, and the folder', async () => {
+    const { folder, copy } = await saveGoneNoteAsNew({ folderGone: false });
+    assert.deepEqual([copy.name, copy.pinned, copy.titleManuallySet, copy.folderId], ['Note A', true, true, folder.id]);
+    assert.ok((await Storage.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
+    assert.equal((await searchEntryOf(Storage, copy.id)).name, 'Note A', 'with its search entry');
+  });
+
+  it('files the note at the root when its folder is gone', async () => {
+    const { copy } = await saveGoneNoteAsNew({ folderGone: true });
+    assert.deepEqual([copy.pinned, copy.titleManuallySet, copy.folderId], [true, true, null]);
+    assert.ok((await Storage.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
+  });
+});
+
+describe('BlockEditor when the page has to reload (#12)', () => {
+  /** A new tab started by its own root, on A, with its editor */
+  async function newTabOnA() {
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: { canvases: [note('A')], elements: [block('a1', 'A', 0, 'alpha')] },
+    });
+    env.load(...FILES);
+    const Storage = env.get('Storage');
+    await startNewTabKernel(env);
+    const navigation = quietNavigation();
+    const editor = makeEditor(env, env.document, { navigation });
+    const feedback = watchFeedback(env, editor);
+    await runUntil(env, editor.loadNote('A'));
+    return { env, Storage, navigation, editor, feedback };
+  }
+
+  /** A newer build opens the database at a higher version, as after an update in another tab */
+  function upgradeElsewhere(env) {
+    return new Promise((resolve, reject) => {
+      const upgrade = env.indexedDB.open('CanvasTabDB', 9);
+      upgrade.onsuccess = () => {
+        upgrade.result.close();
+        resolve();
+      };
+      upgrade.onerror = () => reject(upgrade.error);
+      upgrade.onblocked = () => reject(new Error('the new tab held the database open'));
+    });
+  }
+
+  it('an edit still in the debounce when another context upgrades is written before the connection closes', async () => {
+    const { env, Storage, editor, feedback } = await newTabOnA();
+    const opened = spyTransactions(Storage);
+    type(editor, 'typed just before the upgrade');
+    assert.notEqual(editor.saveTimeout, null, 'pending');
+    await upgradeElsewhere(env);
+    assert.equal(Storage.openState, 'version-changed', 'the connection closed');
+    assert.deepEqual(writesOf(opened)[0], { stores: ['canvases', 'elements'], mode: 'readwrite' },
+      'its transaction opened before the close');
+    await runUntil(env, editor.flushSave());
+
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed just before the upgrade' }, 'committed');
+    assert.equal(editor.saveTimeout, null);
+    assert.equal(editor._retryPending, false, 'nothing retries');
+    assert.equal(editor.root.querySelector('.reload-notice'), null, 'no notice until the next edit');
+    assert.equal(feedback.statuses.at(-1), 'Saved');
+
+    type(editor, 'typed after it');
+    await runUntil(env, editor.flushSave());
+    assert.ok(editor.root.querySelector('.reload-notice'), 'the next edit shows the reload notice');
+    assert.equal(editor._retryPending, false, 'and nothing retries');
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed just before the upgrade' });
+  });
+
+  it('with nothing pending, the upgrade writes nothing before the connection closes', async () => {
+    const { env, Storage } = await newTabOnA();
+    const opened = spyTransactions(Storage);
+    await upgradeElsewhere(env);
+    assert.equal(Storage.openState, 'version-changed');
+    assert.deepEqual(writesOf(opened), []);
+  });
+
+  it('a save after another context upgraded the database keeps the text and shows the reload notice', async () => {
+    const { env, Storage, navigation, editor, feedback } = await newTabOnA();
+    await upgradeElsewhere(env);
+    assert.equal(Storage.openState, 'version-changed');
+
+    type(editor, 'typed after the upgrade');
+    await runUntil(env, editor.flushSave());
+
+    assert.equal(editor.blocks[0].content, 'typed after the upgrade', 'the text stays on screen');
+    assert.equal(editor.noteId, 'A');
+    assert.equal(editor._retryPending, false, 'no retry, which would fail the same way');
+    const notice = editor.root.querySelector('.reload-notice');
+    assert.ok(notice, 'the reload notice shows');
+    assert.equal(notice.getAttribute('role'), 'alert');
+    assert.equal(notice.querySelector('.note-gone-text').textContent,
+      "This page lost its connection to your notes, so these changes aren't saved. Copy anything you need, then reload.");
+    assert.equal(notice.querySelector('.note-gone-btn').textContent, 'Reload');
+    assert.equal(feedback.statuses.at(-1), 'Not saved');
+    assert.deepEqual(feedback.toasts, []);
+
+    // Another edit keeps the one notice
+    type(editor, 'typed again');
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.root.querySelectorAll('.reload-notice').length, 1);
+
+    notice.querySelector('.note-gone-btn').click();
+    assert.deepEqual(navigation.calls.filter(([method]) => method === 'reloadPage'), [['reloadPage']]);
   });
 });

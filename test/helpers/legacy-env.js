@@ -596,6 +596,7 @@ function createLegacyEnv(options = {}) {
     Blob,
     FileReader: FakeFileReader,
     structuredClone,
+    DOMException,
     atob,
     btoa,
     TextEncoder,
@@ -872,20 +873,89 @@ function quietNavigation() {
     openNote: record('openNote'),
     openNoteByName: record('openNoteByName'),
     noteReplaced: async (...args) => { calls.push(['noteReplaced', ...args]); },
+    reloadPage: record('reloadPage'),
   };
 }
 
 /**
- * A BlockEditor without its DOM constructor: real persistence and Storage,
- * render methods stubbed. Its root is a pane (`.editor-pane`, active unless
- * `root` is given) holding the writing column (`.editor`) with the title and
+ * The page's document client as its editors get it: each call goes to `client`, and what a
+ * read answers is copied into this realm, as fake-indexeddb's answers to Storage always were,
+ * so a test compares it with its own arrays. Its methods can be replaced, so a test can make
+ * a save fail the way a full disk does.
+ * @param {Object} client - js/kernel/composition/document.js's, made in the page
+ * @returns {Object}
+ */
+function testDocumentClient(client) {
+  const copied = (read) => async (...args) => plain(await read(...args));
+  return {
+    openNote: copied(client.openNote),
+    readNote: copied(client.readNote),
+    backlinks: copied(client.backlinks),
+    noteNames: copied(client.noteNames),
+    templates: copied(client.templates),
+    blocksOf: copied(client.blocksOf),
+    saveContent: (save) => client.saveContent(save),
+    deleteBlocks: (noteId, blockIds) => client.deleteBlocks(noteId, blockIds),
+    createNote: (fields) => client.createNote(fields),
+    newId: () => client.newId(),
+    beforeConnectionCloses: (flush) => client.beforeConnectionCloses(flush),
+  };
+}
+
+/**
+ * Make the document client the page's editors read and write through
+ * (test/helpers/editor-client.mjs): a new tab's kernel over the page's Storage, which has
+ * to have started. Each editor makeEditor makes for the page gets it. It takes
+ * test/helpers/page-module.js, so node runs with --experimental-vm-modules (npm test
+ * passes it).
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<Object>} the client
+ */
+async function startEditorClient(env) {
+  const { loadPageModule } = require('./page-module');
+  const { editorClientFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
+  env.documentClient = testDocumentClient(
+    editorClientFor({ storage: env.get('Storage'), settings: env.chrome.api.storage.local }),
+  );
+  return env.documentClient;
+}
+
+/**
+ * Start the page's kernel the way the new tab's root does (js/kernel/composition/newtab.js):
+ * it opens Storage itself, versioned and watching its connection, and runs startup
+ * maintenance. Its document client becomes the one makeEditor gives editors. Storage must not
+ * have started.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<Object>} the document client, once the kernel is ready
+ */
+async function startNewTabKernel(env) {
+  const { loadPageModule } = require('./page-module');
+  const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  const host = { storage: env.get('Storage'), settings: env.chrome.api.storage.local };
+  const kernel = root.createNewTabClient(host);
+  const failure = await kernel.whenReady();
+  if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
+  env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, host));
+  return env.documentClient;
+}
+
+/**
+ * A BlockEditor without its DOM constructor: real persistence through the page's document
+ * client (startEditorClient), render methods stubbed. Its root is a pane (`.editor-pane`,
+ * active unless `root` is given) holding the writing column (`.editor`) with the title and
  * the blocks container, where the editor puts its own notices.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {FakeDocument} [doc] - Its own document, as the PiP window has
- * @param {{root?: FakeElement|null, navigation?: Object}} [options] - The pane element to use, as
- *   App passes #editor-container, and the navigation port, quietNavigation() unless given
+ * @param {{root?: FakeElement|null, navigation?: Object, documentClient?: Object}} [options] - The
+ *   pane element to use, as App passes #editor-container, the navigation port,
+ *   quietNavigation() unless given, and the document client, the page's unless given
  */
-function makeEditor(env, doc = env.document, { root: pane = null, navigation = quietNavigation() } = {}) {
+function makeEditor(env, doc = env.document, {
+  root: pane = null,
+  navigation = quietNavigation(),
+  documentClient = env.documentClient,
+} = {}) {
+  if (!documentClient) throw new Error('makeEditor: await startEditorClient(env) first, once Storage has started');
   const BlockEditor = env.get('BlockEditor');
   const editor = Object.create(BlockEditor.prototype);
   const root = pane || doc.createElement('div');
@@ -900,6 +970,7 @@ function makeEditor(env, doc = env.document, { root: pane = null, navigation = q
     root,
     doc,
     navigation,
+    documentClient,
     noteId: null,
     noteData: null,
     blocks: [],
@@ -973,6 +1044,7 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
+  await startEditorClient(env);
   const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',
@@ -1034,6 +1106,8 @@ module.exports = {
   createLockManager,
   createChannelBus,
   makeEditor,
+  startEditorClient,
+  startNewTabKernel,
   quietNavigation,
   runUntil,
   bootNewTab,

@@ -91,6 +91,12 @@ class DatabaseManager {
      * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'|'version-changed'|'closed-by-browser'}
      */
     this.openState = 'closed';
+    /**
+     * What runs when another context upgrades the database, before a watched connection
+     * closes (beforeConnectionCloses)
+     * @type {Set<() => void>}
+     */
+    this._closeFlushers = new Set();
     /** @type {number|null} Version of the database on disk, read before opening */
     this.onDiskVersion = null;
     /** @type {Array<string>} Stores a version-8 database is missing */
@@ -188,10 +194,9 @@ class DatabaseManager {
    *
    * With `watchConnection`, the connection closes when another context upgrades
    * or deletes the database, as openExisting()'s does, and openState says so:
-   * 'version-changed', or 'closed-by-browser' when Chrome closed it. Only the
-   * service worker asks for it, and it opens again on its next capture. A page's
-   * connection waits out the other context's upgrade, as before, until #12
-   * slice 4b moves the new tab's editor to its kernel.
+   * 'version-changed', or 'closed-by-browser' when Chrome closed it. The kernel's
+   * legacy adapter asks for it: the service worker opens again on its next
+   * capture, and the new tab's editor keeps its text and asks for a reload.
    * @param {{watchConnection?: boolean}} [options]
    * @returns {Promise<void>}
    */
@@ -282,6 +287,9 @@ class DatabaseManager {
    */
   _watchConnection(db) {
     db.onversionchange = () => {
+      // The page's pending saves go first: each opens its transaction now, which the close
+      // lets finish
+      if (this.db === db) this._runCloseFlushers();
       db.close();
       if (this.db === db) this.openState = 'version-changed';
     };
@@ -289,6 +297,34 @@ class DatabaseManager {
     db.onclose = () => {
       if (this.db === db) this.openState = 'closed-by-browser';
     };
+  }
+
+  /**
+   * Run `flush` when another context upgrades or deletes the database, right before a watched
+   * connection closes: the new tab's editors write what they have pending, each opening its
+   * transaction before `flush` returns, so it commits before the connection goes. A
+   * connection Chrome closes itself is gone already, so nothing runs then.
+   * @param {() => void} flush - Synchronous; what it throws is logged
+   * @returns {() => void} Stops running it
+   */
+  beforeConnectionCloses(flush) {
+    this._closeFlushers.add(flush);
+    return () => {
+      this._closeFlushers.delete(flush);
+    };
+  }
+
+  /**
+   * @returns {void}
+   */
+  _runCloseFlushers() {
+    for (const flush of Array.from(this._closeFlushers)) {
+      try {
+        flush();
+      } catch (error) {
+        console.error('A save before the notes database closed failed:', error);
+      }
+    }
   }
 
   /**

@@ -212,7 +212,8 @@ describe('scripts/module-preloads.js', () => {
       const expected = modulePreloads.expectedPreloads(graph, page);
       assert.ok(expected.length > 0 && expected.every(href => href.startsWith('js/kernel/')), `${page}: ${expected}`);
       // The composition root is one import deep, so the page finds it as soon as its own script loads
-      assert.ok(!expected.some(href => href.startsWith('js/kernel/composition/') && href !== 'js/kernel/composition/host.js'), page);
+      const roots = ['newtab', 'popup', 'sidepanel', 'background'].map(name => `js/kernel/composition/${name}.js`);
+      assert.ok(!expected.some(href => roots.includes(href)), page);
       assert.deepEqual(preloadLinks(fs.readFileSync(path.join(ROOT, page), 'utf8')), expected, page);
     }
     assert.deepEqual(modulePreloads.expectedPreloads(graph, 'offscreen.html'), []);

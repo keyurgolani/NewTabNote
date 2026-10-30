@@ -8,7 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument,
-  makeEditor, runUntil, shownTabs,
+  makeEditor, runUntil, shownTabs, startEditorClient,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -558,6 +558,7 @@ describe('Replace all (AC4)', () => {
     page.load(...FILES);
     const reloaded = page.get('Storage');
     await reloaded.init();
+    await startEditorClient(page);
     page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
     const restored = new (page.get('TabController'))({ storage: reloaded, eventBus: null, domRefs: null, logger: null });
     restored.editor = makeEditor(page, page.document);
@@ -771,6 +772,7 @@ async function replaceAll(env, controller, data) {
 }
 
 async function openEditors(env, Storage) {
+  if (!env.documentClient) await startEditorClient(env);
   const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';

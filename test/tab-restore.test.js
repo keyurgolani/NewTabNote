@@ -9,7 +9,7 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, plain, note, block, makeEditor } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, plain, note, block, makeEditor, startEditorClient } = require('./helpers/legacy-env');
 
 const FILES = [
   'js/utils.js',
@@ -65,6 +65,7 @@ async function start(env) {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  await startEditorClient(env);
   const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';

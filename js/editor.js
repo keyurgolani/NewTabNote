@@ -38,6 +38,7 @@ const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image
  * @property {(name: string) => void} openNoteByName - Open the note a wiki link names
  * @property {(editor: BlockEditor, goneId: string, note: Object) => Promise<void>} noteReplaced
  *   The editor saved a deleted note's text as `note`, so the tab that showed it follows
+ * @property {() => void} reloadPage - Reload the new tab, which opens the notes database again
  */
 
 /**
@@ -50,6 +51,7 @@ const NO_NAVIGATION = Object.freeze({
   openNote() {},
   openNoteByName() {},
   noteReplaced: async () => {},
+  reloadPage() {},
 });
 
 /**
@@ -61,8 +63,20 @@ const NO_NAVIGATION = Object.freeze({
  * @property {string} noteId
  * @property {Object} noteData - The note record, shared with the editor while that note is loaded
  * @property {Array<Object>|null} blocks - Serialized blocks with `canvasId` and `order` set, once taken
+ * @property {EditorTitle|null} title - The title set since the note's last save, taken with the blocks
  * @property {boolean} written - True once this state's transaction has been opened
  * @property {boolean} isRetry - The retry after a failed save; failing again shows the error toast
+ * @property {boolean} [beforeClose] - Written as the page's connection closed for another
+ *   context's upgrade (beforeConnectionCloses): its transaction opened first, so it commits
+ */
+
+/**
+ * A title set in the editor that no save has stored yet. The save that takes it writes it with
+ * the blocks, as 1.4.x's save wrote the note's name with them.
+ * @typedef {Object} EditorTitle
+ * @property {string} noteId
+ * @property {string} name
+ * @property {'typed'|'generated'} origin - typed by the user, or set by the AI (setTitleProgrammatically)
  */
 
 class BlockEditor {
@@ -75,6 +89,12 @@ class BlockEditor {
     this.onChange = config.onChange || null;
     /** @type {EditorNavigation} */
     this.navigation = config.navigation || NO_NAVIGATION;
+    /**
+     * What it reads and writes its note through: js/kernel/composition/document.js, over the
+     * page's kernel, which App gives every editor in place of Storage
+     * @type {any}
+     */
+    this.documentClient = config.documentClient || null;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -280,8 +300,9 @@ class BlockEditor {
     let blocksData = [];
     let keepEditorCopy = false;
     for (let round = 0; ; round++) {
-      noteData = await Storage.getNote(noteId);
-      blocksData = noteData ? await Storage.getElementsByNote(noteId) : [];
+      const opened = await this.documentClient.openNote(noteId);
+      noteData = opened ? opened.note : null;
+      blocksData = opened ? opened.blocks : [];
       if (loadSeq !== this._loadSeq) return false;
       // Switching notes, or nothing written since the reads started: they are current.
       if (noteId !== this.noteId || !this._hasPendingSave()) break;
@@ -311,6 +332,8 @@ class BlockEditor {
     }
 
     this._clearNoteGone();
+    // A title still unsaved belongs to the note it was set on, whose failed save keeps it
+    this._unsavedTitle = null;
     this.noteId = noteId;
     this.noteData = noteData;
     this.blocks = blocksData
@@ -1144,7 +1167,7 @@ class BlockEditor {
     });
 
     this.blocks.splice(index, 1);
-    Storage.deleteElement(blockId);
+    this._deleteStoredBlocks([blockId]);
 
     // Remove DOM element incrementally instead of full re-render (Req 50.2)
     const focusIndex = Math.max(0, index - 1);
@@ -1310,6 +1333,7 @@ class BlockEditor {
       // (not just the initial load or auto-title update)
       if (oldTitle !== newTitle && !this.isAutoTitleUpdate) {
         this.noteData.titleManuallySet = true;
+        this._titleSet(newTitle, 'typed');
       }
 
       this.scheduleSave();
@@ -1334,6 +1358,7 @@ class BlockEditor {
       }
       this.titleEl.textContent = title;
       this.isAutoTitleUpdate = false;
+      this._titleSet(title, 'generated');
 
       this.scheduleSave();
 
@@ -1523,7 +1548,7 @@ class BlockEditor {
     const lastTwo = textBefore.slice(-2);
     if (lastTwo === '[[' && !this.wikiMenuVisible) {
       // Get all note names for autocomplete
-      this.noteNames = await Storage.getNoteNames();
+      this.noteNames = await this.documentClient.noteNames();
       this.showWikiMenu(contentEl.closest('.block'));
       return;
     }
@@ -1703,7 +1728,7 @@ class BlockEditor {
 
     // Check for /template
     if (text === '/template') {
-      this.templates = await Storage.getTemplates();
+      this.templates = await this.documentClient.templates();
       this.showTemplateMenu(contentEl.closest('.block'));
       return;
     }
@@ -1776,7 +1801,8 @@ class BlockEditor {
    * Select a template to insert
    */
   async selectTemplateItem(templateId) {
-    const templateBlocks = await Storage.getElementsByNote(templateId);
+    // In the order the template shows them, as getNoteBlocks lists a note's blocks
+    const templateBlocks = await this.documentClient.blocksOf(templateId);
     if (!templateBlocks || templateBlocks.length === 0) {
       this.hideTemplateMenu();
       return;
@@ -1822,15 +1848,15 @@ class BlockEditor {
     // Add blocks to the list at the correct position
     this.blocks.splice(currentBlockIndex + 1, 0, ...newBlocks);
 
-    // Save all new blocks
     for (let i = 0; i < this.blocks.length; i++) {
       this.blocks[i].order = i;
-      await Storage.saveElement(this.blocks[i].serialize());
     }
 
     this.renderBlocks();
     this.hideTemplateMenu();
+    // The inserted blocks are saved now, with the rest of the note, as saveNoteContent saves them
     this.scheduleSave();
+    this.save();
 
     // Focus first inserted block
     if (newBlocks.length > 0) {
@@ -2502,7 +2528,7 @@ class BlockEditor {
           const idx = this.blocks.findIndex(b => b.id === entry.blockId);
           if (idx !== -1) {
             this.blocks.splice(idx, 1);
-            Storage.deleteElement(entry.blockId);
+            this._deleteStoredBlocks([entry.blockId]);
           }
         } else {
           // Redo add → re-insert the block
@@ -2527,7 +2553,7 @@ class BlockEditor {
           const idx = this.blocks.findIndex(b => b.id === entry.blockId);
           if (idx !== -1) {
             this.blocks.splice(idx, 1);
-            Storage.deleteElement(entry.blockId);
+            this._deleteStoredBlocks([entry.blockId]);
           }
         }
         break;
@@ -3629,7 +3655,7 @@ class BlockEditor {
       return;
     }
 
-    const backlinks = await Storage.getBacklinks(this.noteId);
+    const backlinks = await this.documentClient.backlinks(this.noteId);
 
     if (backlinks.length === 0) {
       panel.classList.add('hidden');
@@ -3698,6 +3724,48 @@ class BlockEditor {
     this._savingAsNew = null;
     /** @type {Set<string>} Deleted notes whose text "Save as a new note" saved under a new ID */
     this._rescuedIds = new Set();
+    /** @type {EditorTitle|null} The title set since its note's last save, which every save of that note carries until one stores it */
+    this._unsavedTitle = null;
+    /** True once a save found the page's connection to the notes database gone: only a reload opens it again */
+    this.reloadRequired = false;
+    /** @type {HTMLElement|null} The notice that says so, with Reload */
+    this._reloadNotice = null;
+  }
+
+  /**
+   * A title was set on the loaded note, so its next save writes it. A title the AI sets after
+   * one the user typed stays typed, as 1.4.x's save kept `titleManuallySet` once the user had
+   * typed one.
+   * @param {string} name
+   * @param {'typed'|'generated'} origin
+   * @returns {void}
+   */
+  _titleSet(name, origin) {
+    if (!this.noteId) return;
+    const pending = this._unsavedTitle;
+    const typed = origin === 'typed' || Boolean(pending && pending.noteId === this.noteId && pending.origin === 'typed');
+    /** @type {EditorTitle} */
+    const title = { noteId: this.noteId, name, origin: typed ? 'typed' : 'generated' };
+    this._unsavedTitle = title;
+  }
+
+  /**
+   * Delete blocks the user deleted from the loaded note, as their own command. Its transaction
+   * opens before this returns, so a save that starts later can't write the blocks back.
+   * @param {Array<string>} blockIds
+   * @returns {Promise<void>}
+   */
+  _deleteStoredBlocks(blockIds) {
+    if (!this.noteId || blockIds.length === 0) return Promise.resolve();
+    return this.documentClient.deleteBlocks(this.noteId, blockIds).then((outcome) => {
+      if (outcome.kind === 'committed') return;
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
+        this._onReloadRequired();
+        return;
+      }
+      // Codes only, never what the blocks hold
+      console.error('Failed to delete blocks:', outcome.kind, outcome.code);
+    });
   }
 
   /**
@@ -3842,7 +3910,9 @@ class BlockEditor {
    */
   _captureSaveState(isRetry = false) {
     if (!this.noteId || !this.noteData) return null;
-    return { seq: ++this._saveSeq, noteId: this.noteId, noteData: this.noteData, blocks: null, written: false, isRetry };
+    return {
+      seq: ++this._saveSeq, noteId: this.noteId, noteData: this.noteData, blocks: null, title: null, written: false, isRetry,
+    };
   }
 
   /**
@@ -3856,6 +3926,8 @@ class BlockEditor {
     if (this.noteId !== state.noteId || !this.noteData) return false;
     const noteId = state.noteId;
     state.noteData = this.noteData;
+    const title = this._unsavedTitle;
+    state.title = title && title.noteId === noteId ? title : null;
     state.blocks = this.blocks.map((block, index) => {
       const data = block.serialize();
       // Field name 'canvasId' kept for backward compatibility
@@ -3913,12 +3985,7 @@ class BlockEditor {
       }
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      // null: the note was deleted meanwhile, so nothing was written and nothing is retried.
-      if (!(await this._writeSaveState(state))) {
-        this._onNoteGone(state);
-        return;
-      }
-      await this._afterSaveWrite(state, meta.text);
+      this._afterSaveWrite(state, await this._writeSaveState(state, meta));
     } catch (error) {
       this._onSaveFailed(error, state);
     }
@@ -3968,36 +4035,67 @@ class BlockEditor {
   }
 
   /**
-   * Open the note-and-blocks transaction for a captured state.
+   * Save a captured state with saveNoteContent: its blocks, what the editor derived from them,
+   * a title set since the last save, and the note names its wiki links hold. The command opens
+   * its note-and-blocks transaction before this returns, and writes no other note field, so a
+   * pin, folder move, or template conversion made meanwhile stays. The search entry's name and
+   * the links follow in the same command, as 1.4.x's save updated them after the note.
    * @param {EditorSaveState} state
-   * @returns {Promise<Object|null>} The note, or null when it no longer exists and nothing was written
+   * @param {{preview: string, todoProgress: Object|null, text: string}} meta
+   * @returns {Promise<'saved'|'gone'|'reload'>} 'gone' when the note no longer exists and nothing
+   *   was written, 'reload' when the page lost its connection to the database; rejects when the
+   *   save failed otherwise
    */
-  _writeSaveState(state) {
+  _writeSaveState(state, meta) {
     state.written = true;
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
-    return editorStorage().saveNoteWithBlocks(state.noteData, state.blocks);
+    const save = {
+      noteId: state.noteId,
+      blocks: state.blocks,
+      preview: meta.preview,
+      todoProgress: meta.todoProgress,
+      linkedNames: Utils.extractWikiLinks(meta.text),
+    };
+    if (state.title) Object.assign(save, { name: state.title.name, titleOrigin: state.title.origin });
+    return this.documentClient.saveContent(save).then((outcome) => {
+      if (outcome.kind === 'committed') return 'saved';
+      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'gone';
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return 'reload';
+      // Its kind and code, never the note's content
+      throw new Error(`The save was not stored (${outcome.kind}: ${outcome.code})`);
+    });
   }
 
   /**
-   * Writes that follow once the note and its blocks are stored.
+   * What follows a save's answer: "Saved", and search indexing and the sidebar's preview
+   * catching up; or the notice for a deleted note, or for a page that has to reload.
    * @param {EditorSaveState} state
-   * @param {string} text - All block text, for wiki links
-   * @returns {Promise<void>}
+   * @param {'saved'|'gone'|'reload'} result
+   * @returns {void}
    */
-  async _afterSaveWrite(state, text) {
-    const storage = editorStorage();
-    if (state.noteData.name !== undefined) {
-      await storage.updateNoteNameInSearchIndex(state.noteId, state.noteData.name);
+  _afterSaveWrite(state, result) {
+    if (result === 'gone') {
+      this._onNoteGone(state);
+      return;
     }
-
-    // Update bidirectional links
-    await storage.updateNoteLinks(state.noteId, Utils.extractWikiLinks(text));
-
-    this.updateSaveStatus('Saved');
-
-    // Search indexing and the sidebar's preview catch up
+    if (result === 'reload' && state.beforeClose) {
+      // Its note-and-blocks transaction opened before the connection closed, which lets it
+      // finish; only the search entry and links that follow it couldn't be written. The page
+      // can't read or write anything more, so the next edit gets the reload notice.
+      if (state.title && this._unsavedTitle === state.title) this._unsavedTitle = null;
+      if (!this.reloadRequired) this.updateSaveStatus('Saved');
+      return;
+    }
+    if (result === 'reload') {
+      this._onReloadRequired();
+      return;
+    }
+    // The title it carried is stored, unless a newer one was set meanwhile
+    if (state.title && this._unsavedTitle === state.title) this._unsavedTitle = null;
+    state.noteData.updatedAt = Date.now();
+    if (!this.reloadRequired) this.updateSaveStatus('Saved');
     this.navigation.noteSaved(state.noteData);
   }
 
@@ -4052,9 +4150,17 @@ class BlockEditor {
     doc.addEventListener('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') this._writePendingNow();
     });
+    // Another context's upgrade closes the page's connection; what is pending goes first
+    const stop = this.documentClient && typeof this.documentClient.beforeConnectionCloses === 'function'
+      ? this.documentClient.beforeConnectionCloses(() => this._writePendingNow({ beforeClose: true }))
+      : null;
     const win = doc.defaultView;
     if (win) {
-      win.addEventListener('pagehide', () => this._writePendingNow());
+      win.addEventListener('pagehide', () => {
+        this._writePendingNow();
+        // A PiP window that closes takes its editor with it
+        if (stop && win !== globalThis) stop();
+      });
     }
   }
 
@@ -4066,9 +4172,10 @@ class BlockEditor {
    * pages don't run rAF and closing pages don't wait, so the metadata is
    * computed here and the transactions open before this returns.
    * Writes nothing when nothing is pending.
+   * @param {{beforeClose?: boolean}} [options] - `beforeClose` as the page's connection closes
    * @returns {void}
    */
-  _writePendingNow() {
+  _writePendingNow({ beforeClose = false } = {}) {
     const waiting = this._activeSaves()
       .map((entry) => entry.state)
       .filter((state) => !state.written && state.noteId === this.noteId);
@@ -4076,12 +4183,14 @@ class BlockEditor {
     if (!due && waiting.length === 0) return;
 
     const work = due ? this._takeDueWork() : { loaded: false, loadedIsRetry: false, others: [] };
-    for (const copy of work.others) this._rewrite(copy);
+    for (const copy of work.others) this._rewrite(copy, beforeClose);
     if (!work.loaded && waiting.length === 0) return;
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
     const state = this._captureSaveState(isRetry);
-    if (state && this._takeBlockSnapshot(state)) this._writeNow(state);
+    if (!state || !this._takeBlockSnapshot(state)) return;
+    state.beforeClose = beforeClose;
+    this._writeNow(state);
   }
 
   /**
@@ -4089,10 +4198,11 @@ class BlockEditor {
    * that note. It keeps its capture order, so it can't supersede a newer save
    * of the note.
    * @param {EditorSaveState} copy
+   * @param {boolean} [beforeClose=false]
    * @returns {Promise<void>}
    */
-  _rewrite(copy) {
-    return this._writeNow({ ...copy, written: false, isRetry: true });
+  _rewrite(copy, beforeClose = false) {
+    return this._writeNow({ ...copy, written: false, isRetry: true, beforeClose });
   }
 
   /**
@@ -4106,11 +4216,7 @@ class BlockEditor {
     try {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      work = this._writeSaveState(state).then((saved) => {
-        if (saved) return this._afterSaveWrite(state, meta.text);
-        this._onNoteGone(state);
-        return undefined;
-      });
+      work = this._writeSaveState(state, meta).then((result) => this._afterSaveWrite(state, result));
     } catch (error) {
       work = Promise.reject(error);
     }
@@ -4207,6 +4313,36 @@ class BlockEditor {
   }
 
   /**
+   * A save or delete found the page's connection to the notes database gone: another context
+   * upgraded or deleted the database, or Chrome closed the connection. Nothing is written, and
+   * nothing is retried, since only a reload opens the database again. The text stays on screen
+   * with a notice, in the deleted-note notice's form, whose Reload reloads the page.
+   * @returns {void}
+   */
+  _onReloadRequired() {
+    this.reloadRequired = true;
+    this.updateSaveStatus('Not saved');
+    if (this._reloadNotice) return;
+
+    const notice = this.doc.createElement('div');
+    notice.className = 'note-gone-notice reload-notice';
+    notice.setAttribute('role', 'alert');
+    const text = this.doc.createElement('p');
+    text.className = 'note-gone-text';
+    text.textContent = "This page lost its connection to your notes, so these changes aren't saved. Copy anything you need, then reload.";
+    const button = this.doc.createElement('button');
+    button.type = 'button';
+    button.className = 'primary-btn note-gone-btn';
+    button.textContent = 'Reload';
+    button.addEventListener('click', () => this.navigation.reloadPage());
+    notice.appendChild(text);
+    notice.appendChild(button);
+    const column = this.root.querySelector('.editor') || this.root;
+    column.insertBefore(notice, column.firstChild);
+    this._reloadNotice = notice;
+  }
+
+  /**
    * "Save as a new note": a deleted note's text, still on screen, becomes a new
    * active note with the same title, pin, and folder if it still exists. The
    * editor keeps its blocks, under new IDs so they never share a record with
@@ -4229,23 +4365,31 @@ class BlockEditor {
   async _saveAsNewNote() {
     const goneId = this.noteId;
     const gone = this.noteData || {};
-    // Its folder only while that's still there (Replace all takes folders too): a note in a missing folder shows nowhere
-    const folder = gone.folderId ? await editorStorage().getFolder(gone.folderId).catch(() => null) : null;
-    let note;
-    try {
-      note = await editorStorage().createNote(gone.name || 'Untitled');
-    } catch (error) {
-      console.error('Save as a new note failed:', error);
-      Utils.showToast("Couldn't save this as a new note. Try again.", 'error');
+    const fields = {
+      noteId: this.documentClient.newId(),
+      name: gone.name || 'Untitled',
+      pinned: Boolean(gone.pinned),
+      titleManuallySet: Boolean(gone.titleManuallySet),
+    };
+    // Its folder while that's still there (Replace all takes folders too), else the root: a note in a missing folder shows nowhere
+    let outcome = await this.documentClient.createNote({ ...fields, folderId: gone.folderId || null });
+    if (outcome.kind === 'rejected' && outcome.code === 'folder-not-found') {
+      outcome = await this.documentClient.createNote({ ...fields, folderId: null });
+    }
+    if (outcome.kind !== 'committed') {
+      console.error('Save as a new note failed:', outcome.kind, outcome.code);
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') this._onReloadRequired();
+      else Utils.showToast("Couldn't save this as a new note. Try again.", 'error');
       return;
     }
-    note.titleManuallySet = Boolean(gone.titleManuallySet);
-    note.folderId = folder ? folder.id : null;
-    note.pinned = Boolean(gone.pinned);
+    const note = await this.documentClient.readNote(fields.noteId).catch(() => null)
+      || { id: fields.noteId, name: fields.name, pinned: fields.pinned, titleManuallySet: fields.titleManuallySet };
     // The deleted note's pending and failed saves can't land anywhere; the new note gets all the text.
     this._takePendingSave();
     this._retryCopies.delete(goneId);
     this._rescuedIds.add(goneId);
+    // The new note has the title already
+    this._unsavedTitle = null;
     this.noteId = note.id;
     this.noteData = note;
     for (const block of this.blocks) block.id = Utils.generateId();
@@ -4461,7 +4605,7 @@ class BlockEditor {
     });
 
     this.blocks = this.blocks.filter(b => !idsToDelete.has(b.id));
-    idsToDelete.forEach(id => Storage.deleteElement(id));
+    this._deleteStoredBlocks([...idsToDelete]);
 
     // Ensure at least one block remains
     if (this.blocks.length === 0) {
