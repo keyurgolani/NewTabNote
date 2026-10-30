@@ -9,8 +9,10 @@
 // records are sorted by key. Values JSON can't hold are tagged objects: Blob {$type, mime,
 // base64}, ArrayBuffer and typed arrays {$type, base64}, Date {$type, iso}, undefined
 // {$type}, Map and Set {$type, entries}, NaN, the infinities and -0 {$type: 'Number', value}.
-// A plain object whose own key is `$type` is escaped as {$type: 'Object', value}. Keys use the
-// same tags. Strings may hold {{CANARY:<slot>}}, filled from `canaries` (default
+// An array with holes or with keys besides its items, which structured clone keeps, is
+// {$type: 'Array', length, items: {<index>: value}, props: {<key>: value}}, listing only the
+// indexes it holds; a dense array with no other key is a plain JSON array. A plain object
+// whose own key is `$type` is escaped as {$type: 'Object', value}. Keys use the same tags. Strings may hold {{CANARY:<slot>}}, filled from `canaries` (default
 // `canary-<slot>`), so no real secret is ever committed.
 //
 // loadFixture opens each database at exactly its version, makes the declared stores and
@@ -111,9 +113,20 @@ export async function encodeValue(value) {
     return { [TAG]: 'Set', entries };
   }
   if (Array.isArray(value)) {
-    const items = [];
-    for (const item of value) items.push(await encodeValue(item));
-    return items;
+    const indexes = Object.keys(value).filter(key => /^(0|[1-9]\d*)$/.test(key));
+    const extra = Object.keys(value).filter(key => !/^(0|[1-9]\d*)$/.test(key));
+    if (indexes.length === value.length && extra.length === 0) {
+      const items = [];
+      for (const item of value) items.push(await encodeValue(item));
+      return items;
+    }
+    /** @type {Record<string, unknown>} */
+    const items = {};
+    for (const index of indexes) items[index] = await encodeValue(value[Number(index)]);
+    /** @type {Record<string, unknown>} */
+    const props = {};
+    for (const key of extra) props[key] = await encodeValue(/** @type {any} */ (value)[key]);
+    return { [TAG]: 'Array', length: value.length, items, props };
   }
   const record = /** @type {Record<string, unknown>} */ (value);
   /** @type {Record<string, unknown>} */
@@ -148,6 +161,13 @@ export function decodeValue(value) {
         return new Map(record.entries.map((/** @type {[unknown, unknown]} */ [key, item]) => [decodeValue(key), decodeValue(item)]));
       case 'Set':
         return new Set(record.entries.map(decodeValue));
+      case 'Array': {
+        /** @type {any[]} */
+        const out = new Array(record.length);
+        for (const [index, item] of Object.entries(record.items || {})) out[Number(index)] = decodeValue(item);
+        for (const [key, item] of Object.entries(record.props || {})) /** @type {any} */ (out)[key] = decodeValue(item);
+        return out;
+      }
       case 'Object': {
         /** @type {Record<string, unknown>} */
         const out = {};
