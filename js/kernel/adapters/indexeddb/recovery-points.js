@@ -431,6 +431,29 @@ export async function verifyPoint({ recovery, point, io }) {
 }
 
 /**
+ * Every row a point holds for `store`, as copied, read back in bounded batches
+ * @param {IDBDatabase} recovery
+ * @param {Point} point
+ * @param {string} store
+ * @param {Pick<Io, 'keyRange' | 'limits'>} io
+ * @returns {Promise<Array<{key: IDBValidKey, value: any}>>}
+ */
+export async function readPointStore(recovery, point, store, io) {
+  /** @type {Array<{key: IDBValidKey, value: any}>} */
+  const rows = [];
+  /** @type {IDBValidKey | null} */
+  let after = null;
+  const range = rowRange(io.keyRange, point.id, store);
+  for (;;) {
+    const batch = await readBatch(recovery, ROWS_STORE, after, range, io);
+    for (const { value: row } of batch.entries) rows.push({ key: row.key, value: row.value });
+    if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
+    if (batch.end || batch.entries.length === 0) break;
+  }
+  return rows;
+}
+
+/**
  * Deletes a point: its rows in bounded batches, then its record and progress
  * @param {IDBDatabase} recovery
  * @param {string} pointId
