@@ -384,6 +384,10 @@ describe('eslint.config.mjs boundary rules', () => {
       assert.ok(message.startsWith(`[${rule}] `), `${ruleId} message should start with [${rule}]: ${message}`);
     }
     assert.equal(boundaries.ruleOf({ ruleId: 'no-undef', message: "'chrome' is not defined." }), 'core-global');
+    assert.equal(
+      boundaries.ruleOf({ ruleId: 'no-undef', message: "'chrome' is not defined." }, 'js/kernel/registry/probe.js'),
+      'registry-global',
+    );
   });
 
   it("matches today's hits in js/ to docs/architecture/kernel-ledger.json", async () => {
@@ -500,6 +504,50 @@ describe('eslint.config.mjs boundary rules', () => {
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/core\/event-bus\.js/);
     assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 25, output);
+  });
+
+  it("keeps #15's registry kit host-neutral in a copy of js/: no browser API, legacy global, or outside import", async () => {
+    const root = tempRoot();
+    fs.cpSync(path.join(ROOT, 'js'), path.join(root, 'js'), { recursive: true });
+    fs.cpSync(path.join(ROOT, 'eslint.config.mjs'), path.join(root, 'eslint.config.mjs'));
+    fs.cpSync(path.join(ROOT, 'docs', 'architecture'), path.join(root, 'docs', 'architecture'), { recursive: true });
+    const write = (file, text) => {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), text);
+    };
+    write('js/kernel/registry/probe.js', [
+      "import '../core/contracts/limits.js';",
+      "import '../../storage.js';",
+      "import 'https://cdn.example.test/registry.js';",
+      'export const later = name => import(`./${name}.js`);',
+      // Allowed: the kit itself and the vendored Valibot
+      "import { isId } from './ids.js';",
+      "import * as v from '../../lib/valibot/index.mjs';",
+      "import '/js/kernel/registry/chords.js';",
+      // Each a browser API or legacy global
+      'export const id = () => chrome.runtime.id;',
+      "export const get = () => fetch('https://example.test/');",
+      "export const open = () => indexedDB.open('probe');",
+      'export const read = () => Storage.getSetting;',
+      'export const kind = typeof document;',
+      'export const all = globalThis;',
+      'export const wait = () => setTimeout(() => {}, 1);',
+      // ECMAScript's own globals are fine
+      'export const ok = [isId, v, new Map(), Promise.resolve(), JSON.stringify({}), Object.freeze([])];',
+    ].join('\n'));
+
+    const lines = [];
+    const code = await boundaries.main([], { root, log: line => lines.push(line), error: line => lines.push(line) });
+    const output = lines.join('\n');
+    assert.equal(code, 1, output);
+    for (const expected of [
+      'js/kernel/registry/probe.js: 4 registry-import hits no ledger row covers',
+      'js/kernel/registry/probe.js: 7 registry-global hits no ledger row covers',
+    ]) {
+      assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
+    }
+    assert.doesNotMatch(output, /core-global|core-import/);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 2, output);
   });
 
   it("counts #17's storage access in a copy of js/: object stores, getStore, blind writes, and chrome.storage.local", async () => {

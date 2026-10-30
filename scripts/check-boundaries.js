@@ -60,6 +60,9 @@ const RULES = {
   'adapter-import': 'an import from js/kernel/adapters/ outside js/kernel/',
   'core-global': 'a browser API or legacy global in js/kernel/core/',
   'core-import': 'an import into js/kernel/core/ from outside it and js/lib/valibot/',
+  // #15's registry kit, host-neutral like core (#15 slice 1)
+  'registry-global': 'a browser API or legacy global in js/kernel/registry/',
+  'registry-import': 'an import into js/kernel/registry/ from outside it and js/lib/valibot/',
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
@@ -135,11 +138,16 @@ function byRowKey(a, b) {
   return byFileThenRule(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
 }
 
+/** Where no-undef counts under registry-global rather than core-global */
+const REGISTRY_DIR = 'js/kernel/registry/';
+
 /**
- * The ledger rule an ESLint message counts under, or null when it isn't a boundary message
+ * The ledger rule an ESLint message in `file` counts under, or null when it isn't a boundary
+ * message. no-undef runs only in kernel core and the registry kit, so its rule is the one for
+ * the directory it's in.
  */
-function ruleOf(message) {
-  if (message.ruleId === 'no-undef') return 'core-global';
+function ruleOf(message, file = '') {
+  if (message.ruleId === 'no-undef') return file.startsWith(REGISTRY_DIR) ? 'registry-global' : 'core-global';
   const tag = /\[([^\]\s]+)\]/.exec(message.message || '');
   return tag && Object.hasOwn(RULES, tag[1]) && tag[1] !== DECLARED_GAP ? tag[1] : null;
 }
@@ -159,7 +167,7 @@ async function lint(root) {
     const file = path.relative(root, result.filePath).split(path.sep).join('/');
     for (const message of result.messages) {
       const at = `${message.line}:${message.column}`;
-      const rule = message.fatal ? null : ruleOf(message);
+      const rule = message.fatal ? null : ruleOf(message, file);
       if (!rule) {
         errors.push(`${file}:${at} ${message.fatal ? "doesn't parse: " : `${message.ruleId || 'eslint'}: `}${message.message}`);
         continue;

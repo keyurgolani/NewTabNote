@@ -9,9 +9,10 @@
  * register. A kernel file missing from dist/ breaks the module graph and boots a blank new
  * tab, so CI runs this on the build the extension job tests.
  *
- * Every module under #13's contract and messaging directories, and Valibot's build, must be
- * in the build too, whether or not anything reached from a page or the worker imports it yet
- * (#13, AC7). A missing one would break whichever context loads it next.
+ * Every module under #13's contract and messaging directories, #15's registry kit, and
+ * Valibot's build, must be in the build too, whether or not anything reached from a page or
+ * the worker imports it yet (#13, AC7). A missing one would break whichever context loads it
+ * next.
  *
  *   npm run check:dist                 check dist/
  *   node scripts/check-dist.js <dir>   check another build
@@ -23,11 +24,15 @@ const { readScriptGraph } = require('./lib/script-graph');
 
 const ROOT_DIR = path.join(__dirname, '..');
 
-/** Source directories whose every .js and .mjs file must be in the build (#13, AC7) */
+/**
+ * Source directories whose every .js and .mjs file must be in the build (#13, AC7), and #15's
+ * registry kit, which no page or worker imports until its first family does
+ */
 const SHIPPED_DIRS = [
   'js/kernel/core/contracts/',
   'js/kernel/core/messaging/',
   'js/kernel/adapters/messaging/',
+  'js/kernel/registry/',
   'js/lib/valibot/',
 ];
 

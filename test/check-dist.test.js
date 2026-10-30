@@ -85,11 +85,12 @@ describe('scripts/check-dist.js', () => {
     assert.match(lines[1], /kernel\/composition\/background\.js is missing/);
   });
 
-  it("fails when a contract or messaging module or Valibot's build is missing, whether anything imports it yet or not (#13, AC7)", () => {
+  it("fails when a contract or messaging module, a registry kit module, or Valibot's build is missing, whether anything imports it yet or not (#13, AC7; #15)", () => {
     assert.deepEqual(checkDist.SHIPPED_DIRS, [
       'js/kernel/core/contracts/',
       'js/kernel/core/messaging/',
       'js/kernel/adapters/messaging/',
+      'js/kernel/registry/',
       'js/lib/valibot/',
     ]);
     // Nothing imports these yet, so only their directories say they're missing
@@ -97,12 +98,14 @@ describe('scripts/check-dist.js', () => {
       'js/kernel/core/contracts/operations/create-note.js': null,
       'js/kernel/core/messaging/hints.js': null,
       'js/kernel/adapters/messaging/status-region.js': null,
+      'js/kernel/registry/resolve.js': null,
     }));
     assertFails(unimported,
-      'check:dist failed: 3 problems in ',
+      'check:dist failed: 4 problems in ',
       'js/kernel/core/contracts/operations/create-note.js is missing; every module under js/kernel/core/contracts/ ships, imported yet or not',
       'js/kernel/core/messaging/hints.js is missing; every module under js/kernel/core/messaging/ ships',
-      'js/kernel/adapters/messaging/status-region.js is missing; every module under js/kernel/adapters/messaging/ ships');
+      'js/kernel/adapters/messaging/status-region.js is missing; every module under js/kernel/adapters/messaging/ ships',
+      'js/kernel/registry/resolve.js is missing; every module under js/kernel/registry/ ships');
     // The worker's router imports these, so what imports them says so too
     const imported = run(packageCopy({ 'js/kernel/core/contracts/codec.js': null, 'js/lib/valibot/index.mjs': null }));
     assertFails(imported,
