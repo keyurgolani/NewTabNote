@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { principalOf } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { MAX_DEPTH, MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
-import { failed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
+import { committed, conflict, failed, rejected, UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { isTransportCode } from '../../js/kernel/core/contracts/transport-codes.js';
 import { check, checkResult, readFrame } from '../../js/kernel/core/contracts/validate.js';
 import { createCatchUp } from '../../js/kernel/core/messaging/catch-up.js';
@@ -416,6 +416,146 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
         assert.ok(
           checkResult(KNOWN[call.name], call.answer).ok,
           `${call.name} answered ${JSON.stringify(call.answer)}`,
+        );
+      }
+    }),
+  );
+
+  it(
+    'the client settles each call once with a ledger too, whatever the records say and however its calls are aborted, timed out, or dropped',
+    seeded(async random => {
+      const scheduler = testScheduler();
+      const coordinator = scriptedCoordinator();
+      /** @type {Map<string, 'committed' | 'conflict' | 'failed' | 'held' | 'absent' | 'odd'>} */
+      const records = new Map();
+      /** @type {Array<() => void>} */
+      const held = [];
+      const ledger = /** @type {import('../../js/kernel/core/ports/idempotency-ledger.js').IdempotencyLedger} */ ({
+        async read(command) {
+          const kind = records.get(command.commandId) ?? 'absent';
+          if (kind === 'held' || random.chance(0.2)) await new Promise(resolve => held.push(() => resolve(undefined)));
+          if (kind === 'failed') throw new UnavailableError('storage', 'read-failed', true);
+          if (kind === 'committed') return { status: 'committed', outcome: committed('fuzzed', []) };
+          if (kind === 'conflict') return { status: 'conflict', outcome: conflict('fuzzed', 1) };
+          // A ledger that answers something no ledger would: a status with an outcome its schema refuses
+          if (kind === 'odd') {
+            return /** @type {any} */ (
+              random.chance(0.8)
+                ? { status: random.pick(['committed', 'conflict']), outcome: anyValue(random) }
+                : anyValue(random)
+            );
+          }
+          return { status: random.chance(0.1) ? 'key-reuse' : 'absent' };
+        },
+      });
+      const client = createClient({
+        transport: coordinator.transport,
+        surface: 'newtab',
+        extensionVersion: VERSION,
+        lookup,
+        ids: testIds('client'),
+        ...scheduler,
+        ledger,
+      });
+      /** @type {Array<{name: string, settled: number, answer?: unknown}>} */
+      const calls = [];
+      /** @type {AbortController[]} */
+      const controllers = [];
+      /** @type {Set<unknown>} */
+      const welcomed = new Set();
+      const call = (/** @type {number} */ serial) => {
+        const base = structuredClone(random.pick(VALID));
+        if ('commandId' in base) {
+          const commandId = `c-${serial}`;
+          base.commandId = commandId;
+          records.set(
+            commandId,
+            random.pick(/** @type {const} */ (['committed', 'conflict', 'failed', 'held', 'absent', 'absent', 'odd'])),
+          );
+        }
+        /** @type {{name: string, settled: number, answer?: unknown}} */
+        const entry = { name: base.type, settled: 0 };
+        calls.push(entry);
+        const controller = new AbortController();
+        controllers.push(controller);
+        const options = { signal: controller.signal, userVisible: random.chance(0.5) };
+        const kind = OPERATIONS[base.type]?.entry.kind ?? 'query';
+        const answer =
+          kind === 'command' ? client.execute(/** @type {any} */ (base), options) : client.query(base, options);
+        void answer.then(result => {
+          entry.settled += 1;
+          entry.answer = result;
+        });
+      };
+      for (let round = 0; round < 150; round += 1) {
+        const last = coordinator.connections.at(-1);
+        switch (random.int(8)) {
+          case 0:
+          case 1:
+            call(round);
+            break;
+          case 2:
+            if (last && !welcomed.has(last)) {
+              welcomed.add(last);
+              try {
+                last.welcome();
+              } catch {
+                // It closed before its welcome
+              }
+            }
+            break;
+          case 3: {
+            const requests = last?.requests() ?? [];
+            if (!last || requests.length === 0) break;
+            const { requestId, payload } = random.pick(requests);
+            const answer = random.pick([
+              () => ({ frame: 'response', requestId, result: committed('fuzzed', []) }),
+              () => ({ frame: 'response', requestId, result: anyValue(random) }),
+              () => ({ frame: 'response', requestId, result: failed('storage', 'fuzzed') }),
+              () => ({
+                frame: 'error',
+                requestId,
+                code: random.pick(['unavailable', 'outcome-unknown', 'invalid-payload']),
+              }),
+              () => ({ frame: 'cancelled', requestId }),
+              () => ({ frame: 'too-late', requestId, outcome: committed('fuzzed', [String(payload?.noteId ?? 'x')]) }),
+            ])();
+            try {
+              last.send(answer);
+            } catch {
+              // It closed
+            }
+            break;
+          }
+          case 4:
+            last?.close();
+            break;
+          case 5:
+            await scheduler.advance(random.pick([10, 600, 2500, 16_000, 31_500]));
+            break;
+          case 6:
+            if (controllers.length > 0) random.pick(controllers).abort();
+            break;
+          default:
+            for (const go of held.splice(0, random.int(held.length + 1))) go();
+        }
+        await settle();
+      }
+      // Everything the ledger holds comes back, and the page goes
+      for (let tries = 0; tries < 20; tries += 1) {
+        for (const go of held.splice(0)) go();
+        await settle();
+      }
+      client.close();
+      for (let tries = 0; calls.some(entry => entry.settled === 0) && tries < 50; tries += 1) {
+        for (const go of held.splice(0)) go();
+        await settle();
+      }
+      for (const entry of calls) {
+        assert.equal(entry.settled, 1, `${entry.name} settled once`);
+        assert.ok(
+          checkResult(KNOWN[entry.name], entry.answer).ok,
+          `${entry.name} answered ${JSON.stringify(entry.answer)}`,
         );
       }
     }),
