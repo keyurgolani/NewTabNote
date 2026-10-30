@@ -156,8 +156,13 @@ class LLMService {
             reject(new Error('Background worker timeout'));
           }, 30000); // 30 second timeout
           
+          // A message never carries a raw credential (#13), and the worker drops headers
+          // anyway. The direct fetch below keeps them.
+          const headers = Object.fromEntries(
+            Object.entries(options.headers || {}).filter(([name]) => name.toLowerCase() !== 'authorization'),
+          );
           chrome.runtime.sendMessage(
-            { type: 'API_REQUEST', url, options },
+            { type: 'API_REQUEST', url, options: { ...options, headers } },
             (response) => {
               clearTimeout(timeoutId);
               
