@@ -474,6 +474,7 @@ function createChromeStub() {
   const notifications = [];
   const tabsCreated = [];
   const setFailures = [];
+  const getFailures = [];
   const later = (fn) => setImmediate(fn);
   const toJson = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 
@@ -496,7 +497,13 @@ function createChromeStub() {
 
   const storageLocal = {
     get(keys, callback) {
-      calls.push({ method: 'get', keys });
+      const failure = getFailures.shift();
+      calls.push({ method: 'get', keys, failed: Boolean(failure) });
+      if (failure) {
+        // As Chrome does, the callback gets no result when the read fails
+        if (callback) { later(() => withLastError(failure, () => callback())); return undefined; }
+        return Promise.reject(failure);
+      }
       let result = {};
       if (keys === null || keys === undefined) {
         result = toJson(local);
@@ -557,6 +564,8 @@ function createChromeStub() {
     tabsCreated,
     /** Make the next chrome.storage.local.set fail with `error` (via runtime.lastError). */
     failNextSet(error = new Error('QUOTA_BYTES quota exceeded')) { setFailures.push(error); },
+    /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
+    failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
     /** set and remove calls, which are the writes. */
     writes() { return calls.filter((c) => c.method === 'set' || c.method === 'remove'); },
   };
