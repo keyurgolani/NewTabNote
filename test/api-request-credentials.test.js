@@ -52,6 +52,22 @@ describe('API_REQUEST carries no credential (#13)', () => {
     assert.deepEqual(fetches, []);
   });
 
+  it('sends the worker only the method and body, whatever headers a caller names and however it shapes them', async () => {
+    const key = canary();
+    const { llm, messages } = await setup((callback) => callback({ ok: true, status: 200, data: {} }));
+    await llm.fetchViaBackground('https://provider.example.test/v1/chat', {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
+      body: '{"model":"m"}',
+    });
+    await llm.fetchViaBackground('https://provider.example.test/v1/models', { headers: [['api-key', key]] });
+    assert.deepEqual(messages.map((message) => message.options), [
+      { method: 'POST', body: '{"model":"m"}' },
+      {},
+    ]);
+    assert.equal(JSON.stringify(messages).includes(key), false, 'a message holds the key');
+  });
+
   it('keeps the header on the direct fetch it falls back to when the worker is unreachable', async () => {
     const key = canary();
     const { llm, fetches } = await setup((callback, runtime) => {
