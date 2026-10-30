@@ -9,14 +9,17 @@
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {LLMService} deps.llm
+ * @param {Object} [deps.documentClient] - What the chat's title and insights writes go through
+ *   (js/kernel/composition/document.js): each names its note, and none takes a note record
  */
 class AIChatController {
-  constructor({ storage, eventBus, domRefs, logger, llm }) {
+  constructor({ storage, eventBus, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
     this.eventBus = eventBus;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;
+    this.documentClient = documentClient;
 
     // AI Chat sidebar state
     this.aiSidebarOpen = false;
@@ -459,6 +462,8 @@ class AIChatController {
 
     // Build context-windowed note content
     const editor = this.getEditor ? this.getEditor() : null;
+    // The note the answer is about, which a title it generates goes to
+    const noteId = editor ? editor.noteId : null;
     const blocks = (editor && editor.blocks) ? editor.blocks : [];
     const cursorIndex = (editor && editor.activeBlock)
       ? blocks.findIndex(b => b.id === editor.activeBlock)
@@ -524,8 +529,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         this.aiChatHistory = this.aiChatHistory.slice(-20);
       }
 
-      if (message.toLowerCase().includes('title') && message.toLowerCase().includes('generate')) {
-        this.handleGeneratedTitle(result);
+      if (noteId && message.toLowerCase().includes('title') && message.toLowerCase().includes('generate')) {
+        this.handleGeneratedTitle(result, noteId);
       }
     }
   }
@@ -1407,6 +1412,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       Utils.showToast('No note selected', 'error');
       return;
     }
+    // The insights go to this note, whichever note is open when the provider answers
+    const noteId = editor.noteId;
+    const noteName = editor.noteData?.name;
 
     if (!this.llm.isConfigured()) {
       Utils.showToast('AI not configured. Please set up in Settings.', 'error');
@@ -1434,18 +1442,21 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         return;
       }
 
-      const insights = await this.llm.extractInsights(noteContent, editor.noteData?.name);
+      const insights = await this.llm.extractInsights(noteContent, noteName);
 
       if (!insights) {
         this.addChatMessage('Could not extract any insights from this note. The content may not contain actionable items, reminders, or deadlines.', 'assistant');
         return;
       }
 
-      if (editor.noteData) {
-        editor.noteData.insights = insights;
-        editor.noteData.lastInsightsExtractedAt = Date.now();
-        await this.storage.updateNote(editor.noteData);
-        editor.renderInsights();
+      // The insight fields and nothing else, so a pin, trash, or title set meanwhile stays
+      const outcome = await this.documentClient.attachInsights(noteId, insights);
+      if (outcome.kind !== 'committed') {
+        throw new Error(`Not stored: insights (${outcome.kind}: ${outcome.code})`);
+      }
+      const shownIn = this.getEditor ? this.getEditor() : null;
+      if (shownIn && typeof shownIn.showCommittedInsights === 'function') {
+        shownIn.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
       }
 
       let response = '✅ **Insights extracted and saved to note!**\n\n';
@@ -1836,46 +1847,72 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     }
   }
 
-  async handleGeneratedTitle(response) {
+  /**
+   * Offer the title an answer generated for `noteId`, the note the chat was about when the
+   * message was sent
+   * @param {string} response
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
+  async handleGeneratedTitle(response, noteId) {
     let title = response.split('\n')[0].trim();
     title = title.replace(/^["']|["']$/g, '').trim();
 
     if (title && title.length < 100) {
       const apply = await confirmDialog({ title: 'Apply Title', message: `Apply this title to your note?\n\n"${title}"` });
       if (apply) {
-        this.applyGeneratedTitle(title);
+        await this.applyGeneratedTitle(title, noteId);
       }
     }
   }
 
-  async applyGeneratedTitle(title) {
-    const editor = this.getEditor ? this.getEditor() : null;
-    if (!editor || !editor.noteId) return;
+  /**
+   * Apply a title the user confirmed to `noteId`, over a title set by hand too, as 1.4.x did
+   * @param {string} title
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
+  async applyGeneratedTitle(title, noteId) {
+    if (!noteId) return;
 
     try {
-      const note = await this.storage.getNote(editor.noteId);
-      if (note) {
-        note.name = title;
-        note.lastAutoTitleAt = Date.now();
-        await this.storage.updateNote(note);
-
-        editor.setTitleProgrammatically(title);
-
-        const openTabs = this.onGetOpenTabs ? this.onGetOpenTabs() : [];
-        const tabIndex = openTabs.findIndex(t => t.noteId === editor.noteId);
-        if (tabIndex !== -1) {
-          openTabs[tabIndex].name = title;
-          if (this.onRenderTabs) this.onRenderTabs();
-          if (this.onSaveTabs) await this.onSaveTabs();
-        }
-
-        if (this.onRenderNotesList) await this.onRenderNotesList();
-        Utils.showToast('Title updated', 'success');
+      const outcome = await this.documentClient.renameNote(noteId, title, 'generated');
+      // A note deleted meanwhile stays deleted, as 1.4.x left it
+      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return;
+      if (outcome.kind !== 'committed') {
+        throw new Error(`Not stored: title (${outcome.kind}: ${outcome.code})`);
       }
+      await this.showCommittedTitle(noteId, title);
+      Utils.showToast('Title updated', 'success');
     } catch (error) {
       console.error('Failed to apply title:', error);
       Utils.showToast('Failed to apply title', 'error');
     }
+  }
+
+  /**
+   * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
+   * holds that note (display only, no save), in the note's tab, and in the list. A title the
+   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async showCommittedTitle(noteId, name) {
+    const editor = this.getEditor ? this.getEditor() : null;
+    const shown = editor && typeof editor.showCommittedTitle === 'function'
+      ? editor.showCommittedTitle(noteId, name)
+      : 'not-open';
+    if (shown !== 'typed-title-pending') {
+      const openTabs = this.onGetOpenTabs ? this.onGetOpenTabs() : [];
+      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
+      if (tabIndex !== -1) {
+        openTabs[tabIndex].name = name;
+        if (this.onRenderTabs) this.onRenderTabs();
+        if (this.onSaveTabs) await this.onSaveTabs();
+      }
+    }
+    if (this.onRenderNotesList) await this.onRenderNotesList();
   }
 
   clearAIChatHistory() {
@@ -2163,27 +2200,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
       if (!newTitle || !newTitle.trim()) return;
 
-      const note = await this.storage.getNote(noteId);
-      if (!note) return;
-
-      note.name = newTitle;
-      note.lastAutoTitleAt = Date.now();
-      await this.storage.updateNote(note);
-
-      const editor = this.getEditor ? this.getEditor() : null;
-      if (editor && editor.noteId === noteId) {
-        editor.setTitleProgrammatically(newTitle);
+      // A derived title: one the user typed into the new note meanwhile keeps it out
+      const outcome = await this.documentClient.deriveTitle(noteId, newTitle);
+      // Deleted meanwhile, or named by hand: it stays as it is
+      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return;
+      if (outcome.kind === 'committed' && outcome.code === 'title-kept') return;
+      if (outcome.kind !== 'committed') {
+        throw new Error(`Not stored: title (${outcome.kind}: ${outcome.code})`);
       }
 
-      const openTabs = this.onGetOpenTabs ? this.onGetOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = newTitle;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-
-      if (this.onRenderNotesList) this.onRenderNotesList();
+      await this.showCommittedTitle(noteId, newTitle);
 
       Utils.showToast(`Title generated: "${newTitle}"`, 'success');
     } catch (error) {

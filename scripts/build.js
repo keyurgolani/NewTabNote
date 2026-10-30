@@ -67,6 +67,7 @@ const JS_FILES = [
   'js/embeddings.js',
   'js/onboarding.js',
   'js/services/sync-service.js',
+  'js/services/ai-port.mjs',
   'js/stream-renderer.js',
   'js/scroll-state-machine.js',
   'js/chat-ui-components.js',

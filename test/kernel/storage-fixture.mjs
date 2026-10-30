@@ -101,7 +101,7 @@ async function startIndexedDb(missing) {
     },
     // A write the disk refuses: it goes through, then its transaction aborts as it commits
     failNextWrite: target => {
-      if (target === 'preferences' || target === 'session') first.chrome.failNextSet();
+      if (target === 'preferences' || target === 'session' || target === 'jobs') first.chrome.failNextSet();
       else first.faults.abortAfterNextWrite(IDB_STORES[target], 'QuotaExceededError');
     },
     close: async () => closeAll(first),

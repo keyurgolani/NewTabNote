@@ -907,6 +907,15 @@ function testDocumentClient(client) {
     deleteBlocks: (noteId, blockIds) => client.deleteBlocks(noteId, blockIds),
     createNote: (fields) => client.createNote(fields),
     newId: () => client.newId(),
+    deriveTitle: (...args) => client.deriveTitle(...args),
+    renameNote: (...args) => client.renameNote(...args),
+    attachInsights: (noteId, insights, contentHash) => client.attachInsights(noteId, insights, contentHash),
+    setInsightsPending: (noteId, pending) => client.setInsightsPending(noteId, pending),
+    insightsPending: (noteId) => client.insightsPending(noteId),
+    recordJobRun: (job) => client.recordJobRun(job),
+    jobRuns: copied(client.jobRuns),
+    preferences: copied(client.preferences),
+    activeNotes: copied(client.activeNotes),
     beforeConnectionCloses: (flush) => client.beforeConnectionCloses(flush),
     connectionOpen: () => client.connectionOpen(),
   };
@@ -923,10 +932,14 @@ function testDocumentClient(client) {
  */
 async function startEditorClient(env) {
   const { loadPageModule } = require('./page-module');
-  const { editorClientFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
-  env.documentClient = testDocumentClient(
-    editorClientFor({ storage: env.get('Storage'), settings: env.chrome.api.storage.local }),
-  );
+  const { editorKernelFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
+  const { kernel, documentClient } = editorKernelFor({
+    storage: env.get('Storage'),
+    settings: env.chrome.api.storage.local,
+  });
+  // The kernel client too, so a test can pin, trash, or rename the way another part of the page does
+  env.kernel = kernel;
+  env.documentClient = testDocumentClient(documentClient);
   return env.documentClient;
 }
 

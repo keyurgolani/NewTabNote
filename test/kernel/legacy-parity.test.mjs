@@ -369,15 +369,13 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await title(typed.viaKernel), await title(typed.viaStorage));
 
     const generated = await twin(records());
-    generated.viaStorage.env.load('js/controllers/notes-manager.js');
-    generated.viaStorage.env.get('Utils').showToast = () => {};
-    const manager = Object.assign(Object.create(generated.viaStorage.env.get('NotesManager').prototype), {
-      storage: generated.viaStorage.storage,
-      llm: { isConfigured: () => true, generateTitle: async () => 'Groceries' },
-      getEditor: () => null,
-      getOpenTabs: () => [],
-    });
-    await manager.generateTitleForNote('n1');
+    // 1.4.x's NotesManager.generateTitleForNote: the stored note with the title and its time,
+    // written whole with updateNote, which renames the search entry. NotesManager runs
+    // renameNote now (#12 slice 4b2a), so this is its 1.4.x write, step for step.
+    const stored = await generated.viaStorage.storage.getNote('n1');
+    stored.name = 'Groceries';
+    stored.lastAutoTitleAt = Date.now();
+    await generated.viaStorage.storage.updateNote(stored);
     assertCommitted(
       await generated.kernel.execute({
         type: 'renameNote',
@@ -663,6 +661,43 @@ describe("the kernel's copies of production rules, run both ways", () => {
       state.kind === 'ready' ? state.data.map(block => block.id) : [],
       editor.blocks.map((/** @type {{id: string}} */ block) => block.id),
     );
+  });
+
+  it("the jobs' bookkeeping reads back through Storage's settings, both ways, under 1.4.x's keys", async () => {
+    const { viaKernel, kernel } = await twin();
+    const { storage } = viaKernel;
+
+    // The kernel writes, and Storage reads them where NotesManager and the editor read them
+    const before = Date.now();
+    assertCommitted(await kernel.execute({ type: 'setInsightsPending', commandId: 'c1', noteId: 'n1', pending: true }));
+    assertCommitted(await kernel.execute({ type: 'recordJobRun', commandId: 'c2', job: 'autoTitle' }));
+    assertCommitted(await kernel.execute({ type: 'recordJobRun', commandId: 'c3', job: 'insights' }));
+    const [since, lastAutoTitleRun, lastInsightsRun] = legacyEnv.plain([
+      await storage.getSetting('insightsExtracting_n1', null),
+      await storage.getSetting('lastAutoTitleRun', 0),
+      await storage.getSetting('lastInsightsRun', 0),
+    ]);
+    for (const time of [since, lastAutoTitleRun, lastInsightsRun]) assert.ok(time >= before && time <= Date.now());
+    // Cleared with null, as NotesManager cleared it with setSetting(key, null)
+    assertCommitted(
+      await kernel.execute({ type: 'setInsightsPending', commandId: 'c4', noteId: 'n1', pending: false }),
+    );
+    const stored = legacyEnv.plain(
+      await new Promise(resolve => viaKernel.env.chrome.api.storage.local.get(null, resolve)),
+    );
+    assert.equal(stored.setting_insightsExtracting_n1, null);
+    assert.ok(Object.hasOwn(stored, 'setting_insightsExtracting_n1'));
+
+    // Storage writes, as 1.4.x's NotesManager did, and the kernel reads
+    await storage.setSetting('insightsExtracting_n2', 1700000000500);
+    await storage.setSetting('lastAutoTitleRun', 1700000000600);
+    await storage.setSetting('lastInsightsRun', 1700000000700);
+    const pending = await kernel.query({ type: 'getInsightsPending', noteId: 'n2' });
+    const runs = await kernel.query({ type: 'getJobRuns' });
+    assert.deepEqual(legacyEnv.plain([pending.kind === 'ready' && pending.data, runs.kind === 'ready' && runs.data]), [
+      { since: 1700000000500 },
+      { lastAutoTitleRun: 1700000000600, lastInsightsRun: 1700000000700 },
+    ]);
   });
 
   it("preferences and the workspace session read back through Storage's settings and TabController, both ways", async () => {

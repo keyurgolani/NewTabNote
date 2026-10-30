@@ -574,6 +574,40 @@ export function runContractSuite(fixture) {
         );
       });
 
+      it('drops a generated title when the note has a title set by hand, and still saves the blocks', async () => {
+        await createNote({ noteId: 'n1', name: 'Untitled' });
+        // Another tab named the note while this editor's provider call ran
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Mine' }));
+        const before = await noteOf('n1');
+        ctx.clock.advance();
+        const outcome = await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: someBlocks('n1', 1),
+            preview: 'Line 0',
+            name: 'Weekly plan',
+            titleOrigin: 'generated',
+          }),
+        );
+        assert.deepEqual(
+          [outcome.code, outcome.changedIds, outcome.severity],
+          ['content-saved-title-kept', ['n1'], 'info'],
+        );
+        assert.deepEqual(await noteOf('n1'), { ...before, preview: 'Line 0', updatedAt: NOW + 1000 });
+        assert.equal((await blocksOf('n1')).length, 1);
+        assert.equal((await searchEntryOf('n1'))?.name, 'Mine');
+      });
+
+      it('a typed title in a save over a title set by hand still lands', async () => {
+        await createNote({ noteId: 'n1', name: 'Untitled' });
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Mine' }));
+        const outcome = await run(
+          cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), name: 'Mine again' }),
+        );
+        assert.equal(outcome.code, 'content-saved');
+        assert.deepEqual([(await noteOf('n1'))?.name, (await searchEntryOf('n1'))?.name], ['Mine again', 'Mine again']);
+      });
+
       it('a save with no typed title leaves the stored one, so a rename made elsewhere stays', async () => {
         await createNote({ noteId: 'n1', name: 'Draft' });
         await run(cmd('renameNote', { noteId: 'n1', name: 'Renamed in another tab' }));
@@ -819,6 +853,102 @@ export function runContractSuite(fixture) {
         assert.equal(saved.code, 'content-saved');
         const note = await noteOf('n1');
         assert.deepEqual([note?.preview, note?.insights], ['Typed', { todos: ['Call'] }]);
+      });
+    });
+
+    describe('job bookkeeping', () => {
+      /**
+       * @param {string} noteId
+       * @returns {Promise<number | null | undefined>}
+       */
+      const pendingSince = async noteId => {
+        const state = await kernel.query({ type: 'getInsightsPending', noteId });
+        return state.kind === 'ready' ? state.data.since : undefined;
+      };
+
+      it('setInsightsPending marks a note with the kernel clock, clears it, and getInsightsPending reads it', async () => {
+        await createNote({ noteId: 'n1' });
+        assert.equal(await pendingSince('n1'), null);
+        ctx.clock.advance();
+        const marked = await run(cmd('setInsightsPending', { noteId: 'n1', pending: true }));
+        assert.deepEqual([marked.code, marked.changedIds], ['insights-pending', ['n1']]);
+        assert.equal(await pendingSince('n1'), NOW + 1000);
+        assert.equal(await pendingSince('n2'), null, 'only the note it names');
+        const cleared = await run(cmd('setInsightsPending', { noteId: 'n1', pending: false }));
+        assert.deepEqual([cleared.code, cleared.changedIds], ['insights-pending-cleared', ['n1']]);
+        assert.equal(await pendingSince('n1'), null);
+        assertRejected(
+          await kernel.execute(cmd('setInsightsPending', { noteId: 'n1', pending: /** @type {any} */ ('yes') })),
+          'validation',
+          'invalid-command',
+        );
+        assert.equal(
+          (await kernel.query({ type: 'getInsightsPending', noteId: /** @type {any} */ (7) })).kind,
+          'failed',
+        );
+      });
+
+      it('recordJobRun stamps each job with the kernel clock, and getJobRuns reads 0 for one that never ran', async () => {
+        const never = await kernel.query({ type: 'getJobRuns' });
+        assert.deepEqual(never.kind === 'ready' && never.data, { lastAutoTitleRun: 0, lastInsightsRun: 0 });
+        ctx.clock.advance();
+        const outcome = await run(cmd('recordJobRun', { job: 'autoTitle' }));
+        assert.deepEqual([outcome.code, outcome.changedIds], ['job-run-recorded', ['autoTitle']]);
+        ctx.clock.advance();
+        await run(cmd('recordJobRun', { job: 'insights' }));
+        const state = await kernel.query({ type: 'getJobRuns' });
+        assert.deepEqual(state.kind === 'ready' && state.data, {
+          lastAutoTitleRun: NOW + 1000,
+          lastInsightsRun: NOW + 2000,
+        });
+        assertRejected(
+          await kernel.execute(cmd('recordJobRun', { job: /** @type {any} */ ('backup') })),
+          'validation',
+          'invalid-command',
+        );
+      });
+
+      it('a bookkeeping write the storage refuses is unavailable, and leaves what was stored', async () => {
+        await run(cmd('setInsightsPending', { noteId: 'n1', pending: true }));
+        const since = await pendingSince('n1');
+        ctx.failNextWrite('jobs');
+        const outcome = await kernel.execute(cmd('setInsightsPending', { noteId: 'n1', pending: false }));
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.equal(await pendingSince('n1'), since);
+      });
+
+      it("changes no note, so a note's record and revision stay as they were", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await kernel.query({ type: 'getNote', noteId: 'n1' });
+        ctx.clock.advance();
+        await run(cmd('setInsightsPending', { noteId: 'n1', pending: true }));
+        await run(cmd('recordJobRun', { job: 'insights' }));
+        await run(cmd('setInsightsPending', { noteId: 'n1', pending: false }));
+        const after = await kernel.query({ type: 'getNote', noteId: 'n1' });
+        assert.deepEqual(after.kind === 'ready' && after.data, before.kind === 'ready' && before.data);
+      });
+
+      it('runs from the new tab only', async () => {
+        for (const caller of [CALLERS.popup, CALLERS.sidepanel, CALLERS['worker-internal']]) {
+          const other = ctx.kernel(caller);
+          assertRejected(
+            await other.execute(cmd('setInsightsPending', { noteId: 'n1', pending: true })),
+            'policy',
+            'not-on-surface',
+          );
+          assertRejected(await other.execute(cmd('recordJobRun', { job: 'autoTitle' })), 'policy', 'not-on-surface');
+          assert.deepEqual(await other.query({ type: 'getInsightsPending', noteId: 'n1' }), {
+            kind: 'failed',
+            cause: 'policy',
+            code: 'not-on-surface',
+          });
+          assert.deepEqual(await other.query({ type: 'getJobRuns' }), {
+            kind: 'failed',
+            cause: 'policy',
+            code: 'not-on-surface',
+          });
+        }
+        assert.equal(await pendingSince('n1'), null);
       });
     });
 
@@ -1405,6 +1535,7 @@ export function runContractSuite(fixture) {
         await run(cmd('renameNote', { noteId: 'n1', name: 'Mine' }));
         await run(cmd('applyDerivedTitle', { noteId: 'n1', name: 'Derived' }));
         await run(cmd('setPreferences', { values: { theme: 'dark' } }));
+        await run(cmd('setInsightsPending', { noteId: 'n1', pending: true }));
         await new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(
           seen.map(({ event }) => ({ ...event, ids: [...event.ids] })),
@@ -1412,6 +1543,8 @@ export function runContractSuite(fixture) {
             { aggregate: 'note', ids: ['n1'] },
             { aggregate: 'note', ids: ['n1'] },
             { aggregate: 'preferences', ids: ['theme'] },
+            // The jobs' bookkeeping has its own aggregate, so a note list ignores it
+            { aggregate: 'job', ids: ['n1'] },
           ],
         );
         // A listener reads the committed state
@@ -1496,12 +1629,14 @@ export function runContractSuite(fixture) {
           'createNote',
           'deleteBlocks',
           'moveFolder',
+          'recordJobRun',
           'renameNote',
           'restoreNote',
           'runBulkAction',
           'runStartupMaintenance',
           'saveNoteContent',
           'saveWorkspaceSession',
+          'setInsightsPending',
           'setPinned',
           'setPreferences',
           'trashNote',

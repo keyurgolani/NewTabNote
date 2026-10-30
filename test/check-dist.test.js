@@ -213,7 +213,9 @@ describe('scripts/module-preloads.js', () => {
     const graph = readScriptGraph(ROOT, { pages: ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html'] });
     for (const page of ['newtab.html', 'popup.html', 'sidepanel.html']) {
       const expected = modulePreloads.expectedPreloads(graph, page);
-      assert.ok(expected.length > 0 && expected.every(href => href.startsWith('js/kernel/')), `${page}: ${expected}`);
+      // The kernel graph, and on the new tab the AI port its root builds (js/services/ai-port.mjs)
+      const ownGraph = href => href.startsWith('js/kernel/') || (page === 'newtab.html' && href === 'js/services/ai-port.mjs');
+      assert.ok(expected.length > 0 && expected.every(ownGraph), `${page}: ${expected}`);
       // The composition root is one import deep, so the page finds it as soon as its own script loads
       const roots = ['newtab', 'popup', 'sidepanel', 'background'].map(name => `js/kernel/composition/${name}.js`);
       assert.ok(!expected.some(href => roots.includes(href)), page);
