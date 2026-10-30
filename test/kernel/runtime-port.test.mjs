@@ -112,7 +112,7 @@ describe('the runtime port: the worker side', () => {
     );
   });
 
-  it('disconnects a port from anything else unread, and leaves a port by another name alone', async () => {
+  it('disconnects a port from anything else, or by another name, unread', async () => {
     const { fake, accepted } = installed();
     /** @type {string[]} */
     const gone = [];
@@ -129,13 +129,15 @@ describe('the runtime port: the worker side', () => {
     legacy.onDisconnect.addListener(() => gone.push('another name'));
     await settle();
     await settle();
+    // Nothing else in the extension takes a port, so one by another name would wait for nothing
     assert.deepEqual(gone.sort(), [
+      'another name',
       'content script',
       'options page',
       'other extension: Could not establish connection. Receiving end does not exist.',
     ]);
     assert.deepEqual(accepted, []);
-    assert.doesNotThrow(() => legacy.postMessage('still open'));
+    assert.throws(() => legacy.postMessage('closed'));
   });
 });
 

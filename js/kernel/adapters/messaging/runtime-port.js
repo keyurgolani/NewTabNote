@@ -111,14 +111,13 @@ function portLink(port, runtime, report) {
 /**
  * Hands the router every port one of this extension's pages opens by PORT_NAME. The worker
  * calls it at its top level, synchronously, so the listener is there before Chrome dispatches
- * the connection that woke the worker. A port from anything else is disconnected unread, and
- * a port by another name is left alone.
+ * the connection that woke the worker. A port from anything else, or by another name, is
+ * disconnected unread, since nothing else here takes a port and it would wait for nothing.
  * @param {{runtime: Runtime, router: {accept(connection: Connection): void}, report?: (error: unknown) => void}} options
  */
 export function installRuntimePort({ runtime, router, report = () => {} }) {
   runtime.onConnect.addListener(port => {
-    if (port.name !== PORT_NAME) return;
-    const surface = principalOf(port.sender, runtime.id);
+    const surface = port.name === PORT_NAME ? principalOf(port.sender, runtime.id) : null;
     if (surface === null) {
       port.disconnect();
       return;
