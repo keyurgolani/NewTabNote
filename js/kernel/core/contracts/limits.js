@@ -52,6 +52,12 @@ export const RECONNECTING_AFTER_MS = 2000;
  */
 export const RECONNECT_DELAYS_MS = Object.freeze(/** @type {const} */ ([500, 1000, 2000]));
 
+/**
+ * How long a client waits for an in-process read of the idempotency ledger (#17) before it
+ * gives up on it: the command's outcome stays unknown, and nothing is sent again
+ */
+export const LEDGER_READ_TIMEOUT_MS = 5000;
+
 /** How long a client waits for the welcome before it counts the attempt failed */
 export const HANDSHAKE_TIMEOUT_MS = 5000;
 

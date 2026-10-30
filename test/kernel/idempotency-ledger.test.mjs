@@ -55,7 +55,11 @@ describe("the in-memory ledger's digest", () => {
       { b: 1, a: [2, { d: null, c: 'x' }] },
       { text: 'ünïcödé 日本語 😀 \u0000 "quoted"' },
       { long: 'x'.repeat(100_000) },
-      ...[0, 1, 55, 56, 63, 64, 65, 119, 120].map(length => ({ s: 'y'.repeat(length) })),
+      // A string hashes as its JSON, quotes included, so these cover every total from 2 to 132
+      // bytes, padding's 55 and 56 bytes past a 64-byte block among them, in one-byte and
+      // two-byte characters
+      ...Array.from({ length: 131 }, (_, length) => 'y'.repeat(length)),
+      ...Array.from({ length: 66 }, (_, length) => `${'é'.repeat(length)}${length % 2 ? 'y' : ''}`),
     ];
     /**
      * @param {unknown} value

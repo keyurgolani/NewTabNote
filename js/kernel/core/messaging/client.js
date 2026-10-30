@@ -43,6 +43,7 @@ import { decode, encode, encodedBytes } from '../contracts/codec.js';
 import {
   DEADLINE_GRACE_MS,
   HANDSHAKE_TIMEOUT_MS,
+  LEDGER_READ_TIMEOUT_MS,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   RECONNECTING_AFTER_MS,
@@ -154,12 +155,15 @@ import { silentLogger } from '../ports/runtime.js';
  *   Resolves each command the journal holds once the page reloaded or came back, by its key.
  *   It reads every record first, in the journal's order, by the command as the journal wrote
  *   it, so a record answers whatever the client's state. Then it sends again each journaled
- *   command that has none, once, in that order, each after the one before it answered. Only
- *   to send it is a command taken to the catalog's current version (contracts/upcast.js), and
- *   one that can't be is refused with its code, unsent. One that can't go now, as once the
- *   client closed or the coordinator speaks another major version, stays unknown. A command
- *   still open in this client is waited on, not sent again. Without a journal and a ledger, or
- *   when the journal can't be read, it resolves nothing.
+ *   command that has none, once, in that order, each after the one before it answered, and
+ *   reads its record once more just before it goes. Only to send it is a command taken to the
+ *   catalog's current version (contracts/upcast.js). One under a key that can't be, or whose
+ *   operation the catalog doesn't know, stays unknown with that code and isn't sent, since it
+ *   may have committed. So does one that can't go now, as once the coordinator speaks another
+ *   major version, and one whose record doesn't come within LEDGER_READ_TIMEOUT_MS. close()
+ *   stops a running resume, and what it hadn't resolved is unavailable. A command still open
+ *   in this client is waited on, not sent again. Without a journal and a ledger, or when the
+ *   journal can't be read, it resolves nothing.
  * @property {() => void} close - settles every call and refuses any after
  */
 
@@ -235,6 +239,8 @@ export function createClient({
   const verifying = new Set();
   /** @type {Map<string, Promise<unknown>>} each command still open, by commandId */
   const open = new Map();
+  /** @type {Set<() => void>} ledger reads waiting for their answer, which close() ends */
+  const reading = new Set();
   /** @type {Set<(state: ConnectionState) => void>} */
   const listeners = new Set();
   /** @type {ConnectionState} */
@@ -343,25 +349,46 @@ export function createClient({
   };
 
   /**
-   * What the ledger has of a command, or null when it can't say
+   * What the ledger has of a command, or null when it can't say: the read failed, answered
+   * something no ledger would, took longer than LEDGER_READ_TIMEOUT_MS, or the client closed
+   * while it waited. Null never allows a resend.
    * @param {Operation} operation
    * @param {Record<string, unknown>} command
    * @returns {Promise<LedgerRead | null>}
    */
   const readLedger = (operation, command) =>
-    Promise.resolve()
-      .then(() => /** @type {IdempotencyLedger} */ (ledger).read(/** @type {KeyedCommand} */ (command)))
-      .then(
-        read => {
-          if (isLedgerRead(operation, read)) return read;
-          warn('client-ledger-invalid-read', { operation: command.type });
-          return null;
-        },
-        error => {
-          warn('client-ledger-read-failed', { operation: command.type, error });
-          return null;
-        },
-      );
+    new Promise(resolve => {
+      let done = false;
+      /** @type {unknown} */
+      let timer;
+      /** @param {LedgerRead | null} read */
+      const finish = read => {
+        if (done) return;
+        done = true;
+        timers.clear(timer);
+        reading.delete(stop);
+        resolve(read);
+      };
+      const stop = () => finish(null);
+      reading.add(stop);
+      timer = timers.set(() => {
+        warn('client-ledger-read-timed-out', { operation: command.type });
+        finish(null);
+      }, LEDGER_READ_TIMEOUT_MS);
+      Promise.resolve()
+        .then(() => /** @type {IdempotencyLedger} */ (ledger).read(/** @type {KeyedCommand} */ (command)))
+        .then(
+          read => {
+            if (isLedgerRead(operation, read)) return finish(read);
+            warn('client-ledger-invalid-read', { operation: command.type });
+            finish(null);
+          },
+          error => {
+            warn('client-ledger-read-failed', { operation: command.type, error });
+            finish(null);
+          },
+        );
+    });
 
   /**
    * Resolves a command whose reply was lost by its key: what the ledger has of it, or with no
@@ -769,18 +796,52 @@ export function createClient({
     if (!isRecord(command)) return { commandId: '', outcome: rejected('validation', 'invalid-payload') };
     const commandId = typeof command.commandId === 'string' ? command.commandId : '';
     const operation = typeof command.type === 'string' ? lookup(command.type) : undefined;
-    // A query is never journaled
+    // A query is never journaled. An entry with a key may have committed under it, as one
+    // of an operation a later build renamed, so it stays unknown rather than refused.
     if (!operation || operation.entry.kind !== 'command') {
-      return { commandId, outcome: rejected('validation', 'unknown-operation') };
+      return {
+        commandId,
+        outcome:
+          commandId === '' ? rejected('validation', 'unknown-operation') : unknown('unknown-operation', commandId),
+      };
     }
     if (commandId === '') return { commandId, outcome: rejected('validation', 'invalid-payload') };
     const pending = open.get(commandId);
     if (pending) return { commandId, outcome: /** @type {Outcome | BulkOutcome} */ (await pending) };
     const read = await readLedger(operation, command);
-    if (read?.status === 'committed' || read?.status === 'conflict') return { commandId, outcome: read.outcome };
-    if (read?.status === 'key-reuse') return { commandId, outcome: rejected('validation', 'idempotency-key-reuse') };
-    if (!read) return { commandId, outcome: unknown('outcome-unknown', commandId) };
-    return { commandId, entry: /** @type {JournalEntry} */ (entry), operation };
+    const settled = settledBy(read, commandId);
+    return settled
+      ? { commandId, outcome: settled }
+      : { commandId, entry: /** @type {JournalEntry} */ (entry), operation };
+  };
+
+  /**
+   * A journal entry left unread because the client closed
+   * @param {unknown} entry
+   * @returns {ReadEntry}
+   */
+  const unavailableEntry = entry => {
+    const command = isRecord(entry) ? entry.command : undefined;
+    const commandId = isRecord(command) && typeof command.commandId === 'string' ? command.commandId : '';
+    return {
+      commandId,
+      outcome: commandId === '' ? rejected('validation', 'invalid-payload') : unknown('unavailable', commandId),
+    };
+  };
+
+  /**
+   * What a ledger read settles a journal entry with, or null when it has no record, so the
+   * entry may go again. A read that couldn't say is unknown, and unavailable once closed.
+   * @param {LedgerRead | null} read
+   * @param {string} commandId
+   * @returns {Outcome | null}
+   */
+  const settledBy = (read, commandId) => {
+    if (read?.status === 'committed' || read?.status === 'conflict') return read.outcome;
+    if (read?.status === 'key-reuse') return rejected('validation', 'idempotency-key-reuse');
+    if (phase === 'closed') return unknown('unavailable', commandId);
+    if (!read) return unknown('outcome-unknown', commandId);
+    return null;
   };
 
   /**
@@ -794,9 +855,14 @@ export function createClient({
     const { commandId, entry, operation } = read;
     const pending = open.get(commandId);
     if (pending) return /** @type {Outcome | BulkOutcome} */ (await pending);
+    if (phase === 'closed') return unknown('unavailable', commandId);
     if (!operation.entry.journaled) return unknown('outcome-unknown', commandId);
+    // One the catalog can't take back may still have committed, so it stays unknown
     const upcast = upcastJournalEntry(entry, lookup);
-    if (!upcast.ok) return rejected('validation', upcast.code);
+    if (!upcast.ok) return unknown(upcast.code, commandId);
+    // Read again just before it goes, since another context may have committed it meanwhile
+    const settled = settledBy(await readLedger(operation, entry.command), commandId);
+    if (settled) return settled;
     return /** @type {Promise<Outcome | BulkOutcome>} */ (
       track(commandId, ask('command', upcast.command, { userVisible: false }, 'resend'))
     );
@@ -847,7 +913,13 @@ export function createClient({
       // answered, so a save never goes before the createNote it follows
       /** @type {ReadEntry[]} */
       const reads = [];
-      for (const entry of entries) reads.push(await readEntry(entry));
+      // A resume running when the client closes stops: what it hasn't read is unavailable. One
+      // that starts closed still reads each record, which answers whatever the client's state.
+      const closedFirst = phase === 'closed';
+      for (const entry of entries) {
+        if (!closedFirst && phase === 'closed') reads.push(unavailableEntry(entry));
+        else reads.push(await readEntry(entry));
+      }
       /** @type {Array<{commandId: string, outcome: Outcome | BulkOutcome}>} */
       const resolved = [];
       for (const read of reads) resolved.push({ commandId: read.commandId, outcome: await resendEntry(read) });
@@ -860,6 +932,7 @@ export function createClient({
       hangUp();
       loseSent();
       refuseWaiting('unavailable');
+      for (const stop of [...reading]) stop();
       for (const call of [...verifying]) settle(call, call.lost);
       tell();
     },

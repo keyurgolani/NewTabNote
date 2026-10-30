@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,
+  LEDGER_READ_TIMEOUT_MS,
   MAX_MESSAGE_BYTES,
   RECONNECT_DELAYS_MS,
 } from '../../js/kernel/core/contracts/limits.js';
@@ -477,7 +478,7 @@ describe(
       });
       assert.deepEqual(await client.resume(), [
         { commandId: 'c-r', outcome: unknown('outcome-unknown', 'c-r') },
-        { commandId: 'c-n2', outcome: rejected('validation', 'unsupported-version') },
+        { commandId: 'c-n2', outcome: unknown('unsupported-version', 'c-n2') },
         { commandId: 'c-n3', outcome: rejected('validation', 'idempotency-key-reuse') },
         { commandId: '', outcome: rejected('validation', 'unknown-operation') },
       ]);
@@ -549,7 +550,10 @@ describe('the client: resuming in journal order, by the record first', { timeout
     const slow = [];
     const ledger = /** @type {IdempotencyLedger} */ ({
       read: async command => {
-        if (command.commandId === 'c1') await new Promise(resolve => slow.push(() => resolve(undefined)));
+        // Only the first read of c1 is slow, not the one just before it goes again
+        if (command.commandId === 'c1' && slow.length === 0) {
+          await new Promise(resolve => slow.push(() => resolve(undefined)));
+        }
         return { status: 'absent' };
       },
     });
@@ -641,9 +645,84 @@ describe('the client: resuming in journal order, by the record first', { timeout
     );
     assert.deepEqual(await client.resume(), [
       { commandId: 'c-n1', outcome: pinned },
-      { commandId: 'c-n2', outcome: rejected('validation', 'unsupported-version') },
+      { commandId: 'c-n2', outcome: unknown('unsupported-version', 'c-n2') },
     ]);
     assert.deepEqual(spy.reads, [pin('n1'), pin('n2')]);
     assert.equal(coordinator.attempts, 0);
+  });
+});
+
+describe("the client: ledger reads that don't answer, and what closing does to a resume", { timeout: 10_000 }, () => {
+  /** A ledger that never answers */
+  const silent = /** @type {IdempotencyLedger} */ ({ read: () => new Promise(() => {}) });
+
+  it('gives a lost reply up as unknown once the ledger has not answered in LEDGER_READ_TIMEOUT_MS, and sends nothing again', async () => {
+    const { scheduler, coordinator, client } = await welcomed({ ledger: silent });
+    const answer = client.execute(pin());
+    await settle();
+    coordinator.last.close();
+    await scheduler.advance(LEDGER_READ_TIMEOUT_MS - 1);
+    assert.equal(await isSettled(answer), false);
+    await scheduler.advance(1);
+    assert.deepEqual(await answer, unknown('outcome-unknown', 'c-n1'));
+    assert.equal(coordinator.attempts, 1);
+  });
+
+  it("answers a journal entry whose record doesn't come in time unknown, and sends nothing", async () => {
+    const { scheduler, coordinator, client } = resuming([{ v: 1, command: pin('n1') }], { ledger: silent });
+    const resumed = client.resume();
+    await scheduler.advance(LEDGER_READ_TIMEOUT_MS);
+    assert.deepEqual(await resumed, [{ commandId: 'c-n1', outcome: unknown('outcome-unknown', 'c-n1') }]);
+    assert.equal(coordinator.attempts, 0);
+  });
+
+  it('stops a running resume when closed: what it has not resolved is unavailable, at once', async () => {
+    const { coordinator, client } = resuming(
+      [
+        { v: 1, command: pin('n1') },
+        { v: 1, command: pin('n2') },
+      ],
+      { ledger: silent },
+    );
+    const resumed = client.resume();
+    await settle();
+    client.close();
+    assert.deepEqual(await resumed, [
+      { commandId: 'c-n1', outcome: unknown('unavailable', 'c-n1') },
+      { commandId: 'c-n2', outcome: unknown('unavailable', 'c-n2') },
+    ]);
+    assert.equal(coordinator.attempts, 0);
+  });
+
+  it('answers an entry of an operation it does not know, under a commandId, unknown rather than a definite refusal', async () => {
+    const { client } = resuming([{ v: 1, command: { type: 'renamedSince', commandId: 'c-x', noteId: 'n1' } }], {
+      ledger: spyLedger().ledger,
+    });
+    assert.deepEqual(await client.resume(), [{ commandId: 'c-x', outcome: unknown('unknown-operation', 'c-x') }]);
+  });
+
+  it('reads the ledger again just before each resend, so one recorded meanwhile goes no more', async () => {
+    const spy = spyLedger();
+    const { coordinator, client } = resuming(
+      [
+        { v: 1, command: pin('n1') },
+        { v: 1, command: pin('n2') },
+      ],
+      { ledger: spy.ledger },
+    );
+    const resumed = client.resume();
+    await welcomeNext(coordinator, 1);
+    const [first] = coordinator.last.requests();
+    // Another context committed the second while the first was out
+    spy.inner.record(pin('n2'), committed('note-pinned', ['n2']));
+    coordinator.last.send({ frame: 'response', requestId: first.requestId, result: pinned });
+    assert.deepEqual(await resumed, [
+      { commandId: 'c-n1', outcome: pinned },
+      { commandId: 'c-n2', outcome: committed('note-pinned', ['n2']) },
+    ]);
+    assert.deepEqual(
+      coordinator.last.requests().map(request => request.payload.commandId),
+      ['c-n1'],
+    );
   });
 });
