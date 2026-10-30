@@ -36,10 +36,30 @@ export const TRUST_DB_VERSION = 1;
 
 /** The layout of version 1 */
 export const TRUST_DB_STORES = Object.freeze({
-  receipts: Object.freeze({ keyPath: 'id', autoIncrement: false, indexes: Object.freeze(['providerId', 'verifiedAt']), unique: Object.freeze([]) }),
-  incidents: Object.freeze({ keyPath: 'id', autoIncrement: false, indexes: Object.freeze(['key', 'state']), unique: Object.freeze(['key']) }),
-  runs: Object.freeze({ keyPath: 'id', autoIncrement: false, indexes: Object.freeze(['startedAt']), unique: Object.freeze([]) }),
-  journal: Object.freeze({ keyPath: 'seq', autoIncrement: true, indexes: Object.freeze(['at']), unique: Object.freeze([]) }),
+  receipts: Object.freeze({
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: Object.freeze(['providerId', 'verifiedAt']),
+    unique: Object.freeze([]),
+  }),
+  incidents: Object.freeze({
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: Object.freeze(['key', 'state']),
+    unique: Object.freeze(['key']),
+  }),
+  runs: Object.freeze({
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: Object.freeze(['startedAt']),
+    unique: Object.freeze([]),
+  }),
+  journal: Object.freeze({
+    keyPath: 'seq',
+    autoIncrement: true,
+    indexes: Object.freeze(['at']),
+    unique: Object.freeze([]),
+  }),
 });
 
 /** How long open() waits for an open that hasn't finished, as connection.js waits */
@@ -70,7 +90,8 @@ function createStores(db, upgrade) {
       ? /** @type {IDBTransaction} */ (upgrade).objectStore(name)
       : db.createObjectStore(name, { keyPath, autoIncrement });
     for (const index of indexes) {
-      if (!store.indexNames.contains(index)) store.createIndex(index, index, { unique: /** @type {readonly string[]} */ (unique).includes(index) });
+      if (!store.indexNames.contains(index))
+        store.createIndex(index, index, { unique: /** @type {readonly string[]} */ (unique).includes(index) });
     }
   }
 }
@@ -93,7 +114,8 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
   /** @type {Promise<void> | null} */
   let opening = null;
   // Read when a range is first needed, so a host without the global can still open
-  const ranges = () => keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
+  const ranges = () =>
+    keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
 
   const connect = () =>
     new Promise((resolve, reject) => {
@@ -142,7 +164,8 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
   const view = (database, tx, stores, writable) => {
     /** @param {TrustStoreName} store */
     const handle = store => {
-      if (!Object.prototype.hasOwnProperty.call(TRUST_DB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
+      if (!Object.prototype.hasOwnProperty.call(TRUST_DB_STORES, store))
+        throw new UnavailableError('adapter', 'unknown-store', false);
       if (!stores.includes(store)) throw new UnavailableError('adapter', 'store-outside-transaction', false);
       if (!database.objectStoreNames.contains(store)) throw new UnavailableError('storage', 'store-unavailable', false);
       return tx.objectStore(store);
@@ -189,7 +212,10 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
       tx = database.transaction([...stores], mode, mode === 'readwrite' ? STRICT : undefined);
     } catch (error) {
       if (state === 'open' && /** @type {{name?: unknown}} */ (error)?.name === 'InvalidStateError') state = 'gone';
-      return { ok: false, error: state === 'gone' ? new UnavailableError('storage', 'reload-required', false) : failureOf(error) };
+      return {
+        ok: false,
+        error: state === 'gone' ? new UnavailableError('storage', 'reload-required', false) : failureOf(error),
+      };
     }
     const ended = ending(tx);
     /** @type {T} */

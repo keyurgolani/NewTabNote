@@ -39,14 +39,19 @@ const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/sc
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const CATALOG_URL = new URL('../../js/trust/core/contracts.js', import.meta.url);
 
-const ENTRIES = /** @type {Array<[string, import('../../js/kernel/core/contracts/commands.js').CommandEntry | import('../../js/kernel/core/contracts/queries.js').QueryEntry]>} */ ([
-  ...Object.entries(TRUST_QUERIES),
-  ...Object.entries(TRUST_COMMANDS),
-]);
+const ENTRIES =
+  /** @type {Array<[string, import('../../js/kernel/core/contracts/commands.js').CommandEntry | import('../../js/kernel/core/contracts/queries.js').QueryEntry]>} */ ([
+    ...Object.entries(TRUST_QUERIES),
+    ...Object.entries(TRUST_COMMANDS),
+  ]);
 
 /** Each operation with the schema module its entry names */
 const MODULES = await Promise.all(
-  ENTRIES.map(async ([name, entry]) => ({ name, entry, module: await import(new URL(entry.schema, CATALOG_URL).href) })),
+  ENTRIES.map(async ([name, entry]) => ({
+    name,
+    entry,
+    module: await import(new URL(entry.schema, CATALOG_URL).href),
+  })),
 );
 
 describe('the trust catalog (#20 slice 1, AC1)', () => {
@@ -62,8 +67,14 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
     ]);
     for (const [name, entry] of ENTRIES) {
       assert.equal(entry.version, 1, name);
-      assert.ok(!(name in COMMANDS) && !(name in QUERIES) && !(name in SYSTEM_QUERIES), `${name} is already an operation`);
-      assert.equal(entry.schema, `./operations/${name.replace('.', '-').replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}.js`);
+      assert.ok(
+        !(name in COMMANDS) && !(name in QUERIES) && !(name in SYSTEM_QUERIES),
+        `${name} is already an operation`,
+      );
+      assert.equal(
+        entry.schema,
+        `./operations/${name.replace('.', '-').replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}.js`,
+      );
       assert.ok(entry.surfaces.length > 0 && entry.surfaces.every(surface => SURFACES.includes(surface)), name);
       assert.deepEqual(entry.destinations, []);
       assert.equal(entry.journaled, false);
@@ -125,7 +136,13 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
     assert.equal(request('recovery.run', { ...run, userInitiated: false }).ok, false);
     assert.equal(request('recovery.run', { ...run, userInitiated: 'true' }).ok, false);
     assert.equal(request('recovery.run', { ...run, userInitiated: true }).ok, true);
-    const raise = { type: 'recovery.raise', commandId: 'c2', providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' };
+    const raise = {
+      type: 'recovery.raise',
+      commandId: 'c2',
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      severity: 'degraded',
+    };
     assert.equal(request('recovery.raise', { ...raise, evidence: { durationMs: 3 } }).ok, true);
     assert.deepEqual(request('recovery.raise', { ...raise, evidence: { title: 'x' } }), {
       ok: false,
@@ -138,7 +155,12 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
 
   it('answers each operation within its result schema', async () => {
     const clock = manualClock();
-    const records = createTrustRecords({ store: createMemoryTrustStore(), settings: settingsArea(), clock, ids: hexIds() });
+    const records = createTrustRecords({
+      store: createMemoryTrustStore(),
+      settings: settingsArea(),
+      clock,
+      ids: hexIds(),
+    });
     await records.open();
     const journal = createDiagnosticJournal({ records, clock, strict: true });
     const root = createRegistryRoot({ host: 'workspace' });
@@ -160,7 +182,11 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
         core: true,
         fixtures: ['truthful-receipt'],
         implementation: {
-          check: () => ({ status: 'degraded', capture: 'safe', faults: [{ faultCode: 'scan-findings', severity: 'degraded' }] }),
+          check: () => ({
+            status: 'degraded',
+            capture: 'safe',
+            faults: [{ faultCode: 'scan-findings', severity: 'degraded' }],
+          }),
         },
       },
     ]);
@@ -190,13 +216,19 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
       'diagnostics.export': await trust.exportDiagnostics(),
     };
     for (const [name, answer] of Object.entries(answers)) {
-      assert.ok(['committed', 'ready', 'diagnostics'].includes(/** @type {any} */ (answer).kind), `${name}: ${JSON.stringify(answer)}`);
+      assert.ok(
+        ['committed', 'ready', 'diagnostics'].includes(/** @type {any} */ (answer).kind),
+        `${name}: ${JSON.stringify(answer)}`,
+      );
       const checked = checkResult(TRUST_OPERATIONS[name], answer);
       assert.equal(checked.ok, true, `${name}: ${JSON.stringify(checked)}`);
     }
     assert.deepEqual(/** @type {any} */ (answers['recovery.raise']).changedIds.length, 1);
     // A payload a router would refuse is refused in-process too
-    assert.equal((await trust.raise({ type: 'recovery.raise', commandId: 'c3', providerId: 'storage' })).kind, 'rejected');
+    assert.equal(
+      (await trust.raise({ type: 'recovery.raise', commandId: 'c3', providerId: 'storage' })).kind,
+      'rejected',
+    );
     assert.equal((await trust.verify({ type: 'trust.verify', commandId: 'c4', trigger: 'boot' })).kind, 'rejected');
   });
 });
@@ -205,7 +237,7 @@ describe('where trust code loads (#20 slice 1, R1)', () => {
   const isTrust = (/** @type {string} */ file) =>
     file.startsWith('js/trust/') || file === 'js/kernel/adapters/indexeddb/trust.js';
 
-  it("is reached from no shipped page or the service worker, so nothing users see changes", () => {
+  it('is reached from no shipped page or the service worker, so nothing users see changes', () => {
     const pages = ['offscreen.html'].filter(page => fs.existsSync(path.join(ROOT, page)));
     const graph = readScriptGraph(ROOT, { pages });
     const loaded = [...graph.modules, ...graph.classic, ...graph.workerFiles];
@@ -219,9 +251,12 @@ describe('where trust code loads (#20 slice 1, R1)', () => {
     assert.deepEqual(graph.filter(isTrust), []);
   });
 
-  it('keeps NewTabNoteTrust\'s adapter free of imports from js/trust/, so it can ship before the trust core does', () => {
+  it("keeps NewTabNoteTrust's adapter free of imports from js/trust/, so it can ship before the trust core does", () => {
     const adapter = path.join(ROOT, 'js', 'kernel', 'adapters', 'indexeddb', 'trust.js');
     const graph = [...importGraph(adapter)].map(file => path.relative(ROOT, file));
-    assert.deepEqual(graph.filter(file => file.startsWith('js/trust/')), []);
+    assert.deepEqual(
+      graph.filter(file => file.startsWith('js/trust/')),
+      [],
+    );
   });
 });
