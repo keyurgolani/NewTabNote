@@ -5555,10 +5555,11 @@ class BlockEditor {
 
   /**
    * Show a read-only preview of a snapshot (Req 31.3).
-   * @param {{id: string, timestamp: number}} summary - The snapshot, as version history lists it
+   * @param {{id?: string, timestamp: number, blocks?: Array<Object>}} summary - The snapshot as
+   *   version history lists it, whose blocks are read now, or one with its blocks
    */
   async _previewSnapshot(summary) {
-    const snap = await this._readSnapshot(summary.id);
+    const snap = Array.isArray(summary.blocks) ? summary : await this._readSnapshot(summary.id);
     if (!snap) return;
     // Remove existing preview
     const existing = this.doc.getElementById('snapshot-preview-modal');
