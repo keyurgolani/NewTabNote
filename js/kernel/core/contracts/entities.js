@@ -92,6 +92,18 @@ export const searchEntryRecord = content(
 );
 
 /**
+ * A snapshot of a note, as IndexedDB's `snapshots` store holds it (domain/snapshot.js): the
+ * note's blocks and title at `timestamp`. Its blocks and title are content.
+ */
+export const snapshotRecord = v.looseObject({
+  id: entityId('snapshot'),
+  noteId: entityId('note'),
+  timestamp,
+  blocks: content(v.array(v.unknown())),
+  title: content(v.string()),
+});
+
+/**
  * One entry of #17's change log, which #13's CommitFeed reads from a cursor. #17 defines each
  * op (its slice 4), and #19 fills `parentRevisionIds` and `originDeviceId`.
  */
@@ -110,5 +122,6 @@ export const changeRecord = v.looseObject({
 /** @typedef {v.InferOutput<typeof blockRecord>} BlockEntity */
 /** @typedef {v.InferOutput<typeof blockInput>} BlockInputEntity */
 /** @typedef {v.InferOutput<typeof folderRecord>} FolderEntity */
+/** @typedef {v.InferOutput<typeof snapshotRecord>} SnapshotEntity */
 /** @typedef {v.InferOutput<typeof changeRecord>} ChangeEntity */
 /** @typedef {v.InferOutput<typeof searchEntryRecord>} SearchEntryEntity */

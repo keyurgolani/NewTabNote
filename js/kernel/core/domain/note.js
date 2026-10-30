@@ -285,6 +285,93 @@ export function inBlockOrder(blocks) {
   return [...blocks].sort((a, b) => timeOf(a.order) - timeOf(b.order) || compareKeys(a.id, b.id));
 }
 
+// ============ What a note's blocks give it ============
+
+/** How long a note's preview is, as SidebarUtils keeps it */
+const PREVIEW_LENGTH = 120;
+
+/**
+ * Plain text from markup, as SidebarUtils.stripHtml reads it
+ * @param {unknown} value
+ * @returns {string}
+ */
+function stripHtml(value = '') {
+  return String(value)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The text a block shows, as SidebarUtils.extractBlockText reads it
+ * @param {BlockRecord} block
+ * @returns {string}
+ */
+function blockText(block) {
+  if (block.type === 'toggle') return [stripHtml(block.content), stripHtml(block.children)].filter(Boolean).join(' ');
+  if (block.type === 'bookmark') return [block.title, block.description, block.url].filter(Boolean).join(' ');
+  if (block.type === 'equation') return stripHtml(block.equation);
+  if (block.type === 'table' && Array.isArray(block.tableData)) {
+    return block.tableData
+      .flat()
+      .map(cell => stripHtml(cell))
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (block.type === 'file') return stripHtml(block.fileName);
+  if (block.type === 'video') return stripHtml(block.videoUrl);
+  return stripHtml(block.content);
+}
+
+/**
+ * A note's preview and todo progress from its blocks in note order, as
+ * SidebarUtils.buildNoteSaveMetadata makes them: the first text any block shows, cut to 120
+ * characters with an ellipsis, and how many of its todos are checked, or null for none
+ * @param {BlockRecord[]} blocks
+ * @returns {{preview: string, todoProgress: {completed: number, total: number} | null}}
+ */
+export function noteSaveMetadata(blocks) {
+  let preview = '';
+  let completed = 0;
+  let total = 0;
+  for (const block of blocks) {
+    const text = blockText(block);
+    if (!preview && text) preview = text;
+    if (block.type === 'todo') {
+      total += 1;
+      if (block.checked) completed += 1;
+    }
+  }
+  if (preview.length > PREVIEW_LENGTH) preview = `${preview.slice(0, PREVIEW_LENGTH - 1).trimEnd()}…`;
+  return { preview, todoProgress: total > 0 ? { completed, total } : null };
+}
+
+/**
+ * The note names `[[wiki links]]` in `text` hold, trimmed, each once, as Utils.extractWikiLinks
+ * reads them
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function wikiLinkNames(text) {
+  if (!text) return [];
+  return [...new Set([...text.matchAll(/\[\[([^\]]+)\]\]/g)].map(match => match[1].trim()))];
+}
+
+/**
+ * The text an AI insert reads a note's wiki links from: each block's content, or its title or
+ * caption when it has no content, one block a line, as AIChatController's insert read them
+ * @param {BlockRecord[]} blocks
+ * @returns {string}
+ */
+export function insertLinkText(blocks) {
+  return blocks
+    .map(block => block.content || block.title || block.caption || '')
+    .filter(Boolean)
+    .join('\n');
+}
+
 // ============ Daily Notes ============
 
 /**

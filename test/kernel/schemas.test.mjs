@@ -153,6 +153,8 @@ const folderTypesMatch = true;
  *   getPopupInsightsEnabled: typeof import('../../js/kernel/core/contracts/operations/get-popup-insights-enabled.js').result,
  *   getInsightsPending: typeof import('../../js/kernel/core/contracts/operations/get-insights-pending.js').result,
  *   getJobRuns: typeof import('../../js/kernel/core/contracts/operations/get-job-runs.js').result,
+ *   listSnapshots: typeof import('../../js/kernel/core/contracts/operations/list-snapshots.js').result,
+ *   getSnapshot: typeof import('../../js/kernel/core/contracts/operations/get-snapshot.js').result,
  * }} ResultSchemas
  */
 
@@ -177,6 +179,8 @@ const queryDataMatches = {
   getPopupInsightsEnabled: true,
   getInsightsPending: true,
   getJobRuns: true,
+  listSnapshots: true,
+  getSnapshot: true,
 };
 
 /**
@@ -190,7 +194,7 @@ describe('fields', () => {
     assert.equal(accepts(id, 'n1'), true);
     assert.equal(accepts(id, 'x'.repeat(MAX_ID_LENGTH)), true);
     for (const bad of ['', 'x'.repeat(MAX_ID_LENGTH + 1), 5, null]) assert.equal(accepts(id, bad), false, String(bad));
-    assert.deepEqual(ENTITY_TYPES, ['note', 'block', 'folder']);
+    assert.deepEqual(ENTITY_TYPES, ['note', 'block', 'folder', 'snapshot']);
     assert.deepEqual(v.getMetadata(entityId('folder')), { entity: 'folder' });
     assert.equal(accepts(entityId('note'), ''), false);
     assert.deepEqual(v.getMetadata(content(v.string())), { content: true });
