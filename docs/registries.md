@@ -86,7 +86,7 @@ A descriptor is static data:
 
 A chord is modifiers and one key joined by `+`, such as `Mod+Shift+K`. `Mod` is Cmd on macOS and Ctrl elsewhere. Keys are `KeyboardEvent.code` names without the `Key` and `Digit` prefixes (`K`, `1`, `Backslash`, `F11`), so a chord means the same physical key on every layout. Each modifier appears once, in the order Mod (or Ctrl), Meta, Alt, Shift, and `Mod` never sits beside the Ctrl or Meta it stands for, so a chord names exactly one modifier set.
 
-`chords` lists them per platform (`mac`, `windows`, `linux`, `chromeos`), with `default` for every platform that lists none. Chords are compared as each platform presses them, so `Mod+W` and a Windows `Ctrl+W` are the same chord. The validator rejects Chrome's reserved chords from #24: `Mod+T`, `Mod+N`, `Mod+W`, and `Mod+Tab`, each with or without Shift, `Mod+Shift+Q`, `Mod+PageUp`, and `Mod+PageDown`. Two contributions in a family that bind one chord on a platform are both unresolved. Matching keydowns (AltGraph, dead keys, editable text) is the commands family's, in slice 2.
+`chords` lists them per platform (`mac`, `windows`, `linux`, `chromeos`), with `default` for every platform that lists none. Chords are compared as each platform presses them, so `Mod+W` and a Windows `Ctrl+W` are the same chord. The validator rejects Chrome's reserved chords from #24: `Mod+T`, `Mod+N`, `Mod+W`, and `Mod+Tab`, each with or without Shift, `Mod+Shift+Q`, `Mod+PageUp`, and `Mod+PageDown`. Two contributions in a family that bind one chord on a platform, on a host they share, are both unresolved. `Mod+K` on `workspace` and `Mod+K` on `popup` never fire together, so they don't conflict. Which contexts a chord fires in, and matching keydowns (AltGraph, dead keys, editable text), are the commands family's, in slice 2.
 
 ## Roots and resolution
 
@@ -97,7 +97,7 @@ root.register(navigation, navigationDescriptors);
 const resolution = root.resolve({ disabled: { commands: ['toggle-ai'] } });
 ```
 
-A root takes each family's built-ins at startup and then locks. The first `resolve` locks it, as does `lock()`, and registering after that throws. Entries from user data (installed models, user destinations, prompt templates) aren't descriptors. Their family resolves them as records, so the lock doesn't cover them.
+A root takes each family's built-ins at startup and then locks. The first `resolve` locks it, as does `lock()`, and registering after that throws. `register` keeps a deep frozen copy of each descriptor's data (its loader, implementation, and probe by reference), and each descriptor is checked once, so changing a registered descriptor afterwards changes nothing a root resolves. Entries from user data (installed models, user destinations, prompt templates) aren't descriptors. Their family resolves them as records, so the lock doesn't cover them.
 
 Resolution is synchronous, does no I/O, and calls no loader or probe. The same descriptors and input give the same states and browse order whatever order they were registered in, so a root can rerun it on every service worker wake. A resolution is frozen. `resolution.list(family)` gives a family's contributions in browse order, `resolution.get(ref)` one contribution, and `resolution.problems` everything wrong with any descriptor. Projections hold frozen copies of the static fields, never the loader, implementation, or probe.
 
@@ -144,7 +144,7 @@ A contribution that declares Chrome permissions or a probe is `temporarily-unava
 
 ## Loaders
 
-`runtime.load(ref)` loads an enabled contribution's implementation once. A second call while it's loading gets the same promise. A load that throws, rejects, or resolves to nothing is tried once more. If that fails too, the contribution is `unresolved` (`load-failed`) for the rest of the runtime. `runtime.loaderState(ref)` is `not-loaded`, `loading`, `loaded`, or `load-failed`. A static `implementation` starts `loaded`. Nothing loads during resolution or registration, so optional panels, codecs, and providers stay out of a page until something asks for them.
+`runtime.load(ref)` loads a contribution's implementation once, and only while `runtime.status(ref)` says it's `enabled`. While its probe hasn't answered or says no, or something it requires is unavailable, `load` answers with that status and loads nothing. A second call while it's loading gets the same promise. A load that throws, rejects, or resolves to nothing is tried once more. If that fails too, the contribution is `unresolved` (`load-failed`) for the rest of the runtime. `runtime.loaderState(ref)` is `not-loaded`, `loading`, `loaded`, or `load-failed`. A static `implementation` starts `loaded`. Nothing loads during resolution or registration, so optional panels, codecs, and providers stay out of a page until something asks for them.
 
 ## The resolution report
 
@@ -152,7 +152,7 @@ A contribution that declares Chrome permissions or a probe is `temporarily-unava
 
 | Field | Holds |
 | --- | --- |
-| `family`, `id`, `version` | which contribution |
+| `family`, `id`, `version` | which contribution; `id` is null for a malformed id with characters no id has, so free text never gets in |
 | `state`, `reason` | its state and reason code |
 | `message`, `remediation` | the code-owned text for that reason |
 | `privileged` | whether it reaches a destination or an AI scope beyond `metadata` |
@@ -164,7 +164,7 @@ A row holds nothing else: no label, no family field, no probe answer beyond its 
 
 Every family contract sets a ceiling, and a contribution that asks for more is `unauthorized`:
 
-- `chromePermissions`: manifest permissions, checked with `chrome.permissions.contains` by the root that runs the contribution. Only a contribution whose hosts are all `background` may declare any, and a family may allow them only if it has the `background` host. A family's ceiling lists only permissions in `manifest.json`. The kit can't read the manifest, so each family's tests check that.
+- `chromePermissions`: manifest permissions, checked with `chrome.permissions.contains` by the root that runs the contribution. Only a contribution whose hosts are all `background` may declare any, and a family may allow them only if it has the `background` host. A family's ceiling lists only permissions in `manifest.json`. The kit can't read the manifest, so the conformance suite checks it with `chromePermissionsOutsideManifest`.
 - `aiScopes`: how much note data an AI contribution may read, from `metadata`, `selected-block`, `current-note`, `linked-context`, and `workspace`. Only intelligence and the `ai` inspector allow more than `metadata`. #21 takes this constant over and enforces it.
 - `destinations`: where data may go. Only the sync family and #9's and #11's families allow any.
 - `authorization`: the #12 use-case policy a contribution runs under, which #12 and #21 enforce.
@@ -179,9 +179,11 @@ The kit validates these declarations. Enforcement belongs to #12 and #21. Contri
 describeRegistryConformance('commands', { family: commands, builtIns, sample, fixtures });
 ```
 
-It covers the approved cases, listed in `CONFORMANCE_CASES`: valid, disabled, duplicate, cyclic, missing, incompatible, unauthorized, and lazy. The valid case asserts that every built-in is valid on every host its family has, so a built-in that breaks any rule fails `npm test`. `sample(id, rank)` gives the suite a valid descriptor to derive the other cases from, and `fixtures` has a runner for each fixture the family requires, run on every built-in. `CONFORMANCE_RUNS` records which families ran it, for #28's coverage inventory.
+It covers the approved cases, listed in `CONFORMANCE_CASES`: valid, disabled, duplicate, cyclic, missing, incompatible, unauthorized, and lazy. The valid case asserts that every built-in is valid on every host its family has, so a built-in that breaks any rule fails `npm test`. `sample(id, rank)` gives the suite a valid descriptor to derive the other cases from, and `fixtures` has a runner for each fixture the family requires, run on every built-in. `alongside` lists the other families, with their built-ins, that this family's built-ins require, so they resolve as they will in a root. `context` and `permissions` are what the root would inject, and the valid case runs every built-in's probe once against them and fails on `probe-failed`. It also checks the family's Chrome permission ceiling against `manifest.json`. `CONFORMANCE_RUNS` records which families ran it, for #28's coverage inventory.
 
-`test/kernel/registry-fixtures.mjs` holds four made-up families that between them use every rule, and `registry-conformance-fixtures.test.mjs` runs the suite on them. `test/kernel/registry.test.mjs` tests the kit itself.
+`assertRootValid(entries)` checks a whole root's built-ins on every host its families have, which is what finds a `requires` cycle that crosses families. Each composition root's test should run it on what that root registers.
+
+`test/kernel/registry-fixtures.mjs` holds five made-up families that between them use every rule, and `registry-conformance-fixtures.test.mjs` runs the suite on them. `test/kernel/registry.test.mjs` tests the kit itself.
 
 ## In the build
 

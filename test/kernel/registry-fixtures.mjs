@@ -1,8 +1,9 @@
-// Fixture families for #15's registry kit (slice 1): four made-up families, shaped like the
+// Fixture families for #15's registry kit (slice 1): five made-up families, shaped like the
 // real ones slices 2 to 4 add, that between them use every rule the kit has. Commands bind
-// chords and run in the service worker, navigation has path ids and no loaders, providers
-// reach a destination and have placeholders and probes, and producers ask for AI scopes and
-// require a conformance fixture. None is a real family, and nothing here is wired to a page.
+// chords, run in the service worker, and require a navigation contribution; navigation has
+// path ids and no loaders; providers reach a destination and have placeholders and probes;
+// producers ask for AI scopes and require a conformance fixture; and workers run only in the
+// service worker. None is a real family, and nothing here is wired to a page.
 
 import { defineFamily } from '../../js/kernel/registry/family.js';
 
@@ -83,11 +84,6 @@ export const commandBuiltIns = [
 ];
 
 /**
- * @param {string} id
- * @param {number} rank
- * @returns {Descriptor}
- */
-/**
  * A command that needs another family's contribution, so its family's conformance run has to
  * resolve it with navigation alongside
  * @type {Descriptor}
@@ -107,6 +103,11 @@ export const openSettings = {
 };
 commandBuiltIns.push(openSettings);
 
+/**
+ * @param {string} id
+ * @param {number} rank
+ * @returns {Descriptor}
+ */
 export const commandSample = (id, rank) => ({
   id,
   version: 1,
@@ -375,7 +376,12 @@ export const FIXTURE_FAMILIES = Object.freeze([
     ]),
   },
   { family: navigation, builtIns: navigationBuiltIns, sample: navigationSample },
-  { family: providers, builtIns: providerBuiltIns, sample: providerSample },
+  {
+    family: providers,
+    builtIns: providerBuiltIns,
+    sample: providerSample,
+    context: { configured: true, online: true },
+  },
   { family: producers, builtIns: producerBuiltIns, sample: producerSample },
   { family: workers, builtIns: workerBuiltIns, sample: workerSample },
 ]);

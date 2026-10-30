@@ -11,8 +11,10 @@
  * `temporarily-unavailable` with `probe-failed`. A probe can't enable a contribution
  * resolution didn't, and the answer's code is all the runtime keeps of it.
  *
- * A loader runs only for an enabled contribution, once at a time: a second load while one is
- * in flight gets the same promise. A load that throws, rejects, or resolves to nothing is
+ * A loader runs only for a contribution that's enabled now, as `status` gives it: not while
+ * its probe hasn't answered or says no, or while something it requires is unavailable. Such a
+ * load answers with that status and loads nothing. It runs once at a time: a second load
+ * while one is in flight gets the same promise. A load that throws, rejects, or resolves to nothing is
  * tried once more, and if that fails too, the contribution is `unresolved` with
  * `load-failed` for the rest of this runtime. Probes and loaders get the root's injected
  * context and nothing else: no kernel, credential, storage, or network access of their own.
@@ -206,16 +208,15 @@ export function createRuntime(resolution, { context = {}, permissions } = {}) {
     },
     status: ref => status(ref),
     /**
-     * The contribution's implementation, loaded once
+     * The contribution's implementation, loaded once, or its status when it isn't enabled now
      * @param {string} ref
      * @returns {Promise<LoadOutcome>}
      */
     load(ref) {
       const contribution = resolution.get(ref);
       if (!contribution) return Promise.resolve({ ok: false, ...NOT_REGISTERED });
-      if (contribution.state !== 'enabled') {
-        return Promise.resolve({ ok: false, state: contribution.state, reason: contribution.reason });
-      }
+      const now = status(ref);
+      if (now.state !== 'enabled') return Promise.resolve({ ok: false, state: now.state, reason: now.reason });
       const entry = /** @type {{state: LoaderState, promise: Promise<LoadOutcome> | null, implementation: unknown}} */ (
         loaders.get(ref)
       );

@@ -999,7 +999,11 @@ describe('registry review fixes', () => {
     const probing = runtime.probe();
     answers[0]({ state: 'enabled' });
     await probing;
-    assert.deepEqual(await runtime.load('fixture-plain:setup'), { ok: false, state: 'needs-setup', reason: 'needs-setup' });
+    assert.deepEqual(await runtime.load('fixture-plain:setup'), {
+      ok: false,
+      state: 'needs-setup',
+      reason: 'needs-setup',
+    });
     assert.deepEqual(await runtime.load('fixture-plain:dependent'), {
       ok: false,
       state: 'temporarily-unavailable',
@@ -1019,7 +1023,9 @@ describe('registry review fixes', () => {
       hosts,
       chords: { default: ['Mod+K'] },
     });
-    const apart = resolveAll('workspace', [[commands, [chord('here', 1, ['workspace']), chord('there', 2, ['popup'])]]]);
+    const apart = resolveAll('workspace', [
+      [commands, [chord('here', 1, ['workspace']), chord('there', 2, ['popup'])]],
+    ]);
     assert.deepEqual(stateOf(apart, 'fixture-commands:here'), ['enabled', 'ok']);
     assert.deepEqual(stateOf(apart, 'fixture-commands:there'), ['not-applicable', 'other-host']);
     const together = resolveAll('popup', [

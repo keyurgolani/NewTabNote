@@ -4,7 +4,8 @@
  * exposes it as a kernel query with its first consumer. It's a pure function of a resolution,
  * or of a runtime's snapshot once probes and loaders have answered.
  *
- * A row holds the contribution's family, id, and version, its state, the reason code, the
+ * A row holds the contribution's family, id (null for a malformed one with characters no id
+ * has), and version, its state, the reason code, the
  * code-owned text for that reason and its remediation, whether it's privileged (it reaches a
  * destination, or an AI scope beyond `metadata`), and the refs a conflict or requirement is
  * about. Nothing else: no label, no field a family defines, no probe answer beyond its code,
@@ -12,6 +13,12 @@
  */
 
 import { reasonFor } from './reasons.js';
+
+/**
+ * The characters an id may have, loosely, so a malformed id still names its row when it's
+ * close to one (`BadId`), and free text (`Bad Id`, a sentence) never reaches the report
+ */
+const ID_CHARACTERS = /^[A-Za-z0-9._/:-]{1,64}$/;
 
 /** @typedef {import('./resolve.js').Resolution} Resolution */
 /** @typedef {import('./reasons.js').State} State */
@@ -42,7 +49,9 @@ export function resolutionReport(resolution) {
       const reason = reasonFor(reasons.get(contribution.family) ?? {}, contribution.reason);
       return Object.freeze({
         family: contribution.family,
-        id: contribution.id ?? contribution.rawId,
+        id:
+          contribution.id ??
+          (contribution.rawId !== null && ID_CHARACTERS.test(contribution.rawId) ? contribution.rawId : null),
         version: contribution.version,
         state: contribution.state,
         reason: contribution.reason,

@@ -7,7 +7,7 @@
  *
  * What one descriptor gets wrong is validate.js's. Here, across descriptors: two with one id
  * in a family are both unresolved, and so are two with one group and rank, two binding one
- * chord on a platform, and every member of a `requires` cycle. Something that requires a
+ * chord on a platform and a host they share, and every member of a `requires` cycle. Something that requires a
  * missing or unresolved contribution is unresolved too. Then, for this root: a contribution
  * for another host, or one whose requirement is turned off or runs elsewhere, isn't
  * applicable, one the user turned off is `disabled-by-user`, and a placeholder is
@@ -159,9 +159,11 @@ export function makeResolution(host, families, contributions, problems, internal
  * @param {ReadonlyMap<string, {family: Family, descriptors: readonly unknown[]}>} registered by family id
  * @param {{disabled?: Readonly<Record<string, readonly string[]>>}} [input] the ids the user
  *   turned off, by family; ids nothing has are kept and ignored
+ * @param {WeakMap<object, Checked>} [checks] each descriptor's checks from an earlier resolve,
+ *   reused so a root resolves the descriptors it locked, not whatever they hold now
  * @returns {Resolution}
  */
-export function resolve(host, registered, { disabled = {} } = {}) {
+export function resolve(host, registered, { disabled = {} } = {}, checks = new WeakMap()) {
   const familyIds = [...registered.keys()].sort();
   /** @type {Node[]} */
   const nodes = [];
@@ -177,7 +179,7 @@ export function resolve(host, registered, { disabled = {} } = {}) {
     /** @type {Node[]} */
     const members = descriptors.map((descriptor, index) => ({
       family,
-      checked: checkDescriptor(family, descriptor),
+      checked: checkOnce(family, descriptor, checks),
       index,
       ref: null,
       conflict: null,
@@ -208,10 +210,15 @@ export function resolve(host, registered, { disabled = {} } = {}) {
     conflicts(valid, node => [`${node.checked.groupIndex}:${node.checked.rank}`], 'ordering-conflict');
     conflicts(
       valid,
-      node =>
-        node.checked.pressed
-          ? PLATFORMS.flatMap(platform => node.checked.pressed?.[platform].map(chord => `${platform}:${chord}`) ?? [])
-          : [],
+      // Two chords collide only where both can fire: on a host they share, on one platform.
+      // Which contexts a chord fires in is the command family's to check.
+      node => {
+        const { pressed, hosts } = node.checked;
+        if (!pressed) return [];
+        return hosts.flatMap(on =>
+          PLATFORMS.flatMap(platform => pressed[platform].map(chord => `${on}:${platform}:${chord}`)),
+        );
+      },
       'chord-conflict',
     );
   }
@@ -329,6 +336,22 @@ export function resolve(host, registered, { disabled = {} } = {}) {
 }
 
 /**
+ * A descriptor's checks, from `checks` when this descriptor was checked before
+ * @param {Family} family
+ * @param {unknown} descriptor
+ * @param {WeakMap<object, Checked>} checks
+ * @returns {Checked}
+ */
+function checkOnce(family, descriptor, checks) {
+  if (descriptor === null || typeof descriptor !== 'object') return checkDescriptor(family, descriptor);
+  const known = checks.get(descriptor);
+  if (known) return known;
+  const checked = checkDescriptor(family, descriptor);
+  checks.set(descriptor, checked);
+  return checked;
+}
+
+/**
  * Mark every node that shares a key with another as unresolved with `code`
  * @param {Node[]} nodes
  * @param {(node: Node) => string[]} keysOf
@@ -435,7 +458,8 @@ function cycles(byRef) {
 
 /**
  * Family, then group, then rank, then id; descriptors without a comparable place sort after
- * the rest of their family by the id they wrote, then by registration order
+ * the rest of their family by the id they wrote. Then version, then registration order, which
+ * only descriptors alike in all of those fall back to.
  * @param {Node} a
  * @param {Node} b
  */
@@ -450,5 +474,8 @@ function byBrowseOrder(a, b) {
   const aId = a.checked.rawId ?? '';
   const bId = b.checked.rawId ?? '';
   if (aId !== bId) return aId < bId ? -1 : 1;
+  const aVersion = a.checked.version ?? 0;
+  const bVersion = b.checked.version ?? 0;
+  if (aVersion !== bVersion) return aVersion - bVersion;
   return a.index - b.index;
 }

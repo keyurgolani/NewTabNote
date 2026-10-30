@@ -158,8 +158,9 @@ export function checkDescriptor(family, descriptor) {
   else if (d.apiVersion !== family.apiVersion) {
     add('incompatible-api-version', 'apiVersion');
     return checked;
+  } else {
+    checked.compatible = true;
   }
-  checked.compatible = true;
 
   for (const field of Object.keys(d)) {
     if (!COMMON_FIELDS.includes(field) && !Object.hasOwn(family.fields, field)) add('unknown-field', field);

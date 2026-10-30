@@ -10,6 +10,7 @@
  * explains.
  */
 
+import { frozenCopy, isPlainData } from './data.js';
 import { isFamily } from './family.js';
 import { resolve as resolveRegistered } from './resolve.js';
 import { HOSTS, LIMITS } from './vocabulary.js';
@@ -38,13 +39,16 @@ export function createRegistryRoot({ host }) {
   /** @type {Map<string, {family: Family, descriptors: unknown[]}>} */
   const registered = new Map();
   let locked = false;
+  /** @type {WeakMap<object, import('./validate.js').Checked>} */
+  const checks = new WeakMap();
 
   return Object.freeze({
     host,
     /**
      * Add a family's descriptors. Several modules may register one family; its descriptors
-     * join in the order they arrive. Each descriptor is copied, so changing it later changes
-     * nothing here.
+     * join in the order they arrive. Each descriptor's data is copied deep and frozen, and
+     * each is checked once, at the first resolve after it's registered, so changing it later
+     * changes nothing here.
      * @param {Family} family
      * @param {readonly unknown[]} descriptors
      */
@@ -59,13 +63,7 @@ export function createRegistryRoot({ host }) {
           `registry root (${host}): ${family.id} has more than ${LIMITS.contributionsPerFamily} contributions`,
         );
       }
-      for (const descriptor of descriptors) {
-        const copy =
-          descriptor !== null && typeof descriptor === 'object' && !Array.isArray(descriptor)
-            ? Object.freeze({ ...descriptor })
-            : descriptor;
-        entry.descriptors.push(copy);
-      }
+      for (const descriptor of descriptors) entry.descriptors.push(copyOf(descriptor));
       registered.set(family.id, entry);
     },
     lock() {
@@ -76,7 +74,28 @@ export function createRegistryRoot({ host }) {
     },
     resolve(input = {}) {
       locked = true;
-      return resolveRegistered(host, registered, input);
+      return resolveRegistered(host, registered, input, checks);
     },
   });
+}
+
+/** The fields kept by reference: code, not data */
+const CODE_FIELDS = ['load', 'implementation', 'probe'];
+
+/**
+ * A descriptor as registered: a frozen copy whose plain-data fields are deep frozen copies too,
+ * with its loader, implementation, and probe kept by reference. Anything else is left as it is,
+ * for validation to reject.
+ * @param {unknown} descriptor
+ */
+function copyOf(descriptor) {
+  if (descriptor === null || typeof descriptor !== 'object' || Array.isArray(descriptor)) return descriptor;
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(descriptor).map(([field, value]) => [
+        field,
+        CODE_FIELDS.includes(field) || !isPlainData(value) ? value : frozenCopy(value),
+      ]),
+    ),
+  );
 }
