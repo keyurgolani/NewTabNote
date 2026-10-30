@@ -42,7 +42,8 @@ import { createScopeCheck } from './scope.js';
  * state, or a promise of one
  * @callback PageHandler
  * @param {unknown} payload
- * @param {{target: Target, deadline: number}} context
+ * @param {{target: Target, deadline: number}} context - `deadline` is the request's, or its
+ *   entry's `deadlineMs` from when it arrived when that comes first. No answer goes after it.
  * @returns {unknown}
  */
 
@@ -135,19 +136,30 @@ export function createPageResponder({
     if (!checked.ok) return refuse(checked.code);
     const { operation, payload } = checked;
     if (!addressable(operation)) return refuse('unknown-operation');
-    if (frame.deadline <= clock.now()) return refuse('deadline-exceeded');
+    const arrived = clock.now();
+    if (frame.deadline <= arrived) return refuse('deadline-exceeded');
     if (!inScope(operation, payload)) return refuse('forbidden-for-surface');
     const handler = Object.hasOwn(handlers, frame.operation) ? handlers[frame.operation] : undefined;
     if (!handler) return refuse('unknown-operation');
+    // The entry's deadline holds however far off the request puts its own, as in the router
+    const deadline = Math.min(frame.deadline, arrived + operation.entry.deadlineMs);
+    // The requester has stopped waiting by then, so an answer after it would only add noise
+    const late = () => {
+      if (clock.now() < deadline) return false;
+      warn(logger, 'page-answer-too-late', { operation: frame.operation });
+      return true;
+    };
     Promise.resolve()
-      .then(() => handler(payload, { target: frame.target, deadline: frame.deadline }))
+      .then(() => handler(payload, { target: frame.target, deadline }))
       .then(
         result => {
+          if (late()) return;
           if (checkResult(operation, result).ok) return answer(result);
           warn(logger, 'page-handler-invalid-answer', { operation: frame.operation });
           refuse('unavailable');
         },
         error => {
+          if (late()) return;
           warn(logger, 'page-handler-failed', { operation: frame.operation, error });
           refuse('unavailable');
         },

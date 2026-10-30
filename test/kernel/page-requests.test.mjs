@@ -238,6 +238,55 @@ describe('page-addressed requests (#13, "Topology")', () => {
     assert.deepEqual(posted, ['page-request', 'page-response']);
   });
 
+  it("hold a handler to its entry's deadline, however far off the request puts it, and post no answer after it", async () => {
+    /** @type {number[]} */
+    const deadlines = [];
+    /** @type {Array<(state: unknown) => void>} */
+    const finish = [];
+    const { fake, scheduler, warnings } = pages({
+      measured: (_, { deadline }) => {
+        deadlines.push(deadline);
+        return new Promise(resolve => finish.push(resolve));
+      },
+    });
+    const raw = new (fake.page('newtab').BroadcastChannel)(HINT_CHANNEL);
+    /** @type {string[]} */
+    const answered = [];
+    raw.addEventListener('message', (/** @type {{data: unknown}} */ event) => {
+      const frame = /** @type {any} */ (decode(event.data));
+      if (frame.frame === 'page-response') answered.push(frame.requestId);
+    });
+    /**
+     * @param {string} requestId
+     * @param {number} deadline
+     */
+    const post = (requestId, deadline) =>
+      raw.postMessage(
+        encode({
+          frame: 'page-request',
+          requestId,
+          operation: 'test.measure',
+          version: 1,
+          deadline,
+          target: { kind: 'session', sessionId: 's-other' },
+          payload: { type: 'test.measure', noteId: 'n1' },
+        }),
+      );
+    post('far', NOW + 10 * QUERY_DEADLINE_MS);
+    post('near', NOW + 1000);
+    await settle();
+    assert.deepEqual(deadlines, [NOW + QUERY_DEADLINE_MS, NOW + 1000]);
+    // The near one answers in time, and the far one only after its entry's deadline
+    finish[1](ready(NOW, { n: 2 }));
+    await settle();
+    await scheduler.advance(QUERY_DEADLINE_MS);
+    finish[0](ready(NOW, { n: 1 }));
+    await settle();
+    await settle();
+    assert.deepEqual(answered, ['near']);
+    assert.deepEqual(warnings, ['page-answer-too-late']);
+  });
+
   it('take only a valid answer to their own request, whoever else posts one', async () => {
     const { fake, requester } = pages({
       handler: session => () => new Promise(resolve => setImmediate(() => resolve(ready(NOW, { sessionId: session })))),
