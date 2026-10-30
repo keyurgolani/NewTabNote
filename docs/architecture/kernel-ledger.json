@@ -50,7 +50,7 @@
     {
       "file": "js/controllers/ai-chat-controller.js",
       "rule": "this.storage",
-      "count": 36,
+      "count": 27,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -133,14 +133,6 @@
       "count": 5,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/editor.js",
-      "rule": "Storage",
-      "count": 8,
-      "owner": 12,
-      "removeWhen": "#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp",
       "verify": "npm run check:boundaries"
     },
     {

@@ -878,9 +878,9 @@ describe('BlockEditor saves keep trash and archive state', () => {
   it('a snapshot revert keeps a trash made elsewhere, and writes the snapshot title', async () => {
     await storeFlags({ trashed: true, trashedAt: 42, archived: false, archivedAt: null });
     await saveEdit('edited after the trash');
-    await runUntil(env, editor._revertToSnapshot({
-      timestamp: 1, title: 'From the snapshot', blocks: [{ id: 'a1', type: 'text', content: 'restored' }],
-    }));
+    await runUntil(env, env.documentClient.saveSnapshot('A', [{ id: 'a1', type: 'text', content: 'restored' }], 'From the snapshot'));
+    const [summary] = await runUntil(env, env.documentClient.snapshots('A'));
+    await runUntil(env, editor._revertToSnapshot(summary));
     const stored = await Storage.getNote('A');
     assert.deepEqual([stored.trashed, stored.trashedAt, stored.name], [true, 42, 'From the snapshot']);
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'restored' });
