@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { loadsOf } from './import-graph.mjs';
+
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const ADAPTER = 'js/kernel/adapters/messaging/runtime-port.js';
 
@@ -30,6 +32,18 @@ function scripts(dir) {
  */
 const naming = pattern => scripts('js').filter(file => pattern.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
 
+/**
+ * The scripts that load `module` in any form TypeScript's parser reads: a named or namespace
+ * import, a re-export, or a side-effect import
+ * @param {string} module - relative to the repository root
+ */
+const loading = module =>
+  scripts('js').filter(file =>
+    loadsOf(fs.readFileSync(path.join(ROOT, file), 'utf8'))
+      .imports.filter(specifier => specifier.startsWith('.'))
+      .some(specifier => path.join(path.dirname(file), specifier) === module),
+  );
+
 describe('chrome.runtime listeners (#13, AC4)', () => {
   it('leaves onConnect to the runtime-port adapter alone', () => {
     assert.ok(scripts('js').length > 100);
@@ -42,6 +56,9 @@ describe('chrome.runtime listeners (#13, AC4)', () => {
       naming(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from`));
     assert.deepEqual(importing('installRuntimePort'), ['js/kernel/composition/background.js']);
     assert.deepEqual(importing('installWorkerRouter'), ['js/background.js']);
+    // The module that defines installWorkerRouter is loaded by the worker alone, however a
+    // module would load it, so no page reaches it through a re-export or a namespace import
+    assert.deepEqual(loading('js/kernel/composition/background.js'), ['js/background.js']);
     assert.deepEqual(
       naming(/\binstallRuntimePort\s*\(/).filter(file => file !== ADAPTER),
       ['js/kernel/composition/background.js'],

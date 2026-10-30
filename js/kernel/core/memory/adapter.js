@@ -11,14 +11,22 @@
  *   A bulk command keeps only its fingerprint, from its first recall, so the same commandId
  *   with another selection is key reuse even when both are sent at once, and a resend runs
  *   again: each item that committed or conflicted answers from its own record, and each
- *   other item runs again. The same command is the same canonical JSON, keys sorted, which
- *   #17 hashes instead.
+ *   other item runs again. The same command is the same SHA-256 of its canonical JSON, keys
+ *   sorted (memory/fingerprint.js), the digest #17 keeps, so no record holds the command.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
  *
  * The contract suite runs against it, and `beforeWrite` lets a test make a write fail. #17
  * persists what it keeps: revisions, outcomes, and conflicts.
+ *
+ * Given #13's in-memory ledger and commit log (memory/ledger.js, memory/commit-log.js), it
+ * writes them in the task that commits, as #17 writes its idempotency record and change-log
+ * entry in the commit's transaction: a commit that changes notes or folders appends one change
+ * per entity, with its revision, and its committed outcome carries that commitSeq. Then the
+ * ledger keeps each committed or conflict outcome under its commandId. A resend appends and
+ * records nothing again, and a bulk command's reservation stays the adapter's own, so its key
+ * reads as absent there and each item's reads under its own.
  */
 
 import { clone } from '../contracts/clone.js';
@@ -27,6 +35,7 @@ import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcom
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
+import { digestOf } from './fingerprint.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
@@ -39,6 +48,9 @@ import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
 /** @typedef {import('../ports/repository.js').ReadTx} ReadTx */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Work} Work */
+/** @typedef {import('../ports/commit-log.js').Change} Change */
+/** @typedef {import('./commit-log.js').MemoryCommitLog} MemoryCommitLog */
+/** @typedef {import('./ledger.js').MemoryLedger} MemoryLedger */
 
 /**
  * A conflict the adapter kept: the command that lost, and the revision it lost to. The
@@ -54,6 +66,8 @@ import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
  * @property {(target: StoreName | SettingsArea, key: string) => void} [beforeWrite]
  *   Called before each write; a throw fails the command, as a failing IndexedDB request
  *   would. Throw an UnavailableError to choose the cause.
+ * @property {MemoryLedger} [ledger] - where it keeps each committed and conflict outcome too
+ * @property {MemoryCommitLog} [commitLog] - where it appends each commit's changed entities
  */
 
 /** @typedef {KernelAdapter & {conflicts: () => KeptConflict[]}} MemoryAdapter */
@@ -70,36 +84,13 @@ const isKey = key => typeof key === 'string' && key !== '';
  */
 const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-/**
- * `value` with every object's keys in sorted order, so two copies of one command serialize alike
- * @param {unknown} value
- * @returns {unknown}
- */
-const sortedKeys = value => {
-  if (Array.isArray(value)) return value.map(sortedKeys);
-  if (value === null || typeof value !== 'object') return value;
-  const record = /** @type {Record<string, unknown>} */ (value);
-  return Object.fromEntries(
-    Object.keys(record)
-      .sort(byKey)
-      .map(key => [key, sortedKeys(record[key])]),
-  );
-};
-
-/**
- * What tells one command from another under the same commandId: its canonical JSON
- * @param {Command} command
- * @returns {string}
- */
-const fingerprintOf = command => JSON.stringify(sortedKeys(command));
-
 /** @typedef {{fingerprint: string, outcome?: Outcome}} KeptOutcome - a bulk command's has no outcome */
 
 /**
  * @param {MemoryAdapterOptions} [options]
  * @returns {MemoryAdapter}
  */
-export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
+export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog } = {}) {
   /** @type {Map<StoreName, Map<string, Record<string, unknown>>>} */
   const stores = new Map(/** @type {StoreName[]} */ (Object.keys(STORES)).map(name => [name, new Map()]));
   /** @type {Map<string, number>} */
@@ -307,6 +298,40 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   };
 
   /**
+   * The entities a committed command changed, for the commit log: notes and folders, each at
+   * its revision, or 0 for one that has none. Settings and maintenance change no entity.
+   * @param {Work} work
+   * @param {Outcome} outcome
+   * @returns {Change[]}
+   */
+  const changesOf = (work, outcome) => {
+    if (outcome.kind !== 'committed') return [];
+    const { aggregate } = COMMANDS[work.command.type];
+    if (aggregate !== 'note' && aggregate !== 'folder') return [];
+    /** @type {StoreName} */
+    const store = aggregate === 'note' ? 'notes' : 'folders';
+    return outcome.changedIds.map(entityId => ({
+      entityType: aggregate,
+      entityId,
+      revision: revisions.get(revisionKey(store, entityId)) ?? 0,
+    }));
+  };
+
+  /**
+   * Writes the commit log and the ledger for an outcome the adapter keeps, and answers it with
+   * its commitSeq when the log took a change
+   * @param {Work} work
+   * @param {Outcome} outcome
+   * @returns {Outcome}
+   */
+  const log = (work, outcome) => {
+    const changes = commitLog ? changesOf(work, outcome) : [];
+    const kept = changes.length > 0 ? { ...outcome, commitSeq: commitLog?.append(changes) } : outcome;
+    if (kept.kind === 'committed' || kept.kind === 'conflict') ledger?.record(work.command, kept);
+    return kept;
+  };
+
+  /**
    * What the commandId already answered, or `idempotency-key-reuse` when it came with
    * another command. Undefined when it has no record, or a bulk command's record, which keeps
    * no outcome.
@@ -317,7 +342,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   const keptFor = (commandId, command) => {
     const kept = outcomes.get(commandId);
     if (!kept) return undefined;
-    if (kept.fingerprint !== fingerprintOf(command)) return rejected('validation', 'idempotency-key-reuse');
+    if (kept.fingerprint !== digestOf(command)) return rejected('validation', 'idempotency-key-reuse');
     return kept.outcome && clone(kept.outcome);
   };
 
@@ -332,7 +357,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
       // even sent at the same time, and a resend runs again, each item answering from its own
       // record.
       if (kept === undefined && COMMANDS[command.type].bulk && !outcomes.has(command.commandId)) {
-        outcomes.set(command.commandId, { fingerprint: fingerprintOf(command) });
+        outcomes.set(command.commandId, { fingerprint: digestOf(command) });
       }
       return kept;
     },
@@ -350,7 +375,8 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
           return { outcome: unavailableFrom(error), replayed: false };
         }
         if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
-          outcomes.set(work.commandId, { fingerprint: fingerprintOf(work.command), outcome: clone(outcome) });
+          outcome = log(work, outcome);
+          outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };
       });

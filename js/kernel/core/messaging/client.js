@@ -13,9 +13,19 @@
  * - Each request carries its deadline, from when it's sent, which the router enforces. The
  *   client waits DEADLINE_GRACE_MS past it before it gives up, so no client timeout is
  *   shorter, and giving up never starts a second way to run it.
- * - A command whose answer didn't come and that may have started is unknown, and #13 slice 3
- *   resolves it by its commandId before anything shows saved or failed. A command that was
- *   never sent is definitely unavailable.
+ * - A command whose answer didn't come and that may have started is unknown: its reply was
+ *   lost to a dropped connection, a deadline, or an answer it can't take. Given an
+ *   IdempotencyLedger, the client resolves it by its commandId before its caller hears
+ *   anything, so nothing shows saved or failed first ("Idempotency and catch-up"): a record of
+ *   it committed answers the original outcome, a conflict reads back, and none allows one
+ *   resend with the same key. Only the coordinator's own answer to that resend counts, and
+ *   anything else that ends it reads the ledger again, since the first send may have committed.
+ *   A command still without a record then stays unknown, and so does one whose ledger can't be
+ *   read. A cancel after its reply was lost changes nothing. A command that was never sent is
+ *   definitely unavailable.
+ * - resume() resolves what a page had in flight when it went, from its journal: each journaled
+ *   command by its key the same way, and one that isn't journaled by reading the ledger only,
+ *   never sending it again, since its outcome comes from reading the projection (#13, AC3).
  * - An answer counts once its operation's result schema takes it, so a reply is as strict as
  *   a request.
  *
@@ -38,7 +48,10 @@ import {
   RECONNECTING_AFTER_MS,
   RECONNECT_DELAYS_MS,
 } from '../contracts/limits.js';
+import { isRecord } from '../contracts/checks.js';
+import { rejected, unknown } from '../contracts/outcomes.js';
 import { commandOutcome, queryFailure } from '../contracts/transport-codes.js';
+import { upcastJournalEntry } from '../contracts/upcast.js';
 import { checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
 
@@ -46,6 +59,12 @@ import { silentLogger } from '../ports/runtime.js';
 /** @typedef {import('../contracts/envelope.js').WelcomeFrame} WelcomeFrame */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../contracts/outcomes.js').BulkOutcome} BulkOutcome */
+/** @typedef {import('../contracts/outcomes.js').Unknown} Unknown */
+/** @typedef {import('../ports/idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
+/** @typedef {import('../ports/idempotency-ledger.js').KeyedCommand} KeyedCommand */
+/** @typedef {import('../ports/idempotency-ledger.js').LedgerRead} LedgerRead */
+/** @typedef {import('../ports/journal.js').JournalEntry} JournalEntry */
+/** @typedef {import('../ports/journal.js').JournalReader} JournalReader */
 /** @typedef {import('../contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../contracts/transport-codes.js').TransportCode} TransportCode */
 /** @typedef {import('../contracts/validate.js').Operation} Operation */
@@ -109,6 +128,10 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {Logger} [logger]
  * @property {() => boolean} [isComposing] - whether an IME composition is open on the page
  * @property {() => boolean} [hasPendingCommit] - whether the page holds input not yet committed
+ * @property {IdempotencyLedger} [ledger]
+ *   #17's ledger, read in-process, by which a command whose reply was lost resolves. Without
+ *   one, such a command answers unknown at once.
+ * @property {JournalReader} [journal] - #17's journal, which resume() reads
  */
 
 /**
@@ -127,6 +150,16 @@ import { silentLogger } from '../ports/runtime.js';
  *   Whether reloading the page loses nothing: no IME composition, no input the page hasn't
  *   committed, and no command of this client's waiting for its answer
  * @property {() => CoordinatorInfo | null} coordinator
+ * @property {() => Promise<Array<{commandId: string, outcome: Outcome | BulkOutcome}>>} resume
+ *   Resolves each command the journal holds once the page reloaded or came back, by its key.
+ *   It reads every record first, in the journal's order, by the command as the journal wrote
+ *   it, so a record answers whatever the client's state. Then it sends again each journaled
+ *   command that has none, once, in that order, each after the one before it answered. Only
+ *   to send it is a command taken to the catalog's current version (contracts/upcast.js), and
+ *   one that can't be is refused with its code, unsent. One that can't go now, as once the
+ *   client closed or the coordinator speaks another major version, stays unknown. A command
+ *   still open in this client is waited on, not sent again. Without a journal and a ledger, or
+ *   when the journal can't be read, it resolves nothing.
  * @property {() => void} close - settles every call and refuses any after
  */
 
@@ -142,6 +175,9 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {boolean} visible - the user waits on it
  * @property {number} since - when it was made
  * @property {boolean} sent
+ * @property {boolean} resent - a command whose reply was lost, sent again or never to be
+ * @property {boolean} settled
+ * @property {Unknown | null} lost - what it answers if it can't be resolved, once its reply was lost
  * @property {unknown} timer
  * @property {(answer: unknown) => void} resolve
  * @property {() => void} unlisten
@@ -162,6 +198,8 @@ export function createClient({
   logger = silentLogger,
   isComposing = () => false,
   hasPendingCommit = () => false,
+  ledger,
+  journal,
 }) {
   const sessionId = ids.next();
   /**
@@ -193,6 +231,10 @@ export function createClient({
   let waiting = [];
   /** @type {Map<string, Call>} calls sent, by requestId */
   const sent = new Map();
+  /** @type {Set<Call>} commands whose reply was lost, while the ledger is read */
+  const verifying = new Set();
+  /** @type {Map<string, Promise<unknown>>} each command still open, by commandId */
+  const open = new Map();
   /** @type {Set<(state: ConnectionState) => void>} */
   const listeners = new Set();
   /** @type {ConnectionState} */
@@ -248,19 +290,125 @@ export function createClient({
    * @param {unknown} answer
    */
   const settle = (call, answer) => {
+    if (call.settled) return;
+    call.settled = true;
     timers.clear(call.timer);
     sent.delete(call.requestId);
     waiting = waiting.filter(other => other !== call);
+    verifying.delete(call);
     call.unlisten();
     call.resolve(answer);
   };
 
   /**
-   * Settles every call still waiting to be sent, which definitely never started
+   * Ends a call with `result`. A command answered unknown goes to the ledger first, and so
+   * does a resend that anything but the coordinator's own answer ends, since the first send
+   * may have committed.
+   * @param {Call} call
+   * @param {unknown} result
+   * @param {boolean} answered - it's the coordinator's answer: a response, or too-late
+   */
+  const conclude = (call, result, answered) => {
+    if (call.kind !== 'command' || !ledger) return settle(call, result);
+    const { kind, code } = /** @type {{kind?: unknown, code?: unknown}} */ (result);
+    if (kind !== 'unknown' && (answered || !call.resent)) return settle(call, result);
+    const lost =
+      kind === 'unknown'
+        ? /** @type {Unknown} */ (result)
+        : unknown(typeof code === 'string' ? code : 'outcome-unknown', call.commandId);
+    if (phase === 'closed') return settle(call, lost);
+    verify(call, lost);
+  };
+
+  /**
+   * Ends a call with a transport code
+   * @param {Call} call
+   * @param {TransportCode} code
+   * @param {boolean} mayHaveStarted
+   */
+  const end = (call, code, mayHaveStarted) => conclude(call, answerFor(call, code, mayHaveStarted), false);
+
+  /**
+   * Whether `read` is an answer a ledger gives, whose outcome the command's result schema takes
+   * @param {Operation} operation
+   * @param {unknown} read
+   * @returns {read is LedgerRead}
+   */
+  const isLedgerRead = (operation, read) => {
+    if (!isRecord(read)) return false;
+    const { status, outcome } = read;
+    if (status === 'absent' || status === 'key-reuse') return true;
+    if (status !== 'committed' && status !== 'conflict') return false;
+    return isRecord(outcome) && outcome.kind === status && checkResult(operation, outcome).ok;
+  };
+
+  /**
+   * What the ledger has of a command, or null when it can't say
+   * @param {Operation} operation
+   * @param {Record<string, unknown>} command
+   * @returns {Promise<LedgerRead | null>}
+   */
+  const readLedger = (operation, command) =>
+    Promise.resolve()
+      .then(() => /** @type {IdempotencyLedger} */ (ledger).read(/** @type {KeyedCommand} */ (command)))
+      .then(
+        read => {
+          if (isLedgerRead(operation, read)) return read;
+          warn('client-ledger-invalid-read', { operation: command.type });
+          return null;
+        },
+        error => {
+          warn('client-ledger-read-failed', { operation: command.type, error });
+          return null;
+        },
+      );
+
+  /**
+   * Resolves a command whose reply was lost by its key: what the ledger has of it, or with no
+   * record, one resend with the same key. Until then its caller hears nothing.
+   * @param {Call} call
+   * @param {Unknown} lost - what it answers if the ledger can't settle it
+   */
+  const verify = (call, lost) => {
+    timers.clear(call.timer);
+    sent.delete(call.requestId);
+    waiting = waiting.filter(other => other !== call);
+    call.sent = false;
+    call.lost = lost;
+    verifying.add(call);
+    void readLedger(call.operation, call.payload).then(read => {
+      if (call.settled) return;
+      verifying.delete(call);
+      if (read?.status === 'committed' || read?.status === 'conflict') return settle(call, read.outcome);
+      if (read?.status === 'key-reuse') return settle(call, rejected('validation', 'idempotency-key-reuse'));
+      if (read?.status === 'absent' && !call.resent && phase !== 'closed' && phase !== 'unsupported') {
+        return resend(call);
+      }
+      settle(call, lost);
+    });
+  };
+
+  /**
+   * Sends a command the ledger has no record of once more, with the same key, as a new request
+   * @param {Call} call
+   */
+  const resend = call => {
+    call.resent = true;
+    call.requestId = ids.next();
+    call.since = clock.now();
+    waiting.push(call);
+    if (phase === 'open') flush();
+    else begin();
+    watch();
+  };
+
+  /**
+   * Ends every call still waiting to be sent, which definitely never started, unless it's a
+   * resend
    * @param {TransportCode} code
    */
   const refuseWaiting = code => {
-    for (const call of [...waiting]) settle(call, answerFor(call, code, false));
+    for (const call of [...waiting]) end(call, code, false);
   };
 
   /**
@@ -269,7 +417,7 @@ export function createClient({
    */
   const loseSent = () => {
     for (const call of [...sent.values()]) {
-      settle(call, answerFor(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true));
+      end(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true);
     }
   };
 
@@ -317,7 +465,7 @@ export function createClient({
       try {
         frame = frameOf(call);
       } catch {
-        settle(call, answerFor(call, 'invalid-payload', false));
+        end(call, 'invalid-payload', false);
         return true;
       }
     }
@@ -329,7 +477,7 @@ export function createClient({
     call.sent = true;
     sent.set(call.requestId, call);
     call.timer = timers.set(
-      () => settle(call, answerFor(call, 'deadline-exceeded', true)),
+      () => end(call, 'deadline-exceeded', true),
       call.operation.entry.deadlineMs + DEADLINE_GRACE_MS,
     );
     return true;
@@ -436,9 +584,9 @@ export function createClient({
    * @param {unknown} result
    */
   const answer = (call, result) => {
-    if (checkResult(call.operation, result).ok) return settle(call, result);
+    if (checkResult(call.operation, result).ok) return conclude(call, result, true);
     warn('client-invalid-answer', { operation: call.name });
-    settle(call, answerFor(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true));
+    end(call, call.kind === 'command' ? 'outcome-unknown' : 'unavailable', true);
   };
 
   /** @param {Frame} frame */
@@ -449,9 +597,9 @@ export function createClient({
     if (!call) return;
     if (frame.frame === 'response') return answer(call, frame.result);
     if (frame.frame === 'too-late' && call.kind === 'command') return answer(call, frame.outcome);
-    if (frame.frame === 'cancelled') return settle(call, answerFor(call, 'cancelled', false));
+    if (frame.frame === 'cancelled') return end(call, 'cancelled', false);
     // The router refused it before it could start
-    if (frame.frame === 'error') settle(call, answerFor(call, frame.code, false));
+    if (frame.frame === 'error') end(call, frame.code, false);
   };
 
   /** Opens a connection and says hello */
@@ -501,12 +649,21 @@ export function createClient({
   }
 
   /**
+   * How a call starts: sent, or for a journaled command resume() found no record of, sent as
+   * the one resend its key allows. Anything that ends a resend but the coordinator's answer,
+   * a refusal before it goes included, leaves it unknown, since the first send may have
+   * committed.
+   * @typedef {'send' | 'resend'} Start
+   */
+
+  /**
    * @param {'command' | 'query'} kind
    * @param {{type?: unknown, commandId?: unknown}} input
    * @param {CallOptions} options
+   * @param {Start} [start]
    * @returns {Promise<unknown>}
    */
-  const ask = (kind, input, { signal, userVisible = true } = {}) =>
+  const ask = (kind, input, { signal, userVisible = true } = {}, start = 'send') =>
     new Promise(resolve => {
       const name = typeof input?.type === 'string' ? input.type : '';
       const operation = name === '' ? undefined : lookup(name);
@@ -521,12 +678,15 @@ export function createClient({
         visible: userVisible,
         since: clock.now(),
         sent: false,
+        resent: start === 'resend',
+        settled: false,
+        lost: null,
         timer: undefined,
         resolve,
         unlisten: () => {},
       };
       /** @param {TransportCode} code */
-      const refuse = code => resolve(answerFor(call, code, false));
+      const refuse = code => resolve(start === 'resend' ? unknown(code, call.commandId) : answerFor(call, code, false));
       if (!operation || operation.entry.kind !== kind) return refuse('unknown-operation');
       if (phase === 'closed') return refuse('unavailable');
       if (phase === 'unsupported') return refuse('unsupported-version');
@@ -548,10 +708,10 @@ export function createClient({
         signal.addEventListener('abort', cancel);
         call.unlisten = () => signal.removeEventListener('abort', cancel);
       }
-      if (phase === 'open' && transmit(call, text)) return;
-      // A call that waits keeps the payload as it was called, as kernel.execute() copies a
-      // command, so nothing its caller changes after reaches the coordinator
+      // A call keeps the payload as it was called, as kernel.execute() copies a command, so
+      // nothing its caller changes after reaches the coordinator, a resend, or the ledger
       call.payload = /** @type {{payload: Record<string, unknown>}} */ (decode(text)).payload;
+      if (phase === 'open' && transmit(call, text)) return;
       waiting.push(call);
       begin();
       watch();
@@ -563,6 +723,8 @@ export function createClient({
    * @param {Call} call
    */
   const cancelCall = call => {
+    // A command whose reply was lost may have committed, so its outcome comes by its key
+    if (call.resent || verifying.has(call)) return;
     if (!call.sent) {
       settle(call, answerFor(call, 'cancelled', false));
       return;
@@ -574,9 +736,76 @@ export function createClient({
     }
   };
 
+  /**
+   * Keeps a command's promise by its commandId while it's open, so resume() waits on it
+   * rather than sending it twice
+   * @param {unknown} commandId
+   * @param {Promise<unknown>} promise
+   */
+  const track = (commandId, promise) => {
+    if (typeof commandId !== 'string' || commandId === '' || open.has(commandId)) return promise;
+    open.set(commandId, promise);
+    void promise.then(() => {
+      if (open.get(commandId) === promise) open.delete(commandId);
+    });
+    return promise;
+  };
+
+  /**
+   * One journal entry, once its record was read: settled, or to send again
+   * @typedef {{commandId: string, outcome: Outcome | BulkOutcome}
+   *   | {commandId: string, entry: JournalEntry, operation: Operation}} ReadEntry
+   */
+
+  /**
+   * Reads one journal entry's record, by its command as the journal wrote it, before anything
+   * could refuse it: a record answers whatever the client's state, and the command is taken to
+   * the catalog's current version only to send it again
+   * @param {unknown} entry
+   * @returns {Promise<ReadEntry>}
+   */
+  const readEntry = async entry => {
+    const command = isRecord(entry) ? entry.command : undefined;
+    if (!isRecord(command)) return { commandId: '', outcome: rejected('validation', 'invalid-payload') };
+    const commandId = typeof command.commandId === 'string' ? command.commandId : '';
+    const operation = typeof command.type === 'string' ? lookup(command.type) : undefined;
+    // A query is never journaled
+    if (!operation || operation.entry.kind !== 'command') {
+      return { commandId, outcome: rejected('validation', 'unknown-operation') };
+    }
+    if (commandId === '') return { commandId, outcome: rejected('validation', 'invalid-payload') };
+    const pending = open.get(commandId);
+    if (pending) return { commandId, outcome: /** @type {Outcome | BulkOutcome} */ (await pending) };
+    const read = await readLedger(operation, command);
+    if (read?.status === 'committed' || read?.status === 'conflict') return { commandId, outcome: read.outcome };
+    if (read?.status === 'key-reuse') return { commandId, outcome: rejected('validation', 'idempotency-key-reuse') };
+    if (!read) return { commandId, outcome: unknown('outcome-unknown', commandId) };
+    return { commandId, entry: /** @type {JournalEntry} */ (entry), operation };
+  };
+
+  /**
+   * Sends again a journaled command the ledger had no record of, once. One that isn't
+   * journaled is never sent again: its outcome comes from reading the projection.
+   * @param {ReadEntry} read
+   * @returns {Promise<Outcome | BulkOutcome>}
+   */
+  const resendEntry = async read => {
+    if ('outcome' in read) return read.outcome;
+    const { commandId, entry, operation } = read;
+    const pending = open.get(commandId);
+    if (pending) return /** @type {Outcome | BulkOutcome} */ (await pending);
+    if (!operation.entry.journaled) return unknown('outcome-unknown', commandId);
+    const upcast = upcastJournalEntry(entry, lookup);
+    if (!upcast.ok) return rejected('validation', upcast.code);
+    return /** @type {Promise<Outcome | BulkOutcome>} */ (
+      track(commandId, ask('command', upcast.command, { userVisible: false }, 'resend'))
+    );
+  };
+
   return Object.freeze({
     sessionId,
-    execute: (command, options) => /** @type {Promise<Outcome | BulkOutcome>} */ (ask('command', command, options)),
+    execute: (command, options) =>
+      /** @type {Promise<Outcome | BulkOutcome>} */ (track(command?.commandId, ask('command', command, options))),
     query: (query, options) => /** @type {Promise<QueryState<unknown>>} */ (ask('query', query, options)),
     state,
     subscribe(listener) {
@@ -600,9 +829,30 @@ export function createClient({
       } catch {
         return false;
       }
-      return ![...waiting, ...sent.values()].some(call => call.kind === 'command');
+      return ![...waiting, ...sent.values(), ...verifying].some(call => call.kind === 'command');
     },
     coordinator: () => (coordinator ? { ...coordinator } : null),
+    async resume() {
+      if (!journal || !ledger) return [];
+      /** @type {unknown} */
+      let entries;
+      try {
+        entries = await journal.inFlight();
+      } catch (error) {
+        warn('client-journal-read-failed', { error });
+        return [];
+      }
+      if (!Array.isArray(entries)) return [];
+      // Every record first, in the journal's order, then each resend once the one before it
+      // answered, so a save never goes before the createNote it follows
+      /** @type {ReadEntry[]} */
+      const reads = [];
+      for (const entry of entries) reads.push(await readEntry(entry));
+      /** @type {Array<{commandId: string, outcome: Outcome | BulkOutcome}>} */
+      const resolved = [];
+      for (const read of reads) resolved.push({ commandId: read.commandId, outcome: await resendEntry(read) });
+      return resolved;
+    },
     close() {
       if (phase === 'closed') return;
       stopConnecting();
@@ -610,6 +860,7 @@ export function createClient({
       hangUp();
       loseSent();
       refuseWaiting('unavailable');
+      for (const call of [...verifying]) settle(call, call.lost);
       tell();
     },
   });

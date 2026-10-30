@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
+import { createMemoryCommitLog } from '../../js/kernel/core/memory/commit-log.js';
+import { createMemoryLedger } from '../../js/kernel/core/memory/ledger.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { runContractSuite } from './contract.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
@@ -219,5 +221,95 @@ describe('the in-memory adapter', () => {
       adapter.read(['notes'], tx => tx.getAll('folders')),
       /store-outside-transaction/,
     );
+  });
+});
+
+describe("the in-memory adapter, given #13's ledger and commit log", () => {
+  /** A kernel over an adapter that writes its records and change entries to a ledger and log */
+  const start = () => {
+    const ledger = createMemoryLedger();
+    const commitLog = createMemoryCommitLog();
+    const adapter = createMemoryAdapter({ ledger, commitLog });
+    const kernel = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+    });
+    /** @param {Record<string, unknown>} command */
+    const execute = command => kernel.execute(/** @type {any} */ (command));
+    return { ledger, commitLog, execute };
+  };
+
+  it('appends one change per entity a commit changed, with its revision, and puts that commitSeq on the outcome the ledger keeps', async () => {
+    const { ledger, commitLog, execute } = start();
+    const create = { type: 'createNote', commandId: 'c1', noteId: 'n1', blocks: [{ id: 'b1', content: 'a' }] };
+    const folder = { type: 'createFolder', commandId: 'c2', folderId: 'f1', name: 'Work', parentId: null };
+    const created = await execute(create);
+    const filed = await execute(folder);
+    assert.deepEqual(created.kind === 'committed' && [created.commitSeq, created.revision], [1, 1]);
+    assert.deepEqual(filed.kind === 'committed' && filed.commitSeq, 2);
+    assert.deepEqual(await commitLog.readChangesSince(0, 10), {
+      kind: 'changes',
+      entries: [
+        { commitSeq: 1, entityType: 'note', entityId: 'n1', revision: 1 },
+        { commitSeq: 2, entityType: 'folder', entityId: 'f1', revision: 1 },
+      ],
+      cursor: 2,
+      more: false,
+    });
+    assert.deepEqual(await ledger.read(/** @type {any} */ (create)), { status: 'committed', outcome: created });
+    assert.deepEqual(await ledger.read(/** @type {any} */ (folder)), { status: 'committed', outcome: filed });
+  });
+
+  it('appends nothing for a resend, which answers the original outcome, commitSeq included', async () => {
+    const { commitLog, execute } = start();
+    const pin = { type: 'setPinned', commandId: 'c2', noteId: 'n1', pinned: true };
+    await execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+    const first = await execute(pin);
+    assert.deepEqual(await execute(pin), first);
+    assert.deepEqual(first.kind === 'committed' && first.commitSeq, 2);
+    assert.equal(await commitLog.head(), 2);
+  });
+
+  it('keeps a conflict in the ledger and appends nothing for it, and keeps no record of a rejection', async () => {
+    const { ledger, commitLog, execute } = start();
+    await execute({ type: 'createNote', commandId: 'c1', noteId: 'n1', blocks: [{ id: 'b1', content: 'a' }] });
+    const stale = {
+      type: 'saveNoteContent',
+      commandId: 'c2',
+      noteId: 'n1',
+      blocks: [{ id: 'b1', content: 'b', order: 0 }],
+      expectedRevision: 0,
+    };
+    const lost = await execute(stale);
+    assert.equal(lost.kind, 'conflict');
+    assert.deepEqual(await ledger.read(/** @type {any} */ (stale)), { status: 'conflict', outcome: lost });
+    const missing = { type: 'setPinned', commandId: 'c3', noteId: 'gone', pinned: true };
+    assert.equal((await execute(missing)).kind, 'rejected');
+    assert.deepEqual(await ledger.read(/** @type {any} */ (missing)), { status: 'absent' });
+    assert.equal(await commitLog.head(), 1);
+  });
+
+  it('gives a commit that changes no entity, such as a preference, a record but no commitSeq', async () => {
+    const { ledger, commitLog, execute } = start();
+    const prefer = { type: 'setPreferences', commandId: 'c1', values: { theme: 'dark' } };
+    const outcome = await execute(prefer);
+    assert.deepEqual(outcome.kind === 'committed' && outcome.commitSeq, undefined);
+    assert.equal((await ledger.read(/** @type {any} */ (prefer))).status, 'committed');
+    assert.equal(await commitLog.head(), 0);
+  });
+
+  it("records each item of a bulk command under its own key, and keeps the bulk key's reservation out of the ledger", async () => {
+    const { ledger, commitLog, execute } = start();
+    await execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+    await execute({ type: 'createNote', commandId: 'c2', noteId: 'n2' });
+    const archive = { type: 'runBulkAction', commandId: 'b1', action: 'archive', noteIds: ['n1', 'n2'] };
+    assert.equal((await execute(archive)).kind, 'bulk');
+    assert.deepEqual(await ledger.read(/** @type {any} */ (archive)), { status: 'absent' });
+    const item = await ledger.read({ type: 'archiveNote', commandId: 'b1:n2', noteId: 'n2' });
+    assert.deepEqual(item.status === 'committed' && item.outcome.commitSeq, 4);
+    assert.equal(await commitLog.head(), 4);
   });
 });

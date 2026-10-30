@@ -329,6 +329,14 @@ describe('page-addressed requests (#13, "Topology")', () => {
     assert.deepEqual(state, ready(NOW, { sessionId: 's-offscreen' }));
   });
 
+  it('check what the codec carries, as the addressed page reads it: a field left undefined goes as absent', async () => {
+    const { requester } = pages();
+    assert.deepEqual(
+      await requester.request({ ...ask, scope: undefined }, { kind: 'session', sessionId: 's-other' }),
+      ready(NOW, { sessionId: 's-other' }),
+    );
+  });
+
   it('end as cancelled when their signal aborts, before or after they go', async () => {
     const { requester } = pages({ handler: () => () => new Promise(() => {}) });
     const before = new AbortController();
