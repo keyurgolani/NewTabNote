@@ -157,7 +157,9 @@ test('trash retention at a new tab\'s start leaves another new tab on the note i
 });
 
 test('clicking the tab of a note deleted in another new tab closes that tab with a toast, and the note on screen stays', async ({ extension }) => {
-  const { used, other, ids } = await twoTabs(extension, 'Beta');
+  const { used, other, ids, otherTabs } = await twoTabs(extension, 'Beta');
+  // Beta, seeded last, is the newest note, so the first new tab started on it alone
+  expect(otherTabs, 'the other new tab has one tab, Beta').toEqual(['Beta']);
   await other.evaluate(id => app.openNoteInNewTab(id), ids.Alpha);
   await other.locator('#note-tabs .note-tab').filter({ hasText: 'Beta' }).click();
   await expect(other.locator('#page-title')).toHaveText('Beta');
