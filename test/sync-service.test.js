@@ -58,15 +58,6 @@ describe('SyncService', () => {
     assert.equal(state.lastSyncAt, 12345);
   });
 
-  it('tracks pending changes via note:saved events', async () => {
-    await service.init();
-    assert.equal(service.getState().pendingChanges, 0);
-    eventBus.emit('note:saved', { noteId: 'abc' });
-    assert.equal(service.getState().pendingChanges, 1);
-    eventBus.emit('note:saved', { noteId: 'def' });
-    assert.equal(service.getState().pendingChanges, 2);
-  });
-
   it('disconnect clears state and settings', async () => {
     await service.init();
     // Manually set provider state
@@ -99,17 +90,44 @@ describe('SyncService', () => {
     assert.equal(service.getState().status, 'idle');
   });
 
-  it('destroy stops auto sync and removes listener', async () => {
-    await service.init();
-    service.startAutoSync(60000);
-    assert.notEqual(service._syncInterval, null);
-    service.destroy();
-    assert.equal(service._syncInterval, null);
-    // Emitting after destroy should not increment
-    const before = service.state.pendingChanges;
-    eventBus.emit('note:saved', {});
-    assert.equal(service.state.pendingChanges, before);
+  it('destroy stops auto sync and drops every listener init added', async () => {
+    // The event bus as the service sees it, counting its listeners per event, so nothing is emitted
+    const bus = createEventBus();
+    const listening = new Map();
+    const counted = {
+      on(event, handler) { listening.set(event, (listening.get(event) || 0) + 1); bus.on(event, handler); },
+      off(event, handler) { listening.set(event, (listening.get(event) || 0) - 1); bus.off(event, handler); },
+      emit: bus.emit,
+    };
+    const watched = new SyncService({ storage, eventBus: counted, logger });
+    await watched.init();
+    assert.ok([...listening.values()].some((n) => n > 0), 'init listens for something');
+    watched.startAutoSync(60000);
+    assert.notEqual(watched._syncInterval, null);
+    watched.destroy();
+    assert.equal(watched._syncInterval, null);
+    assert.deepEqual([...listening].filter(([, n]) => n !== 0), [], 'listeners left after destroy');
   });
+
+  for (const [name, label] of [['gdrive', 'Google Drive'], ['dropbox', 'Dropbox']]) {
+    it(`connect('${name}') rejects with not-implemented and connects nothing`, async () => {
+      await service.init();
+      const changes = [];
+      eventBus.on('sync:stateChanged', (state) => changes.push(state));
+      await assert.rejects(() => service.connect(name), (error) => {
+        assert.equal(error.code, 'not-implemented');
+        assert.match(error.message, new RegExp(`^${label} sync isn't available yet$`));
+        return true;
+      });
+      assert.equal(service.activeProvider, null);
+      assert.equal(service.providers[name].connected, false);
+      assert.equal(service.getState().provider, null);
+      assert.equal(await storage.getSetting('syncProvider'), null, 'nothing remembers the provider');
+      assert.deepEqual(changes, [], 'no state change claims a connection');
+      await service.sync();
+      assert.equal(service.getState().status, 'error', 'a sync after it has no provider to run on');
+    });
+  }
 
   it('emits sync:stateChanged on disconnect', async () => {
     await service.init();
@@ -123,50 +141,42 @@ describe('SyncService', () => {
 });
 
 describe('GoogleDriveProvider', () => {
-  it('connect sets connected to true', async () => {
+  it('connect rejects with not-implemented and leaves it disconnected', async () => {
     const p = new GoogleDriveProvider();
-    await p.connect();
-    assert.ok(p.connected);
+    await assert.rejects(() => p.connect(), { code: 'not-implemented' });
+    assert.equal(p.connected, false);
   });
 
   it('disconnect resets state', async () => {
     const p = new GoogleDriveProvider();
-    await p.connect();
+    p.fileId = 'file-1';
     await p.disconnect();
     assert.equal(p.connected, false);
     assert.equal(p.fileId, null);
   });
 
-  it('upload throws when not connected', async () => {
+  it('upload and download throw, since it never connects', async () => {
     const p = new GoogleDriveProvider();
+    await assert.rejects(() => p.connect(), { code: 'not-implemented' });
     await assert.rejects(() => p.upload({}), /not connected/);
-  });
-
-  it('download returns null (placeholder)', async () => {
-    const p = new GoogleDriveProvider();
-    await p.connect();
-    const result = await p.download();
-    assert.equal(result, null);
+    await assert.rejects(() => p.download(), /not connected/);
+    assert.equal(await p.getLastModified(), null);
   });
 });
 
 describe('DropboxProvider', () => {
-  it('connect sets connected to true', async () => {
+  it('connect rejects with not-implemented and leaves it disconnected', async () => {
     const p = new DropboxProvider();
-    await p.connect();
-    assert.ok(p.connected);
+    await assert.rejects(() => p.connect(), { code: 'not-implemented' });
+    assert.equal(p.connected, false);
   });
 
-  it('upload throws when not connected', async () => {
+  it('upload and download throw, since it never connects', async () => {
     const p = new DropboxProvider();
+    await assert.rejects(() => p.connect(), { code: 'not-implemented' });
     await assert.rejects(() => p.upload({}), /not connected/);
-  });
-
-  it('download returns null (placeholder)', async () => {
-    const p = new DropboxProvider();
-    await p.connect();
-    const result = await p.download();
-    assert.equal(result, null);
+    await assert.rejects(() => p.download(), /not connected/);
+    assert.equal(await p.getLastModified(), null);
   });
 });
 

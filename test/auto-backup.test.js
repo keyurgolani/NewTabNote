@@ -1,169 +1,107 @@
-const { describe, it, beforeEach } = require('node:test');
+'use strict';
+
+// Automatic backups through production js/storage.js on fake-indexeddb and legacy-env's
+// chrome.storage.local stub: each backup is the export of what the database holds, stored
+// under auto_backup_<ms>, the newest three kept, and lastBackupAt set once one is stored.
+// A chrome.storage read that fails lists no backups, and a write that fails stores none.
+
+const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const { createLegacyEnv, createDatabase, note, block, plain } = require('./helpers/legacy-env');
+
+const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
+
+/** Wait long enough for Date.now() to move, so two backups get different keys */
+const nextMillisecond = () => new Promise((resolve) => setTimeout(resolve, 3));
 
 /**
- * Minimal mock of chrome.storage.local for testing auto-backup logic.
+ * Storage started on a database holding note N (Groceries) with one block, as a new tab
+ * starts it
  */
-function createMockChromeStorage() {
-  const store = {};
-  return {
-    local: {
-      get(keys, cb) {
-        if (keys === null) {
-          setTimeout(() => cb({ ...store }), 0);
-          return;
-        }
-        const ks = Array.isArray(keys) ? keys : [keys];
-        const result = {};
-        ks.forEach(k => { if (store[k] !== undefined) result[k] = store[k]; });
-        setTimeout(() => cb(result), 0);
-      },
-      set(items, cb) {
-        Object.assign(store, items);
-        if (cb) setTimeout(cb, 0);
-      },
-      remove(keys, cb) {
-        const ks = Array.isArray(keys) ? keys : [keys];
-        ks.forEach(k => delete store[k]);
-        if (cb) setTimeout(cb, 0);
-      },
-    },
-    onChanged: { addListener() {} },
-    _store: store,
-  };
-}
-
-/**
- * Minimal DatabaseManager stub with only the methods needed for auto-backup tests.
- */
-function createStorageStub(chromeStorage) {
-  // Patch global chrome for the module
-  globalThis.chrome = { storage: chromeStorage, runtime: { lastError: null } };
-
-  const proto = {
-    async exportAll() {
-      return { version: 1, exportedAt: Date.now(), canvases: [{ id: 'n1', name: 'Test' }], elements: [], media: [] };
-    },
-    async getSetting(key, defaultValue = null) {
-      return new Promise(resolve => {
-        const storageKey = `setting_${key}`;
-        chrome.storage.local.get([storageKey], (result) => {
-          resolve(result[storageKey] !== undefined ? result[storageKey] : defaultValue);
-        });
-      });
-    },
-    async setSetting(key, value) {
-      return new Promise((resolve, reject) => {
-        const storageKey = `setting_${key}`;
-        chrome.storage.local.set({ [storageKey]: value }, () => {
-          if (chrome.runtime.lastError) { reject(chrome.runtime.lastError); return; }
-          resolve();
-        });
-      });
-    },
-  };
-
-  // Load the real createAutoBackup, getAutoBackups, _getAutoBackupKeys from storage.js
-  // We replicate them here to test the logic in isolation without IndexedDB.
-  proto.createAutoBackup = async function () {
-    const data = await this.exportAll();
-    data.autoBackup = true;
-    data.backupCreatedAt = Date.now();
-
-    const key = `auto_backup_${Date.now()}`;
-    const existingKeys = await this._getAutoBackupKeys();
-
-    await new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [key]: data }, () => {
-        if (chrome.runtime.lastError) { reject(chrome.runtime.lastError); return; }
-        resolve();
-      });
-    });
-
-    const allKeys = [...existingKeys, key].sort();
-    if (allKeys.length > 3) {
-      const toRemove = allKeys.slice(0, allKeys.length - 3);
-      await new Promise(resolve => {
-        chrome.storage.local.remove(toRemove, () => resolve());
-      });
-    }
-
-    await this.setSetting('lastBackupAt', Date.now());
-  };
-
-  proto.getAutoBackups = async function () {
-    const keys = await this._getAutoBackupKeys();
-    if (keys.length === 0) return [];
-    return new Promise(resolve => {
-      chrome.storage.local.get(keys, (result) => {
-        const backups = keys
-          .filter(k => result[k])
-          .map(k => ({ key: k, data: result[k] }))
-          .sort((a, b) => (b.data.backupCreatedAt || 0) - (a.data.backupCreatedAt || 0));
-        resolve(backups);
-      });
-    });
-  };
-
-  proto._getAutoBackupKeys = async function () {
-    return new Promise(resolve => {
-      chrome.storage.local.get(null, (result) => {
-        const keys = Object.keys(result).filter(k => k.startsWith('auto_backup_'));
-        resolve(keys.sort());
-      });
-    });
-  };
-
-  return proto;
+async function started() {
+  const env = createLegacyEnv({ document: null });
+  await createDatabase(env.indexedDB, {
+    records: { canvases: [note('N', { name: 'Groceries' })], elements: [block('b1', 'N', 0, 'eggs')] },
+  });
+  env.load(...FILES);
+  const storage = env.get('Storage');
+  await storage.init();
+  /** The auto_backup_ keys chrome.storage.local holds, oldest first */
+  const backupKeys = () => Object.keys(env.chrome.local).filter((key) => key.startsWith('auto_backup_')).sort();
+  return { env, storage, backupKeys };
 }
 
 describe('auto-backup to chrome.storage.local', () => {
-  let chromeStorage;
-  let storage;
-
-  beforeEach(() => {
-    chromeStorage = createMockChromeStorage();
-    storage = createStorageStub(chromeStorage);
-  });
-
-  it('createAutoBackup saves a backup entry', async () => {
-    await storage.createAutoBackup();
-    const backups = await storage.getAutoBackups();
-    assert.equal(backups.length, 1);
-    assert.equal(backups[0].data.autoBackup, true);
-    assert.ok(backups[0].data.canvases.length > 0);
-  });
-
-  it('createAutoBackup updates lastBackupAt setting', async () => {
+  it('createAutoBackup stores the export of the database under an auto_backup_ key', async () => {
+    const { env, storage, backupKeys } = await started();
     const before = Date.now();
     await storage.createAutoBackup();
-    const lastBackup = await storage.getSetting('lastBackupAt', 0);
-    assert.ok(lastBackup >= before);
+
+    const keys = backupKeys();
+    assert.equal(keys.length, 1);
+    assert.match(keys[0], /^auto_backup_\d+$/);
+    assert.ok(Number(keys[0].slice('auto_backup_'.length)) >= before);
+    const stored = env.chrome.local[keys[0]];
+    assert.equal(stored.autoBackup, true);
+    assert.ok(stored.backupCreatedAt >= before);
+    assert.deepEqual(stored.canvases.map((n) => [n.id, n.name]), [['N', 'Groceries']]);
+    assert.deepEqual(stored.elements.map((b) => [b.id, b.canvasId, b.content]), [['b1', 'N', 'eggs']]);
   });
 
-  it('retains only the last 3 backups', async () => {
-    // Create 4 backups with small delays to get distinct timestamps
+  it('createAutoBackup sets lastBackupAt', async () => {
+    const { env, storage } = await started();
+    const before = Date.now();
+    await storage.createAutoBackup();
+    assert.ok(env.chrome.local.setting_lastBackupAt >= before);
+    assert.ok(await storage.getSetting('lastBackupAt', 0) >= before);
+  });
+
+  it('keeps only the newest three backups', async () => {
+    const { storage, backupKeys } = await started();
+    const made = [];
     for (let i = 0; i < 4; i++) {
       await storage.createAutoBackup();
-      await new Promise(r => setTimeout(r, 5));
+      made.push(backupKeys().at(-1));
+      await nextMillisecond();
     }
-
-    const backups = await storage.getAutoBackups();
-    assert.equal(backups.length, 3, 'Should retain exactly 3 backups');
+    assert.equal(new Set(made).size, 4, 'each backup got its own key');
+    assert.deepEqual(backupKeys(), made.slice(1), 'the oldest one is gone');
+    assert.deepEqual(plain(await storage.getAutoBackups()).map((b) => b.key), made.slice(1).reverse());
   });
 
-  it('getAutoBackups returns empty array when no backups exist', async () => {
-    const backups = await storage.getAutoBackups();
-    assert.equal(backups.length, 0);
+  it('getAutoBackups lists none when there are none', async () => {
+    const { storage } = await started();
+    assert.deepEqual(plain(await storage.getAutoBackups()), []);
   });
 
-  it('getAutoBackups returns backups sorted newest-first', async () => {
+  it('getAutoBackups lists the newest first, with what each stored', async () => {
+    const { storage, backupKeys } = await started();
     await storage.createAutoBackup();
-    await new Promise(r => setTimeout(r, 5));
+    await nextMillisecond();
     await storage.createAutoBackup();
 
-    const backups = await storage.getAutoBackups();
-    assert.equal(backups.length, 2);
-    assert.ok(backups[0].data.backupCreatedAt >= backups[1].data.backupCreatedAt);
+    const backups = plain(await storage.getAutoBackups());
+    assert.deepEqual(backups.map((b) => b.key), backupKeys().reverse());
+    assert.ok(backups[0].data.backupCreatedAt > backups[1].data.backupCreatedAt);
+    assert.deepEqual(backups.map((b) => b.data.canvases.map((n) => n.id)), [['N'], ['N']]);
+  });
+
+  it('getAutoBackups resolves an empty list when chrome.storage reports lastError', async () => {
+    const { env, storage, backupKeys } = await started();
+    await storage.createAutoBackup();
+    assert.equal(backupKeys().length, 1);
+
+    env.chrome.failNextGet();
+    assert.deepEqual(plain(await storage.getAutoBackups()), []);
+    // The next read works again
+    assert.equal((await storage.getAutoBackups()).length, 1);
+  });
+
+  it('createAutoBackup rejects when chrome.storage refuses the write, and stores nothing', async () => {
+    const { env, storage, backupKeys } = await started();
+    env.chrome.failNextSet();
+    await assert.rejects(storage.createAutoBackup(), { message: 'QUOTA_BYTES quota exceeded' });
+    assert.deepEqual(backupKeys(), []);
+    assert.equal(env.chrome.local.setting_lastBackupAt, undefined);
   });
 });

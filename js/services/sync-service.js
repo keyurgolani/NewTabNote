@@ -2,9 +2,9 @@
  * SyncService — Cross-device sync via Google Drive, Dropbox, or WebDAV.
  *
  * Provides provider abstraction, background sync, conflict resolution,
- * and sync status tracking. OAuth flows for Google Drive and Dropbox
- * are placeholder implementations (require API keys and redirect URIs).
- * WebDAV uses basic auth and is more fully implemented.
+ * and sync status tracking. Google Drive and Dropbox aren't built yet:
+ * their connect() rejects with an error coded `not-implemented` and they
+ * never report connected. WebDAV uses basic auth and is more fully implemented.
  *
  * @typedef {'idle'|'syncing'|'error'} SyncStatus
  * @typedef {'gdrive'|'dropbox'|'webdav'} SyncProvider
@@ -23,6 +23,15 @@
  * @property {function(): Promise<Object|null>} download
  * @property {function(): Promise<number|null>} getLastModified
  */
+
+/**
+ * The error a provider that isn't built yet rejects connect() with.
+ * @param {string} name - The provider's name, as the message shows it
+ * @returns {Error & {code: 'not-implemented'}}
+ */
+function notImplementedError(name) {
+  return Object.assign(new Error(`${name} sync isn't available yet`), { code: /** @type {'not-implemented'} */ ('not-implemented') });
+}
 
 /**
  * Base class for sync providers.
@@ -44,7 +53,8 @@ class BaseSyncProvider {
 }
 
 /**
- * Google Drive sync provider (placeholder — requires OAuth client ID).
+ * Google Drive sync provider. Not built yet: connect() rejects with
+ * `not-implemented`, so it never connects.
  */
 class GoogleDriveProvider extends BaseSyncProvider {
   constructor() {
@@ -54,12 +64,8 @@ class GoogleDriveProvider extends BaseSyncProvider {
   }
 
   async connect() {
-    // Placeholder: In production, this would initiate OAuth2 flow via
-    // chrome.identity.launchWebAuthFlow with a registered client ID.
-    if (typeof Utils !== 'undefined') {
-      Utils.showToast('Google Drive sync requires OAuth configuration. See extension settings for setup instructions.', 'info', 5000);
-    }
-    this.connected = true;
+    // No OAuth flow exists yet, so this fails rather than claim a connection
+    throw notImplementedError('Google Drive');
   }
 
   async disconnect() {
@@ -88,7 +94,8 @@ class GoogleDriveProvider extends BaseSyncProvider {
 }
 
 /**
- * Dropbox sync provider (placeholder — requires OAuth app key).
+ * Dropbox sync provider. Not built yet: connect() rejects with
+ * `not-implemented`, so it never connects.
  */
 class DropboxProvider extends BaseSyncProvider {
   constructor() {
@@ -97,12 +104,8 @@ class DropboxProvider extends BaseSyncProvider {
   }
 
   async connect() {
-    // Placeholder: In production, this would initiate OAuth2 PKCE flow
-    // via chrome.identity.launchWebAuthFlow with a registered app key.
-    if (typeof Utils !== 'undefined') {
-      Utils.showToast('Dropbox sync requires OAuth configuration. See extension settings for setup instructions.', 'info', 5000);
-    }
-    this.connected = true;
+    // No OAuth flow exists yet, so this fails rather than claim a connection
+    throw notImplementedError('Dropbox');
   }
 
   async disconnect() {

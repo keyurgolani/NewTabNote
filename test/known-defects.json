@@ -16,6 +16,56 @@
       "tests": [
         "KD-002 the capture-selection command saves the selected text and its source to today's Daily Note"
       ]
+    },
+    {
+      "id": "KD-003",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L1003-L1018",
+      "tests": [
+        "KD-003 createNote resolves only once its note is stored"
+      ]
+    },
+    {
+      "id": "KD-004",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L1806-L1813",
+      "tests": [
+        "KD-004 saveElement resolves only once its block is stored"
+      ]
+    },
+    {
+      "id": "KD-005",
+      "ownerIssue": 18,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L2182-L2192",
+      "tests": [
+        "KD-005 exportAll includes the links between notes",
+        "KD-005 exportAll includes custom themes",
+        "KD-005 exportAll includes note snapshots"
+      ]
+    },
+    {
+      "id": "KD-006",
+      "ownerIssue": 21,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/services/sync-service.js#L302-L307",
+      "tests": [
+        "KD-006 connecting WebDAV stores no plaintext copy of the password"
+      ]
+    },
+    {
+      "id": "KD-007",
+      "ownerIssue": 21,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/llm.js#L802-L805",
+      "tests": [
+        "KD-007 Gemini requests carry the API key outside their URL"
+      ]
+    },
+    {
+      "id": "KD-008",
+      "ownerIssue": 14,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/2064b327b1b6784438e89a3a4ae4462eb14bd1fc/js/editor.js#L3398-L3401",
+      "tests": [
+        "KD-008 a URL pasted with focus in a block with text becomes a bookmark right after that block"
+      ]
     }
   ]
 }
