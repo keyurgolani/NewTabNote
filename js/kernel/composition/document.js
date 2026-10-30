@@ -17,6 +17,8 @@
 /** @typedef {import('../core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../core/domain/note.js').BlockRecord} BlockRecord */
 /** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
+/** @typedef {import('../core/domain/snapshot.js').SnapshotRecord} SnapshotRecord */
+/** @typedef {import('../core/domain/snapshot.js').SnapshotSummary} SnapshotSummary */
 /** @typedef {import('../core/contracts/queries.js').Query} Query */
 /** @typedef {import('../core/contracts/queries.js').QueryType} QueryType */
 /** @typedef {import('../core/contracts/queries.js').QueryData} QueryData */
@@ -61,6 +63,16 @@
  *   Promise<import('../core/contracts/settings.js').PreferenceValues>} preferences
  *   The stored preferences of `keys`; one with nothing stored is left out, for its caller's default
  * @property {() => Promise<NoteRecord[]>} activeNotes - the active notes, newest first, as Storage.getAllNotes listed them
+ * @property {(noteId: string, blocks: Array<Record<string, unknown> & {id: string}>, title: string) => Promise<Outcome>} saveSnapshot
+ *   A snapshot of the note's blocks and title for its version history, under an id taken now
+ * @property {(noteId: string) => Promise<SnapshotSummary[]>} snapshots - the note's snapshots, newest first
+ * @property {(snapshotId: string) => Promise<SnapshotRecord | null>} snapshot - one snapshot, blocks included, or null
+ * @property {(noteId: string, snapshotId: string, blocks: Array<Record<string, unknown> & {id: string}>, name?: string) =>
+ *   Promise<Outcome>} restoreSnapshot
+ *   Reverts the note to the snapshot: the note as stored becomes a snapshot first, under an id
+ *   taken now, then `blocks` and `name` replace its own, in one unit
+ * @property {(noteId: string, blocks: Array<Record<string, unknown> & {id: string}>, atOrder?: number) => Promise<Outcome>} insertBlocks
+ *   New blocks, at `atOrder` or after the last, with the note's preview and links following
  * @property {() => boolean} connectionOpen
  *   Whether the page's connection to the database is open now, so a save started now opens
  *   its first transaction, which a closing connection lets finish
@@ -174,6 +186,40 @@ export function createDocumentClient(
     preferences: keys => read({ type: 'getPreferences', keys }, {}),
 
     activeNotes: () => read({ type: 'listNotes', view: 'active' }, []),
+
+    saveSnapshot: (noteId, blocks, title) =>
+      client.execute({
+        type: 'saveSnapshot',
+        commandId: client.ids.next(),
+        noteId,
+        snapshotId: client.ids.next(),
+        blocks,
+        title,
+      }),
+
+    snapshots: noteId => read({ type: 'listSnapshots', noteId }, []),
+
+    snapshot: snapshotId => read({ type: 'getSnapshot', snapshotId }, null),
+
+    restoreSnapshot: (noteId, snapshotId, blocks, name) =>
+      client.execute({
+        type: 'restoreSnapshot',
+        commandId: client.ids.next(),
+        noteId,
+        snapshotId,
+        preSnapshotId: client.ids.next(),
+        blocks,
+        ...(name === undefined ? {} : { name }),
+      }),
+
+    insertBlocks: (noteId, blocks, atOrder) =>
+      client.execute({
+        type: 'insertBlocks',
+        commandId: client.ids.next(),
+        noteId,
+        blocks,
+        ...(atOrder === undefined ? {} : { atOrder }),
+      }),
 
     beforeConnectionCloses,
 

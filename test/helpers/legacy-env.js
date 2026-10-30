@@ -988,6 +988,11 @@ function testDocumentClient(client) {
     jobRuns: copied(client.jobRuns),
     preferences: copied(client.preferences),
     activeNotes: copied(client.activeNotes),
+    saveSnapshot: (noteId, blocks, title) => client.saveSnapshot(noteId, blocks, title),
+    snapshots: copied(client.snapshots),
+    snapshot: copied(client.snapshot),
+    restoreSnapshot: (noteId, snapshotId, blocks, name) => client.restoreSnapshot(noteId, snapshotId, blocks, name),
+    insertBlocks: (noteId, blocks, atOrder) => client.insertBlocks(noteId, blocks, atOrder),
     beforeConnectionCloses: (flush) => client.beforeConnectionCloses(flush),
     connectionOpen: () => client.connectionOpen(),
   };
