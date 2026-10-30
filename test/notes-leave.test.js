@@ -47,7 +47,7 @@ async function openPage(env, { open = ['A'], split = false, ready = true } = {})
 }
 
 const controllers = {
-  notes: (env, Storage) => new (env.get('NotesManager'))({ storage: Storage, eventBus: null, domRefs: null, logger: null, llm: null }),
+  notes: (env, Storage) => new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null }),
   sidebar: (env, Storage) => new (env.get('SidebarController'))({ storage: Storage, domRefs: null, logger: null }),
   settings: (env, Storage) => new (env.get('SettingsController'))({ storage: Storage, domRefs: null, logger: null }),
 };

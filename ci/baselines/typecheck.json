@@ -131,7 +131,6 @@
         "Cannot find name 'AIPromptTemplates'.": 2,
         "Cannot find name 'AIResponseUtils'.": 4,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ResizablePanel'.": 1,
         "Cannot find name 'SidebarUtils'.": 2,
@@ -188,7 +187,6 @@
       "TS2304": {
         "Cannot find name 'AIResponseUtils'.": 6,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'confirmDialog'.": 1
       },

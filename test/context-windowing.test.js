@@ -44,7 +44,6 @@ const { AIChatController } = require('../js/controllers/ai-chat-controller.js');
 function makeController() {
   return new AIChatController({
     storage: { getSetting: async () => null, setSetting: async () => {} },
-    eventBus: { on: () => () => {}, emit: () => {} },
     domRefs: { get: () => null },
     logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
     llm: { isConfigured: () => false },

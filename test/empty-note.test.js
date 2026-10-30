@@ -78,7 +78,7 @@ describe('trashing an untitled note', () => {
 
   it('from the sidebar or the note menu says it moved to trash', async () => {
     const { env, Storage, toasts, stored } = await setup(HOLDING[0][1]);
-    const notes = new (env.get('NotesManager'))({ storage: Storage, eventBus: null, domRefs: null, logger: null, llm: null });
+    const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
 
     await notes.trashNoteById('N');
 
@@ -129,7 +129,7 @@ describe('trashing an untitled note', () => {
 
   it('that holds nothing, from the sidebar, says the empty note was deleted, as before', async () => {
     const { env, Storage, toasts } = await setup([]);
-    const notes = new (env.get('NotesManager'))({ storage: Storage, eventBus: null, domRefs: null, logger: null, llm: null });
+    const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
     await notes.trashNoteById('N');
     assert.deepEqual(toasts, [{ message: 'Empty note deleted', kind: 'success' }]);
   });
