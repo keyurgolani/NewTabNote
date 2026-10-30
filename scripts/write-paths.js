@@ -95,10 +95,15 @@ const UNDEFINED_WRITES = {
 /** Write names too common to flag on receivers the scanner can't place */
 const GENERIC_WRITE_NAMES = new Set(['init']);
 
-/** App's components: a write-named call on `this.<component>` is that component's own method */
+/**
+ * App's components: a write-named call on `this.<component>` is that component's own method.
+ * `documentClient` is the editors' document client (js/kernel/composition/document.js), whose
+ * writes are kernel commands, so nothing it calls is a Storage write.
+ */
 const COMPONENTS = new Set([
   'sidebarController', 'tabController', 'aiChatController', 'settingsController', 'themeBuilderController',
   'analyticsController', 'notesManager', 'shortcutsManager', 'exportImportService', 'syncService', 'graphView', 'domRefs',
+  'documentClient',
 ]);
 
 /** The controllers App creates in init(); `if (this.<controller>)` hands a method off to one */

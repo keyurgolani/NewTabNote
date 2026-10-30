@@ -11,7 +11,8 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const checkDist = require('../scripts/check-dist.js');
-const { readScriptGraph } = require('../scripts/lib/script-graph.js');
+const modulePreloads = require('../scripts/module-preloads.js');
+const { readScriptGraph, preloadLinks } = require('../scripts/lib/script-graph.js');
 const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 
 // What a build ships: the manifest, the pages, and js/ (scripts/build.js)
@@ -182,5 +183,63 @@ describe('scripts/check-dist.js', () => {
 
   it('fails when there is no build to check', () => {
     assertFails(run(path.join(tempDir(), 'dist')), 'no build at');
+  });
+
+  it("fails when a page's module preloads and its module graph differ", () => {
+    const first = '<link rel="modulepreload" href="js/kernel/adapters/legacy/adapter.js">';
+    assertFails(
+      run(packageCopy({ 'popup.html': text => text.replace(first, '') })),
+      'check:dist failed: 1 problem in ',
+      "popup.html doesn't preload js/kernel/adapters/legacy/adapter.js, which its module graph reaches two or more imports deep",
+    );
+    assertFails(
+      run(packageCopy({
+        'sidepanel.html': text => text.replace('</head>', '<link rel="modulepreload" href="js/storage.js">\n</head>'),
+      })),
+      "sidepanel.html preloads js/storage.js, which isn't two or more imports deep in its module graph",
+    );
+    // A module a page reaches deeper once its graph changes is one it has to preload
+    assertFails(
+      run(packageCopy({ 'js/kernel/core/contracts/limits.js': text => `import './extra.js';\n${text}`, 'js/kernel/core/contracts/extra.js': () => 'export {};\n' })),
+      "newtab.html doesn't preload js/kernel/core/contracts/extra.js",
+      "popup.html doesn't preload js/kernel/core/contracts/extra.js",
+      "sidepanel.html doesn't preload js/kernel/core/contracts/extra.js",
+    );
+  });
+});
+
+describe('scripts/module-preloads.js', () => {
+  it("lists each page's kernel graph, the modules two or more imports deep, and each page is up to date", () => {
+    const graph = readScriptGraph(ROOT, { pages: ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html'] });
+    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html']) {
+      const expected = modulePreloads.expectedPreloads(graph, page);
+      assert.ok(expected.length > 0 && expected.every(href => href.startsWith('js/kernel/')), `${page}: ${expected}`);
+      // The composition root is one import deep, so the page finds it as soon as its own script loads
+      const roots = ['newtab', 'popup', 'sidepanel', 'background'].map(name => `js/kernel/composition/${name}.js`);
+      assert.ok(!expected.some(href => roots.includes(href)), page);
+      assert.deepEqual(preloadLinks(fs.readFileSync(path.join(ROOT, page), 'utf8')), expected, page);
+    }
+    assert.deepEqual(modulePreloads.expectedPreloads(graph, 'offscreen.html'), []);
+    const lines = [];
+    assert.equal(modulePreloads.main([], { log: line => lines.push(line), error: line => lines.push(line) }), 0, lines.join('\n'));
+  });
+
+  it('--write puts the hints before </head>, replaces the ones a page had, and changes nothing the second time', () => {
+    const dir = packageCopy({
+      'popup.html': text => {
+        const begin = text.indexOf(modulePreloads.BEGIN);
+        const end = text.indexOf(modulePreloads.END) + modulePreloads.END.length;
+        return `${text.slice(0, begin)}<link rel="modulepreload" href="js/stale.js">${text.slice(end)}`;
+      },
+    });
+    const before = fs.readFileSync(path.join(ROOT, 'popup.html'), 'utf8');
+    const lines = [];
+    const options = { log: line => lines.push(line), error: line => lines.push(line), root: dir };
+    assert.equal(modulePreloads.main([], options), 1);
+    assert.ok(lines.some(line => line.includes(modulePreloads.WRITE_COMMAND)), lines.join('\n'));
+    assert.deepEqual(modulePreloads.writePreloads(dir, ['popup.html', 'newtab.html']), ['popup.html']);
+    assert.equal(fs.readFileSync(path.join(dir, 'popup.html'), 'utf8'), before);
+    assert.deepEqual(modulePreloads.writePreloads(dir, ['popup.html', 'newtab.html']), []);
+    assert.equal(modulePreloads.main([], options), 0);
   });
 });

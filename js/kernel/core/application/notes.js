@@ -20,6 +20,7 @@ import {
   inBlockOrder,
   isEmpty,
   isUntitled,
+  linkTargets,
   newNoteRecord,
   newSearchEntry,
   notesInView,
@@ -46,11 +47,11 @@ import { contentChanged, unitsWork } from './work.js';
 
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
- *   | 'restoreNote' | 'saveNoteContent' | 'applyDerivedTitle' | 'attachInsights' | 'captureToDailyNote'
- *   | 'runBulkAction'} NoteCommandType
+ *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'applyDerivedTitle' | 'attachInsights'
+ *   | 'captureToDailyNote' | 'runBulkAction'} NoteCommandType
  */
 
-/** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks'} NoteQueryType */
+/** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks'} NoteQueryType */
 
 const invalid = () => rejected('validation', 'invalid-command');
 const noteNotFound = () => rejected('not-found', 'note-not-found');
@@ -112,6 +113,39 @@ function renameSearchEntry(noteId, name, now) {
 }
 
 /**
+ * Units that replace the wiki links from `noteId` with links to the notes `names` name, as
+ * Storage.updateNoteLinks has: the notes are read in one transaction, as it read them with
+ * getAllNotes, and the links replaced in another, which only ever spans the links store. With
+ * no names, the note's links are only deleted, as Storage.clearLinksFromNote deletes them.
+ * @param {string} noteId
+ * @param {readonly string[]} names
+ * @param {{now: number, nextId: () => string}} stamp
+ * @returns {Unit[]}
+ */
+function replaceLinks(noteId, names, { now, nextId }) {
+  /** @type {string[]} */
+  let targets = [];
+  return [
+    {
+      stores: ['notes'],
+      mode: 'readonly',
+      when: () => names.length > 0,
+      // Each run decides afresh, since an adapter may run the units again (ports/repository.js, Unit)
+      async run(tx) {
+        targets = linkTargets(await tx.getAll('notes'), names, noteId);
+      },
+    },
+    {
+      stores: ['links'],
+      async run(tx) {
+        for (const key of await tx.getKeysByIndex('links', 'fromNoteId', noteId)) tx.delete('links', key);
+        for (const toNoteId of targets) tx.put('links', { id: nextId(), fromNoteId: noteId, toNoteId, createdAt: now });
+      },
+    },
+  ];
+}
+
+/**
  * The blocks a command carries, as records of `noteId`. A block of another note, or two
  * blocks with one id, are refused.
  * @param {unknown} blocks
@@ -139,6 +173,12 @@ function blockRecords(blocks, noteId) {
  * @returns {value is undefined | string}
  */
 const isOptionalString = value => value === undefined || typeof value === 'string';
+
+/**
+ * @param {unknown} value
+ * @returns {value is string[]}
+ */
+const isStringList = value => Array.isArray(value) && value.every(item => typeof item === 'string');
 
 /**
  * @param {unknown} value
@@ -170,12 +210,20 @@ function setFields(command, code, change) {
 /** @type {{[T in NoteCommandType]: CommandHandler<T>}} */
 export const noteCommands = {
   createNote(command, { clock }) {
-    const { noteId, name = 'Untitled', folderId = null, blocks = [] } = command;
+    const {
+      noteId,
+      name = 'Untitled',
+      folderId = null,
+      blocks = [],
+      pinned = false,
+      titleManuallySet = false,
+    } = command;
     if (!isId(noteId) || typeof name !== 'string' || !isIdOrNull(folderId)) return invalid();
+    if (typeof pinned !== 'boolean' || typeof titleManuallySet !== 'boolean') return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
-    const note = newNoteRecord({ id: noteId, name, now, folderId });
+    const note = newNoteRecord({ id: noteId, name, now, folderId, pinned, titleManuallySet });
     /** @type {Unit[]} */
     const units = [];
     if (folderId !== null) {
@@ -291,9 +339,20 @@ export const noteCommands = {
     });
   },
 
-  saveNoteContent(command, { clock }) {
-    const { noteId, blocks, preview, todoProgress, expectedRevision } = command;
-    if (!isId(noteId) || !isOptionalString(preview)) return invalid();
+  saveNoteContent(command, { clock, ids }) {
+    const {
+      noteId,
+      blocks,
+      preview,
+      todoProgress,
+      name,
+      titleOrigin = 'typed',
+      linkedNames,
+      expectedRevision,
+    } = command;
+    if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
+    if (titleOrigin !== 'typed' && titleOrigin !== 'generated') return invalid();
+    if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
     if (expectedRevision !== undefined && !Number.isInteger(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
@@ -316,12 +375,52 @@ export const noteCommands = {
         const next = { ...note, updatedAt: now };
         if (preview !== undefined) next.preview = preview;
         if (todoProgress !== undefined) next.todoProgress = todoProgress;
+        // A title goes in with the blocks, as 1.4.x's editor save wrote it: a typed one marked as
+        // set by hand, as the editor marked it when the user typed it, and one the AI made with
+        // the time it was made, as BlockEditor.setTitleProgrammatically stamped it
+        if (name !== undefined) {
+          next.name = name;
+          if (titleOrigin === 'typed') next.titleManuallySet = true;
+          else next.lastAutoTitleAt = now;
+        }
         tx.put('notes', next);
       },
     };
-    return unitsWork(command, [save], () => committed('content-saved', [noteId]), {
+    /** @type {Unit[]} */
+    const units = [save];
+    // The search entry's name and the wiki links follow in their own units, as 1.4.x's save
+    // updated them after the note and its blocks were stored
+    if (name !== undefined) units.push(renameSearchEntry(noteId, name, now));
+    if (linkedNames !== undefined) units.push(...replaceLinks(noteId, linkedNames, { now, nextId: () => ids.next() }));
+    return unitsWork(command, units, () => committed('content-saved', [noteId]), {
       primary: noteRecord(noteId),
       revised: contentChanged,
+    });
+  },
+
+  deleteBlocks(command) {
+    const { noteId, blockIds } = command;
+    if (!isId(noteId) || !isIdList(blockIds)) return invalid();
+    let deleted = false;
+    /** @type {Unit} */
+    const remove = {
+      stores: ['blocks'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        deleted = false;
+        for (const blockId of new Set(blockIds)) {
+          const block = await tx.get('blocks', blockId);
+          // Never saved, or deleted already
+          if (!block) continue;
+          if (block.canvasId !== noteId) return rejected('validation', 'block-of-another-note');
+          tx.delete('blocks', blockId);
+          deleted = true;
+        }
+      },
+    };
+    return unitsWork(command, [remove], () => committed('blocks-deleted', deleted ? [noteId] : []), {
+      primary: noteRecord(noteId),
+      revised: () => deleted,
     });
   },
 
@@ -467,5 +566,21 @@ export const noteQueries = {
     if (!isId(noteId)) return failed('validation', 'invalid-query');
     const blocks = await adapter.read(['blocks'], tx => tx.getAllByIndex('blocks', 'canvasId', noteId));
     return blocks.length > 0 ? ready(clock.now(), inBlockOrder(blocks)) : empty(clock.now());
+  },
+
+  async getBacklinks({ noteId }, { adapter, clock }) {
+    if (!isId(noteId)) return failed('validation', 'invalid-query');
+    // Each link's note, in the order the links are stored, as Storage.getBacklinks lists them. A
+    // link whose note is gone is left out, as is one that names none.
+    const notes = await adapter.read(['links', 'notes'], async tx => {
+      /** @type {NoteRecord[]} */
+      const found = [];
+      for (const link of await tx.getAllByIndex('links', 'toNoteId', noteId)) {
+        const note = isId(link.fromNoteId) ? await tx.get('notes', link.fromNoteId) : undefined;
+        if (note) found.push(note);
+      }
+      return found;
+    });
+    return notes.length > 0 ? ready(clock.now(), notes) : empty(clock.now());
   },
 };

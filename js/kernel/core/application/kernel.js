@@ -221,6 +221,12 @@ export function createKernel({
         // again before the page reloads
         const { cause, code } = unavailableFrom(error);
         failure = unavailable(cause, code, false);
+        // The outcome keeps only the cause and code, so what was thrown is reported here, once
+        try {
+          logger.warn('storage-unavailable', { cause, code, error });
+        } catch {
+          // A logger that throws changes nothing the kernel answers
+        }
       },
     );
 

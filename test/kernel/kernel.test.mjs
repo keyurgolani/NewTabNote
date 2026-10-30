@@ -302,6 +302,47 @@ describe('the kernel', () => {
     }
   });
 
+  it('tells the logger what stopped storage opening or its maintenance, once, with its cause and code', async () => {
+    /** @type {Array<{event: string, detail: Record<string, unknown>}>} */
+    const warnings = [];
+    const logger = {
+      warn: (/** @type {string} */ event, /** @type {Record<string, unknown>} */ detail) =>
+        warnings.push({ event, detail }),
+    };
+    const thrown = new UnavailableError('newer-schema', 'version-too-new', false);
+    const refused = kernelWith({ ready: Promise.reject(thrown), logger });
+    await refused.whenReady();
+    await refused.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' });
+    assert.deepEqual(warnings, [
+      { event: 'storage-unavailable', detail: { cause: 'newer-schema', code: 'version-too-new', error: thrown } },
+    ]);
+
+    // Maintenance that storage refused, as a root runs it while it opens
+    warnings.length = 0;
+    const memory = createMemoryAdapter();
+    const maintaining = createKernel({
+      adapter: {
+        ...memory,
+        commit: work =>
+          work.effect.kind === 'maintenance'
+            ? Promise.resolve({ outcome: unavailable('quota', 'quota', false), replayed: false })
+            : memory.commit(work),
+      },
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+      logger,
+      ready: Promise.resolve(),
+      maintainOnOpen: true,
+    });
+    await maintaining.whenReady();
+    assert.deepEqual(
+      warnings.map(({ event, detail }) => [event, detail.cause, detail.code, detail.error instanceof UnavailableError]),
+      [['storage-unavailable', 'quota', 'quota', true]],
+    );
+  });
+
   it('tells the logger about a listener that threw with the aggregate, the ids, and the error, never the payload', async () => {
     /** @type {Array<{event: string, detail: Record<string, unknown>}>} */
     const warnings = [];

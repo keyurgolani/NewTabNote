@@ -106,9 +106,9 @@ describe('each composition root', () => {
     closeAll([fresh, ...panes, workerProfile]);
   });
 
-  it("watches only the worker's versioned connection in slice 4a, not the new tab's", async () => {
-    // The new tab's connection waits out another context's upgrade, as in 1.4.x, until slice
-    // 4b moves its editor to the kernel and it can keep the text while it asks for a reload
+  it("watches the new tab's and the worker's versioned connections", async () => {
+    // Another context's upgrade never waits on either: the worker opens again on its next
+    // capture, and the new tab's editor keeps its text while it asks for a reload
     const tab = legacyContext();
     assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
     const worker = legacyContext();
@@ -118,7 +118,7 @@ describe('each composition root', () => {
       const db = /** @type {IDBDatabase} */ (context.storage.db);
       return [db.onversionchange, db.onclose].map(handler => typeof handler === 'function');
     };
-    assert.deepEqual(handled(tab), [false, false]);
+    assert.deepEqual(handled(tab), [true, true]);
     assert.deepEqual(handled(worker), [true, true]);
     closeAll([tab, worker]);
   });

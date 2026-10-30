@@ -36,14 +36,19 @@ const STARTUP_FAILED = "NewTabNote couldn't open your notes.";
 /**
  * What App.init shows when the tab's kernel couldn't open or maintain storage: the guard, by
  * the code Storage.init threw, for a database a newer build upgraded or one missing its notes
- * or blocks, and otherwise the error state, saying why in words.
+ * or blocks, and otherwise the error state, saying why in words. The error's message is what
+ * the page shows, and its cause the outcome, so the console says both, with the cause and code.
  * @param {{cause: string, code: string, messageKey: string}} failure - the outcome whenReady answered with
- * @returns {Error & {code?: string}}
+ * @returns {Error & {code?: string, cause?: unknown}}
  */
 function storageFailure(failure) {
-  const error = /** @type {Error & {code?: string}} */ (new Error(STARTUP_FAILURES[failure.messageKey] || STARTUP_FAILED));
-  if (failure.cause === 'newer-schema') error.code = 'NEWER_SCHEMA';
-  else if (failure.code === 'missing-core-stores') error.code = 'MISSING_CORE_STORES';
+  let code = null;
+  if (failure.cause === 'newer-schema') code = 'NEWER_SCHEMA';
+  else if (failure.code === 'missing-core-stores') code = 'MISSING_CORE_STORES';
+  const shown = code ? STORAGE_GUARD_TEXT[code].title : STARTUP_FAILURES[failure.messageKey] || STARTUP_FAILED;
+  const error = /** @type {Error & {code?: string, cause?: unknown}} */ (new Error(shown));
+  error.cause = failure;
+  if (code) error.code = code;
   return error;
 }
 
@@ -61,11 +66,13 @@ const MISSING_STORE_FEATURES = {
 class App {
   /**
    * The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
-   * tab's kernel client (js/kernel/composition/host.js describes it).
-   * @param {{kernel?: any}} [options]
+   * tab's kernel client (js/kernel/composition/host.js describes it), and the document client
+   * every editor reads and writes its note through (js/kernel/composition/document.js).
+   * @param {{kernel?: any, documentClient?: any}} [options]
    */
-  constructor({ kernel } = {}) {
+  constructor({ kernel, documentClient } = {}) {
     this.kernel = kernel;
+    this.documentClient = documentClient;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -254,13 +261,16 @@ class App {
         }
       }, 2000);
 
+      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation() };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
-        onChange: editorChangeHandler
+        onChange: editorChangeHandler,
+        ...this.editorPorts,
       });
       this.secondaryEditor = new BlockEditor({
         root: document.getElementById('secondary-editor-container'),
-        onChange: editorChangeHandler
+        onChange: editorChangeHandler,
+        ...this.editorPorts,
       });
 
       // Wire version history button (Req 31.2)
@@ -646,9 +656,10 @@ class App {
       logger: this.logger,
     });
 
-    // Share editor references
+    // Share editor references, and what the PiP editor gets
     this.tabController.editor = this.editor;
     this.tabController.secondaryEditor = this.secondaryEditor;
+    this.tabController.editorPorts = this.editorPorts;
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => Storage.createNote('Untitled');
@@ -2187,6 +2198,27 @@ class App {
     if (this.tabController) {
       this.tabController.openTabs = this.openTabs;
     }
+  }
+
+  /**
+   * The navigation port the note editors get in place of window.app (#12 slice 4): what an
+   * editor asks of the page around it. See EditorNavigation in js/editor.js.
+   * @returns {Object}
+   */
+  editorNavigation() {
+    return {
+      titleChanged: (name) => this.updateCurrentTabName(name),
+      noteSaved: (note) => {
+        this.triggerIndexing(note.id);
+        this.updateSidebarNotePreview(note);
+      },
+      // A backlink opens its note: 1.4.x called an App.openNote that never existed, so it threw
+      openNote: (noteId) => this.openNoteById(noteId),
+      openNoteByName: (name) => this.openNoteByName(name),
+      noteReplaced: (editor, goneId, note) => this.tabController.noteReplaced(editor, goneId, note),
+      // The new tab's, from the PiP window too, since the PiP window closes with it
+      reloadPage: () => window.location.reload(),
+    };
   }
 
   /**

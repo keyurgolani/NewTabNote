@@ -99,7 +99,7 @@ const SEED_OWNERS = [
   { file: 'js/popup.js', owner: 12, removeWhen: "#12 slice 4: Popup lists notes and saves its quick note through its composition root's client" },
   { file: 'js/sidepanel.js', owner: 12, removeWhen: "#12 slice 4: Side Panel reads notes through its composition root's client" },
   { file: 'js/background.js', owner: 12, removeWhen: "#12 slice 4: capture runs as the kernel's captureToDailyNote command" },
-  { file: 'js/editor.js', rule: 'window.opener', owner: 12, removeWhen: "#12 slice 4: getApp's lookups go with getApp, and getLLM's become the injected AI port, re-pointed to #11 if they stay here" },
+  { file: 'js/editor.js', rule: 'window.opener', owner: 12, removeWhen: "#12 slice 4: getLLM's lookups become the injected AI port, re-pointed to #11 if they stay here" },
   { file: 'js/editor.js', owner: 12, removeWhen: '#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp' },
   { file: 'js/app.js', rule: 'window.app', owner: 12, removeWhen: '#12 slice 7: the new-tab composition root replaces the bootstrap' },
   { file: 'js/app.js', rule: 'app-callback', owner: 12, removeWhen: '#12 slice 7 replaces the domain callbacks with projections; UI-only ones left are re-pointed to #2 or #3' },

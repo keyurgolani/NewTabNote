@@ -54,6 +54,12 @@
  */
 
 /**
+ * One wiki link, from the note whose text holds `[[name]]` to the note with that name, as
+ * Storage.updateNoteLinks has stored them in the `links` store since 1.4.0.
+ * @typedef {{id: string, fromNoteId?: unknown, toNoteId?: unknown, createdAt?: unknown} & Record<string, unknown>} LinkRecord
+ */
+
+/**
  * What a capture adds to today's Daily Note: a page, or selected text and the page it came
  * from. A tab can lack a URL or title, and the block then lacks it too, as before.
  * @typedef {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} Capture
@@ -69,11 +75,18 @@ export const INSIGHT_FIELDS = Object.freeze(['insights', 'lastInsightsExtractedA
 export const DERIVED_FIELDS = Object.freeze(['preview', 'todoProgress', ...INSIGHT_FIELDS]);
 
 /**
- * A new note, field for field the one Storage.createNote has written since 1.4.0.
- * @param {{id: string, name: string, now: number, folderId?: string | null}} fields
+ * A new note, field for field the one Storage.createNote has written since 1.4.0, pinned or with
+ * a title set by hand when it carries over a note the editor saved as a new one.
+ * @param {object} fields
+ * @param {string} fields.id
+ * @param {string} fields.name
+ * @param {number} fields.now
+ * @param {string | null} [fields.folderId]
+ * @param {boolean} [fields.pinned]
+ * @param {boolean} [fields.titleManuallySet]
  * @returns {NoteRecord}
  */
-export function newNoteRecord({ id, name, now, folderId = null }) {
+export function newNoteRecord({ id, name, now, folderId = null, pinned = false, titleManuallySet = false }) {
   return {
     id,
     name,
@@ -81,12 +94,12 @@ export function newNoteRecord({ id, name, now, folderId = null }) {
     updatedAt: now,
     archived: false,
     archivedAt: null,
-    titleManuallySet: false,
+    titleManuallySet,
     lastAutoTitleAt: null,
     insights: null,
     lastInsightsExtractedAt: null,
     preview: '',
-    pinned: false,
+    pinned,
     todoProgress: null,
     isDaily: false,
     dateStr: null,
@@ -240,6 +253,27 @@ export function notesInView(notes, view) {
     case 'sidePanel':
       return indexed.reverse();
   }
+}
+
+/**
+ * The notes a note's wiki links point at, as Storage.updateNoteLinks finds them: for each name,
+ * the first note in the `withArchived` list with that name, whatever its case, unless that's
+ * the linking note itself. Each note once, in the order the names first reach it.
+ * @param {NoteRecord[]} notes
+ * @param {readonly string[]} names
+ * @param {string} fromNoteId
+ * @returns {string[]}
+ */
+export function linkTargets(notes, names, fromNoteId) {
+  const named = notesInView(notes, 'withArchived').filter(note => typeof note.name === 'string' && note.name !== '');
+  /** @type {string[]} */
+  const targets = [];
+  for (const name of names) {
+    const wanted = name.toLowerCase();
+    const target = named.find(note => /** @type {string} */ (note.name).toLowerCase() === wanted);
+    if (target && target.id !== fromNoteId && !targets.includes(target.id)) targets.push(target.id);
+  }
+  return targets;
 }
 
 /**

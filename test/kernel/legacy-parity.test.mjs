@@ -125,6 +125,42 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
+  it('createNote with a pin, a folder, and a hand-set title, then a save, leave what Storage did for a note saved as a new one', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({ folders: [folder('f1', null)] });
+    // "Save as a new note": Storage.createNote made the record, the editor set the deleted
+    // note's pin, folder, and title flag on it, and its save wrote the record with the blocks
+    const made = await viaStorage.storage.createNote('Plan');
+    Object.assign(made, { titleManuallySet: true, folderId: 'f1', pinned: true, preview: 'Milk', todoProgress: null });
+    const blocks = [legacyEnv.block('b1', made.id, 0, 'Milk')];
+    await viaStorage.storage.saveNoteWithBlocks(made, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex(made.id, 'Plan');
+    const noteId = made.id;
+    assertCommitted(
+      await kernel.execute({
+        type: 'createNote',
+        commandId: 'c1',
+        noteId,
+        name: 'Plan',
+        folderId: 'f1',
+        pinned: true,
+        titleManuallySet: true,
+      }),
+    );
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c2',
+        noteId,
+        blocks,
+        preview: 'Milk',
+        todoProgress: null,
+      }),
+    );
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+  });
+
   it('createFolder writes the folder Storage.createFolder writes', async () => {
     const { viaStorage, viaKernel, kernel } = await twin({ folders: [folder('f0', null)] });
     const made = legacyEnv.plain(await viaStorage.storage.createFolder('Work', 'f0'));
@@ -321,13 +357,12 @@ describe("the kernel's copies of production rules, run both ways", () => {
     };
 
     const typed = await twin(records());
-    typed.viaStorage.env.load(...EDITOR_FILES);
-    const editor = legacyEnv.makeEditor(typed.viaStorage.env);
-    // Its saves wait for animation frames, which the page runs while it's visible
-    await legacyEnv.runUntil(typed.viaStorage.env, editor.loadNote('n1'));
-    editor.titleEl.textContent = 'Groceries';
-    editor.onTitleChange();
-    await legacyEnv.runUntil(typed.viaStorage.env, editor.flushSave());
+    // 1.4.x's title edit: onTitleChange set the name and titleManuallySet on the editor's copy,
+    // and its save wrote the copy with the blocks, then the search entry's name
+    const { storage } = typed.viaStorage;
+    const editorCopy = { ...(await storage.getNote('n1')), name: 'Groceries', titleManuallySet: true };
+    await storage.saveNoteWithBlocks(editorCopy, await storage.getElementsByNote('n1'));
+    await storage.updateNoteNameInSearchIndex('n1', 'Groceries');
     assertCommitted(
       await typed.kernel.execute({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'Groceries' }),
     );
@@ -384,6 +419,156 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.equal(refused.kind, 'rejected');
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it('saveNoteContent with a typed title leaves the note, blocks, and search entry the editor saved it with', async () => {
+    const stored = legacyEnv.note('n1', { name: 'Draft' });
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [stored],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      search_index: [{ noteId: 'n1', name: 'Draft', content: 'Milk', updatedAt: SEEDED_AT }],
+    });
+    const blocks = [legacyEnv.block('b1', 'n1', 0, 'Milk and eggs')];
+    // The title edit set the name and titleManuallySet on the editor's copy, its save wrote the
+    // copy with the blocks, and then the search entry's name
+    const editorCopy = { ...stored, name: 'Groceries', titleManuallySet: true, preview: 'Milk and eggs' };
+    await viaStorage.storage.saveNoteWithBlocks(editorCopy, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex('n1', 'Groceries');
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c1',
+        noteId: 'n1',
+        blocks,
+        preview: 'Milk and eggs',
+        name: 'Groceries',
+      }),
+    );
+    const stores = ['canvases', 'elements', 'search_index'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it('saveNoteContent with a generated title leaves what the editor saved after setTitleProgrammatically', async () => {
+    const stored = legacyEnv.note('n1', { name: 'Untitled', lastAutoTitleAt: null });
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [stored],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      search_index: [{ noteId: 'n1', name: 'Untitled', content: 'Milk', updatedAt: SEEDED_AT }],
+    });
+    const blocks = [legacyEnv.block('b1', 'n1', 0, 'Milk and eggs')];
+    // setTitleProgrammatically set the name and lastAutoTitleAt on the editor's copy, leaving
+    // titleManuallySet, and the save wrote the copy with the blocks, then the search entry's name
+    const editorCopy = { ...stored, name: 'Groceries', lastAutoTitleAt: Date.now(), preview: 'Milk and eggs' };
+    await viaStorage.storage.saveNoteWithBlocks(editorCopy, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex('n1', 'Groceries');
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c1',
+        noteId: 'n1',
+        blocks,
+        preview: 'Milk and eggs',
+        name: 'Groceries',
+        titleOrigin: 'generated',
+      }),
+    );
+    const stores = ['canvases', 'elements', 'search_index'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it("saveNoteContent's wiki links are the ones Storage.updateNoteLinks writes after the save", async () => {
+    const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [
+        legacyEnv.note('n1', { name: 'Plan', updatedAt: at(1) }),
+        legacyEnv.note('old', { name: 'groceries', updatedAt: at(2) }),
+        legacyEnv.note('new', { name: 'Groceries', updatedAt: at(3) }),
+        legacyEnv.note('archived', { name: 'Archive me', archived: true, archivedAt: at(4) }),
+        legacyEnv.note('trashed', { name: 'Trash me', trashed: true, trashedAt: at(5) }),
+        legacyEnv.note('template', { name: 'Template', isTemplate: true }),
+        legacyEnv.note('n2', { name: 'Linker' }),
+      ],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      links: [
+        { id: 'l-old', fromNoteId: 'n1', toNoteId: 'old', createdAt: SEEDED_AT },
+        { id: 'l-in', fromNoteId: 'n2', toNoteId: 'n1', createdAt: SEEDED_AT },
+      ],
+    });
+    const linkedNames = ['GROCERIES', 'Archive me', 'Trash me', 'Template', 'Plan', 'Nowhere', 'groceries'];
+    const blocks = [legacyEnv.block('b1', 'n1', 0, '[[Groceries]] and the rest')];
+    const stored = legacyEnv.plain(await viaStorage.storage.getNote('n1'));
+    await viaStorage.storage.saveNoteWithBlocks(stored, blocks);
+    await viaStorage.storage.updateNoteLinks('n1', linkedNames);
+    assertCommitted(
+      await kernel.execute({ type: 'saveNoteContent', commandId: 'c1', noteId: 'n1', blocks, linkedNames }),
+    );
+    // Each side gives its links ids of its own, so they compare by what they link
+    /** @param {LegacyContext} context */
+    const links = async context =>
+      Object.values((await recordsIn(context, ['links'])).links)
+        .map(({ id, ...link }) => link)
+        .sort((a, b) => `${a.fromNoteId}>${a.toNoteId}`.localeCompare(`${b.fromNoteId}>${b.toNoteId}`));
+    assert.deepEqual(await links(viaKernel), await links(viaStorage));
+    assert.deepEqual(
+      (await links(viaKernel)).map(link => [link.fromNoteId, link.toNoteId]),
+      [
+        ['n1', 'archived'],
+        ['n1', 'new'],
+        ['n2', 'n1'],
+      ],
+    );
+
+    // A save with no links clears them, as Storage.clearLinksFromNote does
+    await viaStorage.storage.updateNoteLinks('n1', []);
+    assertCommitted(
+      await kernel.execute({ type: 'saveNoteContent', commandId: 'c2', noteId: 'n1', blocks, linkedNames: [] }),
+    );
+    assert.deepEqual(await links(viaKernel), await links(viaStorage));
+  });
+
+  it('deleteBlocks leaves the blocks Storage.deleteElement leaves, one call per block', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('n1'), legacyEnv.note('n2')],
+      elements: [
+        legacyEnv.block('a', 'n1', 0, 'Kept'),
+        legacyEnv.block('b', 'n1', 1, 'Deleted'),
+        legacyEnv.block('c', 'n1', 2, 'Deleted too'),
+        legacyEnv.block('d', 'n2', 0, 'Another note'),
+      ],
+    });
+    const blockIds = ['b', 'c', 'never-saved'];
+    for (const id of blockIds) await viaStorage.storage.deleteElement(id);
+    assertCommitted(await kernel.execute({ type: 'deleteBlocks', commandId: 'c1', noteId: 'n1', blockIds }));
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it('getBacklinks lists the notes Storage.getBacklinks lists, in its order', async () => {
+    const { viaStorage, kernel } = await twin({
+      canvases: [
+        legacyEnv.note('target', { name: 'Target' }),
+        legacyEnv.note('plain', { name: 'Plain' }),
+        legacyEnv.note('archived', { name: 'Archived', archived: true, archivedAt: SEEDED_AT }),
+        legacyEnv.note('trashed', { name: 'Trashed', trashed: true, trashedAt: SEEDED_AT }),
+        legacyEnv.note('template', { name: 'Template', isTemplate: true }),
+      ],
+      links: [
+        { id: 'l3', fromNoteId: 'trashed', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l1', fromNoteId: 'plain', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l4', fromNoteId: 'template', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l2', fromNoteId: 'archived', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l5', fromNoteId: 'gone', toNoteId: 'target', createdAt: SEEDED_AT },
+        { id: 'l6', fromNoteId: 'target', toNoteId: 'plain', createdAt: SEEDED_AT },
+      ],
+    });
+    for (const noteId of ['target', 'plain', 'nothing']) {
+      const state = await kernel.query({ type: 'getBacklinks', noteId });
+      assert.deepEqual(
+        state.kind === 'ready' ? legacyEnv.plain(state.data) : [],
+        legacyEnv.plain(await viaStorage.storage.getBacklinks(noteId)),
+        noteId,
+      );
+    }
   });
 
   it("moveFolder refuses the moves SidebarController.isChildFolder refuses, and writes what the sidebar's move writes", async () => {
@@ -462,7 +647,16 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     });
     viaStorage.env.load(...EDITOR_FILES);
-    const editor = legacyEnv.makeEditor(viaStorage.env);
+    // The editor on 1.4.x's reads, Storage.getNote and getElementsByNote, which loadNote sorts
+    const { storage } = viaStorage;
+    const editor = legacyEnv.makeEditor(viaStorage.env, viaStorage.env.document, {
+      documentClient: {
+        openNote: async (/** @type {string} */ id) => ({
+          note: await storage.getNote(id),
+          blocks: await storage.getElementsByNote(id),
+        }),
+      },
+    });
     await legacyEnv.runUntil(viaStorage.env, editor.loadNote('n1'));
     const state = await kernel.query({ type: 'getNoteBlocks', noteId: 'n1' });
     assert.deepEqual(

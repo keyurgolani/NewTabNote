@@ -52,7 +52,14 @@ const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import
 const COMMAND_SAMPLES = {
   runStartupMaintenance: {},
   createFolder: { folderId: 'f0', name: 'Work', parentId: null },
-  createNote: { noteId: 'n1', name: 'Plan', folderId: 'f0', blocks: [{ id: 'b1', type: 'text', content: 'Line' }] },
+  createNote: {
+    noteId: 'n1',
+    name: 'Plan',
+    folderId: 'f0',
+    blocks: [{ id: 'b1', type: 'text', content: 'Line' }],
+    pinned: false,
+    titleManuallySet: false,
+  },
   renameNote: { noteId: 'n1', name: 'Plan 2', origin: 'typed' },
   setPinned: { noteId: 'n1', pinned: true },
   saveNoteContent: {
@@ -60,8 +67,12 @@ const COMMAND_SAMPLES = {
     blocks: [{ id: 'b1', type: 'text', content: 'Line', order: 0 }],
     preview: 'Line',
     todoProgress: { completed: 0, total: 1 },
+    name: 'Plan 3',
+    titleOrigin: 'typed',
+    linkedNames: ['Plan 3', 'Elsewhere'],
     expectedRevision: 1,
   },
+  deleteBlocks: { noteId: 'n1', blockIds: ['b1', 'never-saved'] },
   applyDerivedTitle: { noteId: 'n1', name: 'Derived', contentHash: 'h1' },
   attachInsights: { noteId: 'n1', insights: { todos: ['Call'] }, contentHash: 'h1' },
   captureToDailyNote: {
@@ -84,6 +95,7 @@ const QUERY_SAMPLES = {
   listNotes: { view: 'active' },
   getNote: { noteId: 'n1' },
   getNoteBlocks: { noteId: 'n1' },
+  getBacklinks: { noteId: 'n1' },
   listFolders: {},
   getPreferences: { keys: ['theme', 'sidebarWidth'] },
   getWorkspaceSession: {},
