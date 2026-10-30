@@ -2,16 +2,18 @@
 
 // Smart paste through production js/editor.js: each paste goes to the editor's onPaste, the
 // handler the new tab's document sends its paste events to, with focus in a block of a
-// stored note. What it detects shows in the note and in what is stored: a URL becomes a
-// bookmark, fenced code a code block, TSV or CSV a table, Markdown its blocks, and anything
-// else is the browser's to paste. test/paste.test.js covers which pane and field a paste
-// belongs to; this file covers what each kind of text turns into.
+// stored note, which the editor reads and saves through the page's kernel. What it detects
+// shows in the note and in what is stored: a URL becomes a bookmark, fenced code a code
+// block, TSV or CSV a table, Markdown its blocks, and anything else is the browser's to
+// paste. Each lands right after the block with focus. test/paste.test.js covers which pane
+// and field a paste belongs to; this file covers what each kind of text turns into and where.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, makeEditor, note, block,
+  createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, makeEditor, startEditorClient, note, block,
 } = require('./helpers/legacy-env');
+const { expectFailure } = require('./helpers/expect-failure');
 
 const FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js',
@@ -32,40 +34,55 @@ function fields(b) {
 }
 
 /**
- * A new tab with an editor on note N, stored with one text block (`content`), in the
- * active pane. `paste(text)` pastes plain text with focus in that block.
- * @param {string} content - The block's text; '' for an empty block
+ * A new tab with an editor on note N, stored with a text block for each of `contents`, in
+ * the active pane. `paste(text, index)` pastes plain text with focus in block `index`.
+ * @param {string[]} contents - Each block's text; '' for an empty block
  */
-async function noteWith(content) {
+async function noteWith(contents) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   await createDatabase(env.indexedDB, {
-    records: { canvases: [note('N', { name: 'Groceries' })], elements: [block('b1', 'N', 0, content)] },
+    records: {
+      canvases: [note('N', { name: 'Groceries' })],
+      elements: contents.map((content, i) => block(`b${i + 1}`, 'N', i, content)),
+    },
   });
   env.load(...FILES);
   // The editor's URL check, as a page has it
   env.global.URL = URL;
   await env.get('Storage').init();
+  await startEditorClient(env);
 
   const doc = env.document;
   const pane = doc.body.appendChild(doc.createElement('div'));
   pane.className = 'editor-pane active';
   const editor = makeEditor(env, doc, { root: pane });
+  // FakeDocument can't draw blocks (blocks.js styles and replaces real elements), so the
+  // three calls that would are no-ops; the note's blocks and what is stored are what's checked
   const noop = () => {};
-  // Rendering is the page's; the note's blocks and what is stored are what's checked
   Object.assign(editor, { insertBlockDOM: noop, rerenderBlock: noop, focusBlock: noop });
   await editor.loadNote('N');
-  // The block's element, where focus is. It sits in the pane outside the blocks container,
-  // since rendering is stubbed and a type change would otherwise redraw it.
-  const row = pane.appendChild(doc.createElement('div'));
-  row.className = 'block';
-  row.setAttribute('data-id', 'b1');
-  const text = row.appendChild(doc.createElement('div'));
-  text.className = 'block-content';
-  text.setAttribute('contenteditable', 'true');
+  // Each block's element. They sit in the pane outside the blocks container, since nothing
+  // draws there and a type change would otherwise try to redraw them.
+  const texts = contents.map((_, i) => {
+    const row = pane.appendChild(doc.createElement('div'));
+    row.className = 'block';
+    row.setAttribute('data-id', `b${i + 1}`);
+    const text = row.appendChild(doc.createElement('div'));
+    text.className = 'block-content';
+    text.setAttribute('contenteditable', 'true');
+    return text;
+  });
 
-  /** @param {string} clipboard @returns {boolean} whether the editor kept the browser from pasting it */
-  const paste = (clipboard) => {
+  /**
+   * @param {string} clipboard
+   * @param {number} [index] - The block with focus, the first unless given
+   * @returns {boolean} whether the editor kept the browser from pasting it
+   */
+  const paste = (clipboard, index = 0) => {
+    const text = texts[index];
     text.focus();
+    // What the blocks container's focus listener does as focus moves into a block (editor.js L193)
+    editor.onBlockFocus({ type: 'focus', target: text });
     const event = {
       type: 'paste',
       target: text,
@@ -90,13 +107,18 @@ async function noteWith(content) {
 }
 
 const EGGS = { type: 'text', content: 'eggs' };
+const MILK = { type: 'text', content: 'milk' };
 
-/** [what is pasted, the text, the blocks it adds after a block holding "eggs"] */
+/** [what is pasted, the URL] */
+const URLS = [
+  ['an https URL', 'https://example.com', 'https://example.com'],
+  ['an http URL with a path and query', 'http://example.com/path?q=1', 'http://example.com/path?q=1'],
+  ['a URL on a subdomain', 'https://sub.domain.co.uk/page', 'https://sub.domain.co.uk/page'],
+  ['a URL with spaces around it', '  https://example.com/a  ', 'https://example.com/a'],
+];
+
+/** [what is pasted, the text, the blocks it adds after the block with focus] */
 const DETECTED = [
-  ['an https URL', 'https://example.com', [{ type: 'bookmark', content: '', url: 'https://example.com' }]],
-  ['an http URL with a path and query', 'http://example.com/path?q=1', [{ type: 'bookmark', content: '', url: 'http://example.com/path?q=1' }]],
-  ['a URL on a subdomain', 'https://sub.domain.co.uk/page', [{ type: 'bookmark', content: '', url: 'https://sub.domain.co.uk/page' }]],
-  ['a URL with spaces around it', '  https://example.com/a  ', [{ type: 'bookmark', content: '', url: 'https://example.com/a' }]],
   ['fenced code', '```\nconst x = 1;\n```', [{ type: 'code', content: 'const x = 1;' }]],
   ['fenced code with a language', '```js\nconsole.log("hi");\n```', [{ type: 'code', content: 'console.log(&quot;hi&quot;);' }]],
   ['fenced code over two lines', '```\nline1\nline2\n```', [{ type: 'code', content: 'line1\nline2' }]],
@@ -135,27 +157,48 @@ const PLAIN = [
   ['nothing', ''],
 ];
 
-describe('smart paste after a block with text', () => {
+describe('smart paste with focus in the first of two blocks with text', () => {
   for (const [label, text, added] of DETECTED) {
-    it(`${label} is added after it`, async () => {
-      const { paste, shown, saved } = await noteWith('eggs');
+    it(`${label} is added right after it`, async () => {
+      const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
       assert.equal(paste(text), true, 'the browser does not paste it too');
-      assert.deepEqual(shown(), [EGGS, ...added]);
-      assert.deepEqual(await saved(), [EGGS, ...added]);
+      assert.deepEqual(shown(), [EGGS, ...added, MILK]);
+      assert.deepEqual(await saved(), [EGGS, ...added, MILK]);
     });
   }
 
   for (const [label, text] of PLAIN) {
     it(`${label} is left to the browser`, async () => {
-      const { paste, shown, saved } = await noteWith('eggs');
+      const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
       assert.equal(paste(text), false);
-      assert.deepEqual(shown(), [EGGS]);
-      assert.deepEqual(await saved(), [EGGS]);
+      assert.deepEqual(shown(), [EGGS, MILK]);
+      assert.deepEqual(await saved(), [EGGS, MILK]);
     });
   }
 });
 
-describe('smart paste into an empty block', () => {
+describe('smart paste of a URL with focus in the last block with text', () => {
+  // Where a URL lands from a block in the middle is KD-008, below
+  for (const [label, text, url] of URLS) {
+    it(`${label} becomes a bookmark after it`, async () => {
+      const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
+      assert.equal(paste(text, 1), true, 'the browser does not paste it too');
+      const bookmark = { type: 'bookmark', content: '', url };
+      assert.deepEqual(shown(), [EGGS, MILK, bookmark]);
+      assert.deepEqual(await saved(), [EGGS, MILK, bookmark]);
+    });
+  }
+});
+
+expectFailure('KD-008 a URL pasted with focus in a block with text becomes a bookmark right after that block', async () => {
+  const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
+  if (!paste('https://example.com/a')) throw new Error('the editor left the URL to the browser');
+  const bookmark = { type: 'bookmark', content: '', url: 'https://example.com/a' };
+  assert.deepEqual(shown(), [EGGS, bookmark, MILK]);
+  assert.deepEqual(await saved(), [EGGS, bookmark, MILK]);
+});
+
+describe('smart paste into an empty block between two others', () => {
   const INTO_EMPTY = [
     ['a URL', 'https://example.com', [{ type: 'bookmark', content: '', url: 'https://example.com' }]],
     ['fenced code', '```\na < b\n```', [{ type: 'code', content: 'a &lt; b' }]],
@@ -164,17 +207,17 @@ describe('smart paste into an empty block', () => {
   ];
   for (const [label, text, blocks] of INTO_EMPTY) {
     it(`${label} becomes the block`, async () => {
-      const { paste, shown, saved } = await noteWith('');
-      assert.equal(paste(text), true);
-      assert.deepEqual(shown(), blocks);
-      assert.deepEqual(await saved(), blocks);
+      const { paste, shown, saved } = await noteWith(['eggs', '', 'milk']);
+      assert.equal(paste(text, 1), true);
+      assert.deepEqual(shown(), [EGGS, ...blocks, MILK]);
+      assert.deepEqual(await saved(), [EGGS, ...blocks, MILK]);
     });
   }
 
   it('plain text is left to the browser', async () => {
-    const { paste, shown, saved } = await noteWith('');
-    assert.equal(paste('just words'), false);
-    assert.deepEqual(shown(), [{ type: 'text', content: '' }]);
-    assert.deepEqual(await saved(), [{ type: 'text', content: '' }]);
+    const { paste, shown, saved } = await noteWith(['eggs', '', 'milk']);
+    assert.equal(paste('just words', 1), false);
+    assert.deepEqual(shown(), [EGGS, { type: 'text', content: '' }, MILK]);
+    assert.deepEqual(await saved(), [EGGS, { type: 'text', content: '' }, MILK]);
   });
 });

@@ -90,12 +90,23 @@ describe('SyncService', () => {
     assert.equal(service.getState().status, 'idle');
   });
 
-  it('destroy stops auto sync', async () => {
-    await service.init();
-    service.startAutoSync(60000);
-    assert.notEqual(service._syncInterval, null);
-    service.destroy();
-    assert.equal(service._syncInterval, null);
+  it('destroy stops auto sync and drops every listener init added', async () => {
+    // The event bus as the service sees it, counting its listeners per event, so nothing is emitted
+    const bus = createEventBus();
+    const listening = new Map();
+    const counted = {
+      on(event, handler) { listening.set(event, (listening.get(event) || 0) + 1); bus.on(event, handler); },
+      off(event, handler) { listening.set(event, (listening.get(event) || 0) - 1); bus.off(event, handler); },
+      emit: bus.emit,
+    };
+    const watched = new SyncService({ storage, eventBus: counted, logger });
+    await watched.init();
+    assert.ok([...listening.values()].some((n) => n > 0), 'init listens for something');
+    watched.startAutoSync(60000);
+    assert.notEqual(watched._syncInterval, null);
+    watched.destroy();
+    assert.equal(watched._syncInterval, null);
+    assert.deepEqual([...listening].filter(([, n]) => n !== 0), [], 'listeners left after destroy');
   });
 
   for (const [name, label] of [['gdrive', 'Google Drive'], ['dropbox', 'Dropbox']]) {

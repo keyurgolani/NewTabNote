@@ -25,11 +25,19 @@ expectFailure('KD-006 connecting WebDAV stores no plaintext copy of the password
   await service.init();
 
   const password = canary('webdav');
-  await service.connect('webdav', { serverUrl: 'https://dav.example.test/files', username: 'synthetic-user', password });
+  const username = 'synthetic-user';
+  await service.connect('webdav', { serverUrl: 'https://dav.example.test/files', username, password });
   if (env.chrome.local.setting_syncProvider !== 'webdav') throw new Error('WebDAV did not connect');
 
   const atRest = JSON.stringify(env.chrome.local) + JSON.stringify(await dumpDatabase(env.indexedDB));
-  assert.equal(atRest.includes(password), false, 'the password is stored as typed');
+  const base64 = (text) => Buffer.from(text).toString('base64');
+  // As typed, or only encoded: on its own, or as the Basic auth credentials
+  const copies = [
+    ['as typed', password],
+    ['in base64', base64(password)],
+    ['as base64 Basic credentials', base64(`${username}:${password}`)],
+  ];
+  assert.deepEqual(copies.filter(([, copy]) => atRest.includes(copy)).map(([how]) => how), [], 'the password is stored');
 });
 
 expectFailure('KD-007 Gemini requests carry the API key outside their URL', async () => {

@@ -1,17 +1,20 @@
 'use strict';
 
-// Known defects of production js/storage.js, on fake-indexeddb behind #17's fault-injecting
-// wrapper (test/kernel/storage-faults.mjs). Each is an expected failure under its
-// test/known-defects.json entry, so the run fails once the defect is fixed and the entry
-// stays. A step that goes wrong for another reason throws a plain Error, which fails the test
-// as it should, rather than an assertion that would read as the defect.
+// Production js/storage.js on fake-indexeddb behind #17's fault-injecting wrapper
+// (test/kernel/storage-faults.mjs): writes answer only for what they stored, and exportAll
+// exports what the database holds. The known defects are expected failures under their
+// test/known-defects.json entries, so the run fails once one is fixed and its entry stays.
+// A step that goes wrong for another reason throws a plain Error, which fails the test as it
+// should, rather than an assertion that would read as the defect.
 
+const test = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory } = require('fake-indexeddb');
 const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, plain, note, block } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
+const FAULT = 'QuotaExceededError';
 
 /**
  * Storage started on a database the wrapper watches. `real` is fake-indexeddb itself, for
@@ -47,36 +50,84 @@ async function outcomeOf(env, promise) {
   return outcome;
 }
 
+/**
+ * Whether `error`, or an error it wraps (StorageError's `cause`), is the fault the test
+ * injected
+ * @param {any} error
+ */
+function isInjectedFault(error) {
+  for (let current = error; current; current = current.cause) {
+    if (current.name === FAULT) return true;
+  }
+  return false;
+}
+
+/**
+ * The write either answers with what it stored, or rejects with the injected abort. A
+ * rejection for any other reason, or an answer for a record that isn't stored, fails.
+ * @param {{value?: any, error?: any}} outcome
+ * @param {Object<string, any>} stored - The store's rows by key, read after the abort
+ * @param {(value: any) => string} keyOf - The key of the record the write answered with
+ * @param {string} what - The write, for the messages
+ */
+function assertAnsweredHonestly(outcome, stored, keyOf, what) {
+  if (outcome.error) {
+    assert.ok(isInjectedFault(outcome.error), `${what} rejected, but not with the aborted transaction's error: ${outcome.error && outcome.error.message}`);
+    return;
+  }
+  assert.ok(keyOf(plain(outcome.value)) in stored, `${what} resolved with a record its aborted transaction never stored`);
+}
+
+test('createNote and saveElement resolve once what they wrote is stored, when nothing fails', async () => {
+  const { env, real, storage } = await started({ canvases: [note('N', { name: 'Groceries' })] });
+  const created = await outcomeOf(env, storage.createNote('Plan'));
+  if (created.error) throw created.error;
+  const saved = await outcomeOf(env, storage.saveElement(block('b1', 'N', 0, 'eggs')));
+  if (saved.error) throw saved.error;
+  const dump = await dumpDatabase(real);
+  assert.equal(recordsOf(dump, 'canvases')[plain(created.value).id].name, 'Plan');
+  assert.equal(recordsOf(dump, 'elements').b1.content, 'eggs');
+});
+
 expectFailure('KD-003 createNote resolves only once its note is stored', async () => {
   const { env, real, faults, storage } = await started();
   // The note's write succeeds, then its transaction aborts, as one the disk refuses at commit does
-  const aborted = faults.abortAfterNextWrite('canvases', 'QuotaExceededError');
+  const aborted = faults.abortAfterNextWrite('canvases', FAULT);
   const outcome = await outcomeOf(env, storage.createNote('Plan'));
   await aborted;
-  // Rejecting is honest: the caller knows the note isn't there
-  if (outcome.error) return;
-  const stored = recordsOf(await dumpDatabase(real), 'canvases');
-  const id = plain(outcome.value).id;
-  assert.ok(id in stored, 'createNote resolved with a note its aborted transaction never stored');
+  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'canvases'), (n) => n.id, 'createNote');
 });
 
 expectFailure('KD-004 saveElement resolves only once its block is stored', async () => {
   const { env, real, faults, storage } = await started({ canvases: [note('N', { name: 'Groceries' })] });
-  const aborted = faults.abortAfterNextWrite('elements', 'QuotaExceededError');
+  const aborted = faults.abortAfterNextWrite('elements', FAULT);
   const outcome = await outcomeOf(env, storage.saveElement(block('b1', 'N', 0, 'eggs')));
   await aborted;
-  if (outcome.error) return;
-  const stored = recordsOf(await dumpDatabase(real), 'elements');
-  assert.ok('b1' in stored, 'saveElement resolved with a block its aborted transaction never stored');
+  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'elements'), (b) => b.id, 'saveElement');
 });
 
-expectFailure('KD-005 exportAll includes the links between notes', async () => {
+/** What exportAll exports from a database holding two linked notes, a theme, and a snapshot */
+async function exported() {
   const { storage } = await started({
     canvases: [note('A', { name: 'Alpha' }), note('B', { name: 'Beta' })],
     links: [{ id: 'l1', fromNoteId: 'A', toNoteId: 'B', createdAt: 1 }],
+    themes: [{ id: 't1', name: 'Dusk', updatedAt: 2, colors: { accent: '#335577' } }],
+    snapshots: [{ id: 's1', noteId: 'A', timestamp: 3, title: 'Alpha', blocks: [{ id: 'x1', type: 'text', content: 'draft' }] }],
   });
-  const exported = plain(await storage.exportAll());
-  const notes = exported.canvases.map((n) => n.id).sort();
+  const data = plain(await storage.exportAll());
+  const notes = data.canvases.map((n) => n.id).sort();
   if (notes.join() !== 'A,B') throw new Error(`exportAll exported notes ${notes.join()}, not A and B`);
-  assert.deepEqual((exported.links || []).map((l) => [l.id, l.fromNoteId, l.toNoteId]), [['l1', 'A', 'B']]);
+  return data;
+}
+
+expectFailure('KD-005 exportAll includes the links between notes', async () => {
+  assert.deepEqual(((await exported()).links || []).map((l) => [l.id, l.fromNoteId, l.toNoteId]), [['l1', 'A', 'B']]);
+});
+
+expectFailure('KD-005 exportAll includes custom themes', async () => {
+  assert.deepEqual(((await exported()).themes || []).map((t) => [t.id, t.name]), [['t1', 'Dusk']]);
+});
+
+expectFailure('KD-005 exportAll includes note snapshots', async () => {
+  assert.deepEqual(((await exported()).snapshots || []).map((s) => [s.id, s.noteId, s.blocks.length]), [['s1', 'A', 1]]);
 });
