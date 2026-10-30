@@ -335,7 +335,10 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       if (list !== undefined && !isCodeList(list)) throw new TypeError('recovery.raise: capabilities must be codes');
     }
     const evidence = checkEvidence(input.evidence);
-    if (!evidence.ok) throw new TypeError(`recovery.raise: evidence refused (${evidence.reason})`);
+    if (!evidence.ok) {
+      const { reason } = /** @type {import('./evidence.js').RefusedEvidence} */ (evidence);
+      throw new TypeError(`recovery.raise: evidence refused (${reason})`);
+    }
     return evidence.value;
   };
 

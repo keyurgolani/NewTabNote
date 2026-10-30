@@ -124,7 +124,11 @@ export const evidenceSchema = v.strictObject(
  */
 
 /**
- * @typedef {{ok: true, value: Evidence} | {ok: false, reason: EvidenceRefusal, field: string | null}} CheckedEvidence
+ * @typedef {{ok: false, reason: EvidenceRefusal, field: string | null}} RefusedEvidence
+ */
+
+/**
+ * @typedef {{ok: true, value: Evidence} | RefusedEvidence} CheckedEvidence
  */
 
 /**
