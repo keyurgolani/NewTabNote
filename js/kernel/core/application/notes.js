@@ -473,7 +473,9 @@ export const noteCommands = {
         const start = atOrder ?? existing.reduce((next, block) => Math.max(next, (Number(block.order) || 0) + 1), 0);
         // The blocks at or past the place move down by as many as come in, as AI chat moved them
         const placed = existing.map(block =>
-          (Number(block.order) || 0) >= start ? { ...block, order: (Number(block.order) || 0) + records.length } : block,
+          (Number(block.order) || 0) >= start
+            ? { ...block, order: (Number(block.order) || 0) + records.length }
+            : block,
         );
         placed.forEach((block, index) => {
           if (block !== existing[index]) tx.put('blocks', block);

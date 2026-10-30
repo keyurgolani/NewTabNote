@@ -981,7 +981,9 @@ export function runContractSuite(fixture) {
       const placedNote = async () => {
         await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
         await createNote({ noteId: 'n1', name: 'Draft', blocks: someBlocks('n1', 3) });
-        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'old', blocks: serialized(['Then']), title: 'Then' }));
+        await run(
+          cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'old', blocks: serialized(['Then']), title: 'Then' }),
+        );
         await run(cmd('renameNote', { noteId: 'n1', name: 'Now' }));
         await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
         await seed('notes', [{ .../** @type {NoteRecord} */ (await noteOf('n1')), folderId: 'f1' }]);
@@ -1004,7 +1006,9 @@ export function runContractSuite(fixture) {
           title: 'Plan',
         });
         ctx.clock.advance();
-        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's2', blocks: serialized(['Eggs']), title: 'Later' }));
+        await run(
+          cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's2', blocks: serialized(['Eggs']), title: 'Later' }),
+        );
         assert.deepEqual(await listOf('n1'), [
           { id: 's2', timestamp: NOW + 2000, title: 'Later' },
           { id: 's1', timestamp: NOW + 1000, title: 'Plan' },
@@ -1071,7 +1075,9 @@ export function runContractSuite(fixture) {
         );
         assert.deepEqual([outcome.code, outcome.changedIds], ['snapshot-restored', ['n1']]);
         assert.deepEqual(await noteOf('n1'), { ...before, name: 'Then', updatedAt: NOW + 1000 });
-        assert.deepEqual(await blocksOf('n1'), [{ id: 's-0', type: 'text', content: 'Then', canvasId: 'n1', order: 0 }]);
+        assert.deepEqual(await blocksOf('n1'), [
+          { id: 's-0', type: 'text', content: 'Then', canvasId: 'n1', order: 0 },
+        ]);
         assert.equal((await searchEntryOf('n1'))?.name, 'Then');
         // What the note was, as stored, with no note or place of its own in each block
         assert.deepEqual(await snapshotOf('pre'), {
@@ -1091,7 +1097,12 @@ export function runContractSuite(fixture) {
         await createNote({ noteId: 'n1', name: 'Kept', blocks: someBlocks('n1', 1) });
         await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'old', blocks: serialized(['Then']), title: '' }));
         await run(
-          cmd('restoreSnapshot', { noteId: 'n1', snapshotId: 'old', preSnapshotId: 'pre', blocks: serialized(['Then']) }),
+          cmd('restoreSnapshot', {
+            noteId: 'n1',
+            snapshotId: 'old',
+            preSnapshotId: 'pre',
+            blocks: serialized(['Then']),
+          }),
         );
         assert.equal((await noteOf('n1'))?.name, 'Kept');
         assert.equal((await searchEntryOf('n1'))?.name, 'Kept');

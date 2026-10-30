@@ -99,7 +99,13 @@ export const snapshotCommands = {
         // 1.4.x took one before it reverted
         const stored = inBlockOrder(await tx.getAllByIndex('blocks', 'canvasId', noteId));
         const title = typeof note.name === 'string' && note.name ? note.name : 'Untitled';
-        const pre = snapshotRecord({ id: preSnapshotId, noteId, timestamp: now, blocks: snapshotBlocks(stored), title });
+        const pre = snapshotRecord({
+          id: preSnapshotId,
+          noteId,
+          timestamp: now,
+          blocks: snapshotBlocks(stored),
+          title,
+        });
         const refused = await keepSnapshot(tx, pre);
         if (refused) return refused;
         // The snapshot's blocks replace the note's, in its order
