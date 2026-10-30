@@ -92,7 +92,8 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
   let failure = null;
   /** @type {Promise<void> | null} */
   let opening = null;
-  const ranges = keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
+  // Read when a range is first needed, so a host without the global can still open
+  const ranges = () => keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
 
   const connect = () =>
     new Promise((resolve, reject) => {
@@ -158,7 +159,7 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
       count: store => result(handle(store).count()),
       keys: async (store, { index, below, limit } = {}) => {
         const objectStore = handle(store);
-        const range = below === undefined ? null : ranges.upperBound(below, true);
+        const range = below === undefined ? null : ranges().upperBound(below, true);
         const source = index ? objectStore.index(index) : objectStore;
         return /** @type {Promise<(string | number)[]>} */ (result(source.getAllKeys(range, limit)));
       },
