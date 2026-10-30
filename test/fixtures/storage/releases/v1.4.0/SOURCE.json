@@ -1,0 +1,17 @@
+{
+  "about": "js/storage.js and js/utils.js exactly as the v1.4.0 tag has them: release artifacts kept as test fixtures for #17's rollback and import tests (Q11), never production code. Excluded from eslint, the type ratchet, prettier, and the design-token scan.",
+  "tag": "v1.4.0",
+  "commit": "e93b21e6acf065c198a71646fc0ee185cfd416ba",
+  "files": [
+    {
+      "path": "js/storage.js",
+      "gitBlob": "05e4e8bf88b2427abe9697750cca3ad47dadf3bf",
+      "sha256": "6c1e79d5f5694073f98ec40028aafd6dc55d7f0efa4ee1e9d9e90a7f8f33449e"
+    },
+    {
+      "path": "js/utils.js",
+      "gitBlob": "47f0d257127454c63bfb6f4cc4362461de6bd30c",
+      "sha256": "f612eaeb05fb5ff784d42ef4acfc66316e7917c650a05f8c8ec719b3069f1ef4"
+    }
+  ]
+}
