@@ -94,7 +94,12 @@ for (const { name, make } of STORES) {
       assert.equal(incident.key, 'storage/open-failed/-');
       assert.equal(incident.ref, incident.id.slice(0, 6).toUpperCase());
       // Another subject is another incident
-      await records.raise({ providerId: 'storage', faultCode: 'open-failed', subjectId: 'canvases', severity: 'degraded' });
+      await records.raise({
+        providerId: 'storage',
+        faultCode: 'open-failed',
+        subjectId: 'canvases',
+        severity: 'degraded',
+      });
       assert.equal((await records.incidents()).length, 2);
     });
 
@@ -139,14 +144,21 @@ for (const { name, make } of STORES) {
         await records.resolve('index', []);
       }
       for (let n = 0; n < 3; n++) {
-        const { incident } = await records.raise({ providerId: 'sync', faultCode: 'conflict', subjectId: `o${n}`, severity: 'data-risk' });
+        const { incident } = await records.raise({
+          providerId: 'sync',
+          faultCode: 'conflict',
+          subjectId: `o${n}`,
+          severity: 'data-risk',
+        });
         if (n === 0) await records.dismiss(incident.id, true);
       }
       const all = await records.incidents();
       const resolved = all.filter(incident => incident.state === 'resolved');
       assert.equal(resolved.length, BOUNDS.resolvedIncidents);
       // The newest resolved ones stay
-      assert.ok(!resolved.some(incident => ['r0', 'r1', 'r2', 'r3', 'r4'].includes(/** @type {string} */ (incident.subjectId))));
+      assert.ok(
+        !resolved.some(incident => ['r0', 'r1', 'r2', 'r3', 'r4'].includes(/** @type {string} */ (incident.subjectId))),
+      );
       const open = all.filter(incident => incident.state === 'open');
       assert.equal(open.length, 3);
       assert.equal(open.filter(incident => incident.dismissed).length, 1);
@@ -190,13 +202,10 @@ for (const { name, make } of STORES) {
       assert.equal(latest.transition, false);
       assert.equal(latest.verifiedAt, clock.now() - 1);
       assert.ok(transitions.every((item, index) => index === 0 || item.status !== transitions[index - 1].status));
-      assert.deepEqual(
-        (await records.latestReceipts()).map(item => [item.providerId, item.status]).sort(),
-        [
-          ['index', 'unverified'],
-          ['storage', 'degraded'],
-        ],
-      );
+      assert.deepEqual((await records.latestReceipts()).map(item => [item.providerId, item.status]).sort(), [
+        ['index', 'unverified'],
+        ['storage', 'degraded'],
+      ]);
       assert.ok(stored.every(item => item.installId === stored[0].installId));
     });
 
@@ -283,7 +292,9 @@ describe('NewTabNoteTrust (#20 slice 1, "Records")', () => {
         keyPath: objectStore.keyPath,
         autoIncrement: objectStore.autoIncrement,
         indexes: Object.keys(TRUST_DB_STORES).includes(name)
-          ? /** @type {any} */ (TRUST_DB_STORES)[name].indexes.filter((/** @type {string} */ index) => indexes.includes(index))
+          ? /** @type {any} */ (TRUST_DB_STORES)[name].indexes.filter((/** @type {string} */ index) =>
+              indexes.includes(index),
+            )
           : indexes,
         unique: indexes.filter(index => objectStore.index(index).unique),
       };

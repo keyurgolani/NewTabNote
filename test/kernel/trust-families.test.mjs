@@ -63,9 +63,15 @@ const storageAnswer = /** @type {{next: CheckResult}} */ ({ next: { status: 'ver
 /** The approved test plan's provider fixtures, one per state */
 const PROVIDERS = [
   // healthy: core, verified, capture safe
-  provider('capture', 'storage', 10, () => ({ status: 'verified', capture: 'safe', evidence: { durationMs: 2, seq: 41 } }), {
-    core: true,
-  }),
+  provider(
+    'capture',
+    'storage',
+    10,
+    () => ({ status: 'verified', capture: 'safe', evidence: { durationMs: 2, seq: 41 } }),
+    {
+      core: true,
+    },
+  ),
   provider('storage', 'storage', 20, () => storageAnswer.next, { core: true }),
   // unconfigured
   provider('sync', 'sync', 10, () => ({ status: 'not-configured' })),
@@ -198,7 +204,13 @@ describe('the health and remediation families (#20 slice 1)', () => {
 async function trustCenter() {
   const clock = manualClock();
   const settings = settingsArea();
-  const records = createTrustRecords({ store: createMemoryTrustStore(), settings, clock, ids: hexIds(), locks: lockManager() });
+  const records = createTrustRecords({
+    store: createMemoryTrustStore(),
+    settings,
+    clock,
+    ids: hexIds(),
+    locks: lockManager(),
+  });
   await records.open();
   const journal = createDiagnosticJournal({ records, clock, strict: true });
   const root = createRegistryRoot({ host: 'workspace' });
@@ -308,9 +320,18 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
 
   it('capture at risk or storage failing routes to the Recovery Center', async () => {
     const { trust } = await trustCenter();
-    storageAnswer.next = { status: 'failed', capture: 'at-risk', faults: [{ faultCode: 'open-failed', severity: 'capture-risk' }] };
+    storageAnswer.next = {
+      status: 'failed',
+      capture: 'at-risk',
+      faults: [{ faultCode: 'open-failed', severity: 'capture-risk' }],
+    };
     try {
-      await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now', providerIds: ['capture', 'storage'] });
+      await trust.verify({
+        type: 'trust.verify',
+        commandId: 'c1',
+        trigger: 'verify-now',
+        providerIds: ['capture', 'storage'],
+      });
       const summary = await summaryOf(trust);
       assert.equal(summary.worstCore, 'failed');
       assert.equal(summary.capture, 'at-risk');
@@ -322,7 +343,11 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
 
   it('a dismissed incident leaves Needs action until the next failing check, and a passing one resolves it', async () => {
     const { trust, records } = await trustCenter();
-    storageAnswer.next = { status: 'degraded', capture: 'safe', faults: [{ faultCode: 'scan-findings', severity: 'degraded' }] };
+    storageAnswer.next = {
+      status: 'degraded',
+      capture: 'safe',
+      faults: [{ faultCode: 'scan-findings', severity: 'degraded' }],
+    };
     try {
       await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now', providerIds: ['storage'] });
       const [incident] = await records.incidents();
@@ -349,7 +374,13 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
 
   it('a check that throws or answers outside the schema records unverified, never verified', async () => {
     const clock = manualClock();
-    const base = { id: 'x', operation: 'fixture.x', costClass: /** @type {const} */ ('local-cheap'), timeoutMs: 50, freshnessMs: DAY };
+    const base = {
+      id: 'x',
+      operation: 'fixture.x',
+      costClass: /** @type {const} */ ('local-cheap'),
+      timeoutMs: 50,
+      freshnessMs: DAY,
+    };
     const threw = await runCheck(
       {
         ...base,
@@ -361,10 +392,16 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     );
     assert.equal(threw.receipt.status, 'unverified');
     assert.deepEqual(threw.receipt.evidence, { errorCode: 'check-threw', exception: 'TypeError' });
-    const loose = await runCheck({ ...base, check: () => ({ status: 'verified', evidence: { note: 'x' } }) }, { clock, timers: realTimers });
+    const loose = await runCheck(
+      { ...base, check: () => ({ status: 'verified', evidence: { note: 'x' } }) },
+      { clock, timers: realTimers },
+    );
     assert.equal(loose.receipt.status, 'unverified');
     // Only a core provider may say capture is safe
-    const notCore = await runCheck({ ...base, check: () => ({ status: 'verified', capture: 'safe' }) }, { clock, timers: realTimers });
+    const notCore = await runCheck(
+      { ...base, check: () => ({ status: 'verified', capture: 'safe' }) },
+      { clock, timers: realTimers },
+    );
     assert.equal(notCore.receipt.status, 'unverified');
     assert.equal(notCore.outcome, 'invalid');
   });

@@ -40,7 +40,9 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
 
     const held = /** @type {any} */ (profile.settings.items.get(KEY));
     assert.equal(held.key, 'capture/capture-failed/-', 'the latest storage incident is the one kept');
-    assert.ok(profile.settings.sets.every(set => Object.keys(set).every(key => key === KEY || key === 'trust.installId')));
+    assert.ok(
+      profile.settings.sets.every(set => Object.keys(set).every(key => key === KEY || key === 'trust.installId')),
+    );
     const inMemory = await records.incidents();
     assert.deepEqual(inMemory.map(incident => incident.key).sort(), [
       'capture/capture-failed/-',
@@ -60,7 +62,10 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     const first = await openRecords(createTrustDatabase({ indexedDB: brokenFactory }), profile);
     await first.records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' });
     // The service worker, say, starting later in the same profile
-    const second = await openRecords(createMemoryTrustStore({ openError: new UnavailableError('storage', 'open-failed', true) }), profile);
+    const second = await openRecords(
+      createMemoryTrustStore({ openError: new UnavailableError('storage', 'open-failed', true) }),
+      profile,
+    );
     assert.deepEqual(
       (await second.records.incidents()).map(incident => incident.key),
       ['storage/open-failed/-'],
@@ -78,7 +83,12 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
       locks: profile.locks,
     });
     await down.open();
-    await down.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk', evidence: { exception: 'UnknownError' } });
+    await down.raise({
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      severity: 'capture-risk',
+      evidence: { exception: 'UnknownError' },
+    });
     clock.advance(10);
     await down.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' });
 
@@ -133,7 +143,11 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     opened.push(store);
     const { records } = await openRecords(store, profile);
     store.close();
-    const raised = await records.raise({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' });
+    const raised = await records.raise({
+      providerId: 'capture',
+      faultCode: 'capture-failed',
+      severity: 'capture-risk',
+    });
     assert.equal(raised.held, true);
     assert.equal(records.failureCode(), 'reload-required');
     const store2 = databaseOn(profile);

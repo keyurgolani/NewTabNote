@@ -8,6 +8,7 @@
 
 import * as v from '../../lib/valibot/index.mjs';
 import { code, count, timestamp } from '../../kernel/core/contracts/fields.js';
+import { check } from '../../kernel/core/contracts/validate.js';
 import { evidenceSchema, opaqueId } from './evidence.js';
 import {
   CAPTURE_STATES,
@@ -137,6 +138,23 @@ export const journalEventSchema = v.strictObject({
 });
 
 /** @typedef {v.InferOutput<typeof journalEventSchema>} JournalEvent */
+
+/**
+ * `value` checked against `schema`, or a TypeError that names only the rule and the path it
+ * broke, never the value: Valibot's own error quotes what it received, and a caller that logs
+ * the error would log whatever text was passed in (contracts/validate.js's issues hold none)
+ * @template {v.GenericSchema} S
+ * @param {S} schema
+ * @param {unknown} value
+ * @param {string} what - the record's kind, for the message
+ * @returns {v.InferOutput<S>}
+ */
+export function parseRecord(schema, value, what) {
+  const checked = check(schema, value);
+  if (checked.ok) return checked.value;
+  const [issue] = /** @type {{ok: false, issues: {type: string, path: string}[]}} */ (checked).issues;
+  throw new TypeError(`${what} refused: ${issue ? `${issue.type} at ${issue.path || '/'}` : 'invalid'}`);
+}
 
 /**
  * An incident's key

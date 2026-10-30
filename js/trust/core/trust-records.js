@@ -27,6 +27,7 @@
  */
 
 import * as v from '../../lib/valibot/index.mjs';
+import { code } from '../../kernel/core/contracts/fields.js';
 import { UnavailableError } from '../../kernel/core/contracts/outcomes.js';
 import { checkEvidence, isCodeList, opaqueId } from './evidence.js';
 import { SETTINGS_KEYS } from './ports.js';
@@ -35,6 +36,7 @@ import {
   incidentKey,
   incidentSchema,
   journalEventSchema,
+  parseRecord,
   receiptSchema,
   refOf,
   runSchema,
@@ -325,6 +327,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    */
   const checkRaise = input => {
     if (!v.is(opaqueId, input.providerId)) throw new TypeError('recovery.raise: providerId must be an opaque id');
+    if (!v.is(code, input.faultCode)) throw new TypeError('recovery.raise: faultCode must be a code');
     if (input.subjectId != null && !v.is(opaqueId, input.subjectId)) {
       throw new TypeError('recovery.raise: subjectId must be an opaque id');
     }
@@ -353,13 +356,13 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     const key = incidentKey(input.providerId, input.faultCode, input.subjectId);
     const stored = await attempt(['incidents'], 'readwrite', async tx => {
       const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', key));
-      const incident = v.parse(incidentSchema, merged(existing, input, evidence, at));
+      const incident = parseRecord(incidentSchema, merged(existing, input, evidence, at), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
       return { incident, created: !existing };
     });
     if (stored.ok) return { ...stored.value, held: false };
-    const incident = v.parse(incidentSchema, merged(pendingIncidents.get(key), input, evidence, at));
+    const incident = parseRecord(incidentSchema, merged(pendingIncidents.get(key), input, evidence, at), 'incident');
     await holdIncident(incident);
     return { incident, created: incident.occurrences === 1, held: true };
   };
@@ -440,7 +443,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    */
   const record = async input => {
     const stamped = { ...input, id: ids.next(), installId: await installId(), transition: true };
-    v.parse(receiptSchema, stamped);
+    parseRecord(receiptSchema, stamped, 'receipt');
     const stored = await attempt(['receipts'], 'readwrite', async tx => {
       const all = /** @type {HealthReceipt[]} */ (await tx.getAllByIndex('receipts', 'providerId', input.providerId)).sort(
         byTime('verifiedAt'),
@@ -465,7 +468,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @returns {Promise<RemediationRun>}
    */
   const putRun = async run => {
-    const checked = v.parse(runSchema, run);
+    const checked = parseRecord(runSchema, run, 'run');
     const stored = await attempt(['runs'], 'readwrite', async tx => {
       tx.put('runs', checked);
       await pruneRuns(tx);
@@ -483,7 +486,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @returns {Promise<void>}
    */
   const append = async event => {
-    const checked = /** @type {Omit<JournalEvent, 'seq'>} */ (v.parse(newEventSchema, event));
+    const checked = /** @type {Omit<JournalEvent, 'seq'>} */ (parseRecord(newEventSchema, event, 'journal event'));
     const stored = await attempt(['journal'], 'readwrite', async tx => {
       await tx.append('journal', checked);
       await pruneJournal(tx);
@@ -518,7 +521,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
               evidence: held.evidence,
             }
           : held;
-        tx.put('incidents', v.parse(incidentSchema, next));
+        tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
         count++;
       }
       await pruneIncidents(tx);

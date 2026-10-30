@@ -78,7 +78,9 @@ async function capturingConsole(body) {
       console[method] = saved[index];
     });
   }
-  return lines.map(args => args.map(arg => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg))).join(' ')).join('\n');
+  return lines
+    .map(args => args.map(arg => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg))).join(' '))
+    .join('\n');
 }
 
 /** Every way a caller might try to put a canary into an event */
@@ -103,20 +105,63 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
   it('lists only codes in the pattern, with fields on the allowlist', () => {
     assert.deepEqual(eventCodeProblems(), []);
     // The failure sites #20 slice 1b moves onto logger.event each have a code and an incident
-    for (const code of ['capture.failed', 'storage.open-failed', 'embeddings.load-failed', 'backup.auto-failed', 'indexer.start-failed']) {
+    for (const code of [
+      'capture.failed',
+      'storage.open-failed',
+      'embeddings.load-failed',
+      'backup.auto-failed',
+      'indexer.start-failed',
+    ]) {
       assert.ok(EVENT_CODES[code]?.incident, `${code} raises no incident`);
     }
   });
 
   it('holds only ids, codes, counts, enums, durations, versions, times, revisions, seq, and hashes', () => {
     assert.deepEqual(EVIDENCE_FIELD_NAMES, [
-      'ageMs', 'at', 'attempts', 'browserVersion', 'bytes', 'capture', 'cause', 'code', 'commandId', 'costClass', 'count',
-      'durationMs', 'errorCode', 'exception', 'extensionVersion', 'faultCode', 'incidentId', 'lag', 'operation',
-      'packageHash', 'pending', 'providerId', 'reason', 'records', 'recoveryPointId', 'remediationId', 'retryable',
-      'revision', 'runId', 'schemaVersion', 'seq', 'severity', 'since', 'state', 'status', 'subjectId', 'surface',
-      'timeoutMs', 'trigger', 'verifiedAt', 'version',
+      'ageMs',
+      'at',
+      'attempts',
+      'browserVersion',
+      'bytes',
+      'capture',
+      'cause',
+      'code',
+      'commandId',
+      'costClass',
+      'count',
+      'durationMs',
+      'errorCode',
+      'exception',
+      'extensionVersion',
+      'faultCode',
+      'incidentId',
+      'lag',
+      'operation',
+      'packageHash',
+      'pending',
+      'providerId',
+      'reason',
+      'records',
+      'recoveryPointId',
+      'remediationId',
+      'retryable',
+      'revision',
+      'runId',
+      'schemaVersion',
+      'seq',
+      'severity',
+      'since',
+      'state',
+      'status',
+      'subjectId',
+      'surface',
+      'timeoutMs',
+      'trigger',
+      'verifiedAt',
+      'version',
     ]);
-    for (const fields of CANARY_FIELDS) assert.equal(checkEvidence(fields).ok, false, JSON.stringify(Object.keys(fields)));
+    for (const fields of CANARY_FIELDS)
+      assert.equal(checkEvidence(fields).ok, false, JSON.stringify(Object.keys(fields)));
     assert.equal(checkEvidence({ exception: 'QuotaExceededError', errorCode: 'quota', durationMs: 4 }).ok, true);
     assert.equal(checkEvidence([1]).ok, false);
     assert.equal(checkEvidence(new Error('x')).ok, false);
@@ -126,7 +171,10 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
 describe('logger.event (#20 slice 1, AC3)', () => {
   it('appends a registered event with its allowlisted fields', async () => {
     const { journal, records } = await journalOn({ strict: true });
-    assert.equal(journal.event('trust.check-timed-out', { providerId: 'storage', durationMs: 20, timeoutMs: 20 }), true);
+    assert.equal(
+      journal.event('trust.check-timed-out', { providerId: 'storage', durationMs: 20, timeoutMs: 20 }),
+      true,
+    );
     await journal.flush();
     const [event] = await records.events();
     assert.equal(event.code, 'trust.check-timed-out');
@@ -137,7 +185,10 @@ describe('logger.event (#20 slice 1, AC3)', () => {
     const { journal, records } = await journalOn({ strict: true });
     const message = await capturingConsole(async () => {
       assert.throws(() => journal.event('note.saved', {}), /unregistered-code/);
-      assert.throws(() => journal.event('trust.reconciled', { providerId: 'storage' }), /field-not-allowed \(providerId\)/);
+      assert.throws(
+        () => journal.event('trust.reconciled', { providerId: 'storage' }),
+        /field-not-allowed \(providerId\)/,
+      );
       for (const fields of CANARY_FIELDS) {
         assert.throws(
           () => journal.event('capture.failed', /** @type {any} */ (fields)),
@@ -180,27 +231,33 @@ describe('logger.event (#20 slice 1, AC3)', () => {
 
   it('raises the incident a failure code names, and a repeat updates it', async () => {
     const { journal, records } = await journalOn({ strict: true });
-    journal.event('storage.open-failed', { surface: 'worker-internal', cause: 'storage', errorCode: 'open-failed', exception: 'UnknownError' });
+    journal.event('storage.open-failed', {
+      surface: 'worker-internal',
+      cause: 'storage',
+      errorCode: 'open-failed',
+      exception: 'UnknownError',
+    });
     journal.event('storage.open-failed', { surface: 'worker-internal', cause: 'storage', errorCode: 'open-failed' });
     journal.event('indexer.start-failed', { surface: 'newtab', exception: 'TypeError' });
     journal.event('embeddings.load-failed', { surface: 'offscreen', durationMs: 900 });
     journal.event('backup.auto-failed', { cause: 'quota', errorCode: 'quota', records: 12 });
-    journal.event('capture.failed', { surface: 'worker-internal', errorCode: 'store-unavailable', subjectId: 'daily-2026-10-30' });
+    journal.event('capture.failed', {
+      surface: 'worker-internal',
+      errorCode: 'store-unavailable',
+      subjectId: 'daily-2026-10-30',
+    });
     await journal.flush();
     const incidents = await records.incidents();
-    assert.deepEqual(
-      incidents.map(incident => [incident.key, incident.severity, incident.occurrences]).sort(),
-      [
-        ['backup/auto-backup-failed/-', 'data-risk', 1],
-        ['capture/capture-failed/daily-2026-10-30', 'capture-risk', 1],
-        ['index/indexer-start-failed/-', 'degraded', 1],
-        ['local-inference/load-failed/-', 'degraded', 1],
-        ['storage/open-failed/-', 'capture-risk', 2],
-      ],
-    );
+    assert.deepEqual(incidents.map(incident => [incident.key, incident.severity, incident.occurrences]).sort(), [
+      ['backup/auto-backup-failed/-', 'data-risk', 1],
+      ['capture/capture-failed/daily-2026-10-30', 'capture-risk', 1],
+      ['index/indexer-start-failed/-', 'degraded', 1],
+      ['local-inference/load-failed/-', 'degraded', 1],
+      ['storage/open-failed/-', 'capture-risk', 2],
+    ]);
   });
 
-  it("gives a logger an event method and leaves its level methods console-only", () => {
+  it('gives a logger an event method and leaves its level methods console-only', () => {
     const logger = createLogger('warn');
     const journal = /** @type {any} */ ({ event: () => true });
     const extended = withEvents(logger, journal);
@@ -235,13 +292,28 @@ describe('the diagnostic report (#20, "Security and privacy")', () => {
     const report = JSON.parse(exported.serialized);
     assert.ok(v.is(reportSchema, report));
     assert.deepEqual(Object.keys(report), [
-      'format', 'formatVersion', 'createdAt', 'installId', 'versions', 'records', 'recordsFailure', 'migrations',
-      'receipts', 'incidents', 'runs', 'journal', 'rejected',
+      'format',
+      'formatVersion',
+      'createdAt',
+      'installId',
+      'versions',
+      'records',
+      'recordsFailure',
+      'migrations',
+      'receipts',
+      'incidents',
+      'runs',
+      'journal',
+      'rejected',
     ]);
     // The preview is exactly the file's fields, nothing hidden and nothing extra
     assert.deepEqual(exported.fields, leaves(report));
     assert.ok(exported.fields.some(field => field.field === 'versions.extension' && field.value === '1.4.1'));
-    assert.ok(exported.fields.some(field => field.field === 'receipts.0.operation' && field.value === 'storage.probe-readwrite'));
+    assert.ok(
+      exported.fields.some(
+        field => field.field === 'receipts.0.operation' && field.value === 'storage.probe-readwrite',
+      ),
+    );
     assert.equal(exported.bytes, Buffer.byteLength(exported.serialized));
     // A field nobody listed can't reach the file
     assert.equal(v.is(reportSchema, { ...report, notes: [] }), false);
@@ -315,12 +387,72 @@ describe('seeded canaries reach no record, journal event, report, or log line (#
             evidence,
           }),
         );
-        await records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'degraded', evidence }).catch(error => {
-          answers.push(String(error && error.message));
-        });
+        await records
+          .raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'degraded', evidence })
+          .catch(error => {
+            answers.push(String(error && error.message));
+          });
       }
-      answers.push(await trust.raise({ type: 'recovery.raise', commandId: 'c3', providerId: URL_CANARY, faultCode: 'x', severity: 'degraded' }));
-      answers.push(await trust.raise({ type: 'recovery.raise', commandId: 'c4', providerId: 'storage', faultCode: MESSAGE, severity: 'degraded' }));
+      // Straight at the records, past every schema a router would apply first
+      /** @param {Promise<unknown>} attempt */
+      const refused = attempt =>
+        attempt.then(
+          () => assert.fail('the records stored a canary'),
+          error => answers.push(String(error && error.message)),
+        );
+      await refused(records.raise({ providerId: 'storage', faultCode: MESSAGE, severity: 'degraded' }));
+      await refused(records.raise({ providerId: 'storage', faultCode: 'x', subjectId: TITLE, severity: 'degraded' }));
+      await refused(
+        records.raise({ providerId: 'storage', faultCode: 'x', severity: 'degraded', affected: [MESSAGE] }),
+      );
+      const base = {
+        providerId: 'storage',
+        status: /** @type {const} */ ('verified'),
+        verifiedAt: 1,
+        durationMs: 1,
+        freshnessMs: 1,
+        operation: 'storage.probe-readwrite',
+        evidence: {},
+        consequenceKey: null,
+        preserved: [],
+        nextAction: null,
+      };
+      await refused(records.record({ ...base, evidence: /** @type {any} */ ({ url: URL_CANARY }) }));
+      await refused(records.record({ ...base, consequenceKey: CREDENTIAL }));
+      await refused(records.record({ ...base, operation: MESSAGE }));
+      await refused(
+        records.append({ at: 1, code: 'capture.failed', fields: /** @type {any} */ ({ message: MESSAGE }) }),
+      );
+      await refused(records.append({ at: 1, code: TITLE, fields: {} }));
+      await refused(
+        records.putRun({
+          id: 'r1',
+          commandId: 'retry',
+          incidentId: null,
+          state: 'failed',
+          outcome: MESSAGE,
+          startedAt: 1,
+          updatedAt: 1,
+        }),
+      );
+      answers.push(
+        await trust.raise({
+          type: 'recovery.raise',
+          commandId: 'c3',
+          providerId: URL_CANARY,
+          faultCode: 'x',
+          severity: 'degraded',
+        }),
+      );
+      answers.push(
+        await trust.raise({
+          type: 'recovery.raise',
+          commandId: 'c4',
+          providerId: 'storage',
+          faultCode: MESSAGE,
+          severity: 'degraded',
+        }),
+      );
       await journal.flush();
       answers.push(await trust.summary(), await trust.report(), await trust.incidents({ includeResolved: true }));
       answers.push(await trust.exportDiagnostics());
@@ -338,7 +470,10 @@ describe('seeded canaries reach no record, journal event, report, or log line (#
     // The checks did run: each canary provider has a receipt, none verified on what it tried
     const statuses = (await records.latestReceipts()).map(receipt => receipt.status);
     assert.equal(statuses.length, checks.length);
-    assert.ok(statuses.every(status => status === 'unverified'), statuses.join());
+    assert.ok(
+      statuses.every(status => status === 'unverified'),
+      statuses.join(),
+    );
     // And the canaries were counted, not stored
     assert.ok(journal.rejected()['field-not-allowed'] > 0);
     assert.ok(journal.rejected()['value-not-allowed'] > 0);

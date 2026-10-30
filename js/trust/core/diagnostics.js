@@ -15,7 +15,7 @@ import { encodedBytes } from '../../kernel/core/contracts/codec.js';
 import { code, count, timestamp } from '../../kernel/core/contracts/fields.js';
 import { dottedVersion, opaqueId } from './evidence.js';
 import { REJECTION_REASONS } from './journal.js';
-import { incidentSchema, journalEventSchema, receiptSchema, runSchema } from './records.js';
+import { incidentSchema, journalEventSchema, parseRecord, receiptSchema, runSchema } from './records.js';
 
 /** @typedef {import('./trust-records.js').TrustRecords} TrustRecords */
 /** @typedef {import('./journal.js').DiagnosticJournal} DiagnosticJournal */
@@ -106,7 +106,7 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     records.events(),
     migrations(),
   ]);
-  const report = v.parse(reportSchema, {
+  const report = parseRecord(reportSchema, {
     format: 'newtabnote-diagnostics',
     formatVersion: 1,
     createdAt: now,
@@ -120,7 +120,7 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     runs,
     journal: events,
     rejected: journal.rejected(),
-  });
+  }, 'diagnostic report');
   const serialized = JSON.stringify(report, null, 2);
   const fields = leaves(JSON.parse(serialized));
   return {
