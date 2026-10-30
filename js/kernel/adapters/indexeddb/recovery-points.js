@@ -220,7 +220,12 @@ export function readBatch(db, store, after, range, { keyRange, limits }) {
     const entries = [];
     let bytes = 0;
     let end = false;
+    // Whether the cursor answered at all: a transaction that ends before it did read nothing,
+    // which must never pass for the end of the store
+    let answered = false;
+    request.onerror = () => reject(request.error);
     request.onsuccess = () => {
+      answered = true;
       const cursor = request.result;
       if (!cursor) {
         end = true;
@@ -233,7 +238,10 @@ export function readBatch(db, store, after, range, { keyRange, limits }) {
       if (entries.length >= limits.records) return;
       cursor.continue();
     };
-    tx.oncomplete = () => resolve({ entries, end });
+    tx.oncomplete = () => {
+      if (answered) resolve({ entries, end });
+      else reject(new DOMException('The read ended before its cursor answered', 'UnknownError'));
+    };
     tx.onabort = () => reject(tx.error);
   });
 }
