@@ -1,0 +1,23 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "none.basic",
+    "purpose": "A profile with no database: a new install.",
+    "shape": "none",
+    "releases": [],
+    "provenance": "synthesized",
+    "source": {
+      "generator": "scripts/fixtures/synthesize-storage.mjs",
+      "seed": 1
+    },
+    "schema": {
+      "idbVersion": null,
+      "structuralVersion": null,
+      "logicalVersion": null
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [],
+  "chromeStorageLocal": {}
+}

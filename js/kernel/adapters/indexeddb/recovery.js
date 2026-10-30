@@ -56,11 +56,11 @@ async function dataUrl(blob) {
 }
 
 /**
- * A copy of a stored value with each Blob in it as a data URL
+ * A copy of a stored value with each Blob in it as a data URL. legacy-export.js uses it too.
  * @param {unknown} value
  * @returns {Promise<unknown>}
  */
-async function withDataUrls(value) {
+export async function withDataUrls(value) {
   if (value instanceof Blob) return dataUrl(value);
   if (!hasBlob(value, 0)) return value;
   if (Array.isArray(value)) {
