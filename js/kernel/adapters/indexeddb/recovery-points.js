@@ -161,7 +161,9 @@ export async function openRecovery(indexedDB, { create }) {
   if (!db) return null;
   const usable =
     db.version === RECOVERY_DB_VERSION &&
-    [POINTS_STORE, ROWS_STORE, PROGRESS_STORE].every(name => /** @type {IDBDatabase} */ (db).objectStoreNames.contains(name));
+    [POINTS_STORE, ROWS_STORE, PROGRESS_STORE].every(name =>
+      /** @type {IDBDatabase} */ (db).objectStoreNames.contains(name),
+    );
   if (!usable) {
     db.close();
     throw new UnavailableError('storage', 'recovery-unavailable', false);
@@ -211,9 +213,7 @@ export function readBatch(db, store, after, range, { keyRange, limits }) {
     /** @type {IDBKeyRange | undefined} */
     let bounds = range || undefined;
     if (after !== null) {
-      bounds = range
-        ? keyRange.bound(after, range.upper, true, range.upperOpen)
-        : keyRange.lowerBound(after, true);
+      bounds = range ? keyRange.bound(after, range.upper, true, range.upperOpen) : keyRange.lowerBound(after, true);
     }
     const request = tx.objectStore(store).openCursor(bounds);
     /** @type {Array<{key: IDBValidKey, value: any}>} */
