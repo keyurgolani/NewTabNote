@@ -500,7 +500,8 @@ function createChromeStub() {
       const failure = getFailures.shift();
       calls.push({ method: 'get', keys, failed: Boolean(failure) });
       if (failure) {
-        if (callback) { later(() => withLastError(failure, () => callback({}))); return undefined; }
+        // As Chrome does, the callback gets no result when the read fails
+        if (callback) { later(() => withLastError(failure, () => callback())); return undefined; }
         return Promise.reject(failure);
       }
       let result = {};
