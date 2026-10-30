@@ -10,7 +10,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| kernel command, slice 4 | 54 | #12 slice 4 (notes and blocks) routes it through the command. |
+| kernel command, slice 4 | 45 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 17 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 37 | #12 slice 6 (preferences and session) routes it through the command. |
 | deleted in slice 7 | 43 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
@@ -19,7 +19,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
 | ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
-| Total | 173 | |
+| Total | 164 | |
 
 No row is UI-only. Presentation state (panels, the palette index, selection mode, the calendar month) isn't persisted, and every persisted preference goes through the settings port.
 
@@ -28,13 +28,13 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | Command | Status | Rows |
 | --- | --- | --- |
 | `runStartupMaintenance` | kernel command, slice 4 | 0 |
-| `createNote` | kernel command, slice 4 | 14 |
+| `createNote` | kernel command, slice 4 | 13 |
 | `importNote` | kernel command, slice 4 | 8 |
 | `ensureDailyNote` | kernel command, slice 4 | 7 |
 | `captureToDailyNote` | kernel command, slice 4 | 0 |
-| `saveNoteContent` | kernel command, slice 4 | 4 |
+| `saveNoteContent` | kernel command, slice 4 | 0 |
 | `insertBlocks` | kernel command, slice 4 | 9 |
-| `deleteBlocks` | kernel command, slice 4 | 4 |
+| `deleteBlocks` | kernel command, slice 4 | 0 |
 | `saveSnapshot` | kernel command, slice 4 | 1 |
 | `restoreSnapshot` | kernel command, slice 4 | 4 |
 | `renameNote` | kernel command, slice 4 | 3 |
@@ -83,55 +83,55 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/app.js` | [512](../../js/app.js#L512) | `App.createFirstNote` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/app.js` | [526](../../js/app.js#L526) | `App.runOnboarding` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/app.js` | [530](../../js/app.js#L530) | `App.runOnboarding` | `Storage.saveElement(…)` | `createNote` | kernel command, slice 4 |
-| `js/app.js` | [654](../../js/app.js#L654) | `App.initTabController > onCreateNote` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/app.js` | [997](../../js/app.js#L997) | `App.initShortcutsManager > onEnsureDailyNote` | `Storage.ensureDailyNote()` | `ensureDailyNote` | kernel command, slice 4 |
-| `js/app.js` | [1122](../../js/app.js#L1122) | `App.createCalendarDay > click listener` | `Storage.ensureDailyNoteForDate(…)` | `ensureDailyNote` | deleted in slice 7 |
-| `js/app.js` | [1634](../../js/app.js#L1634) | `App.generateTitleForNote` | `Storage.updateNote({lastAutoTitleAt, name})` | `renameNote` | deleted in slice 7 |
-| `js/app.js` | [1684](../../js/app.js#L1684) | `App.extractInsightsForNote` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | deleted in slice 7 |
-| `js/app.js` | [1730](../../js/app.js#L1730) | `App.extractInsightsForNote` | `Storage.updateNote({insights, lastInsightsContentHash, lastInsightsExtractedAt})` | `attachInsights` | deleted in slice 7 |
-| `js/app.js` | [1754](../../js/app.js#L1754) | `App.extractInsightsForNote` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | deleted in slice 7 |
-| `js/app.js` | [1818](../../js/app.js#L1818) | `App.archiveNote` | `Storage.archiveNote(…)` | `archiveNote` | deleted in slice 7 |
-| `js/app.js` | [1833](../../js/app.js#L1833) | `App.unarchiveNote` | `Storage.unarchiveNote(…)` | `unarchiveNote` | deleted in slice 7 |
-| `js/app.js` | [1846](../../js/app.js#L1846) | `App.trashNoteById` | `Storage.trashNote(…)` | `trashNote` | deleted in slice 7 |
-| `js/app.js` | [1866](../../js/app.js#L1866) | `App.restoreNoteById` | `Storage.restoreNote(…)` | `restoreNote` | deleted in slice 7 |
-| `js/app.js` | [1883](../../js/app.js#L1883) | `App.permanentlyDeleteNoteById` | `Storage.permanentlyDeleteNote(…)` | `deleteNotePermanently` | deleted in slice 7 |
-| `js/app.js` | [1914](../../js/app.js#L1914) | `App.convertNoteToTemplate` | `Storage.updateNote({folderId, isTemplate})` | `convertNoteToTemplate` | deleted in slice 7 |
-| `js/app.js` | [1931](../../js/app.js#L1931) | `App.convertTemplateToNote` | `Storage.updateNote({isTemplate})` | `convertTemplateToNote` | deleted in slice 7 |
-| `js/app.js` | [1974](../../js/app.js#L1974) | `App.emptyTrash` | `Storage.emptyTrash()` | `emptyTrash` | deleted in slice 7 |
-| `js/app.js` | [1987](../../js/app.js#L1987) | `App.runTrashCleanup` | `Storage.cleanupTrash(…)` | `runTrashCleanup` | deleted in slice 7 |
-| `js/app.js` | [2045](../../js/app.js#L2045) | `App.toggleSidebar` | `Storage.setSetting('sidebarOpen', …)` | `setPreferences` | deleted in slice 7 |
-| `js/app.js` | [2331](../../js/app.js#L2331) | `App.renderFolderTree > click listener` | `Storage.updateFolder({collapsed})` | `setFolderCollapsed` | deleted in slice 7 |
-| `js/app.js` | [2355](../../js/app.js#L2355) | `App.renderFolderTree > drop listener` | `Storage.moveNoteToFolder(…)` | `moveNoteToFolder` | deleted in slice 7 |
-| `js/app.js` | [2363](../../js/app.js#L2363) | `App.renderFolderTree > drop listener` | `Storage.updateFolder({parentId})` | `moveFolder` | deleted in slice 7 |
-| `js/app.js` | [2551](../../js/app.js#L2551) | `App.toggleNotePin` | `Storage.updateNote({pinned})` | `setPinned` | deleted in slice 7 |
-| `js/app.js` | [3011](../../js/app.js#L3011) | `App.executeCommandPaletteItem` | `Storage.ensureDailyNote()` | `ensureDailyNote` | deleted in slice 7 |
-| `js/app.js` | [3090](../../js/app.js#L3090) | `App.loadAIPromptTemplates` | `Storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | deleted in slice 7 |
-| `js/app.js` | [3319](../../js/app.js#L3319) | `App.refreshNoteMetadataAfterInsert` | `Storage.updateNote({preview, todoProgress})` | `insertBlocks` | deleted in slice 7 |
-| `js/app.js` | [3327](../../js/app.js#L3327) | `App.refreshNoteMetadataAfterInsert` | `Storage.updateNoteLinks(…)` | `insertBlocks` | deleted in slice 7 |
-| `js/app.js` | [3513](../../js/app.js#L3513) | `App.openNoteByName` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/app.js` | [3557](../../js/app.js#L3557) | `App.appendAIResponseToNote` | `Storage.saveElements(…)` | `insertBlocks` | deleted in slice 7 |
-| `js/app.js` | [3577](../../js/app.js#L3577) | `App.createNoteFromAIResponse` | `Storage.createNote(…)` | `createNote` | deleted in slice 7 |
-| `js/app.js` | [3580](../../js/app.js#L3580) | `App.createNoteFromAIResponse` | `Storage.saveElements(…)` | `createNote` | deleted in slice 7 |
-| `js/app.js` | [3613](../../js/app.js#L3613) | `App.generateTitleForNewNote` | `Storage.updateNote({lastAutoTitleAt, name})` | `applyDerivedTitle` | deleted in slice 7 |
-| `js/app.js` | [3896](../../js/app.js#L3896) | `App.importNote` | `Storage.createNote(…)` | `importNote` | deleted in slice 7 |
-| `js/app.js` | [3907](../../js/app.js#L3907) | `App.importNote` | `Storage.saveElement(…)` | `importNote` | deleted in slice 7 |
-| `js/app.js` | [3929](../../js/app.js#L3929) | `App.importNote` | `Storage.createNote(…)` | `importNote` | deleted in slice 7 |
-| `js/app.js` | [3940](../../js/app.js#L3940) | `App.importNote` | `Storage.saveElement(…)` | `importNote` | deleted in slice 7 |
-| `js/app.js` | [4077](../../js/app.js#L4077) | `App.runAutoTitle` | `Storage.setSetting('lastAutoTitleRun', …)` | `recordJobRun` | deleted in slice 7 |
-| `js/app.js` | [4149](../../js/app.js#L4149) | `App.runAutoTitle` | `Storage.updateNote({lastAutoTitleAt, lastTitleContentHash, name})` | `applyDerivedTitle` | deleted in slice 7 |
-| `js/app.js` | [4380](../../js/app.js#L4380) | `App.runInsightsExtraction` | `Storage.setSetting('lastInsightsRun', …)` | `recordJobRun` | deleted in slice 7 |
-| `js/app.js` | [4423](../../js/app.js#L4423) | `App.runInsightsExtraction` | `Storage.updateNote({insights, lastInsightsContentHash, lastInsightsExtractedAt})` | `attachInsights` | deleted in slice 7 |
-| `js/app.js` | [4529](../../js/app.js#L4529) | `App.showFolderContextMenu > action` | `Storage.updateFolder({name})` | `renameFolder` | deleted in slice 7 |
-| `js/app.js` | [4539](../../js/app.js#L4539) | `App.showFolderContextMenu > action` | `Storage.deleteFolder(…)` | `deleteFolder` | deleted in slice 7 |
-| `js/app.js` | [4548](../../js/app.js#L4548) | `App.showFolderContextMenu > action` | `Storage.createNote(…)` | `createNote` | deleted in slice 7 |
-| `js/app.js` | [4550](../../js/app.js#L4550) | `App.showFolderContextMenu > action` | `Storage.updateNote({folderId})` | `moveNoteToFolder` | deleted in slice 7 |
-| `js/app.js` | [4560](../../js/app.js#L4560) | `App.showFolderContextMenu > action` | `Storage.updateFolder({parentId})` | `moveFolder` | deleted in slice 7 |
-| `js/app.js` | [4666](../../js/app.js#L4666) | `App.initIndexer > onmessage` | `Storage.setSearchIndex(…)` | `updateSearchIndex` | deleted in slice 7 |
-| `js/app.js` | [4727](../../js/app.js#L4727) | `App.updateMissingEmbeddings` | `Storage.saveVector(…)` | `saveVector` | deleted in slice 7 |
-| `js/app.js` | [4977](../../js/app.js#L4977) | `App.setupShortcuts > keydown listener` | `Storage.ensureDailyNote()` | `ensureDailyNote` | deleted in slice 7 |
+| `js/app.js` | [522](../../js/app.js#L522) | `App.createFirstNote` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
+| `js/app.js` | [536](../../js/app.js#L536) | `App.runOnboarding` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
+| `js/app.js` | [540](../../js/app.js#L540) | `App.runOnboarding` | `Storage.saveElement(…)` | `createNote` | kernel command, slice 4 |
+| `js/app.js` | [665](../../js/app.js#L665) | `App.initTabController > onCreateNote` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
+| `js/app.js` | [1008](../../js/app.js#L1008) | `App.initShortcutsManager > onEnsureDailyNote` | `Storage.ensureDailyNote()` | `ensureDailyNote` | kernel command, slice 4 |
+| `js/app.js` | [1133](../../js/app.js#L1133) | `App.createCalendarDay > click listener` | `Storage.ensureDailyNoteForDate(…)` | `ensureDailyNote` | deleted in slice 7 |
+| `js/app.js` | [1645](../../js/app.js#L1645) | `App.generateTitleForNote` | `Storage.updateNote({lastAutoTitleAt, name})` | `renameNote` | deleted in slice 7 |
+| `js/app.js` | [1695](../../js/app.js#L1695) | `App.extractInsightsForNote` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | deleted in slice 7 |
+| `js/app.js` | [1741](../../js/app.js#L1741) | `App.extractInsightsForNote` | `Storage.updateNote({insights, lastInsightsContentHash, lastInsightsExtractedAt})` | `attachInsights` | deleted in slice 7 |
+| `js/app.js` | [1765](../../js/app.js#L1765) | `App.extractInsightsForNote` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | deleted in slice 7 |
+| `js/app.js` | [1829](../../js/app.js#L1829) | `App.archiveNote` | `Storage.archiveNote(…)` | `archiveNote` | deleted in slice 7 |
+| `js/app.js` | [1844](../../js/app.js#L1844) | `App.unarchiveNote` | `Storage.unarchiveNote(…)` | `unarchiveNote` | deleted in slice 7 |
+| `js/app.js` | [1857](../../js/app.js#L1857) | `App.trashNoteById` | `Storage.trashNote(…)` | `trashNote` | deleted in slice 7 |
+| `js/app.js` | [1877](../../js/app.js#L1877) | `App.restoreNoteById` | `Storage.restoreNote(…)` | `restoreNote` | deleted in slice 7 |
+| `js/app.js` | [1894](../../js/app.js#L1894) | `App.permanentlyDeleteNoteById` | `Storage.permanentlyDeleteNote(…)` | `deleteNotePermanently` | deleted in slice 7 |
+| `js/app.js` | [1925](../../js/app.js#L1925) | `App.convertNoteToTemplate` | `Storage.updateNote({folderId, isTemplate})` | `convertNoteToTemplate` | deleted in slice 7 |
+| `js/app.js` | [1942](../../js/app.js#L1942) | `App.convertTemplateToNote` | `Storage.updateNote({isTemplate})` | `convertTemplateToNote` | deleted in slice 7 |
+| `js/app.js` | [1985](../../js/app.js#L1985) | `App.emptyTrash` | `Storage.emptyTrash()` | `emptyTrash` | deleted in slice 7 |
+| `js/app.js` | [1998](../../js/app.js#L1998) | `App.runTrashCleanup` | `Storage.cleanupTrash(…)` | `runTrashCleanup` | deleted in slice 7 |
+| `js/app.js` | [2056](../../js/app.js#L2056) | `App.toggleSidebar` | `Storage.setSetting('sidebarOpen', …)` | `setPreferences` | deleted in slice 7 |
+| `js/app.js` | [2363](../../js/app.js#L2363) | `App.renderFolderTree > click listener` | `Storage.updateFolder({collapsed})` | `setFolderCollapsed` | deleted in slice 7 |
+| `js/app.js` | [2387](../../js/app.js#L2387) | `App.renderFolderTree > drop listener` | `Storage.moveNoteToFolder(…)` | `moveNoteToFolder` | deleted in slice 7 |
+| `js/app.js` | [2395](../../js/app.js#L2395) | `App.renderFolderTree > drop listener` | `Storage.updateFolder({parentId})` | `moveFolder` | deleted in slice 7 |
+| `js/app.js` | [2583](../../js/app.js#L2583) | `App.toggleNotePin` | `Storage.updateNote({pinned})` | `setPinned` | deleted in slice 7 |
+| `js/app.js` | [3043](../../js/app.js#L3043) | `App.executeCommandPaletteItem` | `Storage.ensureDailyNote()` | `ensureDailyNote` | deleted in slice 7 |
+| `js/app.js` | [3122](../../js/app.js#L3122) | `App.loadAIPromptTemplates` | `Storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | deleted in slice 7 |
+| `js/app.js` | [3351](../../js/app.js#L3351) | `App.refreshNoteMetadataAfterInsert` | `Storage.updateNote({preview, todoProgress})` | `insertBlocks` | deleted in slice 7 |
+| `js/app.js` | [3359](../../js/app.js#L3359) | `App.refreshNoteMetadataAfterInsert` | `Storage.updateNoteLinks(…)` | `insertBlocks` | deleted in slice 7 |
+| `js/app.js` | [3545](../../js/app.js#L3545) | `App.openNoteByName` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
+| `js/app.js` | [3589](../../js/app.js#L3589) | `App.appendAIResponseToNote` | `Storage.saveElements(…)` | `insertBlocks` | deleted in slice 7 |
+| `js/app.js` | [3609](../../js/app.js#L3609) | `App.createNoteFromAIResponse` | `Storage.createNote(…)` | `createNote` | deleted in slice 7 |
+| `js/app.js` | [3612](../../js/app.js#L3612) | `App.createNoteFromAIResponse` | `Storage.saveElements(…)` | `createNote` | deleted in slice 7 |
+| `js/app.js` | [3645](../../js/app.js#L3645) | `App.generateTitleForNewNote` | `Storage.updateNote({lastAutoTitleAt, name})` | `applyDerivedTitle` | deleted in slice 7 |
+| `js/app.js` | [3928](../../js/app.js#L3928) | `App.importNote` | `Storage.createNote(…)` | `importNote` | deleted in slice 7 |
+| `js/app.js` | [3939](../../js/app.js#L3939) | `App.importNote` | `Storage.saveElement(…)` | `importNote` | deleted in slice 7 |
+| `js/app.js` | [3961](../../js/app.js#L3961) | `App.importNote` | `Storage.createNote(…)` | `importNote` | deleted in slice 7 |
+| `js/app.js` | [3972](../../js/app.js#L3972) | `App.importNote` | `Storage.saveElement(…)` | `importNote` | deleted in slice 7 |
+| `js/app.js` | [4109](../../js/app.js#L4109) | `App.runAutoTitle` | `Storage.setSetting('lastAutoTitleRun', …)` | `recordJobRun` | deleted in slice 7 |
+| `js/app.js` | [4181](../../js/app.js#L4181) | `App.runAutoTitle` | `Storage.updateNote({lastAutoTitleAt, lastTitleContentHash, name})` | `applyDerivedTitle` | deleted in slice 7 |
+| `js/app.js` | [4412](../../js/app.js#L4412) | `App.runInsightsExtraction` | `Storage.setSetting('lastInsightsRun', …)` | `recordJobRun` | deleted in slice 7 |
+| `js/app.js` | [4455](../../js/app.js#L4455) | `App.runInsightsExtraction` | `Storage.updateNote({insights, lastInsightsContentHash, lastInsightsExtractedAt})` | `attachInsights` | deleted in slice 7 |
+| `js/app.js` | [4561](../../js/app.js#L4561) | `App.showFolderContextMenu > action` | `Storage.updateFolder({name})` | `renameFolder` | deleted in slice 7 |
+| `js/app.js` | [4571](../../js/app.js#L4571) | `App.showFolderContextMenu > action` | `Storage.deleteFolder(…)` | `deleteFolder` | deleted in slice 7 |
+| `js/app.js` | [4580](../../js/app.js#L4580) | `App.showFolderContextMenu > action` | `Storage.createNote(…)` | `createNote` | deleted in slice 7 |
+| `js/app.js` | [4582](../../js/app.js#L4582) | `App.showFolderContextMenu > action` | `Storage.updateNote({folderId})` | `moveNoteToFolder` | deleted in slice 7 |
+| `js/app.js` | [4592](../../js/app.js#L4592) | `App.showFolderContextMenu > action` | `Storage.updateFolder({parentId})` | `moveFolder` | deleted in slice 7 |
+| `js/app.js` | [4698](../../js/app.js#L4698) | `App.initIndexer > onmessage` | `Storage.setSearchIndex(…)` | `updateSearchIndex` | deleted in slice 7 |
+| `js/app.js` | [4759](../../js/app.js#L4759) | `App.updateMissingEmbeddings` | `Storage.saveVector(…)` | `saveVector` | deleted in slice 7 |
+| `js/app.js` | [5009](../../js/app.js#L5009) | `App.setupShortcuts > keydown listener` | `Storage.ensureDailyNote()` | `ensureDailyNote` | deleted in slice 7 |
 | `js/controllers/ai-chat-controller.js` | [158](../../js/controllers/ai-chat-controller.js#L158) | `AIChatController.setupAI > keydown listener` | `this.storage.ensureDailyNote()` | `ensureDailyNote` | kernel command, slice 4 |
 | `js/controllers/ai-chat-controller.js` | [275](../../js/controllers/ai-chat-controller.js#L275) | `AIChatController.setupAISidebarResize > onResizeEnd` | `this.storage.setSetting('aiSidebarWidth', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/controllers/ai-chat-controller.js` | [370](../../js/controllers/ai-chat-controller.js#L370) | `AIChatController.saveNoteChatHistory` | `this.storage.setSetting('aiChatHistory', …)` | `saveChatHistory` | kernel command, slice 6 |
@@ -214,29 +214,20 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/controllers/sidebar-controller.js` | [1203](../../js/controllers/sidebar-controller.js#L1203) | `SidebarController.showFolderContextMenu > action` | `this.storage.updateNote({folderId})` | `moveNoteToFolder` | kernel command, slice 5 |
 | `js/controllers/sidebar-controller.js` | [1209](../../js/controllers/sidebar-controller.js#L1209) | `SidebarController.showFolderContextMenu > action` | `this.storage.updateFolder({parentId})` | `moveFolder` | kernel command, slice 5 |
 | `js/controllers/sidebar-controller.js` | [1288](../../js/controllers/sidebar-controller.js#L1288) | `SidebarController.performBulkAction` | `this.storage.bulkNoteAction(…)` | `runBulkAction` | kernel command, slice 5 |
-| `js/controllers/tab-controller.js` | [586](../../js/controllers/tab-controller.js#L586) | `TabController.saveTabs` | `this.storage.setSetting('openTabs', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
-| `js/controllers/tab-controller.js` | [587](../../js/controllers/tab-controller.js#L587) | `TabController.saveTabs` | `this.storage.setSetting('activeTabIndex', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
-| `js/controllers/tab-controller.js` | [588](../../js/controllers/tab-controller.js#L588) | `TabController.saveTabs` | `this.storage.setSetting('splitViewEnabled', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
-| `js/controllers/tab-controller.js` | [590](../../js/controllers/tab-controller.js#L590) | `TabController.saveTabs` | `this.storage.setSetting('secondaryNoteId', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
-| `js/controllers/tab-controller.js` | [601](../../js/controllers/tab-controller.js#L601) | `TabController.cacheLastOpenedNoteId` | `chrome.storage.local.set({lastOpenedNoteId})` | `saveWorkspaceSession` | kernel command, slice 6 |
+| `js/controllers/tab-controller.js` | [588](../../js/controllers/tab-controller.js#L588) | `TabController.saveTabs` | `this.storage.setSetting('openTabs', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
+| `js/controllers/tab-controller.js` | [589](../../js/controllers/tab-controller.js#L589) | `TabController.saveTabs` | `this.storage.setSetting('activeTabIndex', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
+| `js/controllers/tab-controller.js` | [590](../../js/controllers/tab-controller.js#L590) | `TabController.saveTabs` | `this.storage.setSetting('splitViewEnabled', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
+| `js/controllers/tab-controller.js` | [592](../../js/controllers/tab-controller.js#L592) | `TabController.saveTabs` | `this.storage.setSetting('secondaryNoteId', …)` | `saveWorkspaceSession` | kernel command, slice 6 |
+| `js/controllers/tab-controller.js` | [603](../../js/controllers/tab-controller.js#L603) | `TabController.cacheLastOpenedNoteId` | `chrome.storage.local.set({lastOpenedNoteId})` | `saveWorkspaceSession` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [70](../../js/controllers/theme-builder-controller.js#L70) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.saveCustomTheme(…)` | `saveTheme` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [71](../../js/controllers/theme-builder-controller.js#L71) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.setSetting('theme', …)` | `setPreferences` | kernel command, slice 6 |
-| `js/editor.js` | [487](../../js/editor.js#L487) | `BlockEditor.renderInsights` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | kernel command, slice 4 |
-| `js/editor.js` | [778](../../js/editor.js#L778) | `BlockEditor.refreshInsights` | `Storage.updateNote({insights, lastInsightsExtractedAt})` | `attachInsights` | kernel command, slice 4 |
-| `js/editor.js` | [1129](../../js/editor.js#L1129) | `BlockEditor.deleteBlock` | `Storage.deleteElement(…)` | `deleteBlocks` | kernel command, slice 4 |
-| `js/editor.js` | [1818](../../js/editor.js#L1818) | `BlockEditor.selectTemplateItem` | `Storage.saveElement(…)` | `saveNoteContent` | kernel command, slice 4 |
-| `js/editor.js` | [2498](../../js/editor.js#L2498) | `BlockEditor._applyUndoEntry` | `Storage.deleteElement(…)` | `deleteBlocks` | kernel command, slice 4 |
-| `js/editor.js` | [2523](../../js/editor.js#L2523) | `BlockEditor._applyUndoEntry` | `Storage.deleteElement(…)` | `deleteBlocks` | kernel command, slice 4 |
-| `js/editor.js` | [3978](../../js/editor.js#L3978) | `BlockEditor._writeSaveState` | `Storage.saveNoteWithBlocks(…)` | `saveNoteContent` | kernel command, slice 4 |
-| `js/editor.js` | [3990](../../js/editor.js#L3990) | `BlockEditor._afterSaveWrite` | `Storage.updateNoteNameInSearchIndex(…)` | `saveNoteContent` | kernel command, slice 4 |
-| `js/editor.js` | [3994](../../js/editor.js#L3994) | `BlockEditor._afterSaveWrite` | `Storage.updateNoteLinks(…)` | `saveNoteContent` | kernel command, slice 4 |
-| `js/editor.js` | [4240](../../js/editor.js#L4240) | `BlockEditor._saveAsNewNote` | `Storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/editor.js` | [4470](../../js/editor.js#L4470) | `BlockEditor.deleteSelectedBlocks` | `Storage.deleteElement(…)` | `deleteBlocks` | kernel command, slice 4 |
-| `js/editor.js` | [5086](../../js/editor.js#L5086) | `BlockEditor._autoSnapshot` | `Storage.saveSnapshot(…)` | `saveSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5284](../../js/editor.js#L5284) | `BlockEditor._revertToSnapshot` | `Storage.saveSnapshot(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5293](../../js/editor.js#L5293) | `BlockEditor._revertToSnapshot` | `Storage.deleteElements(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5306](../../js/editor.js#L5306) | `BlockEditor._revertToSnapshot` | `Storage.saveElement(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5313](../../js/editor.js#L5313) | `BlockEditor._revertToSnapshot` | `Storage.updateNote({name})` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [526](../../js/editor.js#L526) | `BlockEditor.renderInsights` | `Storage.setSetting('insightsExtracting_${…}', …)` | `setInsightsPending` | kernel command, slice 4 |
+| `js/editor.js` | [817](../../js/editor.js#L817) | `BlockEditor.refreshInsights` | `Storage.updateNote({insights, lastInsightsExtractedAt})` | `attachInsights` | kernel command, slice 4 |
+| `js/editor.js` | [5202](../../js/editor.js#L5202) | `BlockEditor._autoSnapshot` | `Storage.saveSnapshot(…)` | `saveSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5400](../../js/editor.js#L5400) | `BlockEditor._revertToSnapshot` | `Storage.saveSnapshot(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5409](../../js/editor.js#L5409) | `BlockEditor._revertToSnapshot` | `Storage.deleteElements(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5422](../../js/editor.js#L5422) | `BlockEditor._revertToSnapshot` | `Storage.saveElement(…)` | `restoreSnapshot` | kernel command, slice 4 |
+| `js/editor.js` | [5429](../../js/editor.js#L5429) | `BlockEditor._revertToSnapshot` | `Storage.updateNote({name})` | `restoreSnapshot` | kernel command, slice 4 |
 | `js/llm.js` | [130](../../js/llm.js#L130) | `LLMService.setEndpoint` | `Storage.setSetting('llmEndpoint', …)` | `saveProviderSettings` | no live caller |
 | `js/llm.js` | [662](../../js/llm.js#L662) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [674](../../js/llm.js#L674) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |

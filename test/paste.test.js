@@ -8,7 +8,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, note, block,
+  createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, note, block, startEditorClient, quietNavigation,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -56,6 +56,7 @@ async function page() {
   // The editor's URL check, as a page has it
   env.global.URL = URL;
   await env.get('Storage').init();
+  const documentClient = await startEditorClient(env);
   const doc = env.document;
   const pane = add(doc.body, 'div', { id: 'editor-container', class: 'editor-pane active' });
   const column = add(pane, 'div', { id: 'editor', class: 'editor' });
@@ -82,7 +83,7 @@ async function page() {
   const editor = Object.create(env.get('BlockEditor').prototype);
   const noop = () => {};
   Object.assign(editor, {
-    root: pane, doc, noteId: null, noteData: null, blocks: [], titleEl: { textContent: '' },
+    root: pane, doc, documentClient, navigation: quietNavigation(), noteId: null, noteData: null, blocks: [], titleEl: { textContent: '' },
     container: { querySelector: () => null, querySelectorAll: () => [] }, insightsPollingId: null,
     undoStack: [], redoStack: [], _contentUndoPending: {}, selectedBlockIds: new Set(), _snapshotDirty: false,
     _snapshotInterval: null, hasReceivedFirstContent: false, pendingAutoTitle: false,

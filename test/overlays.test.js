@@ -11,7 +11,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, FakeDocument, createDatabase, note, block } = require('./helpers/legacy-env');
+const { createLegacyEnv, FakeDocument, createDatabase, note, block, startEditorClient, quietNavigation } = require('./helpers/legacy-env');
 
 const FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js',
@@ -187,6 +187,7 @@ describe('a note that loads focuses its first block, unless focus is in an open 
     await createDatabase(env.indexedDB, { records: { canvases: [note('N', { name: 'Welcome' })], elements: [block('n1', 'N', 0, 'Welcome')] } });
     env.load(...FILES);
     await env.get('Storage').init();
+    const documentClient = await startEditorClient(env);
     const doc = env.document;
     const pane = add(doc.body, 'div', { id: 'editor-container', class: 'editor-pane active' });
     const container = add(pane, 'div', { class: 'blocks-container' });
@@ -194,7 +195,7 @@ describe('a note that loads focuses its first block, unless focus is in an open 
     const editor = Object.create(env.get('BlockEditor').prototype);
     const noop = () => {};
     Object.assign(editor, {
-      root: pane, doc, container, noteId: null, noteData: null, blocks: [], titleEl: { textContent: '' }, insightsPollingId: null,
+      root: pane, doc, documentClient, navigation: quietNavigation(), container, noteId: null, noteData: null, blocks: [], titleEl: { textContent: '' }, insightsPollingId: null,
       undoStack: [], redoStack: [], _contentUndoPending: {}, selectedBlockIds: new Set(), _snapshotDirty: false,
       _snapshotInterval: null, hasReceivedFirstContent: false, pendingAutoTitle: false,
     });

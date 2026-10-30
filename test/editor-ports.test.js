@@ -8,7 +8,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, note, block, makeEditor, quietNavigation, runUntil, settle,
+  createLegacyEnv, createDatabase, note, block, makeEditor, quietNavigation, runUntil, settle, startEditorClient,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -32,6 +32,7 @@ async function editorOnA() {
   });
   env.load(...FILES);
   await env.get('Storage').init();
+  await startEditorClient(env);
   const navigation = quietNavigation();
   const editor = makeEditor(env, env.document, { navigation });
   return { env, navigation, editor };

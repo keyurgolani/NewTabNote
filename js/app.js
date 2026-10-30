@@ -66,11 +66,13 @@ const MISSING_STORE_FEATURES = {
 class App {
   /**
    * The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
-   * tab's kernel client (js/kernel/composition/host.js describes it).
-   * @param {{kernel?: any}} [options]
+   * tab's kernel client (js/kernel/composition/host.js describes it), and the document client
+   * every editor reads and writes its note through (js/kernel/composition/document.js).
+   * @param {{kernel?: any, documentClient?: any}} [options]
    */
-  constructor({ kernel } = {}) {
+  constructor({ kernel, documentClient } = {}) {
     this.kernel = kernel;
+    this.documentClient = documentClient;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -259,7 +261,7 @@ class App {
         }
       }, 2000);
 
-      this.editorPorts = { navigation: this.editorNavigation() };
+      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation() };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
         onChange: editorChangeHandler,
@@ -2214,6 +2216,8 @@ class App {
       openNote: (noteId) => this.openNoteById(noteId),
       openNoteByName: (name) => this.openNoteByName(name),
       noteReplaced: (editor, goneId, note) => this.tabController.noteReplaced(editor, goneId, note),
+      // The new tab's, from the PiP window too, since the PiP window closes with it
+      reloadPage: () => window.location.reload(),
     };
   }
 
