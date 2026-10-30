@@ -7,7 +7,6 @@ import { createRequire } from 'node:module';
 
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
-import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { faultyFactory } from './storage-faults.mjs';
 import { NOW } from './support.mjs';
@@ -146,7 +145,11 @@ export function hexIds(prefix = 'a1b2') {
  * @param {TrustStore} store
  */
 export function flakyStore(store) {
-  const plan = { count: 0, cause: /** @type {import('../../js/kernel/core/contracts/outcomes.js').UnavailableCause} */ ('storage'), code: 'unreadable' };
+  const plan = {
+    count: 0,
+    cause: /** @type {import('../../js/kernel/core/contracts/outcomes.js').UnavailableCause} */ ('storage'),
+    code: 'unreadable',
+  };
   return {
     store: /** @type {TrustStore} */ ({
       open: () => store.open(),
@@ -178,6 +181,9 @@ export function trustProfile() {
 
 /** @typedef {ReturnType<typeof trustProfile>} TrustProfile */
 
+/** fake-indexeddb's IDBKeyRange, which NewTabNoteTrust's adapter takes in Node */
+export const fakeKeyRange = fake.IDBKeyRange;
+
 /**
  * NewTabNoteTrust over `profile`'s factory
  * @param {TrustProfile} profile
@@ -194,15 +200,6 @@ export const brokenFactory = /** @type {IDBFactory} */ (
     },
   })
 );
-
-/**
- * The two trust stores the records suite runs on, each made fresh per test
- * @type {ReadonlyArray<{name: string, make: (profile: TrustProfile) => TrustStore}>}
- */
-export const STORES = Object.freeze([
-  { name: 'memory', make: () => createMemoryTrustStore() },
-  { name: 'NewTabNoteTrust (fake-indexeddb)', make: databaseOn },
-]);
 
 /**
  * Records over `store` in `profile`, opened

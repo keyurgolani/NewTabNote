@@ -59,6 +59,7 @@ export const EVENT_CODES = Object.freeze({
   'trust.check-timed-out': Object.freeze({ fields: Object.freeze(['providerId', 'durationMs', 'timeoutMs']) }),
   'trust.storage-fallback': Object.freeze({ fields: Object.freeze([...ERROR, 'surface']) }),
   'trust.reconciled': Object.freeze({ fields: Object.freeze(['count', 'records']) }),
+  'trust.fallback-dropped': Object.freeze({ fields: Object.freeze(['count', 'state']) }),
   'incident.raised': Object.freeze({
     fields: Object.freeze(['incidentId', 'providerId', 'faultCode', 'severity', 'count']),
   }),

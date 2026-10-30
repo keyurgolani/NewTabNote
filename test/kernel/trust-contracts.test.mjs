@@ -206,7 +206,7 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
         type: 'recovery.raise',
         commandId: 'c2',
         providerId: 'backup',
-        faultCode: 'stale',
+        faultCode: 'stale-backup',
         severity: 'data-risk',
         evidence: { ageMs: 9 },
       }),

@@ -15,7 +15,7 @@ export const payload = commandPayload('diagnostics.export', {});
 /** One field of the file, by its path, with the value it holds */
 export const previewFieldSchema = v.strictObject({
   field: v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.-]{1,200}$/)),
-  value: v.union([v.pipe(v.string(), v.maxLength(256)), v.number(), v.boolean(), v.null()]),
+  value: v.union([v.pipe(v.string(), v.maxLength(512)), v.number(), v.boolean(), v.null()]),
 });
 
 export const exportedSchema = v.strictObject({
@@ -24,6 +24,9 @@ export const exportedSchema = v.strictObject({
   bytes: count,
   fields: v.array(previewFieldSchema),
   serialized: v.pipe(v.string(), v.maxLength(16 * 1024 * 1024)),
+  // What the preview says beside the fields: the install id links every report from this
+  // profile, or there's none because chrome.storage.local failed
+  notices: v.array(v.picklist(['install-id-stable', 'install-id-missing'])),
 });
 
 export const result = v.variant('kind', [exportedSchema, rejectedSchema, unavailableSchema]);

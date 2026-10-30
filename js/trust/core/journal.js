@@ -6,8 +6,10 @@
  * Anything else is refused whole:
  * - in tests (`strict: true`) it throws a TypeError that names the rule and, for a listed
  *   field, the field, never a value;
- * - in production it's dropped and counted under its reason, and a `diagnostics.rejected`
- *   event records the reason and the running count.
+ * - in production it's dropped and counted in memory under its reason (the diagnostic report
+ *   holds the counts), and a `diagnostics.rejected` event records the reason and the running
+ *   count the first time and then at most once an hour, so refusals never crowd real events
+ *   out of the journal.
  *
  * The journal never writes to the console. A logger's level methods (js/core/logger.js) stay
  * console-only, and withEvents gives one an `event` method beside them; #20 slice 1b moves
@@ -21,18 +23,32 @@ import { EVENT_CODES, isEventCode } from './event-codes.js';
 /** @typedef {import('./trust-records.js').TrustRecords} TrustRecords */
 
 /**
- * Why an event was refused
- * @typedef {'unregistered-code' | 'field-not-allowed' | 'value-not-allowed' | 'not-an-object'} RejectionReason
+ * Why an event didn't reach the journal: refused, or (`write-failed`) accepted and then
+ * thrown out by the records, which only a programming error does, since a store that fails
+ * leaves the event in memory
+ * @typedef {'unregistered-code' | 'field-not-allowed' | 'value-not-allowed' | 'not-an-object' | 'write-failed'} RejectionReason
  */
 
 /** @type {readonly RejectionReason[]} */
-export const REJECTION_REASONS = Object.freeze(['unregistered-code', 'field-not-allowed', 'value-not-allowed', 'not-an-object']);
+export const REJECTION_REASONS = Object.freeze([
+  'unregistered-code',
+  'field-not-allowed',
+  'value-not-allowed',
+  'not-an-object',
+  'write-failed',
+]);
+
+/**
+ * How often a reason's running count is journaled: the first refusal, then at most once an
+ * hour, so refusals never crowd real events out of the journal's 2,000
+ */
+export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
 
 /**
  * @typedef {object} DiagnosticJournal
  * @property {(code: string, fields?: Record<string, unknown>) => boolean} event
  *   Records an event and answers true, or refuses it: throws when strict, and otherwise
- *   answers false after counting it
+ *   answers false after counting it in memory
  * @property {() => Readonly<Record<RejectionReason, number>>} rejected - refusals so far, by reason
  * @property {() => Promise<void>} flush - resolves once every write so far has settled
  */
@@ -43,15 +59,36 @@ export const REJECTION_REASONS = Object.freeze(['unregistered-code', 'field-not-
  */
 export function createDiagnosticJournal({ records, clock, strict = false }) {
   /** @type {Record<RejectionReason, number>} */
-  const counts = { 'unregistered-code': 0, 'field-not-allowed': 0, 'value-not-allowed': 0, 'not-an-object': 0 };
+  const counts = { 'unregistered-code': 0, 'field-not-allowed': 0, 'value-not-allowed': 0, 'not-an-object': 0, 'write-failed': 0 };
+  /** @type {Partial<Record<RejectionReason, number>>} */
+  const journaledAt = {};
   /** @type {Set<Promise<void>>} */
   const writes = new Set();
 
-  /** @param {Promise<unknown>} write */
-  const track = write => {
+  /**
+   * Counts `reason`, and journals its running count the first time and then at most once per
+   * REJECTION_JOURNAL_MS
+   * @param {RejectionReason} reason
+   */
+  const count = reason => {
+    counts[reason] += 1;
+    const now = clock.now();
+    const last = journaledAt[reason];
+    if (last !== undefined && now - last < REJECTION_JOURNAL_MS) return;
+    journaledAt[reason] = now;
+    track(records.append({ at: now, code: 'diagnostics.rejected', fields: { reason, count: counts[reason] } }), false);
+  };
+
+  /**
+   * @param {Promise<unknown>} write
+   * @param {boolean} [counted] - whether a failure counts as `write-failed`
+   */
+  const track = (write, counted = true) => {
     const settled = write.then(
       () => {},
-      () => {},
+      () => {
+        if (counted) count('write-failed');
+      },
     );
     writes.add(settled);
     settled.then(() => writes.delete(settled));
@@ -66,8 +103,7 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
     if (strict) {
       throw new TypeError(`logger.event refused an event: ${reason}${field ? ` (${field})` : ''}`);
     }
-    counts[reason] += 1;
-    track(records.append({ at: clock.now(), code: 'diagnostics.rejected', fields: { reason, count: counts[reason] } }));
+    count(reason);
     return false;
   };
 

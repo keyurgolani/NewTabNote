@@ -153,7 +153,12 @@ describeRegistryConformance('health (#20)', {
         },
         { clock, timers: realTimers },
       );
-      const receipt = { ...run.receipt, id: 'r1', installId: 'i1', transition: true };
+      const receipt = {
+        ...run.receipt,
+        id: '00000000-0000-4000-8000-000000000001',
+        installId: '00000000-0000-4000-8000-000000000002',
+        transition: true,
+      };
       assert.ok(v.is(receiptSchema, receipt), `${contribution.ref} made a receipt outside the schema`);
       assert.equal(receipt.operation, data.operation, 'a receipt carries its declared operation');
       assert.equal(receipt.freshnessMs, data.freshnessMs, 'a receipt carries its declared freshness');

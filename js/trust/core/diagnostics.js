@@ -7,13 +7,15 @@
  * here, a strict one, so a field nobody listed can't reach the file.
  *
  * Its preview lists every field the file holds, by path, with its value, so what the user
- * reads before saving is exactly what's saved. Saving it is slice 4's view, locally only.
+ * reads before saving is exactly what's saved, and notices for the view to say beside it:
+ * `install-id-stable`, since the install id is the same in every report this profile exports
+ * and so links them, or `install-id-missing` when the settings area couldn't give one. Saving it is slice 4's view, locally only.
  */
 
 import * as v from '../../lib/valibot/index.mjs';
 import { encodedBytes } from '../../kernel/core/contracts/codec.js';
-import { code, count, timestamp } from '../../kernel/core/contracts/fields.js';
-import { dottedVersion, opaqueId } from './evidence.js';
+import { count, timestamp } from '../../kernel/core/contracts/fields.js';
+import { contributionId, dottedVersion, errorCode, recordId } from './evidence.js';
 import { REJECTION_REASONS } from './journal.js';
 import { incidentSchema, journalEventSchema, parseRecord, receiptSchema, runSchema } from './records.js';
 
@@ -40,11 +42,11 @@ export const versionsSchema = v.strictObject({
 
 /** One migration receipt (#17 slice 2 writes them; none exist before it) */
 export const migrationSchema = v.strictObject({
-  id: opaqueId,
+  id: contributionId,
   fromVersion: count,
   toVersion: count,
   at: timestamp,
-  outcome: code,
+  outcome: errorCode,
 });
 
 /** @typedef {v.InferOutput<typeof migrationSchema>} MigrationReceipt */
@@ -53,10 +55,10 @@ export const reportSchema = v.strictObject({
   format: v.literal('newtabnote-diagnostics'),
   formatVersion: v.literal(1),
   createdAt: timestamp,
-  installId: opaqueId,
+  installId: v.nullable(recordId),
   versions: versionsSchema,
   records: v.picklist(['closed', 'open', 'fallback']),
-  recordsFailure: v.nullable(code),
+  recordsFailure: v.nullable(errorCode),
   migrations: v.array(migrationSchema),
   receipts: v.array(receiptSchema),
   incidents: v.array(incidentSchema),
@@ -98,8 +100,9 @@ export function leaves(value, at = '') {
  */
 export async function buildDiagnostics({ records, journal, clock, versions, migrations = async () => [] }) {
   const now = clock.now();
+  // The report still builds when chrome.storage.local fails, marked as having no install id
   const [installId, receipts, incidents, runs, events, migrated] = await Promise.all([
-    records.installId(),
+    records.installId().catch(() => null),
     records.latestReceipts(),
     records.incidents(),
     records.runs(),
@@ -129,5 +132,6 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     bytes: encodedBytes(serialized),
     fields,
     serialized,
+    notices: installId === null ? ['install-id-missing'] : ['install-id-stable'],
   };
 }

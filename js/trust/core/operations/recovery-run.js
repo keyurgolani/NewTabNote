@@ -8,11 +8,11 @@
 import * as v from '../../../lib/valibot/index.mjs';
 import { commandPayload } from '../../../kernel/core/contracts/operation.js';
 import { outcomeSchema } from '../../../kernel/core/contracts/outcome-schemas.js';
-import { opaqueId } from '../evidence.js';
+import { contributionId, recordId } from '../evidence.js';
 
 export const payload = commandPayload('recovery.run', {
-  remediationId: opaqueId,
-  incidentId: v.optional(v.nullable(opaqueId)),
+  remediationId: contributionId,
+  incidentId: v.optional(v.nullable(recordId)),
   userInitiated: v.literal(true),
 });
 

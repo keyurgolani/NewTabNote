@@ -14,8 +14,8 @@
  */
 
 import * as v from '../../lib/valibot/index.mjs';
-import { code } from '../../kernel/core/contracts/fields.js';
-import { evidenceSchema, opaqueId } from './evidence.js';
+import { EXCEPTION_NAMES } from './codes.js';
+import { contributionId, evidenceSchema, faultCode, subjectId } from './evidence.js';
 import { capabilities, consequenceKey } from './records.js';
 import { CAPTURE_STATES, RECEIPT_STATUSES, SEVERITIES } from './vocabulary.js';
 
@@ -27,8 +27,8 @@ import { CAPTURE_STATES, RECEIPT_STATUSES, SEVERITIES } from './vocabulary.js';
 
 /** A fault a check found: one incident, keyed by the provider, the fault, and its subject */
 export const faultSchema = v.strictObject({
-  faultCode: code,
-  subjectId: v.optional(v.nullable(opaqueId)),
+  faultCode,
+  subjectId: v.optional(v.nullable(subjectId)),
   severity: v.picklist(SEVERITIES),
   affected: v.optional(capabilities),
   preserved: v.optional(capabilities),
@@ -41,7 +41,7 @@ export const checkResultSchema = v.strictObject({
   evidence: v.optional(evidenceSchema),
   consequenceKey: v.optional(v.nullable(consequenceKey)),
   preserved: v.optional(capabilities),
-  nextAction: v.optional(v.nullable(opaqueId)),
+  nextAction: v.optional(v.nullable(contributionId)),
   faults: v.optional(v.pipe(v.array(faultSchema), v.maxLength(32))),
 });
 
@@ -145,14 +145,15 @@ export async function runCheck(provider, { context = {}, clock, timers }) {
 }
 
 /**
- * An error's name when it's an Error or DOMException name, never its message
+ * An error's name when it's one of the known Error and DOMException names (codes.js), never
+ * its message, and never a name an error was given that isn't one of them
  * @param {unknown} error
  * @returns {string | null}
  */
 export function exceptionOf(error) {
   if (error === null || typeof error !== 'object') return null;
   const name = /** @type {{name?: unknown}} */ (error).name;
-  return typeof name === 'string' && /^[A-Z][A-Za-z0-9]{0,63}$/.test(name) ? name : null;
+  return typeof name === 'string' && EXCEPTION_NAMES.includes(name) ? name : null;
 }
 
 /**

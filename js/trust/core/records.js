@@ -7,9 +7,11 @@
  */
 
 import * as v from '../../lib/valibot/index.mjs';
-import { code, count, timestamp } from '../../kernel/core/contracts/fields.js';
+import { count, timestamp } from '../../kernel/core/contracts/fields.js';
 import { check } from '../../kernel/core/contracts/validate.js';
-import { evidenceSchema, opaqueId } from './evidence.js';
+import { RUN_OUTCOMES } from './codes.js';
+import { EVENT_CODE_NAMES } from './event-codes.js';
+import { capability, contributionId, evidenceSchema, faultCode, recordId, subjectId } from './evidence.js';
 import {
   CAPTURE_STATES,
   COST_CLASSES,
@@ -55,10 +57,14 @@ export const consequenceKey = v.pipe(
   v.maxLength(80),
 );
 
-/** The capabilities an incident affects or a degraded system still preserves, as codes */
-export const capabilities = v.pipe(v.array(code), v.maxLength(32));
+/** The capabilities an incident affects or a degraded system still preserves, registered in codes.js */
+export const capabilities = v.pipe(v.array(capability), v.maxLength(32));
 
-/** The incident key: provider, fault, and subject, `-` when there's no subject */
+/**
+ * The incident key: provider, fault, and subject, `-` when there's no subject. Its bound is
+ * past the longest each part takes (a 64-character contribution id, a registered fault, and a
+ * 36-character UUID or a shorter subject), so any incident the records accept has a valid key.
+ */
 export const incidentKeySchema = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:/-]{1,256}$/));
 
 /**
@@ -66,9 +72,9 @@ export const incidentKeySchema = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:/-]{1
  * the provider's receipt before it, which the receipt bound keeps 20 of.
  */
 export const receiptSchema = v.strictObject({
-  id: opaqueId,
-  providerId: opaqueId,
-  installId: opaqueId,
+  id: recordId,
+  providerId: contributionId,
+  installId: recordId,
   status: v.picklist(RECEIPT_STATUSES),
   capture: v.optional(v.picklist(CAPTURE_STATES)),
   verifiedAt: timestamp,
@@ -78,7 +84,7 @@ export const receiptSchema = v.strictObject({
   evidence: evidenceSchema,
   consequenceKey: v.nullable(consequenceKey),
   preserved: capabilities,
-  nextAction: v.nullable(opaqueId),
+  nextAction: v.nullable(contributionId),
   executionClass: v.optional(v.picklist(COST_CLASSES)),
   transition: v.boolean(),
 });
@@ -91,12 +97,12 @@ export const receiptSchema = v.strictObject({
  * re-verification passes, and cleared if the fault comes back.
  */
 export const incidentSchema = v.strictObject({
-  id: opaqueId,
-  ref: v.pipe(v.string(), v.regex(/^[A-Z0-9_.:-]{1,6}$/)),
+  id: recordId,
+  ref: v.pipe(v.string(), v.regex(/^[A-Z0-9-]{6}$/)),
   key: incidentKeySchema,
-  providerId: opaqueId,
-  faultCode: code,
-  subjectId: v.nullable(opaqueId),
+  providerId: contributionId,
+  faultCode,
+  subjectId: v.nullable(subjectId),
   severity: v.picklist(SEVERITIES),
   state: v.picklist(INCIDENT_STATES),
   dismissed: v.boolean(),
@@ -113,12 +119,12 @@ export const incidentSchema = v.strictObject({
 
 /** A RemediationRun: one remediation's run, written before its first mutation (slice 3) */
 export const runSchema = v.strictObject({
-  id: opaqueId,
-  commandId: opaqueId,
-  incidentId: v.nullable(opaqueId),
+  id: recordId,
+  commandId: contributionId,
+  incidentId: v.nullable(recordId),
   state: v.picklist(RUN_STATES),
-  recoveryPointId: v.optional(opaqueId),
-  outcome: v.nullable(code),
+  recoveryPointId: v.optional(recordId),
+  outcome: v.nullable(v.picklist(RUN_OUTCOMES)),
   startedAt: timestamp,
   updatedAt: timestamp,
 });
@@ -129,11 +135,7 @@ export const runSchema = v.strictObject({
 export const journalEventSchema = v.strictObject({
   seq: v.pipe(count, v.minValue(1)),
   at: timestamp,
-  code: v.pipe(
-    v.string(),
-    v.regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){1,3}$/),
-    v.maxLength(64),
-  ),
+  code: v.picklist(EVENT_CODE_NAMES),
   fields: evidenceSchema,
 });
 

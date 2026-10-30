@@ -10,7 +10,7 @@ import * as v from '../../../lib/valibot/index.mjs';
 import { count } from '../../../kernel/core/contracts/fields.js';
 import { queryPayload } from '../../../kernel/core/contracts/operation.js';
 import { queryStateSchema } from '../../../kernel/core/contracts/outcome-schemas.js';
-import { opaqueId } from '../evidence.js';
+import { contributionId } from '../evidence.js';
 import { incidentSchema, operationCode, receiptSchema, runSchema } from '../records.js';
 import { COST_CLASSES, HEALTH_GROUPS, PROVIDER_STATUSES } from '../vocabulary.js';
 
@@ -20,7 +20,7 @@ export const reportSchema = v.strictObject({
   records: v.picklist(['closed', 'open', 'fallback']),
   providers: v.array(
     v.strictObject({
-      providerId: opaqueId,
+      providerId: contributionId,
       group: v.picklist(HEALTH_GROUPS),
       core: v.boolean(),
       operation: operationCode,

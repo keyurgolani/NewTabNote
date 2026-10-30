@@ -294,7 +294,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       if (!checked.success) return rejected('validation', 'invalid-payload');
       const { type, commandId, ...input } = checked.output;
       try {
-        const { incident } = await records.raise(input);
+        const { incident, held } = await records.raise(input);
         journal.event('incident.raised', {
           incidentId: incident.id,
           providerId: incident.providerId,
@@ -302,7 +302,10 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
           severity: incident.severity,
           count: incident.occurrences,
         });
-        return committed('incident-raised', [incident.id]);
+        // Held only in memory (and the settings copy), until NewTabNoteTrust takes writes again
+        return held
+          ? committed('incident-held', [incident.id], { severity: 'warning' })
+          : committed('incident-raised', [incident.id]);
       } catch (error) {
         return unavailableFrom(error);
       }
