@@ -5,7 +5,8 @@
  * #29 (PR CI) adds the rest of the lint config and leaves these to check:boundaries.
  *
  * Every message starts with the ledger rule it counts under, in brackets. no-undef's can't
- * carry one, and check:boundaries counts it as core-global.
+ * carry one, and check:boundaries counts it as registry-global in js/kernel/registry/ and as
+ * core-global everywhere else.
  */
 
 import fs from 'node:fs';
@@ -435,6 +436,26 @@ export default [
         rule: 'core-import',
         message: 'js/kernel/core/ imports only from itself and js/lib/valibot/.',
         allow: ['js/kernel/core/', 'js/lib/valibot/'],
+      }],
+    },
+  },
+  // #15's registry kit is host-neutral like core: no browser API, no legacy global, and no
+  // import from outside itself and the vendored Valibot. Families get chrome.* and storage
+  // only through what their composition root injects.
+  {
+    files: ['js/kernel/registry/**/*.js', 'js/kernel/registry/**/*.mjs'],
+    plugins: { kernel },
+    languageOptions: { globals: { window: 'off', self: 'off' } },
+    rules: {
+      'no-undef': ['error', { typeof: true }],
+      'no-restricted-globals': ['error', {
+        name: 'globalThis',
+        message: '[registry-global] js/kernel/registry/ is host-neutral: no browser API or legacy global, globalThis included.',
+      }],
+      'kernel/imports': ['error', {
+        rule: 'registry-import',
+        message: 'js/kernel/registry/ imports only from itself and js/lib/valibot/.',
+        allow: ['js/kernel/registry/', 'js/lib/valibot/'],
       }],
     },
   },
