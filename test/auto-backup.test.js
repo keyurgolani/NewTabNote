@@ -100,7 +100,7 @@ describe('auto-backup to chrome.storage.local', () => {
   it('createAutoBackup rejects when chrome.storage refuses the write, and stores nothing', async () => {
     const { env, storage, backupKeys } = await started();
     env.chrome.failNextSet();
-    await assert.rejects(storage.createAutoBackup(), { message: 'QUOTA_BYTES quota exceeded' });
+    await assert.rejects(storage.createAutoBackup(), { message: 'Resource::kQuotaBytes quota exceeded' });
     assert.deepEqual(backupKeys(), []);
     assert.equal(env.chrome.local.setting_lastBackupAt, undefined);
   });
