@@ -93,7 +93,12 @@ async function tagged(value, crypto) {
   }
   if (value === null) return null;
   if (typeof Blob === 'function' && value instanceof Blob) {
-    return { [TAG]: 'Blob', sha256: await sha256Hex(crypto, await value.arrayBuffer()), type: value.type, size: value.size };
+    return {
+      [TAG]: 'Blob',
+      sha256: await sha256Hex(crypto, await value.arrayBuffer()),
+      type: value.type,
+      size: value.size,
+    };
   }
   if (value instanceof ArrayBuffer) {
     return { [TAG]: 'ArrayBuffer', sha256: await sha256Hex(crypto, value), size: value.byteLength };

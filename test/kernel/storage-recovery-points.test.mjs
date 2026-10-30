@@ -87,7 +87,9 @@ async function tamper(of, change) {
 async function firstRow(of, pointId, store) {
   const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
   const tx = recovery.transaction(ROWS_STORE, 'readonly');
-  const request = tx.objectStore(ROWS_STORE).getAll(KeyRange.bound([pointId, store], [pointId, `${store}\u0000`], false, true), 1);
+  const request = tx
+    .objectStore(ROWS_STORE)
+    .getAll(KeyRange.bound([pointId, store], [pointId, `${store}\u0000`], false, true), 1);
   const row = await new Promise(resolve => {
     request.onsuccess = () => resolve(request.result[0]);
   });
@@ -99,8 +101,14 @@ describe('a record hash', () => {
   it('sees what IndexedDB keeps: Blob bytes and type, binary data, Dates, undefined, Maps, Sets, -0, and an escaped $type', async () => {
     const hash = (/** @type {unknown} */ value) => recordSha256(value, crypto);
     const png = new Uint8Array([1, 2, 3]);
-    assert.equal(await hash(new Blob([png], { type: 'image/png' })), await hash(new Blob([png], { type: 'image/png' })));
-    assert.notEqual(await hash(new Blob([png], { type: 'image/png' })), await hash(new Blob([png], { type: 'image/gif' })));
+    assert.equal(
+      await hash(new Blob([png], { type: 'image/png' })),
+      await hash(new Blob([png], { type: 'image/png' })),
+    );
+    assert.notEqual(
+      await hash(new Blob([png], { type: 'image/png' })),
+      await hash(new Blob([png], { type: 'image/gif' })),
+    );
     assert.notEqual(await hash(new Blob([png])), await hash(new Blob([new Uint8Array([1, 2, 4])])));
     assert.notEqual(await hash({ a: undefined }), await hash({}));
     assert.notEqual(await hash(new Date(0)), await hash(0));
@@ -112,7 +120,10 @@ describe('a record hash', () => {
     // eslint-disable-next-line no-sparse-arrays
     assert.notEqual(await hash([1, , 3]), await hash([1, undefined, 3]));
     assert.equal(await hash({ b: 1, a: 2 }), await hash({ a: 2, b: 1 }));
-    assert.match(await taggedJson({ blob: new Blob([png], { type: 'image/png' }) }, crypto), /^\{"blob":\{"\$type":"Blob","sha256":"[0-9a-f]{64}","size":3,"type":"image\/png"\}\}$/);
+    assert.match(
+      await taggedJson({ blob: new Blob([png], { type: 'image/png' }) }, crypto),
+      /^\{"blob":\{"\$type":"Blob","sha256":"[0-9a-f]{64}","size":3,"type":"image\/png"\}\}$/,
+    );
   });
 
   it('counts a Blob by its size, not its bytes as text, for the batch bound', () => {
@@ -131,8 +142,16 @@ describe('verification', () => {
 
   /** @type {Array<[string, (row: any, store: IDBObjectStore) => void, string]>} */
   const DAMAGE = [
-    ['a changed record', (row, store) => store.put({ ...row, value: { ...row.value, name: 'changed' } }), 'record-mismatch'],
-    ['a changed Blob', (row, store) => store.put({ ...row, value: { ...row.value, blob: new Blob(['other'], { type: 'image/png' }) } }), 'record-mismatch'],
+    [
+      'a changed record',
+      (row, store) => store.put({ ...row, value: { ...row.value, name: 'changed' } }),
+      'record-mismatch',
+    ],
+    [
+      'a changed Blob',
+      (row, store) => store.put({ ...row, value: { ...row.value, blob: new Blob(['other'], { type: 'image/png' }) } }),
+      'record-mismatch',
+    ],
     ['a missing id', (row, store) => store.delete([row.pointId, row.store, row.key]), 'count-mismatch'],
     [
       'an extra row (the count off by one)',
@@ -147,7 +166,11 @@ describe('verification', () => {
       },
       'id-set-mismatch',
     ],
-    ['a row under a store the point never copied', (row, store) => store.put({ ...row, store: 'zz-not-copied' }), 'count-mismatch'],
+    [
+      'a row under a store the point never copied',
+      (row, store) => store.put({ ...row, store: 'zz-not-copied' }),
+      'count-mismatch',
+    ],
   ];
   for (const [what, damage, code] of DAMAGE) {
     it(`catches ${what}`, async () => {
@@ -166,7 +189,13 @@ describe('verification', () => {
   it('catches a manifest whose count is off by one', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const { recovery, point } = await copied(of);
-    const off = { ...point, manifest: { ...point.manifest, canvases: { ...point.manifest.canvases, count: point.manifest.canvases.count + 1 } } };
+    const off = {
+      ...point,
+      manifest: {
+        ...point.manifest,
+        canvases: { ...point.manifest.canvases, count: point.manifest.canvases.count + 1 },
+      },
+    };
     assert.deepStrictEqual(await verifyPoint({ recovery, point: off, io }), { ok: false, code: 'count-mismatch' });
     recovery.close();
   });
@@ -179,7 +208,10 @@ describe('purged ids (#17 PR 2, Q16)', () => {
     recovery.close();
     const row = await firstRow(of, point.id, 'canvases');
     /** @type {Point} */
-    const purged = { ...point, manifest: { ...point.manifest, canvases: { ...point.manifest.canvases, purged: [row.key] } } };
+    const purged = {
+      ...point,
+      manifest: { ...point.manifest, canvases: { ...point.manifest.canvases, purged: [row.key] } },
+    };
     const check = async (/** @type {Point} */ which) => {
       const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
       const verdict = await verifyPoint({ recovery: db, point: which, io });
@@ -264,17 +296,25 @@ describe('which points stay', () => {
     });
     assert.deepStrictEqual([outcome.status, outcome.failure], ['failed', { code: 'recovery-point-unverified' }]);
     const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
-    assert.deepStrictEqual((await listPoints(db)).map(p => [p.id, p.status, p.pinned]), [['pinned', 'verified', true]]);
+    assert.deepStrictEqual(
+      (await listPoints(db)).map(p => [p.id, p.status, p.pinned]),
+      [['pinned', 'verified', true]],
+    );
     assert.deepStrictEqual(await verifyPoint({ recovery: db, point: pinned, io }), { ok: true });
     const tx = db.transaction(ROWS_STORE, 'readonly');
     const leftover = await new Promise(resolve => {
-      const request = tx.objectStore(ROWS_STORE).count(KeyRange.bound([`pre-migration-${NOW}`], [`pre-migration-${NOW}\u0000`], false, true));
+      const request = tx
+        .objectStore(ROWS_STORE)
+        .count(KeyRange.bound([`pre-migration-${NOW}`], [`pre-migration-${NOW}\u0000`], false, true));
       request.onsuccess = () => resolve(request.result);
     });
     assert.equal(leftover, 0);
     db.close();
     // Nothing structural ran
-    assert.equal(of.logs.some(line => line.event === 'storage-recovery-point-unverified'), true);
+    assert.equal(
+      of.logs.some(line => line.event === 'storage-recovery-point-unverified'),
+      true,
+    );
   });
 
   it('the first verified pre-migration point is pinned; later ones keep only the newest beside it', async () => {
@@ -287,7 +327,13 @@ describe('which points stay', () => {
     }
     const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     const points = await listPoints(db);
-    assert.deepStrictEqual(points.map(p => [p.id, p.pinned]), [['first', true], ['third', false]]);
+    assert.deepStrictEqual(
+      points.map(p => [p.id, p.pinned]),
+      [
+        ['first', true],
+        ['third', false],
+      ],
+    );
     for (const point of points) assert.deepStrictEqual(await verifyPoint({ recovery: db, point, io }), { ok: true });
     db.close();
   });
@@ -299,9 +345,14 @@ describe('which points stay', () => {
     const b = await copied(of, { id: 'b' });
     const before = of.faults.transactions.length;
     await discardPoint(b.recovery, 'a', { keyRange: KeyRange, limits: { records: 3, bytes: DEFAULT_LIMITS.bytes } });
-    const deletes = of.faults.transactions.slice(before).filter(tx => tx.names.includes(ROWS_STORE) && tx.mode === 'readwrite');
+    const deletes = of.faults.transactions
+      .slice(before)
+      .filter(tx => tx.names.includes(ROWS_STORE) && tx.mode === 'readwrite');
     assert.ok(deletes.length > 3, `${deletes.length} delete batches`);
-    assert.deepStrictEqual((await listPoints(b.recovery)).map(p => p.id), ['b']);
+    assert.deepStrictEqual(
+      (await listPoints(b.recovery)).map(p => p.id),
+      ['b'],
+    );
     assert.deepStrictEqual(await verifyPoint({ recovery: b.recovery, point: b.point, io }), { ok: true });
     b.recovery.close();
   });
@@ -344,7 +395,8 @@ describe('batch bounds (#17, "Accessibility and performance")', () => {
   });
 
   it('stops at 2 MB, and copies a bigger record alone', async () => {
-    const big = (/** @type {string} */ id, /** @type {number} */ size) => legacyEnv.block(id, 'n1', 0, 'x'.repeat(size));
+    const big = (/** @type {string} */ id, /** @type {number} */ size) =>
+      legacyEnv.block(id, 'n1', 0, 'x'.repeat(size));
     const elements = [big('b1', 900_000), big('b2', 900_000), big('b3', 900_000), big('b4', 3_000_000), big('b5', 10)];
     assert.deepStrictEqual(await batches({ canvases: [legacyEnv.note('n1')], elements }), [1, 2, 1, 1, 1]);
   });

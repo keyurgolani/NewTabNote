@@ -77,7 +77,14 @@ describe('every fixture through the registry to 9', () => {
 });
 
 describe('a run stopped anywhere and run again', () => {
-  const STOPPED = ['v8.basic', 'v2-idb-settings.basic', 'v8.missing-themes', 'none.basic', 'v8.missing-core', 'v9.newer'];
+  const STOPPED = [
+    'v8.basic',
+    'v2-idb-settings.basic',
+    'v8.missing-themes',
+    'none.basic',
+    'v8.missing-core',
+    'v9.newer',
+  ];
   for (const id of STOPPED) {
     it(`${id}: stopped at each step and batch in turn, the next run ends at the expected file`, async () => {
       const expected = asDumped(expectedFor(id));
@@ -109,7 +116,11 @@ describe('a run stopped anywhere and run again', () => {
         const second = await run(of, { limits: SMALL });
         // Stopped after its last write, the run had finished: the next finds nothing to do
         const finished = labels[labels.length - 1] === 'receipts';
-        assert.equal(second.status, finished ? 'current' : outcomeOf(id), `stopped at ${labels.join(' > ')}: ${JSON.stringify(second)}`);
+        assert.equal(
+          second.status,
+          finished ? 'current' : outcomeOf(id),
+          `stopped at ${labels.join(' > ')}: ${JSON.stringify(second)}`,
+        );
         assert.deepStrictEqual(await dump(of, expected.header), expected, `stopped at ${labels.join(' > ')}`);
         const third = await run(of, { limits: SMALL });
         assert.ok(['current', 'refused'].includes(third.status));
@@ -137,9 +148,8 @@ describe('space', () => {
 
   it('enough is twice the copy plus 64 MB: just under that blocks, just over runs', async () => {
     const fixture = /** @type {any} */ (FIXTURES.get('v8.data-urls'));
-    const { measureStores, storesToCopy, DEFAULT_LIMITS } = await import(
-      '../../js/kernel/adapters/indexeddb/recovery-points.js'
-    );
+    const { measureStores, storesToCopy, DEFAULT_LIMITS } =
+      await import('../../js/kernel/adapters/indexeddb/recovery-points.js');
     const { openWithoutUpgrade } = await import('../../js/kernel/adapters/indexeddb/shapes.js');
     const { KeyRange } = await import('./migration-support.mjs');
     const measuring = await profileWith(fixture);
@@ -153,7 +163,7 @@ describe('space', () => {
     assert.equal((await run(enough, { estimate: async () => ({ quota: need, usage: 0 }) })).status, 'migrated');
   });
 
-  it('an estimate that can\'t be read is not short: the run goes ahead and says so', async () => {
+  it("an estimate that can't be read is not short: the run goes ahead and says so", async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const outcome = await run(of, {
       estimate: async () => {
@@ -238,7 +248,9 @@ describe('faults on both databases', () => {
   it('CanvasTabDB open: a VersionError at the upgrade leaves it at 8, keeps the verified point, and the next run reuses it', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const outcome = await run(of, {
-      hooks: { between: label => (label === 'verified' ? of.faults.failNextOpen('CanvasTabDB', 'VersionError') : undefined) },
+      hooks: {
+        between: label => (label === 'verified' ? of.faults.failNextOpen('CanvasTabDB', 'VersionError') : undefined),
+      },
     });
     assert.deepStrictEqual([outcome.status, outcome.failure], ['failed', { code: 'version-too-new' }]);
     assert.equal((await inspect(of.real)).version, 8);
@@ -281,7 +293,10 @@ describe('faults on both databases', () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const outcome = await run(of, {
       limits: SMALL,
-      hooks: { between: label => (label === 'point-started' ? of.faults.failNextRead('elements', 'NotReadableError') : undefined) },
+      hooks: {
+        between: label =>
+          label === 'point-started' ? of.faults.failNextRead('elements', 'NotReadableError') : undefined,
+      },
     });
     assert.deepStrictEqual([outcome.status, outcome.shape, outcome.recoveryPointId], ['failed', 'legacy', null]);
     const partial = await dump(of);
@@ -312,7 +327,11 @@ describe('faults on both databases', () => {
   });
 
   it('versionchange: QuotaExceededError on its meta put aborts the upgrade, CanvasTabDB stays at 8, and the next run migrates', async () => {
-    const { of } = await faulted(of => of.faults.abortAfterNextWrite('meta', 'QuotaExceededError'), 'failed', 'transaction-failed');
+    const { of } = await faulted(
+      of => of.faults.abortAfterNextWrite('meta', 'QuotaExceededError'),
+      'failed',
+      'transaction-failed',
+    );
     assert.equal(recordsIn(await dump(of), 'NewTabNoteRecovery', 'points').length, 1);
   });
 
@@ -380,7 +399,10 @@ describe('shape detection reads stores, indexes, and meta', () => {
       }),
       { kind: 'unknown', reason: 'version-mismatch' },
     );
-    assert.deepStrictEqual(await shapeOf({ version: 7, omit: ['snapshots'] }), { kind: 'legacy', missing: ['snapshots'] });
+    assert.deepStrictEqual(await shapeOf({ version: 7, omit: ['snapshots'] }), {
+      kind: 'legacy',
+      missing: ['snapshots'],
+    });
     // A version-8 store with an index no release made
     const of = newProfile();
     await new Promise((resolve, reject) => {
@@ -403,9 +425,16 @@ describe('shape detection reads stores, indexes, and meta', () => {
 
   it('meta without a schema record is unknown, and one naming a later version is newer', async () => {
     const v9 = { meta: { keyPath: 'key' }, migrations: { keyPath: ['id', 'status'] } };
-    assert.deepStrictEqual(await shapeOf({ version: 9, extraStores: v9 }), { kind: 'unknown', reason: 'meta-unreadable' });
+    assert.deepStrictEqual(await shapeOf({ version: 9, extraStores: v9 }), {
+      kind: 'unknown',
+      reason: 'meta-unreadable',
+    });
     assert.deepStrictEqual(
-      await shapeOf({ version: 9, extraStores: v9, records: { meta: [{ key: 'schema', structuralVersion: 11, logicalVersion: 3 }] } }),
+      await shapeOf({
+        version: 9,
+        extraStores: v9,
+        records: { meta: [{ key: 'schema', structuralVersion: 11, logicalVersion: 3 }] },
+      }),
       { kind: 'newer', structuralVersion: 11 },
     );
   });
@@ -472,16 +501,32 @@ describe('step 9 inside its versionchange', () => {
     return { of, calls, late, result };
   }
 
-  const ALLOWED = new Set(['db.createObjectStore', 'store.createIndex', 'store.put', 'tx.objectStore', 'objectStoreNames.contains']);
+  const ALLOWED = new Set([
+    'db.createObjectStore',
+    'store.createIndex',
+    'store.put',
+    'tx.objectStore',
+    'objectStoreNames.contains',
+  ]);
 
   for (const [id, fixture] of FIXTURES) {
     const kind = fixture.header.shape;
-    if (kind === 'none' || id === 'v9.basic' || id === 'v9.newer' || id === 'v8.extra-store' || id === 'v8.missing-core') continue;
+    if (
+      kind === 'none' ||
+      id === 'v9.basic' ||
+      id === 'v9.newer' ||
+      id === 'v8.extra-store' ||
+      id === 'v8.missing-core'
+    )
+      continue;
     it(`${id}: only createObjectStore, createIndex, and put, synchronously, and all ten legacy stores kept`, async () => {
       const { of, calls, late, result } = await recorded(fixture);
       assert.equal(result, undefined, 'returned something, so it could have awaited');
       assert.deepStrictEqual(late, [], 'called after it returned');
-      assert.deepStrictEqual(calls.filter(call => !ALLOWED.has(call)), []);
+      assert.deepStrictEqual(
+        calls.filter(call => !ALLOWED.has(call)),
+        [],
+      );
       assert.equal(calls.filter(call => call === 'store.put').length, 1);
       const dumped = await dump({ ...of, chrome: { api: { storage: { local: { get: async () => ({}) } } } } });
       const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));

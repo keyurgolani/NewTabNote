@@ -29,7 +29,13 @@ async function exported(id) {
   assert.equal((await run(of)).status, 'migrated');
   const pointId = await exportablePoint({ indexedDB: of.real });
   assert.equal(pointId, `pre-migration-${NOW}`);
-  const data = await exportPoint({ indexedDB: of.real, keyRange: KeyRange, crypto, clock: { now: () => NOW }, pointId: /** @type {string} */ (pointId) });
+  const data = await exportPoint({
+    indexedDB: of.real,
+    keyRange: KeyRange,
+    crypto,
+    clock: { now: () => NOW },
+    pointId: /** @type {string} */ (pointId),
+  });
   return { of, fixture, file: JSON.parse(JSON.stringify(data)) };
 }
 
@@ -82,18 +88,25 @@ describe('a pre-migration point exported for 1.4.1', () => {
 
     const dumped = await legacyEnv.dumpDatabase(env.indexedDB);
     const notes = Object.values(legacyEnv.recordsOf(dumped, 'canvases'));
-    const byName = (/** @type {string} */ name) => /** @type {any} */ (notes.find((/** @type {any} */ n) => n.name === name));
+    const byName = (/** @type {string} */ name) =>
+      /** @type {any} */ (notes.find((/** @type {any} */ n) => n.name === name));
     // Every note 1.4.1's own export would hold: outside trash, archived and templates included
     const source = valuesOf(fixture, 'canvases');
     assert.deepStrictEqual(
       notes.map((/** @type {any} */ n) => n.name).sort(),
-      source.filter(n => !n.trashed).map(n => n.name).sort(),
+      source
+        .filter(n => !n.trashed)
+        .map(n => n.name)
+        .sort(),
     );
     assert.equal(byName('Old plans').archived, true);
     assert.equal(byName('Meeting template').isTemplate, true);
     // The folder came along, and the note filed in it still is
     const folders = Object.values(legacyEnv.recordsOf(dumped, 'folders'));
-    assert.deepStrictEqual(folders.map((/** @type {any} */ f) => f.name), ['Home']);
+    assert.deepStrictEqual(
+      folders.map((/** @type {any} */ f) => f.name),
+      ['Home'],
+    );
     assert.equal(byName('Groceries').folderId, /** @type {any} */ (folders[0]).id);
     // The image, byte for byte, on its note
     const media = Object.values(legacyEnv.recordsOf(dumped, 'media'));
@@ -103,7 +116,10 @@ describe('a pre-migration point exported for 1.4.1', () => {
     assert.equal(/** @type {any} */ (media[0]).canvasId, byName('Groceries').id);
     // The orphan block stays out of 1.4.1 and in the file
     const blocks = Object.values(legacyEnv.recordsOf(dumped, 'elements'));
-    assert.equal(blocks.some((/** @type {any} */ b) => b.content === 'Left behind'), false);
+    assert.equal(
+      blocks.some((/** @type {any} */ b) => b.content === 'Left behind'),
+      false,
+    );
     assert.ok(file.orphanElements.some((/** @type {any} */ b) => b.content === 'Left behind'));
     assert.equal(result.skippedMedia, 1);
   });
@@ -125,8 +141,15 @@ describe('a pre-migration point exported for 1.4.1', () => {
     const { env, Storage } = await release141();
     await Storage.importData(file, 'merge');
     const blocks = Object.values(legacyEnv.recordsOf(await legacyEnv.dumpDatabase(env.indexedDB), 'elements'));
-    assert.ok(blocks.some((/** @type {any} */ b) => b.type === 'image' && b.imageUrl.startsWith('data:image/png;base64,')));
-    assert.ok(blocks.some((/** @type {any} */ b) => b.type === 'file' && b.fileData === `data:text/plain;base64,${Buffer.from('hello').toString('base64')}`));
+    assert.ok(
+      blocks.some((/** @type {any} */ b) => b.type === 'image' && b.imageUrl.startsWith('data:image/png;base64,')),
+    );
+    assert.ok(
+      blocks.some(
+        (/** @type {any} */ b) =>
+          b.type === 'file' && b.fileData === `data:text/plain;base64,${Buffer.from('hello').toString('base64')}`,
+      ),
+    );
   });
 
   it('a v2 profile (v1.0.0 to v1.1.2) exports and imports too, its IndexedDB settings left out', async () => {

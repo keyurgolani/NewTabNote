@@ -143,34 +143,34 @@ export function faultyFactory(real) {
      * @returns {IDBObjectStore}
      */
     const wrapStore = (name, store) => {
-        /** @param {'put' | 'delete' | 'add' | 'clear'} method */
-        const write =
-          method =>
-          (/** @type {unknown[]} */ ...args) => {
-            const refused = take(throwing, name);
-            if (refused) throw new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
-            const request = /** @type {any} */ (store)[method](...args);
-            const late = take(aborting, name);
-            if (late) {
-              request.addEventListener('success', () => {
-                abortWith(late.name);
-                // Added after every listener the transaction already had, so it hears last
-                tx.addEventListener('abort', late.delivered, { once: true });
-              });
-            }
-            return request;
-          };
-        return wrap(store, {
-          put: write('put'),
-          delete: write('delete'),
-          add: write('add'),
-          clear: write('clear'),
-          ...reads(name, store),
-          index: (/** @type {string} */ indexName) => {
-            const index = store.index(indexName);
-            return wrap(index, reads(name, index));
-          },
-        });
+      /** @param {'put' | 'delete' | 'add' | 'clear'} method */
+      const write =
+        method =>
+        (/** @type {unknown[]} */ ...args) => {
+          const refused = take(throwing, name);
+          if (refused) throw new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
+          const request = /** @type {any} */ (store)[method](...args);
+          const late = take(aborting, name);
+          if (late) {
+            request.addEventListener('success', () => {
+              abortWith(late.name);
+              // Added after every listener the transaction already had, so it hears last
+              tx.addEventListener('abort', late.delivered, { once: true });
+            });
+          }
+          return request;
+        };
+      return wrap(store, {
+        put: write('put'),
+        delete: write('delete'),
+        add: write('add'),
+        clear: write('clear'),
+        ...reads(name, store),
+        index: (/** @type {string} */ indexName) => {
+          const index = store.index(indexName);
+          return wrap(index, reads(name, index));
+        },
+      });
     };
 
     const wrapped = wrap(tx, {
@@ -226,7 +226,12 @@ export function faultyFactory(real) {
       const refused = take(unopenable, name);
       if (refused) {
         // A request that fails, touching nothing
-        const failing = /** @type {any} */ ({ result: undefined, error: null, readyState: 'pending', transaction: null });
+        const failing = /** @type {any} */ ({
+          result: undefined,
+          error: null,
+          readyState: 'pending',
+          transaction: null,
+        });
         setImmediate(() => {
           failing.readyState = 'done';
           failing.error = new DOMException(`A fault the test injected: ${refused.name}`, refused.name);

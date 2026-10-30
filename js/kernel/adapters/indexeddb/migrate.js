@@ -394,7 +394,9 @@ async function migrate(options, status) {
     }
   }
 
-  const refusal = Object.hasOwn(REFUSALS, shape.kind) ? REFUSALS[/** @type {keyof typeof REFUSALS} */ (shape.kind)] : null;
+  const refusal = Object.hasOwn(REFUSALS, shape.kind)
+    ? REFUSALS[/** @type {keyof typeof REFUSALS} */ (shape.kind)]
+    : null;
   const target = steps.length > 0 ? steps[steps.length - 1].to : null;
 
   // No point for no database: there's nothing it would hold
@@ -433,7 +435,12 @@ async function migrate(options, status) {
   const recoveryPointId = point ? point.id : null;
 
   if (refusal || target === null) {
-    return outcome({ status: 'refused', shape: shape.kind, recoveryPointId, failure: { code: refusal || 'unknown-shape' } });
+    return outcome({
+      status: 'refused',
+      shape: shape.kind,
+      recoveryPointId,
+      failure: { code: refusal || 'unknown-shape' },
+    });
   }
 
   const startedAt = clock.now();

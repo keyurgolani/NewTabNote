@@ -67,9 +67,14 @@ const base64Of = bytes => Buffer.from(bytes).toString('base64');
 
 /**
  * @param {string} text
- * @returns {Uint8Array}
+ * @returns {Uint8Array<ArrayBuffer>}
  */
-const bytesOf = text => new Uint8Array(Buffer.from(text, 'base64'));
+const bytesOf = text => {
+  const decoded = Buffer.from(text, 'base64');
+  const bytes = new Uint8Array(new ArrayBuffer(decoded.length));
+  bytes.set(decoded);
+  return bytes;
+};
 
 /**
  * `value` in the fixture format

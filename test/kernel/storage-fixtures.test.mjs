@@ -69,7 +69,12 @@ function strings(value, key = '') {
 const shapeOf = store => ({
   keyPath: store.keyPath,
   autoIncrement: store.autoIncrement,
-  indexes: store.indexes.map((/** @type {any} */ { name, keyPath, unique, multiEntry }) => ({ name, keyPath, unique, multiEntry })),
+  indexes: store.indexes.map((/** @type {any} */ { name, keyPath, unique, multiEntry }) => ({
+    name,
+    keyPath,
+    unique,
+    multiEntry,
+  })),
 });
 
 describe('every fixture file', () => {
@@ -78,7 +83,17 @@ describe('every fixture file', () => {
       assert.ok(fs.statSync(path.join(FIXTURES, file)).size < MAX_BYTES, 'over 256 KiB');
       assert.equal(fixture.format, FORMAT);
       const { header } = fixture;
-      for (const field of ['id', 'purpose', 'shape', 'releases', 'provenance', 'source', 'schema', 'degraded', 'privacy']) {
+      for (const field of [
+        'id',
+        'purpose',
+        'shape',
+        'releases',
+        'provenance',
+        'source',
+        'schema',
+        'degraded',
+        'privacy',
+      ]) {
         assert.ok(Object.hasOwn(header, field), `header.${field}`);
       }
       assert.ok(Object.hasOwn(SHAPES, header.shape), `unknown shape ${header.shape}`);
@@ -117,9 +132,14 @@ describe('every fixture file', () => {
           assert.ok(want.delete(item.slice('missing-store:'.length)), `${item} names no store of ${header.shape}`);
         }
       }
-      const extras = [...degraded].filter(item => item.startsWith('extra-store:')).map(item => item.slice('extra-store:'.length));
+      const extras = [...degraded]
+        .filter(item => item.startsWith('extra-store:'))
+        .map(item => item.slice('extra-store:'.length));
       const have = db.stores.filter((/** @type {any} */ s) => !extras.includes(s.name));
-      assert.deepStrictEqual(have.map((/** @type {any} */ s) => s.name), [...want.keys()].sort());
+      assert.deepStrictEqual(
+        have.map((/** @type {any} */ s) => s.name),
+        [...want.keys()].sort(),
+      );
       for (const store of have) assert.deepStrictEqual(shapeOf(store), want.get(store.name), store.name);
       for (const item of degraded) {
         assert.match(item, /^(missing-store|extra-store|idb-version|meta-structural):/, `unknown degradation ${item}`);
@@ -139,14 +159,19 @@ describe('every fixture file', () => {
     it(`${file}: no secret outside a canary`, () => {
       for (const [key, text] of strings(fixture)) {
         for (const pattern of SECRET_PATTERNS) assert.doesNotMatch(text, pattern, `${key} looks like a secret`);
-        if (SECRET_KEYS.has(key)) assert.match(text, /^(|\{\{CANARY:[a-z0-9-]+\}\})$/, `${key} holds a value, not a canary`);
+        if (SECRET_KEYS.has(key))
+          assert.match(text, /^(|\{\{CANARY:[a-z0-9-]+\}\})$/, `${key} holds a value, not a canary`);
       }
       // A settings row keyed llmApiKey holds its secret in `value`
       for (const db of fixture.databases) {
         for (const store of db.stores) {
           for (const record of store.records) {
             if (record.key === 'llmApiKey' && store.name === 'settings') {
-              assert.match(String(record.value.value), /^(|\{\{CANARY:[a-z0-9-]+\}\})$/, 'settings.llmApiKey holds a value');
+              assert.match(
+                String(record.value.value),
+                /^(|\{\{CANARY:[a-z0-9-]+\}\})$/,
+                'settings.llmApiKey holds a value',
+              );
             }
           }
         }
@@ -170,7 +195,8 @@ describe('every fixture file', () => {
         for (const store of db.stores) {
           const fields = out.get(store.name) || new Set();
           for (const record of store.records) {
-            if (record.value && typeof record.value === 'object') for (const field of Object.keys(record.value)) fields.add(field);
+            if (record.value && typeof record.value === 'object')
+              for (const field of Object.keys(record.value)) fields.add(field);
           }
           out.set(store.name, fields);
         }
@@ -185,10 +211,12 @@ describe('every fixture file', () => {
       assert.deepStrictEqual(recorded.header.schema, synthesized[0].header.schema);
       const covered = new Map();
       for (const f of synthesized) {
-        for (const [store, fields] of fieldsOf(f)) covered.set(store, new Set([...(covered.get(store) || []), ...fields]));
+        for (const [store, fields] of fieldsOf(f))
+          covered.set(store, new Set([...(covered.get(store) || []), ...fields]));
       }
       for (const [store, fields] of fieldsOf(recorded)) {
-        for (const field of fields) assert.ok(covered.get(store)?.has(field), `${file}: ${store}.${field} has no synthesized cover`);
+        for (const field of fields)
+          assert.ok(covered.get(store)?.has(field), `${file}: ${store}.${field} has no synthesized cover`);
       }
     }
   });
@@ -199,15 +227,27 @@ describe('the loader and the dumper', () => {
     it(`${file} loads and dumps back as itself`, async () => {
       const of = newProfile();
       const { databases } = await loadFixture(fixture, { factory: of.real, storage: of.chrome.api.storage.local });
-      assert.deepStrictEqual(databases, fixture.databases.map((/** @type {any} */ db) => db.name));
-      const dumped = await dumpFixture({ factory: of.real, storage: of.chrome.api.storage.local, header: fixture.header });
+      assert.deepStrictEqual(
+        databases,
+        fixture.databases.map((/** @type {any} */ db) => db.name),
+      );
+      const dumped = await dumpFixture({
+        factory: of.real,
+        storage: of.chrome.api.storage.local,
+        header: fixture.header,
+      });
       // An empty database at version 1 reads back as one, as IndexedDB keeps it
-      assert.deepStrictEqual(dumped, fillCanaries({ ...fixture, chromeStorageLocal: fixture.chromeStorageLocal || {} }));
+      assert.deepStrictEqual(
+        dumped,
+        fillCanaries({ ...fixture, chromeStorageLocal: fixture.chromeStorageLocal || {} }),
+      );
     });
   }
 
   it('renames databases through `names`, and fills canaries from `canaries`', async () => {
-    const [, fixture] = /** @type {[string, any]} */ (filesOf('synthesized').find(([file]) => file.includes('local-settings')));
+    const [, fixture] = /** @type {[string, any]} */ (
+      filesOf('synthesized').find(([file]) => file.includes('local-settings'))
+    );
     const of = newProfile();
     await loadFixture(fixture, {
       factory: of.real,
@@ -215,10 +255,16 @@ describe('the loader and the dumper', () => {
       names: { CanvasTabDB: 'CanvasTabDB-test' },
       canaries: { 'llm-api-key': 'placed-here' },
     });
-    assert.deepStrictEqual((await of.real.databases()).map(db => db.name), ['CanvasTabDB-test']);
+    assert.deepStrictEqual(
+      (await of.real.databases()).map(db => db.name),
+      ['CanvasTabDB-test'],
+    );
     assert.equal(of.chrome.local.setting_llmApiKey, 'placed-here');
     const dumped = await dumpFixture({ factory: of.real, names: { CanvasTabDB: 'CanvasTabDB-test' } });
-    assert.deepStrictEqual(dumped.databases.map(db => db.name), ['CanvasTabDB']);
+    assert.deepStrictEqual(
+      dumped.databases.map(db => db.name),
+      ['CanvasTabDB'],
+    );
   });
 
   it('round-trips every tagged value', async () => {
@@ -244,7 +290,8 @@ describe('the loader and the dumper', () => {
 describe('the registry and the catalog', () => {
   it("step 9's stores are shapes.json's v9, and the legacy stores its v8", () => {
     /** @param {string} shape */
-    const catalog = shape => Object.fromEntries(SHAPES[shape].stores.map((/** @type {any} */ s) => [s.name, shapeOf(s)]));
+    const catalog = shape =>
+      Object.fromEntries(SHAPES[shape].stores.map((/** @type {any} */ s) => [s.name, shapeOf(s)]));
     assert.deepStrictEqual(legacySchema(), catalog('v8'));
     assert.deepStrictEqual(schemaAt(9), catalog('v9'));
     assert.deepStrictEqual(schemaAt(8), catalog('v8'));
@@ -253,7 +300,17 @@ describe('the registry and the catalog', () => {
   it('every release tag is in exactly one shape, from v1.0.0 to v1.4.1', () => {
     const releases = Object.values(SHAPES).flatMap((/** @type {any} */ s) => s.releases);
     assert.deepStrictEqual(releases, [
-      'v1.0.0', 'v1.1.0', 'v1.1.1', 'v1.1.2', 'v1.1.3', 'v1.1.4', 'v1.1.5', 'v1.2.0', 'v1.3.0', 'v1.4.0', 'v1.4.1',
+      'v1.0.0',
+      'v1.1.0',
+      'v1.1.1',
+      'v1.1.2',
+      'v1.1.3',
+      'v1.1.4',
+      'v1.1.5',
+      'v1.2.0',
+      'v1.3.0',
+      'v1.4.0',
+      'v1.4.1',
     ]);
   });
 });
@@ -264,7 +321,10 @@ describe('the frozen release files (Q11)', () => {
       const dir = path.join(FIXTURES, 'releases', tag);
       const source = JSON.parse(fs.readFileSync(path.join(dir, 'SOURCE.json'), 'utf8'));
       assert.equal(source.tag, tag);
-      assert.deepStrictEqual(source.files.map((/** @type {any} */ f) => f.path), ['js/storage.js', 'js/utils.js']);
+      assert.deepStrictEqual(
+        source.files.map((/** @type {any} */ f) => f.path),
+        ['js/storage.js', 'js/utils.js'],
+      );
       for (const file of source.files) {
         const bytes = fs.readFileSync(path.join(dir, file.path));
         assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);

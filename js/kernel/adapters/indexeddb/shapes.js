@@ -111,7 +111,8 @@ export function detectShape(inspection, { latest = LATEST_STRUCTURAL } = {}) {
   const { meta } = inspection;
 
   if (meta !== null) {
-    if (meta === 'unreadable' || !isVersion(meta.structuralVersion)) return { kind: 'unknown', reason: 'meta-unreadable' };
+    if (meta === 'unreadable' || !isVersion(meta.structuralVersion))
+      return { kind: 'unknown', reason: 'meta-unreadable' };
     const structuralVersion = meta.structuralVersion;
     if (structuralVersion > latest) return { kind: 'newer', structuralVersion };
     const schema = schemaAt(structuralVersion);
