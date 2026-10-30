@@ -55,3 +55,15 @@ test('the reopen check fails on a build whose saved tabs always reopen the first
     expect(error.message.replace(/\u001b\[[0-9;]*m/g, '')).toMatch(/Expected: "Note B"\s+Received: "Note A"/);
   });
 });
+
+test('a new tab opens the newest of notes seeded one after another, and the sidebar lists them newest first', async ({ extension }) => {
+  // Notes without blocks write fastest, so several can land in one millisecond, and notes
+  // that share an updatedAt sort by their random IDs
+  const names = ['One', 'Two', 'Three', 'Four', 'Five', 'Six'];
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, names.map(name => ({ name })));
+  const page = await driver.openNewTab(extension);
+  expect(await driver.noteTitle(page)).toBe('Six');
+  await driver.showNotes(page);
+  expect(await driver.listedNoteNames(page)).toEqual([...names].reverse());
+});
