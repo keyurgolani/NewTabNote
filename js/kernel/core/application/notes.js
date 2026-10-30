@@ -340,8 +340,18 @@ export const noteCommands = {
   },
 
   saveNoteContent(command, { clock, ids }) {
-    const { noteId, blocks, preview, todoProgress, name, linkedNames, expectedRevision } = command;
+    const {
+      noteId,
+      blocks,
+      preview,
+      todoProgress,
+      name,
+      titleOrigin = 'typed',
+      linkedNames,
+      expectedRevision,
+    } = command;
     if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
+    if (titleOrigin !== 'typed' && titleOrigin !== 'generated') return invalid();
     if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
     if (expectedRevision !== undefined && !Number.isInteger(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
@@ -365,11 +375,13 @@ export const noteCommands = {
         const next = { ...note, updatedAt: now };
         if (preview !== undefined) next.preview = preview;
         if (todoProgress !== undefined) next.todoProgress = todoProgress;
-        // A typed title goes in with the blocks, as 1.4.x's editor save wrote it, marked as set
-        // by hand, as the editor marked it when the user typed it
+        // A title goes in with the blocks, as 1.4.x's editor save wrote it: a typed one marked as
+        // set by hand, as the editor marked it when the user typed it, and one the AI made with
+        // the time it was made, as BlockEditor.setTitleProgrammatically stamped it
         if (name !== undefined) {
           next.name = name;
-          next.titleManuallySet = true;
+          if (titleOrigin === 'typed') next.titleManuallySet = true;
+          else next.lastAutoTitleAt = now;
         }
         tx.put('notes', next);
       },

@@ -12,7 +12,7 @@
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  *
  * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
- * older database to version 8 as Storage.init always has. Their kernels set
+ * older database to version 8 as Storage.init always has, and watches the connection. Their kernels set
  * `maintainOnOpen`, so Storage's startup maintenance runs before any command does, as
  * Storage.init ran it before the app did anything; its first run writes every default over
  * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
@@ -50,6 +50,8 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {() => Promise<void>} openExisting
  * @property {() => Promise<void>} runStartupMaintenance
  * @property {string} openState - `version-changed` or `closed-by-browser` once a connection openExisting opened is gone
+ * @property {(flush: () => void) => () => void} beforeConnectionCloses - runs `flush` when another
+ *   context upgrades the database, before a watched connection closes
  */
 
 /**
@@ -338,7 +340,9 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
 
     async open() {
       try {
-        if (mode === 'versioned') await storage.open({ watchConnection: reopens });
+        // Both versioned opens watch the connection, so another context's upgrade never waits
+        // on this one: the worker opens again, and a page asks for a reload
+        if (mode === 'versioned') await storage.open({ watchConnection: true });
         else await storage.openExisting();
       } catch (error) {
         const refused = storageError(error);

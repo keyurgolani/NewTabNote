@@ -357,13 +357,12 @@ describe("the kernel's copies of production rules, run both ways", () => {
     };
 
     const typed = await twin(records());
-    typed.viaStorage.env.load(...EDITOR_FILES);
-    const editor = legacyEnv.makeEditor(typed.viaStorage.env);
-    // Its saves wait for animation frames, which the page runs while it's visible
-    await legacyEnv.runUntil(typed.viaStorage.env, editor.loadNote('n1'));
-    editor.titleEl.textContent = 'Groceries';
-    editor.onTitleChange();
-    await legacyEnv.runUntil(typed.viaStorage.env, editor.flushSave());
+    // 1.4.x's title edit: onTitleChange set the name and titleManuallySet on the editor's copy,
+    // and its save wrote the copy with the blocks, then the search entry's name
+    const { storage } = typed.viaStorage;
+    const editorCopy = { ...(await storage.getNote('n1')), name: 'Groceries', titleManuallySet: true };
+    await storage.saveNoteWithBlocks(editorCopy, await storage.getElementsByNote('n1'));
+    await storage.updateNoteNameInSearchIndex('n1', 'Groceries');
     assertCommitted(
       await typed.kernel.execute({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'Groceries' }),
     );
@@ -443,6 +442,34 @@ describe("the kernel's copies of production rules, run both ways", () => {
         blocks,
         preview: 'Milk and eggs',
         name: 'Groceries',
+      }),
+    );
+    const stores = ['canvases', 'elements', 'search_index'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it('saveNoteContent with a generated title leaves what the editor saved after setTitleProgrammatically', async () => {
+    const stored = legacyEnv.note('n1', { name: 'Untitled', lastAutoTitleAt: null });
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [stored],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+      search_index: [{ noteId: 'n1', name: 'Untitled', content: 'Milk', updatedAt: SEEDED_AT }],
+    });
+    const blocks = [legacyEnv.block('b1', 'n1', 0, 'Milk and eggs')];
+    // setTitleProgrammatically set the name and lastAutoTitleAt on the editor's copy, leaving
+    // titleManuallySet, and the save wrote the copy with the blocks, then the search entry's name
+    const editorCopy = { ...stored, name: 'Groceries', lastAutoTitleAt: Date.now(), preview: 'Milk and eggs' };
+    await viaStorage.storage.saveNoteWithBlocks(editorCopy, blocks);
+    await viaStorage.storage.updateNoteNameInSearchIndex('n1', 'Groceries');
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveNoteContent',
+        commandId: 'c1',
+        noteId: 'n1',
+        blocks,
+        preview: 'Milk and eggs',
+        name: 'Groceries',
+        titleOrigin: 'generated',
       }),
     );
     const stores = ['canvases', 'elements', 'search_index'];
@@ -620,7 +647,16 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     });
     viaStorage.env.load(...EDITOR_FILES);
-    const editor = legacyEnv.makeEditor(viaStorage.env);
+    // The editor on 1.4.x's reads, Storage.getNote and getElementsByNote, which loadNote sorts
+    const { storage } = viaStorage;
+    const editor = legacyEnv.makeEditor(viaStorage.env, viaStorage.env.document, {
+      documentClient: {
+        openNote: async (/** @type {string} */ id) => ({
+          note: await storage.getNote(id),
+          blocks: await storage.getElementsByNote(id),
+        }),
+      },
+    });
     await legacyEnv.runUntil(viaStorage.env, editor.loadNote('n1'));
     const state = await kernel.query({ type: 'getNoteBlocks', noteId: 'n1' });
     assert.deepEqual(
