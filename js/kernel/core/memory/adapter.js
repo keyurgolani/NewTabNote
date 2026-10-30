@@ -27,6 +27,7 @@ import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcom
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
+import { fingerprintOf } from './fingerprint.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
@@ -69,29 +70,6 @@ const isKey = key => typeof key === 'string' && key !== '';
  * @param {string} b
  */
 const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-
-/**
- * `value` with every object's keys in sorted order, so two copies of one command serialize alike
- * @param {unknown} value
- * @returns {unknown}
- */
-const sortedKeys = value => {
-  if (Array.isArray(value)) return value.map(sortedKeys);
-  if (value === null || typeof value !== 'object') return value;
-  const record = /** @type {Record<string, unknown>} */ (value);
-  return Object.fromEntries(
-    Object.keys(record)
-      .sort(byKey)
-      .map(key => [key, sortedKeys(record[key])]),
-  );
-};
-
-/**
- * What tells one command from another under the same commandId: its canonical JSON
- * @param {Command} command
- * @returns {string}
- */
-const fingerprintOf = command => JSON.stringify(sortedKeys(command));
 
 /** @typedef {{fingerprint: string, outcome?: Outcome}} KeptOutcome - a bulk command's has no outcome */
 
