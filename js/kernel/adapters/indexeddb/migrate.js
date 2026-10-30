@@ -226,9 +226,10 @@ async function ensurePoint(options) {
     const stores = storesToCopy(source);
     // Nothing a point would hold
     if (stores.length === 0) return { status: 'ready', point: null };
-    const recovery = /** @type {IDBDatabase} */ (await openRecovery(indexedDB, { create: true }));
+    // Read first, so a run that reuses a point or stops short of space makes no recovery database
+    let recovery = await openRecovery(indexedDB, { create: false });
     try {
-      const points = await listPoints(recovery);
+      const points = recovery ? await listPoints(recovery) : [];
       /** @param {Point} point */
       const matches = point =>
         point.kind === 'pre-migration' &&
@@ -245,7 +246,7 @@ async function ensurePoint(options) {
       for (const point of points) {
         if (point.status === 'verified') continue;
         if (!resume && point.status === 'copying' && matches(point)) resume = point;
-        else await discardPoint(recovery, point.id, io);
+        else await discardPoint(/** @type {IDBDatabase} */ (recovery), point.id, io);
       }
 
       const bytes = await measureStores(source, stores, io);
@@ -253,10 +254,11 @@ async function ensurePoint(options) {
       const space = await checkSpace({ estimate, bytes });
       if (space.status === 'short') {
         // A partial point holds room capture may need, and never verified (Q7)
-        if (resume) await discardPoint(recovery, resume.id, io);
+        if (resume && recovery) await discardPoint(recovery, resume.id, io);
         return { status: 'space-blocked', code: 'space-short' };
       }
       if (space.status === 'unknown') logger.warn('storage-migration-space-unknown', { shape: shape.kind });
+      if (!recovery) recovery = /** @type {IDBDatabase} */ (await openRecovery(indexedDB, { create: true }));
 
       /** @type {Point} */
       let point;
@@ -304,7 +306,7 @@ async function ensurePoint(options) {
       await between('verified');
       return { status: 'ready', point: verified };
     } finally {
-      recovery.close();
+      if (recovery) recovery.close();
     }
   } finally {
     source.close();
