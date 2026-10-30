@@ -24,6 +24,7 @@ import { committed, conflict, UnavailableError } from '../../js/kernel/core/cont
  *   Keeps `outcome` for the command's key, as the ledger's adapter does in the transaction that
  *   commits the command, and answers what the ledger then holds for that command
  * @property {() => Promise<void>} [failNextRead] - makes the next read fail, from a fixture that can
+ * @property {() => Promise<unknown>} stored - everything the ledger keeps, as it keeps it
  * @property {() => Promise<void>} close
  */
 
@@ -134,6 +135,26 @@ export function describeIdempotencyLedger(fixture) {
             return true;
           });
           await assert.rejects(record(command, pinned), UnavailableError);
+        }
+      }),
+    );
+
+    it(
+      'keeps a digest of each command, never the command: no stored value holds what its payload says',
+      using(async ({ ledger, record, stored }) => {
+        const create = {
+          type: 'createNote',
+          commandId: 'c9',
+          noteId: 'n9',
+          name: 'A private title',
+          blocks: [{ id: 'b9', content: 'Private words, ünïcödé' }],
+        };
+        const created = committed('note-created', ['n9'], { commitSeq: 1 });
+        await record(create, created);
+        assert.deepEqual(await ledger.read(create), { status: 'committed', outcome: created });
+        const kept = JSON.stringify(await stored());
+        for (const text of ['A private title', 'Private words', 'createNote', '"b9"', 'noteId']) {
+          assert.equal(kept.includes(text), false, `the ledger keeps ${text}`);
         }
       }),
     );

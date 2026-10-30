@@ -11,8 +11,8 @@
  *   A bulk command keeps only its fingerprint, from its first recall, so the same commandId
  *   with another selection is key reuse even when both are sent at once, and a resend runs
  *   again: each item that committed or conflicted answers from its own record, and each
- *   other item runs again. The same command is the same canonical JSON, keys sorted, which
- *   #17 hashes instead.
+ *   other item runs again. The same command is the same SHA-256 of its canonical JSON, keys
+ *   sorted (memory/fingerprint.js), the digest #17 keeps, so no record holds the command.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
@@ -35,7 +35,7 @@ import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcom
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
-import { fingerprintOf } from './fingerprint.js';
+import { digestOf } from './fingerprint.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
@@ -342,7 +342,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   const keptFor = (commandId, command) => {
     const kept = outcomes.get(commandId);
     if (!kept) return undefined;
-    if (kept.fingerprint !== fingerprintOf(command)) return rejected('validation', 'idempotency-key-reuse');
+    if (kept.fingerprint !== digestOf(command)) return rejected('validation', 'idempotency-key-reuse');
     return kept.outcome && clone(kept.outcome);
   };
 
@@ -357,7 +357,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       // even sent at the same time, and a resend runs again, each item answering from its own
       // record.
       if (kept === undefined && COMMANDS[command.type].bulk && !outcomes.has(command.commandId)) {
-        outcomes.set(command.commandId, { fingerprint: fingerprintOf(command) });
+        outcomes.set(command.commandId, { fingerprint: digestOf(command) });
       }
       return kept;
     },
@@ -376,7 +376,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         }
         if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
           outcome = log(work, outcome);
-          outcomes.set(work.commandId, { fingerprint: fingerprintOf(work.command), outcome: clone(outcome) });
+          outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };
       });

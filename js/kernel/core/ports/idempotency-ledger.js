@@ -3,8 +3,12 @@
  * command's key, once the command's reply was lost to a worker stop, a dropped port, or a
  * deadline. #12's `commandId` and #17's `opId` are one key, made once when the intent forms
  * and reused by every retry. #17's persisted idempotency records are the dedupe authority:
- * each is written in the transaction that commits its command, or keeps its conflict, with a
- * fingerprint of the command. A read answers one of:
+ * each is written in the transaction that commits its command, or keeps its conflict, with the
+ * command's fingerprint. The fingerprint is a digest, the SHA-256 of the logical command's
+ * canonical JSON (keys sorted, computed before hash-only elision, streaming, and media
+ * write-back), and never the JSON itself, so no record holds note content, a title, or a URL.
+ * The record keeps the key, that digest, and the outcome, which carries ids and codes only.
+ * A read answers one of:
  *
  * - `committed`, with the outcome the command committed with, which the client answers as
  *   the original outcome, never sending the command again;
@@ -44,7 +48,7 @@
  * @typedef {object} IdempotencyLedger
  * @property {(command: KeyedCommand) => Promise<LedgerRead>} read
  *   What the command's key has a record of, told apart from another command under the same
- *   key by the record's fingerprint. A command whose commandId isn't a non-empty string
+ *   key by the digest of the command it's given against the record's. A command whose commandId isn't a non-empty string
  *   rejects with an UnavailableError, cause `adapter`, code `invalid-key`.
  */
 
