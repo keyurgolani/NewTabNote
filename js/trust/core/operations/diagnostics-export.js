@@ -1,8 +1,8 @@
 /**
  * diagnostics.export, catalog version 1 (#20, "Security and privacy"): build the diagnostic
- * report, `newtabnote-diagnostics-<date>.json`, and its preview, which lists every field the
- * file holds with its value, so the user sees all of it before anything is saved. Saving it
- * locally is slice 4's view. It never uploads.
+ * report, `newtabnote-diagnostics-<date>.json`, and its preview: `fields` lists every field
+ * the file holds with its value, so the user sees all of it before anything is saved, and
+ * `serialized` is the file. Saving it locally is slice 4's view. It never uploads.
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
@@ -22,7 +22,7 @@ export const exportedSchema = v.strictObject({
   kind: v.literal('diagnostics'),
   filename: v.pipe(v.string(), v.regex(/^newtabnote-diagnostics-[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$/)),
   bytes: count,
-  preview: v.array(previewFieldSchema),
+  fields: v.array(previewFieldSchema),
   serialized: v.pipe(v.string(), v.maxLength(16 * 1024 * 1024)),
 });
 

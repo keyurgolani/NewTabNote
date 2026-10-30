@@ -122,12 +122,12 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     rejected: journal.rejected(),
   });
   const serialized = JSON.stringify(report, null, 2);
-  const preview = leaves(JSON.parse(serialized));
+  const fields = leaves(JSON.parse(serialized));
   return {
     kind: 'diagnostics',
     filename: `newtabnote-diagnostics-${new Date(now).toISOString().slice(0, 10)}.json`,
     bytes: encodedBytes(serialized),
-    preview,
+    fields,
     serialized,
   };
 }

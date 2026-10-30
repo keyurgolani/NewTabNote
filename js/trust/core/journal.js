@@ -76,7 +76,10 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       if (!isEventCode(code)) return refuse('unregistered-code', null);
       const entry = EVENT_CODES[code];
       const checked = checkEvidence(fields, entry.fields);
-      if (!checked.ok) return refuse(checked.reason, checked.field);
+      if (!checked.ok) {
+        const refused = /** @type {import('./evidence.js').RefusedEvidence} */ (checked);
+        return refuse(refused.reason, refused.field);
+      }
       const at = clock.now();
       track(records.append({ at, code, fields: checked.value }));
       if (entry.incident) {
@@ -109,5 +112,5 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
  * @returns {L & {event: DiagnosticJournal['event']}}
  */
 export function withEvents(logger, journal) {
-  return Object.freeze({ ...logger, event: journal.event });
+  return Object.freeze(Object.assign({}, logger, { event: journal.event }));
 }

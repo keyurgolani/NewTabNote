@@ -312,7 +312,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     async exportDiagnostics() {
       try {
         const exported = await buildDiagnostics({ records, journal, clock, versions, migrations });
-        journal.event('diagnostics.exported', { records: exported.preview.length, bytes: exported.bytes });
+        journal.event('diagnostics.exported', { records: exported.fields.length, bytes: exported.bytes });
         return exported;
       } catch (error) {
         return unavailableFrom(error);

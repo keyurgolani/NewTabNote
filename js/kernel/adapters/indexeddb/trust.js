@@ -70,7 +70,7 @@ function createStores(db, upgrade) {
       ? /** @type {IDBTransaction} */ (upgrade).objectStore(name)
       : db.createObjectStore(name, { keyPath, autoIncrement });
     for (const index of indexes) {
-      if (!store.indexNames.contains(index)) store.createIndex(index, index, { unique: unique.includes(index) });
+      if (!store.indexNames.contains(index)) store.createIndex(index, index, { unique: /** @type {readonly string[]} */ (unique).includes(index) });
     }
   }
 }

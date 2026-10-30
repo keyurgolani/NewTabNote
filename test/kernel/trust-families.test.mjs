@@ -194,7 +194,6 @@ describe('the health and remediation families (#20 slice 1)', () => {
 
 /**
  * Use cases over the fixture providers, in a fresh profile
- * @param {{trigger?: import('../../js/trust/core/vocabulary.js').Trigger}} [options]
  */
 async function trustCenter() {
   const clock = manualClock();
