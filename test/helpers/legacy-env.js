@@ -495,10 +495,26 @@ function createChromeStub() {
     try { fn(); } finally { runtime.lastError = undefined; }
   };
 
+  // A value as chrome.storage.local keeps it, which is JSON's but for a few values: a Date (and
+  // anything else with toJSON) is its own enumerable properties, so {}, and NaN, Infinity, a
+  // function, or a symbol is no value, so its key goes and an array holds null instead
+  const toStored = (value) => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+    if (typeof value !== 'object') return undefined;
+    // Built here, not with value.map, so a value from a vm context is stored as this realm's
+    // arrays and objects, as JSON.parse made them; fromEntries keeps an own __proto__ key as data
+    if (Array.isArray(value)) return Array.from(value, (item) => { const stored = toStored(item); return stored === undefined ? null : stored; });
+    return Object.fromEntries(Object.keys(value).flatMap((key) => {
+      const item = toStored(value[key]);
+      return item === undefined ? [] : [[key, item]];
+    }));
+  };
+
   // As in Chrome, chrome.storage.onChanged (with the area name) and chrome.storage.local.onChanged
   // tell every context sharing this stub, the writing one included, what a write changed: each
   // key's oldValue when it had one and newValue when it has one. A write that changes nothing
-  // fires neither. tests/chrome-storage-conformance.test.js holds this to Chromium.
+  // fires neither. test/chrome-storage-conformance.test.js holds this to Chromium.
   const storageChanged = createEventStub();
   const localChanged = createEventStub();
   const listenerErrors = [];
@@ -561,9 +577,9 @@ function createChromeStub() {
       const changes = {};
       if (!failure) {
         Object.keys(items).forEach((k) => {
-          // Chrome leaves a key whose value is undefined as it was, as JSON.stringify drops it
-          if (items[k] === undefined) return;
-          const value = toJson(items[k]);
+          // Chrome leaves a key it can't store (undefined, NaN, a function) as it was
+          const value = toStored(items[k]);
+          if (value === undefined) return;
           const had = Object.hasOwn(local, k);
           if (had && canonical(local[k]) === canonical(value)) return;
           changes[k] = had ? { oldValue: local[k], newValue: value } : { newValue: value };
@@ -616,7 +632,7 @@ function createChromeStub() {
     notifications,
     tabsCreated,
     /** Make the next chrome.storage.local.set fail with `error` (via runtime.lastError). */
-    failNextSet(error = new Error('QUOTA_BYTES quota exceeded')) { setFailures.push(error); },
+    failNextSet(error = new Error('Resource::kQuotaBytes quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
     /** What onChanged listeners threw, which Chrome would log as "Error in event handler". */

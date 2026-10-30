@@ -380,7 +380,7 @@ describe('the notice', () => {
   it('a choice that fails to save keeps the notice and says so', async () => {
     const { env, Storage, toasts } = await setup();
     const { card } = showNotice(env, Storage);
-    env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+    env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     button(card, 'Not now').click();
     await settle();
 
@@ -494,7 +494,7 @@ describe('the receipt Settings writes after a full export', () => {
 
   it('the file handed over still counts when the writes after it fail', async () => {
     const { env, settings, toasts, downloads } = await settingsSetup();
-    env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+    env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     assert.equal(await settings.exportAll(), true);
     assert.equal(downloads.length, 1);
     assert.deepEqual(toasts, [{ message: 'All notes exported as JSON', kind: 'success' }]);
