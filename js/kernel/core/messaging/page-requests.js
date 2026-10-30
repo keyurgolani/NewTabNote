@@ -16,7 +16,7 @@
  * BroadcastChannel never hears its own posts, so its requester refuses that at once.
  */
 
-import { encode, encodedBytes } from '../contracts/codec.js';
+import { decode, encode, encodedBytes } from '../contracts/codec.js';
 import { targetSchema } from '../contracts/hint-channel.js';
 import { MAX_MESSAGE_BYTES } from '../contracts/limits.js';
 import { queryFailure } from '../contracts/transport-codes.js';
@@ -276,14 +276,17 @@ export function createPageRequester({
         }
         const bytes = encodedBytes(text);
         if (bytes > Math.min(maxBytes, MAX_MESSAGE_BYTES)) return resolve(queryFailure('payload-too-large'));
-        // Every page hears what's posted, so what the addressed page would refuse never goes
+        // Every page hears what's posted, so what the addressed page would refuse never goes.
+        // It's checked as the codec carries it, as that page reads it: a field left undefined
+        // arrives absent.
+        const { payload } = /** @type {{payload: unknown}} */ (decode(text));
         const checked = checkRequest(
-          { frame: 'request', requestId, operation: name, version, deadline: 0, payload: query },
+          { frame: 'request', requestId, operation: name, version, deadline: 0, payload },
           bytes,
           lookup,
         );
         if (!checked.ok) return resolve(queryFailure(checked.code));
-        if (!inScope(operation, query)) return resolve(queryFailure('forbidden-for-surface'));
+        if (!inScope(operation, payload)) return resolve(queryFailure('forbidden-for-surface'));
         /** @type {Waiting} */
         const call = {
           requestId,
