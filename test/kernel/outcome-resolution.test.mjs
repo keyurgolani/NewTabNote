@@ -726,3 +726,41 @@ describe("the client: ledger reads that don't answer, and what closing does to a
     );
   });
 });
+
+describe('the client: two resumes at once', { timeout: 10_000 }, () => {
+  it('sends a journaled command with no record once, however many resumes run at the same time', async () => {
+    const spy = spyLedger();
+    const { coordinator, client } = resuming([{ v: 1, command: pin('n1') }], { ledger: spy.ledger });
+    // Two reconnects, each resuming
+    const both = Promise.all([client.resume(), client.resume()]);
+    await welcomeNext(coordinator, 1);
+    for (let tries = 0; coordinator.last.requests().length === 0 && tries < 50; tries += 1) await settle();
+    await settle();
+    const requests = coordinator.last.requests();
+    assert.deepEqual(
+      requests.map(request => request.payload.commandId),
+      ['c-n1'],
+    );
+    coordinator.last.send({ frame: 'response', requestId: requests[0].requestId, result: pinned });
+    assert.deepEqual(await both, [[{ commandId: 'c-n1', outcome: pinned }], [{ commandId: 'c-n1', outcome: pinned }]]);
+  });
+});
+
+describe('the client: closed while it reads the journal', { timeout: 10_000 }, () => {
+  it('answers what the journal held unavailable at once, reading no record', async () => {
+    const spy = spyLedger();
+    /** @type {(entries: JournalEntry[]) => void} */
+    let give = () => {};
+    const { coordinator, client } = resuming([], {
+      ledger: spy.ledger,
+      journal: { inFlight: () => new Promise(resolve => (give = resolve)) },
+    });
+    const resumed = client.resume();
+    await settle();
+    client.close();
+    give([{ v: 1, command: pin('n1') }]);
+    assert.deepEqual(await resumed, [{ commandId: 'c-n1', outcome: unknown('unavailable', 'c-n1') }]);
+    assert.deepEqual(spy.reads, []);
+    assert.equal(coordinator.attempts, 0);
+  });
+});

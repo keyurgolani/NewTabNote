@@ -863,6 +863,9 @@ export function createClient({
     // Read again just before it goes, since another context may have committed it meanwhile
     const settled = settledBy(await readLedger(operation, entry.command), commandId);
     if (settled) return settled;
+    // Another resume may have sent it while this one read its record
+    const meanwhile = open.get(commandId);
+    if (meanwhile) return /** @type {Outcome | BulkOutcome} */ (await meanwhile);
     return /** @type {Promise<Outcome | BulkOutcome>} */ (
       track(commandId, ask('command', upcast.command, { userVisible: false }, 'resend'))
     );
@@ -900,6 +903,9 @@ export function createClient({
     coordinator: () => (coordinator ? { ...coordinator } : null),
     async resume() {
       if (!journal || !ledger) return [];
+      // A resume running when the client closes stops: what it hasn't read is unavailable. One
+      // that starts closed still reads each record, which answers whatever the client's state.
+      const closedFirst = phase === 'closed';
       /** @type {unknown} */
       let entries;
       try {
@@ -913,9 +919,6 @@ export function createClient({
       // answered, so a save never goes before the createNote it follows
       /** @type {ReadEntry[]} */
       const reads = [];
-      // A resume running when the client closes stops: what it hasn't read is unavailable. One
-      // that starts closed still reads each record, which answers whatever the client's state.
-      const closedFirst = phase === 'closed';
       for (const entry of entries) {
         if (!closedFirst && phase === 'closed') reads.push(unavailableEntry(entry));
         else reads.push(await readEntry(entry));
