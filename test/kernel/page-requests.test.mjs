@@ -287,6 +287,31 @@ describe('page-addressed requests (#13, "Topology")', () => {
     assert.deepEqual(warnings, ['page-answer-too-late']);
   });
 
+  it('refuse at once what a page addresses to its own session or a lock it holds, since it would never hear an answer', async () => {
+    const { fake, posted } = pages();
+    const own = createPageRequester({
+      channel: openHintChannel({ origin: fake.origin, BroadcastChannel: fake.page('newtab').BroadcastChannel }),
+      sessionId: 's-me',
+      holds: lock => lock === 'ntn-editor:mine',
+      lookup,
+      ids: testIds('own'),
+      ...testScheduler(),
+    });
+    assert.deepEqual(
+      await Promise.all([
+        own.request(ask, { kind: 'session', sessionId: 's-me' }),
+        own.request(ask, { kind: 'lock', lock: 'ntn-editor:mine' }),
+      ]),
+      [failed('validation', 'invalid-payload'), failed('validation', 'invalid-payload')],
+    );
+    await settle();
+    assert.deepEqual(posted, []);
+    assert.deepEqual(
+      await own.request(ask, { kind: 'session', sessionId: 's-other' }),
+      ready(NOW, { sessionId: 's-other' }),
+    );
+  });
+
   it('take only a valid answer to their own request, whoever else posts one', async () => {
     const { fake, requester } = pages({
       handler: session => () => new Promise(resolve => setImmediate(() => resolve(ready(NOW, { sessionId: session })))),

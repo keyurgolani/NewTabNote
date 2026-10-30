@@ -10,6 +10,10 @@
  * posts nothing they refuse. Only the addressed page answers, a refusal included, and every
  * other page stays silent. A requester that hears no valid answer by its deadline gets a
  * failed state.
+ *
+ * One responder per page. Two in one page would both answer what's addressed to it, and the
+ * requester would take whichever came first. A page can't address itself either, since a
+ * BroadcastChannel never hears its own posts, so its requester refuses that at once.
  */
 
 import { encode, encodedBytes } from '../contracts/codec.js';
@@ -168,11 +172,40 @@ export function createPageResponder({
 }
 
 /**
- * The requester's side, a page's or the coordinator's as worker-internal
- * @param {{channel: Channel, lookup: Lookup, ids: Ids, clock: Clock, timers: Timers, logger?: Logger}} options
+ * The requester's side, a page's or the coordinator's as worker-internal. A BroadcastChannel
+ * never hears what it posted itself, so a page that passes its own `sessionId` and `holds` has
+ * what it addresses to itself refused at once instead of waiting out the deadline.
+ * @param {object} options
+ * @param {Channel} options.channel
+ * @param {Lookup} options.lookup
+ * @param {Ids} options.ids
+ * @param {Clock} options.clock
+ * @param {Timers} options.timers
+ * @param {string} [options.sessionId] - a page's own client's
+ * @param {(lock: string) => boolean} [options.holds] - whether this page holds a Web Lock by that name
+ * @param {Logger} [options.logger]
  */
-export function createPageRequester({ channel, lookup, ids, clock, timers, logger = silentLogger }) {
+export function createPageRequester({
+  channel,
+  lookup,
+  ids,
+  clock,
+  timers,
+  sessionId,
+  holds = () => false,
+  logger = silentLogger,
+}) {
   const inScope = createScopeCheck();
+
+  /** @param {Target} target */
+  const isOwn = target => {
+    if (target.kind === 'session') return sessionId !== undefined && target.sessionId === sessionId;
+    try {
+      return holds(target.lock) === true;
+    } catch {
+      return false;
+    }
+  };
   /**
    * @typedef {object} Waiting
    * @property {string} requestId
@@ -222,7 +255,7 @@ export function createPageRequester({ channel, lookup, ids, clock, timers, logge
         const name = typeof query?.type === 'string' ? query.type : '';
         const operation = name === '' ? undefined : lookup(name);
         if (!operation || !addressable(operation)) return resolve(queryFailure('unknown-operation'));
-        if (!check(targetSchema, target).ok) return resolve(queryFailure('invalid-payload'));
+        if (!check(targetSchema, target).ok || isOwn(target)) return resolve(queryFailure('invalid-payload'));
         if (signal?.aborted) return resolve(queryFailure('cancelled'));
         const requestId = ids.next();
         const { deadlineMs, maxBytes, version } = operation.entry;
