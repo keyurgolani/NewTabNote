@@ -10,7 +10,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMAND_DEADLINE_MS, DEADLINE_GRACE_MS, RECONNECT_DELAYS_MS } from '../../js/kernel/core/contracts/limits.js';
+import {
+  COMMAND_DEADLINE_MS,
+  DEADLINE_GRACE_MS,
+  MAX_MESSAGE_BYTES,
+  RECONNECT_DELAYS_MS,
+} from '../../js/kernel/core/contracts/limits.js';
 import { committed, conflict, rejected, UnavailableError, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createLookup, operationOf } from '../../js/kernel/core/messaging/operations.js';
@@ -504,5 +509,133 @@ describe('the client: resuming what a page had in flight (#13, "Idempotency and 
     });
     assert.deepEqual(await failing.client.resume(), []);
     assert.equal(failing.coordinator.attempts, 1);
+  });
+});
+
+/**
+ * A client that resumes `entries`, over a scripted coordinator it hasn't connected to yet
+ * @param {JournalEntry[]} entries
+ * @param {Partial<ClientOptions>} [options]
+ */
+function resuming(entries, options = {}) {
+  const scheduler = testScheduler();
+  const coordinator = scriptedCoordinator();
+  const client = createClient({
+    transport: coordinator.transport,
+    surface: 'newtab',
+    extensionVersion: VERSION,
+    lookup: journaledLookup,
+    ids: testIds('client'),
+    ...scheduler,
+    journal: journalOf(entries),
+    ...options,
+  });
+  return { scheduler, coordinator, client };
+}
+
+describe('the client: resuming in journal order, by the record first', { timeout: 10_000 }, () => {
+  it("resends what has no record in the journal's order, each once the one before it answered, whatever order the reads finish in", async () => {
+    const note = { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Plan' };
+    const pinIt = { type: 'setPinned', commandId: 'c2', noteId: 'n1', pinned: true };
+    /** @type {Array<() => void>} */
+    const slow = [];
+    const ledger = /** @type {IdempotencyLedger} */ ({
+      read: async command => {
+        if (command.commandId === 'c1') await new Promise(resolve => slow.push(() => resolve(undefined)));
+        return { status: 'absent' };
+      },
+    });
+    const { coordinator, client } = resuming(
+      [
+        { v: 1, command: note },
+        { v: 1, command: pinIt },
+      ],
+      { ledger },
+    );
+    const resumed = client.resume();
+    await settle();
+    assert.equal(coordinator.attempts, 0);
+    assert.equal(slow.length, 1);
+    slow[0]();
+    await welcomeNext(coordinator, 1);
+    assert.deepEqual(
+      coordinator.last.requests().map(request => request.payload.commandId),
+      ['c1'],
+    );
+    const [first] = coordinator.last.requests();
+    coordinator.last.send({ frame: 'response', requestId: first.requestId, result: committed('note-created', ['n1']) });
+    for (let tries = 0; coordinator.last.requests().length < 2 && tries < 50; tries += 1) await settle();
+    const [, second] = coordinator.last.requests();
+    assert.equal(second.payload.commandId, 'c2');
+    coordinator.last.send({ frame: 'response', requestId: second.requestId, result: pinned });
+    assert.deepEqual(
+      (await resumed).map(({ commandId }) => commandId),
+      ['c1', 'c2'],
+    );
+  });
+
+  it('reads the record before anything could refuse it: a committed command answers committed once the client is closed, unsupported, or the command too large, and one with none stays unknown', async () => {
+    const big = { type: 'createNote', commandId: 'big', noteId: 'n9', name: 'x'.repeat(MAX_MESSAGE_BYTES) };
+    const created = committed('note-created', ['n9'], { commitSeq: 2 });
+    for (const recorded of [true, false]) {
+      const spy = spyLedger();
+      if (recorded) {
+        spy.inner.record(pin('n1'), pinned);
+        spy.inner.record(big, created);
+      }
+      // Closed
+      const closed = resuming([{ v: 1, command: pin('n1') }], { ledger: spy.ledger });
+      closed.client.close();
+      // Unsupported: the coordinator speaks another major version
+      const unsupported = resuming([{ v: 1, command: pin('n1') }], { ledger: spy.ledger });
+      unsupported.client.retry();
+      await settle();
+      unsupported.coordinator.last.welcome({ protocol: { major: 9, minor: 0 } });
+      await settle();
+      assert.equal(unsupported.client.state(), 'unsupported');
+      // Too large to send
+      const large = resuming([{ v: 1, command: big }], { ledger: spy.ledger });
+      assert.deepEqual(
+        await Promise.all([closed.client.resume(), unsupported.client.resume(), large.client.resume()]),
+        recorded
+          ? [
+              [{ commandId: 'c-n1', outcome: pinned }],
+              [{ commandId: 'c-n1', outcome: pinned }],
+              [{ commandId: 'big', outcome: created }],
+            ]
+          : [
+              [{ commandId: 'c-n1', outcome: unknown('unavailable', 'c-n1') }],
+              [{ commandId: 'c-n1', outcome: unknown('unsupported-version', 'c-n1') }],
+              [{ commandId: 'big', outcome: unknown('payload-too-large', 'big') }],
+            ],
+      );
+      assert.equal(large.coordinator.attempts, 0);
+    }
+  });
+
+  it('reads the record of the command as the journal wrote it, and takes it to the current version only to send it again', async () => {
+    // setPinned at catalog version 2, with no step from 1: an entry written at 1 can't go again
+    const later = createLookup({
+      ...OPERATIONS,
+      setPinned: operationOf(
+        /** @type {CommandEntry} */ ({ ...OPERATIONS.setPinned.entry, version: 2, journaled: true }),
+        OPERATIONS.setPinned,
+      ),
+    });
+    const spy = spyLedger();
+    spy.inner.record(pin('n1'), pinned);
+    const { coordinator, client } = resuming(
+      [
+        { v: 1, command: pin('n1') },
+        { v: 1, command: pin('n2') },
+      ],
+      { ledger: spy.ledger, lookup: later },
+    );
+    assert.deepEqual(await client.resume(), [
+      { commandId: 'c-n1', outcome: pinned },
+      { commandId: 'c-n2', outcome: rejected('validation', 'unsupported-version') },
+    ]);
+    assert.deepEqual(spy.reads, [pin('n1'), pin('n2')]);
+    assert.equal(coordinator.attempts, 0);
   });
 });
