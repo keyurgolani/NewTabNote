@@ -213,7 +213,7 @@ function messageFrom(random, serial, held) {
   return JSON.stringify(frame);
 }
 
-describe('seeded envelope fuzzing (#13, "Test plan")', () => {
+describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () => {
   it(
     'the router dispatches only payloads their schemas take, answers each request once, and counts nothing a sender chose',
     seeded(async random => {

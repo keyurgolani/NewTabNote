@@ -127,6 +127,26 @@ export function describeCommitLog(fixture) {
     );
 
     it(
+      'moves the cursor past the one it was given whenever more follow, so a reader paging through always ends',
+      using(async ({ log, append }) => {
+        for (const id of ['n1', 'n2', 'n3', 'n4', 'n5']) await append([note(id)]);
+        let cursor = 0;
+        let pages = 0;
+        for (;;) {
+          const read = await log.readChangesSince(cursor, 1);
+          assert.equal(read.kind, 'changes');
+          if (read.kind !== 'changes') return;
+          if (read.more) assert.ok(read.cursor > cursor, `cursor ${read.cursor} after ${cursor}`);
+          cursor = read.cursor;
+          pages += 1;
+          if (!read.more) break;
+          assert.ok(pages < 10, 'it ends');
+        }
+        assert.deepEqual([cursor, pages], [5, 5]);
+      }),
+    );
+
+    it(
       'answers resync-required for a cursor below its floor, and serves the floor itself',
       using(async ({ log, append, prune }) => {
         for (const id of ['n1', 'n2', 'n3', 'n4']) await append([note(id)]);

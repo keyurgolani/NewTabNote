@@ -86,7 +86,7 @@ function page({ project = async () => {} } = {}) {
 /** @param {ChangeEntry[]} entries */
 const seqs = entries => entries.map(entry => `${entry.entityId}@${entry.commitSeq}`);
 
-describe('catch-up from the commit log (#13, "Idempotency and catch-up")', () => {
+describe('catch-up from the commit log (#13, "Idempotency and catch-up")', { timeout: 10_000 }, () => {
   it('subscribes to hints first, then reads the projection, then applies what committed after its asOfCommitSeq', async () => {
     /** @type {() => void} */
     let release = () => {};
@@ -256,6 +256,24 @@ describe('catch-up from the commit log (#13, "Idempotency and catch-up")', () =>
     hint('n3');
     await settle();
     assert.deepEqual([applied, catchUp.cursor()], [['n1', 'n2', 'n3'], 3]);
+  });
+
+  it('stops reading a log that says more follow without moving its cursor, rather than reading it forever', async () => {
+    let reads = 0;
+    const catchUp = createCatchUp({
+      subscribe: () => () => {},
+      commitLog: {
+        readChangesSince: async cursor => {
+          reads += 1;
+          return { kind: 'changes', entries: [], cursor, more: true };
+        },
+        head: async () => 3,
+      },
+      project: async () => 3,
+      apply: () => {},
+    });
+    await catchUp.start();
+    assert.deepEqual([reads, catchUp.cursor()], [1, 3]);
   });
 
   it('hears nothing once stopped', async () => {

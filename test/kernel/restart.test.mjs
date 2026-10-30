@@ -15,7 +15,7 @@ import { openHintChannel } from '../../js/kernel/adapters/messaging/hint-channel
 import { createRuntimePortTransport, installRuntimePort } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
-import { rejected } from '../../js/kernel/core/contracts/outcomes.js';
+import { rejected, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { createCatchUp } from '../../js/kernel/core/messaging/catch-up.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
@@ -135,16 +135,17 @@ function harness() {
    * A page of `surface` with a client to the worker over the runtime port, the ledger, and,
    * when given, a journal double
    * @param {'newtab' | 'popup'} surface
-   * @param {{journal?: JournalEntry[]}} [options]
+   * @param {{journal?: JournalEntry[], journaled?: boolean}} [options] - `journaled` false keeps
+   *   createNote unjournaled, as the catalog has it today, even with a journal
    */
-  const open = (surface, { journal } = {}) => {
+  const open = (surface, { journal, journaled = journal !== undefined } = {}) => {
     const context = fake.page(surface);
     documents += 1;
     const client = createClient({
       transport: createRuntimePortTransport({ runtime: context.chrome.runtime }),
       surface,
       extensionVersion: VERSION,
-      lookup: journal ? journaledLookup : lookup,
+      lookup: journaled ? journaledLookup : lookup,
       ids: testIds(`${surface}-${documents}`),
       ...scheduler,
       ledger,
@@ -232,7 +233,7 @@ function stopOnWelcome(h, client) {
 /** @param {ChangeEntry[]} entries */
 const seqs = entries => entries.map(entry => `${entry.entityId}@${entry.commitSeq}`);
 
-describe('the restart matrix on the Chrome fake (#13, AC3)', () => {
+describe('the restart matrix on the Chrome fake (#13, AC3)', { timeout: 10_000 }, () => {
   it('worker stop before receipt: the ledger has no record, and the one resend commits it once', async () => {
     const h = harness();
     const { client } = h.open('newtab');
@@ -267,7 +268,7 @@ describe('the restart matrix on the Chrome fake (#13, AC3)', () => {
     assert.equal(await h.commitLog.head(), 1);
   });
 
-  it('a Popup closed with a command in flight: it commits once, and a Popup opened again sends nothing for a command that is not journaled', async () => {
+  it('a Popup closed with a command in flight: it commits once, and a Popup opened again reads it from the projection', async () => {
     const h = harness();
     const first = h.open('popup');
     h.hooks.beforeCommit = () => {
@@ -279,13 +280,26 @@ describe('the restart matrix on the Chrome fake (#13, AC3)', () => {
     await until(() => h.ledger.size() === 1);
     assert.equal(await h.commitLog.head(), 1);
 
-    const again = h.open('popup', { journal: [] });
-    assert.deepEqual(await again.client.resume(), []);
+    const again = h.open('popup');
     assert.deepEqual(h.runs, ['c1']);
     // Its outcome comes from reading the projection again
     const view = h.projection(again.context);
     await view.catchUp.start();
     assert.deepEqual([...view.notes.keys()], ['n-c1']);
+  });
+
+  it("a Popup opened again never sends a command that isn't journaled, even one its journal holds that never arrived", async () => {
+    const h = harness();
+    h.fake.worker.wakeable = false;
+    const first = h.open('popup');
+    void first.client.execute(create());
+    await until(() => first.client.state() === 'reconnecting');
+    first.context.close();
+    h.fake.worker.wakeable = true;
+    const again = h.open('popup', { journal: [{ v: 1, command: create() }], journaled: false });
+    assert.deepEqual(await again.client.resume(), [{ commandId: 'c1', outcome: unknown('outcome-unknown', 'c1') }]);
+    assert.deepEqual(h.runs, []);
+    assert.equal(h.fake.worker.starts, 0);
   });
 
   it('a Popup closed with a journaled command in flight: opened again, it resolves the command by its key, sending it once only if it never arrived', async () => {

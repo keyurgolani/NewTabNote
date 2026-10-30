@@ -127,6 +127,11 @@ export function createCatchUp({
         continue;
       }
       if (read.entries.length > 0) await apply(read.entries);
+      // A log that says more follow without moving the cursor would be read forever
+      if (read.more && read.cursor <= /** @type {number} */ (cursor)) {
+        warn('catch-up-cursor-stuck', { cursor });
+        return;
+      }
       cursor = read.cursor;
       if (!read.more) return;
     }
