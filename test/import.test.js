@@ -400,7 +400,7 @@ describe('Replace all (AC4)', () => {
   it('a failed recovery write stops the import with IndexedDB unchanged', async () => {
     const controller = makeController(env, Storage);
     const before = await dumpDatabase(env.indexedDB);
-    env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+    env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     const done = controller.importFromFile(fileOf(sameProfileBackup()));
     choose(await waitForDialog(env, 'Import backup'), 'replace');
     confirmButton(await waitForDialog(env, 'Replace all notes?')).click();
@@ -616,7 +616,7 @@ describe('Replace all (AC4)', () => {
     const realImport = Storage.importData.bind(Storage);
     Storage.importData = async (...args) => {
       const result = await realImport(...args);
-      env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+      env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
       return result;
     };
 
@@ -640,7 +640,7 @@ describe('Replace all (AC4)', () => {
     const realImport = Storage.importData.bind(Storage);
     Storage.importData = async (...args) => {
       const result = await realImport(...args);
-      env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+      env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
       return result;
     };
 

@@ -60,27 +60,6 @@ function noticeMarkup(env) {
   return card;
 }
 
-/**
- * Have chrome.storage.local.set tell onChanged listeners what it changed, as
- * Chrome does in every page of the extension, the writing one included.
- */
-function announceWrites(env) {
-  const local = env.chrome.api.storage.local;
-  const realSet = local.set;
-  const announce = (items) => {
-    const changes = Object.fromEntries(Object.keys(items).map((key) => [key, { newValue: items[key] }]));
-    env.chrome.api.storage.onChanged.listeners.slice().forEach((listener) => listener(changes, 'local'));
-  };
-  local.set = (items, callback) => {
-    if (!callback) return realSet.call(local, items).then(() => announce(items));
-    return realSet.call(local, items, () => {
-      const failed = Boolean(env.chrome.api.runtime.lastError);
-      callback();
-      if (!failed) announce(items);
-    });
-  };
-}
-
 /** Show a notice. onExport resolves to each of `exports` in turn. */
 function showNotice(env, Storage, { exports = [true], onClose = null } = {}) {
   const calls = { exports: 0, closes: [] };
@@ -401,7 +380,7 @@ describe('the notice', () => {
   it('a choice that fails to save keeps the notice and says so', async () => {
     const { env, Storage, toasts } = await setup();
     const { card } = showNotice(env, Storage);
-    env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+    env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     button(card, 'Not now').click();
     await settle();
 
@@ -467,7 +446,6 @@ describe('the receipt Settings writes after a full export', () => {
 
   async function settingsSetup() {
     const context = await setup({ files: SETTINGS_FILES });
-    announceWrites(context.env);
     const downloads = [];
     context.env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
     const settings = new (context.env.get('SettingsController'))({ storage: context.Storage, eventBus: null, domRefs: null, logger: null });
@@ -516,7 +494,7 @@ describe('the receipt Settings writes after a full export', () => {
 
   it('the file handed over still counts when the writes after it fail', async () => {
     const { env, settings, toasts, downloads } = await settingsSetup();
-    env.chrome.failNextSet(new Error('QUOTA_BYTES quota exceeded'));
+    env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     assert.equal(await settings.exportAll(), true);
     assert.equal(downloads.length, 1);
     assert.deepEqual(toasts, [{ message: 'All notes exported as JSON', kind: 'success' }]);

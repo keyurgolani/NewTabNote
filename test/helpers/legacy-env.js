@@ -495,6 +495,63 @@ function createChromeStub() {
     try { fn(); } finally { runtime.lastError = undefined; }
   };
 
+  // A value as chrome.storage.local keeps it, which is JSON's but for a few values: a Date (and
+  // anything else with toJSON) is its own enumerable properties, so {}, and NaN, Infinity, a
+  // function, or a symbol is no value, so its key goes and an array holds null instead
+  const toStored = (value) => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+    if (typeof value !== 'object') return undefined;
+    // Built here, not with value.map, so a value from a vm context is stored as this realm's
+    // arrays and objects, as JSON.parse made them; fromEntries keeps an own __proto__ key as data
+    if (Array.isArray(value)) return Array.from(value, (item) => { const stored = toStored(item); return stored === undefined ? null : stored; });
+    return Object.fromEntries(Object.keys(value).flatMap((key) => {
+      const item = toStored(value[key]);
+      return item === undefined ? [] : [[key, item]];
+    }));
+  };
+
+  // As in Chrome, chrome.storage.onChanged (with the area name) and chrome.storage.local.onChanged
+  // tell every context sharing this stub, the writing one included, what a write changed: each
+  // key's oldValue when it had one and newValue when it has one. A write that changes nothing
+  // fires neither. The writer's own listeners hear a write before its callback runs or its
+  // promise settles, which is the order Chromium shows in the writing context; Chromium promises
+  // no order for another context, and neither does this. e2e/chrome-storage.spec.js runs the
+  // same cases on Chromium as test/chrome-storage-conformance.test.js runs here.
+  const storageChanged = createEventStub();
+  const localChanged = createEventStub();
+  const announce = (changes) => {
+    if (Object.keys(changes).length === 0) return;
+    const deliver = (listener, args) => {
+      // Chrome logs a listener that throws and goes on to the next. Here it goes on too, and the
+      // error is thrown again on a later tick, so the test that made it fails
+      try { listener(...args); } catch (error) { setImmediate(() => { throw error; }); }
+    };
+    storageChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes), 'local']));
+    localChanged.listeners.slice().forEach((listener) => deliver(listener, [toJson(changes)]));
+  };
+  // Chrome compares stored values as JSON values, so key order in an object doesn't count
+  const canonical = (value) => JSON.stringify(value, (key, item) => (
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((k) => [k, item[k]]))
+      : item
+  ));
+  // Finish a write the way Chrome does: its changes go out, then its callback runs or its promise settles
+  const finish = (failure, changes, callback) => {
+    if (callback) {
+      later(() => {
+        if (!failure) announce(changes);
+        withLastError(failure, () => callback());
+      });
+      return undefined;
+    }
+    return new Promise((resolve, reject) => later(() => {
+      if (failure) { reject(failure); return; }
+      announce(changes);
+      resolve();
+    }));
+  };
+
   const storageLocal = {
     get(keys, callback) {
       const failure = getFailures.shift();
@@ -520,22 +577,37 @@ function createChromeStub() {
     set(items, callback) {
       const failure = setFailures.shift();
       calls.push({ method: 'set', keys: Object.keys(items), failed: Boolean(failure) });
-      if (!failure) Object.keys(items).forEach((k) => { local[k] = toJson(items[k]); });
-      if (callback) { later(() => withLastError(failure, () => callback())); return undefined; }
-      return failure ? Promise.reject(failure) : Promise.resolve();
+      const changes = {};
+      if (!failure) {
+        Object.keys(items).forEach((k) => {
+          // Chrome leaves a key it can't store (undefined, NaN, a function) as it was
+          const value = toStored(items[k]);
+          if (value === undefined) return;
+          const had = Object.hasOwn(local, k);
+          if (had && canonical(local[k]) === canonical(value)) return;
+          changes[k] = had ? { oldValue: local[k], newValue: value } : { newValue: value };
+          local[k] = value;
+        });
+      }
+      return finish(failure, changes, callback);
     },
     remove(keys, callback) {
       const list = Array.isArray(keys) ? keys : [keys];
       calls.push({ method: 'remove', keys: list });
-      list.forEach((k) => { delete local[k]; });
-      if (callback) { later(() => withLastError(null, () => callback())); return undefined; }
-      return Promise.resolve();
+      const changes = {};
+      list.forEach((k) => {
+        if (!Object.hasOwn(local, k)) return;
+        changes[k] = { oldValue: local[k] };
+        delete local[k];
+      });
+      return finish(null, changes, callback);
     },
+    onChanged: localChanged,
   };
 
   const api = {
     runtime,
-    storage: { local: storageLocal, onChanged: createEventStub() },
+    storage: { local: storageLocal, onChanged: storageChanged },
     notifications: {
       create(idOrOptions, maybeOptions, callback) {
         const options = typeof idOrOptions === 'string' ? maybeOptions : idOrOptions;
@@ -563,7 +635,7 @@ function createChromeStub() {
     notifications,
     tabsCreated,
     /** Make the next chrome.storage.local.set fail with `error` (via runtime.lastError). */
-    failNextSet(error = new Error('QUOTA_BYTES quota exceeded')) { setFailures.push(error); },
+    failNextSet(error = new Error('Resource::kQuotaBytes quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
     /** set and remove calls, which are the writes. */
