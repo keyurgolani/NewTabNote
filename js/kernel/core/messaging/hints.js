@@ -17,6 +17,13 @@ import { silentLogger } from '../ports/runtime.js';
 /** @typedef {import('../ports/runtime.js').Logger} Logger */
 
 /**
+ * How many entities a page remembers the last commitSeq of. Past it, the one heard longest
+ * ago is forgotten, which only lets a duplicate of its hint through, and catching up from the
+ * cursor absorbs that.
+ */
+export const MAX_HINT_ENTITIES = 1024;
+
+/**
  * The hint channel as core sees it: the codec's text each way, as on a link. Its adapter
  * (adapters/messaging/hint-channel.js) passes on only what came from this extension's origin.
  * @typedef {object} Channel
@@ -98,7 +105,7 @@ export function createHintPublisher({ channel, logger = silentLogger }) {
  * @param {{channel: Channel, logger?: Logger}} options
  */
 export function createHintSubscriber({ channel, logger = silentLogger }) {
-  /** @type {Map<string, number>} the last commitSeq heard for each entity */
+  /** @type {Map<string, number>} the last commitSeq heard for each entity, the longest ago first */
   const latest = new Map();
   /** @type {Set<(hint: Hint) => void>} */
   const listeners = new Set();
@@ -109,7 +116,10 @@ export function createHintSubscriber({ channel, logger = silentLogger }) {
     const { entityType, entityId, revision, commitSeq } = read.frame;
     const key = keyOf({ entityType, entityId, revision, commitSeq });
     if ((latest.get(key) ?? 0) >= commitSeq) return;
+    // Set again, so the map's order is the order entities were last heard in
+    latest.delete(key);
     latest.set(key, commitSeq);
+    if (latest.size > MAX_HINT_ENTITIES) latest.delete(/** @type {string} */ (latest.keys().next().value));
     for (const listener of [...listeners]) {
       try {
         listener({ entityType, entityId, revision, commitSeq });

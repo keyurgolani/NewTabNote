@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { openHintChannel } from '../../js/kernel/adapters/messaging/hint-channel.js';
 import { encode } from '../../js/kernel/core/contracts/codec.js';
 import { HINT_CHANNEL } from '../../js/kernel/core/contracts/hint-channel.js';
-import { createHintPublisher, createHintSubscriber } from '../../js/kernel/core/messaging/hints.js';
+import { MAX_HINT_ENTITIES, createHintPublisher, createHintSubscriber } from '../../js/kernel/core/messaging/hints.js';
 import { createChromeFake } from './chrome-fake.mjs';
 import { settle } from './messaging-support.mjs';
 
@@ -63,6 +63,25 @@ describe('commit hints (#13, "Desired behavior")', () => {
     }
     await settle();
     assert.deepEqual(pages[0].heard, [note('n1', 5), note('n2', 4), note('n1', 6)]);
+  });
+
+  it('remembers the last MAX_HINT_ENTITIES entities it heard, dropping the one heard longest ago', async () => {
+    const { fake, pages } = opened();
+    const other = new (fake.page('popup').BroadcastChannel)(HINT_CHANNEL);
+    const post = (/** @type {Hint} */ hint) => other.postMessage(encode({ frame: 'hint', ...hint }));
+    for (let i = 0; i < MAX_HINT_ENTITIES; i += 1) post(note(`n${i}`, i + 1));
+    // Hearing n0 again makes it the latest, so n1 is the one the next entity pushes out
+    post(note('n0', MAX_HINT_ENTITIES + 1));
+    post(note('new', MAX_HINT_ENTITIES + 2));
+    await settle();
+    const before = pages[0].heard.length;
+    assert.equal(before, MAX_HINT_ENTITIES + 2);
+    // A forgotten entity lets a duplicate through, which catching up from the cursor absorbs
+    post(note('n0', MAX_HINT_ENTITIES + 1));
+    post(note('n2', 3));
+    post(note('n1', 2));
+    await settle();
+    assert.deepEqual(pages[0].heard.slice(before), [note('n1', 2)]);
   });
 
   it('carries ids and numbers only: a hint holding anything else is refused on both sides', async () => {
