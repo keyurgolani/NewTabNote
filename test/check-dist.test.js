@@ -85,22 +85,30 @@ describe('scripts/check-dist.js', () => {
     assert.match(lines[1], /kernel\/composition\/background\.js is missing/);
   });
 
-  it("fails when a contract module or Valibot's build is missing, though nothing imports them yet (#13, AC7)", () => {
+  it("fails when a contract or messaging module or Valibot's build is missing, whether anything imports it yet or not (#13, AC7)", () => {
     assert.deepEqual(checkDist.SHIPPED_DIRS, [
       'js/kernel/core/contracts/',
       'js/kernel/core/messaging/',
       'js/kernel/adapters/messaging/',
       'js/lib/valibot/',
     ]);
-    const result = run(packageCopy({
-      'js/kernel/core/contracts/codec.js': null,
+    // Nothing imports these yet, so only their directories say they're missing
+    const unimported = run(packageCopy({
       'js/kernel/core/contracts/operations/create-note.js': null,
-      'js/lib/valibot/index.mjs': null,
+      'js/kernel/core/messaging/hints.js': null,
+      'js/kernel/adapters/messaging/status-region.js': null,
     }));
-    assertFails(result,
+    assertFails(unimported,
       'check:dist failed: 3 problems in ',
+      'js/kernel/core/contracts/operations/create-note.js is missing; every module under js/kernel/core/contracts/ ships, imported yet or not',
+      'js/kernel/core/messaging/hints.js is missing; every module under js/kernel/core/messaging/ ships',
+      'js/kernel/adapters/messaging/status-region.js is missing; every module under js/kernel/adapters/messaging/ ships');
+    // The worker's router imports these, so what imports them says so too
+    const imported = run(packageCopy({ 'js/kernel/core/contracts/codec.js': null, 'js/lib/valibot/index.mjs': null }));
+    assertFails(imported,
+      'js/kernel/core/messaging/router.js imports "../contracts/codec.js", but js/kernel/core/contracts/codec.js is missing',
+      'js/kernel/core/contracts/fields.js imports "../../../lib/valibot/index.mjs", but js/lib/valibot/index.mjs is missing',
       'js/kernel/core/contracts/codec.js is missing; every module under js/kernel/core/contracts/ ships, imported yet or not',
-      'js/kernel/core/contracts/operations/create-note.js is missing; every module under js/kernel/core/contracts/ ships',
       'js/lib/valibot/index.mjs is missing; every module under js/lib/valibot/ ships');
     // Only modules count: the declarations and the vendor record don't ship
     assert.deepEqual(checkDist.missingModules(packageCopy({

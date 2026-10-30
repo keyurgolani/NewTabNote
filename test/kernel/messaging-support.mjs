@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
 import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import { linkPair } from '../../js/kernel/core/messaging/in-process.js';
 import { createLookup, operationOf } from '../../js/kernel/core/messaging/operations.js';
+import { SYSTEM_OPERATIONS } from '../../js/kernel/core/messaging/system-operations.js';
 import { NOW } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/validate.js').Operation} Operation */
@@ -101,7 +102,7 @@ export const OPERATIONS = Object.freeze(
 );
 
 /** Finds every kernel operation and the coordinator's own queries */
-export const lookup = createLookup(OPERATIONS);
+export const lookup = createLookup({ ...OPERATIONS, ...SYSTEM_OPERATIONS });
 
 /**
  * A hello from `surface`, for the session `sessionId`

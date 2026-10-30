@@ -4,7 +4,6 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import * as v from '../../js/lib/valibot/index.mjs';
@@ -20,6 +19,7 @@ import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { entityTypesIn, walk } from '../../js/kernel/core/contracts/schema-walk.js';
+import { importGraph } from './import-graph.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
@@ -141,38 +141,6 @@ function undefinedFields(value) {
     (sum, field) => sum + (field === undefined ? 1 : undefinedFields(field)),
     /** @type {number} */ (0),
   );
-}
-
-/**
- * The relative modules `file` imports statically, as paths
- * @param {string} file
- * @returns {string[]}
- */
-function staticImports(file) {
-  const text = fs.readFileSync(file, 'utf8');
-  const specifiers = [...text.matchAll(/^(?:import|export)\s[^;]*?from\s+'([^']+)'|^import\s+'([^']+)'/gm)].map(
-    match => match[1] ?? match[2],
-  );
-  return specifiers.map(specifier => path.resolve(path.dirname(file), specifier));
-}
-
-/**
- * Every module `file` reaches through static imports, `file` included
- * @param {string} file
- * @returns {Set<string>}
- */
-function importGraph(file) {
-  const seen = new Set([file]);
-  const pending = [file];
-  while (pending.length > 0) {
-    for (const next of staticImports(/** @type {string} */ (pending.pop()))) {
-      if (!seen.has(next)) {
-        seen.add(next);
-        pending.push(next);
-      }
-    }
-  }
-  return seen;
 }
 
 describe('the catalog (#13, "Desired behavior")', () => {

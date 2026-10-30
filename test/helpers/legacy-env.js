@@ -486,6 +486,7 @@ function createChromeStub() {
     onMessage: createEventStub(),
     onInstalled: createEventStub(),
     onStartup: createEventStub(),
+    onConnect: createEventStub(),
   };
 
   const withLastError = (error, fn) => {

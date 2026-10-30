@@ -1,9 +1,10 @@
 // #13's transport conformance suite (AC2): one set of tests every transport passes, through one
 // JSON codec, with a client on one side and the router on the other: correlation, deadlines,
 // cancellation with too-late, typed errors, the compatibility handshake, round-trip fidelity,
-// and a coordinator that goes away. The in-process transport runs it in
-// conformance-in-process.test.mjs, and the runtime port runs it on the Chrome fake (slice 2b).
-// Streams with backpressure join it with streams (slice 4).
+// a coordinator that goes away, and the sessions the router's hooks hear of. The in-process
+// transport runs it in conformance-in-process.test.mjs, and the runtime port on the Chrome
+// fake in conformance-runtime-port.test.mjs. Streams with backpressure, and MessagePorts, join
+// it with streams (slice 4).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -130,8 +131,9 @@ export function describeConformance(name, connect) {
    * A router serving the kernel and `handlers`, reached through the transport, and clients
    * to it
    * @param {Record<string, Handler>} [handlers]
+   * @param {Partial<import('../../js/kernel/core/messaging/router.js').RouterOptions>} [options]
    */
-  async function start(handlers = {}) {
+  async function start(handlers = {}, options = {}) {
     const scheduler = testScheduler();
     const router = createRouter({
       lookup,
@@ -140,6 +142,7 @@ export function describeConformance(name, connect) {
       ...scheduler,
       coordinatorId: 'coordinator-1',
       extensionVersion: VERSION,
+      ...options,
     });
     const harness = await connect(router, scheduler);
     let sessions = 0;
@@ -347,6 +350,23 @@ export function describeConformance(name, connect) {
       const again = await remote.query({ type: 'listFolders' });
       assert.equal(again.kind, 'empty');
       assert.deepEqual(states, ['connecting', 'connected', 'idle', 'connecting', 'connected']);
+    });
+
+    it("tells the router's session hooks of each client's session once it's welcomed, and of its close", async () => {
+      /** @type {string[]} */
+      const heard = [];
+      /** @param {string} event */
+      const keep = event => (/** @type {{surface: string, sessionId: string}} */ session) =>
+        heard.push(`${event} ${session.surface} ${session.sessionId}`);
+      const { client } = await start({}, { sessions: { opened: keep('opened'), closed: keep('closed') } });
+      const newtab = client('newtab');
+      const sidepanel = client('sidepanel');
+      await newtab.query({ type: 'listFolders' });
+      await sidepanel.query({ type: 'listFolders' });
+      assert.deepEqual(heard, [`opened newtab ${newtab.sessionId}`, `opened sidepanel ${sidepanel.sessionId}`]);
+      newtab.close();
+      for (let tries = 0; heard.length < 3 && tries < 50; tries += 1) await settle();
+      assert.deepEqual(heard.slice(2), [`closed newtab ${newtab.sessionId}`]);
     });
   });
 }

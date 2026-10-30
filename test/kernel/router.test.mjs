@@ -30,6 +30,7 @@ import {
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Handler} Handler */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').RouterOptions} RouterOptions */
+/** @typedef {import('../../js/kernel/core/messaging/router.js').Session} Session */
 /** @typedef {import('../../js/kernel/core/ports/policy.js').PolicyPort} PolicyPort */
 
 /**
@@ -682,6 +683,107 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
   });
 });
 
+describe("the router: sessions, which #35's coordinator hears of", () => {
+  /** A router whose session hooks keep what they hear, and each session they're handed */
+  const hearing = () => {
+    /** @type {string[]} */
+    const heard = [];
+    /** @type {Session[]} */
+    const sessions = [];
+    /** @param {string} event */
+    const keep = event => (/** @type {Session} */ session) => {
+      heard.push(`${event} ${session.surface} ${session.sessionId}`);
+      sessions.push(session);
+    };
+    const router = makeRouter({ sessions: { opened: keep('opened'), closed: keep('closed') } });
+    return { router, heard, sessions };
+  };
+
+  it('tells its hooks of each session a hello opens, and of its close from either end, with the surface the transport verified', async () => {
+    const { router, heard, sessions } = hearing();
+    const first = rawConnection(router, 'newtab');
+    first.send(hello('newtab', 's1'));
+    const second = rawConnection(router, 'popup');
+    second.send(hello('popup', 's2'));
+    await settle();
+    assert.deepEqual(heard, ['opened newtab s1', 'opened popup s2']);
+    second.close();
+    await settle();
+    router.close();
+    await settle();
+    assert.deepEqual(heard, ['opened newtab s1', 'opened popup s2', 'closed popup s2', 'closed newtab s1']);
+    // A connection's open and close hand over the one session, which no hook can change
+    assert.equal(sessions[3], sessions[0]);
+    assert.equal(Object.isFrozen(sessions[0]), true);
+  });
+
+  it("tells them nothing of a connection that never opened: one closed before its hello, one in another major, or one claiming a surface it isn't", async () => {
+    const { router, heard } = hearing();
+    rawConnection(router, 'newtab').close();
+    const older = rawConnection(router, 'newtab');
+    older.send(hello('newtab', 's1', { major: PROTOCOL_VERSION.major + 1, minor: 0 }));
+    const claims = rawConnection(router, 'popup');
+    claims.send(hello('newtab', 's2'));
+    await settle();
+    assert.equal(older.frames[0].frame, 'welcome');
+    assert.equal(claims.closed, true);
+    router.close();
+    await settle();
+    assert.deepEqual(heard, []);
+  });
+
+  it('tells them of each connection a session opens, as when it reconnects before its last close arrives, and of one closed for a second hello', async () => {
+    const { router, heard } = hearing();
+    const first = rawConnection(router, 'sidepanel');
+    first.send(hello('sidepanel', 's1'));
+    await settle();
+    const again = rawConnection(router, 'sidepanel');
+    again.send(hello('sidepanel', 's1'));
+    await settle();
+    first.close();
+    await settle();
+    again.send(hello('sidepanel', 's1'));
+    await settle();
+    assert.equal(again.closed, true);
+    assert.deepEqual(heard, [
+      'opened sidepanel s1',
+      'opened sidepanel s1',
+      'closed sidepanel s1',
+      'closed sidepanel s1',
+    ]);
+  });
+
+  it('keeps a hook that throws from changing any answer, and tells the logger', async () => {
+    /** @type {string[]} */
+    const warned = [];
+    const broken = () => {
+      throw new Error('a broken hook');
+    };
+    /** @type {string[]} */
+    const stopped = [];
+    const router = makeRouter({
+      handlers: {
+        getNote: (payload, context) => {
+          context.onCancel(() => stopped.push(/** @type {{noteId: string}} */ (payload).noteId));
+          return new Promise(() => {});
+        },
+      },
+      logger: { warn: event => warned.push(event) },
+      sessions: { opened: broken, closed: broken },
+    });
+    const peer = rawConnection(router, 'newtab');
+    peer.send(hello('newtab', 's1'));
+    peer.send(request('q1', { type: 'getNote', noteId: 'waits' }));
+    await settle();
+    assert.equal(peer.frames[0].frame, 'welcome');
+    router.close();
+    await settle();
+    assert.deepEqual(stopped, ['waits']);
+    assert.equal(router.health().connections, 0);
+    assert.deepEqual(warned, ['router-session-hook-failed', 'router-session-hook-failed']);
+  });
+});
+
 describe('the router: system.messagingHealth (#13, "Security and privacy")', () => {
   const health = /** @type {import('../../js/kernel/core/contracts/validate.js').Operation} */ (
     lookup('system.messagingHealth')
@@ -689,7 +791,12 @@ describe('the router: system.messagingHealth (#13, "Security and privacy")', () 
 
   it('answers system.messagingHealth itself, to the surfaces its entry lists, and no handler takes its place', async () => {
     const scheduler = testScheduler();
-    const router = makeRouter({ ...scheduler, handlers: { 'system.messagingHealth': () => ready(NOW, 'taken') } });
+    // It knows its own queries whatever lookup it's given, and no lookup can replace them
+    const router = makeRouter({
+      ...scheduler,
+      lookup: createLookup({ 'system.messagingHealth': OPERATIONS.getNote }),
+      handlers: { 'system.messagingHealth': () => ready(NOW, 'taken') },
+    });
     const peer = await opened(router, 'newtab');
     peer.send(request('h1', { type: 'system.messagingHealth' }));
     await settle();
