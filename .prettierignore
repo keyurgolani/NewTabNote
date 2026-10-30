@@ -8,3 +8,5 @@
 !/test/
 /test/*
 !/test/kernel/
+# Release files frozen as #17's fixtures stay byte for byte as their tags have them
+/test/fixtures/storage/releases/

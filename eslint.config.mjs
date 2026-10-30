@@ -391,7 +391,8 @@ const kernel = {
 };
 
 export default [
-  { ignores: ['js/lib/**'] },
+  // Frozen release files kept as #17's test fixtures (test/fixtures/storage/releases/), never linted
+  { ignores: ['js/lib/**', 'test/fixtures/storage/releases/**'] },
   {
     files: ['js/**/*.js', 'js/**/*.mjs'],
     languageOptions: {
