@@ -177,8 +177,55 @@ export function addHashes(a, b) {
   return ((BigInt(`0x${a}`) + BigInt(`0x${b}`)) % MODULUS).toString(16).padStart(64, '0');
 }
 
+/**
+ * `a - b` modulo 2^256: takes an entry's hash back out of a set hash, as permanent deletion's
+ * purge (#17 PR 2) takes a purged row out of its store's content hash
+ * @param {string} a
+ * @param {string} b
+ * @returns {string}
+ */
+export function subtractHashes(a, b) {
+  return ((BigInt(`0x${a}`) - BigInt(`0x${b}`) + MODULUS) % MODULUS).toString(16).padStart(64, '0');
+}
+
 /** The hash of the empty set */
 export const EMPTY_SET_HASH = '0'.repeat(64);
+
+/**
+ * One record's entry in its store's content hash: the SHA-256 of its store, its key's hash,
+ * and its value's hash together, so the sum over a store binds each value to its key and its
+ * store, and a value moved to another key or store changes it (review R61)
+ * @param {string} store
+ * @param {string} keyHash - recordSha256 of the key
+ * @param {string} valueHash - recordSha256 of the value
+ * @param {Digester} crypto
+ * @returns {Promise<string>}
+ */
+export function contentEntry(store, keyHash, valueHash, crypto) {
+  return sha256OfText(crypto, canonicalJson([store, keyHash, valueHash]));
+}
+
+/**
+ * The key a value holds at `keyPath`, as IndexedDB reads it for an inline key, or undefined
+ * when it holds none there
+ * @param {unknown} value
+ * @param {string | string[]} keyPath
+ * @returns {unknown}
+ */
+export function keyAt(value, keyPath) {
+  if (Array.isArray(keyPath)) {
+    const parts = keyPath.map(path => keyAt(value, path));
+    return parts.some(part => part === undefined) ? undefined : parts;
+  }
+  if (keyPath === '') return value;
+  /** @type {unknown} */
+  let at = value;
+  for (const name of keyPath.split('.')) {
+    if (at === null || typeof at !== 'object' || !Object.hasOwn(at, name)) return undefined;
+    at = /** @type {Record<string, unknown>} */ (at)[name];
+  }
+  return at;
+}
 
 /**
  * About how many bytes `value` takes stored: its strings as UTF-8, numbers as 8, Blobs and

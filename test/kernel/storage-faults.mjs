@@ -31,6 +31,7 @@
  * @property {(store: string, name: string) => void} failNextRead
  *   The next read of `store` fails with a DOMException called `name` and its transaction aborts,
  *   as a read of a damaged file does (NotReadableError, UnknownError)
+ * @property {string[]} deletes - every database name the wrapped factory was asked to delete
  * @property {(database: string, name: string) => void} failNextOpen
  *   The next open of `database` fails with a DOMException called `name`, touching nothing, as
  *   an open below the version on disk does (VersionError)
@@ -85,6 +86,8 @@ export function faultyFactory(real) {
   const unreadable = [];
   /** @type {Array<{store: string, name: string}>} */
   const unopenable = [];
+  /** @type {string[]} */
+  const deletes = [];
 
   /**
    * @param {IDBTransaction} tx
@@ -222,6 +225,10 @@ export function faultyFactory(real) {
   const wrapped = new WeakMap();
 
   const factory = wrap(real, {
+    deleteDatabase: (/** @type {string} */ name) => {
+      deletes.push(name);
+      return real.deleteDatabase(name);
+    },
     open: (/** @type {string} */ name, /** @type {number | undefined} */ version) => {
       const refused = take(unopenable, name);
       if (refused) {
@@ -282,6 +289,7 @@ export function faultyFactory(real) {
     failNextRead: (store, name) => {
       unreadable.push({ store, name });
     },
+    deletes,
     failNextOpen: (database, name) => {
       unopenable.push({ store: database, name });
     },

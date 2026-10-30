@@ -506,61 +506,88 @@
                   "canvases": {
                     "count": 5,
                     "idSetHash": "bd588acd126b7eaba3e5b8eecfb5dd050d30c2f57ec1e8e60dfda4ef0d9da302",
+                    "contentHash": "ede60b9848844641f5c5a1fa27c371d3be116f2ebd658a16f50323c305c2bde7",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "elements": {
                     "count": 5,
                     "idSetHash": "ce71deaaa52a4a8ab66df1533b329b541609b6c40e96950f26575242c80c29bb",
+                    "contentHash": "978b477a9b7282c4425f0f7c29db0a0aa2b8956d75a993c643bac7db09c8f448",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "folders": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "future_store": {
                     "count": 1,
                     "idSetHash": "4e319c63b3dafcef9b25b5549030f4301e5a745fd0fc561be773daeaa1b36f68",
+                    "contentHash": "b3051eeaa0d6f8900642d79685bf1cf5b77e555a6438082311dde7a9c88e02db",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "links": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "media": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "meta": {
                     "count": 1,
                     "idSetHash": "a50dde9a71a786a7f314d0c04853ccdd8b67680fee3304e4a5a4f905e65e1714",
+                    "contentHash": "789c6f13347aacac88cd03a0b551d1d99d52aeef4249d2508de699467baac174",
+                    "keyPath": "key",
                     "purged": []
                   },
                   "migrations": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": [
+                      "id",
+                      "status"
+                    ],
                     "purged": []
                   },
                   "search_index": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "noteId",
                     "purged": []
                   },
                   "snapshots": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "themes": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "vectors": {
                     "count": 0,
                     "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
                     "purged": []
                   }
                 }

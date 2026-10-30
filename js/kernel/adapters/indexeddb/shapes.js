@@ -2,7 +2,8 @@
  * Which shape a CanvasTabDB is in (#17, "Data and migration"), read from its stores, their key
  * paths and indexes, and `meta`, never from `oldVersion` or the version number alone. The
  * support matrix (test/fixtures/storage/shapes.json has each row with its tag and line):
- * - `none`: no database, or one with no stores at any version this build can open
+ * - `none`: no database, or one with no stores at any version (migrate.js recreates one at
+ *   or above the version it opens at, since opening it there runs no upgrade)
  * - `legacy`: a subset of the ten version-8 stores, each as every release made it, holding
  *   `canvases` and `elements`, at IndexedDB version 2 to 8 (1.0.0 to 1.4.1), with the stores
  *   it lacks. Step 9 adds them.
@@ -128,9 +129,10 @@ export function detectShape(inspection, { latest = LATEST_STRUCTURAL } = {}) {
     return { kind: 'current', structuralVersion, logicalVersion: meta.logicalVersion };
   }
 
-  // A version this build can't open was written by a newer one, whatever it holds
-  if (inspection.version > latest) return { kind: 'newer', structuralVersion: null };
+  // No store, so nothing to keep, whatever the version
   if (names.length === 0) return { kind: 'none' };
+  // A version this build can't open was written by a newer one
+  if (inspection.version > latest) return { kind: 'newer', structuralVersion: null };
 
   const legacy = legacySchema();
   if (names.some(name => !Object.hasOwn(legacy, name))) return { kind: 'unknown', reason: 'extra-store' };

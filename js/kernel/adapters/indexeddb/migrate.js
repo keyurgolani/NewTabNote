@@ -14,6 +14,16 @@
  * A `newer`, `missing-core`, or `unknown` database gets a point and no step (Q13): it's left as
  * it is, and #33's refusal stays the answer.
  *
+ * The one database a run deletes is a CanvasTabDB with no object store at all at or above the
+ * version it opens at (an aborted or foreign open can leave one), since opening that runs no
+ * upgrade and it would never migrate. The lead's conditions (2026-10-30), against #33's and
+ * #17's "nothing deletes CanvasTabDB on its own": the zero-store check is made on the run's own
+ * connection, under `storage.migrate`, and the delete is requested while that connection is
+ * still open, so nothing can be queued between the check and the delete; a database with any
+ * store is never deleted, at any version (storage-migrate.test.mjs); and the delete is logged,
+ * `storage-migration-recreated-empty`, and receipted, `recreate-empty`, with its old version
+ * only.
+ *
  * Every run can be cut off anywhere and run again. A point resumes from its progress record,
  * a verified one is reused, and a database whose `versionchange` committed but whose receipt
  * didn't reads as `current` and gets the receipt, since the second transaction's check is the
@@ -36,6 +46,7 @@ import {
   isQuota,
   keepVerified,
   listPoints,
+  matchesSource,
   measureStores,
   openRecovery,
   readProgress,
@@ -197,6 +208,38 @@ function upgrade({ indexedDB, version, steps, logicalVersion, onBlocked }) {
 }
 
 /**
+ * Deletes CanvasTabDB if, read on this connection right before the delete, it holds no object
+ * store. Resolves its old version, or null when it held a store or was gone, and deleted
+ * nothing. A connection that blocks the delete is answered as a blocked upgrade.
+ * @param {{indexedDB: IDBFactory, logger: Logger, onBlocked: () => void}} options
+ * @returns {Promise<number | null>}
+ */
+async function deleteIfEmpty({ indexedDB, logger, onBlocked }) {
+  const db = await openWithoutUpgrade(indexedDB, DB_NAME);
+  if (!db) return null;
+  if (db.objectStoreNames.length !== 0) {
+    db.close();
+    return null;
+  }
+  const version = db.version;
+  /** @type {IDBOpenDBRequest} */
+  let request;
+  try {
+    // Requested while the connection that saw no store is open, so it's next in the queue
+    request = indexedDB.deleteDatabase(DB_NAME);
+  } finally {
+    db.close();
+  }
+  logger.warn('storage-migration-recreated-empty', { fromVersion: version });
+  await new Promise((resolve, reject) => {
+    request.onblocked = () => onBlocked();
+    request.onsuccess = () => resolve(undefined);
+    request.onerror = () => reject(request.error);
+  });
+  return version;
+}
+
+/**
  * The verified pre-migration point made before structural version `target`, if any, without
  * making the recovery database
  * @param {IDBFactory} indexedDB
@@ -243,7 +286,11 @@ async function ensurePoint(options) {
         point.sourceVersion === inspection.version &&
         sameNames(point.stores, stores);
       const reusable = points.filter(point => point.status === 'verified' && matches(point)).pop();
-      if (reusable) return { status: 'ready', point: reusable };
+      // Reused only while it still holds what the database holds, read now (review R61, Q3)
+      if (reusable && (await matchesSource({ source, point: reusable, io }))) {
+        return { status: 'ready', point: reusable };
+      }
+      if (reusable) logger.warn('storage-recovery-point-stale', { pointId: reusable.id });
 
       // A point that never verified is resumed when it's this one, and dropped otherwise
       /** @type {Point | null} */
@@ -301,13 +348,17 @@ async function ensurePoint(options) {
       }
       await between('copied');
 
-      const verdict = await verifyPoint({ recovery, point, io });
+      // What's on disk is what's verified, not the record this run kept in memory
+      const stored = (await listPoints(recovery)).find(candidate => candidate.id === point.id);
+      const verdict = stored
+        ? await verifyPoint({ recovery, point: stored, io })
+        : { ok: /** @type {const} */ (false), code: 'point-missing' };
       if (!verdict.ok) {
         logger.warn('storage-recovery-point-unverified', { pointId: point.id, code: verdict.code });
         await discardPoint(recovery, point.id, io);
         return { status: 'failed', code: 'recovery-point-unverified' };
       }
-      const verified = await keepVerified({ recovery, point, clock, io });
+      const verified = await keepVerified({ recovery, point: /** @type {Point} */ (stored), clock, io });
       await between('verified');
       return { status: 'ready', point: verified };
     } finally {
@@ -444,17 +495,23 @@ async function migrate(options, status) {
   }
 
   const startedAt = clock.now();
-  const db = await upgrade({
-    indexedDB,
-    version: target,
-    steps,
-    logicalVersion,
-    onBlocked: () => {
-      status.phase = 'blocked-upgrade';
-      logger.warn('storage-migration-blocked', { shape: shape.kind, to: target });
-      if (options.onBlocked) options.onBlocked();
-    },
-  });
+  const onBlocked = () => {
+    status.phase = 'blocked-upgrade';
+    logger.warn('storage-migration-blocked', { shape: shape.kind, to: target });
+    if (options.onBlocked) options.onBlocked();
+  };
+  // An empty database at or above the target opens with no upgrade, so it's made again
+  /** @type {number | null} */
+  let recreatedFrom = null;
+  if (shape.kind === 'none' && inspection.exists && inspection.version >= target) {
+    recreatedFrom = await deleteIfEmpty({ indexedDB, logger, onBlocked });
+    if (recreatedFrom === null) {
+      return outcome({ status: 'failed', shape: shape.kind, failure: { code: 'shape-changed' } });
+    }
+    status.phase = 'running';
+    await between('recreated');
+  }
+  const db = await upgrade({ indexedDB, version: target, steps, logicalVersion, onBlocked });
   status.phase = 'running';
   try {
     await between('upgraded');
@@ -479,19 +536,30 @@ async function migrate(options, status) {
       return outcome({ status: 'failed', shape: shape.kind, recoveryPointId, failure: { code: 'schema-mismatch' } });
     }
     const completedAt = clock.now();
-    await writeReceipts(
-      db,
-      steps.map(step => ({
-        id: step.id,
-        from: fromOf(step),
-        to: step.to,
-        status: /** @type {const} */ ('completed'),
+    /** @type {Receipt[]} */
+    const receipts = steps.map(step => ({
+      id: step.id,
+      from: fromOf(step),
+      to: step.to,
+      status: /** @type {const} */ ('completed'),
+      startedAt,
+      completedAt,
+      recoveryPointId,
+      failure: null,
+    }));
+    if (recreatedFrom !== null) {
+      receipts.unshift({
+        id: 'recreate-empty',
+        from: recreatedFrom,
+        to: 0,
+        status: 'completed',
         startedAt,
         completedAt,
-        recoveryPointId,
+        recoveryPointId: null,
         failure: null,
-      })),
-    );
+      });
+    }
+    await writeReceipts(db, receipts);
     await between('receipts');
     return outcome({
       status: 'migrated',

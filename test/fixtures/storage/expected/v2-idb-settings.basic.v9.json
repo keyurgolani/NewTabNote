@@ -461,16 +461,22 @@
                   "canvases": {
                     "count": 4,
                     "idSetHash": "5e69480b466289c447d4afb283d0f69e276775a575c2e27aca31ac4b4b5010c5",
+                    "contentHash": "b9a38fef3c8f8da8d286f9f22bb71d99484dbd58bf12a11444e7e827363a54ee",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "elements": {
                     "count": 5,
                     "idSetHash": "4e6bac6eeae68d8221c718197a266653bd2d9c3ca4156c472a3414d4b9e72d74",
+                    "contentHash": "de3bfa87630da7a3033db3cee9d052e8e64731a53d74fbfbb55f35f1f73e2cb5",
+                    "keyPath": "id",
                     "purged": []
                   },
                   "media": {
                     "count": 1,
                     "idSetHash": "8b6bc9465447739c5f293eefed82d0d912f6194b9cd42428f8214983badf77f1",
+                    "contentHash": "8dbdcd2a480709b5cb401174dde2e5a238d18275abb14dad371fc79ab4c8d67f",
+                    "keyPath": "id",
                     "purged": []
                   }
                 }
