@@ -26,8 +26,12 @@
 
 const assert = require('node:assert/strict');
 
-/** What Chromium reports for a set over chrome.storage.local.QUOTA_BYTES */
-const QUOTA_MESSAGE = 'QUOTA_BYTES quota exceeded';
+/**
+ * What Chromium reports for a set over chrome.storage.local.QUOTA_BYTES, as Playwright's
+ * Chromium (chromium-1248) words it. A Chromium that words it otherwise fails the e2e run, and
+ * the stub's message changes with this.
+ */
+const QUOTA_MESSAGE = 'Resource::kQuotaBytes quota exceeded';
 
 /** How long a case waits for onChanged to reach a context */
 const EVENT_WAIT_MS = 5000;
@@ -165,17 +169,54 @@ const CASES = [
     const [writer, other] = contexts;
     const seen = await writer.evaluate(async ({ p }) => {
       const value = { text: 'ünïcödé 日本語', number: 1.5, flag: false, nothing: null, list: [1, 'two', { three: 3 }, undefined], nested: { deep: { deeper: true }, gone: undefined } };
-      await chrome.storage.local.set({ [`${p}value`]: value });
+      // An own __proto__ key, as JSON.parse makes one, is data like any other key
+      await chrome.storage.local.set({ [`${p}value`]: value, [`${p}proto`]: JSON.parse('{"__proto__":{"pinned":true},"id":"n1"}') });
+      const proto = (await chrome.storage.local.get(`${p}proto`))[`${p}proto`];
       value.text = 'changed after set';
       value.list.push('pushed after set');
       const first = await chrome.storage.local.get(`${p}value`);
       first[`${p}value`].nested.deep.deeper = 'changed after get';
       const second = await chrome.storage.local.get(`${p}value`);
-      return { stored: second[`${p}value`], nestedKeys: Object.keys(second[`${p}value`].nested) };
+      return {
+        stored: second[`${p}value`],
+        nestedKeys: Object.keys(second[`${p}value`].nested),
+        proto: { json: JSON.stringify(proto), own: Object.keys(proto), pinned: proto.pinned === undefined ? 'not inherited' : 'inherited' },
+      };
     }, { p });
     const expected = { text: 'ünïcödé 日本語', number: 1.5, flag: false, nothing: null, list: [1, 'two', { three: 3 }, null], nested: { deep: { deeper: true } } };
-    assert.deepEqual(seen, { stored: expected, nestedKeys: ['deep'] });
-    assert.deepEqual(await other.evaluate(readAll, { prefix: p }), { [`${p}value`]: expected });
+    assert.deepEqual(seen, {
+      stored: expected,
+      nestedKeys: ['deep'],
+      proto: { json: '{"__proto__":{"pinned":true},"id":"n1"}', own: ['__proto__', 'id'], pinned: 'not inherited' },
+    });
+    const elsewhere = await other.evaluate(readAll, { prefix: p });
+    assert.deepEqual(elsewhere[`${p}value`], expected);
+  }],
+
+  ['set stores what JSON would not as Chromium does: a Date or a Map as {}, and no key for NaN or a function', async ({ contexts }, p) => {
+    const [writer, other] = contexts;
+    await writer.evaluate(({ p }) => chrome.storage.local.set({
+      [`${p}date`]: new Date(0),
+      [`${p}map`]: new Map([[1, 2]]),
+      [`${p}nan`]: NaN,
+      [`${p}infinity`]: Infinity,
+      [`${p}function`]: () => 1,
+      [`${p}nested`]: { date: new Date(0), nan: NaN, fn: () => 1, list: [NaN, () => 1, new Date(0)], kept: 1 },
+    }), { p });
+    for (const context of [writer, other]) {
+      const stored = await context.evaluate(async ({ p }) => {
+        const all = await chrome.storage.local.get(null);
+        const mine = Object.keys(all).filter((key) => key.indexOf(p) === 0).sort();
+        return { keys: mine, nested: all[`${p}nested`], nestedKeys: Object.keys(all[`${p}nested`]).sort(), date: all[`${p}date`], map: all[`${p}map`] };
+      }, { p });
+      assert.deepEqual(stored, {
+        keys: [`${p}date`, `${p}map`, `${p}nested`],
+        nested: { date: {}, list: [null, null, {}], kept: 1 },
+        nestedKeys: ['date', 'kept', 'list'],
+        date: {},
+        map: {},
+      }, context.name);
+    }
   }],
 
   ['set leaves a key whose value is undefined as it was', async ({ contexts }, p) => {
