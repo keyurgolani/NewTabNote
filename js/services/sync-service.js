@@ -16,6 +16,12 @@
  * @property {SyncProvider|null} provider
  * @property {string|null} errorMessage
  *
+ * #13's sync.stateChanged, a typed in-process event with the state's status, provider,
+ * pending count, and last sync time. It leaves out errorMessage, free text #19 replaces with
+ * a code, so a listener that shows an error reads it from getState() until then.
+ * @typedef {Readonly<{type: 'sync.stateChanged', status: SyncStatus, provider: SyncProvider|null,
+ *   pendingChanges: number, lastSyncAt: number|null}>} SyncStateChanged
+ *
  * @typedef {Object} SyncProviderInterface
  * @property {function(): Promise<void>} connect
  * @property {function(): Promise<void>} disconnect
@@ -253,6 +259,9 @@ class SyncService {
     };
 
     this._syncInterval = null;
+
+    /** @type {Set<(event: SyncStateChanged) => void>} */
+    this._stateListeners = new Set();
   }
 
   /** Initialize the sync service, restoring saved state. */
@@ -527,9 +536,30 @@ class SyncService {
     }
   }
 
-  /** Emit sync state change event. */
+  /**
+   * Tells `listener` each sync.stateChanged, until the function it returns is called
+   * @param {(event: SyncStateChanged) => void} listener
+   * @returns {() => void}
+   */
+  onStateChanged(listener) {
+    this._stateListeners.add(listener);
+    return () => {
+      this._stateListeners.delete(listener);
+    };
+  }
+
+  /** Tells every listener the state changed. One that throws doesn't stop the others. */
   _emitStateChange() {
-    this.eventBus.emit('sync:stateChanged', { ...this.state });
+    const { status, provider, pendingChanges, lastSyncAt } = this.state;
+    /** @type {SyncStateChanged} */
+    const event = Object.freeze({ type: 'sync.stateChanged', status, provider, pendingChanges, lastSyncAt });
+    for (const listener of [...this._stateListeners]) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger.warn('SyncService', 'A sync.stateChanged listener failed', error);
+      }
+    }
   }
 
   /** @returns {SyncState} Current sync state (copy). */

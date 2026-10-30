@@ -886,9 +886,10 @@ class App {
 
     await this.syncService.init();
 
-    // Listen for sync state changes to update UI
-    this.eventBus.on('sync:stateChanged', (state) => {
-      this._updateSyncStatusUI(state);
+    // sync.stateChanged has no error text, so the indicator reads the state, errorMessage
+    // included, from getState() until #19 replaces both
+    this.syncService.onStateChanged(() => {
+      this._updateSyncStatusUI(this.syncService.getState());
     });
 
     // If a provider was previously configured, try reconnecting
