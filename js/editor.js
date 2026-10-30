@@ -66,8 +66,6 @@ const NO_NAVIGATION = Object.freeze({
  * @property {EditorTitle|null} title - The title set since the note's last save, taken with the blocks
  * @property {boolean} written - True once this state's transaction has been opened
  * @property {boolean} isRetry - The retry after a failed save; failing again shows the error toast
- * @property {boolean} [beforeClose] - Written as the page's connection closed for another
- *   context's upgrade (beforeConnectionCloses): its transaction opened first, so it commits
  */
 
 /**
@@ -300,7 +298,17 @@ class BlockEditor {
     let blocksData = [];
     let keepEditorCopy = false;
     for (let round = 0; ; round++) {
-      const opened = await this.documentClient.openNote(noteId);
+      let opened;
+      try {
+        opened = await this.documentClient.openNote(noteId);
+      } catch (error) {
+        if (!this._isReloadRequired(error)) throw error;
+        // The page lost its connection to the database: the note it shows stays, with the notice
+        if (loadSeq !== this._loadSeq) return false;
+        this._onReloadRequired();
+        this._resumeNoteTimers();
+        return false;
+      }
       noteData = opened ? opened.note : null;
       blocksData = opened ? opened.blocks : [];
       if (loadSeq !== this._loadSeq) return false;
@@ -816,7 +824,13 @@ class BlockEditor {
       if (insights) {
         this.noteData.insights = insights;
         this.noteData.lastInsightsExtractedAt = Date.now();
-        await Storage.updateNote(this.noteData);
+        // Onto the note as stored (_storedNote), as attachInsights will write them
+        const stored = await this._storedNote();
+        if (stored) {
+          stored.insights = insights;
+          stored.lastInsightsExtractedAt = this.noteData.lastInsightsExtractedAt;
+          await Storage.updateNote(stored);
+        }
         this.renderInsights();
         Utils.showToast('Insights updated', 'success');
       } else {
@@ -1801,8 +1815,12 @@ class BlockEditor {
    * Select a template to insert
    */
   async selectTemplateItem(templateId) {
-    // In the order the template shows them, as getNoteBlocks lists a note's blocks
-    const templateBlocks = await this.documentClient.blocksOf(templateId);
+    // In id order, as 1.4.x's Storage.getElementsByNote listed them, which is the order they
+    // were made in, not always the order the template shows them. Kept on purpose for R1's no
+    // visible change rule, so a later slice can choose the order the template shows instead.
+    const templateBlocks = (await this.documentClient.blocksOf(templateId))
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     if (!templateBlocks || templateBlocks.length === 0) {
       this.hideTemplateMenu();
       return;
@@ -3750,6 +3768,28 @@ class BlockEditor {
   }
 
   /**
+   * The loaded note as stored, for the two writes that still put a whole note record
+   * (refreshInsights and _revertToSnapshot): they set their own fields on it, so a pin, folder,
+   * trash, or archive set elsewhere stays. The editor's copy no longer takes the stored state
+   * from each save, as Storage.saveNoteWithBlocks gave it. Null when the note was deleted
+   * meanwhile, which they leave deleted. #12 slice 4b2 moves them to attachInsights and
+   * restoreSnapshot.
+   * @returns {Promise<Object|null>}
+   */
+  _storedNote() {
+    return this.documentClient.readNote(this.noteId);
+  }
+
+  /**
+   * @param {*} error - What a document client read threw
+   * @returns {boolean} True when it failed because the page lost its connection to the database
+   */
+  _isReloadRequired(error) {
+    const state = error && error.cause;
+    return Boolean(state && state.code === 'reload-required');
+  }
+
+  /**
    * Delete blocks the user deleted from the loaded note, as their own command. Its transaction
    * opens before this returns, so a save that starts later can't write the blocks back.
    * @param {Array<string>} blockIds
@@ -4042,9 +4082,12 @@ class BlockEditor {
    * the links follow in the same command, as 1.4.x's save updated them after the note.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
-   * @returns {Promise<'saved'|'gone'|'reload'>} 'gone' when the note no longer exists and nothing
-   *   was written, 'reload' when the page lost its connection to the database; rejects when the
-   *   save failed otherwise
+   * @returns {Promise<'saved'|'stored'|'gone'|'reload'>} 'gone' when the note no longer exists and
+   *   nothing was written; 'reload' when the page had lost its connection to the database, so
+   *   nothing was written; 'stored' when the connection closed while the save ran: its
+   *   note-and-blocks transaction had opened, and a closing connection lets it finish, but the
+   *   search entry and links that follow it couldn't be written. Rejects when the save failed
+   *   otherwise.
    */
   _writeSaveState(state, meta) {
     state.written = true;
@@ -4059,10 +4102,14 @@ class BlockEditor {
       linkedNames: Utils.extractWikiLinks(meta.text),
     };
     if (state.title) Object.assign(save, { name: state.title.name, titleOrigin: state.title.origin });
+    // Open now, the command's first transaction opens before this returns
+    const openAtStart = typeof this.documentClient.connectionOpen === 'function'
+      ? this.documentClient.connectionOpen()
+      : true;
     return this.documentClient.saveContent(save).then((outcome) => {
       if (outcome.kind === 'committed') return 'saved';
       if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'gone';
-      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return 'reload';
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return openAtStart ? 'stored' : 'reload';
       // Its kind and code, never the note's content
       throw new Error(`The save was not stored (${outcome.kind}: ${outcome.code})`);
     });
@@ -4072,7 +4119,7 @@ class BlockEditor {
    * What follows a save's answer: "Saved", and search indexing and the sidebar's preview
    * catching up; or the notice for a deleted note, or for a page that has to reload.
    * @param {EditorSaveState} state
-   * @param {'saved'|'gone'|'reload'} result
+   * @param {'saved'|'stored'|'gone'|'reload'} result
    * @returns {void}
    */
   _afterSaveWrite(state, result) {
@@ -4080,10 +4127,10 @@ class BlockEditor {
       this._onNoteGone(state);
       return;
     }
-    if (result === 'reload' && state.beforeClose) {
-      // Its note-and-blocks transaction opened before the connection closed, which lets it
-      // finish; only the search entry and links that follow it couldn't be written. The page
-      // can't read or write anything more, so the next edit gets the reload notice.
+    if (result === 'stored') {
+      // The note, its blocks, and its title are stored. The search entry is rebuilt at the next
+      // start and the links on the note's next save. The page can't read or write anything
+      // more, so the next edit gets the reload notice.
       if (state.title && this._unsavedTitle === state.title) this._unsavedTitle = null;
       if (!this.reloadRequired) this.updateSaveStatus('Saved');
       return;
@@ -4152,7 +4199,7 @@ class BlockEditor {
     });
     // Another context's upgrade closes the page's connection; what is pending goes first
     const stop = this.documentClient && typeof this.documentClient.beforeConnectionCloses === 'function'
-      ? this.documentClient.beforeConnectionCloses(() => this._writePendingNow({ beforeClose: true }))
+      ? this.documentClient.beforeConnectionCloses(() => this._writePendingNow())
       : null;
     const win = doc.defaultView;
     if (win) {
@@ -4172,10 +4219,9 @@ class BlockEditor {
    * pages don't run rAF and closing pages don't wait, so the metadata is
    * computed here and the transactions open before this returns.
    * Writes nothing when nothing is pending.
-   * @param {{beforeClose?: boolean}} [options] - `beforeClose` as the page's connection closes
    * @returns {void}
    */
-  _writePendingNow({ beforeClose = false } = {}) {
+  _writePendingNow() {
     const waiting = this._activeSaves()
       .map((entry) => entry.state)
       .filter((state) => !state.written && state.noteId === this.noteId);
@@ -4183,14 +4229,12 @@ class BlockEditor {
     if (!due && waiting.length === 0) return;
 
     const work = due ? this._takeDueWork() : { loaded: false, loadedIsRetry: false, others: [] };
-    for (const copy of work.others) this._rewrite(copy, beforeClose);
+    for (const copy of work.others) this._rewrite(copy);
     if (!work.loaded && waiting.length === 0) return;
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
     const state = this._captureSaveState(isRetry);
-    if (!state || !this._takeBlockSnapshot(state)) return;
-    state.beforeClose = beforeClose;
-    this._writeNow(state);
+    if (state && this._takeBlockSnapshot(state)) this._writeNow(state);
   }
 
   /**
@@ -4198,11 +4242,10 @@ class BlockEditor {
    * that note. It keeps its capture order, so it can't supersede a newer save
    * of the note.
    * @param {EditorSaveState} copy
-   * @param {boolean} [beforeClose=false]
    * @returns {Promise<void>}
    */
-  _rewrite(copy, beforeClose = false) {
-    return this._writeNow({ ...copy, written: false, isRetry: true, beforeClose });
+  _rewrite(copy) {
+    return this._writeNow({ ...copy, written: false, isRetry: true });
   }
 
   /**
@@ -5448,7 +5491,12 @@ class BlockEditor {
     if (snap.title && this.noteData) {
       this.noteData.name = snap.title;
       this.titleEl.textContent = snap.title;
-      await Storage.updateNote(this.noteData);
+      // Onto the note as stored (_storedNote), as restoreSnapshot will write it
+      const stored = await this._storedNote();
+      if (stored) {
+        stored.name = snap.title;
+        await Storage.updateNote(stored);
+      }
     }
 
     this.renderBlocks();

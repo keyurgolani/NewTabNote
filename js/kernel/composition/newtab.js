@@ -45,6 +45,7 @@ export function createNewTabClient(host = legacyHost()) {
 export function createNewTabDocumentClient(kernel, host) {
   return createDocumentClient(kernel, {
     beforeConnectionCloses: flush => host.storage.beforeConnectionCloses(flush),
+    connectionOpen: () => host.storage.openState === 'open',
   });
 }
 

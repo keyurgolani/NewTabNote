@@ -851,6 +851,72 @@ describe('BlockEditor saves keep trash and archive state', () => {
     assert.equal(stored.trashed, undefined);
     assert.equal(stored.trashedAt, undefined);
   });
+
+  /** Refresh insights, with an AI that finds one to-do */
+  async function refreshInsights() {
+    editor.getLLM = () => ({ isConfigured: () => true, extractInsights: async () => ({ todos: ['call'] }) });
+    await runUntil(env, editor.refreshInsights());
+    return Storage.getNote('A');
+  }
+
+  it('Refresh insights after a save keeps a trash made elsewhere, and writes the insights', async () => {
+    await storeFlags({ trashed: true, trashedAt: 42, archived: false, archivedAt: null });
+    await saveEdit('edited after the trash, long enough for insights');
+    const stored = await refreshInsights();
+    assert.deepEqual([stored.trashed, stored.trashedAt], [true, 42]);
+    assert.deepEqual(plain(stored.insights), { todos: ['call'] });
+    assert.equal(typeof stored.lastInsightsExtractedAt, 'number');
+  });
+
+  it('Refresh insights after a save keeps an archive made elsewhere', async () => {
+    await storeFlags({ archived: true, archivedAt: 7 });
+    await saveEdit('edited after the archive, long enough for insights');
+    const stored = await refreshInsights();
+    assert.deepEqual([stored.archived, stored.archivedAt], [true, 7]);
+  });
+
+  it('a snapshot revert keeps a trash made elsewhere, and writes the snapshot title', async () => {
+    await storeFlags({ trashed: true, trashedAt: 42, archived: false, archivedAt: null });
+    await saveEdit('edited after the trash');
+    await runUntil(env, editor._revertToSnapshot({
+      timestamp: 1, title: 'From the snapshot', blocks: [{ id: 'a1', type: 'text', content: 'restored' }],
+    }));
+    const stored = await Storage.getNote('A');
+    assert.deepEqual([stored.trashed, stored.trashedAt, stored.name], [true, 42, 'From the snapshot']);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'restored' });
+  });
+
+  it('Refresh insights on a note deleted meanwhile leaves it deleted', async () => {
+    await saveEdit('edited before the delete, long enough for insights');
+    await Storage.permanentlyDeleteNote('A');
+    assert.equal(await refreshInsights(), undefined);
+  });
+});
+
+describe('BlockEditor template inserts (#12)', () => {
+  it("inserts a template's blocks in the order 1.4.x read them, by id, which R1 keeps", async () => {
+    const { env } = await setup();
+    // The template's blocks were dragged around: t1 shows second, t2 first
+    const Storage = env.get('Storage');
+    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    await Storage.saveElements([block('t1', 'C', 1, 'second shown'), block('t2', 'C', 0, 'first shown')]);
+    await Storage.deleteElements(['c1']);
+    const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
+    await editor.loadNote('A');
+    // The caret is in A's first block, where "/template" was typed
+    const blockEl = { dataset: { id: 'a1' }, querySelector: () => ({ textContent: '/template' }) };
+    editor.doc.defaultView.getSelection = () => ({
+      rangeCount: 1,
+      getRangeAt: () => ({ startContainer: { parentElement: { closest: () => blockEl } } }),
+    });
+    await runUntil(env, editor.selectTemplateItem('C'));
+    await runUntil(env, editor.flushSave());
+
+    const inserted = editor.blocks.slice(1, 3).map((b) => b.content);
+    assert.deepEqual(inserted, ['second shown', 'first shown']);
+    const stored = (await Storage.getElementsByNote('A')).sort((a, b) => a.order - b.order).map((b) => b.content);
+    assert.deepEqual(plain(stored).slice(1, 3), ['second shown', 'first shown'], 'and saves them in that order');
+  });
 });
 
 describe('BlockEditor save hold (import)', () => {
@@ -1188,6 +1254,47 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     assert.ok(editor.root.querySelector('.reload-notice'), 'the next edit shows the reload notice');
     assert.equal(editor._retryPending, false, 'and nothing retries');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed just before the upgrade' });
+  });
+
+  it('a save under way when another context upgrades is reported saved, and the next edit gets the notice', async () => {
+    const { env, Storage, editor, feedback } = await newTabOnA();
+    // The upgrade comes in the same task the save opens its transaction in
+    const client = env.documentClient;
+    const realSave = client.saveContent;
+    let upgraded = null;
+    client.saveContent = (save) => {
+      const answer = realSave(save);
+      client.saveContent = realSave;
+      upgraded = upgradeElsewhere(env);
+      return answer;
+    };
+    type(editor, 'typed and saving as the upgrade comes');
+    env.clock.tick(500);
+    env.frames();
+    await runUntil(env, editor.flushSave());
+    await upgraded;
+    assert.equal(Storage.openState, 'version-changed');
+
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
+    assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
+    assert.equal(editor.root.querySelector('.reload-notice'), null);
+    assert.equal(editor._retryPending, false);
+
+    type(editor, 'typed after it');
+    await runUntil(env, editor.flushSave());
+    assert.ok(editor.root.querySelector('.reload-notice'));
+    assert.equal(feedback.statuses.at(-1), 'Not saved');
+    assert.equal(editor._retryPending, false);
+  });
+
+  it('switching notes after another context upgraded keeps the note on screen and shows the reload notice', async () => {
+    const { env, editor, feedback } = await newTabOnA();
+    await upgradeElsewhere(env);
+    assert.equal(await runUntil(env, editor.loadNote('B')), false, 'the switch reads nothing');
+    assert.equal(editor.noteId, 'A', 'the note stays on screen');
+    assert.ok(editor.root.querySelector('.reload-notice'), 'and the notice says why');
+    assert.equal(feedback.statuses.at(-1), 'Not saved');
+    assert.equal(editor._retryPending, false);
   });
 
   it('with nothing pending, the upgrade writes nothing before the connection closes', async () => {

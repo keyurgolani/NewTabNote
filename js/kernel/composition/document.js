@@ -42,6 +42,9 @@
  * @property {() => Promise<NoteRecord[]>} templates
  * @property {(noteId: string) => Promise<BlockRecord[]>} blocksOf - a note's blocks in note order
  * @property {() => string} newId - an id for a note or block the editor makes
+ * @property {() => boolean} connectionOpen
+ *   Whether the page's connection to the database is open now, so a save started now opens
+ *   its first transaction, which a closing connection lets finish
  * @property {(flush: () => void) => () => void} beforeConnectionCloses
  *   Runs `flush` when another context upgrades the database, before the page's connection
  *   closes, so an editor writes what it has pending: a save it opens then commits. Answers a
@@ -50,11 +53,17 @@
 
 /**
  * @param {Client} client - the page's kernel client
- * @param {{beforeConnectionCloses?: DocumentClient['beforeConnectionCloses']}} [connection]
- *   What the page's connection runs before it closes for another context's upgrade
+ * @param {{
+ *   beforeConnectionCloses?: DocumentClient['beforeConnectionCloses'],
+ *   connectionOpen?: DocumentClient['connectionOpen'],
+ * }} [connection] What the page's connection runs before it closes for another context's
+ *   upgrade, and whether it's open
  * @returns {DocumentClient}
  */
-export function createDocumentClient(client, { beforeConnectionCloses = () => () => {} } = {}) {
+export function createDocumentClient(
+  client,
+  { beforeConnectionCloses = () => () => {}, connectionOpen = () => true } = {},
+) {
   /**
    * A query's data, or `none` when it found nothing. Its kernel is ready once the page has
    * started, which the read waits for.
@@ -111,5 +120,7 @@ export function createDocumentClient(client, { beforeConnectionCloses = () => ()
     newId: () => client.ids.next(),
 
     beforeConnectionCloses,
+
+    connectionOpen,
   });
 }
