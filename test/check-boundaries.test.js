@@ -475,7 +475,7 @@ describe('eslint.config.mjs boundary rules', () => {
     assert.equal(code, 1, output);
     for (const expected of [
       'js/sidebar-utils.js: 1 indexedDB hit no ledger row covers',
-      'js/editor.js: 9 Storage hits, 8 allowed by the ledger',
+      'js/editor.js: 1 Storage hit no ledger row covers',
       'js/search.js: 1 window.app hit no ledger row covers',
       'js/search.js: 1 fetch hit no ledger row covers',
       'js/search.js: 1 Storage hit no ledger row covers',
