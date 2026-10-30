@@ -702,7 +702,11 @@ describe('an empty CanvasTabDB at or above the version a run opens at', () => {
 
   // The lead's condition: a database with even one store is never deleted, at any version
   for (const version of [1, 2, 7, 8, 9, 10, 12, 40]) {
-    for (const stores of [{ canvases: 'id' }, { mystery: 'id' }, { meta: 'key' }]) {
+    for (const stores of /** @type {Record<string, string>[]} */ ([
+      { canvases: 'id' },
+      { mystery: 'id' },
+      { meta: 'key' },
+    ])) {
       it(`at version ${version} with only ${Object.keys(stores)[0]}: never deleted, and its record kept`, async () => {
         const of = await made(version, stores);
         await run(of);
