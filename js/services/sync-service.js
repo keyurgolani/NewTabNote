@@ -230,13 +230,11 @@ class WebDAVProvider extends BaseSyncProvider {
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
- * @param {EventBus} deps.eventBus
  * @param {Logger} deps.logger
  */
 class SyncService {
-  constructor({ storage, eventBus, logger }) {
+  constructor({ storage, logger }) {
     this.storage = storage;
-    this.eventBus = eventBus;
     this.logger = logger;
 
     /** @type {SyncState} */

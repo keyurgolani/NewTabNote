@@ -445,7 +445,7 @@ describe('eslint.config.mjs boundary rules', () => {
     append('js/core/logger.js', "import 'kernel/adapters/legacy/notes.js';");
     // A URL of another protocol names no file in the package, so it isn't an adapter
     // import, though core may not import one either
-    append('js/core/event-bus.js', "import 'https://cdn.example.test/js/kernel/adapters/legacy/notes.js';");
+    append('js/ui/confirm-dialog.js', "import 'https://cdn.example.test/js/kernel/adapters/legacy/notes.js';");
     write('js/kernel/core/probe.js', [
       "import '../../storage.js';",
       "import 'https://cdn.example.test/valibot.js';",
@@ -502,7 +502,7 @@ describe('eslint.config.mjs boundary rules', () => {
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
-    assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/core\/event-bus\.js/);
+    assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/ui\/confirm-dialog\.js/);
     assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 25, output);
   });
 

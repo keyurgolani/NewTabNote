@@ -15,7 +15,6 @@
 // Core infrastructure
 import './utils.js';
 import './core/storage-error.js';
-import './core/event-bus.js';
 import './core/dom-refs.js';
 import './core/logger.js';
 

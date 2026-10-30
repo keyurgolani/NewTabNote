@@ -35,7 +35,6 @@ const isStrict = process.argv.includes('--strict');
 const JS_FILES = [
   'js/utils.js',
   'js/core/storage-error.js',
-  'js/core/event-bus.js',
   'js/core/dom-refs.js',
   'js/core/logger.js',
   'js/utils/sanitize.js',

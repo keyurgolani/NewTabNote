@@ -4,13 +4,11 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
- * @param {EventBus} deps.eventBus
  * @param {Logger} deps.logger
  */
 class GraphView {
-  constructor({ storage, eventBus, logger }) {
+  constructor({ storage, logger }) {
     this.storage = storage;
-    this.eventBus = eventBus;
     this.logger = logger;
 
     this.isOpen = false;

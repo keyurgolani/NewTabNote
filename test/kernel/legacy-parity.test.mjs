@@ -733,7 +733,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
     // Storage and TabController write, and the kernel reads
     await storage.setSetting('font', 'serif');
-    const tabs = new TabController({ storage, eventBus: null, domRefs: null, logger: null });
+    const tabs = new TabController({ storage, domRefs: null, logger: null });
     tabs.openTabs = [
       { noteId: 'n3', name: 'Three' },
       { noteId: 'n4', name: 'Four' },
