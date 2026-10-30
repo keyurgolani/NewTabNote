@@ -25,7 +25,9 @@
  * only.
  *
  * Every run can be cut off anywhere and run again. A point resumes from its progress record,
- * a verified one is reused, and a database whose `versionchange` committed but whose receipt
+ * a verified one is reused while the live stores, read now, still match its manifest (count,
+ * ID set, content hash) and remade when they don't, its pin moving to the new one, and the
+ * point is verified as its record on disk reads, and a database whose `versionchange` committed but whose receipt
  * didn't reads as `current` and gets the receipt, since the second transaction's check is the
  * same read. A run that finds nothing to do writes nothing, receipts included.
  *

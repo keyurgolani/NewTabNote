@@ -589,8 +589,7 @@ export async function keepVerified({ recovery, point, clock, io }) {
   const sameKind = others.filter(other => other.kind === point.kind && other.status === 'verified');
   const replaced = sameKind.filter(other => other.target === point.target);
   const pinnedElsewhere = sameKind.some(other => other.pinned && other.target !== point.target);
-  const pinned =
-    point.kind === 'pre-migration' && (replaced.some(other => other.pinned) || !pinnedElsewhere);
+  const pinned = point.kind === 'pre-migration' && (replaced.some(other => other.pinned) || !pinnedElsewhere);
   /** @type {Point} */
   const verified = { ...point, status: 'verified', verifiedAt: clock.now(), pinned };
   await savePoint(recovery, verified, null);

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { committed } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import { committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES, STEPS, legacySchema } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { detectShape, inspect, openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
@@ -590,6 +590,31 @@ describe('a verified point reused only while it matches the live data (review R6
     assert.ok(exported.canvases.some(note => /** @type {any} */ (note).id === 'written-after-point'));
   });
 
+  it("verification reads the point's record from disk, not the copy the run kept in memory (probe E)", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const outcome = await run(of, {
+      hooks: {
+        between: async label => {
+          if (label !== 'copied') return;
+          // The stored manifest no longer says what the copy read
+          const db = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+          const tx = db.transaction('points', 'readwrite');
+          const done = committed(tx);
+          const request = tx.objectStore('points').get(`pre-migration-${NOW}`);
+          request.onsuccess = () => {
+            const point = request.result;
+            point.manifest.canvases.count += 1;
+            tx.objectStore('points').put(point);
+          };
+          await done;
+          db.close();
+        },
+      },
+    });
+    assert.deepStrictEqual([outcome.status, outcome.failure], ['failed', { code: 'recovery-point-unverified' }]);
+    assert.equal((await inspect(of.real)).version, 8);
+  });
+
   it('a point that still matches is reused as it is, with nothing copied again', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     await run(of, {
@@ -602,7 +627,9 @@ describe('a verified point reused only while it matches the live data (review R6
     const before = of.faults.transactions.length;
     const second = await run(of);
     assert.equal(second.recoveryPointId, `pre-migration-${NOW}`);
-    const copies = of.faults.transactions.slice(before).filter(tx => tx.names.includes('rows') && tx.mode === 'readwrite');
+    const copies = of.faults.transactions
+      .slice(before)
+      .filter(tx => tx.names.includes('rows') && tx.mode === 'readwrite');
     assert.deepStrictEqual(copies, []);
   });
 });
@@ -640,7 +667,9 @@ describe('an empty CanvasTabDB at or above the version a run opens at', () => {
       const expected = expectedFor('none.basic');
       const dumped = await dump(of, expected.header);
       const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));
-      const want = /** @type {any} */ (asDumped(expected).databases.find(candidate => candidate.name === 'CanvasTabDB'));
+      const want = /** @type {any} */ (
+        asDumped(expected).databases.find(candidate => candidate.name === 'CanvasTabDB')
+      );
       assert.deepStrictEqual(
         db.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
         want.stores.filter((/** @type {any} */ store) => store.name !== 'migrations'),
@@ -688,6 +717,34 @@ describe('an empty CanvasTabDB at or above the version a run opens at', () => {
       });
     }
   }
+
+  it('the zero-store check is made again on the connection that deletes: a store that appeared since inspection stops it', async () => {
+    const of = await made(9);
+    const outcome = await run(of, {
+      hooks: {
+        between: async label => {
+          if (label !== 'inspected') return;
+          // Something gives the database a store after the run read it as empty
+          await new Promise((resolve, reject) => {
+            const request = of.real.open('CanvasTabDB', 10);
+            request.onupgradeneeded = () =>
+              request.result.createObjectStore('mystery', { keyPath: 'id' }).put({ id: 'kept', text: 'still here' });
+            request.onsuccess = () => {
+              request.result.close();
+              resolve(undefined);
+            };
+            request.onerror = () => reject(request.error);
+          });
+        },
+      },
+    });
+    assert.deepStrictEqual([outcome.status, outcome.failure], ['failed', { code: 'shape-changed' }]);
+    assert.deepStrictEqual(of.faults.deletes, []);
+    assert.deepStrictEqual(
+      recordsIn(await dump(of), 'CanvasTabDB', 'mystery').map(record => record.value.text),
+      ['still here'],
+    );
+  });
 
   it('an empty database below 9 upgrades in place, and nothing is deleted', async () => {
     const of = await made(1);

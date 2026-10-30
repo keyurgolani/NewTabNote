@@ -36,6 +36,26 @@ function filesOf(kind) {
 
 const ALL = [...filesOf('synthesized'), ...filesOf('recorded'), ...filesOf('expected')];
 
+/**
+ * What's wrong with a set of expected files: each must be `<fixture-id>.v<target>` for a
+ * synthesized or recorded fixture, and every synthesized fixture needs its `.v9`
+ * @param {string[]} expected
+ * @param {string[]} synthesized
+ * @param {string[]} recorded
+ * @returns {string[]}
+ */
+function expectedProblems(expected, synthesized, recorded) {
+  const fixtures = new Set([...synthesized, ...recorded]);
+  const problems = [];
+  for (const id of expected) {
+    const match = /^(.+)\.v(\d+)$/.exec(id);
+    if (!match) problems.push(`${id} isn't <fixture-id>.v<target>`);
+    else if (!fixtures.has(match[1])) problems.push(`${id} names no fixture under synthesized/ or recorded/`);
+  }
+  for (const id of synthesized) if (!expected.includes(`${id}.v9`)) problems.push(`${id} has no expected file`);
+  return problems;
+}
+
 /** Secret-looking strings; a canary placeholder is the only way a secret slot is written */
 const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{16,}/,
@@ -179,11 +199,20 @@ describe('every fixture file', () => {
     });
   }
 
-  it('every synthesized fixture has an expected file, and every expected file a fixture', () => {
+  it('every synthesized fixture has an expected file, and every expected file a fixture, synthesized or recorded', () => {
     const synthesized = filesOf('synthesized').map(([, f]) => f.header.id);
-    const expected = filesOf('expected').map(([, f]) => f.header.id.replace(/\.v9$/, ''));
-    assert.deepStrictEqual(expected, synthesized);
+    const recorded = filesOf('recorded').map(([, f]) => f.header.id);
+    const expected = filesOf('expected').map(([, f]) => f.header.id);
+    assert.deepStrictEqual(expectedProblems(expected, synthesized, recorded), []);
     assert.ok(synthesized.length >= 15);
+  });
+
+  it("that check takes an expected file for a recorded fixture (#28 slice 3's), and refuses one for no fixture", () => {
+    assert.deepStrictEqual(expectedProblems(['v8.basic.v9', 'v8.v1.4.0.v9'], ['v8.basic'], ['v8.v1.4.0']), []);
+    assert.deepStrictEqual(expectedProblems(['v8.basic.v9', 'v8.gone.v9'], ['v8.basic'], []), [
+      'v8.gone.v9 names no fixture under synthesized/ or recorded/',
+    ]);
+    assert.deepStrictEqual(expectedProblems([], ['v8.basic'], []), ['v8.basic has no expected file']);
   });
 
   it("a recorded fixture's fields are covered by the synthesized fixture of its shape (none recorded yet: #28 slice 3)", () => {
@@ -280,10 +309,28 @@ describe('the loader and the dumper', () => {
       odd: { $type: 'not a tag' },
       nan: NaN,
       negative: -0,
+      // eslint-disable-next-line no-sparse-arrays
+      sparse: [1, , 3],
+      labelled: Object.assign([4, 5], { label: 'kept' }),
     };
     const encoded = JSON.parse(JSON.stringify(await encodeValue(value)));
     assert.deepStrictEqual(await encodeValue(decodeValue(encoded)), encoded);
     assert.deepStrictEqual(encoded.odd, { $type: 'Object', value: { $type: 'not a tag' } });
+    assert.deepStrictEqual(encoded.sparse, { $type: 'Array', length: 3, items: { 0: 1, 2: 3 }, props: {} });
+    assert.deepStrictEqual(encoded.labelled, {
+      $type: 'Array',
+      length: 2,
+      items: { 0: 4, 1: 5 },
+      props: { label: 'kept' },
+    });
+    const decoded = decodeValue(encoded);
+    assert.equal(decoded.sparse.length, 3);
+    assert.equal(1 in decoded.sparse, false, 'the hole is a hole, not undefined');
+    assert.equal(decoded.labelled.label, 'kept');
+    // And the record hash, which tells a hole from undefined, reads the decoded value as the original
+    const crypto = /** @type {any} */ ((await import('node:crypto')).webcrypto);
+    const { recordSha256 } = await import('../../js/kernel/adapters/indexeddb/records.js');
+    assert.equal(await recordSha256(decoded, crypto), await recordSha256(value, crypto));
   });
 });
 

@@ -113,7 +113,9 @@ async function firstRow(of, pointId, store) {
 async function rowsOf(of, pointId, store) {
   const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
   const tx = recovery.transaction(ROWS_STORE, 'readonly');
-  const request = tx.objectStore(ROWS_STORE).getAll(KeyRange.bound([pointId, store], [pointId, `${store}\u0000`], false, true));
+  const request = tx
+    .objectStore(ROWS_STORE)
+    .getAll(KeyRange.bound([pointId, store], [pointId, `${store}\u0000`], false, true));
   const rows = await new Promise(resolve => {
     request.onsuccess = () => resolve(request.result);
   });
@@ -261,13 +263,13 @@ describe('verification', () => {
       if (rewrites) await damage(row, /** @type {any} */ (null), rows);
       /** @type {any[]} */
       const rehashed = [];
-      for (const changed of rows.pending) rehashed.push({ ...changed, sha256: await recordSha256(changed.value, crypto) });
+      for (const changed of rows.pending)
+        rehashed.push({ ...changed, sha256: await recordSha256(changed.value, crypto) });
       await tamper(of, target => {
         if (rewrites) {
           for (const key of rows.removed) target.delete(key);
           for (const changed of rehashed) target.put(changed);
-        }
-        else damage(row, target, rows);
+        } else damage(row, target, rows);
       });
       const reopened = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
       assert.deepStrictEqual(await verifyPoint({ recovery: reopened, point, io }), { ok: false, code });
@@ -419,7 +421,11 @@ describe('which points stay', () => {
   it('the first verified pre-migration point is pinned; later ones keep only the newest beside it', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     // Before steps 9, 10, and 11, as #17's later PRs will make them
-    for (const [id, target] of /** @type {const} */ ([['first', 9], ['second', 10], ['third', 11]])) {
+    for (const [id, target] of /** @type {const} */ ([
+      ['first', 9],
+      ['second', 10],
+      ['third', 11],
+    ])) {
       const { recovery, point } = await copied(of, { id, target });
       const ticking = { now: () => NOW + ['first', 'second', 'third'].indexOf(id) };
       await keepVerified({ recovery, point: { ...point, createdAt: ticking.now() }, clock: ticking, io });
