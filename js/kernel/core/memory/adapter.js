@@ -19,6 +19,14 @@
  *
  * The contract suite runs against it, and `beforeWrite` lets a test make a write fail. #17
  * persists what it keeps: revisions, outcomes, and conflicts.
+ *
+ * Given #13's in-memory ledger and commit log (memory/ledger.js, memory/commit-log.js), it
+ * writes them in the task that commits, as #17 writes its idempotency record and change-log
+ * entry in the commit's transaction: a commit that changes notes or folders appends one change
+ * per entity, with its revision, and its committed outcome carries that commitSeq. Then the
+ * ledger keeps each committed or conflict outcome under its commandId. A resend appends and
+ * records nothing again, and a bulk command's reservation stays the adapter's own, so its key
+ * reads as absent there and each item's reads under its own.
  */
 
 import { clone } from '../contracts/clone.js';
@@ -40,6 +48,9 @@ import { fingerprintOf } from './fingerprint.js';
 /** @typedef {import('../ports/repository.js').ReadTx} ReadTx */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Work} Work */
+/** @typedef {import('../ports/commit-log.js').Change} Change */
+/** @typedef {import('./commit-log.js').MemoryCommitLog} MemoryCommitLog */
+/** @typedef {import('./ledger.js').MemoryLedger} MemoryLedger */
 
 /**
  * A conflict the adapter kept: the command that lost, and the revision it lost to. The
@@ -55,6 +66,8 @@ import { fingerprintOf } from './fingerprint.js';
  * @property {(target: StoreName | SettingsArea, key: string) => void} [beforeWrite]
  *   Called before each write; a throw fails the command, as a failing IndexedDB request
  *   would. Throw an UnavailableError to choose the cause.
+ * @property {MemoryLedger} [ledger] - where it keeps each committed and conflict outcome too
+ * @property {MemoryCommitLog} [commitLog] - where it appends each commit's changed entities
  */
 
 /** @typedef {KernelAdapter & {conflicts: () => KeptConflict[]}} MemoryAdapter */
@@ -77,7 +90,7 @@ const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * @param {MemoryAdapterOptions} [options]
  * @returns {MemoryAdapter}
  */
-export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
+export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog } = {}) {
   /** @type {Map<StoreName, Map<string, Record<string, unknown>>>} */
   const stores = new Map(/** @type {StoreName[]} */ (Object.keys(STORES)).map(name => [name, new Map()]));
   /** @type {Map<string, number>} */
@@ -285,6 +298,40 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
   };
 
   /**
+   * The entities a committed command changed, for the commit log: notes and folders, each at
+   * its revision, or 0 for one that has none. Settings and maintenance change no entity.
+   * @param {Work} work
+   * @param {Outcome} outcome
+   * @returns {Change[]}
+   */
+  const changesOf = (work, outcome) => {
+    if (outcome.kind !== 'committed') return [];
+    const { aggregate } = COMMANDS[work.command.type];
+    if (aggregate !== 'note' && aggregate !== 'folder') return [];
+    /** @type {StoreName} */
+    const store = aggregate === 'note' ? 'notes' : 'folders';
+    return outcome.changedIds.map(entityId => ({
+      entityType: aggregate,
+      entityId,
+      revision: revisions.get(revisionKey(store, entityId)) ?? 0,
+    }));
+  };
+
+  /**
+   * Writes the commit log and the ledger for an outcome the adapter keeps, and answers it with
+   * its commitSeq when the log took a change
+   * @param {Work} work
+   * @param {Outcome} outcome
+   * @returns {Outcome}
+   */
+  const log = (work, outcome) => {
+    const changes = commitLog ? changesOf(work, outcome) : [];
+    const kept = changes.length > 0 ? { ...outcome, commitSeq: commitLog?.append(changes) } : outcome;
+    if (kept.kind === 'committed' || kept.kind === 'conflict') ledger?.record(work.command, kept);
+    return kept;
+  };
+
+  /**
    * What the commandId already answered, or `idempotency-key-reuse` when it came with
    * another command. Undefined when it has no record, or a bulk command's record, which keeps
    * no outcome.
@@ -328,6 +375,7 @@ export function createMemoryAdapter({ beforeWrite = () => {} } = {}) {
           return { outcome: unavailableFrom(error), replayed: false };
         }
         if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
+          outcome = log(work, outcome);
           outcomes.set(work.commandId, { fingerprint: fingerprintOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };
