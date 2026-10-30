@@ -128,7 +128,6 @@
         "Cannot find name 'DomRefs'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ResizablePanel'.": 1,
-        "Cannot find name 'SidebarUtils'.": 2,
         "Cannot find name 'confirmDialog'.": 1,
         "Cannot find name 'sanitizeHtml'.": 4
       },
@@ -315,14 +314,8 @@
         "Property 'clientY' does not exist on type 'Event'.": 1,
         "Property 'closest' does not exist on type 'EventTarget'.": 5,
         "Property 'dataset' does not exist on type 'Element'.": 2,
-        "Property 'deleteElements' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'getElementsByNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'getSnapshots' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'saveElement' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'saveSnapshot' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
         "Property 'src' does not exist on type 'Element'.": 1,
-        "Property 'tagName' does not exist on type 'EventTarget'.": 2,
-        "Property 'updateNote' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+        "Property 'tagName' does not exist on type 'EventTarget'.": 2
       },
       "TS2345": {
         "Argument of type 'string' is not assignable to parameter of type '\"rewrite\" | \"expand\" | \"summarize\" | \"translate\"'.": 1

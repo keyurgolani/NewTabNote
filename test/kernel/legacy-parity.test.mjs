@@ -881,7 +881,14 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     const made = legacyEnv.plain(await viaStorage.storage.saveSnapshot('n1', blocks, 'Plan'));
     assertCommitted(
-      await kernel.execute({ type: 'saveSnapshot', commandId: 'c1', noteId: 'n1', snapshotId: made.id, blocks, title: 'Plan' }),
+      await kernel.execute({
+        type: 'saveSnapshot',
+        commandId: 'c1',
+        noteId: 'n1',
+        snapshotId: made.id,
+        blocks,
+        title: 'Plan',
+      }),
     );
     const kept = await snapshotsIn(viaKernel);
     assert.deepEqual(kept, await snapshotsIn(viaStorage));
@@ -908,12 +915,13 @@ describe("the kernel's copies of production rules, run both ways", () => {
     const { storage } = viaStorage;
     // 1.4.x's _revertToSnapshot, with the editor's blocks as its last save stored them
     const snap = legacyEnv.plain((await storage.getSnapshots('n1'))[0]);
-    const current = legacyEnv.plain(await storage.getElementsByNote('n1')).map(
-      (/** @type {any} */ { canvasId, order, ...serialized }) => serialized,
-    );
+    const current = legacyEnv
+      .plain(await storage.getElementsByNote('n1'))
+      .map((/** @type {any} */ { canvasId, order, ...serialized }) => serialized);
     const pre = legacyEnv.plain(await storage.saveSnapshot('n1', current, 'Now'));
     await storage.deleteElements(['a', 'b']);
-    for (let i = 0; i < snap.blocks.length; i++) await storage.saveElement({ ...snap.blocks[i], canvasId: 'n1', order: i });
+    for (let i = 0; i < snap.blocks.length; i++)
+      await storage.saveElement({ ...snap.blocks[i], canvasId: 'n1', order: i });
     const stored = legacyEnv.plain(await storage.getNote('n1'));
     await storage.updateNote({ ...stored, name: snap.title });
 
@@ -956,16 +964,23 @@ describe("the kernel's copies of production rules, run both ways", () => {
     // refreshNoteMetadataAfterInsert
     const startOrder = 1;
     for (const element of legacyEnv.plain(await storage.getElementsByNote('n1'))) {
-      if ((element.order || 0) >= startOrder) await storage.saveElement({ ...element, order: element.order + reply.length });
+      if ((element.order || 0) >= startOrder)
+        await storage.saveElement({ ...element, order: element.order + reply.length });
     }
     const now = Date.now();
     await storage.saveElements(
-      reply.map((block, index) => ({ ...block, canvasId: 'n1', order: startOrder + index, createdAt: now, updatedAt: now })),
+      reply.map((block, index) => ({
+        ...block,
+        canvasId: 'n1',
+        order: startOrder + index,
+        createdAt: now,
+        updatedAt: now,
+      })),
     );
     const note = legacyEnv.plain(await storage.getNote('n1'));
-    const blocks = legacyEnv.plain(await storage.getElementsByNote('n1')).sort(
-      (/** @type {any} */ left, /** @type {any} */ right) => (left.order || 0) - (right.order || 0),
-    );
+    const blocks = legacyEnv
+      .plain(await storage.getElementsByNote('n1'))
+      .sort((/** @type {any} */ left, /** @type {any} */ right) => (left.order || 0) - (right.order || 0));
     Object.assign(note, SidebarUtils.buildNoteSaveMetadata(blocks));
     await storage.updateNote(note);
     const text = blocks
@@ -974,7 +989,9 @@ describe("the kernel's copies of production rules, run both ways", () => {
       .join('\n');
     await storage.updateNoteLinks('n1', Utils.extractWikiLinks(text));
 
-    assertCommitted(await kernel.execute({ type: 'insertBlocks', commandId: 'c1', noteId: 'n1', blocks: reply, atOrder: 1 }));
+    assertCommitted(
+      await kernel.execute({ type: 'insertBlocks', commandId: 'c1', noteId: 'n1', blocks: reply, atOrder: 1 }),
+    );
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
     /** @param {LegacyContext} context */
@@ -995,13 +1012,31 @@ describe("the kernel's copies of production rules, run both ways", () => {
     /** @type {Array<Array<Record<string, unknown>>>} */
     const cases = [
       [],
-      [{ type: 'text', content: '' }, { type: 'text', content: '<p>Hello&nbsp;<b>there</b><br>friend</p>' }],
+      [
+        { type: 'text', content: '' },
+        { type: 'text', content: '<p>Hello&nbsp;<b>there</b><br>friend</p>' },
+      ],
       [{ type: 'toggle', content: '<i>Open</i>', children: 'inside' }],
       [{ type: 'bookmark', title: 'A page', description: 'About it', url: 'https://example.test/' }],
       [{ type: 'equation', equation: 'E = mc^2' }],
-      [{ type: 'table', tableData: [['<b>a</b>', ''], ['c', 'd']] }],
-      [{ type: 'file', fileName: 'notes.pdf' }, { type: 'video', videoUrl: 'https://example.test/v' }],
-      [{ type: 'todo', content: 'one', checked: true }, { type: 'todo', content: 'two' }, { type: 'todo', checked: true }],
+      [
+        {
+          type: 'table',
+          tableData: [
+            ['<b>a</b>', ''],
+            ['c', 'd'],
+          ],
+        },
+      ],
+      [
+        { type: 'file', fileName: 'notes.pdf' },
+        { type: 'video', videoUrl: 'https://example.test/v' },
+      ],
+      [
+        { type: 'todo', content: 'one', checked: true },
+        { type: 'todo', content: 'two' },
+        { type: 'todo', checked: true },
+      ],
       [{ type: 'text', content: long }],
       [{ type: 'divider' }, { type: 'image', imageUrl: 'data:' }],
     ];
