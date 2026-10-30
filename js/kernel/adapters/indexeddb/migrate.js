@@ -115,6 +115,11 @@ export const MIGRATE_LOCK = 'storage.migrate';
  * @property {() => 'running' | 'blocked-upgrade' | 'done'} state
  */
 
+/**
+ * Where a run is, and the shape it found once it has read it
+ * @typedef {{phase: 'running' | 'blocked-upgrade' | 'done', shape: Shape['kind'] | null}} RunStatus
+ */
+
 /** The code a database that stays as it is answers with */
 const REFUSALS = Object.freeze({
   'missing-core': 'missing-core-stores',
@@ -316,7 +321,7 @@ async function ensurePoint(options) {
 /**
  * One run, under the lock
  * @param {MigrationOptions} options
- * @param {{phase: 'running' | 'blocked-upgrade' | 'done'}} status
+ * @param {RunStatus} status
  * @returns {Promise<MigrationOutcome>}
  */
 async function migrate(options, status) {
@@ -329,6 +334,7 @@ async function migrate(options, status) {
 
   const inspection = await inspect(indexedDB);
   const shape = detectShape(inspection);
+  status.shape = shape.kind;
   await between('inspected');
 
   /** @type {StructuralStep[]} */
@@ -500,15 +506,15 @@ async function migrate(options, status) {
  */
 export function startMigrations(options) {
   const { logger, openWithinMs = OPEN_WITHIN_MS } = options;
-  /** @type {{phase: 'running' | 'blocked-upgrade' | 'done'}} */
-  const status = { phase: 'running' };
+  /** @type {RunStatus} */
+  const status = { phase: 'running', shape: null };
   /** @type {Promise<MigrationOutcome>} */
   const run =
     options.locks && typeof options.locks.request === 'function'
       ? options.locks.request(MIGRATE_LOCK, { mode: 'exclusive' }, () => migrate(options, status))
       : Promise.resolve(outcome({ status: 'failed', failure: { code: 'locks-unavailable' } }));
   const done = run
-    .catch(error => outcome({ status: 'failed', failure: { code: failureOf(error).code } }))
+    .catch(error => outcome({ status: 'failed', shape: status.shape, failure: { code: failureOf(error).code } }))
     .then(result => {
       status.phase = 'done';
       if (result.status !== 'migrated' && result.status !== 'current') {
