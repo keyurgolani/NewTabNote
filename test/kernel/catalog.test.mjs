@@ -68,6 +68,7 @@ const COMMAND_SAMPLES = {
     preview: 'Line',
     todoProgress: { completed: 0, total: 1 },
     name: 'Plan 3',
+    titleOrigin: 'typed',
     linkedNames: ['Plan 3', 'Elsewhere'],
     expectedRevision: 1,
   },

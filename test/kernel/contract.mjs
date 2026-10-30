@@ -538,6 +538,42 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await searchEntryOf('n1'), entry);
       });
 
+      it('writes a generated title with the blocks and lastAutoTitleAt, leaving titleManuallySet as it was', async () => {
+        await createNote({ noteId: 'n1', name: 'Untitled' });
+        const before = await noteOf('n1');
+        ctx.clock.advance();
+        const outcome = await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: someBlocks('n1', 1),
+            preview: 'Line 0',
+            name: 'Weekly plan',
+            titleOrigin: 'generated',
+          }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['content-saved', ['n1']]);
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          name: 'Weekly plan',
+          lastAutoTitleAt: NOW + 1000,
+          preview: 'Line 0',
+          updatedAt: NOW + 1000,
+        });
+        assert.equal((await searchEntryOf('n1'))?.name, 'Weekly plan');
+        assertRejected(
+          await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: [],
+              name: 'x',
+              titleOrigin: /** @type {any} */ ('pasted'),
+            }),
+          ),
+          'validation',
+          'invalid-command',
+        );
+      });
+
       it('a save with no typed title leaves the stored one, so a rename made elsewhere stays', async () => {
         await createNote({ noteId: 'n1', name: 'Draft' });
         await run(cmd('renameNote', { noteId: 'n1', name: 'Renamed in another tab' }));
