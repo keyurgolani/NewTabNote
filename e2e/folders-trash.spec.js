@@ -242,22 +242,20 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   }));
   const before = await panes();
   await page.evaluate(() => {
-    // Fault injection: the next write that would trash a note fails, as a broken database does
-    const transaction = Storage.transaction.bind(Storage);
-    let armed = true;
-    Storage.transaction = (names, mode) => {
-      const tx = transaction(names, mode);
+    // Fault injection: every write that would trash a note fails, as a broken database's do, on
+    // the page's every connection: the tab's kernel is on #17's adapter since #17 PR 4a, which
+    // runs a transaction an UnknownError aborted once more, and that fails too
+    const transaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function failingTrash(names, mode, options) {
+      const tx = transaction.call(this, names, mode, options);
       const objectStore = tx.objectStore.bind(tx);
       tx.objectStore = name => {
         const store = objectStore(name);
         if (name !== 'canvases') return store;
         const put = store.put.bind(store);
-        store.put = record => {
-          if (armed && record && record.trashed === true) {
-            armed = false;
-            throw new DOMException('A write the test made fail', 'UnknownError');
-          }
-          return put(record);
+        store.put = (record, key) => {
+          if (record && record.trashed === true) throw new DOMException('A write the test made fail', 'UnknownError');
+          return key === undefined ? put(record) : put(record, key);
         };
         return store;
       };

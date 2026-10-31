@@ -487,12 +487,13 @@ describe("a database a newer build upgraded, past this build's version (AC7)", (
     assert.deepEqual(env.chrome.writes(), []);
 
     // The console names what the guard shows, with the outcome's cause and code, and the kernel
-    // logged what Storage threw
+    // logged the refusal #17's adapter opened with, which found the database past this build's
+    // version itself (#17 PR 4a; Storage's coded NEWER_SCHEMA was its cause before)
     const [[, error]] = logged(env, 'error', 'Failed to initialize app:');
     assert.equal(error.message, GUARD_TITLE);
     assert.deepEqual([error.cause.cause, error.cause.code], ['newer-schema', 'version-too-new']);
     const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
-    assert.deepEqual([opened.cause, opened.code, opened.error.cause.code], ['newer-schema', 'version-too-new', 'NEWER_SCHEMA']);
+    assert.deepEqual([opened.cause, opened.code, opened.error.name], ['newer-schema', 'version-too-new', 'UnavailableError']);
   });
 
   it('the popup shows the guard with one Open new tab button and disables quick note', async () => {
@@ -740,12 +741,15 @@ describe('background capture on a version-8 database', () => {
 });
 
 /**
- * The database's state App reads, as the new tab's root makes it from the page's Storage
+ * The database's state App reads, as the new tab's root makes it from its adapter (#17's since
+ * #17 PR 4a), which opens the page's database as it is
  * @returns {Promise<{openState: string, missingStores: readonly string[]}>}
  */
 async function storageStateOf(env) {
-  const { createNewTabStorageState } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-  return createNewTabStorageState({ storage: env.get('Storage') });
+  const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  const adapter = root.createNewTabAdapter(root.newTabHost());
+  await adapter.open();
+  return root.createNewTabStorageState(adapter);
 }
 
 /**
