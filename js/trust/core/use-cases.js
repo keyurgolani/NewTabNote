@@ -17,7 +17,14 @@
  */
 
 import * as v from '../../lib/valibot/index.mjs';
-import { committed, failedFrom, ready, rejected, unavailableFrom } from '../../kernel/core/contracts/outcomes.js';
+import {
+  committed,
+  failedFrom,
+  ready,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../../kernel/core/contracts/outcomes.js';
 import { effectiveStatus, runCheck } from './checks.js';
 import { buildDiagnostics } from './diagnostics.js';
 import { payload as raisePayload } from './operations/recovery-raise.js';
@@ -127,9 +134,10 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
   };
 
   /**
-   * Runs one provider's check and stores what it found
+   * Runs one provider's check and stores what it found. Answers its receipt, or null when the
+   * store wouldn't take it (the storage incident counts that).
    * @param {ProviderInfo} provider
-   * @returns {Promise<HealthReceipt>}
+   * @returns {Promise<HealthReceipt | null>}
    */
   const verifyOne = async provider => {
     const loaded = await registry.runtime.load(provider.ref);
@@ -157,8 +165,10 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         ...(typeof exception === 'string' ? { exception } : {}),
       });
     }
-    const receipt = await records.record(run.receipt);
+    const recorded = await records.record(run.receipt);
     for (const fault of run.faults) await records.raise(fault);
+    if (!recorded.recorded) return null;
+    const { receipt } = recorded;
     if (receipt.status === 'verified') {
       const still = run.faults.map(fault => incidentKey(fault.providerId, fault.faultCode, fault.subjectId));
       for (const incident of await records.resolve(provider.id, still)) {
@@ -203,7 +213,8 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         /** @type {TrustSummary} */
         const summary = {
           worstCore: worstStatus(core.map(({ status }) => status)),
-          capture: atRisk ? 'at-risk' : safe ? 'safe' : 'unknown',
+          // While writes fail, nothing proves capture safe
+          capture: atRisk ? 'at-risk' : safe && records.state() !== 'fallback' ? 'safe' : 'unknown',
           actionRequired: needsAction.length,
           route: atRisk || storageDown ? 'recovery' : 'trust',
           records: records.state(),
@@ -274,11 +285,15 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       try {
         /** @type {string[]} */
         const changed = [];
+        let unrecorded = 0;
         for (const provider of chosen) {
           const one = () => verifyOne(provider);
           const receipt = locks ? await locks.request(`trust.check.${provider.id}`, one) : await one();
-          changed.push(receipt.id);
+          if (receipt) changed.push(receipt.id);
+          else unrecorded++;
         }
+        // A check whose receipt the store wouldn't take is never reported as recorded
+        if (unrecorded > 0) return unavailable('storage', 'not-recorded', true);
         return committed('trust-verified', changed, changed.length === 0 ? { severity: 'info' } : {});
       } catch (error) {
         return unavailableFrom(error);
@@ -294,7 +309,10 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       if (!checked.success) return rejected('validation', 'invalid-payload');
       const { type, commandId, ...input } = checked.output;
       try {
-        const { incident, held } = await records.raise(input);
+        const { incident, held, recorded } = await records.raise(input);
+        // Not recorded, and not a storage incident memory holds: the write-failed incident counts it
+        if (!recorded && !(held && incident)) return unavailable('storage', 'not-recorded', true);
+        if (!incident) return unavailable('storage', 'not-recorded', true);
         journal.event('incident.raised', {
           incidentId: incident.id,
           providerId: incident.providerId,

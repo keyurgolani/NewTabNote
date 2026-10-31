@@ -72,6 +72,17 @@ const run = (id, state, at) => ({
 });
 
 /**
+ * Raises an incident that the store takes, so it answers one
+ * @param {import('../../js/trust/core/trust-records.js').TrustRecords} records
+ * @param {import('../../js/trust/core/trust-records.js').RaiseInput} input
+ */
+async function raised(records, input) {
+  const answer = await records.raise(input);
+  assert.ok(answer.incident, 'the raise answered no incident');
+  return { ...answer, incident: answer.incident };
+}
+
+/**
  * Runs the suite on the trust store `make` opens in a fresh profile
  * @param {string} name
  * @param {{make: (profile: TrustProfile) => TrustStore}} options
@@ -80,12 +91,12 @@ export function describeTrustStore(name, { make }) {
   describe(`trust records on ${name} (#20 slice 1, AC2)`, () => {
     it('a repeat of one provider, fault, and subject updates one incident', async () => {
       const { records, clock } = await fresh(make);
-      const first = await records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' });
+      const first = await raised(records, { providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' });
       assert.equal(first.created, true);
       assert.equal(first.held, false);
       await records.dismiss(first.incident.id, true);
       clock.advance(1000);
-      const second = await records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'data-risk' });
+      const second = await raised(records, { providerId: 'storage', faultCode: 'open-failed', severity: 'data-risk' });
       assert.equal(second.created, false);
       assert.equal(second.incident.id, first.incident.id);
       const all = await records.incidents();
@@ -110,13 +121,13 @@ export function describeTrustStore(name, { make }) {
 
     it('a resolved incident that comes back reopens the same record', async () => {
       const { records, clock } = await fresh(make);
-      const { incident } = await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
+      const { incident } = await raised(records, { providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
       clock.advance(10);
       const [resolved] = await records.resolve('index', []);
       assert.equal(resolved.state, 'resolved');
       assert.equal(resolved.resolvedAt, clock.now());
       clock.advance(10);
-      const again = await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
+      const again = await raised(records, { providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
       assert.equal(again.incident.id, incident.id);
       assert.equal(again.incident.state, 'open');
       assert.equal(again.incident.resolvedAt, null);
@@ -154,7 +165,7 @@ export function describeTrustStore(name, { make }) {
         await records.resolve('index', []);
       }
       for (let n = 0; n < 3; n++) {
-        const { incident } = await records.raise({
+        const { incident } = await raised(records, {
           providerId: 'sync',
           faultCode: 'conflict',
           subjectId: legacyId(n, 'o'),
@@ -181,7 +192,8 @@ export function describeTrustStore(name, { make }) {
       await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
       await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
       await records.resolve('index', []);
-      clock.advance(BOUNDS.resolvedIncidentAgeMs + 1);
+      // The resolution is ordered a millisecond after the sighting it follows
+      clock.advance(BOUNDS.resolvedIncidentAgeMs + 2);
       // Any write to incidents applies the bound
       await records.raise({ providerId: 'backup', faultCode: 'stale-backup', severity: 'data-risk' });
       const keys = (await records.incidents()).map(incident => incident.key).sort();

@@ -20,7 +20,7 @@ import { reportSchema } from '../../js/trust/core/operations/trust-report.js';
 import { receiptSchema } from '../../js/trust/core/records.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases, runsOn } from '../../js/trust/core/use-cases.js';
-import { REMEDIATION_IDS } from '../../js/trust/core/codes.js';
+import { PROVIDER_IDS, REMEDIATION_IDS } from '../../js/trust/core/codes.js';
 import { REMEDIATION_CLASSES } from '../../js/trust/core/vocabulary.js';
 import { describeRegistryConformance } from './registry-conformance.mjs';
 import { hexIds, lockManager, manualClock, realTimers, settingsArea } from './trust-support.mjs';
@@ -144,6 +144,11 @@ describeRegistryConformance('health (#20)', {
   fixtures: {
     'truthful-receipt': async (contribution, implementation) => {
       const data = /** @type {Record<string, any>} */ (contribution.data);
+      // A provider's id is registered with it, or none of its receipts could be written
+      assert.ok(
+        PROVIDER_IDS.includes(/** @type {string} */ (contribution.id)),
+        `${contribution.ref} isn't in PROVIDER_IDS`,
+      );
       const clock = manualClock();
       const run = await runCheck(
         {

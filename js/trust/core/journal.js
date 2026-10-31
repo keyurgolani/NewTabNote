@@ -85,7 +85,11 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
    */
   const track = (write, counted = true) => {
     const settled = write.then(
-      () => {},
+      result => {
+        // Accepted, but the store wouldn't take it: the records' write-failed incident counts it too
+        const answer = /** @type {{recorded?: unknown}} */ (result);
+        if (counted && answer && answer.recorded === false) count('write-failed');
+      },
       () => {
         if (counted) count('write-failed');
       },

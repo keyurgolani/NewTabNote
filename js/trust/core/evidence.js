@@ -6,9 +6,9 @@
  * nothing else: no note text, title, URL, credential, prompt, model output, or error message.
  * Titles resolve at render from the ids.
  *
- * No string here is free: a record id has a UUID's or a legacy id's shape, and a provider,
- * a remediation, a subject that isn't a record, and every code, reason, exception, and
- * capability is one codes.js lists. So no title, key, host, or message fits in
+ * No string here is free: a record id has a UUID's or a legacy id's shape (whose suffix can
+ * still spell a short word), and a provider, a remediation, a subject that isn't a record, and
+ * every code, reason, exception, and capability is one codes.js lists. So no title, key, host, or message fits in
  * any field. A field outside this list, or a value its schema refuses, is refused whole.
  */
 
@@ -38,13 +38,14 @@ import {
 
 /**
  * A record's id, which the host's ids port makes: a UUID (crypto.randomUUID), or the id
- * Utils.generateId has always made, a 13-digit millisecond time, a hyphen, and the nine
- * base-36 characters `Math.random().toString(36).substr(2, 9)` gives. No word, key, host, or
- * path has either shape.
+ * Utils.generateId has made in every release, a 13-digit millisecond time, a hyphen, and what
+ * `Math.random().toString(36).substr(2, 9)` gives: up to nine base-36 characters, fewer about
+ * once in 4,650 calls. No sentence, host, path, or key fits, though a suffix can still spell a
+ * short lowercase word or number.
  */
 export const recordId = v.pipe(
   v.string(),
-  v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{9})$/),
+  v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{0,9})$/),
 );
 
 /** A health provider's id, from the registered ones (codes.js) */
