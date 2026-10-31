@@ -447,6 +447,9 @@ class SpaceNotice extends ExportNotice {
    * @returns {Promise<boolean>}
    */
   async isDue() {
+    // A record a full disk kept from being replaced says nothing once the database is at this
+    // build's version (review R79)
+    if (this.storageState.upgraded()) return false;
     const stored = await this.settings.workspaceData([UPGRADE_RECORD_SETTING, SPACE_NOTICE_SETTING]);
     if (!isSpaceBlocked(stored[UPGRADE_RECORD_SETTING])) return false;
     const snoozedAt = Number(stored[SPACE_NOTICE_SETTING]);

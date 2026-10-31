@@ -862,6 +862,7 @@ class App {
         copy: this.preUpdateCopy,
         // The worker's record of its last run, read through the page's settings port
         readUpgrade: async () => (await this.settings.workspaceData(['storageUpgrade'])).storageUpgrade,
+        isUpgraded: () => this.storageState.upgraded(),
       });
       this.preUpdateCopySection.mount(preUpdateSection);
     }

@@ -83,8 +83,8 @@ installWorkerRouter({
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
 /**
- * The migration run's outcome, for #34's harness, which seeds a profile only once it's in. It
- * starts the coordinator, whose kernel starts the run.
+ * The latest migration attempt's outcome, for #34's harness, which seeds a profile only once
+ * it's in. It starts the coordinator, whose kernel starts the run.
  */
 Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => migrationDone(), configurable: true });
 
@@ -108,14 +108,15 @@ function migrationDone() {
 
 /**
  * What a page that found no database, or an older one, hears when it waits on the migration
- * (#17, Q12): the run's status, never anything stored. js/kernel/composition/worker-network.js
+ * (#17, Q12): the attempt in progress, or after one that was short of space or failed, a new
+ * one. Only its status goes back, never anything stored. js/kernel/composition/worker-network.js
  * runs it for this extension's own senders only.
  * @returns {Promise<{status: string}>}
  */
 function migrationStatus() {
   const run = migration();
   if (!run) return Promise.resolve({ status: 'failed' });
-  return run.done.then(
+  return run.request().then(
     outcome => ({ status: outcome.status }),
     () => ({ status: 'failed' }),
   );

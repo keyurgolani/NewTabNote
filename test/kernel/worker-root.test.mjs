@@ -9,7 +9,10 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
-import { RETRY_AFTER_MS, UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
+import { KEEPALIVE_MS, RETRY_AFTER_MS, UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
+import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
+import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
 
@@ -135,5 +138,170 @@ describe('a run that stands is one this build ran', () => {
       ],
       ['migrated', '1.5.1'],
     );
+  });
+});
+
+/**
+ * Fake interval timers: `fire()` runs every live interval once
+ */
+function fakeTimers() {
+  /** @type {Map<number, () => void>} */
+  const live = new Map();
+  let next = 1;
+  return {
+    live,
+    setInterval: (/** @type {() => void} */ fn) => {
+      live.set(next, fn);
+      return next++;
+    },
+    clearInterval: (/** @type {unknown} */ id) => {
+      live.delete(/** @type {number} */ (id));
+    },
+    fire: () => [...live.values()].forEach(fn => fn()),
+  };
+}
+
+/** Single-store reads of a legacy store since `from`, which only measuring and copying make */
+const storeReadsSince = (/** @type {any} */ of, /** @type {number} */ from) =>
+  of.faults.transactions
+    .slice(from)
+    .filter(
+      (/** @type {any} */ opened) =>
+        opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
+    ).length;
+
+describe('the backoff, retries within one worker, and the keepalive (review R79)', () => {
+  it('three starts in one window measure once, and a start after the window measures again and starts a new window', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const host = () => ({ ...hostOf(of, { estimate: CRAMPED }), indexedDB: of.faults.factory, version: '1.5.0' });
+    const reads = [];
+    for (let i = 0; i < 3; i++) {
+      const before = of.faults.transactions.length;
+      assert.equal((await createWorkerClient(host()).migration.done).status, 'space-blocked');
+      reads.push(storeReadsSince(of, before) > 0);
+    }
+    assert.deepStrictEqual(reads, [true, false, false]);
+    const first = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
+    // Past the window: it measures again, and its time starts the next window
+    of.chrome.local[UPGRADE_RECORD_KEY] = { ...first, at: first.at - RETRY_AFTER_MS - 1 };
+    let before = of.faults.transactions.length;
+    await createWorkerClient(host()).migration.done;
+    assert.ok(storeReadsSince(of, before) > 0, 'measured again');
+    const refreshed = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
+    assert.ok(refreshed.at > first.at - RETRY_AFTER_MS - 1, 'the time moved on');
+    before = of.faults.transactions.length;
+    await createWorkerClient(host()).migration.done;
+    assert.equal(storeReadsSince(of, before), 0, 'and the next start in the new window measures nothing');
+  });
+
+  it("a page's storage.migrate after a run that failed before reading anything runs again at once", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const locks = legacyEnv.createLockManager();
+    let refusals = 1;
+    const flaky = {
+      request: (/** @type {any[]} */ ...args) => {
+        if (refusals-- > 0) return Promise.reject(new DOMException('lock manager unavailable', 'InvalidStateError'));
+        return /** @type {any} */ (locks).request(...args);
+      },
+    };
+    const worker = createWorkerClient({ ...hostOf(of), locks: /** @type {any} */ (flaky), version: '1.5.0' });
+    const failed = await worker.migration.done;
+    assert.deepStrictEqual([failed.status, failed.shape], ['failed', null]);
+    assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).costly, false);
+    // A reload of the page asks again, and the run goes at once
+    assert.equal((await worker.migration.request()).status, 'migrated');
+    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await capture(worker, 'after-retry')).kind, 'committed');
+  });
+
+  it("after a run short of space, storage.migrate runs again only past the window, and then migrates when there's room", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    let free = 1024 ** 2;
+    const estimate = async () => ({ quota: free, usage: 0 });
+    const worker = createWorkerClient({ ...hostOf(of, { estimate }), version: '1.5.0' });
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    free = 10 * 1024 ** 3;
+    // Inside the window the record stands, so nothing is measured again
+    assert.equal((await worker.migration.request()).status, 'space-blocked');
+    assert.equal((await inspect(of.real)).version, 8);
+    const recorded = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
+    of.chrome.local[UPGRADE_RECORD_KEY] = { ...recorded, at: recorded.at - RETRY_AFTER_MS - 1 };
+    assert.equal((await worker.migration.request()).status, 'migrated');
+    assert.equal((await inspect(of.real)).version, 9);
+    // Its kernel follows: a capture now lands on 9
+    assert.equal((await capture(worker, 'on-9')).kind, 'committed');
+  });
+
+  it('storage.migrate during a blocked run answers with that run, and starts no other', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
+    const worker = createWorkerClient(hostOf(of));
+    try {
+      await legacyEnv.waitFor(() => worker.migration.blocked());
+      const first = worker.migration.done;
+      const answer = worker.migration.request();
+      assert.equal(worker.migration.done, first, 'no new attempt');
+      blocker.close();
+      assert.equal((await answer).status, 'migrated');
+    } finally {
+      blocker.close();
+    }
+  });
+
+  it('a database replaced at 8 under the worker is migrated by the runner, after a point, before the next capture lands', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient(hostOf(of));
+    assert.equal((await capture(worker, 'first')).kind, 'committed');
+    assert.equal((await inspect(of.real)).version, 9);
+    // R79's probe: another context deletes it and makes it again at 8, with a note
+    await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
+    await legacyEnv.createDatabase(of.real, { records: { canvases: [legacyEnv.note('recreated', { name: 'Recreated' })] } });
+    assert.equal((await capture(worker, 'second')).kind, 'committed');
+    assert.equal((await inspect(of.real)).version, 9);
+    // The step ran only after a verified point of the recreated database
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    const points = await listPoints(recovery);
+    recovery.close();
+    const latest = points.filter(point => point.kind === 'pre-migration' && point.status === 'verified').pop();
+    assert.ok(latest && latest.sourceVersion === 8 && latest.target === 9, JSON.stringify(points.map(p => p.id)));
+    const exported = await exportPoint({
+      indexedDB: of.real,
+      keyRange: KeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      clock: { now: () => Date.now() },
+      pointId: /** @type {any} */ (latest).id,
+    });
+    assert.ok(exported.canvases.some(note => /** @type {any} */ (note).id === 'recreated'));
+  });
+
+  it('keeps the worker alive with an extension API call every 20 s while a run is in progress, and stops when it ends', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
+    const timers = fakeTimers();
+    let calls = 0;
+    const worker = createWorkerClient({
+      ...hostOf(of),
+      timers,
+      keepAlive: async () => {
+        calls++;
+      },
+    });
+    try {
+      await legacyEnv.waitFor(() => worker.migration.blocked());
+      assert.equal(timers.live.size, 1, 'one keepalive while the run waits');
+      assert.equal(worker.migration.running(), true);
+      timers.fire();
+      timers.fire();
+      timers.fire();
+      assert.equal(calls, 3);
+    } finally {
+      blocker.close();
+    }
+    await worker.migration.done;
+    await legacyEnv.waitFor(() => timers.live.size === 0, { message: 'the keepalive to stop' });
+    assert.equal(worker.migration.running(), false);
+    timers.fire();
+    assert.equal(calls, 3, 'none once the run ended');
+    assert.equal(KEEPALIVE_MS, 20 * 1000);
   });
 });
