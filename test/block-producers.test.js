@@ -8,10 +8,10 @@
 // opaque rule. Plain text written into a block's rich content is escaped.
 //
 // The producers: editor insert and slash; Markdown shortcuts; Turn into; paste; Markdown and
-// JSON note import; AI chat's insert and new note; templates, in the editor and the kernel;
-// the onboarding note; a block dropped on the sidebar; background capture. Sync inbound has no
-// live path, in 1.4.1 or now: SyncService._applyRemoteData skips when Storage has no importAll
-// (#17 PR 4b), which the last test holds.
+// JSON note import; AI chat's insert and new note; a block's inline AI action; templates, in
+// the editor and the kernel; the onboarding note; a block dropped on the sidebar; background
+// capture. Sync inbound has no live path, in 1.4.1 or now: SyncService._applyRemoteData skips
+// when Storage has no importAll (#17 PR 4b), which the last test holds.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -379,6 +379,30 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     // A drag with text alone is its text, escaped, from anywhere
     await drop(transfer({ 'application/x-block-content': 'a < b', 'application/x-block-type': 'text' }));
     assert.deepEqual(await contentsOf('a < b'), ['a &lt; b']);
+  });
+
+  it("an inline AI action: the reply goes into the block as its text, and a block that wouldn't decode keeps its content", async () => {
+    const { env, page, events } = await openPage();
+    const editor = page.tabs.editor;
+    editor.logger = { event: (code, fields) => events.push([code, fields]) };
+    const toasts = [];
+    env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
+    editor.ai = { isConfigured: () => true, chat: async () => '  A <b>bold</b> & <i>new</i> line  ' };
+    await runUntil(env, editor.handleInlineAIAction('a1', 'rewrite'));
+    const made = editor.getBlockById('a1');
+    assert.equal(made.content, 'A &lt;b&gt;bold&lt;/b&gt; &amp; &lt;i&gt;new&lt;/i&gt; line');
+    assert.equal(env.get('BlockProjections').plainText(made), 'A <b>bold</b> & <i>new</i> line');
+    assert.ok(known(stateOf(env, made.serialize())));
+
+    const kept = made.content;
+    made.indentLevel = 'deep';
+    await runUntil(env, editor.handleInlineAIAction('a1', 'rewrite'));
+    assert.equal(editor.getBlockById('a1').content, kept);
+    assert.deepEqual(plain(events), [['block.refused', { errorCode: 'block-invalid-field' }]]);
+    assert.deepEqual(plain(toasts), [
+      { message: 'Block rewrited', kind: 'success' },
+      { message: 'AI rewrite failed', kind: 'error' },
+    ]);
   });
 
   it("paste: Markdown whose blocks wouldn't decode pastes nothing, and says so in an event and a toast", async () => {
