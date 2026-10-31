@@ -1102,58 +1102,11 @@ class SettingsController {
 
   // ─── Block to markdown (for export) ───
 
+  /**
+   * A block as the Markdown export writes it: its Markdown codec (#14)
+   */
   blockToMarkdown(block) {
-    // Delegate to App's method if available, or use AIResponseUtils
-    if (typeof AIResponseUtils !== 'undefined' && AIResponseUtils.blockToMarkdown) {
-      return AIResponseUtils.blockToMarkdown(block);
-    }
-
-    const content = this.htmlToMarkdown(block.content || '');
-
-    switch (block.type) {
-      case 'h1': return `# ${content}\n\n`;
-      case 'h2': return `## ${content}\n\n`;
-      case 'h3': return `### ${content}\n\n`;
-      case 'bullet': return `- ${content}\n`;
-      case 'numbered': return `1. ${content}\n`;
-      case 'todo': return `- [${block.checked ? 'x' : ' '}] ${content}\n`;
-      case 'quote': return `> ${content}\n\n`;
-      case 'code': return `\`\`\`\n${block.content || ''}\n\`\`\`\n\n`;
-      case 'divider': return `---\n\n`;
-      case 'callout': return `> ${block.calloutIcon || '💡'} ${content}\n\n`;
-      case 'toggle': return `<details>\n<summary>${content}</summary>\n${block.children || ''}\n</details>\n\n`;
-      case 'image': return block.imageUrl ? `![${content}](${block.imageUrl})\n\n` : '';
-      case 'bookmark': return block.url ? `[${block.title || block.url}](${block.url})\n\n` : '';
-      case 'equation': return `$$\n${block.equation || ''}\n$$\n\n`;
-      case 'table':
-        if (block.tableData && block.tableData.length > 0) {
-          let md = '';
-          block.tableData.forEach((row, i) => {
-            md += '| ' + row.join(' | ') + ' |\n';
-            if (i === 0) {
-              md += '| ' + row.map(() => '---').join(' | ') + ' |\n';
-            }
-          });
-          return md + '\n';
-        }
-        return '';
-      default: return content ? `${content}\n\n` : '\n';
-    }
-  }
-
-  htmlToMarkdown(html) {
-    if (!html) return '';
-    return html
-      .replace(/<b>(.*?)<\/b>/gi, '**$1**')
-      .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
-      .replace(/<i>(.*?)<\/i>/gi, '*$1*')
-      .replace(/<em>(.*?)<\/em>/gi, '*$1*')
-      .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-      .replace(/<s>(.*?)<\/s>/gi, '~~$1~~')
-      .replace(/<strike>(.*?)<\/strike>/gi, '~~$1~~')
-      .replace(/<a href="(.*?)">(.*?)<\/a>/gi, '[$2]($1)')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, '');
+    return globalThis.BlockProjections.markdownOf(block);
   }
 
   // ─── Cross-tab settings sync ───

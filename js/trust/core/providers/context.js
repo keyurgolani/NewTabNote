@@ -95,6 +95,8 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  *   must throw from it, never answer `[]`: contributions can't tell none from failed.
  * @property {TrustReader} [trust]
  * @property {import('../ports.js').Timers} [timers] - the check's timers, which checks.js passes
+ * @property {{health(): {types: number, disabled: number}}} [blocks]
+ *   #14's block-health query: how many block types the root has, and how many it disabled
  */
 
 /**

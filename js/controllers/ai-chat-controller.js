@@ -3134,51 +3134,11 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     return contentParts.join('\n\n');
   }
 
+  /**
+   * The text of a block AI chat sends: its AI context projection (#14)
+   */
   extractBlockText(block) {
-    if (!block) return '';
-
-    switch (block.type) {
-      case 'text':
-      case 'h1':
-      case 'h2':
-      case 'h3':
-      case 'bullet':
-      case 'numbered':
-      case 'todo':
-      case 'quote':
-      case 'callout':
-        return this.stripHtml(block.content || '');
-
-      case 'code':
-        return block.content || '';
-
-      case 'toggle':
-        const mainText = this.stripHtml(block.content || '');
-        const childText = this.stripHtml(block.children || '');
-        return [mainText, childText].filter(t => t).join('\n');
-
-      case 'table':
-        if (block.tableData && Array.isArray(block.tableData)) {
-          return block.tableData.map(row => row.join(' ')).join('\n');
-        }
-        return '';
-
-      case 'bookmark':
-        return block.title || block.url || '';
-
-      case 'equation':
-        return block.equation || '';
-
-      default:
-        return '';
-    }
-  }
-
-  stripHtml(html) {
-    if (!html) return '';
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    return div.textContent || div.innerText || '';
+    return globalThis.BlockProjections.aiContextText(block);
   }
 
   generateContentHash(content) {

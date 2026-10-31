@@ -3,17 +3,13 @@
   const MAX_TAGS = 3;
 
   /**
-   * Strip HTML tags from a string.
+   * Strip HTML tags from a string: the block previews' stripTags (#14), in linear time, which
+   * js/kernel/composition/block-projections.js installs before this file loads.
    * @param {string} [value=''] - HTML string
    * @returns {string} Plain text
    */
   function stripHtml(value = '') {
-    return String(value)
-      .replace(/<br\s*\/?>/gi, ' ')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return global.BlockProjections.stripTags(value);
   }
 
   /**
@@ -31,40 +27,13 @@
   }
 
   /**
-   * Extract plain text from a block object.
+   * Extract plain text from a block object: its preview projection (#14), which
+   * js/kernel/composition/block-projections.js installs before this file loads.
    * @param {Object} [block={}] - Block data
    * @returns {string} Extracted text
    */
   function extractBlockText(block = {}) {
-    if (!block || typeof block !== 'object') {
-      return '';
-    }
-
-    if (block.type === 'toggle') {
-      return [stripHtml(block.content), stripHtml(block.children)].filter(Boolean).join(' ');
-    }
-
-    if (block.type === 'bookmark') {
-      return [block.title, block.description, block.url].filter(Boolean).join(' ');
-    }
-
-    if (block.type === 'equation') {
-      return stripHtml(block.equation);
-    }
-
-    if (block.type === 'table' && Array.isArray(block.tableData)) {
-      return block.tableData.flat().map(cell => stripHtml(cell)).filter(Boolean).join(' ');
-    }
-
-    if (block.type === 'file') {
-      return stripHtml(block.fileName);
-    }
-
-    if (block.type === 'video') {
-      return stripHtml(block.videoUrl);
-    }
-
-    return stripHtml(block.content);
+    return global.BlockProjections.previewText(block);
   }
 
   /**

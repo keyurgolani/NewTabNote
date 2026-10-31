@@ -14,6 +14,73 @@
   }
 
   /**
+   * The first index of `char` at or after a position, for positions that never go back: the
+   * last answer is reused while it's still ahead, so a pass over the text scans it once
+   * @param {string} text
+   * @param {string} char
+   * @returns {(from: number) => number}
+   */
+  function nextOf(text, char) {
+    let from = Infinity;
+    let found = -1;
+    return at => {
+      if (at >= from && (found === -1 || found >= at)) return found;
+      from = at;
+      found = text.indexOf(char, at);
+      return found;
+    };
+  }
+
+  /**
+   * `/\[([^\]]+)\]\(([^)]+)\)/g` replaced by `<a href="$2">$1</a>`, in one pass: from a `[`,
+   * the text runs to the first `]`, which `(` must follow, and the address to the first `)`
+   * @param {string} text
+   * @returns {string}
+   */
+  function replaceMarkdownLinks(text) {
+    const nextClose = nextOf(text, ']');
+    const nextParen = nextOf(text, ')');
+    let out = '';
+    let from = 0;
+    for (let at = text.indexOf('['); at !== -1; at = text.indexOf('[', at + 1)) {
+      if (at < from) continue;
+      const close = nextClose(at + 1);
+      if (close === -1) break;
+      if (close === at + 1 || text[close + 1] !== '(') continue;
+      const paren = nextParen(close + 2);
+      if (paren === -1) break;
+      if (paren === close + 2) continue;
+      out += `${text.slice(from, at)}<a href="${text.slice(close + 2, paren)}">${text.slice(at + 1, close)}</a>`;
+      from = paren + 1;
+      at = paren;
+    }
+    return out + text.slice(from);
+  }
+
+  /**
+   * `/\[\[([^\]]+)\]\]/g` replaced by a wiki link, in one pass: from a `[[`, the name runs to
+   * the first `]`, which another `]` must follow
+   * @param {string} text
+   * @returns {string}
+   */
+  function replaceWikiLinks(text) {
+    const nextClose = nextOf(text, ']');
+    let out = '';
+    let from = 0;
+    for (let at = text.indexOf('[['); at !== -1; at = text.indexOf('[[', at + 1)) {
+      if (at < from) continue;
+      const close = nextClose(at + 2);
+      if (close === -1) break;
+      if (close === at + 2 || text[close + 1] !== ']') continue;
+      const name = text.slice(at + 2, close);
+      out += `${text.slice(from, at)}<a href="#" class="wiki-link" data-note-name="${name}">${name}</a>`;
+      from = close + 2;
+      at = close + 1;
+    }
+    return out + text.slice(from);
+  }
+
+  /**
    * Convert inline markdown formatting to HTML.
    * @param {string} text - Markdown text
    * @returns {string} HTML string
@@ -27,73 +94,21 @@
     result = result.replace(/(?<![_\w])_([^_]+)_(?![_\w])/g, '<em>$1</em>');
     result = result.replace(/~~([^~]+)~~/g, '<del>$1</del>');
     result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-    result = result.replace(/\[\[([^\]]+)\]\]/g, '<a href="#" class="wiki-link" data-note-name="$1">$1</a>');
+    result = replaceMarkdownLinks(result);
+    result = replaceWikiLinks(result);
     result = result.replace(/\n/g, '<br>');
 
     return result;
   }
 
   /**
-   * Convert HTML content to Markdown inline formatting.
-   * Regex-based for use in Node.js (no DOM) and browser contexts.
-   * @param {string} html - HTML string
-   * @returns {string} Markdown text
-   */
-  function htmlToMarkdown(html) {
-    if (!html) return '';
-    return html
-      .replace(/<a\s+[^>]*class="wiki-link"[^>]*data-note-name="([^"]*)"[^>]*>.*?<\/a>/gi, '[[$1]]')
-      .replace(/<b>(.*?)<\/b>/gi, '**$1**')
-      .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
-      .replace(/<i>(.*?)<\/i>/gi, '*$1*')
-      .replace(/<em>(.*?)<\/em>/gi, '*$1*')
-      .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-      .replace(/<del>(.*?)<\/del>/gi, '~~$1~~')
-      .replace(/<s>(.*?)<\/s>/gi, '~~$1~~')
-      .replace(/<strike>(.*?)<\/strike>/gi, '~~$1~~')
-      .replace(/<a\s+href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, '');
-  }
-
-  /**
-   * Convert a block object to Markdown text.
+   * Convert a block object to Markdown text: its Markdown codec (#14), which
+   * js/kernel/composition/block-projections.js installs before this file loads.
    * @param {Object} block - Block object with type, content, and type-specific properties
    * @returns {string} Markdown representation
    */
   function blockToMarkdown(block) {
-    const content = htmlToMarkdown(block.content || '');
-
-    switch (block.type) {
-      case 'h1': return `# ${content}\n\n`;
-      case 'h2': return `## ${content}\n\n`;
-      case 'h3': return `### ${content}\n\n`;
-      case 'bullet': return `- ${content}\n`;
-      case 'numbered': return `1. ${content}\n`;
-      case 'todo': return `- [${block.checked ? 'x' : ' '}] ${content}\n`;
-      case 'quote': return `> ${content}\n\n`;
-      case 'code': return `\`\`\`\n${block.content || ''}\n\`\`\`\n\n`;
-      case 'divider': return `---\n\n`;
-      case 'callout': return `> ${block.calloutIcon || '💡'} ${content}\n\n`;
-      case 'toggle': return `<details>\n<summary>${content}</summary>\n${htmlToMarkdown(block.children || '')}\n</details>\n\n`;
-      case 'image': return (block.imageUrl || block.src) ? `![${block.caption || content}](${block.imageUrl || block.src})\n\n` : '';
-      case 'bookmark': return block.url ? `[${block.title || block.url}](${block.url})\n\n` : '';
-      case 'equation': return `$$\n${block.equation || ''}\n$$\n\n`;
-      case 'table':
-        if (block.tableData && block.tableData.length > 0) {
-          let md = '';
-          block.tableData.forEach((row, i) => {
-            md += '| ' + row.join(' | ') + ' |\n';
-            if (i === 0) {
-              md += '| ' + row.map(() => '---').join(' | ') + ' |\n';
-            }
-          });
-          return md + '\n';
-        }
-        return '';
-      default: return content ? `${content}\n\n` : '\n';
-    }
+    return global.BlockProjections.markdownOf(block);
   }
 
   /**
@@ -297,14 +312,15 @@
   }
 
   /**
-   * Strip HTML tags from text.
+   * Strip HTML tags from text: line breaks and tags become spaces, runs of white space one,
+   * trimmed. The tags go through the block model layer's replaceTags (#14), in linear time,
+   * which js/kernel/composition/block-projections.js installs before this file loads.
    * @param {string} text - HTML string
    * @returns {string} Plain text
    */
   function stripHtml(text) {
-    return String(text || '')
-      .replace(/<br\s*\/?>/gi, ' ')
-      .replace(/<[^>]*>/g, ' ')
+    const breaks = String(text || '').replace(/<br\s*\/?>/gi, ' ');
+    return global.BlockProjections.replaceTags(breaks, ' ', false)
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -365,7 +381,6 @@
   const api = {
     blockToMarkdown,
     buildAIInsertPreview,
-    htmlToMarkdown,
     markdownInlineToHtml,
     markdownToBlocks,
     parseAIResponseToBlocks,
