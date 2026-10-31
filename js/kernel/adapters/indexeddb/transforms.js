@@ -28,13 +28,12 @@
  * verify, records the stop in `meta` (TRANSFORM_STOP_KEY), and the worker's starts in the next
  * TRANSFORM_RETRY_AFTER_MS don't read them all again, as the runner's starts don't (review R79).
  *
- * Logical 2 gives each note its placement, kind, and lifecycle from its flags, by #1's rules
- * (domain/placement.js), unless it has them, or a placement command on #17's adapter (a
- * placement version above 0) stood for them; reads derive those. It also gives a note whose
- * `updatedAt` no index can hold one (domain/note.js, filledUpdatedAt), so Storage's lists and
- * its export list it too (KD-011). It writes no change entry and moves no version: it adds what
- * the flags already say. Its receipt counts the notes it read and filled, and #1's findings
- * (placementFindingsOf), never content.
+ * Logical 2 gives each note without a placement its placement, kind, and lifecycle from its
+ * flags, by #1's rules (domain/placement.js). It also gives a note whose `updatedAt` no index
+ * can hold one (domain/note.js, filledUpdatedAt), so Storage's lists and its export list it too
+ * (KD-011). It writes no change entry and moves no version: it adds what the flags already say.
+ * Its receipt counts the notes it read and filled, and #1's findings (placementFindingsOf),
+ * never content.
  */
 
 import { filledUpdatedAt, hasIndexedTime } from '../../core/domain/note.js';
@@ -153,17 +152,14 @@ const outcome = fields => ({ steps: [], filled: 0, recoveryPointId: null, failur
 const noCounts = () => ({ read: 0, filled: 0, staleFolder: 0, dailyWithoutDate: 0 });
 
 /**
- * Whether a placement command on #17's adapter stood for the note's group: its placement
- * version moved, and reads derive the group (#17 PR 3, "fill only what's absent")
+ * Whether logical 2 has something to fill on `note`. A note without its placement gets the
+ * group whatever its placement version: a command on it before the transform reached it (a pin
+ * between the run and the transform, say) moved that version and wrote no group, since a command
+ * keeps only a group that's there in step (domain/placement.js), and the batch reads its flags
+ * as that command left them.
  * @param {NoteRecord} note
  */
-const placed = note => hasPlacementGroup(note) || Number(note.placementVersion) > 0;
-
-/**
- * Whether logical 2 has something to fill on `note`
- * @param {NoteRecord} note
- */
-export const needsLogical2 = note => !placed(note) || !hasIndexedTime(note);
+export const needsLogical2 = note => !hasPlacementGroup(note) || !hasIndexedTime(note);
 
 /**
  * A note with what logical 2 fills: its placement, kind, and lifecycle unless it has them, and
@@ -175,7 +171,7 @@ export const needsLogical2 = note => !placed(note) || !hasIndexedTime(note);
 export function filledByLogical2(note, { liveFolderIds, blocks, runStart }) {
   /** @type {NoteRecord} */
   let next = note;
-  if (!placed(note)) next = { ...next, ...placementGroupOf(note, liveFolderIds) };
+  if (!hasPlacementGroup(note)) next = { ...next, ...placementGroupOf(note, liveFolderIds) };
   if (!hasIndexedTime(note)) next = { ...next, updatedAt: filledUpdatedAt(note, blocks, runStart) };
   return next === note ? null : next;
 }
@@ -252,7 +248,7 @@ async function scanNotes(db, io) {
  * @returns {Promise<{status: 'ready', point: Point} | {status: 'space-blocked' | 'failed', code: string, read: boolean}>}
  */
 async function pointForRun(options) {
-  const { indexedDB, db, io, clock, logger, estimate = null, progress, schema } = options;
+  const { indexedDB, db, io, clock, logger, estimate = null, progress, schema, hooks = {} } = options;
   let recovery = await openRecovery(indexedDB, { create: false });
   try {
     const points = recovery ? await listPoints(recovery) : [];
@@ -313,7 +309,7 @@ async function pointForRun(options) {
       }));
     }
     try {
-      await copyPoint({ source: db, recovery, point, progress: copied, io });
+      await copyPoint({ source: db, recovery, point, progress: copied, io, hooks });
     } catch (error) {
       if (!isQuota(error)) throw error;
       // Dropped, so it never holds the room (Q7)
