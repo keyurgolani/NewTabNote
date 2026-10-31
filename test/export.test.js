@@ -2,13 +2,17 @@
 
 // AC5: an export from a profile with archived notes, templates, and folders,
 // imported with Replace all into an empty profile, reproduces all of them with
-// folder placement intact. The Data & Backup hint lists what's excluded.
+// folder placement intact. The Data & Backup hint lists what's excluded. Each export and import
+// runs as the page runs it since #17 PR 4a, on #17's adapter (backups.js) through the page's
+// settings port.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, plain, note, block } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, plain, note, block, startEditorClient,
+} = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const IMAGE = Buffer.from('fake image bytes');
@@ -42,13 +46,43 @@ async function sourceProfile() {
   });
   env.load(...FILES);
   await env.get('Storage').init();
+  await startEditorClient(env);
   return env;
 }
 
-describe('exportAll', () => {
+/** A profile with nothing in it yet, the page's kernel started on it */
+async function emptyProfile() {
+  const env = createLegacyEnv();
+  env.load(...FILES);
+  await env.get('Storage').init();
+  await startEditorClient(env);
+  return env;
+}
+
+/** Export JSON's file, or with `backup` Create Backup's, as the page makes it */
+const exportFile = (env, backup = false) => env.settingsClient.exportBackup({ backup });
+
+/** The export the automatic backup and Replace all's recovery copy hold: the automatic backup's */
+async function exportObject(env) {
+  const keys = () => Object.keys(env.chrome.local).filter((key) => key.startsWith('auto_backup_'));
+  const before = keys();
+  await env.settingsClient.createAutoBackup();
+  const { autoBackup, backupCreatedAt, ...object } = env.chrome.local[keys().find((key) => !before.includes(key))];
+  assert.deepEqual([autoBackup, typeof backupCreatedAt], [true, 'number']);
+  return object;
+}
+
+/** Import `data` as the page does: the backup check, then the importBackup command */
+async function importBackup(env, data, mode) {
+  const checked = env.validateBackup(data);
+  if (!checked.ok) throw new Error(checked.reason);
+  return plain(await env.settingsClient.importBackup(data, mode, checked.counts));
+}
+
+describe('Export JSON (exportAll)', () => {
   it('includes active and archived notes, templates, folders, and their media; not trash', async () => {
     const env = await sourceProfile();
-    const exported = plain(await env.get('Storage').exportAll());
+    const exported = JSON.parse(await (await exportFile(env)).text());
 
     assert.equal(exported.version, 1);
     assert.equal(typeof exported.exportedAt, 'number');
@@ -61,13 +95,10 @@ describe('exportAll', () => {
 
   it('round-trips through Replace all into an empty profile with folder placement intact (AC5)', async () => {
     const source = await sourceProfile();
-    const file = JSON.stringify(await source.get('Storage').exportAll());
+    const file = await (await exportFile(source)).text();
 
-    const target = createLegacyEnv();
-    target.load(...FILES);
-    const Storage = target.get('Storage');
-    await Storage.init();
-    const result = plain(await Storage.importData(JSON.parse(file), 'replace'));
+    const target = await emptyProfile();
+    const result = await importBackup(target, JSON.parse(file), 'replace');
     assert.deepEqual(result.trashedIds, [], 'nothing to trash in an empty profile');
 
     const dump = await dumpDatabase(target.indexedDB);
@@ -101,18 +132,18 @@ describe('exportAll', () => {
     assert.equal(media[0].canvasId, byName['Active note'].id);
     assert.deepEqual(media[0].blob, { __blob: IMAGE.toString('base64'), type: 'image/png' });
 
-    // Archived notes and templates show up where the app lists them.
-    assert.deepEqual(plain(await Storage.getArchivedNotes()).map((n) => n.name), ['Archived note']);
-    assert.deepEqual(plain(await Storage.getTemplates()).map((n) => n.name), ['Weekly template']);
+    // Archived notes and templates show up where the app lists them: the page's note list
+    await target.noteList.settled();
+    assert.deepEqual(plain(target.noteList.view('archived')).map((n) => n.name), ['Archived note']);
+    assert.deepEqual(plain(target.noteList.view('templates')).map((n) => n.name), ['Weekly template']);
   });
 });
 
 describe('Merging a profile\'s own export (AC3)', () => {
   it('leaves every existing record identical and files the copies into the existing folders', async () => {
     const env = await sourceProfile();
-    const Storage = env.get('Storage');
     const before = await dumpDatabase(env.indexedDB);
-    await Storage.importData(JSON.parse(JSON.stringify(await Storage.exportAll())), 'merge');
+    await importBackup(env, JSON.parse(await (await exportFile(env)).text()), 'merge');
     const after = await dumpDatabase(env.indexedDB);
 
     for (const store of ['canvases', 'elements', 'media', 'folders']) {
@@ -147,7 +178,7 @@ describe('Data & Backup hint (AC5)', () => {
   });
 });
 
-describe('Export JSON as a file (exportAllAsBlob)', () => {
+describe('Export JSON as a file (exportAllAsBlob, exportFile on #17\'s adapter)', () => {
   // Images and files live in their blocks as data URLs (the upload buttons
   // write them uncompressed); only import writes the media store.
   const UPLOADS = 16;
@@ -189,6 +220,7 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
     });
     env.load(...FILES);
     await env.get('Storage').init();
+    await startEditorClient(env);
     return env;
   }
 
@@ -204,17 +236,19 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
     return built;
   }
 
-  /** Count how many media rows are being encoded at once */
-  function watchEncoding(env) {
-    const Utils = env.get('Utils');
-    const encode = Utils.readFileAsDataURL.bind(Utils);
-    const seen = { now: 0, most: 0, total: 0 };
-    Utils.readFileAsDataURL = async (file) => {
+  /**
+   * Count how many media rows are being encoded at once, until `seen.restore()`: #17's adapter
+   * reads each row's Blob for its data URL (data-urls.js)
+   */
+  function watchEncoding() {
+    const read = Blob.prototype.arrayBuffer;
+    const seen = { now: 0, most: 0, total: 0, restore: () => { Blob.prototype.arrayBuffer = read; } };
+    Blob.prototype.arrayBuffer = async function counted() {
       seen.now += 1;
       seen.total += 1;
       seen.most = Math.max(seen.most, seen.now);
       try {
-        return await encode(file);
+        return await read.call(this);
       } finally {
         seen.now -= 1;
       }
@@ -224,17 +258,19 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
 
   it('holds the same JSON as exportAll, without indentation, with extra fields last', async () => {
     const env = await uploadsProfile();
-    const Storage = env.get('Storage');
-    const file = await Storage.exportAllAsBlob({ backupType: 'full-backup', backupVersion: 1 });
+    // Create Backup's file, with the fields 1.4.x's createBackup gave it
+    const file = await exportFile(env, true);
     assert.equal(file.type, 'application/json');
     const text = await file.text();
     assert.ok(!text.includes('\n'), 'no indentation');
     const parsed = JSON.parse(text);
-    assert.deepEqual(Object.keys(parsed), ['version', 'exportedAt', 'canvases', 'elements', 'media', 'folders', 'backupType', 'backupVersion']);
-    const { exportedAt, backupType, backupVersion, ...rest } = parsed;
+    assert.deepEqual(Object.keys(parsed), [
+      'version', 'exportedAt', 'canvases', 'elements', 'media', 'folders', 'backupType', 'backupCreatedAt', 'backupVersion',
+    ]);
+    const { exportedAt, backupType, backupCreatedAt, backupVersion, ...rest } = parsed;
     assert.equal(typeof exportedAt, 'number');
-    assert.deepEqual([backupType, backupVersion], ['full-backup', 1]);
-    const { exportedAt: objectTime, ...object } = plain(await Storage.exportAll());
+    assert.deepEqual([backupType, typeof backupCreatedAt, backupVersion], ['full-backup', 'string', 1]);
+    const { exportedAt: objectTime, ...object } = await exportObject(env);
     assert.equal(typeof objectTime, 'number');
     assert.deepEqual(rest, object);
     assert.equal(rest.elements.length, 2 + 2 * UPLOADS);
@@ -244,8 +280,13 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
   it('writes each record on its own, so no string holds more than one block\'s upload', async () => {
     const env = await uploadsProfile();
     const built = watchBlobs(env);
-    const seen = watchEncoding(env);
-    const file = await env.get('Storage').exportAllAsBlob();
+    const seen = watchEncoding();
+    let file;
+    try {
+      file = await exportFile(env);
+    } finally {
+      seen.restore();
+    }
 
     assert.equal(built.length, 1);
     const [parts] = built;
@@ -257,20 +298,21 @@ describe('Export JSON as a file (exportAllAsBlob)', () => {
 
   it('exportAll, which auto backup and the Replace all copy use, still encodes media rows all at once', async () => {
     const env = await uploadsProfile();
-    const seen = watchEncoding(env);
-    await env.get('Storage').exportAll();
+    const seen = watchEncoding();
+    try {
+      await exportObject(env);
+    } finally {
+      seen.restore();
+    }
     assert.deepEqual([seen.total, seen.most], [MEDIA_ROWS, MEDIA_ROWS]);
   });
 
   it('imports with Replace all into an empty profile with every image and file intact', async () => {
     const source = await uploadsProfile();
-    const text = await (await source.get('Storage').exportAllAsBlob()).text();
+    const text = await (await exportFile(source)).text();
 
-    const target = createLegacyEnv();
-    target.load(...FILES);
-    const Storage = target.get('Storage');
-    await Storage.init();
-    await Storage.importData(JSON.parse(text), 'replace');
+    const target = await emptyProfile();
+    await importBackup(target, JSON.parse(text), 'replace');
     const dump = await dumpDatabase(target.indexedDB);
     const notes = Object.values(recordsOf(dump, 'canvases'));
     assert.deepEqual(notes.map((n) => n.name).sort(), ['Kept', 'Photos', 'Template']);
