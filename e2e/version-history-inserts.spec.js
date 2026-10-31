@@ -60,6 +60,9 @@ test('version history saves, lists, previews, and reverts through the kernel, ke
   await page.keyboard.press('End');
   await page.keyboard.type(' and oats');
   await expect.poll(() => driver.savedBlocks(page)).toEqual(['Milk and oats']);
+  await page.locator('#page-title').fill('Shopping');
+  await expect.poll(async () => (await storedNote(page, noteId)).name).toBe('Shopping');
+  await expect.poll(() => driver.listedNoteNames(page)).toContain('Shopping');
   await page.evaluate(id => app.kernel.execute({ type: 'setPinned', commandId: 'pin-e2e', noteId: id, pinned: true }), noteId);
 
   // Version history lists the snapshot, and its preview shows what it holds
@@ -78,6 +81,9 @@ test('version history saves, lists, previews, and reverts through the kernel, ke
   await expect.poll(() => driver.blocks(page)).toEqual([{ type: 'text', text: 'Milk' }]);
   expect((await storedNote(page, noteId)).pinned).toBe(true);
   await expect(page.locator('#version-history-panel')).toHaveCount(0);
+  // The sidebar lists the restored title from the note list, with no reload
+  await expect.poll(() => driver.listedNoteNames(page)).toContain('Groceries');
+  expect(await driver.listedNoteNames(page)).not.toContain('Shopping');
   const titles = await page.evaluate(async id => {
     const state = await app.kernel.query({ type: 'listSnapshots', noteId: id });
     return state.data.length;
@@ -121,5 +127,8 @@ test('AI chat appends, inserts at the cursor, and makes a new note through the k
   expect(made).not.toBe(noteId);
   expect(await storedTexts(page, made)).toEqual(['Call the bakery']);
   expect((await storedNote(page, made)).preview).toBe('Call the bakery');
+  // The sidebar shows the inserted text as the new note's preview, with no reload
+  const listed = page.locator('#sidebar-notes-list .sidebar-note-item').filter({ has: page.getByText('Bakery plan', { exact: true }) });
+  await expect(listed.locator('.sidebar-note-preview')).toHaveText('Call the bakery');
   await expectNoUncaught(extension, page);
 });

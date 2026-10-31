@@ -2137,8 +2137,20 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         if (activeIdx !== -1) atOrder = activeIdx + 1;
       }
 
-      await this.insertBlocksInto(noteId, parsedBlocks, atOrder);
-      if (editor.noteId === noteId) await editor.loadNote(noteId);
+      if (parsedBlocks.length > 0) {
+        const blocks = this.blocksForInsert(parsedBlocks);
+        // The insert's transaction opens now, and the editor takes the blocks in the same task,
+        // so a save from here on writes every block where the insert puts it
+        const inserting = this.documentClient.insertBlocks(noteId, blocks, atOrder);
+        const takeBack = editor.noteId === noteId ? editor.placeInsertedBlocks(noteId, blocks, atOrder) : () => {};
+        const outcome = await inserting;
+        if (outcome.kind !== 'committed') {
+          takeBack();
+          // Its kind and code, never what the blocks hold
+          throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
+        }
+      }
+      if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
       if (this.onRefreshNotesList) await this.onRefreshNotesList();
 
       Utils.showToast(`Added ${parsedBlocks.length} AI block${parsedBlocks.length === 1 ? '' : 's'} to note`, 'success');

@@ -197,6 +197,38 @@ describe('the note-list projection', () => {
     assert.deepEqual(reads, []);
   });
 
+  it('reads nothing for a snapshot, and the note again after a revert or an AI insert, with its new preview', async () => {
+    const { list, reads, run } = start();
+    await run('createNote', { noteId: 'n1', name: 'Plan', blocks: [{ id: 'b1', type: 'text', content: 'Then' }] });
+    await list.settled();
+    reads.length = 0;
+    await run('saveSnapshot', {
+      noteId: 'n1',
+      snapshotId: 's1',
+      blocks: [{ id: 'b1', type: 'text', content: 'Then' }],
+      title: 'Plan',
+    });
+    await list.settled();
+    assert.deepEqual(reads, []);
+    await run('insertBlocks', {
+      noteId: 'n1',
+      blocks: [{ id: 'b2', type: 'text', content: 'From the chat' }],
+      atOrder: 0,
+    });
+    await list.settled();
+    assert.equal(list.note('n1')?.preview, 'From the chat');
+    await run('restoreSnapshot', {
+      noteId: 'n1',
+      snapshotId: 's1',
+      preSnapshotId: 's2',
+      blocks: [{ id: 'b1', type: 'text', content: 'Then' }],
+      name: 'Restored',
+    });
+    await list.settled();
+    assert.deepEqual(reads, ['getNotesByIds n1', 'getNotesByIds n1']);
+    assert.equal(list.note('n1')?.name, 'Restored');
+  });
+
   it('a note a commit names that is gone leaves the lists, with its search entry', async () => {
     const { list, run } = start();
     await run('createNote', { noteId: 'n1', name: 'Untitled' });
