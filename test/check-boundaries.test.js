@@ -23,10 +23,20 @@ function tempRoot() {
   return dir;
 }
 
+/**
+ * Canned hits as lint gives them. A named rule's hit lists its names' counts in `names`, and
+ * its count is theirs together.
+ */
 function hitMap(hits) {
-  return new Map(hits.map(({ file, rule, count }) => [`${file}\0${rule}`, {
-    file, rule, count, at: Array.from({ length: count }, (_, i) => `${i + 1}:1`),
-  }]));
+  return new Map(hits.map(({ file, rule, count, names }) => {
+    if (!names) return [`${file}\0${rule}`, { file, rule, count, at: Array.from({ length: count }, (_, i) => `${i + 1}:1`) }];
+    let line = 0;
+    const named = new Map(Object.entries(names).map(([name, n]) => [name, {
+      count: n, at: Array.from({ length: n }, () => `${++line}:1`),
+    }]));
+    const at = [...named.values()].flatMap(hit => hit.at);
+    return [`${file}\0${rule}`, { file, rule, count: at.length, at, names: named }];
+  }));
 }
 
 function row(file, rule, count, owner = 12, extra = {}) {
@@ -263,6 +273,100 @@ describe('scripts/check-boundaries.js with canned hits', () => {
       "js/a.js:3:1 doesn't parse: Unexpected token");
   });
 
+  describe("app-callback and legacy-store rows, which may each name the callback or handle they count", () => {
+    const callback = (name, count = 1) => row('js/app.js', 'app-callback', count, 3, { name });
+    const store = (name, count, owner) => row('js/app.js', 'legacy-store', count, owner, { name });
+    const ledger = [
+      row('js/app.js', 'app-callback', 2, 3),
+      callback('sidebarController.onArchiveNote'),
+      callback('tabController.onCreateNote'),
+      store('syncStore', 2, 19),
+    ];
+    const hitsWith = (callbacks, stores = { syncStore: 2 }) => [
+      { file: 'js/app.js', rule: 'app-callback', names: callbacks },
+      { file: 'js/app.js', rule: 'legacy-store', names: stores },
+    ];
+    const today = { 'sidebarController.onArchiveNote': 1, 'tabController.onCreateNote': 1, 'sidebarController.onOpenNewTab': 1, 'tabController.getEditor': 1 };
+
+    it("counts a named row's hits by its name, and the file and rule's row the rest", async () => {
+      const root = tempRoot();
+      writeLedger(root, ledger);
+      const result = await run(root, [], { hits: hitsWith(today) });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /OK, 6 hits in 3 files match 4 rows/);
+    });
+
+    it("fails on a second hit for a named callback, even with room in the rest, and on a new one past the rest's count", async () => {
+      const root = tempRoot();
+      writeLedger(root, [{ ...ledger[0], count: 3 }, ...ledger.slice(1)]);
+      assertFails(await run(root, [], { hits: hitsWith({ ...today, 'sidebarController.onArchiveNote': 2 }) }),
+        'js/app.js: 2 app-callback hits for sidebarController.onArchiveNote, 1 allowed by the ledger',
+        "js/app.js: 2 app-callback hits, below the ledger's 3: lower its count to 2 in this PR");
+
+      writeLedger(root, ledger);
+      assertFails(await run(root, [], { hits: hitsWith({ ...today, 'sidebarController.onProbe': 1 }) }),
+        'js/app.js: 3 app-callback hits, 2 allowed by the ledger');
+    });
+
+    it('names the hits no row covers, such as a handle App was never given', async () => {
+      const root = tempRoot();
+      writeLedger(root, ledger);
+      const result = await run(root, [], { hits: hitsWith(today, { syncStore: 3, legacyStorage: 1 }) });
+      assertFails(result,
+        'js/app.js: 3 legacy-store hits for syncStore, 2 allowed by the ledger',
+        'js/app.js: 1 legacy-store hit (legacyStorage) no ledger row covers');
+    });
+
+    it('fails on a named row whose hits are gone, until --write-baseline deletes it and keeps the rest as they are', async () => {
+      const root = tempRoot();
+      writeLedger(root, ledger);
+      const hits = hitsWith(Object.fromEntries(Object.entries(today).filter(([name]) => name !== 'tabController.onCreateNote')));
+      assertFails(await run(root, [], { hits }),
+        "js/app.js: 0 app-callback hits for tabController.onCreateNote, below the ledger's 1: delete the row in this PR");
+      const recorded = await run(root, ['--write-baseline'], { hits });
+      assert.equal(recorded.code, 0, recorded.output);
+      assert.deepEqual(readRows(root), [ledger[0], ledger[1], ledger[3]]);
+      assert.deepEqual(Object.keys(readRows(root)[1]), ['file', 'rule', 'name', 'count', 'owner', 'removeWhen', 'verify']);
+    });
+
+    it('takes a name only on a row of a named rule, as its rule reports it, once per file and rule', async () => {
+      const root = tempRoot();
+      writeLedger(root, [
+        row('js/a.js', 'Storage', 1, 19, { name: 'syncStore' }),
+        callback('not a callback'),
+        callback(7),
+        callback('sidebarController.onArchiveNote'),
+        callback('sidebarController.onArchiveNote'),
+      ]);
+      assertFails(await run(root, []),
+        'js/a.js Storage syncStore names a hit, which only a row of app-callback or legacy-store may',
+        'js/app.js app-callback not a callback needs a name its rule reports',
+        'js/app.js app-callback needs a name its rule reports',
+        'js/app.js app-callback sidebarController.onArchiveNote appears twice');
+    });
+
+    it('--base fails on a named row added for #12 or one whose count rose, and takes a row split into named ones for another owner', async () => {
+      const root = tempRoot();
+      const base = { 'origin/next': [row('js/app.js', 'app-callback', 4, 12), store('syncStore', 2, 19)] };
+      writeLedger(root, [row('js/app.js', 'app-callback', 2, 3), callback('sidebarController.onArchiveNote'), callback('tabController.onCreateNote'), store('syncStore', 2, 19)]);
+      const split = await run(root, ['--base', 'origin/next'], { hits: hitsWith(today), base });
+      assert.equal(split.code, 0, split.output);
+
+      writeLedger(root, [row('js/app.js', 'app-callback', 2, 3), { ...callback('sidebarController.onArchiveNote'), owner: 12 }, callback('tabController.onCreateNote'), store('syncStore', 3, 19)]);
+      assertFails(await run(root, ['--base', 'origin/next'], { hits: hitsWith(today, { syncStore: 3 }), base }),
+        'js/app.js app-callback sidebarController.onArchiveNote: a row added since origin/next names #12 as owner',
+        'js/app.js legacy-store syncStore: count 2 at origin/next rose to 3; fix the new hits instead');
+    });
+
+    it('reads the name a message reports after its rule, and nothing from one that names none', () => {
+      const message = text => ({ ruleId: 'kernel/app-callback', message: text });
+      assert.equal(boundaries.nameOf(message('[app-callback] sidebarController.onArchiveNote: A controller callback into App')), 'sidebarController.onArchiveNote');
+      assert.equal(boundaries.nameOf(message('[legacy-store] syncStore: A handle on js/storage.js')), 'syncStore');
+      assert.equal(boundaries.nameOf(message('[app-callback] A controller callback into App')), null);
+      assert.equal(boundaries.nameOf(message('[app-callback] this[key]: A controller callback into App')), null);
+    });
+  });
+
   it('rejects unknown arguments, --base without a ref, and --base with --write-baseline', async () => {
     const root = tempRoot();
     assert.equal((await run(root, ['--fix'])).code, 2);
@@ -401,6 +505,11 @@ describe('eslint.config.mjs boundary rules', () => {
     assert.equal(code, 0, lines.join('\n'));
   });
 
+  it('has no row #12 owns, since #12 closed with slice 7c: each belongs to the issue that removes it', () => {
+    const { rows } = JSON.parse(fs.readFileSync(path.join(ROOT, boundaries.LEDGER), 'utf8'));
+    assert.deepEqual(rows.filter(r => r.owner === 12).map(r => `${r.file} ${r.rule}`), []);
+  });
+
   it("counts each forbidden use in a copy of js/, and inline comments can't switch a rule off", async () => {
     const root = tempRoot();
     fs.cpSync(path.join(ROOT, 'js'), path.join(root, 'js'), { recursive: true });
@@ -473,12 +582,42 @@ describe('eslint.config.mjs boundary rules', () => {
     write('js/kernel/composition/probe.js', "import '../adapters/legacy/notes.js';\nexport const db = indexedDB;\n");
     write('js/kernel/adapters/legacy/notes.js', 'export const store = self.Storage;\n');
     append('js/storage.js', "indexedDB.open('probe');");
+    // App (#12 slice 7c): the whole of Storage again, by name or as a handle it was never
+    // given, a new use of a handle it has, a new callback, and a second of one that routes a
+    // command; and a controller that takes Storage again
+    append('js/app.js', [
+      "Storage.updateNote({ id: 'probe' });",
+      'export const probeApp = window.app;',
+      "export function probeWrite() { return this.legacyStorage.updateNote({ id: 'probe' }); }",
+      'export function probeSync() { return this.syncStore.importAll({}); }',
+      'export function probeTaken() { const { recovery } = this; return recovery.exportRawStores(); }',
+      'export function probeWire() {',
+      '  this.sidebarController.onProbe = () => this.probe();',
+      '  this.sidebarController.onArchiveNote = () => this.probe();',
+      '}',
+    ].join('\n'));
+    append('js/controllers/tab-controller.js', "function probeStorage() { return this.storage.updateNote({ id: 'probe' }); }");
+    // What the ledger allows App today, so the probes count one past it
+    const allowed = (rule, name) => JSON.parse(fs.readFileSync(path.join(ROOT, boundaries.LEDGER), 'utf8')).rows
+      .find(r => r.file === 'js/app.js' && r.rule === rule && r.name === name).count;
+    const over = (rule, name) => {
+      const count = allowed(rule, name);
+      return `js/app.js: ${count + 1} ${rule} hits${name ? ` for ${name}` : ''}, ${count} allowed by the ledger`;
+    };
 
     const lines = [];
     const code = await boundaries.main([], { root, log: line => lines.push(line), error: line => lines.push(line) });
     const output = lines.join('\n');
     assert.equal(code, 1, output);
     for (const expected of [
+      over('Storage'),
+      'js/app.js: 1 window.app hit no ledger row covers',
+      'js/app.js: 1 legacy-store hit (legacyStorage) no ledger row covers',
+      over('legacy-store', 'syncStore'),
+      over('legacy-store', 'recovery'),
+      over('app-callback'),
+      over('app-callback', 'sidebarController.onArchiveNote'),
+      'js/controllers/tab-controller.js: 1 this.storage hit no ledger row covers',
       'js/sidebar-utils.js: 1 indexedDB hit no ledger row covers',
       'js/editor.js: 1 Storage hit no ledger row covers',
       'js/search.js: 1 window.app hit no ledger row covers',
@@ -508,7 +647,7 @@ describe('eslint.config.mjs boundary rules', () => {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);
     }
     assert.doesNotMatch(output, /js\/kernel\/(composition|adapters)\/|js\/storage\.js|js\/ui\/confirm-dialog\.js/);
-    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 25, output);
+    assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 33, output);
   });
 
   it("keeps #15's registry kit host-neutral in a copy of js/: no browser API, legacy global, or outside import", async () => {

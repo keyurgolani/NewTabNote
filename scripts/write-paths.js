@@ -24,8 +24,9 @@
  *
  * RULES give each call its command, and COMMANDS give each command its slice or the issue
  * it's ledgered to. A call no rule matches fails the check, so a new write path can't land
- * without a decision. Two statuses come from the code instead: "deleted in slice 7" for App's
- * copies of controller paths, and "no live caller" for writes in methods nothing refers to.
+ * without a decision. One status comes from the code instead: "no live caller" for writes in
+ * methods nothing refers to, App's included, since #12 slice 7 deleted App's copies of
+ * controller paths.
  *
  *   npm run check:write-paths              fail when the doc and the code differ, line numbers aside
  *   npm run check:write-paths -- --write   rewrite the doc
@@ -105,12 +106,6 @@ const COMPONENTS = new Set([
   'sidebarController', 'tabController', 'aiChatController', 'settingsController', 'themeBuilderController',
   'analyticsController', 'notesManager', 'shortcutsManager', 'exportImportService', 'syncService', 'graphView', 'domRefs',
   'documentClient', 'settings',
-]);
-
-/** The controllers App creates in init(); `if (this.<controller>)` hands a method off to one */
-const CONTROLLERS = new Set([
-  'sidebarController', 'tabController', 'aiChatController', 'settingsController', 'themeBuilderController',
-  'analyticsController', 'notesManager', 'shortcutsManager', 'exportImportService',
 ]);
 
 /** Files whose every write stays outside the kernel for an issue ("Allowed at close") */
@@ -260,7 +255,6 @@ const STATUSES = [
   ['kernel command, slice 4', '#12 slice 4 (notes and blocks) routes it through the command.'],
   ['kernel command, slice 5', '#12 slice 5 (folders, templates, trash) routes it through the command.'],
   ['kernel command, slice 6', '#12 slice 6 (preferences and session) routes it through the command.'],
-  ['deleted in slice 7', "App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes."],
   ['no live caller', 'Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become.'],
   ['ledgered to #11', "Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows)."],
   ['ledgered to #19', "The sync service, which #19's sync engine replaces."],
@@ -396,113 +390,15 @@ function describe(node) {
   return { method: label('(top level)'), holder: { kind: 'top' } };
 }
 
-// ─── App's live code ───
-
-/** Whether a condition says a controller is there (true), isn't (false), or neither (null) */
-function controllerTest(expr) {
-  const e = strip(expr);
-  if (ts.isPropertyAccessExpression(e) && isThis(e.expression) && CONTROLLERS.has(e.name.text)) return true;
-  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
-    const inner = controllerTest(e.operand);
-    return inner === null ? null : !inner;
-  }
-  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken && controllerTest(e.left) === false) return false;
-  return null;
-}
-
-function exits(statement) {
-  if (!statement) return false;
-  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
-  return ts.isBlock(statement) && statement.statements.some(exits);
-}
-
-/** Visit every node that runs while App's controllers exist */
-function walkLive(node, visit) {
-  (function walk(n) {
-    visit(n);
-    if (ts.isIfStatement(n)) {
-      walk(n.expression);
-      const test = controllerTest(n.expression);
-      if (test !== false) walk(n.thenStatement);
-      if (test !== true && n.elseStatement) walk(n.elseStatement);
-      return;
-    }
-    if (ts.isConditionalExpression(n)) {
-      walk(n.condition);
-      const test = controllerTest(n.condition);
-      if (test !== false) walk(n.whenTrue);
-      if (test !== true) walk(n.whenFalse);
-      return;
-    }
-    if (ts.isBlock(n) || ts.isCaseClause(n) || ts.isDefaultClause(n)) {
-      if (ts.isCaseClause(n)) walk(n.expression);
-      for (const statement of n.statements) {
-        walk(statement);
-        if (ts.isIfStatement(statement) && controllerTest(statement.expression) === true && exits(statement.thenStatement)) break;
-      }
-      return;
-    }
-    ts.forEachChild(n, walk);
-  })(node);
-}
-
-/**
- * The nodes of class App that run once its controllers exist: App's methods reached from the
- * bootstrap (`new App()` and what it calls on it) and from `appCalls`, the names other files
- * call through getApp() or window.app, walked without the code a controller check skips
- */
-function liveAppNodes(sf, appClass, appCalls) {
-  const methods = new Map(); // name -> [member]
-  for (const m of appClass.members) {
-    const name = ts.isConstructorDeclaration(m) ? 'constructor' : m.name && ts.isIdentifier(m.name) ? m.name.text : null;
-    if (!name || !(ts.isConstructorDeclaration(m) || ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m))) continue;
-    if (!methods.has(name)) methods.set(name, []);
-    methods.get(name).push(m);
-  }
-  const roots = new Set([...appCalls, 'constructor'].filter(name => methods.has(name)));
-  (function walk(n) {
-    if (n === appClass) return;
-    if (ts.isPropertyAccessExpression(n) && methods.has(n.name.text) && /^(app|window\.app)$/.test(strip(n.expression).getText(sf))) roots.add(n.name.text);
-    ts.forEachChild(n, walk);
-  })(sf);
-
-  const visited = new Map(); // name -> Set(node)
-  const edges = new Map();
-  for (const [name, members] of methods) {
-    const seen = new Set();
-    const out = new Set();
-    for (const member of members) {
-      walkLive(member, (n) => {
-        seen.add(n);
-        if (ts.isPropertyAccessExpression(n) && isThis(n.expression) && methods.has(n.name.text)) out.add(n.name.text);
-      });
-    }
-    visited.set(name, seen);
-    edges.set(name, out);
-  }
-  const live = new Set();
-  const stack = [...roots];
-  while (stack.length > 0) {
-    const name = stack.pop();
-    if (live.has(name)) continue;
-    live.add(name);
-    for (const next of edges.get(name) || []) stack.push(next);
-  }
-  const nodes = new Set();
-  for (const name of live) for (const n of visited.get(name) || []) nodes.add(n);
-  return nodes;
-}
-
 // ─── Scanning ───
 
 /**
  * Scan one file's source for mutating persistence calls. Returns { hits, problems }: each
- * hit is { file, line, method, kind, op, key, fields, call, holder, appCopy }, and each
- * problem a string. `members` (DatabaseManager's method names) sharpens the message for a
- * method nobody classified, and `appCalls` (the App methods other files call) is what
- * marks App's copies of controller paths in js/app.js.
+ * hit is { file, line, method, kind, op, key, fields, call, holder }, and each problem a
+ * string. `members` (DatabaseManager's method names) sharpens the message for a method
+ * nobody classified.
  */
-function scanSource(file, text, { members = null, appCalls = new Set() } = {}) {
+function scanSource(file, text, { members = null } = {}) {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const lineOf = node => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   const hits = [];
@@ -713,17 +609,9 @@ function scanSource(file, text, { members = null, appCalls = new Set() } = {}) {
     return [...fields].sort();
   }
 
-  let appClass = null;
-  sf.forEachChild(n => {
-    if (ts.isClassDeclaration(n) && n.name && n.name.text === 'App') appClass = n;
-  });
-  const appLive = appClass ? liveAppNodes(sf, appClass, appCalls) : null;
-  const inApp = node => appClass && node.pos >= appClass.pos && node.end <= appClass.end;
-
   const add = (node, fields) => {
     const { method, holder } = describe(node);
     const hit = { file, line: lineOf(node), method, fields: [], ...fields, holder };
-    if (inApp(node)) hit.appCopy = !appLive.has(node);
     hits.push(hit);
     return hit;
   };
@@ -843,22 +731,6 @@ function storageMembers(root = ROOT_DIR) {
     .map(m => (ts.isConstructorDeclaration(m) ? 'constructor' : propertyName(m.name))));
 }
 
-/** The App methods other files call: getApp() and window.app receivers, outside js/app.js */
-function appCallsOf(sources) {
-  const names = new Set();
-  for (const [file, sf] of sources) {
-    if (file === 'js/app.js') continue;
-    (function walk(n) {
-      if (ts.isPropertyAccessExpression(n)
-        && /^(app|window\.app|window\.opener\.app|opener\.app|globalThis\.app|self\.app|this\.getApp\(\))$/.test(strip(n.expression).getText(sf))) {
-        names.add(n.name.text);
-      }
-      ts.forEachChild(n, walk);
-    })(sf);
-  }
-  return names;
-}
-
 /** Where each name is referred to: property reads, bare identifiers, and strings, as {file, pos} */
 function referencesOf(sources) {
   const index = new Map();
@@ -887,7 +759,7 @@ function referencesOf(sources) {
 /** Whether nothing refers to the method or function a hit sits in */
 function noLiveCaller(hit, index) {
   const { holder } = hit;
-  if (hit.appCopy !== undefined || !holder || (holder.kind !== 'method' && holder.kind !== 'function')) return false;
+  if (!holder || (holder.kind !== 'method' && holder.kind !== 'function')) return false;
   const start = holder.node.getStart();
   const end = holder.node.end;
   return !(index.get(holder.name) || []).some(ref => ref.file !== hit.file || ref.pos < start || ref.pos >= end);
@@ -903,7 +775,6 @@ function matches(want, value) {
 }
 
 function statusOf(command, hit) {
-  if (hit.appCopy) return 'deleted in slice 7';
   if (hit.noLiveCaller) return 'no live caller';
   if (Object.hasOwn(LEDGERED_FILES, hit.file)) return `ledgered to #${LEDGERED_FILES[hit.file]}`;
   const entry = COMMANDS[command];
@@ -919,29 +790,17 @@ function classify(hit) {
   return { ...row, command: rule.command, status: statusOf(rule.command, hit) };
 }
 
-/**
- * The new-tab composition root, which constructs App and calls init in place of the
- * bootstrap app.js had (#12, "Layout"). It's in js/kernel/, so no write of its counts, but
- * the App methods it calls are where App's live code starts.
- */
-const APP_ROOT = 'js/kernel/composition/newtab.js';
-
 /** Every write path in js/, classified, and what keeps the doc from being written */
 function collect(root = ROOT_DIR) {
   const files = listFiles(root);
   const texts = new Map(files.map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
   const sources = new Map(files.map(file => [file, ts.createSourceFile(file, texts.get(file), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)]));
   const members = storageMembers(root);
-  const appRoot = path.join(root, APP_ROOT);
-  const appCallers = fs.existsSync(appRoot)
-    ? new Map([...sources, [APP_ROOT, ts.createSourceFile(APP_ROOT, fs.readFileSync(appRoot, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)]])
-    : sources;
-  const appCalls = appCallsOf(appCallers);
   const index = referencesOf(sources);
   const rows = [];
   const problems = [];
   for (const file of files) {
-    const result = scanSource(file, texts.get(file), { members, appCalls });
+    const result = scanSource(file, texts.get(file), { members });
     for (const hit of result.hits) {
       hit.noLiveCaller = noLiveCaller(hit, index);
       rows.push(classify(hit));
@@ -987,7 +846,7 @@ function renderDoc(rows) {
       return `| \`${command}\` | ${status} | ${count('command', command)} |`;
     }),
     '',
-    'Rows marked "deleted in slice 7" or "no live caller" are counted under the command the call would become.',
+    'Rows marked "no live caller" are counted under the command the call would become.',
     '',
     "Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.",
     '',
@@ -1080,6 +939,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, COMPONENTS, CONTROLLERS,
+  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, COMPONENTS,
   LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, classify, collect, renderDoc, withoutLines, check, main,
 };

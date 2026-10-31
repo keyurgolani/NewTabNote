@@ -1,5 +1,5 @@
 {
-  "about": "Hits of the kernel boundary rules (#12, eslint.config.mjs) each legacy file may still have, per rule. `npm run check:boundaries` fails on a hit no row covers, a count that rises, and a count that falls without its row falling in the same PR. Only `--write-baseline` writes this file; a PR may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify. The rules in shrinkOnly (#17's storage access) take no new row and no higher count, except a legacyBlindWrite count that rises by no more than the same file's getStore and objectStore counts fall.",
+  "about": "Hits of the kernel boundary rules (#12, eslint.config.mjs) each legacy file may still have, per rule. `npm run check:boundaries` fails on a hit no row covers, a count that rises, and a count that falls without its row falling in the same PR. Only `--write-baseline` writes this file; a PR may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify. A row of app-callback or legacy-store may name the callback or handle it counts (name), and the file and rule's row without one counts the rest. The rules in shrinkOnly (#17's storage access) take no new row and no higher count, except a legacyBlindWrite count that rises by no more than the same file's getStore and objectStore counts fall.",
   "shrinkOnly": [
     "chrome.storage.local",
     "getStore",
@@ -19,16 +19,187 @@
       "file": "js/app.js",
       "rule": "Storage",
       "count": 1,
-      "owner": 12,
-      "removeWhen": "#12 slices 4 to 7 route App's reads and writes through kernel commands and queries; search index, vector, and sync calls left are re-pointed to #22 and #19",
+      "owner": 19,
+      "removeWhen": "#19's sync engine keeps its WebDAV settings itself, and App's reconnect at startup goes with js/services/sync-service.js",
       "verify": "npm run check:boundaries"
     },
     {
       "file": "js/app.js",
       "rule": "app-callback",
-      "count": 59,
-      "owner": 12,
-      "removeWhen": "#12 slice 7 replaces the domain callbacks with projections; UI-only ones left are re-pointed to #2 or #3",
+      "count": 44,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell wires the editors, tabs, sidebars, palette, and modals itself, with no App between them",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "aiChatController.onEnsureDailyNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell gives AI chat the Daily Note command, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "notesManager.onCreateFirstNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell owns the first note and the empty state, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "shortcutsManager.onEnsureDailyNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell gives the shortcuts the Daily Note command, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onArchiveNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onConvertNoteToTemplate",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onConvertTemplateToNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onExportNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onExtractInsights",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onGenerateTitle",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onImportNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onPermanentlyDeleteNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onRestoreNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onTrashNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "sidebarController.onUnarchiveNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell hands the sidebar NotesManager's note actions, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "app-callback",
+      "name": "tabController.onCreateNote",
+      "count": 1,
+      "owner": 3,
+      "removeWhen": "#3's workspace shell gives TabController the kernel's createNote and its toast, so App routes none",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "legacy-store",
+      "name": "graphStore",
+      "count": 2,
+      "owner": 22,
+      "removeWhen": "#22 builds the graph view from its own pipeline",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "legacy-store",
+      "name": "recovery",
+      "count": 2,
+      "owner": 18,
+      "removeWhen": "#18's backup engine runs the storage guard's raw export",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "legacy-store",
+      "name": "searchIndexStore",
+      "count": 2,
+      "owner": 22,
+      "removeWhen": "#22's search pipeline owns the search index and vectors, so NotesManager needs no handle on Storage",
+      "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/app.js",
+      "rule": "legacy-store",
+      "name": "syncStore",
+      "count": 2,
+      "owner": 19,
+      "removeWhen": "#19's sync engine replaces js/services/sync-service.js",
       "verify": "npm run check:boundaries"
     },
     {
@@ -43,8 +214,8 @@
       "file": "js/controllers/notes-manager.js",
       "rule": "this.storage",
       "count": 10,
-      "owner": 12,
-      "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
+      "owner": 22,
+      "removeWhen": "#22's search pipeline owns the search index and vectors, and NotesManager reaches them through it",
       "verify": "npm run check:boundaries"
     },
     {
