@@ -319,3 +319,134 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     assert.equal(KEEPALIVE_MS, 20 * 1000);
   });
 });
+
+/** The CanvasTabDB connections `of`'s wrapped factory opened that are still open */
+const openConnections = (/** @type {any} */ of) =>
+  of.faults.connections.filter((/** @type {any} */ db) => db.name === 'CanvasTabDB' && !db._closePending).length;
+
+/** Moves the stored record back past the window, as if RETRY_AFTER_MS had gone by */
+const pastTheWindow = (/** @type {any} */ of) => {
+  const recorded = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
+  of.chrome.local[UPGRADE_RECORD_KEY] = { ...recorded, at: recorded.at - RETRY_AFTER_MS - 1 };
+};
+
+describe("review R79's delta: shared retries, one connection, what counts as costly, no call left waiting", () => {
+  it('requests that arrive together after the window share one attempt, which measures once', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient({
+      ...hostOf(of, { estimate: CRAMPED }),
+      indexedDB: of.faults.factory,
+      version: '1.5.0',
+    });
+    const one = storeReadsSince(of, 0);
+    assert.equal(one, 0, 'nothing read before the first attempt starts');
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    const measure = storeReadsSince(of, 0);
+    assert.ok(measure > 0, 'the first attempt measured');
+    pastTheWindow(of);
+    const before = of.faults.transactions.length;
+    const answers = await Promise.all([
+      worker.migration.request(),
+      worker.migration.request(),
+      worker.migration.request(),
+    ]);
+    assert.equal(storeReadsSince(of, before), measure, 'one measure for the three');
+    assert.equal(answers[0], answers[1]);
+    assert.equal(answers[1], answers[2]);
+    assert.equal(answers[0].status, 'space-blocked');
+  });
+
+  it('requests on a space-blocked profile leave the worker one CanvasTabDB connection, inside the window or past it', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient({
+      ...hostOf(of, { estimate: CRAMPED }),
+      indexedDB: of.faults.factory,
+      version: '1.5.0',
+    });
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal((await capture(worker, 'first')).kind, 'committed');
+    for (let i = 0; i < 10; i++) assert.equal((await worker.migration.request()).status, 'space-blocked');
+    assert.equal((await capture(worker, 'inside')).kind, 'committed');
+    assert.equal(openConnections(of), 1, 'inside the window');
+    for (let i = 0; i < 3; i++) {
+      pastTheWindow(of);
+      assert.equal((await worker.migration.request()).status, 'space-blocked');
+    }
+    assert.equal((await capture(worker, 'past')).kind, 'committed');
+    assert.equal(openConnections(of), 1, 'past the window, each run replacing the last connection');
+  });
+
+  it('a run that fails after reading the shape but before reading any store backs nothing off', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    // A recovery database without its stores, which the run refuses before it lists points,
+    // measures, or copies
+    const empty = of.real.open('NewTabNoteRecovery', 1);
+    /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(empty)).close();
+    let recoveryOpens = 0;
+    const factory = {
+      open: (/** @type {string} */ name, /** @type {number} */ version) => {
+        if (name === 'NewTabNoteRecovery') recoveryOpens++;
+        return version === undefined ? of.real.open(name) : of.real.open(name, version);
+      },
+      deleteDatabase: (/** @type {string} */ name) => of.real.deleteDatabase(name),
+      databases: () => of.real.databases(),
+      cmp: (/** @type {unknown} */ a, /** @type {unknown} */ b) => of.real.cmp(a, b),
+    };
+    const worker = createWorkerClient({ ...hostOf(of), indexedDB: /** @type {any} */ (factory), version: '1.5.0' });
+    const failed = await worker.migration.done;
+    assert.deepStrictEqual(
+      [failed.status, failed.shape, failed.failure && failed.failure.code],
+      ['failed', 'legacy', 'recovery-unavailable'],
+    );
+    assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).costly, false);
+    const opens = recoveryOpens;
+    // So the next request runs again at once
+    assert.equal((await worker.migration.request()).status, 'failed');
+    assert.ok(recoveryOpens > opens, 'it ran again');
+  });
+
+  it('a lock manager that throws as it is called is a failed run, and a capture still answers', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const locks = {
+      request: () => {
+        throw new DOMException('lock manager unavailable', 'InvalidStateError');
+      },
+    };
+    const worker = createWorkerClient({ ...hostOf(of), locks: /** @type {any} */ (locks), version: '1.5.0' });
+    const failed = await worker.migration.done;
+    assert.deepStrictEqual([failed.status, failed.shape], ['failed', null]);
+    assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).costly, false);
+    // On the database as it was
+    assert.equal((await capture(worker, 'on-8')).kind, 'committed');
+    assert.equal((await inspect(of.real)).version, 8);
+  });
+
+  it("a kernel that can't be built answers open-failed to a capture and to whenReady, never a call left waiting", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    // A run of this build that stands, so the attempt keeps it without touching IndexedDB
+    of.chrome.local[UPGRADE_RECORD_KEY] = {
+      status: 'space-blocked',
+      code: 'space-short',
+      at: Date.now(),
+      version: '1.5.0',
+      costly: true,
+    };
+    const host = {
+      ...hostOf(of),
+      version: '1.5.0',
+      get indexedDB() {
+        throw new Error('no IndexedDB here');
+      },
+    };
+    const worker = createWorkerClient(/** @type {any} */ (host));
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    const outcome = await capture(worker, 'unbuilt');
+    assert.deepStrictEqual(outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable], [
+      'storage',
+      'open-failed',
+      true,
+    ]);
+    const ready = await worker.whenReady();
+    assert.deepStrictEqual(ready && [ready.cause, ready.code], ['storage', 'open-failed']);
+  });
+});
