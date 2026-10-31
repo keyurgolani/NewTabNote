@@ -1,0 +1,16 @@
+{
+  "rule": "the new tab's row names a start chunk the build doesn't have, which would leave what the page loads at boot out of its start (#27 AC3)",
+  "expect": [
+    "budget/entry"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"startChunks\": [\"workspace\"]",
+      "with": "\"startChunks\": [\"shell\"]"
+    }
+  ]
+}

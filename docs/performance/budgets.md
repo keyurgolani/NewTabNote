@@ -14,7 +14,8 @@
 | New tab | interaction-ready against 1.4.0 | median ratio at most +7% | reported, not gated yet |
 | New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated yet |
 
-- **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment.
+- **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 540.4. Counting the root alone, the 700 KiB row would check nothing. A `startChunks` name the build has no loader chunk for, or one nothing on the page's start loads with `import()`, fails the build, so the row can't quietly fall back to the root.
+- `npm run perf:probe`'s byte mode files every chunk behind an `import()` as lazy, the workspace too, so its start number for the new tab is the root's. The build's number, and `dist-report/chunk-graph.json`, are the start the row holds.
 - Bytes are raw and gzip at level 9, the way `npm run perf:probe` measures them.
 - Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the offscreen document. The service worker's cold-start time is #35's.
 - The new tab's CSS is 66 bytes under its row. Whatever adds CSS to the start path needs the owner's call on the row first.
@@ -62,10 +63,10 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | `budget/bytes` | an entry's start JS, CSS, HTML or fonts is over its row, raw or gzip |
 | `budget/forbidden` | a module or file a gated category names is on an entry's start path |
 | `budget/dependency` | an entry's graph holds a package its row doesn't allow, or its row allows one the graph no longer holds |
-| `budget/entry` | a page or the service worker the build has with no row, a row for an entry it doesn't have that isn't `planned`, or a `planned` row for one it has |
+| `budget/entry` | a page or the service worker the build has with no row, a row for an entry it doesn't have that isn't `planned`, a `planned` row for one it has, or a `startChunks` name the build has no loader chunk for or the page's start doesn't `import()` |
 | `budget/file` | `build/budgets.json` is missing, doesn't parse, or doesn't read as a budget file |
 
-`npm run verify:fixtures` breaks each rule on purpose and checks that the build fails with its code (`test/build-fixtures/budget-*`).
+`npm run verify:fixtures` breaks each rule on purpose and checks that the build fails with its code (`test/build-fixtures/budget-*`). `budget-start-chunk` sets the new tab's JS row to 20 KiB, over the root and under the tab, and the build fails: the workspace chunk is counted. `budget-start-missing` points `startChunks` at a chunk that isn't built.
 
 **Timing and heap** run in CI's `perf` workflow (`.github/workflows/perf.yml`), on every PR push and every push to `next`. It's its own workflow, not part of `pr-gate`, so it never blocks a merge.
 

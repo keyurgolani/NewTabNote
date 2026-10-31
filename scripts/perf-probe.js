@@ -8,7 +8,9 @@
  *
  * - always: for each package's new tab, Popup and Side Panel, the JS, CSS, HTML and font
  *   bytes (raw and gzip) each page loads before it runs, its module count, and what its lazy
- *   chunks and workers would add (scripts/perf/package-bytes.js);
+ *   chunks and workers would add (scripts/perf/package-bytes.js). It reads a package from the
+ *   outside, so a chunk the page's loader boots at once, like today's workspace chunk, is
+ *   lazy here; the build's budget check counts it as start (scripts/build/budgets.js);
  * - with --timing: on `ref-desktop`, for each fixture profile, the install-cold
  *   interaction-ready time and the JS heap at it, over --runs rounds, each run on a fresh
  *   profile (scripts/perf/timing.js). With two or more packages the runs interleave: every

@@ -329,7 +329,8 @@ async function build(argv = process.argv.slice(2)) {
       }
       for (const [name, entry] of Object.entries(/** @type {Record<string, import('./budgets.js').EntryGraph>} */ (graph))) {
         const js = entry.start.bytes.js || { raw: 0, gzip: 0 };
-        console.log(`  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}`);
+        const booted = (entry.boots || []).map((boot) => boot.chunk);
+        console.log(`  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}${booted.length > 0 ? `, with ${booted.join(', ')} loaded at boot` : ''}`);
       }
     }
 
