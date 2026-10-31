@@ -61,18 +61,27 @@ const VIEWS = /** @type {Record<string, any>} */ ({
   DataView,
 });
 
+// Node has Buffer; a browser page or worker, where e2e/harness/fixture-host.js runs this file,
+// has btoa and atob instead
+const NODE = typeof Buffer === 'function';
+
 /**
  * @param {Uint8Array} bytes
  * @returns {string}
  */
-const base64Of = bytes => Buffer.from(bytes).toString('base64');
+const base64Of = bytes => {
+  if (NODE) return Buffer.from(bytes).toString('base64');
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
 
 /**
  * @param {string} text
  * @returns {Uint8Array<ArrayBuffer>}
  */
 const bytesOf = text => {
-  const decoded = Buffer.from(text, 'base64');
+  const decoded = NODE ? Buffer.from(text, 'base64') : Uint8Array.from(atob(text), char => char.charCodeAt(0));
   const bytes = new Uint8Array(new ArrayBuffer(decoded.length));
   bytes.set(decoded);
   return bytes;
@@ -205,13 +214,16 @@ export function compareKeys(a, b) {
     if (Array.isArray(key)) return [4, key];
     if (key && key[TAG] === 'Number') return [0, decodeValue(key)];
     if (key && key[TAG] === 'Date') return [1, Date.parse(key.iso)];
-    if (key && typeof key.base64 === 'string') return [3, Buffer.from(key.base64, 'base64')];
+    if (key && typeof key.base64 === 'string') return [3, bytesOf(key.base64)];
     throw new Error('not a key');
   };
   const [ta, va] = rank(a);
   const [tb, vb] = rank(b);
   if (ta !== tb) return ta - tb;
-  if (ta === 3) return Buffer.compare(va, vb);
+  if (ta === 3) {
+    for (let i = 0; i < Math.min(va.length, vb.length); i++) if (va[i] !== vb[i]) return va[i] - vb[i];
+    return va.length - vb.length;
+  }
   if (ta === 4) {
     for (let i = 0; i < Math.min(va.length, vb.length); i++) {
       const order = compareKeys(va[i], vb[i]);
