@@ -11,6 +11,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, FakeDocument, FakeElement, createDatabase, startEditorClient, settle, waitFor, plain, note, block,
+  releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -65,8 +66,6 @@ async function openPage() {
   FakeElement.prototype.scrollIntoView = () => {};
   await createDatabase(env.indexedDB, { records: profile() });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   const queries = [];
   await startEditorClient(env, { onListQuery: (query) => queries.push(plain(query)) });
   const noteList = env.noteList;
@@ -101,7 +100,7 @@ async function openPage() {
   });
   app.updateEmptyState = () => {};
   queries.length = 0;
-  return { env, Storage, noteList, sidebar, palette, analytics, app, queries };
+  return { env, release: await releaseStorage(env), noteList, sidebar, palette, analytics, app, queries };
 }
 
 const listed = (env) => env.document.getElementById('sidebar-notes-list')
@@ -199,7 +198,7 @@ describe('one note list per new tab', () => {
   });
 
   it('with a search typed in the sidebar, every refresh and read still finishes, and later commits still show', async () => {
-    const { env, Storage, noteList, sidebar, analytics, app } = await openPage();
+    const { env, release, noteList, sidebar, analytics, app } = await openPage();
     // A search engine over the entries the sidebar hands it, as js/search.js's Fuse index is
     sidebar.searchEngine = {
       entries: [],
@@ -216,10 +215,10 @@ describe('one note list per new tab', () => {
       new Promise((resolve) => setTimeout(() => resolve(`${what} hung`), 3000)),
     ]);
     // A write made outside the kernel, which the lists read again with the note list's reload
-    await Storage.archiveNote('A');
+    await release.archiveNote('A');
     assert.equal(await within('archive', noteList.reload()), 'archive finished');
     // Another tab's change, which reaches this one the same way (TabController._onNotesLeftElsewhere)
-    await Storage.trashNote('C');
+    await release.trashNote('C');
     assert.equal(await within('cross-tab', noteList.reload()), 'cross-tab finished');
     // Stats
     env.document.stub(['stat-total-notes', 'stat-total-words', 'stat-daily-notes', 'stat-active-tags']);
@@ -249,9 +248,9 @@ describe('one note list per new tab', () => {
   });
 
   it('opening Stats leaves the sidebar alone, and only its own refresh starts the virtual scroller over', async () => {
-    const { env, Storage, noteList, sidebar, analytics } = await openPage();
+    const { env, release, noteList, sidebar, analytics } = await openPage();
     // An Archive view long enough for the virtual scroller
-    for (let i = 0; i < 55; i++) await Storage.archiveNote((await Storage.createNote(`Archived ${i}`)).id);
+    for (let i = 0; i < 55; i++) await release.archiveNote((await release.createNote(`Archived ${i}`)).id);
     sidebar.sidebarView = 'archive';
     await sidebar.refreshNotesList();
     const scroller = sidebar.virtualScroller;
@@ -266,7 +265,7 @@ describe('one note list per new tab', () => {
     assert.ok(sidebar.virtualScroller === scroller, 'the virtual scroller is the same one');
     // Another tab's change reaches the lists through the note list's reload, which renders them
     // and keeps the scroller, as App's refresh did
-    await Storage.createNote('From another tab');
+    await release.createNote('From another tab');
     await noteList.reload();
     assert.equal(renders, 1);
     assert.ok(sidebar.virtualScroller === scroller, 'the virtual scroller is the same one');
@@ -283,7 +282,7 @@ describe('one note list per new tab', () => {
   });
 
   it("App's empty state follows this tab's commits, and another tab's change, which comes as a reload, leaves it", async () => {
-    const { env, Storage, noteList, app } = await openPage();
+    const { env, release, noteList, app } = await openPage();
     // App's own, on the page's elements, following the list as init has it do
     delete app.updateEmptyState;
     const els = env.document.stub(['empty-state', 'editor-container', 'note-tabs']);
@@ -306,7 +305,7 @@ describe('one note list per new tab', () => {
     // Another tab restores one, which this tab hears of only through a reload: the lists have
     // it, and the editor area stays as it is. It writes what Storage.restoreNote wrote, which had
     // no caller and went with #17 PR 4a
-    await Storage.updateNote({ ...(await Storage.getNote('A')), trashed: false, trashedAt: null });
+    await release.updateNote({ ...(await release.getNote('A')), trashed: false, trashedAt: null });
     await noteList.reload();
     assert.deepEqual(ids(noteList.view('active')), ['A']);
     assert.equal(shown(), true);
@@ -318,7 +317,7 @@ describe('one note list per new tab', () => {
   });
 
   it("a note another tab made, opened from Settings' notes list, takes the empty state away, as App's refresh did", async () => {
-    const { env, Storage, noteList, app } = await openPage();
+    const { env, release, noteList, app } = await openPage();
     delete app.updateEmptyState;
     const els = env.document.stub(['empty-state', 'editor-container', 'note-tabs', 'pages-list', 'settings-modal']);
     els['empty-state'].classList.add('hidden');
@@ -340,7 +339,7 @@ describe('one note list per new tab', () => {
     settings.getEditor = () => editor;
     settings.noteList = noteList;
     settings.onNoteOpened = () => app.showOpenedNote();
-    await Storage.createNote('From another tab');
+    await release.createNote('From another tab');
     await settings.updateNotesList();
     const item = els['pages-list'].querySelectorAll('.page-item')
       .find((el) => el.querySelector('.page-item-name').textContent === 'From another tab');
@@ -375,7 +374,7 @@ describe('one note list per new tab', () => {
   });
 
   it('a bulk archive, then the palette, shows the notes archived; a bulk trash, and they are gone, with App and the counts agreeing', async () => {
-    const { env, Storage, noteList, sidebar, palette, app, queries } = await openPage();
+    const { env, release, noteList, sidebar, palette, app, queries } = await openPage();
     sidebar.selectionMode = true;
     sidebar.selectedNoteIds = new Set(['A', 'C']);
     const archived = sidebar.performBulkAction('archive');
@@ -409,13 +408,13 @@ describe('one note list per new tab', () => {
       [count(env, 'notes-count'), count(env, 'archive-count'), count(env, 'trash-count')],
       [app.notes.length, app.archivedNotes.length, noteList.view('trashed').length],
     );
-    assert.deepEqual(ids(app.notes), ids(await Storage.getAllNotes()));
+    assert.deepEqual(ids(app.notes), ids(await release.getAllNotes()));
   });
 
   it('opening the stats reads the lists again, so they count a note another tab made', async () => {
-    const { env, Storage, noteList, analytics, queries } = await openPage();
+    const { env, release, noteList, analytics, queries } = await openPage();
     // Another tab's note, which this tab's lists haven't heard of
-    await Storage.createNote('From another tab');
+    await release.createNote('From another tab');
     assert.equal(noteList.view('active').length, 4);
     const stats = [];
     env.document.stub(['stat-total-notes', 'stat-total-words', 'stat-daily-notes', 'stat-active-tags']);

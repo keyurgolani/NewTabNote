@@ -7,11 +7,14 @@
 // trashNote is the one place a note is deleted for being empty: Trash in the
 // sidebar and the note menu, the bulk action, and Settings' Trash Note all go
 // through it, and nothing deletes an empty note on a switch, a close, or a start.
+// The rule's own cases run on the frozen 1.4.1 Storage (legacy-env's
+// releaseStorage), which test/kernel/legacy-parity.test.mjs holds the kernel's
+// trashNote to, and the page's cases on the page's kernel (#17 PR 4b).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, note, block, startEditorClient,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, note, block, startEditorClient, releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/notes-manager.js'];
@@ -49,8 +52,6 @@ async function setup(blocks, fields = {}) {
     },
   });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   const stored = async () => {
@@ -60,16 +61,16 @@ async function setup(blocks, fields = {}) {
       blocks: Object.values(recordsOf(db, 'elements')).filter((element) => element.canvasId === 'N').map((element) => element.id).sort(),
     };
   };
-  return { env, Storage, toasts, stored };
+  return { env, release: await releaseStorage(env), toasts, stored };
 }
 
 /**
  * NotesManager as App makes it: its trash goes through the page's removeNotes, here with no
  * panes to move
  */
-async function notesManager(env, Storage) {
+async function notesManager(env) {
   await startEditorClient(env);
-  const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
+  const notes = new (env.get('NotesManager'))({ storage: env.stores.searchIndex, domRefs: null, logger: null, llm: null });
   notes.removal = env.removalFor({ leave: () => null, announce: () => {} });
   return notes;
 }
@@ -77,10 +78,10 @@ async function notesManager(env, Storage) {
 describe('trashing an untitled note', () => {
   for (const [what, blocks] of HOLDING) {
     it(`with only ${what} moves it to trash, blocks and all`, async () => {
-      const { Storage, stored } = await setup(blocks);
-      assert.equal(await Storage.isNoteEmpty('N'), false);
+      const { release, stored } = await setup(blocks);
+      assert.equal(await release.isNoteEmpty('N'), false);
 
-      const result = await Storage.trashNote('N');
+      const result = await release.trashNote('N');
 
       assert.notEqual(result && result.permanentlyDeleted, true, 'not deleted for good');
       const { note: kept, blocks: ids } = await stored();
@@ -90,8 +91,8 @@ describe('trashing an untitled note', () => {
   }
 
   it('from the sidebar or the note menu says it moved to trash', async () => {
-    const { env, Storage, toasts, stored } = await setup(HOLDING[0][1]);
-    const notes = await notesManager(env, Storage);
+    const { env, release, toasts, stored } = await setup(HOLDING[0][1]);
+    const notes = await notesManager(env);
 
     await notes.trashNoteById('N');
 
@@ -109,8 +110,6 @@ describe('trashing an untitled note', () => {
       },
     });
     env.load(...FILES);
-    const Storage = env.get('Storage');
-    await Storage.init();
     await startEditorClient(env);
 
     // The sidebar's bulk trash, which goes through the kernel's runBulkAction since #12, one
@@ -130,10 +129,10 @@ describe('trashing an untitled note', () => {
 
   for (const [what, blocks] of EMPTY) {
     it(`with ${what} still deletes it for good, as before`, async () => {
-      const { Storage, stored } = await setup(blocks);
-      assert.equal(await Storage.isNoteEmpty('N'), true);
+      const { release, stored } = await setup(blocks);
+      assert.equal(await release.isNoteEmpty('N'), true);
 
-      const result = await Storage.trashNote('N');
+      const result = await release.trashNote('N');
 
       assert.deepEqual(JSON.parse(JSON.stringify(result)), { permanentlyDeleted: true });
       const { note: gone, blocks: ids } = await stored();
@@ -143,36 +142,36 @@ describe('trashing an untitled note', () => {
   }
 
   it('with only non-breaking spaces and line breaks deletes it for good, as it does a line break', async () => {
-    const { Storage, stored } = await setup(NBSP);
-    assert.equal(await Storage.isNoteEmpty('N'), true);
-    assert.deepEqual(JSON.parse(JSON.stringify(await Storage.trashNote('N'))), { permanentlyDeleted: true });
+    const { release, stored } = await setup(NBSP);
+    assert.equal(await release.isNoteEmpty('N'), true);
+    assert.deepEqual(JSON.parse(JSON.stringify(await release.trashNote('N'))), { permanentlyDeleted: true });
     assert.equal((await stored()).note, undefined);
   });
 
   it('that holds nothing, from the sidebar, says the empty note was deleted, as before', async () => {
-    const { env, Storage, toasts } = await setup([]);
-    const notes = await notesManager(env, Storage);
+    const { env, release, toasts } = await setup([]);
+    const notes = await notesManager(env);
     await notes.trashNoteById('N');
     assert.deepEqual(toasts, [{ message: 'Empty note deleted', kind: 'success' }]);
   });
 
   it('a titled note that holds nothing still goes to trash, as before', async () => {
-    const { Storage, stored } = await setup([block('n1', 'N', 0, '')], { name: 'Groceries' });
-    await Storage.trashNote('N');
+    const { release, stored } = await setup([block('n1', 'N', 0, '')], { name: 'Groceries' });
+    await release.trashNote('N');
     assert.equal((await stored()).note.trashed, true);
   });
 });
 
-describe('Storage.isEmptyTextBlock, the one rule for an empty block', () => {
+describe("1.4.1 Storage's isEmptyTextBlock, the one rule for an empty block", () => {
   it('only a text block with nothing but spaces, line breaks, and non-breaking spaces is empty', async () => {
-    const { Storage } = await setup([]);
+    const { release } = await setup([]);
     for (const b of [...EMPTY.flatMap(([, blocks]) => blocks), ...NBSP]) {
-      assert.equal(Storage.isEmptyTextBlock(b), true, JSON.stringify(b.content));
+      assert.equal(release.isEmptyTextBlock(b), true, JSON.stringify(b.content));
     }
-    assert.equal(Storage.isEmptyTextBlock({ content: '' }), true, 'a block with no type is a text block');
+    assert.equal(release.isEmptyTextBlock({ content: '' }), true, 'a block with no type is a text block');
     for (const [what, blocks] of HOLDING) {
-      assert.equal(blocks.every((b) => Storage.isEmptyTextBlock(b)), false, what);
+      assert.equal(blocks.every((b) => release.isEmptyTextBlock(b)), false, what);
     }
-    assert.equal(Storage.isEmptyTextBlock(block('t', 'N', 0, '<b></b>')), false, 'any other markup counts');
+    assert.equal(release.isEmptyTextBlock(block('t', 'N', 0, '<b></b>')), false, 'any other markup counts');
   });
 });

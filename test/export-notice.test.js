@@ -11,7 +11,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, settle, waitFor, plain, note, block, FakeDocument,
-  startEditorClient, watchTransactions,
+  startEditorClient, watchTransactions, releaseStorage,
 } = require('./helpers/legacy-env');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -38,8 +38,6 @@ async function setup({ omit = [], canvases, elements, files = FILES, ...shared }
   };
   if (!shared.indexedDB) await createDatabase(env.indexedDB, { omit, records });
   env.load(...files);
-  const Storage = env.get('Storage');
-  await Storage.init();
   // The page's settings port, which reads and records the outcome, and the database's state,
   // as App gives the notice
   await startEditorClient(env);
@@ -51,7 +49,7 @@ async function setup({ omit = [], canvases, elements, files = FILES, ...shared }
       super({ settings: env.settingsClient, storageState: env.storageState, ...deps });
     }
   };
-  return { env, Storage, toasts, ExportNotice };
+  return { env, release: await releaseStorage(env), toasts, ExportNotice };
 }
 
 /** #export-notice as newtab.html has it, between the note's title and its blocks. */
@@ -98,7 +96,7 @@ const record = (env) => env.chrome.local[KEY];
 
 describe('ExportNotice.isDue', () => {
   it('is due for a profile with a note that holds something, with nothing recorded', async () => {
-    const { Storage, ExportNotice } = await setup();
+    const { release, ExportNotice } = await setup();
     assert.equal(await new ExportNotice().isDue(), true);
   });
 
@@ -109,13 +107,13 @@ describe('ExportNotice.isDue', () => {
       [block('u1', 'U', 0, '<br>'), block('u2', 'U', 1, ' &nbsp; <br/> '), block('u3', 'U', 2, ''), block('t1', 'T', 0, 'trashed text')]],
   ]) {
     it(`with ${label}, records "not-needed" and is never due again`, async () => {
-      const { env, Storage, ExportNotice } = await setup({ canvases, elements });
+      const { env, release, ExportNotice } = await setup({ canvases, elements });
       assert.equal(await new ExportNotice().isDue(), false);
       assert.deepEqual(plain(record(env)), { version: 1, outcome: 'not-needed', at: record(env).at });
       assert.equal(typeof record(env).at, 'number');
 
       // The profile's own first note, typed into later, doesn't bring it
-      await Storage.saveElement(block('later', canvases[0] ? canvases[0].id : (await Storage.createNote('Untitled')).id, 1, 'typed later'));
+      await release.saveElement(block('later', canvases[0] ? canvases[0].id : (await release.createNote('Untitled')).id, 1, 'typed later'));
       assert.equal(await new ExportNotice().isDue(), false);
     });
   }
@@ -132,14 +130,14 @@ describe('ExportNotice.isDue', () => {
     ['only an archived note', [note('AR', { name: 'Untitled', archived: true, archivedAt: 1 })], [block('ar1', 'AR', 0, 'old')]],
   ]) {
     it(`is due with ${label}`, async () => {
-      const { env, Storage, ExportNotice } = await setup({ canvases, elements });
+      const { env, release, ExportNotice } = await setup({ canvases, elements });
       assert.equal(await new ExportNotice().isDue(), true);
       assert.equal(record(env), undefined);
     });
   }
 
   it('is not due once this notice or a later one has a recorded outcome', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     for (const value of [{ version: 1, outcome: 'dismissed', at: 1 }, { version: 2, outcome: 'exported', at: 2 }]) {
       env.chrome.local[KEY] = value;
       assert.equal(await new ExportNotice().isDue(), false);
@@ -147,7 +145,7 @@ describe('ExportNotice.isDue', () => {
   });
 
   it('is due when the stored value is not a record of this notice', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     for (const value of ['dismissed', true, { outcome: 'dismissed' }]) {
       env.chrome.local[KEY] = value;
       assert.equal(await new ExportNotice().isDue(), true, JSON.stringify(value));
@@ -156,28 +154,28 @@ describe('ExportNotice.isDue', () => {
 
   for (const store of ['media', 'folders']) {
     it(`is not due while the ${store} store, which Export JSON reads, is missing`, async () => {
-      const { Storage, ExportNotice } = await setup({ omit: [store] });
-      assert.deepEqual(plain(Storage.missingStores), [store]);
+      const { env, ExportNotice } = await setup({ omit: [store] });
+      assert.deepEqual(plain(env.storageState.missingStores), [store]);
       assert.equal(await new ExportNotice().isDue(), false);
     });
   }
 
   for (const store of ['themes', 'settings', 'vectors']) {
     it(`is still due while the ${store} store, which Export JSON doesn't read, is missing`, async () => {
-      const { Storage, ExportNotice } = await setup({ omit: [store] });
+      const { release, ExportNotice } = await setup({ omit: [store] });
       assert.equal(await new ExportNotice().isDue(), true);
     });
   }
 
   it('a failed read decides nothing and records nothing', async () => {
-    const { env, Storage, ExportNotice } = await setup({ canvases: [], elements: [] });
+    const { env, release, ExportNotice } = await setup({ canvases: [], elements: [] });
     failNextRead(env, KEY);
     await assert.rejects(new ExportNotice().isDue());
     assert.equal(record(env), undefined);
   });
 
   it('after a full export, a tab that shows it starts at the check-the-file step', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     env.chrome.local[RECEIPT] = 1700000000000;
     const notice = new ExportNotice({ onExport: async () => true });
     assert.equal(await notice.isDue(), true);
@@ -189,7 +187,7 @@ describe('ExportNotice.isDue', () => {
   });
 
   it('a failed read of that receipt starts it at the first step', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     env.chrome.local[RECEIPT] = 1700000000000;
     failNextRead(env, RECEIPT);
     const notice = new ExportNotice({ onExport: async () => true });
@@ -200,18 +198,20 @@ describe('ExportNotice.isDue', () => {
   });
 });
 
-describe('Storage settings reads', () => {
+// 1.4.1's settings reads, which the settings port's preferencesOr and workspaceDataOr answer as,
+// and the holders' accessor too (test/kernel/storage-facade.test.mjs), since #17 PR 4b
+describe("1.4.1 Storage's settings reads", () => {
   it('getSetting is readSetting with a default for a missing key or a failed read', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     env.chrome.local.setting_theme = 'dark';
-    assert.equal(await Storage.getSetting('theme', 'system'), 'dark');
-    assert.equal(await Storage.readSetting('theme'), 'dark');
-    assert.equal(await Storage.getSetting('nothingHere', 'fallback'), 'fallback');
-    assert.equal(await Storage.readSetting('nothingHere'), undefined);
+    assert.equal(await release.getSetting('theme', 'system'), 'dark');
+    assert.equal(await release.readSetting('theme'), 'dark');
+    assert.equal(await release.getSetting('nothingHere', 'fallback'), 'fallback');
+    assert.equal(await release.readSetting('nothingHere'), undefined);
     failNextRead(env, 'setting_theme');
-    assert.equal(await Storage.getSetting('theme', 'system'), 'system');
+    assert.equal(await release.getSetting('theme', 'system'), 'system');
     failNextRead(env, 'setting_theme');
-    await assert.rejects(Storage.readSetting('theme'), /IO error/);
+    await assert.rejects(release.readSetting('theme'), /IO error/);
   });
 });
 
@@ -236,7 +236,7 @@ function failNextRead(env, key) {
 
 describe('ExportNotice.record', () => {
   it('writes one versioned record through the settings API, and a recorded outcome stands', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     const notice = new ExportNotice();
     await notice.record('dismissed');
     const first = plain(record(env));
@@ -249,7 +249,7 @@ describe('ExportNotice.record', () => {
   });
 
   it('"exported" replaces "dismissed", so an export that finishes after another tab\'s Not now counts', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     const notice = new ExportNotice();
     await notice.record('dismissed');
     await notice.record('exported');
@@ -283,7 +283,7 @@ describe('ExportNotice.record', () => {
   });
 
   it('a failed read writes nothing over what is there', async () => {
-    const { env, Storage, ExportNotice } = await setup();
+    const { env, release, ExportNotice } = await setup();
     env.chrome.local[KEY] = { version: 1, outcome: 'exported', at: 1 };
     failNextRead(env, KEY);
     await assert.rejects(new ExportNotice().record('dismissed'));
@@ -293,7 +293,7 @@ describe('ExportNotice.record', () => {
 
 describe('the notice', () => {
   it('fills the static markup: heading and text in the live region, buttons outside it, named by its heading', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const focused = env.document.activeElement;
     const { card } = showNotice(env);
 
@@ -317,7 +317,7 @@ describe('the notice', () => {
   });
 
   it('Export JSON records nothing: it asks to check the file, with Done, Export again, and Not now', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const before = await dumpDatabase(env.indexedDB);
     const { card, calls } = showNotice(env, { exports: [true, true] });
     const exportButton = button(card, 'Export JSON');
@@ -344,7 +344,7 @@ describe('the notice', () => {
   });
 
   it('a failed export keeps the notice as it was; its own toast says why', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const { card, calls } = showNotice(env, { exports: [false] });
     button(card, 'Export JSON').click();
     await settle();
@@ -356,7 +356,7 @@ describe('the notice', () => {
 
   it('Not now records "dismissed", from either step, and changes no note', async () => {
     for (const exportFirst of [false, true]) {
-      const { env, Storage } = await setup();
+      const { env, release } = await setup();
       const before = await dumpDatabase(env.indexedDB);
       const { card } = showNotice(env);
       if (exportFirst) {
@@ -374,7 +374,7 @@ describe('the notice', () => {
   });
 
   it('ignores clicks while a choice runs, marked by aria-busy', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     let finish;
     let exports = 0;
     const notice = new (env.get('ExportNotice'))({
@@ -400,7 +400,7 @@ describe('the notice', () => {
   });
 
   it('a choice that fails to save keeps the notice and says so', async () => {
-    const { env, Storage, toasts } = await setup();
+    const { env, release, toasts } = await setup();
     const { card } = showNotice(env);
     env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     button(card, 'Not now').click();
@@ -412,7 +412,7 @@ describe('the notice', () => {
   });
 
   it('goes away when another tab records a choice, and stops listening', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const listeners = env.chrome.api.storage.onChanged.listeners;
     const before = listeners.length;
     const { card } = showNotice(env);
@@ -442,7 +442,7 @@ describe('the notice', () => {
   });
 
   it('an export from Settings, in any tab, moves it to the check-the-file step', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const { card } = showNotice(env);
     env.chrome.api.storage.onChanged.listeners.slice().forEach((listener) => listener({ [RECEIPT]: { newValue: 1 } }, 'local'));
     assert.equal(card.querySelector('.export-notice-body').textContent, CONFIRM);
@@ -450,7 +450,7 @@ describe('the notice', () => {
   });
 
   it('when it closes holding focus, onClose gets where focus was before it moved into the notice', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const kept = showNotice(env);
     button(kept.card, 'Not now').click();
     await settle();
@@ -490,7 +490,7 @@ describe('the receipt Settings writes after a full export', () => {
 
   it('Export JSON and Create Backup write it, and move a showing notice to the check-the-file step', async () => {
     for (const [run, countsAsBackup] of [['exportAll', true], ['createBackup', false]]) {
-      const { env, Storage, settings, downloads } = await settingsSetup();
+      const { env, release, settings, downloads } = await settingsSetup();
       const { card } = showNotice(env);
       assert.equal(await settings[run](), true);
       assert.equal(downloads.length, 1);
@@ -504,12 +504,12 @@ describe('the receipt Settings writes after a full export', () => {
 
   it('Export JSON and Create Backup first save what every open editor has pending, so the file has the last edit', async () => {
     for (const run of ['exportAll', 'createBackup']) {
-      const { env, Storage, settings, downloads } = await settingsSetup();
+      const { env, release, settings, downloads } = await settingsSetup();
       // The primary and split editors and Picture-in-Picture, each with an edit inside its debounce
       const pending = (id, noteId, content) => ({
         flushSave: async () => {
           await settle(2);
-          await Storage.saveElement(block(id, noteId, 9, content));
+          await release.saveElement(block(id, noteId, 9, content));
         },
       });
       const tabs = Object.create(env.get('TabController').prototype);

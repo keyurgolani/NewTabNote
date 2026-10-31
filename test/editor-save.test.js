@@ -11,7 +11,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
-  runUntil, startEditorClient, startNewTabKernel, quietNavigation,
+  runUntil, startEditorClient, startNewTabKernel, quietNavigation, releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -70,8 +70,8 @@ afterEach(() => {
 
 /**
  * Record transactions opened on the database, on any connection: the page's kernel writes
- * through #17's adapter's own since #17 PR 4a, and the test's Storage calls through Storage's.
- * It comes off when the test ends.
+ * through #17's adapter's own since #17 PR 4a, and the test's own writes through the frozen
+ * 1.4.1 Storage's (legacy-env's releaseStorage). It comes off when the test ends.
  */
 function spyTransactions() {
   const spy = spyAllTransactions();
@@ -85,8 +85,8 @@ const writesOf = (opened) => opened.filter((t) => t.mode === 'readwrite');
  * Puts `blocks` as another writer would, one at a time (Storage.saveElements had no caller once
  * the new tab wrote through #17's adapter, and went with #17 PR 4a)
  */
-async function putBlocks(Storage, blocks) {
-  for (const saved of blocks) await Storage.saveElement(saved);
+async function putBlocks(release, blocks) {
+  for (const saved of blocks) await release.saveElement(saved);
 }
 
 /**
@@ -119,10 +119,9 @@ async function setup() {
     },
   });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env);
-  return { env, Storage };
+  // Another writer's records, and reads of what's stored, through the frozen 1.4.1 Storage
+  return { env, release: await releaseStorage(env) };
 }
 
 /** canvasId and content of every element, by element ID. */
@@ -169,11 +168,11 @@ function allowDeletes(editor) {
 
 describe('BlockEditor save and load (AC1)', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -241,15 +240,15 @@ describe('BlockEditor save and load (AC1)', () => {
     // the note it leaves first; anything else changing it must not move blocks.
     const B = env.get('Block');
     editor.noteId = 'B';
-    editor.noteData = await Storage.getNote('B');
-    editor.blocks = (await Storage.getElementsByNote('B')).map((data) => B.deserialize(data));
+    editor.noteData = await release.getNote('B');
+    editor.blocks = (await release.getElementsByNote('B')).map((data) => B.deserialize(data));
     env.frames();
     await saving;
 
     const rows = await elementsById(env);
     assert.deepEqual(rows.b1, { canvasId: 'B', content: 'bravo' }, 'no B block moved to A');
     assert.deepEqual([rows.a1.canvasId, rows.a2.canvasId], ['A', 'A'], 'no A block moved to B');
-    assert.equal((await Storage.getNote('A')).name, note('A').name, "A's record not overwritten with B's");
+    assert.equal((await release.getNote('A')).name, note('A').name, "A's record not overwritten with B's");
   });
 
   it('writes the note and its blocks in one readwrite transaction', async () => {
@@ -262,7 +261,7 @@ describe('BlockEditor save and load (AC1)', () => {
     const first = writesOf(opened)[0];
     // #17's adapter commits the save's units in one transaction, its links with its blocks
     assert.deepEqual(first, { stores: ['canvases', 'elements', 'links'], mode: 'readwrite' });
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.ok(stored.updatedAt > note('A').updatedAt, 'updatedAt set like updateNote');
   });
 
@@ -318,11 +317,11 @@ describe('BlockEditor save and load (AC1)', () => {
 
 describe('BlockEditor page lifecycle flush (AC1)', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -356,7 +355,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     env.window.fire('pagehide');
     assert.equal(writesOf(opened).length, 1);
     await settle();
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'tab closing' });
     assert.equal(stored.preview, 'tab closing', 'preview computed without a frame');
   });
@@ -446,11 +445,11 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
 
 describe('BlockEditor deletes stay deleted', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = allowDeletes(makeEditor(env));
     await editor.loadNote('A');
   });
@@ -504,11 +503,11 @@ describe('BlockEditor deletes stay deleted', () => {
 
 describe('BlockEditor in a PiP window', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -552,12 +551,12 @@ describe('BlockEditor in a PiP window', () => {
 
 describe('BlockEditor saves of a deleted note', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
   let feedback;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = allowDeletes(makeEditor(env));
     feedback = watchFeedback(env, editor);
     await editor.loadNote('A');
@@ -571,7 +570,7 @@ describe('BlockEditor saves of a deleted note', () => {
 
   it('an edit still pending when the note is deleted does not bring it back, and stays on screen with a notice', async () => {
     type(editor, 'typed before the delete');
-    await Storage.permanentlyDeleteNote('A'); // emptying trash, or another tab
+    await release.permanentlyDeleteNote('A'); // emptying trash, or another tab
     await runUntil(env, editor.loadNote('B')); // the switch writes the pending edit
 
     const { notes, elements } = await stored();
@@ -593,7 +592,7 @@ describe('BlockEditor saves of a deleted note', () => {
 
   it('"Save as a new note" keeps the text in a new active note, and later typing saves there', async () => {
     type(editor, 'typed before the delete');
-    await Storage.permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     await runUntil(env, editor.flushSave());
     assert.equal(editor.noteGone, true);
 
@@ -621,7 +620,7 @@ describe('BlockEditor saves of a deleted note', () => {
 
   it('a note picked while "Save as a new note" runs opens after it, and each note keeps its own blocks', async () => {
     type(editor, 'typed before the delete');
-    await Storage.permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     await runUntil(env, editor.flushSave());
 
     const saving = editor.saveAsNewNote();
@@ -639,7 +638,7 @@ describe('BlockEditor saves of a deleted note', () => {
 
   it('moving on from the notice loads the next note', async () => {
     type(editor, 'typed before the delete');
-    await Storage.permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     await runUntil(env, editor.flushSave());
     assert.equal(editor.noteGone, true);
 
@@ -651,12 +650,12 @@ describe('BlockEditor saves of a deleted note', () => {
   });
 
   it('trashing an empty untitled note while an edit is pending deletes it for good, and the editor keeps the text', async () => {
-    const untitled = await Storage.createNote('Untitled');
+    const untitled = await release.createNote('Untitled');
     await runUntil(env, editor.loadNote(untitled.id));
     type(editor, 'typed into the untitled note');
 
     // Storage alone: with no stored content, trashNote deletes it. The app writes the edit first (forgetNotes).
-    const trashed = await Storage.trashNote(untitled.id);
+    const trashed = await release.trashNote(untitled.id);
     assert.equal(trashed.permanentlyDeleted, true);
     await runUntil(env, editor.loadNote('B'));
 
@@ -678,7 +677,7 @@ describe('BlockEditor saves of a deleted note', () => {
     await settle();
     assert.equal(editor._retryPending, true, 'the failed save of A waits to retry');
 
-    await Storage.permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     env.clock.tick(1000);
     await runUntil(env, editor.flushSave());
 
@@ -694,11 +693,11 @@ describe('BlockEditor saves of a deleted note', () => {
 
 describe('BlockEditor failed save before a note switch', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -859,15 +858,15 @@ describe('BlockEditor flushSave answers whether what it holds is stored (#27 sli
 
 describe('BlockEditor reloading the open note', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
     // Another writer adds a block, as the AI insert does before it reloads the note.
-    await putBlocks(Storage, [block('ai1', 'A', 5, 'from AI')]);
+    await putBlocks(release, [block('ai1', 'A', 5, 'from AI')]);
   });
 
   it('keeps an edit typed while the reload reads the note', async () => {
@@ -911,30 +910,30 @@ describe('BlockEditor reloading the open note', () => {
 
 describe('BlockEditor saves keep trash and archive state', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
 
   /** Change the stored note the way another tab, trash, or an import does. */
   async function storeFlags(flags) {
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     for (const [key, value] of Object.entries(flags)) {
       if (value === undefined) delete stored[key];
       else stored[key] = value;
     }
-    await Storage.updateNote(stored);
+    await release.updateNote(stored);
   }
 
   async function saveEdit(text) {
     type(editor, text);
     env.clock.tick(500);
     await runUntil(env, editor.flushSave());
-    return Storage.getNote('A');
+    return release.getNote('A');
   }
 
   it('an older copy of the note in the editor cannot take it out of trash', async () => {
@@ -967,7 +966,7 @@ describe('BlockEditor saves keep trash and archive state', () => {
   async function refreshInsights() {
     editor.ai = { isConfigured: () => true, extractInsights: async () => ({ todos: ['call'] }) };
     await runUntil(env, editor.refreshInsights());
-    return Storage.getNote('A');
+    return release.getNote('A');
   }
 
   it('Refresh insights after a save keeps a trash made elsewhere, and writes the insights', async () => {
@@ -992,30 +991,29 @@ describe('BlockEditor saves keep trash and archive state', () => {
     await runUntil(env, env.documentClient.saveSnapshot('A', [{ id: 'a1', type: 'text', content: 'restored' }], 'From the snapshot'));
     const [summary] = await runUntil(env, env.documentClient.snapshots('A'));
     await runUntil(env, editor._revertToSnapshot(summary));
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.trashed, stored.trashedAt, stored.name], [true, 42, 'From the snapshot']);
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'restored' });
   });
 
   it('Refresh insights on a note deleted meanwhile leaves it deleted', async () => {
     await saveEdit('edited before the delete, long enough for insights');
-    await Storage.permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     assert.equal(await refreshInsights(), undefined);
   });
 });
 
 describe('BlockEditor template inserts (#12)', () => {
   it("inserts a template's blocks in the order 1.4.x read them, by id, which R1 keeps", async () => {
-    const { env } = await setup();
+    const { env, release } = await setup();
     // The template's blocks were dragged around: t1 shows second, t2 first. Their ids have the
     // form 1.4.x's Utils.generateId gave every block, which begins with when it was made.
-    const Storage = env.get('Storage');
-    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
-    await putBlocks(Storage, [
+    await release.updateNote({ ...(await release.getNote('C')), isTemplate: true });
+    await putBlocks(release, [
       block('1700000000000-t1aaaaaaa', 'C', 1, 'second shown'),
       block('1700000005000-t2bbbbbbb', 'C', 0, 'first shown'),
     ]);
-    await Storage.deleteElements(['c1']);
+    await release.deleteElements(['c1']);
     const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
     await editor.loadNote('A');
     // The caret is in A's first block, where "/template" was typed
@@ -1029,23 +1027,22 @@ describe('BlockEditor template inserts (#12)', () => {
 
     const inserted = editor.blocks.slice(1, 3).map((b) => b.content);
     assert.deepEqual(inserted, ['second shown', 'first shown']);
-    const stored = (await Storage.getElementsByNote('A')).sort((a, b) => a.order - b.order).map((b) => b.content);
+    const stored = (await release.getElementsByNote('A')).sort((a, b) => a.order - b.order).map((b) => b.content);
     assert.deepEqual(plain(stored).slice(1, 3), ['second shown', 'first shown'], 'and saves them in that order');
   });
 
   it('inserts them in the order they were made when legacy and UUID ids mix, as 1.4.x did by id (#17 PR 2a)', async () => {
-    const { env } = await setup();
-    const Storage = env.get('Storage');
-    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    const { env, release } = await setup();
+    await release.updateNote({ ...(await release.getNote('C')), isTemplate: true });
     // Two blocks from 1.4.x, whose ids sort by time, then two a 2a build made, whose UUIDs don't:
     // one typed, and one captured, which has no createdAt and keeps its capture time as order
-    await putBlocks(Storage, [
+    await putBlocks(release, [
       block('1700000000000-aaaaaaaaa', 'C', 3, 'made first', { createdAt: 1700000000000 }),
       block('0f2c41aa-0000-4000-8000-000000000003', 'C', 0, 'made third', { createdAt: 1700000002000 }),
       block('1700000001000-bbbbbbbbb', 'C', 2, 'made second', { createdAt: 1700000001000 }),
       block('00a1b2c3-0000-4000-8000-000000000004', 'C', 1700000003000, 'captured last', { createdAt: undefined }),
     ]);
-    await Storage.deleteElements(['c1']);
+    await release.deleteElements(['c1']);
     const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
     await editor.loadNote('A');
     const blockEl = { dataset: { id: 'a1' }, querySelector: () => ({ textContent: '/template' }) };
@@ -1076,38 +1073,36 @@ describe('BlockEditor template inserts (#12)', () => {
   }
 
   it('puts the copies 1.4.x made from a template after the blocks typed before them, by the time in their ids (#17 PR 2a)', async () => {
-    const { env } = await setup();
-    const Storage = env.get('Storage');
-    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    const { env, release } = await setup();
+    await release.updateNote({ ...(await release.getNote('C')), isTemplate: true });
     // Two blocks typed in the template, then another template put in after them. 1.4.x gave each
     // copy a new id, which begins with when it went in, and kept the createdAt of the block it
     // copied, from before the typed ones. Both copies went in within one millisecond, where 1.4.x's
     // id order fell to the random rest of each id: their order breaks that tie.
-    await putBlocks(Storage, [
+    await putBlocks(release, [
       block('1700000100000-k2m9x0a1b', 'C', 0, 'typed first', { createdAt: 1700000100000 }),
       block('1700000101000-a0b1c2d3e', 'C', 1, 'typed second', { createdAt: 1700000101000 }),
       block('1700000200000-zz9y8x7w6', 'C', 2, 'copy put in first', { createdAt: 1700000000000 }),
       block('1700000200000-aa1b2c3d4', 'C', 3, 'copy put in second', { createdAt: 1700000000500 }),
     ]);
-    await Storage.deleteElements(['c1']);
+    await release.deleteElements(['c1']);
 
     assert.deepEqual(await insertTemplate(env, 'C', 4), ['typed first', 'typed second', 'copy put in first', 'copy put in second']);
   });
 
   it('puts UUID captures in the order they were captured, after the editor has saved them (#17 PR 2a)', async () => {
-    const { env } = await setup();
-    const Storage = env.get('Storage');
+    const { env, release } = await setup();
     const { captureBlock } = await import('../js/kernel/core/domain/note.js');
-    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    await release.updateNote({ ...(await release.getNote('C')), isTemplate: true });
     // Two captures a minute apart, as the kernel stores them, whose UUIDs sort the other way
     const capturedAt = 1761800000000;
     const first = 'f0000000-0000-4000-8000-000000000001';
     const second = '00000000-0000-4000-8000-000000000002';
-    await putBlocks(Storage, [
+    await putBlocks(release, [
       captureBlock({ id: first, noteId: 'C', capture: { type: 'text', content: 'captured first' }, now: capturedAt }),
       captureBlock({ id: second, noteId: 'C', capture: { type: 'text', content: 'captured second' }, now: capturedAt + 60_000 }),
     ]);
-    await Storage.deleteElements(['c1']);
+    await release.deleteElements(['c1']);
     // The editor loads both at one moment, an hour later, and the second is moved up. The save
     // gives each block its place as its order, and a createdAt: the one it has, else the load's.
     const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
@@ -1122,7 +1117,7 @@ describe('BlockEditor template inserts (#12)', () => {
     editor.moveBlockByDirection(second, -1);
     env.clock.tick(500);
     await runUntil(env, editor.flushSave());
-    const saved = (await Storage.getElementsByNote('C')).sort((a, b) => a.order - b.order);
+    const saved = (await release.getElementsByNote('C')).sort((a, b) => a.order - b.order);
     assert.deepEqual(saved.map((b) => b.content), ['captured second', 'captured first'], 'the save keeps the move');
 
     assert.deepEqual(await insertTemplate(env, 'C', 2, editor), ['captured first', 'captured second']);
@@ -1148,19 +1143,18 @@ describe("the search index's and the embeddings' text, in the order a note's blo
       },
     });
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/notes-manager.js');
-    const Storage = env.get('Storage');
-    await Storage.init();
-    // The page's document client, which NotesManager reads a note's blocks through
+    // The page's document client, which NotesManager reads a note's blocks through, and the
+    // search index handle App gives it (#17 PR 4b)
     await startEditorClient(env);
     const quiet = { debug() {}, info() {}, warn() {}, error() {} };
     const notes = new (env.get('NotesManager'))({
-      storage: Storage,
+      storage: env.stores.searchIndex,
       domRefs: null,
       logger: quiet,
       llm: null,
       documentClient: env.documentClient,
     });
-    const active = [await Storage.getNote('N')];
+    const active = [await (await releaseStorage(env)).getNote('N')];
     notes.noteList = { view: (which) => (which === 'active' ? active : []), settled: async () => {} };
     return { env, notes };
   }
@@ -1207,11 +1201,11 @@ describe("the search index's and the embeddings' text, in the order a note's blo
 
 describe('BlockEditor save hold (import)', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -1227,7 +1221,7 @@ describe('BlockEditor save hold (import)', () => {
 
     // The import commit trashes A, then the editor takes on the same flags.
     const flags = { trashed: true, trashedAt: 123, archived: false, archivedAt: null };
-    await Storage.updateNote({ ...(await Storage.getNote('A')), ...flags });
+    await release.updateNote({ ...(await release.getNote('A')), ...flags });
     const writesBeforeRelease = writesOf(opened).length;
     editor.adoptNoteFlags(flags);
     editor.releaseSaves();
@@ -1235,7 +1229,7 @@ describe('BlockEditor save hold (import)', () => {
     await editor.flushSave();
 
     assert.ok(writesOf(opened).length > writesBeforeRelease, 'the held save ran after release');
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.equal(stored.trashed, true);
     assert.equal(stored.trashedAt, 123);
     assert.equal(editor.noteData.trashed, true);
@@ -1298,9 +1292,9 @@ function typeTitle(editor, title) {
 }
 
 /** Give a note a search entry, as Storage.createNote does */
-function putSearchEntry(Storage, noteId, name) {
+function putSearchEntry(release, noteId, name) {
   return new Promise((resolve, reject) => {
-    const tx = Storage.db.transaction('search_index', 'readwrite');
+    const tx = release.db.transaction('search_index', 'readwrite');
     tx.objectStore('search_index').put({ noteId, name, content: '', updatedAt: 1 });
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
@@ -1308,9 +1302,9 @@ function putSearchEntry(Storage, noteId, name) {
 }
 
 /** The search entry of a note, as stored */
-function searchEntryOf(Storage, noteId) {
+function searchEntryOf(release, noteId) {
   return new Promise((resolve, reject) => {
-    const request = Storage.db.transaction('search_index').objectStore('search_index').get(noteId);
+    const request = release.db.transaction('search_index').objectStore('search_index').get(noteId);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -1318,11 +1312,11 @@ function searchEntryOf(Storage, noteId) {
 
 describe("BlockEditor saves write the note's content only (#12)", () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -1331,11 +1325,11 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
   async function saveEdit(text) {
     type(editor, text);
     await runUntil(env, editor.flushSave());
-    return Storage.getNote('A');
+    return release.getNote('A');
   }
 
   it("moving the open note into a folder survives the editor's next save", async () => {
-    const folder = await Storage.createFolder('Work');
+    const folder = await release.createFolder('Work');
     // The sidebar's move, which goes through the kernel
     const moved = await env.kernel.execute({ type: 'moveNoteToFolder', commandId: 'move-a', noteId: 'A', folderId: folder.id });
     assert.equal(moved.kind, 'committed', JSON.stringify(moved));
@@ -1346,14 +1340,14 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
 
   it("converting the open note to a template survives the editor's next save", async () => {
     // As NotesManager.convertNoteToTemplate writes it
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     Object.assign(stored, { isTemplate: true, folderId: null });
-    await Storage.updateNote(stored);
+    await release.updateNote(stored);
     assert.equal((await saveEdit('typed after converting')).isTemplate, true, 'still a template');
   });
 
   it("pinning the open note survives the editor's next save", async () => {
-    await Storage.updateNote({ ...(await Storage.getNote('A')), pinned: true }); // the sidebar's pin
+    await release.updateNote({ ...(await release.getNote('A')), pinned: true }); // the sidebar's pin
     assert.equal((await saveEdit('typed after pinning')).pinned, true);
   });
 
@@ -1372,7 +1366,7 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
     assert.equal(written.name, 'Groceries', 'the typed title went in with the blocks');
     assert.equal(written.titleManuallySet, true);
     assert.ok(saves[0].puts.some((p) => p.store === 'elements' && p.record.id === 'a1' && p.record.content === 'eggs'));
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet, stored.preview], ['Groceries', true, 'eggs']);
   });
 
@@ -1393,10 +1387,10 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
 
   it('a content save after a generated title landed leaves it, and marks nothing as set by hand', async () => {
     // NotesManager's auto-title: it stores the title, then shows it in the editor
-    await Storage.updateNote({ ...(await Storage.getNote('A')), name: 'Generated', lastAutoTitleAt: 5 });
+    await release.updateNote({ ...(await release.getNote('A')), name: 'Generated', lastAutoTitleAt: 5 });
     editor.setTitleProgrammatically('Generated');
     await runUntil(env, editor.flushSave());
-    let stored = await Storage.getNote('A');
+    let stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Generated', false]);
 
     stored = await saveEdit('typed after the title came');
@@ -1408,13 +1402,13 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
     typeTitle(editor, 'Note A');
     type(editor, 'content');
     await runUntil(env, editor.flushSave());
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Note A', false]);
     assert.ok(writes.some((w) => w.puts.some((p) => p.store === 'elements')), 'the content was saved');
   });
 
   it('a save with no typed title leaves a rename made elsewhere, and marks nothing as set by hand', async () => {
-    await Storage.updateNote({ ...(await Storage.getNote('A')), name: 'Renamed in the sidebar' });
+    await release.updateNote({ ...(await release.getNote('A')), name: 'Renamed in the sidebar' });
     const stored = await saveEdit('typed after the rename');
     assert.equal(stored.name, 'Renamed in the sidebar');
     assert.equal(stored.titleManuallySet, false);
@@ -1429,7 +1423,7 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
     const saves = writes.filter((w) => w.puts.some((p) => p.store === 'elements'));
     assert.equal(saves.length, 1);
     assert.equal(saves[0].puts.find((p) => p.store === 'canvases').record.name, 'Weekly plan');
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet, typeof stored.lastAutoTitleAt], ['Weekly plan', false, 'number']);
   });
 
@@ -1442,59 +1436,59 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
     assert.equal(editor._retryPending, true);
     type(editor, 'typed before the retry');
     await runUntil(env, editor.flushSave());
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Retried title', true]);
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed before the retry' });
   });
 
   it("a save renames the note's search entry and replaces its wiki links", async () => {
-    await Storage.updateNote({ ...(await Storage.getNote('B')), name: 'Bravo' });
-    await putSearchEntry(Storage, 'A', 'Note A');
+    await release.updateNote({ ...(await release.getNote('B')), name: 'Bravo' });
+    await putSearchEntry(release, 'A', 'Note A');
     typeTitle(editor, 'Alpha');
     type(editor, 'see [[bravo]] and [[Alpha]]');
     await runUntil(env, editor.flushSave());
-    assert.deepEqual(plain((await Storage.getBacklinks('B')).map((n) => n.id)), ['A'], 'a link to B, none to itself');
-    assert.equal((await searchEntryOf(Storage, 'A')).name, 'Alpha');
+    assert.deepEqual(plain((await release.getBacklinks('B')).map((n) => n.id)), ['A'], 'a link to B, none to itself');
+    assert.equal((await searchEntryOf(release, 'A')).name, 'Alpha');
 
     type(editor, 'no links now');
     await runUntil(env, editor.flushSave());
-    assert.deepEqual(plain(await Storage.getBacklinks('B')), []);
+    assert.deepEqual(plain(await release.getBacklinks('B')), []);
   });
 });
 
 describe('BlockEditor "Save as a new note" (#12)', () => {
   let env;
-  let Storage;
+  let release;
   let editor;
 
   /** A in a folder, pinned, its title set by hand, deleted with an edit pending; then "Save as a new note". */
   async function saveGoneNoteAsNew({ folderGone }) {
-    ({ env, Storage } = await setup());
-    const folder = await Storage.createFolder('Work');
-    await Storage.updateNote({ ...(await Storage.getNote('A')), folderId: folder.id, pinned: true, titleManuallySet: true });
+    ({ env, release } = await setup());
+    const folder = await release.createFolder('Work');
+    await release.updateNote({ ...(await release.getNote('A')), folderId: folder.id, pinned: true, titleManuallySet: true });
     editor = makeEditor(env);
     await editor.loadNote('A');
     type(editor, 'typed before the delete');
-    if (folderGone) await Storage.deleteFolder(folder.id);
-    await Storage.permanentlyDeleteNote('A');
+    if (folderGone) await release.deleteFolder(folder.id);
+    await release.permanentlyDeleteNote('A');
     await runUntil(env, editor.flushSave());
     assert.equal(editor.noteGone, true);
     await runUntil(env, editor.saveAsNewNote());
     assert.notEqual(editor.noteId, 'A');
-    return { folder, copy: await Storage.getNote(editor.noteId) };
+    return { folder, copy: await release.getNote(editor.noteId) };
   }
 
   it('keeps the pin, the hand-set title, and the folder', async () => {
     const { folder, copy } = await saveGoneNoteAsNew({ folderGone: false });
     assert.deepEqual([copy.name, copy.pinned, copy.titleManuallySet, copy.folderId], ['Note A', true, true, folder.id]);
-    assert.ok((await Storage.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
-    assert.equal((await searchEntryOf(Storage, copy.id)).name, 'Note A', 'with its search entry');
+    assert.ok((await release.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
+    assert.equal((await searchEntryOf(release, copy.id)).name, 'Note A', 'with its search entry');
   });
 
   it('files the note at the root when its folder is gone', async () => {
     const { copy } = await saveGoneNoteAsNew({ folderGone: true });
     assert.deepEqual([copy.pinned, copy.titleManuallySet, copy.folderId], [true, true, null]);
-    assert.ok((await Storage.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
+    assert.ok((await release.getElementsByNote(copy.id)).some((el) => el.content === 'typed before the delete'));
   });
 });
 

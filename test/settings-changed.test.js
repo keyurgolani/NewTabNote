@@ -16,8 +16,6 @@ async function setup() {
   const env = createLegacyEnv({ document: new FakeDocument() });
   await createDatabase(env.indexedDB, {});
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   // The page's settings port, which Settings hears of changes and reads them again through, as App gives it
   await startEditorClient(env);
   await env.noteList.settled();
@@ -25,7 +23,7 @@ async function setup() {
   const report = (changes, area = 'local') => {
     env.chrome.api.storage.onChanged.listeners.slice().forEach((listener) => listener(changes, area));
   };
-  return { env, Storage, report };
+  return { env, report };
 }
 
 const SECRET_OLD = 'sk-test-old-0000';
