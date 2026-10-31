@@ -937,6 +937,38 @@ const Utils = {
     return text.replace(/[&<>"']/g, char => htmlEntities[char]);
   },
 
+  /** The drag data type for the token of a block drag this page's editor started (#14 slice 2) */
+  BLOCK_DRAG_TOKEN: 'application/x-block-drag-token',
+
+  /** @type {string | null} The token of the block drag this page's editor has going */
+  _blockDragToken: null,
+
+  /**
+   * A block drag this page's editor starts (#14 slice 2): a new token for its drag data, which
+   * holds until the drag ends (endBlockDrag). A dropped block keeps its markup only when this
+   * page's editor started the drag (isOwnBlockDrag).
+   * @returns {string}
+   */
+  startBlockDrag() {
+    this._blockDragToken = globalThis.crypto.randomUUID();
+    return this._blockDragToken;
+  },
+
+  /** The block drag this page's editor started has ended, and its token no longer holds */
+  endBlockDrag() {
+    this._blockDragToken = null;
+  },
+
+  /**
+   * Whether `token`, from a drop's data, is the token of the block drag this page's editor has
+   * going
+   * @param {unknown} token
+   * @returns {boolean}
+   */
+  isOwnBlockDrag(token) {
+    return typeof token === 'string' && token !== '' && token === this._blockDragToken;
+  },
+
   /**
    * Why a page may not write blocks it built from outside text (#14 slice 2, "one way in"): the
    * first that doesn't decode as a known block, as the code of what decode found, which goes

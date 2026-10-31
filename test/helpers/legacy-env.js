@@ -702,6 +702,7 @@ function createLegacyEnv(options = {}) {
     Blob,
     FileReader: FakeFileReader,
     structuredClone,
+    crypto: globalThis.crypto,
     DOMException,
     atob,
     btoa,

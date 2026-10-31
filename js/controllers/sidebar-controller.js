@@ -425,7 +425,7 @@ class SidebarController {
     const blockContent = e.dataTransfer.getData('application/x-block-content');
     const blockType = e.dataTransfer.getData('application/x-block-type') || 'text';
     // Its markup, and its text for a block with none, which is plain text (_droppedContent)
-    const blockHtml = e.dataTransfer.getData('application/x-block-html');
+    const blockHtml = this._droppedMarkup(e.dataTransfer);
 
     this._removeDropOverlay();
 
@@ -442,6 +442,19 @@ class SidebarController {
       // Append to existing note (Req 46.3)
       await this._appendBlockToNote(noteItem.dataset.id, blockType, blockHtml, blockContent);
     }
+  }
+
+  /**
+   * A dropped block's markup (#14 slice 2): a dropped block keeps its markup only when this
+   * page's editor started the drag (Utils.isOwnBlockDrag). Any other drag's markup is its text,
+   * escaped into rich text.
+   * @param {DataTransfer} dataTransfer
+   * @returns {string}
+   */
+  _droppedMarkup(dataTransfer) {
+    const html = dataTransfer.getData('application/x-block-html');
+    if (!html || Utils.isOwnBlockDrag(dataTransfer.getData(Utils.BLOCK_DRAG_TOKEN))) return html;
+    return globalThis.BlockRendering.escapePlainText(html);
   }
 
   /**

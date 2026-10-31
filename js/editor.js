@@ -3118,6 +3118,8 @@ class BlockEditor {
       e.dataTransfer.setData('application/x-block-content', textContent || '');
       e.dataTransfer.setData('application/x-block-type', block.type || 'text');
       e.dataTransfer.setData('application/x-block-html', block.content || '');
+      // The drop keeps the markup only with this drag's token (#14 slice 2)
+      e.dataTransfer.setData(Utils.BLOCK_DRAG_TOKEN, Utils.startBlockDrag());
     }
   }
 
@@ -3127,6 +3129,7 @@ class BlockEditor {
   onDragEnd(e) {
     this.isDragging = false;
     this.draggedBlock = null;
+    Utils.endBlockDrag();
 
     this.container.querySelectorAll('.block').forEach((el) => {
       el.classList.remove('dragging', 'drag-over');
