@@ -3243,7 +3243,7 @@ export function runContractSuite(fixture) {
 
       it(
         flags.revisions
-          ? 'revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that writes nothing'
+          ? 'revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that changes nothing in the note or its blocks'
           : 'no revisions: outcomes carry none, and a stale expectedRevision is saved over (the last write wins)',
         async () => {
           const created = await run(cmd('createNote', { noteId: 'n1' }));
@@ -3342,6 +3342,117 @@ export function runContractSuite(fixture) {
             }),
           );
           committedOf(save);
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: each command that takes an expected version is a conflict when the note has moved past it, and changes nothing'
+          : 'no revisions: a command sent with an expected version the note moved past commits (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+          const loaded = await kernel.query({ type: 'getNote', noteId: 'n1' });
+          const { revision, placementVersion } =
+            loaded.kind === 'ready' ? loaded.data : { revision: undefined, placementVersion: undefined };
+          if (flags.revisions) assert.deepEqual([revision, placementVersion], [1, 0]);
+          else assert.deepEqual([revision, placementVersion], [undefined, undefined]);
+          // Another context renames it and pins it, so both its versions move past what was loaded
+          await run(cmd('renameNote', { noteId: 'n1', name: 'Renamed' }));
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const before = await noteOf('n1');
+          const stale = /** @type {Command[]} */ ([
+            cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 1 }),
+            cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'], expectedRevision: 1 }),
+            cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), expectedRevision: 1 }),
+            cmd('setPinned', { noteId: 'n1', pinned: false, expectedPlacementVersion: 0 }),
+            cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
+            cmd('trashNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
+            cmd('moveNoteToFolder', { noteId: 'n1', folderId: null, expectedPlacementVersion: 0 }),
+            cmd('convertNoteToTemplate', { noteId: 'n1', expectedPlacementVersion: 0 }),
+          ]);
+          if (!flags.revisions) {
+            for (const command of stale) committedOf(await kernel.execute(command));
+            return;
+          }
+          for (const command of stale) {
+            const outcome = await kernel.execute(command);
+            const content = 'expectedRevision' in command;
+            assert.deepEqual(
+              outcome.kind === 'conflict' && [outcome.code, outcome.currentRevision],
+              content ? ['revision-conflict', 2] : ['placement-conflict', 1],
+              `${command.type}: ${JSON.stringify(outcome)}`,
+            );
+          }
+          assert.deepEqual(await noteOf('n1'), before);
+          assert.equal((await blocksOf('n1')).length, 2);
+          assert.ok(ctx.conflicts);
+          assert.deepEqual(
+            (await ctx.conflicts()).map(kept => kept.commandId).sort(),
+            stale.map(command => command.commandId).sort(),
+          );
+          // Sent with the versions it has now, each commits
+          committedOf(await kernel.execute(cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 2 })));
+          committedOf(await kernel.execute(cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 1 })));
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a note no command moved has versions 0, and placement commands move only the placement version'
+          : 'no revisions: getNote reports no versions',
+        async () => {
+          // A note as 1.4.x stored it, which no command of this adapter wrote
+          await seed('notes', [storageNote('kept', 'Kept', NOW)]);
+          const read = async () => {
+            const state = await kernel.query({ type: 'getNote', noteId: 'kept' });
+            return state.kind === 'ready' ? [state.data.revision, state.data.placementVersion] : null;
+          };
+          assert.deepEqual(await read(), flags.revisions ? [0, 0] : [undefined, undefined]);
+          await run(cmd('setPinned', { noteId: 'kept', pinned: true }));
+          await run(cmd('archiveNote', { noteId: 'kept' }));
+          assert.deepEqual(await read(), flags.revisions ? [0, 2] : [undefined, undefined]);
+          const saved = await run(
+            cmd('saveNoteContent', { noteId: 'kept', blocks: someBlocks('kept', 1), expectedRevision: 0 }),
+          );
+          assert.equal(saved.revision, flags.revisions ? 1 : undefined);
+          assert.deepEqual(await read(), flags.revisions ? [1, 2] : [undefined, undefined]);
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: insights from a revision older than the ones the note has are dropped as insights-stale, and newer ones land'
+          : 'no revisions: insights land whatever revision they say they came from',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1) }));
+          const fresh = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['New'] }, sourceRevision: 2 }),
+          );
+          assert.deepEqual([fresh.code, fresh.changedIds], ['insights-attached', ['n1']]);
+          const old = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Old'] }, sourceRevision: 1 }),
+          );
+          if (flags.revisions) {
+            assert.deepEqual([old.code, old.changedIds, old.severity], ['insights-stale', [], 'info']);
+            assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['New'] });
+          } else {
+            assert.equal(old.code, 'insights-attached');
+            assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Old'] });
+          }
+          // Ones made from the same revision, or with none given, land
+          await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Again'] }, sourceRevision: 2 }));
+          await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Any'] } }));
+          assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Any'] });
+          for (const sourceRevision of [-1, 1.5, '2']) {
+            assertRejected(
+              await kernel.execute(
+                cmd('attachInsights', /** @type {any} */ ({ noteId: 'n1', insights: null, sourceRevision })),
+              ),
+              'validation',
+              'invalid-command',
+            );
+          }
         },
       );
 
