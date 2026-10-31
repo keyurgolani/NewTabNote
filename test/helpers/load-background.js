@@ -182,14 +182,16 @@ async function loadBackground({ mutate, setup, opens = true, start = true, rewri
   };
   if (start) {
     // Chrome starts the worker for an event, and its coordinator opens the database on the
-    // first one that needs storage (#35): here a browser start, which creates no menus. A
-    // module's top-level bindings aren't globals, so wait until the worker is idle, when the
-    // open has settled, and check it opened the database.
+    // first one that needs storage (#35): here a browser start, which creates no menus. Its
+    // kernel runs #17's migration run, then opens the database and runs startup maintenance,
+    // and captures wait for it. A module's top-level bindings aren't globals, so wait until
+    // the worker is idle, when that has settled, and check its run made the database (#17 PR
+    // 1b: the worker publishes the run as storageUpgrade).
     await dispatch('runtime.onStartup');
     await drain();
-    const { openState } = env.global.Storage;
-    if (opens && openState !== 'open') {
-      throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
+    const upgrade = await env.global.storageUpgrade;
+    if (opens && (!upgrade || upgrade.status !== 'migrated')) {
+      throw new Error(`The worker's migration run answered ${JSON.stringify(upgrade && upgrade.status)} on an empty profile`);
     }
   }
   if (mutate) mutate(env.global);

@@ -206,8 +206,6 @@ export function createWorkerClient(host = workerHost()) {
         settings: host.settings,
         mode: upgraded ? 'versioned' : 'existing',
         requireCore: true,
-        pageContext: false,
-        logger: storageLogger,
       });
       return kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
     });

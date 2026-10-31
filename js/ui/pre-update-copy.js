@@ -17,9 +17,6 @@
  * writes to the notes database or the copy.
  */
 
-/** chrome.storage.local key, through Storage.readSetting, of the worker's recorded run */
-const PRE_UPDATE_UPGRADE_SETTING = 'storageUpgrade';
-
 const PRE_UPDATE_COPY_TEXT = Object.freeze({
   /** @param {string} date */
   available: date =>
@@ -52,12 +49,12 @@ const PRE_UPDATE_COPY_TEXT = Object.freeze({
 class PreUpdateCopySection {
   /**
    * @param {Object} deps
-   * @param {DatabaseManager} deps.storage - for the worker's recorded run
    * @param {PreUpdateCopyPort} deps.copy
+   * @param {() => Promise<*>} deps.readUpgrade - the worker's recorded run (Storage.readSetting('storageUpgrade'))
    */
-  constructor({ storage, copy }) {
-    this.storage = storage;
+  constructor({ copy, readUpgrade }) {
     this.copy = copy;
+    this.readUpgrade = readUpgrade;
     /** @type {HTMLElement|null} */
     this.section = null;
     /** @type {PreUpdateCopyState} */
@@ -112,7 +109,7 @@ class PreUpdateCopySection {
     /** @type {{id: string, createdAt: number}|null} */
     let point = null;
     try {
-      const record = await this.storage.readSetting(PRE_UPDATE_UPGRADE_SETTING);
+      const record = await this.readUpgrade();
       if (record && typeof record === 'object' && record.status === 'space-blocked') {
         state = 'waiting';
       } else {

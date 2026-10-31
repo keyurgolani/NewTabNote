@@ -41,7 +41,6 @@
 
 import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
-import { silentLogger } from '../../core/ports/runtime.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { abort, indexValue, result } from './requests.js';
@@ -55,7 +54,6 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 /** @typedef {import('../../core/ports/repository.js').Unit} Unit */
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
-/** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 
 /**
@@ -71,12 +69,6 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
  * @property {SettingsStore} settings
  * @property {OpenMode} [mode] - versioned unless given
  * @property {number} [openWithinMs] - how long open() waits for a blocked or slow open (connection.js)
- * @property {boolean} [pageContext]
- *   Whether this is a page, which saves the missing-stores recovery copy as it opens versioned
- *   (recovery.js). A page has a document and the service worker doesn't, as Storage tells them
- *   apart, so a root leaves it out.
- * @property {import('./recovery.js').Locks} [locks] - navigator.locks unless given
- * @property {Logger} [logger] - where a recovery copy that failed is reported; silent unless given
  * @property {boolean} [requireCore] - an `existing` open refuses a database without notes or blocks (connection.js)
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What an `existing` open waits on first when there's no database or an older one: a page's
@@ -237,15 +229,10 @@ export function createIndexedDbAdapter({
   settings,
   mode = 'versioned',
   openWithinMs,
-  pageContext = typeof document !== 'undefined',
-  locks = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks : undefined,
-  logger = silentLogger,
   requireCore = false,
   awaitUpgrade = null,
 }) {
-  // Only a page's versioned open saves the copy, as the new tab's Storage.open does
-  const recovery = mode === 'versioned' && pageContext ? { settings, locks, logger } : null;
-  const connection = createConnection({ indexedDB, mode, openWithinMs, recovery, requireCore, awaitUpgrade });
+  const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another

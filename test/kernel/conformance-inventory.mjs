@@ -151,7 +151,6 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
 export const HELPERS = Object.freeze({
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/recovery.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
   'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
   'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
@@ -198,8 +197,9 @@ export const UNSHARED = Object.freeze({
     implements: 'IntelligenceRepository (js/kernel/core/intelligence/repository.js), in memory',
     tests: 'test/kernel/intelligence-records.test.mjs',
   },
-  // #17 PR 1a's migration framework, which no shipped root loads until PR 1b; one runner, one
-  // recovery database, one registry, so nothing to share a suite with
+  // #17 PR 1a's migration framework, which the service worker's root runs since PR 1b (and the
+  // new tab's reads, for its pre-update copy); one runner, one recovery database, one registry,
+  // so nothing to share a suite with
   'js/kernel/adapters/indexeddb/migrate.js': {
     implements: "#17's migration runner (startMigrations, runMigrations), under Web Lock storage.migrate",
     tests: 'test/kernel/storage-migrate.test.mjs',

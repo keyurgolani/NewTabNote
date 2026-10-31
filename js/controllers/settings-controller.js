@@ -18,9 +18,11 @@
  *   Without it, JSZip is the global its script defined, as before.
  * @param {any} [deps.partReload] - App's guarded Reload for the export's failure (App.partReload,
  *   js/ui/part-state.js); null for the browser's
+ * @param {(() => Promise<void>)|null} [deps.onOpened] - Runs each time Settings opens, for sections
+ *   that read their state then (#17 PR 1b)
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, partReload = null }) {
+  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, partReload = null, onOpened = null }) {
     this.settings = settings;
     this.loadLibrary = loadLibrary;
     this.partReload = partReload;
@@ -35,6 +37,8 @@ class SettingsController {
     this.validateBackup = validateBackup;
     this.domRefs = domRefs;
     this.logger = logger;
+    /** @type {(() => Promise<void>)|null} */
+    this.onSettingsOpened = onOpened;
 
     // App-level callbacks (set by App after construction)
     this.onApplyTheme = null;
@@ -59,8 +63,6 @@ class SettingsController {
     this.onRenderAIPromptTemplateSettings = null;
     /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
     this.onSaveOpenEditors = null;
-    /** @type {(() => Promise<void>)|null} Settings opened: sections that read their state then do (#17 PR 1b) */
-    this.onSettingsOpened = null;
     /** @type {function|null} */
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */

@@ -3,8 +3,9 @@
 // AC6: startup never deletes the database or its records, keeps a version-8
 // database with stores missing (one recovery copy, features off), and the
 // integrity check is read-only.
-// AC7: a version-9 database stays byte-identical on every surface, with no
-// chrome.storage.local writes, and each surface shows the guard.
+// AC7: a database a newer build upgraded (since #17 PR 1b, one past version 9)
+// stays byte-identical on every surface, with no chrome.storage.local writes but
+// the worker's record of its migration run, and each surface shows the guard.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -57,11 +58,19 @@ function allRecords() {
  * What `env` logged at `level` whose first argument is `first`, as each call's arguments
  * @returns {Array<Array<any>>}
  */
+/**
+ * chrome.storage.local writes but the worker's record of its migration run (#17 PR 1b), the
+ * one key it writes on a profile it leaves as it is
+ */
+function writesButUpgradeRecord(env) {
+  return env.chrome.writes().filter((w) => !(w.method === 'set' && w.keys.length === 1 && w.keys[0] === 'setting_storageUpgrade'));
+}
+
 function logged(env, level, first) {
   return env.logs.filter((entry) => entry.level === level && entry.args[0] === first).map((entry) => entry.args);
 }
 
-/** A database from raw indexedDB.open calls: version 8 with `omit` left out, or version 9 with a meta store. */
+/** A database from raw indexedDB.open calls: version 8 with `omit` left out, or a later version with a meta store. */
 async function fixture(factory, { version = 8, omit = [] } = {}) {
   const records = allRecords();
   for (const store of omit) delete records[store];
@@ -386,34 +395,34 @@ describe('startup: version 8 without elements', () => {
   });
 });
 
-describe('a version-9 database (AC7)', () => {
+describe('a database a newer build upgraded, past version 9 (AC7)', () => {
   it('Storage.init refuses with NEWER_SCHEMA and changes nothing', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 9 });
+    await fixture(env.indexedDB, { version: 10 });
     const before = await dumpDatabase(env.indexedDB);
     const { Storage, error } = await startStorage(env);
 
     assert.equal(error.code, 'NEWER_SCHEMA');
     assert.equal(error.constructor.name, 'Error', 'a plain Error the service worker can build');
     assert.equal(Storage.openState, 'newer-version');
-    assert.equal(Storage.onDiskVersion, 9);
+    assert.equal(Storage.onDiskVersion, 10);
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     assert.deepEqual(env.chrome.writes(), []);
   });
 
-  it('a VersionError from open(name, 8) maps to the same state', async () => {
+  it('a database a newer build upgrades right after the check is refused the same way', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 9 });
+    await fixture(env.indexedDB, { version: 10 });
     env.load(...STORAGE_FILES);
     const Storage = env.get('Storage');
     Storage.checkAndRepairDatabase = async () => {}; // as if a newer build upgraded right after the check
     await assert.rejects(Storage.init(), { code: 'NEWER_SCHEMA' });
     assert.equal(Storage.openState, 'newer-version');
-    assert.equal(Storage.onDiskVersion, 9);
+    assert.equal(Storage.onDiskVersion, 10);
   });
 
   it('the new tab shows the guard, and Export downloads every store except settings', async () => {
-    const { env, before, downloads, appErrors } = await startApp({ version: 9 });
+    const { env, before, downloads, appErrors } = await startApp({ version: 10 });
     assert.deepEqual(appErrors, ['storage-guard']);
     const guard = env.document.querySelector('.storage-guard');
     assert.equal(guard.querySelector('h1').textContent, GUARD_TITLE);
@@ -425,10 +434,10 @@ describe('a version-9 database (AC7)', () => {
     buttons[0].click();
     await waitFor(() => downloads.length > 0, { message: 'raw export download' });
     const [{ data, filename }] = downloads;
-    assert.match(filename, /^newtabnote-raw-v9-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$/);
+    assert.match(filename, /^newtabnote-raw-v10-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$/);
     const raw = JSON.parse(data);
     assert.equal(raw.rawExport, true);
-    assert.equal(raw.onDiskVersion, 9);
+    assert.equal(raw.onDiskVersion, 10);
     assert.equal(typeof raw.exportedAt, 'number');
     assert.deepEqual(Object.keys(raw.stores).sort(),
       ['canvases', 'elements', 'folders', 'links', 'media', 'meta', 'search_index', 'snapshots', 'themes', 'vectors']);
@@ -453,7 +462,7 @@ describe('a version-9 database (AC7)', () => {
 
   it('the popup shows the guard with one Open new tab button and disables quick note', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 9 });
+    await fixture(env.indexedDB, { version: 10 });
     const before = await dumpDatabase(env.indexedDB);
     const els = env.document.stub([
       { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
@@ -480,7 +489,7 @@ describe('a version-9 database (AC7)', () => {
 
   it('the side panel shows the guard with one Open new tab button', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 9 });
+    await fixture(env.indexedDB, { version: 10 });
     const before = await dumpDatabase(env.indexedDB);
     const els = env.document.stub(['open-notes', 'status', 'status-count', 'sections', 'empty-state']);
     const openButton = env.document.createElement('button');
@@ -504,7 +513,7 @@ describe('a version-9 database (AC7)', () => {
 
   it('the context menu and keyboard command refuse with a "Not captured" notification', async () => {
     const env = createLegacyEnv({ context: 'worker' });
-    await fixture(env.indexedDB, { version: 9 });
+    await fixture(env.indexedDB, { version: 10 });
     const before = await dumpDatabase(env.indexedDB);
     await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
@@ -519,9 +528,11 @@ describe('a version-9 database (AC7)', () => {
       assert.match(notification.message, /^Your notes were upgraded by a newer NewTabNote version\./);
     }
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    assert.deepEqual(env.chrome.writes(), []);
+    // The worker's run left it as it was, and recorded that, and wrote nothing else
+    assert.deepEqual(writesButUpgradeRecord(env), []);
+    assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
 
-    // Each refusal is in the console with its cause and code, and so is what Storage threw
+    // Each refusal is in the console with its cause and code, and so is the open's
     const refusals = logged(env, 'warn', 'Storage not opened in background:');
     assert.deepEqual(refusals.map(([, outcome]) => [outcome.cause, outcome.code]), [
       ['newer-schema', 'version-too-new'],
@@ -529,7 +540,7 @@ describe('a version-9 database (AC7)', () => {
       ['newer-schema', 'version-too-new'],
     ]);
     const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
-    assert.deepEqual([opened.code, opened.error.cause.code], ['version-too-new', 'NEWER_SCHEMA']);
+    assert.deepEqual([opened.cause, opened.code], ['newer-schema', 'version-too-new']);
   });
 });
 
@@ -564,7 +575,7 @@ describe("the new tab when its kernel can't open storage for another reason", ()
 
 describe('the export notice in the guard states (NTN-18 slice 0)', () => {
   for (const [label, spec, openState] of [
-    ['a version-9 database', { version: 9 }, 'newer-version'],
+    ['a database past version 9', { version: 10 }, 'newer-version'],
     ['a version-8 database without elements', { omit: ['elements'] }, 'missing-core-stores'],
   ]) {
     it(`${label}: the new tab shows the guard without deciding on the notice, which isn't due there`, async () => {
@@ -610,24 +621,25 @@ describe('background capture on a version-8 database', () => {
   });
 
   it('a failed save notifies instead of failing silently', async () => {
-    const env = createLegacyEnv({ context: 'worker' });
-    await fixture(env.indexedDB);
+    // The worker's kernel is on #17's adapter (#17 PR 1b), over a factory that can fail its writes
+    const real = new (require('fake-indexeddb').IDBFactory)();
+    const { faultyFactory } = await import('./kernel/storage-faults.mjs');
+    const faults = faultyFactory(real);
+    const env = createLegacyEnv({ context: 'worker', indexedDB: faults.factory });
+    await fixture(real);
     await startWorker(env);
-    // The worker opens its database on the first event that needs it (#35), here a browser start
+    // The worker opens its database on the first event that needs it (#35), here a browser
+    // start, once its run has brought it to 9
     env.chrome.api.runtime.onStartup.listeners[0]();
-    await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
-    // The capture's block write fails: first for a full disk, then for something else
-    const Storage = env.get('Storage');
-    const transaction = Storage.transaction.bind(Storage);
-    const failures = [
-      new DOMException('disk full', 'QuotaExceededError'),
-      new DOMException('Internal error writing to the backing store', 'UnknownError'),
-    ];
-    Storage.transaction = (stores, mode) => {
-      if (mode === 'readwrite' && [].concat(stores).includes('elements')) throw failures.shift();
-      return transaction(stores, mode);
-    };
+    assert.equal((await env.global.storageUpgrade).status, 'migrated');
+    // The capture's commit fails: first for a full disk, then twice for something else, so its
+    // one run again fails too
+    faults.abortAfterNextWrite('elements', 'QuotaExceededError');
     for (const count of [1, 2]) {
+      if (count === 2) {
+        faults.abortAfterNextWrite('elements', 'UnknownError');
+        faults.abortAfterNextWrite('elements', 'UnknownError');
+      }
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
         { url: 'https://example.test/', title: 'x' });
       await waitFor(() => env.chrome.notifications.length === count, { message: `failure notification ${count}` });
@@ -641,7 +653,7 @@ describe('background capture on a version-8 database', () => {
     const failed = logged(env, 'error', 'Failed to capture to daily note:');
     assert.deepEqual(failed.map(([, outcome]) => [outcome.kind, outcome.cause, outcome.code]), [
       ['unavailable', 'quota', 'quota'],
-      ['unavailable', 'storage', 'transaction-failed'],
+      ['unavailable', 'storage', 'retries-exhausted'],
     ]);
     assert.ok(!JSON.stringify(failed).includes('quote'));
   });
@@ -658,7 +670,9 @@ describe('background capture on a version-8 database', () => {
       message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
     });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    assert.deepEqual(env.chrome.writes(), []);
+    // The run gave it a recovery point and no step (Q13), and recorded that
+    assert.deepEqual(writesButUpgradeRecord(env), []);
+    assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
   });
 
   it("lets a newer build upgrade the database, and refuses the next capture as it would have at start", async () => {
@@ -668,9 +682,10 @@ describe('background capture on a version-8 database', () => {
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
     await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
-    // A newer build opens the database at version 9, which an open connection would block
+    // The worker's run brought it to 9. A newer build opens it at 10, which an open connection
+    // would block
     const upgraded = await new Promise((resolve, reject) => {
-      const request = env.indexedDB.open('CanvasTabDB', 9);
+      const request = env.indexedDB.open('CanvasTabDB', 10);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("the worker's connection blocked the upgrade"));
