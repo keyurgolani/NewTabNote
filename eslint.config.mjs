@@ -22,10 +22,15 @@ const realDir = dir => {
 };
 const ROOT = realDir(import.meta.dirname);
 
-// Parsed as a classic script, the way it loads: sidepanel.html's <script vite-ignore src>.
-// offscreen.html loads js/offscreen.js as a module (#21 slice 1a), and the search indexer
-// starts as a module worker (#27 slice 2).
-const CLASSIC_SCRIPTS = ['js/insights-summary.js'];
+// Parsed as classic scripts, the way they load: sidepanel.html's and newtab.html's <script
+// vite-ignore src>. offscreen.html loads js/offscreen.js as a module (#21 slice 1a), and the
+// search indexer starts as a module worker (#27 slice 2).
+const CLASSIC_SCRIPTS = ['js/insights-summary.js', 'js/entries/boot-guard.js'];
+
+// The page's loader (#27 slice 3), which reads the packaged build-info.json with fetch and
+// retries a chunk at a URL built from it: the one file outside js/kernel/ and js/storage.js
+// the fetch rule lets through, with no import of its own but that retry's (#27, "Lazy boundaries")
+const LOADER = 'js/runtime/lazy.js';
 
 // The controllers App wires up, whose on* and get* callbacks count under app-callback
 const CONTROLLERS = [
@@ -407,7 +412,7 @@ export default [
   { files: CLASSIC_SCRIPTS, languageOptions: { sourceType: 'script' } },
   {
     files: ['js/**/*.js', 'js/**/*.mjs'],
-    ignores: ['js/kernel/**', 'js/storage.js'],
+    ignores: ['js/kernel/**', 'js/storage.js', LOADER],
     plugins: { kernel },
     rules: {
       'no-restricted-globals': ['error', { globals: LEGACY_GLOBALS, checkGlobalObject: true }],
@@ -422,6 +427,16 @@ export default [
   {
     files: ['js/app.js'],
     rules: { 'no-restricted-syntax': ['error', ...LEGACY_SYNTAX, APP_CALLBACK] },
+  },
+  // The loader keeps the rules above but two: the fetch ban, for its one read of build-info.json,
+  // and the import rule, whose one hit would be the retry's import() of a chunk build-info.json
+  // names. test/lazy-boundaries.test.js pins that it imports nothing else.
+  {
+    files: [LOADER],
+    rules: {
+      'no-restricted-globals': ['error', { globals: LEGACY_GLOBALS.filter(({ name }) => name !== 'fetch'), checkGlobalObject: true }],
+      'no-restricted-syntax': ['error', ...LEGACY_SYNTAX],
+    },
   },
   {
     files: ['js/kernel/core/**/*.js', 'js/kernel/core/**/*.mjs'],

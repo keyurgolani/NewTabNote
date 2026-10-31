@@ -26,6 +26,7 @@ const CODES = Object.freeze({
   'build/css': 'the stylesheet pipeline reported an error or a warning: lightningcss, or Vite\'s CSS processing',
   'build/load-mode': 'a page loads a script as a classic script that is a module: the bundle holds it, or it has module syntax',
   'build/commonjs': 'the bundler wrapped a module as CommonJS, or a module the bundle holds names exports or require, checks typeof require, or reads module outside a typeof check',
+  'build/loader': 'the loader (js/runtime/lazy.js) isn\'t alone in a chunk at its own path, or doesn\'t carry the build\'s ID',
   'build/manifest': 'manifest.json doesn\'t parse or lacks a required field',
   'build/source-date': 'SOURCE_DATE_EPOCH isn\'t a whole number of seconds',
   'type/kernel': 'tsc -p tsconfig.kernel.json reported a diagnostic, or didn\'t run',

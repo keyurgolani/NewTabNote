@@ -11,7 +11,8 @@
  * build/static-assets.json doesn't list; and on a path of any of those kinds built at run time
  * in first-party code, which it couldn't follow (#89's review: terser folds some constants into
  * literals, so a development build shipped them unchecked). A vendored file's own paths are its
- * record's.
+ * record's, and the loader's (js/runtime/lazy.js, #27 slice 3) are its retry's, which it builds
+ * from build-info.json's chunks, so each of those has to be in the package instead (AC5).
  *
  * Paths resolve as Chrome resolves them: imports, page attributes, and stylesheet URLs from
  * their own file; new Worker and importScripts from the page or worker that runs the script;
@@ -24,11 +25,34 @@ const { problem } = require('./diagnostics.js');
 const { scanScript } = require('./js-scan.js');
 const { htmlTags, rawTextElements, cssUrls } = require('./markup.js');
 const { readVendor } = require('./notices.js');
+const { LOADER } = require('./vite-config.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
 
 const STATIC_ASSETS = path.join(__dirname, '..', '..', 'build', 'static-assets.json');
+
+/**
+ * LOADER is the one first-party file that builds a path at run time: its retry imports the file
+ * build-info.json's chunks names. The bundler ships it at its own path, alone in its chunk
+ * (scripts/build/vite-config.js), so it names the same file in the sources and in a build.
+ */
+
+/**
+ * build-info.json's chunks in `files`, the map the loader's retry reads, or {} without one
+ * @param {PackageFiles} files
+ * @returns {Record<string, unknown>}
+ */
+function packagedChunks(files) {
+  if (!files.has('build-info.json')) return {};
+  try {
+    const { chunks } = JSON.parse(files.text('build-info.json'));
+    return chunks && typeof chunks === 'object' ? chunks : {};
+  } catch {
+    // A build-info.json that doesn't parse is npm run package's to report (readBuildInfo)
+    return {};
+  }
+}
 
 /** Manifest keys that name one file */
 const MANIFEST_FILES = [
@@ -178,11 +202,13 @@ function manifestPaths(manifest) {
 /**
  * Check that the package's references close over its files
  * @param {PackageFiles} files
- * @param {{staticAssets?: StaticAssets, vendored?: Set<string>}} [options] - vendored: the
- *   package's vendored files (js/lib/vendor.json), whose own run-time paths aren't followed
+ * @param {{staticAssets?: StaticAssets, vendored?: Set<string>, chunks?: Record<string, unknown>}} [options] -
+ *   vendored: the package's vendored files (js/lib/vendor.json), whose own run-time paths aren't
+ *   followed; chunks: build-info.json's, the files the loader's retry imports, by default the
+ *   package's own build-info.json's (the build checks before it writes one)
  * @returns {{problems: Problem[], referenced: Set<string>}}
  */
-function checkClosure(files, { staticAssets: assets = staticAssets(), vendored = new Set(readVendor().keys()) } = {}) {
+function checkClosure(files, { staticAssets: assets = staticAssets(), vendored = new Set(readVendor().keys()), chunks = packagedChunks(files) } = {}) {
   /** @type {Problem[]} */
   const problems = [];
   /** @type {Set<string>} */
@@ -234,6 +260,12 @@ function checkClosure(files, { staticAssets: assets = staticAssets(), vendored =
     // The service worker runs its scripts from its own directory; pages from theirs
     follow('manifest.json', `names it as ${key}`, value, '');
   }
+  // The loader's retry imports these from the package root, so each has to be in the package
+  for (const [name, value] of Object.entries(chunks)) {
+    const target = typeof value === 'string' ? resolve(value, '') : 'outside';
+    if (target !== 'elsewhere' && target !== 'outside' && files.has(target)) referenced.add(target);
+    else problems.push(problem('closure/missing', String(value), `build-info.json names it as chunks.${name}, the file the loader's retry imports, but ${files.label} doesn't have it`));
+  }
 
   while (pending.length > 0) {
     const next = pending.shift();
@@ -271,8 +303,9 @@ function checkClosure(files, { staticAssets: assets = staticAssets(), vendored =
       for (const { kind: referenceKind, value, at } of scan.references) {
         const where = `${file}:${at}`;
         if (value === null) {
-          // A vendored library's own run-time paths are its record's business (js/lib/vendor.json)
-          if (!vendored.has(file)) {
+          // A vendored library's own run-time paths are its record's business (js/lib/vendor.json),
+          // and the loader's are its retry's, from build-info.json's chunks
+          if (!vendored.has(file) && file !== LOADER) {
             problems.push(problem('closure/non-literal', where, `${NON_LITERAL[referenceKind]} gets a path built at run time, which the closure check can't follow. Pass a string literal.`));
           }
           continue;
@@ -387,4 +420,4 @@ function checkClassicScripts(files) {
   return problems;
 }
 
-module.exports = { checkClosure, checkPreloads, checkClassicScripts, staticAssets, isListed, resolve, manifestPaths, STATIC_ASSETS };
+module.exports = { checkClosure, checkPreloads, checkClassicScripts, staticAssets, isListed, resolve, manifestPaths, packagedChunks, STATIC_ASSETS };

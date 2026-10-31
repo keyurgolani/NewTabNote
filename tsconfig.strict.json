@@ -7,8 +7,8 @@
     "target": "ES2023",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["ES2023"],
-    "types": ["node"]
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "chrome"]
   },
-  "include": ["scripts/build/**/*.js"]
+  "include": ["scripts/build/**/*.js", "js/entries/**/*.js", "js/runtime/**/*.js", "js/runtime/**/*.d.ts"]
 }

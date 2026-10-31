@@ -5,11 +5,18 @@
  * @param {Object} deps
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
+ * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
+ *   (js/runtime/lazy.js), which Chart.js loads through at the first Stats (#27 slice 3). Without
+ *   it, Chart.js is the global its script defined, as before.
+ * @param {((context: string, error: unknown) => void)|null} [deps.showUnexpectedError] - App's
+ *   "An unexpected error occurred" toast, where a Chart.js that didn't load lands
  */
 class AnalyticsController {
-  constructor({ domRefs, logger }) {
+  constructor({ domRefs, logger, loadLibrary = null, showUnexpectedError = null }) {
     this.domRefs = domRefs;
     this.logger = logger;
+    this.loadLibrary = loadLibrary;
+    this.showUnexpectedError = showUnexpectedError;
 
     // Analytics state
     this.statsOpen = false;
@@ -101,6 +108,9 @@ class AnalyticsController {
    */
   async renderAnalytics() {
     if (typeof Analytics === 'undefined') return;
+    // Chart.js loads at the first Stats, while the counts are read (#27 slice 3). The loader's
+    // answer never rejects.
+    const chartLoad = this.loadLibrary ? this.loadLibrary('chart') : null;
 
     // The note list reads every list again first, so the stats count what's stored, other
     // tabs' notes included, as they did when they read storage
@@ -121,9 +131,12 @@ class AnalyticsController {
     // Destroy existing charts to prevent memory leaks/overlap
     Object.values(this.charts).forEach(chart => chart.destroy());
 
+    const ChartLibrary = chartLoad ? await this.loadedCharts(chartLoad) : Chart;
+    if (!ChartLibrary) return;
+
     // 1. Activity Chart
     const activityData = await Analytics.getActivityData(30);
-    this.charts.activity = new Chart(document.getElementById('activity-chart'), {
+    this.charts.activity = new ChartLibrary(document.getElementById('activity-chart'), {
       type: 'line',
       data: {
         labels: activityData.map(d => d.date),
@@ -153,7 +166,7 @@ class AnalyticsController {
 
     // 2. Content Type Chart
     const typeBreakdown = await Analytics.getContentTypeBreakdown();
-    this.charts.type = new Chart(document.getElementById('content-chart'), {
+    this.charts.type = new ChartLibrary(document.getElementById('content-chart'), {
       type: 'doughnut',
       data: {
         labels: Object.keys(typeBreakdown),
@@ -171,7 +184,7 @@ class AnalyticsController {
 
     // 3. Tags Chart
     const topTags = await Analytics.getTagDistribution();
-    this.charts.tags = new Chart(document.getElementById('tags-chart'), {
+    this.charts.tags = new ChartLibrary(document.getElementById('tags-chart'), {
       type: 'bar',
       data: {
         labels: topTags.map(t => t[0]),
@@ -195,7 +208,7 @@ class AnalyticsController {
       count: this.notes.filter(n => n.folderId === f.id).length
     })).sort((a, b) => b.count - a.count).slice(0, 7);
 
-    this.charts.folders = new Chart(document.getElementById('folders-chart'), {
+    this.charts.folders = new ChartLibrary(document.getElementById('folders-chart'), {
       type: 'polarArea',
       data: {
         labels: folderStats.map(f => f.name),
@@ -210,6 +223,19 @@ class AnalyticsController {
         plugins: { legend: { position: 'right' } }
       }
     });
+  }
+
+  /**
+   * Chart.js from the loader's answer. One that didn't load leaves the counts and draws no chart,
+   * and the page shows the toast an error here showed before, so it answers null.
+   * @param {Promise<any>} loading
+   * @returns {Promise<any>}
+   */
+  async loadedCharts(loading) {
+    const loaded = await loading;
+    if (loaded.status === 'loaded') return loaded.module;
+    if (this.showUnexpectedError) this.showUnexpectedError('AnalyticsController', new Error(`Chart.js didn't load (${loaded.reason})`));
+    return null;
   }
 }
 

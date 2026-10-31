@@ -1584,7 +1584,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // Sync search index data to SearchEngine before searching
       if (this.searchEngine) {
         const searchIndexData = await this.documentClient.searchEntries();
-        this.searchEngine.updateIndex(searchIndexData);
+        // Fuse.js builds from every entry before the search runs: it loads at the first one (#27 slice 3)
+        await this.searchEngine.updateIndex(searchIndexData);
       }
 
       const searchResults = this.searchEngine ? await this.searchEngine.search(message) : [];

@@ -2,8 +2,17 @@
  * Search Engine - handles fuzzy search and result ranking
  */
 class SearchEngine {
-    constructor(options = {}) {
+    /**
+     * @param {Object} [options] - Fuse.js's, over these defaults
+     * @param {{loadLibrary?: Function|null, showUnexpectedError?: Function|null}} [ports] - App's:
+     *   the page loader's loadLibrary, which Fuse.js loads through at the first index (#27 slice
+     *   3), and the toast a library that didn't load lands on. Without loadLibrary, Fuse.js is the
+     *   global its script defined, as before.
+     */
+    constructor(options = {}, { loadLibrary = null, showUnexpectedError = null } = {}) {
         this.fuse = null;
+        this.loadLibrary = loadLibrary;
+        this.showUnexpectedError = showUnexpectedError;
         this.options = {
             keys: [
                 { name: 'name', weight: 0.7 },
@@ -23,7 +32,23 @@ class SearchEngine {
      * @returns {Promise<void>}
      */
     async updateIndex(data) {
-        this.fuse = new Fuse(data, this.options);
+        const FuseLibrary = await this.fuseLibrary();
+        if (!FuseLibrary) return;
+        this.fuse = new FuseLibrary(data, this.options);
+    }
+
+    /**
+     * Fuse.js: through the page's loader, at the first index, or the global without it. One that
+     * didn't load leaves the index as it was, and the page shows what a failure here showed
+     * before, the "An unexpected error occurred" toast, so it answers null.
+     * @returns {Promise<any>}
+     */
+    async fuseLibrary() {
+        if (!this.loadLibrary) return Fuse;
+        const loaded = await this.loadLibrary('fuse');
+        if (loaded.status === 'loaded') return loaded.module;
+        if (this.showUnexpectedError) this.showUnexpectedError('SearchEngine', new Error(`Fuse.js didn't load (${loaded.reason})`));
+        return null;
     }
 
     /**

@@ -208,7 +208,8 @@ function checkOutput(outDir, bundled, root) {
   const background = new Set(bundled.graphs.background);
   return [
     ...loadMode,
-    ...checkClosure(files).problems,
+    // build-info.json comes after the checks, so the chunks the loader's retry reads in it come from the bundle
+    ...checkClosure(files, { chunks: bundled.chunks }).problems,
     ...checkPreloads(files),
     ...checkClassicScripts(files),
     ...checkRemoteCode(files),
@@ -282,7 +283,7 @@ async function build(argv = process.argv.slice(2)) {
   try {
     // 3. The bundle, then what no page or script imports
     console.log('📦 Bundling the pages, their workers, and the service worker...');
-    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode });
+    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId });
     const copied = bundled.problems.length > 0 ? [] : await copyUnbundled(ROOT_DIR, staging, mode);
     const built = [...bundled.problems, ...copied];
     if (built.length > 0) {

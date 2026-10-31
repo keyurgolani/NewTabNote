@@ -1369,7 +1369,8 @@ class SidebarController {
 
   async renderSearchResults(list) {
     const searchIndexData = await this.refreshSearchIndexEntries();
-    if (this.searchEngine) this.searchEngine.updateIndex(searchIndexData);
+    // Fuse.js builds from every entry before the search runs: it loads at the first one (#27 slice 3)
+    if (this.searchEngine) await this.searchEngine.updateIndex(searchIndexData);
     const searchResults = this.searchEngine ? await this.searchEngine.search(this.searchQuery) : [];
 
     let sourceNotes = this.notes;
