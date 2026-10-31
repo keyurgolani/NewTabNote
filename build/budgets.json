@@ -32,7 +32,7 @@
     "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },
     "search-library": { "about": "Fuse.js", "paths": ["js/lib/fuse.js"] },
     "zip-library": { "about": "JSZip", "paths": ["js/lib/jszip.min.js"] },
-    "model-runtime": { "about": "transformers.js and every .wasm", "paths": ["js/lib/transformers.js", "**/*.wasm"] },
+    "model-runtime": { "about": "transformers.js. The package ships no .wasm, and the analyzer lists only chunks, classic scripts, stylesheets and fonts, so a .wasm path here would guard nothing: one gets a path with the analyzer support to see it", "paths": ["js/lib/transformers.js"] },
     "trust": { "about": "#20's Trust and Recovery code", "paths": ["js/trust/**"] },
     "charting-analytics": { "about": "charting and analytics", "paths": ["js/analytics.js", "js/controllers/analytics-controller.js"] },
     "graph-view": { "about": "the graph view", "paths": ["js/ui/graph-view.js"] },
@@ -94,8 +94,9 @@
       "dependencies": []
     },
     "background": {
-      "reason": "The service worker. Its cold-start time is #35's, and stays null until #35 sets it; its graph is one self-contained module (#27 slice 2).",
-      "start": { "js": null, "css": null, "html": null, "fonts": null }
+      "reason": "The service worker. Its cold-start time is #35's, and stays null until #35 sets it; its graph is one self-contained module (#27 slice 2), and its third-party packages are checked like a page's.",
+      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "dependencies": ["valibot"]
     },
     "moment": {
       "chunk": "moment",
