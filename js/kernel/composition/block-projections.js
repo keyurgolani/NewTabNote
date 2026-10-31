@@ -3,8 +3,9 @@
  * editor, AI chat, NotesManager, AIResponseUtils, and the settings export read a block's text
  * and Markdown through `BlockProjections`, which this module sets from the built-ins' catalog,
  * so they run the same projections and codec the kernel does. They strip tags through it too,
- * with the model layer's `stripTags` and `replaceTags`, which read in linear time. js/main.js
- * imports it before any of them.
+ * with the model layer's `stripTags` and `replaceTags`, and the editor's save reads its wiki-link
+ * names with `wikiLinkNames`, the note domain's, all in linear time. js/main.js imports it
+ * before any of them.
  *
  * The catalog runs the block contract's checks as it's made, so an invalid built-in is
  * disabled at start here too. Registering the `block` family on #15's kit

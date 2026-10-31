@@ -21,6 +21,7 @@
 import { BUILT_IN_BLOCKS } from './builtins.js';
 import { createCatalog } from './catalog.js';
 import { replaceTags, stripTags } from './strip-tags.js';
+import { wikiLinkNames } from './wiki-links.js';
 
 /** @typedef {import('./catalog.js').Catalog} Catalog */
 /** @typedef {import('./catalog.js').Decoded} Decoded */
@@ -67,11 +68,11 @@ export function projectionsOf(catalog) {
  * What the new tab's legacy scripts read blocks and markup through, as `BlockProjections`
  * (js/kernel/composition/block-projections.js sets it): the projections over a catalog, and
  * the tag stripping in linear time that the note list, AI responses and the editor's version
- * history use
+ * history use, and the wiki-link names the editor's save reads, also in linear time
  * @param {Catalog} catalog
  */
 export function pageReaders(catalog) {
-  return Object.freeze({ ...projectionsOf(catalog), stripTags, replaceTags });
+  return Object.freeze({ ...projectionsOf(catalog), stripTags, replaceTags, wikiLinkNames });
 }
 
 /** @type {ReturnType<typeof projectionsOf> | null} */

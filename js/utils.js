@@ -2,6 +2,225 @@
  * Utility functions for New Tab Note
  */
 
+/**
+ * The first index of `needle` at or after a position, for positions that never go back: the
+ * last answer is reused while it's still ahead, so a pass over the text scans it once
+ * @param {string} text
+ * @param {string} needle
+ * @returns {(from: number) => number}
+ */
+function forwardIndexOf(text, needle) {
+  let from = Number.POSITIVE_INFINITY;
+  let found = -1;
+  return at => {
+    if (at >= from && (found === -1 || found >= at)) return found;
+    from = at;
+    found = text.indexOf(needle, at);
+    return found;
+  };
+}
+
+/**
+ * `/```(\w*)\n?([\s\S]*?)```/g` replaced by `replace(lang, code)`, in one pass: from a fence,
+ * the language runs over the word characters after it, a line break after them is skipped,
+ * and the code runs to the next fence. With no fence after that, no later one has one either.
+ * @param {string} text
+ * @param {(lang: string, code: string) => string} replace
+ * @returns {string}
+ */
+function replaceFencedCode(text, replace) {
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf('```'); at !== -1; at = text.indexOf('```', from)) {
+    let start = at + 3;
+    while (start < text.length && /\w/.test(text[start])) start++;
+    const lang = text.slice(at + 3, start);
+    if (text[start] === '\n') start++;
+    const end = text.indexOf('```', start);
+    if (end === -1) break;
+    out += text.slice(from, at) + replace(lang, text.slice(start, end));
+    from = end + 3;
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * `/\[([^\]]+)\]\(([^)]+)\)/g` replaced by `link(label, address)`, in one pass: from a `[`,
+ * the label runs to the first `]`, which `(` must follow, and the address to the first `)`
+ * @param {string} text
+ * @param {(label: string, address: string) => string} link
+ * @returns {string}
+ */
+function replaceMarkdownLinks(text, link) {
+  const nextClose = forwardIndexOf(text, ']');
+  const nextParen = forwardIndexOf(text, ')');
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf('['); at !== -1; at = text.indexOf('[', at + 1)) {
+    if (at < from) continue;
+    const close = nextClose(at + 1);
+    if (close === -1) break;
+    if (close === at + 1 || text[close + 1] !== '(') continue;
+    const paren = nextParen(close + 2);
+    if (paren === -1) break;
+    if (paren === close + 2) continue;
+    out += text.slice(from, at) + link(text.slice(at + 1, close), text.slice(close + 2, paren));
+    from = paren + 1;
+    at = paren;
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * `/^(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/gm` replaced by `table(header, separator, body)`,
+ * in one pass. A header is a line from a `|` to a `|` with a line feed after it. The separator
+ * starts on the next line and runs over the class's characters, across lines, to the last `|`
+ * and line feed in that run that a row follows. A row is a line from a `|` to its last `|`, and
+ * the body is rows one after another, each with the line feed after it. What each step looks up
+ * (a line's end, its last `|`, where the class's run ends, the last place the separator can
+ * close) is a table made once.
+ * @param {string} text
+ * @param {(header: string, separator: string, body: string) => string} table
+ * @returns {string}
+ */
+function replaceTables(text, table) {
+  const n = text.length;
+  const isLineEnd = (/** @type {string} */ c) => c === '\n' || c === '\r' || c === '\u2028' || c === '\u2029';
+  // The first line end at or after each position
+  const lineEnd = new Int32Array(n + 1);
+  lineEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) lineEnd[i] = isLineEnd(text[i]) ? i : lineEnd[i + 1];
+  // The last `|` before each position
+  const barBefore = new Int32Array(n + 1);
+  barBefore[0] = -1;
+  for (let i = 1; i <= n; i++) barBefore[i] = text[i - 1] === '|' ? i - 1 : barBefore[i - 1];
+  /** A row at a line start: its last `|`, or -1 @param {number} at */
+  const rowEnd = at => {
+    if (text[at] !== '|') return -1;
+    const last = barBefore[lineEnd[at]];
+    return last >= at + 2 ? last : -1;
+  };
+  // The first position at or after each one that the separator's class doesn't hold
+  const classEnd = new Int32Array(n + 1);
+  classEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) classEnd[i] = /[-:\s|]/.test(text[i]) ? classEnd[i + 1] : i;
+  // The last place at or before each position where a separator can close: a `|`, a line
+  // feed, and a row after them
+  const closeBy = new Int32Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    const closes = text[i] === '|' && text[i + 1] === '\n' && rowEnd(i + 2) !== -1;
+    closeBy[i] = closes ? i : i > 0 ? closeBy[i - 1] : -1;
+  }
+  let out = '';
+  let from = 0;
+  let at = 0;
+  while (at < n) {
+    const end = lineEnd[at];
+    const start = end + 1;
+    let next = start;
+    if (text[at] === '|' && end - at >= 3 && text[end - 1] === '|' && text[end] === '\n' && text[start] === '|') {
+      const latest = classEnd[start + 1] - 2;
+      const close = latest >= start + 2 ? closeBy[latest] : -1;
+      if (close >= start + 2) {
+        let bodyEnd = close + 2;
+        for (let row = rowEnd(bodyEnd); row !== -1; row = rowEnd(bodyEnd)) {
+          bodyEnd = row + 1;
+          if (text[bodyEnd] !== '\n') break;
+          bodyEnd++;
+        }
+        out += text.slice(from, at) + table(text.slice(at, end), text.slice(start, close + 1), text.slice(close + 2, bodyEnd));
+        from = bodyEnd;
+        next = bodyEnd > 0 && isLineEnd(text[bodyEnd - 1]) ? bodyEnd : lineEnd[bodyEnd] + 1;
+      }
+    }
+    at = next;
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * `/((?:<li>.*<\/li>\n?)+)/g`, with `open` and `close` for the tags, replaced by `wrap(run)`, in
+ * one pass: a run is items one after another, each from an opening tag to the last closing tag
+ * on its line, and a line break after it. Each line's end and last closing tag are found once.
+ * @param {string} text
+ * @param {string} open
+ * @param {string} close
+ * @param {(run: string) => string} wrap
+ * @returns {string}
+ */
+function wrapListRuns(text, open, close, wrap) {
+  /** @type {number[]} */
+  const closes = [];
+  for (let at = text.indexOf(close); at !== -1; at = text.indexOf(close, at + 1)) closes.push(at);
+  // Asked for line ends that never go back: the last closing tag that ends by one
+  let passed = 0;
+  const lastCloseBy = (/** @type {number} */ end) => {
+    while (passed < closes.length && closes[passed] + close.length <= end) passed++;
+    return passed > 0 ? closes[passed - 1] : -1;
+  };
+  // What `.` doesn't match, from positions that never go back
+  const LINE_END = /[\n\r\u2028\u2029]/g;
+  let lineEndFound = -1;
+  const lineEnd = (/** @type {number} */ at) => {
+    if (lineEndFound >= at) return lineEndFound;
+    LINE_END.lastIndex = at;
+    const match = LINE_END.exec(text);
+    lineEndFound = match ? match.index : text.length;
+    return lineEndFound;
+  };
+  let out = '';
+  let from = 0;
+  let at = text.indexOf(open);
+  while (at !== -1) {
+    let end = at;
+    while (text.startsWith(open, end)) {
+      const last = lastCloseBy(lineEnd(end));
+      if (last < end + open.length) break;
+      end = last + close.length;
+      if (text[end] === '\n') end++;
+    }
+    if (end === at) {
+      at = text.indexOf(open, at + 1);
+      continue;
+    }
+    out += text.slice(from, at) + wrap(text.slice(at, end));
+    from = end;
+    at = text.indexOf(open, end);
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * Each of parseMarkdown's placeholders replaced by the code it stands for, in one pass, with
+ * what 1.4.x's string replace of each one in turn gave: a placeholder's first appearance takes
+ * its code, where `$$` reads as `$` and `$&` as the placeholder itself. The patterns that copy
+ * the text around a placeholder are kept as written.
+ * @param {string} text
+ * @param {{CODEBLOCK: string[], INLINECODE: string[]}} codes
+ * @returns {string}
+ */
+function restorePlaceholders(text, codes) {
+  const PLACEHOLDER = /\x00(CODEBLOCK|INLINECODE)(\d+)\x00/y;
+  /** @type {{CODEBLOCK: Set<number>, INLINECODE: Set<number>}} */
+  const restored = { CODEBLOCK: new Set(), INLINECODE: new Set() };
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf('\x00'); at !== -1; at = text.indexOf('\x00', at + 1)) {
+    PLACEHOLDER.lastIndex = at;
+    const match = PLACEHOLDER.exec(text);
+    if (!match) continue;
+    const kind = /** @type {'CODEBLOCK' | 'INLINECODE'} */ (match[1]);
+    const index = Number(match[2]);
+    if (String(index) !== match[2] || index >= codes[kind].length || restored[kind].has(index)) continue;
+    restored[kind].add(index);
+    const placeholder = match[0];
+    out += text.slice(from, at) + codes[kind][index].replace(/\$([$&])/g, (_, c) => (c === '$' ? '$' : placeholder));
+    from = at + placeholder.length;
+    at = from - 1;
+  }
+  return out + text.slice(from);
+}
+
 const Utils = {
   /**
    * Generate a unique ID
@@ -724,10 +943,8 @@ const Utils = {
    * @returns {string} - Text with tables converted to HTML
    */
   parseMarkdownTables(text) {
-    // Match table pattern: header row, separator row, and data rows
-    const tableRegex = /^(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/gm;
-
-    return text.replace(tableRegex, (match, headerRow, separatorRow, bodyRows) => {
+    // Match table pattern: header row, separator row, and data rows, in one pass
+    return replaceTables(text, (headerRow, separatorRow, bodyRows) => {
       // Parse alignment from separator row
       const alignments = separatorRow
         .split('|')
@@ -771,32 +988,29 @@ const Utils = {
   },
 
   /**
-   * Extract wikilinks from text [[Note Name]]
-   * @param {string} text - Text to parse
-   * @returns {Array<string>} - Array of note names
-   */
-  extractWikiLinks(text) {
-    if (!text) return [];
-    const regex = /\[\[([^\]]+)\]\]/g;
-    const links = [];
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      links.push(match[1].trim());
-    }
-    return [...new Set(links)]; // Return unique links
-  },
-
-  /**
-   * Convert wikilinks to HTML links
+   * Convert wikilinks to HTML links, in one pass with `/\[\[([^\]]+)\]\]/g`'s matches: from a
+   * `[[`, the name runs to the first `]`, which another `]` must follow
    * @param {string} html - HTML content to process
    * @returns {string} - HTML with wikilinks converted to <a> tags
    */
   convertWikiLinksToHtml(html) {
     if (!html) return '';
-    return html.replace(/\[\[([^\]]+)\]\]/g, (match, noteName) => {
-      const name = noteName.trim();
-      return `<a href="#" class="wiki-link" data-note-name="${this.escapeHtml(name)}">[[${this.escapeHtml(name)}]]</a>`;
-    });
+    // Anything but a string throws, as 1.4.x's replace did
+    const text = html.replace(/(?:)/, '');
+    const nextClose = forwardIndexOf(text, ']');
+    let out = '';
+    let from = 0;
+    for (let at = text.indexOf('[['); at !== -1; at = text.indexOf('[[', at + 1)) {
+      if (at < from) continue;
+      const close = nextClose(at + 2);
+      if (close === -1) break;
+      if (close === at + 2 || text[close + 1] !== ']') continue;
+      const name = this.escapeHtml(text.slice(at + 2, close).trim());
+      out += `${text.slice(from, at)}<a href="#" class="wiki-link" data-note-name="${name}">[[${name}]]</a>`;
+      from = close + 2;
+      at = close + 1;
+    }
+    return out + text.slice(from);
   },
 
   /**
@@ -813,7 +1027,8 @@ const Utils = {
     const inlineCodes = [];
 
     // Extract fenced code blocks first (```code```)
-    let result = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    // Anything but a string throws, as 1.4.x's replace did
+    let result = replaceFencedCode(text.replace(/(?:)/, ''), (lang, code) => {
       const index = codeBlocks.length;
       const escapedCode = this.escapeHtml(code.trim());
       const langClass = lang ? ` class="language-${this.escapeHtml(lang)}"` : '';
@@ -852,7 +1067,7 @@ const Utils = {
     // Unordered lists (- item or * item)
     result = result.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
     // Wrap consecutive <li> items in <ul> (for unordered)
-    result = result.replace(/((?:<li>.*<\/li>\n?)+)/g, (match) => {
+    result = wrapListRuns(result, '<li>', '</li>', (match) => {
       // Check if this is part of an ordered list by looking at context
       return `<ul>${match}</ul>`;
     });
@@ -860,7 +1075,7 @@ const Utils = {
     // Ordered lists (1. item, 2. item, etc.)
     result = result.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
     // Wrap consecutive <oli> items in <ol>
-    result = result.replace(/((?:<oli>.*<\/oli>\n?)+)/g, (match) => {
+    result = wrapListRuns(result, '<oli>', '</oli>', (match) => {
       return `<ol>${match.replace(/<\/?oli>/g, (tag) => tag.replace('oli', 'li'))}</ol>`;
     });
 
@@ -869,7 +1084,7 @@ const Utils = {
     result = result.replace(/<\/ol>\n<ol>/g, '\n');
 
     // Links [text](url)
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    result = replaceMarkdownLinks(result, (label, address) => `<a href="${address}" target="_blank" rel="noopener noreferrer">${label}</a>`);
 
     // Bold (**text** or __text__)
     result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -893,15 +1108,8 @@ const Utils = {
       return `<p>${para.replace(/\n/g, '<br>')}</p>`;
     }).join('\n');
 
-    // Restore code blocks
-    codeBlocks.forEach((block, index) => {
-      result = result.replace(`\x00CODEBLOCK${index}\x00`, block);
-    });
-
-    // Restore inline code
-    inlineCodes.forEach((code, index) => {
-      result = result.replace(`\x00INLINECODE${index}\x00`, code);
-    });
+    // Restore code blocks and inline code
+    result = restorePlaceholders(result, { CODEBLOCK: codeBlocks, INLINECODE: inlineCodes });
 
     // Clean up any remaining paragraph issues around block elements
     result = result.replace(/<p>(<(?:h[1-3]|ul|ol|blockquote|pre|hr)[^>]*>)/g, '$1');

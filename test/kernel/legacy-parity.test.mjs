@@ -21,6 +21,9 @@ import { testIds } from './support.mjs';
 // which takes vm.SourceTextModule: npm test starts node with --experimental-vm-modules
 /** @type {any} */
 const workerHarness = createRequire(import.meta.url)('../helpers/load-background.js');
+// 1.4.x's Utils.extractWikiLinks, word for word: the kernel reads the same names in one pass
+/** @type {{extractWikiLinks: (text: string) => string[]}} */
+const legacyTextPaths = createRequire(import.meta.url)('../fixtures/legacy-text-paths.cjs');
 const RUNS_MODULES = typeof (/** @type {any} */ (vm).SourceTextModule) === 'function';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
@@ -1476,7 +1479,6 @@ describe("the kernel's copies of production rules, run both ways", () => {
     viaStorage.env.load('js/sidebar-utils.js');
     const { storage } = viaStorage;
     const SidebarUtils = viaStorage.env.get('SidebarUtils');
-    const Utils = viaStorage.env.get('Utils');
     const reply = [
       { id: 'ai-1', type: 'text', content: 'See [[work]]' },
       { id: 'ai-2', type: 'todo', content: 'Call the bakery', checked: true },
@@ -1508,7 +1510,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       .map((/** @type {any} */ block) => block.content || block.title || block.caption || '')
       .filter(Boolean)
       .join('\n');
-    await storage.updateNoteLinks('n1', Utils.extractWikiLinks(text));
+    await storage.updateNoteLinks('n1', legacyTextPaths.extractWikiLinks(text));
 
     assertCommitted(
       await kernel.execute({ type: 'insertBlocks', commandId: 'c1', noteId: 'n1', blocks: reply, atOrder: 1 }),
@@ -1522,12 +1524,11 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.equal((await links(viaKernel)).length, 1);
   });
 
-  it("the kernel's preview, todo progress, and wiki-link names are SidebarUtils' and Utils'", async () => {
+  it("the kernel's preview, todo progress, and wiki-link names are SidebarUtils' and 1.4.x Utils'", async () => {
     const page = legacyContext();
     opened.push(page);
     page.env.load('js/sidebar-utils.js');
     const SidebarUtils = page.env.get('SidebarUtils');
-    const Utils = page.env.get('Utils');
     const { noteSaveMetadata, wikiLinkNames } = await import('../../js/kernel/core/domain/note.js');
     const long = `${'word '.repeat(40)}end`;
     /** @type {Array<Array<Record<string, unknown>>>} */
@@ -1566,7 +1567,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       assert.deepEqual(noteSaveMetadata(records), legacyEnv.plain(SidebarUtils.buildNoteSaveMetadata(records)));
     }
     for (const text of ['', 'none', '[[A]] and [[ B ]] and [[A]]', '[[]] [[x]y]] [[Nested [[Inner]]]]', '[[a\nb]]']) {
-      assert.deepEqual(wikiLinkNames(text), legacyEnv.plain(Utils.extractWikiLinks(text)), text);
+      assert.deepEqual(wikiLinkNames(text), legacyTextPaths.extractWikiLinks(text), text);
     }
   });
 });

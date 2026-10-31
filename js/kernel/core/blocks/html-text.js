@@ -50,6 +50,13 @@
  *   for it. The editor never writes one (it serializes `&` as `&amp;`).
  * - A `<` right before a NUL is text and the NUL is dropped, as the standard says; Chromium
  *   keeps U+FFFD for the NUL.
+ * - Inside a `select`, an end tag for an element opened outside it closes that element here,
+ *   and an `svg` or `math` opened inside the select with it. Chromium ignores the end tag
+ *   there, so the foreign content stays open.
+ * - A `</foreignObject>` inside an `svg` closes an HTML element named `foreignobject` opened
+ *   outside any `svg`, as the standard's end-tag rules do; Chromium leaves both open.
+ *
+ * The last two need markup whose tags don't balance, which the editor never serializes.
  *
  * It reads in time linear in its input: each comment, tag and raw-text run is scanned once, and
  * the stack answers every question an end tag asks with a lookup (createStack).
