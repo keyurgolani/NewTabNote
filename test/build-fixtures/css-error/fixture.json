@@ -1,0 +1,12 @@
+{
+  "rule": "CleanCSS reports an error on a level-2 stylesheet",
+  "expect": [
+    "build/css"
+  ],
+  "edits": [
+    {
+      "file": "css/stats.css",
+      "prepend": "@import url(ntn-fixture-missing.css);\n"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "rule": "dist/ has no build-info.json",
+  "kind": "package",
+  "expect": [
+    "package/no-build"
+  ],
+  "distEdits": [
+    {
+      "remove": "dist/build-info.json"
+    }
+  ]
+}

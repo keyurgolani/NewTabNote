@@ -1,0 +1,12 @@
+{
+  "rule": "a level-1 stylesheet (CSS_LEVEL_1) has a syntax error CleanCSS reports only as a warning",
+  "expect": [
+    "build/css"
+  ],
+  "edits": [
+    {
+      "file": "css/premium-chat.css",
+      "append": "\n.ntn-fixture { color: red\n"
+    }
+  ]
+}

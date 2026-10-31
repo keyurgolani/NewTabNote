@@ -1,0 +1,12 @@
+{
+  "rule": "manifest.json doesn't parse",
+  "expect": [
+    "build/manifest"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "append": "}\n"
+    }
+  ]
+}

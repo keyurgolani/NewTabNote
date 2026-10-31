@@ -129,7 +129,8 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # verify:fixtures runs a build per failure rule, and verify:reproducible two more
+    timeout-minutes: 20
     outputs:
       excerpt: ${{ steps.excerpt.outputs.excerpt }}
     steps:
@@ -144,10 +145,17 @@ jobs:
           package-manager-cache: false
       - name: npm ci --ignore-scripts
         run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # --strict is a no-op since #27, which made what it refused the build's only behavior
       - name: npm run build -- --strict
         run: npm run build -- --strict 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run check:dist
         run: npm run check:dist 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # #27: each build failure rule fails its fixture, and two clean builds of the commit
+      # package the same zip, before this job packages and uploads its own
+      - name: npm run verify:fixtures
+        run: npm run verify:fixtures 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      - name: npm run verify:reproducible
+        run: npm run verify:reproducible 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run package
         run: npm run package 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run check:notices
@@ -190,9 +198,10 @@ jobs:
           name: dist
           path: dist
       # Chromium only, without the headless shell: the harness runs extensions on the
-      # full build (channel: 'chromium')
+      # full build (channel: 'chromium'). The locked Playwright from node_modules/.bin, never
+      # npx, which can fetch another version.
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps --no-shell chromium 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+        run: node_modules/.bin/playwright install --with-deps --no-shell chromium 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run test:extension
         run: npm run test:extension 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
@@ -229,7 +238,7 @@ jobs:
             {"unit": "npm test",
             "typecheck": "npm run typecheck:ratchet",
             "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && {0}', needs.kernel.outputs.command || 'npm run check:boundaries')) }},
-            "build": "npm run build -- --strict && npm run check:dist && npm run package && npm run check:notices",
+            "build": "npm run build -- --strict && npm run check:dist && npm run verify:fixtures && npm run verify:reproducible && npm run package && npm run check:notices",
             "extension": "npm run build -- --strict && npm run test:extension"}
         run: |
           set -euo pipefail

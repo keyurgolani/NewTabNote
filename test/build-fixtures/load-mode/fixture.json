@@ -1,0 +1,13 @@
+{
+  "rule": "a page loads a file as a classic script that another loads as an ES module",
+  "expect": [
+    "build/load-mode"
+  ],
+  "edits": [
+    {
+      "file": "popup.html",
+      "replace": "  <script type=\"module\" src=\"js/popup.js\"></script>",
+      "with": "  <script src=\"js/utils.js\"></script>\n  <script type=\"module\" src=\"js/popup.js\"></script>"
+    }
+  ]
+}

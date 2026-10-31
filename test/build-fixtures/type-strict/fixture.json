@@ -1,0 +1,12 @@
+{
+  "rule": "the build code under scripts/build/ has a strict type error",
+  "expect": [
+    "type/strict"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build/diagnostics.js",
+      "append": "\nfunction ntnFixture(value) {\n  return value;\n}\nmodule.exports.ntnFixture = ntnFixture;\n"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "rule": "a legacy file gains a type diagnostic ci/baselines/typecheck.json doesn't allow",
+  "expect": [
+    "type/legacy"
+  ],
+  "edits": [
+    {
+      "file": "js/utils.js",
+      "append": "\nwindow.ntnFixture = ntnFixtureUndefinedName;\n"
+    }
+  ]
+}

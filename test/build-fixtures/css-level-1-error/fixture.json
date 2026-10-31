@@ -1,0 +1,12 @@
+{
+  "rule": "CleanCSS reports an error on a stylesheet CSS_LEVEL_1 lists",
+  "expect": [
+    "build/css"
+  ],
+  "edits": [
+    {
+      "file": "css/premium-chat.css",
+      "prepend": "@import url(ntn-fixture-missing.css);\n"
+    }
+  ]
+}

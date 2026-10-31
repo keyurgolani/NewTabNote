@@ -1,0 +1,13 @@
+{
+  "rule": "the search indexer leaves JS_FILES, so new Worker('js/workers/indexer.js') names a file the package lacks, as it did before #27",
+  "expect": [
+    "closure/missing"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build.js",
+      "replace": "  'js/workers/indexer.js',\n",
+      "with": ""
+    }
+  ]
+}

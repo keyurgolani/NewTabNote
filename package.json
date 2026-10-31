@@ -11,15 +11,18 @@
     "test:kernel": "node --test test/kernel/*.test.mjs",
     "test:extension": "playwright test -c e2e/playwright.config.js",
     "test:mutants": "node scripts/mutants.js",
-    "typecheck": "npx tsc --project jsconfig.json",
-    "typecheck:ratchet": "node scripts/typecheck-ratchet.js",
+    "typecheck": "tsc --project jsconfig.json",
+    "typecheck:ratchet": "node scripts/build/type-gate.js",
     "typecheck:kernel": "tsc -p tsconfig.kernel.json",
+    "typecheck:strict": "tsc -p tsconfig.strict.json",
     "check:boundaries": "node scripts/check-boundaries.js",
     "check:dist": "node scripts/check-dist.js",
     "format": "prettier --write .",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package && npm run check:notices",
     "check:notices": "node scripts/check-notices.js",
+    "verify:fixtures": "node scripts/build/verify-fixtures.js",
+    "verify:reproducible": "node scripts/build/verify-reproducible.js",
     "check:write-paths": "node scripts/write-paths.js",
     "design-tokens": "node scripts/build-design-tokens.js",
     "design-token-scan": "node scripts/design-token-scan.js"
@@ -28,17 +31,18 @@
     "@playwright/test": "1.64.1",
     "@types/chrome": "0.3.5",
     "@types/node": "24.19.2",
-    "archiver": "^7.0.1",
-    "clean-css": "^5.3.3",
+    "archiver": "7.0.1",
+    "clean-css": "5.3.3",
     "eslint": "10.13.0",
     "fake-indexeddb": "6.2.5",
     "prettier": "3.9.10",
-    "terser": "^5.31.0",
-    "typescript": "^5.9.3"
+    "terser": "5.46.0",
+    "typescript": "5.9.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "24.18.0"
   },
+  "packageManager": "npm@11.16.0",
   "author": "Keyur Golani <keyurrgolani@gmail.com>",
   "license": "MIT",
   "repository": {

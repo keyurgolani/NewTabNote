@@ -1,0 +1,13 @@
+{
+  "rule": "a vendored package has no THIRD_PARTY_NOTICES heading",
+  "expect": [
+    "notices/no-entry"
+  ],
+  "edits": [
+    {
+      "file": "THIRD_PARTY_NOTICES",
+      "replace": "\n3. Fuse.js 7.1.0\n",
+      "with": "\n3. Fuse 7.1.0\n"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# LF in the repository and in every checkout, so a build on any machine reads the bytes the
+# commit holds (#27, reproducible packages). Git leaves files it detects as binary alone.
+* text=auto eol=lf
+
+# The notices keep the license texts as their authors wrote them, CRLF lines included, and
+# ship byte for byte (npm run check:notices)
+THIRD_PARTY_NOTICES -text

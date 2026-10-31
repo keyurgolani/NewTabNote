@@ -1,0 +1,13 @@
+{
+  "rule": "a vendored file's dynamic code no longer matches its reviewed build/csp-allowlist.json row",
+  "expect": [
+    "csp/third-party"
+  ],
+  "edits": [
+    {
+      "file": "build/csp-allowlist.json",
+      "replace": "\"count\": 1,\n      \"reason\": \"The setimmediate",
+      "with": "\"count\": 2,\n      \"reason\": \"The setimmediate"
+    }
+  ]
+}

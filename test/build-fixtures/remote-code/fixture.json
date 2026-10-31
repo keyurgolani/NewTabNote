@@ -1,0 +1,12 @@
+{
+  "rule": "shipped code imports a module from another host",
+  "expect": [
+    "remote-code/url"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "append": "\nwindow.ntnFixtureRemote = import('https://cdn.example.test/module.js');\n"
+    }
+  ]
+}
