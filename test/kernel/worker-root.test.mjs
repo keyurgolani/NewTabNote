@@ -9,7 +9,12 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
-import { KEEPALIVE_MS, RETRY_AFTER_MS, UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
+import {
+  KEEPALIVE_MS,
+  RETRY_AFTER_MS,
+  UPGRADE_RECORD_KEY,
+  createWorkerClient,
+} from '../../js/kernel/composition/background.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
@@ -255,7 +260,9 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     assert.equal((await inspect(of.real)).version, 9);
     // R79's probe: another context deletes it and makes it again at 8, with a note
     await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
-    await legacyEnv.createDatabase(of.real, { records: { canvases: [legacyEnv.note('recreated', { name: 'Recreated' })] } });
+    await legacyEnv.createDatabase(of.real, {
+      records: { canvases: [legacyEnv.note('recreated', { name: 'Recreated' })] },
+    });
     assert.equal((await capture(worker, 'second')).kind, 'committed');
     assert.equal((await inspect(of.real)).version, 9);
     // The step ran only after a verified point of the recreated database

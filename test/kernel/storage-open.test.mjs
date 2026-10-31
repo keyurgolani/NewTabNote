@@ -131,7 +131,7 @@ const recordsIn = dump =>
   Object.fromEntries(Object.entries(dump.stores).map(([name, store]) => [name, /** @type {any} */ (store).records]));
 
 describe('opening CanvasTabDB on the IndexedDB adapter', () => {
-  it("leaves each shape as it was in a page's Storage.open, and brings it to 9 through step 9 in the worker's versioned open, every record kept", async () => {
+  it("leaves each shape as it was in a page's Storage.open and in the worker's versioned open, which makes 9 only where there's no database (review R79)", async () => {
     for (const [name, spec] of Object.entries(SHAPES)) {
       // The new tab's Storage.open upgrades nothing, and makes no database (#17 PR 1b)
       const page = await made(spec);
@@ -143,20 +143,32 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
         assert.equal(thrown && thrown.code, 'NO_DATABASE', name);
         assert.deepEqual(await page.real.databases(), [], `${name}: Storage.open made one`);
       }
-      // The worker's versioned open, after its run, finds nothing to upgrade; one that does
-      // runs step 9, which only adds
+      // The worker's versioned open, after its run, finds nothing to upgrade. One that finds an
+      // older database (made or replaced since the run) never upgrades it, since every step
+      // needs a verified point first: it's refused, retryable, for the worker to run the runner
+      // again, and the connection it opened is closed
       const of = await made(spec);
       const adapter = adapterOn(of);
-      await adapter.open();
-      adapter.close();
-      assert.deepEqual(
-        detectShape(await inspect(of.real)),
-        { kind: 'current', structuralVersion: 9, logicalVersion: 1 },
-        name,
-      );
-      const after = recordsIn(await legacyEnv.dumpDatabase(of.real));
-      for (const [store, records] of Object.entries(before ? recordsIn(before) : {})) {
-        assert.deepEqual(after[store], records, `${name}: ${store}`);
+      if (before) {
+        await assert.rejects(
+          adapter.open(),
+          error => {
+            const { unavailableCause, code, retryable } = /** @type {any} */ (error);
+            return unavailableCause === 'storage' && code === 'migration-required' && retryable === true;
+          },
+          name,
+        );
+        assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, `${name}: the versioned open changed it`);
+        assert.equal(await upgradeTo(of.real, 9), 'opened', `${name}: the refused connection is closed`);
+      } else {
+        // With nothing to keep, it makes the database at 9 through the registry's steps
+        await adapter.open();
+        adapter.close();
+        assert.deepEqual(
+          detectShape(await inspect(of.real)),
+          { kind: 'current', structuralVersion: 9, logicalVersion: 1 },
+          name,
+        );
       }
       assert.deepEqual(of.chrome.writes(), [], `${name}: no copy, and no setting`);
     }
@@ -248,8 +260,9 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
     }
   });
 
-  it('a blocked upgrade answers blocked-upgrade within openWithinMs, keeps waiting, and commits once nothing blocks it', async () => {
+  it('a blocked open answers blocked-upgrade within openWithinMs, keeps waiting, and refuses the older database it then finds, which it leaves as it was', async () => {
     const of = await made(SHAPES['version 7 (1.2.0)']);
+    const before = await legacyEnv.dumpDatabase(of.real);
     // An older page's connection that never closes, as 1.4.x's Popup holds its own
     const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
     const adapter = adapterOn(of, { openWithinMs: 50 });
@@ -278,16 +291,18 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
       });
       assert.equal(of.chrome.local[INITIALIZED_KEY], true);
     } finally {
-      // The page holding it closes, the upgrade lands, and the same command commits
+      // The page holding it closes, and the open goes on
       blocker.close();
     }
-    const committed = await legacyEnv.waitFor(async () => {
+    // It finds version 7, which only the runner upgrades after its point (review R79): the same
+    // command answers migration-required. This adapter never opens again, so it isn't
+    // retryable here; the worker's client starts another attempt on that code and builds a new one
+    const refused = await legacyEnv.waitFor(async () => {
       const outcome = await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
-      return outcome.kind === 'committed' ? outcome : null;
+      return outcome.kind === 'unavailable' && outcome.code !== 'blocked-upgrade' ? outcome : null;
     });
-    assert.equal(committed.code, 'note-created');
-    const dump = await legacyEnv.dumpDatabase(of.real);
-    assert.deepEqual([dump.version, Object.keys(dump.stores).includes('snapshots')], [9, true]);
+    assert.deepEqual(unavailableAs(refused), ['storage', 'migration-required', false]);
+    assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
   });
 
   it("an open that hasn't finished within openWithinMs answers open-pending, retryable, and never leaves a call waiting", async () => {
@@ -311,11 +326,16 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
 
   it("closes on another context's upgrade, so it never blocks it, and every call then answers reload-required", async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
-      const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+      // The worker opens versioned only on the database its run made at 9; Popup opens 8 as it is
+      const of = await made(mode === 'versioned' ? undefined : SHAPES['version 8 (1.3.0 to 1.4.x)']);
       const adapter = adapterOn(of, { mode });
       await adapter.open();
       const kernel = kernelOn(adapter, undefined, mode === 'versioned' ? CALLERS.newtab : CALLERS.popup);
-      assert.equal((await kernel.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+      // The fresh database holds no note yet; version 8 holds n1
+      assert.equal(
+        (await kernel.query({ type: 'listNotes', view: 'active' })).kind,
+        mode === 'versioned' ? 'empty' : 'ready',
+      );
       // A newer build's page upgrading past this build
       assert.equal(await within(upgradeTo(of.real, 10), 2000), 'opened', mode);
       for (const attempt of [1, 2]) {
@@ -331,11 +351,12 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
   });
 
   it('a connection Chrome closes itself, or one close() ends, answers reload-required', async () => {
-    const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+    // The database the worker's run made at 9
+    const of = await made();
     const adapter = adapterOn(of);
     await adapter.open();
     const tab = kernelOn(adapter);
-    assert.equal((await tab.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+    assert.equal((await tab.query({ type: 'listNotes', view: 'active' })).kind, 'empty');
     forceCloseDatabase(/** @type {IDBDatabase} */ (of.faults.connections.at(-1)));
     await legacyEnv.settle();
     assert.deepEqual(unavailableAs(await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' })), [

@@ -141,7 +141,8 @@ describe('each composition root', () => {
     assert.equal(fresh.env.chrome.local.setting_storageInitialized, true);
     assert.deepEqual(
       { .../** @type {any} */ (fresh.env.chrome.local[UPGRADE_RECORD_KEY]), at: 0 },
-      { status: 'migrated', code: null, at: 0, version: null },
+      // A fresh profile's run read no store, so it never holds back another (costly: false)
+      { status: 'migrated', code: null, at: 0, version: null, costly: false },
     );
     // And a new tab that wakes it then opens the database as it is, and maintains it
     const next = legacyContext(fresh.env);

@@ -92,6 +92,13 @@ export const RETRY_AFTER_MS = 30 * 60 * 1000;
 export const KEEPALIVE_MS = 20 * 1000;
 
 /**
+ * The answers after which a command starts another attempt and runs once more: its connection
+ * went (another context upgraded or deleted the database), or its versioned open found the
+ * database older than 9, which only the runner upgrades
+ */
+const RETRIED_CODES = Object.freeze(['reload-required', 'migration-required']);
+
+/**
  * Where the runner and the worker's storage warn, with ids, codes, and statuses only
  * @type {Logger}
  */
@@ -362,10 +369,11 @@ export function createWorkerClient(host = workerHost()) {
       const ready = await unlessBlocked(client);
       if (!ready) return blockedUpgrade();
       const outcome = await ready.execute(command);
-      if (outcome.kind !== 'unavailable' || outcome.code !== 'reload-required') return outcome;
-      // The connection went before this command's transaction began, so nothing of it
-      // committed. The database may have been replaced since, so another attempt first, which
-      // upgrades only after its own verified point, then a new connection and the command once more.
+      if (outcome.kind !== 'unavailable' || !RETRIED_CODES.includes(outcome.code)) return outcome;
+      // The connection went before this command's transaction began, or the open found an older
+      // database than the run left, so nothing of it committed. The database may have been
+      // replaced since, so another attempt first, which upgrades only after its own verified
+      // point, then a new connection and the command once more.
       again();
       const next = await unlessBlocked(client);
       return next ? next.execute(command) : blockedUpgrade();
