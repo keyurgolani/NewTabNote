@@ -173,14 +173,22 @@ async function copyUnbundled(root, outDir, mode) {
 }
 
 /**
- * The source modules a graph bundled, read from `root`, first-party ones only (js/lib/ is
- * vendored)
+ * The source modules a graph bundled, read from `root`
  * @param {string[]} files
  * @param {string} root
  * @returns {Array<{file: string, text: string}>}
  */
-function firstParty(files, root) {
-  return files.filter((file) => !file.startsWith('js/lib/')).map((file) => ({ file, text: fs.readFileSync(path.join(root, file), 'utf8') }));
+function sourcesOf(files, root) {
+  return files.map((file) => ({ file, text: fs.readFileSync(path.join(root, file), 'utf8') }));
+}
+
+/**
+ * The first-party ones of `sources` (js/lib/ is vendored)
+ * @param {Array<{file: string, text: string}>} sources
+ * @returns {Array<{file: string, text: string}>}
+ */
+function firstParty(sources) {
+  return sources.filter(({ file }) => !file.startsWith('js/lib/'));
 }
 
 /**
@@ -196,7 +204,8 @@ function checkOutput(outDir, bundled, root) {
   const loadMode = Object.keys(CLASSIC_SCRIPTS).filter((file) => bundled.modules[file])
     .map((file) => problem('build/load-mode', file, `a page loads it as a classic script, and the bundle holds it as a module too, in ${bundled.modules[file].join(', ')}`));
   const modules = [...new Set([...bundled.graphs.pages, ...bundled.graphs.background])].sort();
-  const sources = firstParty(modules, root);
+  const sources = sourcesOf(modules, root);
+  const background = new Set(bundled.graphs.background);
   return [
     ...loadMode,
     ...checkClosure(files).problems,
@@ -210,10 +219,11 @@ function checkOutput(outDir, bundled, root) {
     ...checkVendor(files),
     ...checkBundledVendor(modules, files, root),
     ...checkEnvironment(files),
-    ...checkSourceEnvironment(sources),
+    ...checkSourceEnvironment(firstParty(sources)),
+    // Vendored modules too: the bundler wraps one as readily, and swaps its require (#99's delta)
     ...checkCommonJs(sources),
     ...checkBackgroundOutput(files),
-    ...checkBackgroundSources(firstParty(bundled.graphs.background, root)),
+    ...checkBackgroundSources(firstParty(sources).filter(({ file }) => background.has(file))),
   ];
 }
 

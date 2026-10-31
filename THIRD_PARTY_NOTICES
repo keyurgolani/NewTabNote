@@ -1528,7 +1528,7 @@ This is the MIT/Expat Licence. For more information see:
 
 License:   MIT
 Copyright: Copyright (c) Fabian Hiller
-In:        assets/trust-*.js and js/background.js: dist/index.mjs from the valibot package, bundled and minified into the chunks that import it, the pages' shared chunk (* is its content hash) and the service worker. The source keeps it unmodified as js/lib/valibot/index.mjs, and the package's LICENSE.md ships as js/lib/valibot/LICENSE.md.
+In:        assets/trust-*.js and js/background.js: dist/index.mjs from the valibot package, bundled and minified into the chunks that import it: the trust chunk, which a page loads only for its failure events (* is its content hash), and the service worker. The source keeps it unmodified as js/lib/valibot/index.mjs, and the package's LICENSE.md ships as js/lib/valibot/LICENSE.md.
 Source:    https://www.npmjs.com/package/valibot/v/1.5.0
 
 MIT License

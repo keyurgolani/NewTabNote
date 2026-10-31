@@ -12,7 +12,8 @@
  *   if (typeof document === 'undefined') return; ...            (an exit: return, throw, break,
  *                                                                continue), for what follows it
  * A check may be one of several conditions joined the same way (`a && typeof window !==
- * 'undefined'`).
+ * 'undefined'`). An exit doesn't guard a function declaration after it, which is hoisted and
+ * can run before the exit does.
  *
  * isDeclaredInScope: whether a binding in a scope around the read declares the name, so that the
  * read isn't of the global: a parameter, a local of an enclosing block, a var of an enclosing
@@ -171,7 +172,9 @@ function isGuarded(node, name) {
       if (child === parent.thenStatement && provesDefined(parent.expression, name)) return true;
       if (child === parent.elseStatement && falseProvesDefined(parent.expression, name)) return true;
     }
-    if (ts.isStatement(child) && followsExitGuard(child, name)) return true;
+    // A function declaration is hoisted: it exists, and can be called, before an exit earlier
+    // in its block runs (#99's delta)
+    if (ts.isStatement(child) && !ts.isFunctionDeclaration(child) && followsExitGuard(child, name)) return true;
     child = parent;
     parent = parent.parent;
   }
