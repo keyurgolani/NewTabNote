@@ -360,9 +360,9 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       return { outcome: finish(work), changed: [] };
     }
     // The legacy backup tasks run only on 1.4.x's Storage (the `backups` flag)
-    if (effect.kind === 'backup') return unavailable('adapter', 'backups-need-legacy-storage', false);
+    if (effect.kind === 'backup') return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), changed: [] };
     // The read-only integrity check has nothing to check in memory, and changes nothing
-    if (effect.kind === 'integrity-check') return finish(work);
+    if (effect.kind === 'integrity-check') return { outcome: finish(work), changed: [] };
     if (effect.kind === 'maintenance') {
       /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
       const defaults = [

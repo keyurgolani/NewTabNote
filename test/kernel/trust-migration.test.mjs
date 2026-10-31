@@ -14,6 +14,7 @@ import { UPGRADE_BLOCKED_KEY, UPGRADE_RECORD_KEY, createWorkerClient, migrationE
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createMigrationReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
@@ -124,8 +125,8 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'current', failure: null }) });
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', shape: 'none', to: 9, failure: null }) });
     assert.deepEqual(sent, [
-      ['storage.migration-failed', { schemaVersion: 9 }, 'schema-mismatch'],
-      ['storage.migration-blocked', { schemaVersion: 9, errorCode: 'blocked-upgrade' }, undefined],
+      ['storage.migration-failed', { schemaVersion: LATEST_STRUCTURAL }, 'schema-mismatch'],
+      ['storage.migration-blocked', { schemaVersion: LATEST_STRUCTURAL, errorCode: 'blocked-upgrade' }, undefined],
     ]);
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', to: 9, failure: null }) });
     report({ kind: 'ended', outcome: /** @type {any} */ (failed) });
