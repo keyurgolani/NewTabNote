@@ -9,6 +9,18 @@
  * one, so a repeat updates the one incident. The failure sites #20 slice 1b moves here are
  * background capture, embedding load, worker storage init, auto-backup, and indexer start.
  *
+ * A code that stands for a success at one of those sites names the failure code whose incident
+ * it resolves (`resolves`): the indexer's first answer, an auto-backup that saved, and a
+ * capture that committed. It resolves only the sightings it counted just before it (the
+ * records' occurrence snapshot, never clocks), and is journaled only when it resolved one.
+ * For each of them a success in one context is evidence for a failure in another: the indexer
+ * and auto-backup run the same package on the same profile in every tab, and every capture
+ * runs in the service worker, on the same profile.
+ *
+ * `quietWhileOpen`: a code whose site repeats while nothing changes (the worker's storage open,
+ * at every start) is journaled only when its incident isn't open already with the same error
+ * code; each sighting still counts in the incident.
+ *
  * Adding a code is a PR that adds its entry here, with its fields from the allowlist.
  */
 
@@ -20,6 +32,8 @@ import { EVIDENCE_FIELDS } from './evidence.js';
  * @typedef {Readonly<{
  *   fields: readonly string[],
  *   incident?: Readonly<{providerId: string, faultCode: string, severity: Severity}>,
+ *   resolves?: string,
+ *   quietWhileOpen?: boolean,
  * }>} EventCode
  */
 
@@ -39,6 +53,7 @@ export const EVENT_CODES = Object.freeze({
   'storage.open-failed': Object.freeze({
     fields: Object.freeze([...ERROR, 'surface', 'schemaVersion', 'durationMs', 'subjectId']),
     incident: Object.freeze({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' }),
+    quietWhileOpen: true,
   }),
   'embeddings.load-failed': Object.freeze({
     fields: Object.freeze([...ERROR, 'surface', 'durationMs', 'bytes']),
@@ -52,6 +67,10 @@ export const EVENT_CODES = Object.freeze({
     fields: Object.freeze([...ERROR, 'surface']),
     incident: Object.freeze({ providerId: 'index', faultCode: 'indexer-start-failed', severity: 'degraded' }),
   }),
+  // The successes at those sites, each resolving its site's incident
+  'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
+  'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),
+  'indexer.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'indexer.start-failed' }),
   // The Trust Center's own
   'trust.check-failed': Object.freeze({
     fields: Object.freeze(['providerId', 'durationMs', ...ERROR]),
@@ -96,6 +115,11 @@ export function eventCodeProblems() {
       if (!Object.prototype.hasOwnProperty.call(EVIDENCE_FIELDS, field)) problems.push(`${name}: ${field} isn't evidence`);
     }
     if (new Set(entry.fields).size !== entry.fields.length) problems.push(`${name}: lists a field twice`);
+    if (entry.resolves !== undefined) {
+      const site = EVENT_CODES[entry.resolves];
+      if (!site || !site.incident) problems.push(`${name}: resolves ${entry.resolves}, which raises no incident`);
+      if (entry.incident) problems.push(`${name}: a success raises no incident`);
+    }
   }
   return problems;
 }

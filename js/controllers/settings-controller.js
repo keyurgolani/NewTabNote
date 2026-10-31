@@ -1217,6 +1217,8 @@ class SettingsController {
       try {
         await this.settings.createAutoBackup();
         this.logger?.info?.('SettingsController', 'Auto-backup created to chrome.storage.local');
+        // A backup that saved resolves an earlier auto-backup failure (#20)
+        if (this.logger && typeof this.logger.event === 'function') this.logger.event('backup.auto-succeeded', {});
       } catch (error) {
         console.warn('Auto-backup failed:', error);
         Utils.showToast('Auto-backup failed. Consider exporting manually.', 'error');

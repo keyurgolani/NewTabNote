@@ -46,18 +46,29 @@ export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
 
 /**
  * @typedef {object} DiagnosticJournal
- * @property {(code: string, fields?: Record<string, unknown>) => boolean} event
+ * @property {(code: string, fields?: Record<string, unknown>, options?: {seen?: Readonly<Record<string, {id: string, occurrences: number}>>}) => boolean} event
  *   Records an event and answers true, or refuses it: throws when strict, and otherwise
- *   answers false after counting it in memory
+ *   answers false after counting it in memory. A success may pass `seen`, its site's open
+ *   incidents' ids and occurrences as read at its own moment, which it resolves only while
+ *   both hold; without it the records' snapshot is taken now.
  * @property {() => Readonly<Record<RejectionReason, number>>} rejected - refusals so far, by reason
  * @property {() => Promise<void>} flush - resolves once every write so far has settled
+ * @property {(code: string) => Promise<boolean | null>} siteOpen
+ *   Whether `code`'s site (a failure code, or the success that resolves one) has an open
+ *   incident, or null when the store or the settings copy couldn't be read
  */
 
 /**
- * @param {{records: TrustRecords, clock: Clock, strict?: boolean}} options - `strict` in tests only
+ * @param {{
+ *   records: TrustRecords,
+ *   clock: Clock,
+ *   strict?: boolean,
+ *   onRaised?: (code: string, incident: import('./records.js').Incident) => unknown,
+ * }} options - `strict` in tests only; `onRaised` hears each failure event's incident once its
+ *   raise lands (or is held), and flush() waits for it
  * @returns {DiagnosticJournal}
  */
-export function createDiagnosticJournal({ records, clock, strict = false }) {
+export function createDiagnosticJournal({ records, clock, strict = false, onRaised }) {
   /** @type {Record<RejectionReason, number>} */
   const counts = { 'unregistered-code': 0, 'field-not-allowed': 0, 'value-not-allowed': 0, 'not-an-object': 0, 'write-failed': 0 };
   /** @type {Partial<Record<RejectionReason, number>>} */
@@ -114,8 +125,47 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
     return false;
   };
 
+  /**
+   * The incident a failure code raises, or that a success code's failure code does
+   * @param {string} code
+   */
+  const siteOf = code => {
+    if (!isEventCode(code)) return null;
+    const entry = EVENT_CODES[code];
+    const failure = entry.resolves !== undefined ? EVENT_CODES[entry.resolves] : entry;
+    return failure && failure.incident ? failure.incident : null;
+  };
+
+  /**
+   * A success at `failureCode`'s site: resolves the open incidents it raised that had no new
+   * sighting since just before (the records' occurrence snapshot), and journals the success only
+   * when it resolved one. A read that fails resolves nothing.
+   * @param {string} failureCode
+   * @param {Omit<import('./records.js').JournalEvent, 'seq'>} appended
+   * @param {Readonly<Record<string, {id: string, occurrences: number}>> | undefined} given - the
+   *   incidents' ids and counts read at the success's moment
+   * @returns {Promise<{recorded: boolean}>}
+   */
+  const succeeded = async (failureCode, appended, given) => {
+    const site = /** @type {{providerId: string, faultCode: string}} */ (siteOf(failureCode));
+    /** @type {Readonly<Record<string, number | {id: string, occurrences: number}>>} */
+    let counts;
+    if (given) {
+      counts = given;
+    } else {
+      const seen = await records.occurrencesOf(site.providerId);
+      if (!seen.ok) return { recorded: true };
+      counts = /** @type {{counts: Record<string, number>}} */ (seen).counts;
+    }
+    if (!Object.keys(counts).some(key => key.split('/')[1] === site.faultCode)) return { recorded: true };
+    const done = await records.resolve(site.providerId, [], { looked: [{ faultCode: site.faultCode }], seen: counts });
+    if (!done.recorded) return { recorded: false };
+    if (/** @type {{resolved: unknown[]}} */ (done).resolved.length === 0) return { recorded: true };
+    return records.append(appended);
+  };
+
   return Object.freeze({
-    event(code, fields) {
+    event(code, fields, { seen } = {}) {
       if (!isEventCode(code)) return refuse('unregistered-code', null);
       const entry = EVENT_CODES[code];
       const checked = checkEvidence(fields, entry.fields);
@@ -125,6 +175,10 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       }
       const at = clock.now();
       const appended = { at, code, fields: checked.value };
+      if (entry.resolves !== undefined) {
+        track(succeeded(entry.resolves, appended, seen));
+        return true;
+      }
       if (!entry.incident) {
         track(records.append(appended));
         return true;
@@ -140,11 +194,36 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       track(raised);
       track(
         raised.then(
-          result => records.append(appended, { internal: !result.recorded }),
+          result => {
+            if (onRaised && result.incident) {
+              const incident = result.incident;
+              track(Promise.resolve(onRaised(code, incident)).then(() => ({ recorded: true })));
+            }
+            // A site that repeats while nothing changes journals once per open incident and cause
+            return entry.quietWhileOpen && result.recorded && result.repeat
+              ? { recorded: true }
+              : records.append(appended, { internal: !result.recorded });
+          },
           () => records.append(appended),
         ),
       );
       return true;
+    },
+
+    /**
+     * Whether `code`'s site (a failure code, or the success that resolves one) has an open
+     * incident now, or null when the store or the settings copy couldn't be read
+     * @param {string} code
+     * @returns {Promise<boolean | null>}
+     */
+    async siteOpen(code) {
+      const site = siteOf(code);
+      if (!site) return false;
+      const seen = await records.occurrencesOf(site.providerId);
+      if (!seen.ok) return null;
+      return Object.keys(/** @type {{counts: Record<string, number>}} */ (seen).counts).some(
+        key => key.split('/')[1] === site.faultCode,
+      );
     },
 
     rejected: () => Object.freeze({ ...counts }),

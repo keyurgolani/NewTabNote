@@ -74,11 +74,13 @@
 /** @typedef {{set(callback: () => void, ms: number): unknown, clear(handle: unknown): void}} Timers */
 
 /**
- * The chrome.storage.local keys the Trust Center writes, both `diagnostic`: the latest storage
- * incident while NewTabNoteTrust won't open, and the random id that stamps receipts, written
- * once
+ * The chrome.storage.local keys the Trust Center writes, all `diagnostic`: the latest storage
+ * incident while NewTabNoteTrust won't open, the random id that stamps receipts, written once,
+ * and the failure codes whose site may have an open incident, so a success at a site loads and
+ * opens the trust code only when there's something it could resolve (js/kernel/composition/)
  */
 export const SETTINGS_KEYS = Object.freeze({
   lastStorageIncident: 'trust.lastStorageIncident',
   installId: 'trust.installId',
+  openSites: 'trust.openSites',
 });

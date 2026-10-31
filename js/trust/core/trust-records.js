@@ -69,7 +69,12 @@
  *   a false alarm, never a false all clear.
  * - Known limit: `storage/write-failed` sighted by more than one context stays open, a false
  *   alarm, until a later slice's verify path or a dismissal, even after every one of them
- *   recovered.
+ *   recovered. So does one whose context ended before a write landed there: a closed tab, or
+ *   an MV3 service worker that Chrome stopped (after about 30 s idle, the common case).
+ * - Known limit, wider since the failure events reconcile at every worker start and tab: a
+ *   stuck context's `open-failed` reads resolved after any other context opens the store while
+ *   the copy holds entries (more than 30 s after the stuck context's last failed open), until
+ *   that context fails again.
  * - Known limit: the settings copy is the only channel between contexts. When
  *   chrome.storage.local takes no writes (over its quota, say) while reads still work, a
  *   context's failures stay in its own memory until its store takes a write, so another context
@@ -230,6 +235,19 @@ const stillOpening = error => error instanceof UnavailableError && error.code ==
 
 /** @param {string} provider */
 const isStorageProvider = provider => /** @type {readonly string[]} */ (STORAGE_PROVIDERS).includes(provider);
+
+/**
+ * Whether `incident` is as `seen` had it: the same occurrences, and with a mark's entry the
+ * same incident id too. Anything else (missing, another shape) is a mismatch.
+ * @param {unknown} seen
+ * @param {Incident} incident
+ */
+function unmoved(seen, incident) {
+  if (typeof seen === 'number') return seen === incident.occurrences;
+  if (!seen || typeof seen !== 'object') return false;
+  const entry = /** @type {{id?: unknown, occurrences?: unknown}} */ (seen);
+  return entry.id === incident.id && entry.occurrences === incident.occurrences;
+}
 
 /**
  * @param {{
@@ -847,7 +865,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * Raises an incident, or updates the one with its key. When the store won't take it,
    * `recorded` is false, and a storage incident is `held` (in memory and the settings copy).
    * @param {RaiseInput} input
-   * @returns {Promise<{recorded: boolean, held: boolean, incident: Incident | null, created: boolean}>}
+   * @returns {Promise<{recorded: boolean, held: boolean, incident: Incident | null, created: boolean, repeat: boolean}>}
    */
   const raise = async input => {
     const sighting = sightingOf(input);
@@ -859,15 +877,21 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       const incident = parseRecord(incidentSchema, applyRaise(existing, op), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
-      return { incident, created: !existing };
+      // A repeat: it was open already, with the same error code
+      const repeat = Boolean(
+        existing && existing.state !== 'resolved' && existing.evidence.errorCode === sighting.evidence.errorCode,
+      );
+      return { incident, created: !existing, repeat };
     });
     if (stored.ok) return { recorded: true, held: false, ...stored.value };
     await failedWrite(errorOf(stored));
-    if (!isStorageProvider(sighting.providerId)) return { recorded: false, held: false, incident: null, created: false };
+    if (!isStorageProvider(sighting.providerId)) {
+      return { recorded: false, held: false, incident: null, created: false, repeat: false };
+    }
     const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
     const entry = await holdSighting(key, sighting, now, { counted: true });
     const shown = entry ? (await incidents()).find(item => item.key === key) || null : null;
-    return { recorded: false, held: entry !== null, incident: shown, created: false };
+    return { recorded: false, held: entry !== null, incident: shown, created: false, repeat: false };
   };
 
   /**
@@ -877,10 +901,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * `write-failed`), whoever calls it. A check passes `looked`, what it really looked at
    * (checks.js), so only those incidents resolve, and `seen`, each open incident's occurrences
    * before it ran (occurrencesOf()), so only one with no sighting since resolves: an incident
-   * whose count moved, or that wasn't there, stays, whatever the contexts' clocks say.
+   * whose count moved, or that wasn't there, stays, whatever the contexts' clocks say. A success
+   * passes its site's mark instead, each incident's id with its occurrences, so a new incident
+   * under the key of one that's gone stays too.
    * @param {string} provider
    * @param {readonly string[]} still - keys of the faults the check still reports
-   * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seen?: Readonly<Record<string, number>>}} [options]
+   * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seen?: Readonly<Record<string, number | {id: string, occurrences: number}>>}} [options]
    * @returns {Promise<{recorded: true, resolved: Incident[]} | {recorded: false}>}
    */
   const resolve = async (provider, still, { looked, seen } = {}) => {
@@ -894,7 +920,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
           incident.providerId === provider &&
           !still.includes(incident.key) &&
           !OWN_KEYS.has(incident.key) &&
-          (seen === undefined || seen[incident.key] === incident.occurrences) &&
+          (seen === undefined || unmoved(seen[incident.key], incident)) &&
           (!looked ||
             looked.some(
               item =>
