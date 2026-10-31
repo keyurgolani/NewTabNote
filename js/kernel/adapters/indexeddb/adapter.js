@@ -522,11 +522,12 @@ export function createIndexedDbAdapter({
     let books = NO_BOOKS;
     try {
       db = connection.database();
-      const names = present(db, [...units.flatMap(unit => unit.stores), ...(work.primary ? ['notes'] : [])]);
-      const unitNames = present(
-        db,
-        units.flatMap(unit => unit.stores),
-      );
+      const unitStores = units.flatMap(unit => unit.stores);
+      // The primary note's revision may move, or be reported, though no unit touches the note
+      /** @type {StoreName[]} */
+      const primaryStores = work.primary ? ['notes'] : [];
+      const names = present(db, [...unitStores, ...primaryStores]);
+      const unitNames = present(db, unitStores);
       books = booksOf(db);
       const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite') || books.ledger;
       if (names.length > 0 && writes) {

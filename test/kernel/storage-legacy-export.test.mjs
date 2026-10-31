@@ -10,7 +10,7 @@ import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { ROWS_STORE, committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { KeyRange, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
+import { KeyRange, legacyEnv, profileWith, run, synthesized, writeHistory } from './migration-support.mjs';
 import { NOW } from './support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
@@ -122,6 +122,33 @@ describe('a pre-migration point exported for 1.4.1', () => {
     );
     assert.ok(file.orphanElements.some((/** @type {any} */ b) => b.content === 'Left behind'));
     assert.equal(result.skippedMedia, 1);
+  });
+
+  it("still exports the pinned point, as it was, once #17's adapter has kept history at 10 (#17 PR 2a)", async () => {
+    const fixture = /** @type {any} */ (FIXTURES.get('v8.basic'));
+    const of = await profileWith(fixture);
+    assert.equal((await run(of)).status, 'migrated');
+    assert.ok((await writeHistory(of)).includes('conflict'));
+    const pointId = await exportablePoint({ indexedDB: of.real });
+    assert.equal(pointId, `pre-migration-${NOW}`);
+    const file = JSON.parse(
+      JSON.stringify(
+        await exportPoint({
+          indexedDB: of.real,
+          keyRange: KeyRange,
+          crypto,
+          clock: { now: () => NOW },
+          pointId: /** @type {string} */ (pointId),
+        }),
+      ),
+    );
+    // The point holds the profile as it was before the upgrade, so nothing written since is in it
+    const ids = (/** @type {any[]} */ rows) => rows.map(row => row.id).sort();
+    assert.deepStrictEqual(ids([...file.canvases, ...file.trashedCanvases]), ids(valuesOf(fixture, 'canvases')));
+    const { Storage } = await release141();
+    assert.equal(Storage.validateImport(file).ok, true);
+    const result = await Storage.importData(file, 'merge');
+    assert.equal(result.notes, file.canvases.length);
   });
 
   it('leaves nothing the point holds out of the file', async () => {
