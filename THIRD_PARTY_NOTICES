@@ -1,9 +1,9 @@
 NewTabNote third-party notices
 
-NewTabNote ships the third-party software below, in js/lib/ or bundled into
-its own scripts. Each entry gives the component, its version, license, and
+NewTabNote ships the third-party software and data below, in js/lib/ or bundled
+into its own scripts. Each entry gives the component, its version, license, and
 copyright, where it is in the package, and its license text as the upstream
-package ships it.
+package ships it, or a link to it.
 NewTabNote's own license is in LICENSE.
 
 Components
@@ -28,6 +28,7 @@ Components
   18. ONNX Runtime 1.14.0 third-party notices: onnx, google/flatbuffers, emsdk
   19. Valibot 1.5.0 (MIT)
   20. emoji-regex-xs 1.0.0 (MIT)
+  21. HTML Standard named character references (CC-BY-4.0)
 
 ================================================================================
 1. Chart.js 4.4.1
@@ -1571,3 +1572,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+21. HTML Standard named character references
+================================================================================
+
+License:   CC-BY-4.0 (Creative Commons Attribution 4.0 International)
+Copyright: Copyright © WHATWG (Apple, Google, Mozilla, Microsoft)
+In:        assets/workspace-*.js: js/kernel/core/blocks/entities.js, bundled and minified into the new tab's workspace chunk, which its loader starts it with (* is its content hash), the only script that loads html-text.js's tokenizer. The file holds the HTML Living Standard's table of named character references, all 2231 of them, no subset. It was read from Python's html.entities.html5, which holds the same list, and repacked small for js/kernel/core/blocks/html-text.js to decode: the names that stand for the same code points grouped together, in code point order, each group's first code point stored as the base-36 step from the one before (the file's header describes the format). No name or code point was changed, added, or left out.
+Source:    https://html.spec.whatwg.org/multipage/named-characters.html (the same table as JSON: https://html.spec.whatwg.org/entities.json)
+
+The HTML Living Standard is licensed under the Creative Commons Attribution 4.0
+International License. The license text is at
+https://creativecommons.org/licenses/by/4.0/legalcode, and its summary at
+https://creativecommons.org/licenses/by/4.0/.
