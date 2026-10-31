@@ -2306,6 +2306,169 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe('chat history, themes, onboarding, and backups (#12 slice 6)', () => {
+      /**
+       * @param {import('../../js/kernel/core/ports/repository.js').SettingsArea} area
+       * @param {string[]} keys
+       */
+      const settingsIn = (area, keys) => ctx.adapter.readSettings(area, keys);
+
+      /** @param {string} themeId */
+      const themeOf = themeId => ctx.adapter.read(['themes'], tx => tx.get('themes', themeId));
+
+      it('saveChatHistory writes a conversation, its history and messages together, under 1.4.x keys', async () => {
+        const history = [{ role: 'user', content: 'Plan the week' }];
+        const messages = [{ type: 'user', content: 'Plan the week', timestamp: 1 }];
+        const outcome = await run(cmd('saveChatHistory', { chat: 'note', history, messages }));
+        assert.deepEqual(outcome.changedIds, ['aiChatHistory', 'noteChatMessages']);
+        assert.ok(!JSON.stringify(outcome).includes('Plan the week'), 'the outcome carries no chat text');
+        await run(cmd('saveChatHistory', { chat: 'global', history: [], messages: [] }));
+        assert.deepEqual(
+          await settingsIn('chat', ['aiChatHistory', 'noteChatMessages', 'globalChatHistory', 'globalChatMessages']),
+          { aiChatHistory: history, noteChatMessages: messages, globalChatHistory: [], globalChatMessages: [] },
+        );
+        assertRejected(
+          await kernel.execute(cmd('saveChatHistory', /** @type {any} */ ({ chat: 'side', history: [], messages: [] }))),
+          'validation',
+          'invalid-command',
+        );
+      });
+
+      it('savePromptTemplates writes the templates, and a chat write that fails is unavailable', async () => {
+        const templates = [{ id: 't1', label: 'Sum', prompt: 'Summarize', scope: 'note' }];
+        assert.deepEqual((await run(cmd('savePromptTemplates', { templates }))).changedIds, ['aiPromptTemplates']);
+        assert.deepEqual(await settingsIn('chat', ['aiPromptTemplates']), { aiPromptTemplates: templates });
+        ctx.failNextWrite('chat');
+        const failed = await kernel.execute(cmd('savePromptTemplates', { templates: [] }));
+        assert.equal(failed.kind, 'unavailable', JSON.stringify(failed));
+        assert.deepEqual(await settingsIn('chat', ['aiPromptTemplates']), { aiPromptTemplates: templates });
+      });
+
+      it('saveTheme makes a theme, then a save of it replaces its name and properties and keeps the rest', async () => {
+        const made = await run(cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }));
+        assert.deepEqual(made.changedIds, ['th1']);
+        assert.ok(!JSON.stringify(made).includes('Dusk'), 'the outcome carries no theme name');
+        assert.deepEqual(await themeOf('th1'), {
+          id: 'th1',
+          name: 'Dusk',
+          properties: { '--bg-primary': '#101010' },
+          updatedAt: NOW,
+        });
+        ctx.clock.advance(1000);
+        await run(cmd('saveTheme', { themeId: 'th1', name: 'Dawn', properties: { '--bg-primary': '#fafafa' } }));
+        assert.deepEqual(await themeOf('th1'), {
+          id: 'th1',
+          name: 'Dawn',
+          properties: { '--bg-primary': '#fafafa' },
+          updatedAt: NOW + 1000,
+        });
+        assertRejected(
+          await kernel.execute(
+            cmd('saveTheme', /** @type {any} */ ({ themeId: 'th2', name: 'Bad', properties: { color: 'red' } })),
+          ),
+          'validation',
+          'invalid-command',
+        );
+        assert.equal(await themeOf('th2'), undefined);
+      });
+
+      it('completeOnboarding, recordBackup, and recordExportNotice write their keys, stamped by the kernel clock', async () => {
+        assert.deepEqual((await run(cmd('completeOnboarding', {}))).changedIds, ['hasCompletedOnboarding']);
+        assert.deepEqual(await settingsIn('onboarding', ['hasCompletedOnboarding']), { hasCompletedOnboarding: true });
+
+        // Export JSON: the receipt and the backup time, in one write
+        assert.deepEqual((await run(cmd('recordBackup', { fullExport: true, backup: true }))).changedIds, [
+          'lastFullExportAt',
+          'lastBackupAt',
+        ]);
+        ctx.clock.advance(500);
+        // The Markdown ZIP: the backup time only
+        await run(cmd('recordBackup', { fullExport: false, backup: true }));
+        assert.deepEqual(await settingsIn('backup', ['lastFullExportAt', 'lastBackupAt']), {
+          lastFullExportAt: NOW,
+          lastBackupAt: NOW + 500,
+        });
+        assertRejected(
+          await kernel.execute(cmd('recordBackup', { fullExport: false, backup: false })),
+          'validation',
+          'invalid-command',
+        );
+
+        await run(cmd('recordExportNotice', { version: 1, outcome: 'dismissed' }));
+        assert.deepEqual(await settingsIn('backup', ['preMigrationNotice']), {
+          preMigrationNotice: { version: 1, outcome: 'dismissed', at: NOW + 500 },
+        });
+      });
+
+      it(
+        flags.backups
+          ? "backups: createAutoBackup and importBackup run 1.4.x's Storage code, and an import counts only what committed"
+          : 'no backups: createAutoBackup and importBackup are unavailable and write nothing',
+        async () => {
+          const backup = {
+            version: 1,
+            exportedAt: 1,
+            canvases: [{ id: 'p1', name: 'From the file', createdAt: 1, updatedAt: 1 }],
+            elements: [{ id: 'pb1', canvasId: 'p1', type: 'text', content: 'Line', order: 0 }],
+            folders: [{ id: 'pf1', name: 'Filed', parentId: null }],
+          };
+          const before = await idsIn('active');
+          const auto = await kernel.execute(cmd('createAutoBackup', {}));
+          const imported = await kernel.execute(cmd('importBackup', { mode: 'merge', backup }));
+          if (!flags.backups) {
+            for (const outcome of [auto, imported]) {
+              assert.deepEqual(
+                outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+                ['adapter', 'backups-need-legacy-storage', false],
+                JSON.stringify(outcome),
+              );
+            }
+            assert.deepEqual(await idsIn('active'), before);
+            assert.deepEqual(await settingsIn('backup', ['lastBackupAt']), {});
+            return;
+          }
+          assert.deepEqual(committedOf(auto).changedIds, ['lastBackupAt']);
+          assert.equal(typeof (await settingsIn('backup', ['lastBackupAt'])).lastBackupAt, 'number');
+          // The note it added, under a new id, then the folder it added
+          const [noteId, folderId, ...rest] = committedOf(imported).changedIds;
+          assert.deepEqual([folderId, rest], ['pf1', []]);
+          assert.notEqual(noteId, 'p1');
+          assert.equal((await noteOf(noteId))?.name, 'From the file');
+          assert.deepEqual(
+            (await blocksOf(noteId)).map(block => block.content),
+            ['Line'],
+          );
+          assert.ok(!JSON.stringify(imported).includes('From the file'), 'the outcome carries no note text');
+
+          // A file 1.4.x's import refuses is a rejection, and nothing is added
+          const listed = await idsIn('active');
+          assertRejected(
+            await kernel.execute(cmd('importBackup', { mode: 'replace', backup: { ...backup, version: 2 } })),
+            'validation',
+            'import-invalid',
+          );
+          assert.deepEqual(await idsIn('active'), listed);
+        },
+      );
+
+      it('runs from the new tab only', async () => {
+        const popup = ctx.kernel(CALLERS.popup);
+        for (const command of [
+          cmd('saveChatHistory', { chat: 'note', history: [], messages: [] }),
+          cmd('savePromptTemplates', { templates: [] }),
+          cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: {} }),
+          cmd('completeOnboarding', {}),
+          cmd('recordBackup', { fullExport: true, backup: true }),
+          cmd('recordExportNotice', { version: 1, outcome: 'exported' }),
+          cmd('createAutoBackup', {}),
+          cmd('importBackup', { mode: 'merge', backup: { version: 1, canvases: [], elements: [] } }),
+        ]) {
+          assert.equal((await popup.execute(command)).kind, 'rejected', command.type);
+        }
+        assert.deepEqual(await settingsIn('onboarding', ['hasCompletedOnboarding']), {});
+      });
+    });
+
     describe('queries', () => {
       it('lists each view in the order Storage lists it', async () => {
         await createNote({ noteId: 'old', name: 'Old' });
@@ -2704,8 +2867,10 @@ export function runContractSuite(fixture) {
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
+          'completeOnboarding',
           'convertNoteToTemplate',
           'convertTemplateToNote',
+          'createAutoBackup',
           'createFolder',
           'createNote',
           'deleteBlocks',
@@ -2713,9 +2878,12 @@ export function runContractSuite(fixture) {
           'deleteNotePermanently',
           'emptyTrash',
           'ensureDailyNote',
+          'importBackup',
           'insertBlocks',
           'moveFolder',
           'moveNoteToFolder',
+          'recordBackup',
+          'recordExportNotice',
           'recordJobRun',
           'renameFolder',
           'renameNote',
@@ -2724,8 +2892,11 @@ export function runContractSuite(fixture) {
           'runBulkAction',
           'runStartupMaintenance',
           'runTrashCleanup',
+          'saveChatHistory',
           'saveNoteContent',
+          'savePromptTemplates',
           'saveSnapshot',
+          'saveTheme',
           'saveWorkspaceSession',
           'setFolderCollapsed',
           'setInsightsPending',

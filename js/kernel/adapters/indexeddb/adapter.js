@@ -436,7 +436,7 @@ export function createIndexedDbAdapter({
   return Object.freeze({
     name: 'indexeddb',
     mode,
-    flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false }),
+    flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false, backups: false }),
 
     open: () => connection.open(),
     close: () => connection.close(),
@@ -451,6 +451,8 @@ export function createIndexedDbAdapter({
       try {
         if (effect.kind === 'units') outcome = commitUnits(work, effect.units);
         else if (effect.kind === 'settings') outcome = commitSettings(work, effect.area, effect.values);
+        // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
+        else if (effect.kind === 'backup') outcome = Promise.resolve(unavailable('adapter', 'backups-need-legacy-storage', false));
         else outcome = maintain(work);
       } catch (error) {
         outcome = Promise.resolve(unavailableFrom(failureOf(error)));

@@ -68,7 +68,7 @@ const RULES = {
   'trust-import': 'an import into js/trust/core/ from outside it, kernel core, the registry kit, and js/lib/valibot/',
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
-  'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
+  'declared-gap': 'a gap no rule sees, written by hand (count 1, file is an adapter module that declares gaps)',
   // #17's storage-access rules (#17 slice 1): their rows are a shrink-only exemption list
   // Each counts any use of its function but where it's defined: called, bound, passed on, or taken apart
   objectStore: "an IndexedDB object store opened outside #17's IndexedDB adapter",
@@ -77,9 +77,14 @@ const RULES = {
   'chrome.storage.local': 'chrome.storage.local outside js/kernel/adapters/ and js/kernel/composition/',
 };
 const DECLARED_GAP = 'declared-gap';
-// The one module that declares gaps (its adapter flags), and the issue whose adapter closes them
-const DECLARED_GAP_FILE = 'js/kernel/adapters/legacy/adapter.js';
-const DECLARED_GAP_OWNER = 17;
+// The modules that declare gaps (their adapter flags), each with the issue that closes them: the
+// legacy adapter's, which #17's adapter closes, and #17's adapter's one, the legacy backup tasks
+// it doesn't run, which #18's backup engine closes
+const DECLARED_GAP_OWNERS = Object.freeze({
+  'js/kernel/adapters/legacy/adapter.js': 17,
+  'js/kernel/adapters/indexeddb/adapter.js': 18,
+});
+const DECLARED_GAP_FILES = Object.keys(DECLARED_GAP_OWNERS);
 // The raw access a blind write may replace in the same file under a shrinkOnly rule: an
 // unconverted caller moves onto #17's adapter, which commits it, before it gets a command
 const CONVERTS_FROM = { legacyBlindWrite: ['getStore', 'objectStore'] };
@@ -274,9 +279,13 @@ function parseLedger(text, root, name) {
     }
     if (row.rule === DECLARED_GAP) {
       if (row.count !== 1) fail('is a declared-gap row, so its count is 1');
-      if (row.file !== DECLARED_GAP_FILE) fail(`is a declared-gap row, so its file is ${DECLARED_GAP_FILE}`);
-      else if (!fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
-      if (row.owner !== DECLARED_GAP_OWNER) fail(`is a declared-gap row, so #${DECLARED_GAP_OWNER} owns it`);
+      if (!DECLARED_GAP_FILES.includes(row.file)) {
+        fail(`is a declared-gap row, so its file is ${DECLARED_GAP_FILES.join(' or ')}`);
+      } else {
+        if (!fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
+        const owner = DECLARED_GAP_OWNERS[/** @type {keyof typeof DECLARED_GAP_OWNERS} */ (row.file)];
+        if (row.owner !== owner) fail(`is a declared-gap row, so #${owner} owns it`);
+      }
     }
 
     const key = rowKey(row);

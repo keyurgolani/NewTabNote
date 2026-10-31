@@ -179,9 +179,9 @@ describe('scripts/check-boundaries.js with canned hits', () => {
       `${adapter} declared-gap (contract suite: legacy adapter, atomicMultiStore) is a declared-gap row, so its count is 1`);
   });
 
-  it('takes a declared-gap row only on the legacy adapter module, owned by #17, whose adapter closes it', async () => {
+  it("takes a declared-gap row only on an adapter module that declares gaps, owned by the issue that closes them", async () => {
     const root = tempRoot();
-    for (const file of ['js/kernel/adapters/legacy/adapter.js', 'js/editor.js']) {
+    for (const file of ['js/kernel/adapters/legacy/adapter.js', 'js/kernel/adapters/indexeddb/adapter.js', 'js/editor.js']) {
       fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
       fs.writeFileSync(path.join(root, file), '');
     }
@@ -189,11 +189,16 @@ describe('scripts/check-boundaries.js with canned hits', () => {
       row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 17, { verify: `contract suite: ${name}` }));
     const elsewhere = row('js/editor.js', 'declared-gap', 1, 35, { verify: 'editor saves race' });
     const fifth = row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 2, { verify: 'contract suite: moment' });
-    writeLedger(root, [...gaps, elsewhere, fifth]);
-    const base = { 'origin/next': [...gaps, elsewhere, fifth] };
+    // #17's adapter declares the one gap #18 closes, and only #18 owns it
+    const backups = row('js/kernel/adapters/indexeddb/adapter.js', 'declared-gap', 1, 18, { verify: 'contract suite: backups' });
+    const misowned = row('js/kernel/adapters/indexeddb/adapter.js', 'declared-gap', 1, 17, { verify: 'contract suite: other' });
+    writeLedger(root, [...gaps, backups, elsewhere, fifth, misowned]);
+    const base = { 'origin/next': [...gaps, backups, elsewhere, fifth, misowned] };
     assertFails(await run(root, ['--base', 'origin/next'], { base }),
-      'js/editor.js declared-gap (editor saves race) is a declared-gap row, so its file is js/kernel/adapters/legacy/adapter.js',
-      'js/kernel/adapters/legacy/adapter.js declared-gap (contract suite: moment) is a declared-gap row, so #17 owns it');
+      'js/editor.js declared-gap (editor saves race) is a declared-gap row, so its file is '
+        + 'js/kernel/adapters/legacy/adapter.js or js/kernel/adapters/indexeddb/adapter.js',
+      'js/kernel/adapters/legacy/adapter.js declared-gap (contract suite: moment) is a declared-gap row, so #17 owns it',
+      'js/kernel/adapters/indexeddb/adapter.js declared-gap (contract suite: other) is a declared-gap row, so #18 owns it');
   });
 
   it('tells declared-gap rows on one file apart by verify, and rejects two with the same verify', async () => {

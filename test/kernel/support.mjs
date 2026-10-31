@@ -40,6 +40,21 @@ export function testIds(prefix = 'id') {
   return { next: () => `${prefix}-${++count}` };
 }
 
+/**
+ * The settings areas (ports/repository.js, SettingsArea), which live in chrome.storage.local,
+ * so a fixture fails a write to one by failing chrome.storage's next set
+ * @type {readonly SettingsArea[]}
+ */
+export const SETTINGS_AREAS = Object.freeze(
+  /** @type {SettingsArea[]} */ (['preferences', 'session', 'jobs', 'chat', 'onboarding', 'backup']),
+);
+
+/**
+ * @param {StoreName | SettingsArea} target
+ * @returns {target is SettingsArea}
+ */
+export const isSettingsArea = target => /** @type {readonly string[]} */ (SETTINGS_AREAS).includes(target);
+
 /** @type {Readonly<Record<Surface, Caller>>} */
 export const CALLERS = Object.freeze({
   newtab: Object.freeze({ surface: 'newtab', contextId: 'newtab-1' }),

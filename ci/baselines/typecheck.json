@@ -74,7 +74,7 @@
         "Property 'select' does not exist on type 'HTMLElement'. Did you mean 'onselect'?": 1
       },
       "TS2552": {
-        "Cannot find name 'TabController'. Did you mean 'AbortController'?": 2
+        "Cannot find name 'TabController'. Did you mean 'AbortController'?": 1
       }
     },
     "js/background.js": {
@@ -350,8 +350,7 @@
     "js/onboarding.js": {
       "TS2339": {
         "Property 'Onboarding' does not exist on type 'Window & typeof globalThis'.": 1,
-        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
       }
     },
     "js/popup.js": {

@@ -20,7 +20,7 @@ import { CALLERS, testClock, testIds } from './support.mjs';
 /** @type {import('./support.mjs').ContractFixture} */
 const memoryFixture = {
   name: 'memory',
-  flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true }),
+  flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
   async start() {
     /** @type {Array<StoreName | SettingsArea>} */
     const failing = [];

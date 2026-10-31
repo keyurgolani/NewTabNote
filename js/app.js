@@ -70,18 +70,22 @@ class App {
    * every editor reads and writes its note through (js/kernel/composition/document.js), the
    * AI port every editor and NotesManager call the provider through (js/services/ai-port.mjs),
    * and the tab's note list (js/kernel/core/application/note-list.js), the one copy of the note
-   * lists that App, the controllers, the palette, and analytics read. `events` are the tab's
-   * failure events (js/kernel/composition/lazy-failure-events.js), which init gives the logger
-   * the controllers share, as its `event` method, and Embeddings. `removal` is the tab's
+   * lists that App, the controllers, the palette, and analytics read. The settings client
+   * (js/kernel/composition/settings.js) is the tab's settings port, which the controllers
+   * write their preferences, the workspace session, AI chat history, themes, onboarding, and
+   * backups through. `events` are the tab's failure events
+   * (js/kernel/composition/lazy-failure-events.js), which init gives the logger the
+   * controllers share, as its `event` method, and Embeddings. `removal` is the tab's
    * removeNotes (js/kernel/composition/removal.js).
-   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any, removal?: any}} [options]
+   * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any}} [options]
    */
-  constructor({ kernel, documentClient, ai, noteList, events = null, removal } = {}) {
+  constructor({ kernel, documentClient, settings, ai, noteList, events = null, removal } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
     // active set goes through it, and it moves this tab's panes around the write
     this.removal = removal;
     this.documentClient = documentClient;
+    this.settings = settings;
     this.ai = ai;
     this.noteList = noteList;
     this.events = events;
@@ -277,6 +281,7 @@ class App {
       // The export notice decides now, before any note renders and before a first note exists
       this.exportNotice = new ExportNotice({
         storage: appStorage(),
+        settings: this.settings,
         onExport: () => this.settingsController.exportAll(),
         onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
       });
@@ -377,7 +382,7 @@ class App {
         await this.createFirstNote();
       } else if (this.notes.length > 0) {
         // Try loading cached last-opened note for fast startup (Req 27.2)
-        const cachedNoteId = await TabController.getCachedLastOpenedNoteId();
+        const cachedNoteId = await this.tabController.lastOpenedNoteId();
         const cachedNote = cachedNoteId ? this.notes.find(n => n.id === cachedNoteId) : null;
         if (cachedNote) {
           await this.editor.loadNote(cachedNote.id);
@@ -658,7 +663,7 @@ class App {
    */
   async runOnboarding() {
     // 1. Setup default settings
-    await Onboarding.setupFirstRun();
+    await Onboarding.setupFirstRun(this.settings);
 
     // 2. Create Welcome Note with example blocks, which land with it
     const now = Date.now();
@@ -683,7 +688,7 @@ class App {
     await Onboarding.runWalkthrough();
 
     // 5. Mark onboarding as complete
-    await Onboarding.markComplete();
+    await Onboarding.markComplete(this.settings);
 
     // 6. Show quick-start prompt
     const choice = await Onboarding.showQuickStartPrompt(note.id);
@@ -728,6 +733,7 @@ class App {
   async initSidebarController() {
     this.sidebarController = new SidebarController({
       storage: Storage,
+      settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
       documentClient: this.documentClient,
@@ -771,6 +777,7 @@ class App {
   async initTabController() {
     this.tabController = new TabController({
       storage: Storage,
+      settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -803,6 +810,7 @@ class App {
   async initAIChatController() {
     this.aiChatController = new AIChatController({
       storage: Storage,
+      settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: LLM,
@@ -846,6 +854,7 @@ class App {
   async initSettingsController() {
     this.settingsController = new SettingsController({
       storage: Storage,
+      settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -932,6 +941,7 @@ class App {
   async initThemeBuilderController() {
     this.themeBuilderController = new ThemeBuilderController({
       storage: Storage,
+      settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
     });

@@ -41,6 +41,7 @@ export const IDB_STORES = Object.freeze({
   vectors: 'vectors',
   snapshots: 'snapshots',
   links: 'links',
+  themes: 'themes',
 });
 
 /** Without these the notes can't be read, so a versioned open refuses the database, as Storage.open does */

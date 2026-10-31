@@ -102,6 +102,8 @@ async function setup() {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  // The page's kernel, whose settings port the import runs through, as App's
+  await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   return { env, Storage, toasts };
@@ -114,7 +116,10 @@ async function snapshot(env) {
 
 function makeController(env, Storage) {
   const SettingsController = env.get('SettingsController');
-  return new SettingsController({ storage: Storage, domRefs: null, logger: null });
+  const controller = new SettingsController({ storage: Storage, settings: null, domRefs: null, logger: null });
+  // The page's settings port, as App gives it, once the page's kernel has started (openEditors)
+  Object.defineProperty(controller, 'settings', { get: () => env.settingsClient });
+  return controller;
 }
 
 const fileOf = (data) => new Blob([typeof data === 'string' ? data : JSON.stringify(data)], { type: 'application/json' });
@@ -511,8 +516,7 @@ describe('Replace all (AC4)', () => {
     tabs._setSplitView(true);
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'AR', name: 'Old daily' }, { noteId: 'E', name: 'Untitled' });
     tabs.activeTabIndex = 2;
-    await tabs.saveTabs();
-    tabs.cacheLastOpenedNoteId('E');
+    await tabs.saveTabs({ lastOpenedNoteId: 'E' });
     const controller = makeController(env, Storage);
     controller.onFlushEditors = () => tabs.flushEditorsForImport();
     controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
@@ -540,8 +544,7 @@ describe('Replace all (AC4)', () => {
     const { tabs, editors } = await openEditors(env, Storage);
     tabs._setSplitView(true);
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'E', name: 'Untitled' });
-    await tabs.saveTabs();
-    tabs.cacheLastOpenedNoteId('A');
+    await tabs.saveTabs({ lastOpenedNoteId: 'A' });
     const controller = wireImport(makeController(env, Storage), tabs);
 
     await replaceAll(env, controller, sameProfileBackup());
@@ -560,7 +563,7 @@ describe('Replace all (AC4)', () => {
     await reloaded.init();
     await startEditorClient(page);
     page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
-    const restored = new (page.get('TabController'))({ storage: reloaded, domRefs: null, logger: null });
+    const restored = new (page.get('TabController'))({ storage: reloaded, settings: page.settingsClient, domRefs: null, logger: null });
     restored.editor = makeEditor(page, page.document);
     restored.secondaryEditor = makeEditor(page, page.document);
     await page.noteList.settled();
@@ -777,7 +780,7 @@ async function openEditors(env, Storage) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
   tabs.onCreateNote = () => Storage.createNote('Untitled');
   const primary = makeEditor(env, env.document, { root: panes['editor-container'] });
   const secondary = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
