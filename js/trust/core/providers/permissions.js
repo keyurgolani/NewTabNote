@@ -114,13 +114,16 @@ export const permissions = Object.freeze({
   },
 });
 
-/** One incident for every declared host Chrome doesn't grant: AI requests to them fail */
+/**
+ * One incident for every declared host Chrome doesn't grant: AI requests to them fail
+ * @returns {NonNullable<Faults>[number]}
+ */
 function missingOriginsFault() {
-  return /** @type {const} */ ({
+  return {
     faultCode: 'grant-missing',
     subjectId: null,
     severity: 'degraded',
     affected: ['ai'],
     preserved: ['capture', 'editing', 'reading', 'search'],
-  });
+  };
 }
