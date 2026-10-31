@@ -39,6 +39,7 @@ import { jobCommands, jobQueries } from './jobs.js';
 import { maintenanceCommands } from './maintenance.js';
 import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
+import { remoteChangesRefusal, remoteCommands } from './remote.js';
 import { sessionCommands, sessionQueries } from './session.js';
 import { snapshotCommands, snapshotQueries } from './snapshots.js';
 import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js';
@@ -98,6 +99,17 @@ const COMMAND_HANDLERS = Object.freeze({
   ...snapshotCommands,
   ...workspaceDataCommands,
   ...indexCommands,
+  ...remoteCommands,
+});
+
+/**
+ * What refuses each bulk command for its payload before the adapter recalls it, which reserves
+ * its key, so a refused one leaves no record and the corrected one can run under its commandId
+ * @type {Readonly<Record<string, (command: any) => import('../contracts/outcomes.js').Rejected | undefined>>}
+ */
+export const BULK_REFUSALS = Object.freeze({
+  runBulkAction: bulkRefusal,
+  applyRemoteChanges: remoteChangesRefusal,
 });
 
 /** @type {Readonly<{[T in QueryType]: QueryHandler<T>}>} */
@@ -316,9 +328,10 @@ export function createKernel({
         COMMAND_HANDLERS[command.type]
       );
     const { aggregate, bulk } = COMMANDS[command.type];
-    // recall reserves a bulk command's key, so one refused for its action or notes is refused
-    // first, and leaves no record
-    const refused = bulk ? bulkRefusal(/** @type {RunBulkAction} */ (command)) : undefined;
+    // recall reserves a bulk command's key, so one refused for its payload, such as its action
+    // or notes, is refused first, and leaves no record
+    const refusal = bulk && Object.hasOwn(BULK_REFUSALS, command.type) ? BULK_REFUSALS[command.type] : undefined;
+    const refused = refusal ? refusal(command) : undefined;
     if (refused) return Promise.resolve(refused);
     /** @type {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>} */
     let pending;
