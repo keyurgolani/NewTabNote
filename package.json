@@ -17,6 +17,7 @@
     "typecheck:strict": "tsc -p tsconfig.strict.json",
     "check:boundaries": "node scripts/check-boundaries.js",
     "check:dist": "node scripts/check-dist.js",
+    "perf:probe": "node scripts/perf-probe.js",
     "format": "prettier --write .",
     "package": "node scripts/package.js",
     "release": "npm run clean && npm run build && npm run package && npm run check:notices",
