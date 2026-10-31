@@ -212,7 +212,7 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   await expect(page.locator('.toast.success').last()).toHaveText('1 note restored from Trash');
   expect(await paletteNames()).toContain('Gamma');
   await page.evaluate(async () => Storage.trashNote((await Storage.getAllNotes()).find(note => note.name === 'Gamma').id));
-  await page.evaluate(() => app.refreshNotesList());
+  await page.evaluate(() => app.sidebarController.reloadLists());
   await select(['Gamma']);
   const deleting = page.evaluate(() => app.sidebarController.performBulkAction('delete'));
   await confirm(page, 'Confirm');
@@ -233,7 +233,7 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
 
   // A trash that fails to store leaves the panes and tabs as they were, and says so
   await page.evaluate(async () => Storage.unarchiveNote((await Storage.getAllNotes(true)).find(note => note.name === 'Beta').id));
-  await page.evaluate(() => app.refreshNotesList());
+  await page.evaluate(() => app.sidebarController.reloadLists());
   await driver.openNote(page, 'Beta');
   const panes = () => page.evaluate(() => ({
     note: app.editor.noteId,

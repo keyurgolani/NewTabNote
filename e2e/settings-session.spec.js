@@ -84,7 +84,7 @@ test('turning split view on or off is saved at once: a reload keeps it either wa
   await expect.poll(async () => (await stored(page, ['lastOpenedNoteId'])).lastOpenedNoteId || null).not.toBeNull();
   const { leftId, rightId } = await page.evaluate(async () => {
     const beta = await Storage.createNote('Beta');
-    await app.refreshNotesList();
+    await app.sidebarController.reloadLists();
     await app.tabController.openNoteInNewTab(beta.id);
     // Nothing but the toggle: 1.4.x saved split view only with the next tab change
     await app.tabController.toggleSplitView();
