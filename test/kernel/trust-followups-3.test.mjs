@@ -306,3 +306,102 @@ describe("#80's follow-ups (part 3)", () => {
     assert.equal((await at(rb.records, WRITE_FAILED))?.state, 'open');
   });
 });
+
+describe("#84's check: write-failed resolves by counting", () => {
+  /** @param {Profile} profile */
+  const flakyContext = profile => {
+    const database = databaseFor(profile);
+    return { database, ...flakyStore(database) };
+  };
+
+  it("W1: B's landed write leaves write-failed open while A, whose failure B's merged into, still fails", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const a = flakyContext(profile);
+    const b = flakyContext(profile);
+    const ra = await recordsOn(a.store, profile, { clock, prefix: 'aaaa' });
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    a.failNext(1000, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    assert.equal((await ra.records.append(event(1))).recorded, false);
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(2))).recorded, false);
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(3))).recorded, true);
+    const stored = await storedAt(a.database, WRITE_FAILED);
+    assert.deepEqual([stored?.state, stored?.occurrences], ['open', 2], "B's write resolved A's failure");
+    const summary = /** @type {any} */ (await (await useCases(rb.records, clock)).trust.summary()).data;
+    assert.deepEqual([summary.actionRequired >= 1, summary.route], [true, 'recovery']);
+  });
+
+  it("W2: B's landed write leaves A's failure open after a healthy C replayed B's entry, then A's", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const b = flakyContext(profile);
+    const c = databaseFor(profile);
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    const rc = await recordsOn(c, profile, { clock, prefix: 'cccc' });
+    const ra = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(1))).recorded, false);
+    clock.advance(10);
+    await rc.records.append(event(2));
+    clock.advance(10);
+    assert.equal((await ra.records.append(event(3))).recorded, false);
+    clock.advance(10);
+    await rc.records.append(event(4));
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(5))).recorded, true);
+    const stored = await storedAt(c, WRITE_FAILED);
+    assert.deepEqual([stored?.state, stored?.occurrences], ['open', 2], "B's write resolved A's failure");
+  });
+
+  it('W3 control: A keeps failing, B never failed, and B leaves it open', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const database = databaseFor(profile);
+    const rb = await recordsOn(database, profile, { clock, prefix: 'bbbb' });
+    const ra = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
+    clock.advance(10);
+    await ra.records.append(event(1));
+    clock.advance(10);
+    await rb.records.append(event(2));
+    await rb.records.append(event(3));
+    assert.equal((await storedAt(database, WRITE_FAILED))?.state, 'open');
+  });
+
+  it("W4: after a clock step back, this context's failure resolves once its next write lands", async () => {
+    const profile = trustProfile();
+    const a = flakyContext(profile);
+    const { records, clock } = await recordsOn(a.store, profile);
+    a.failNext(1, 'unreadable', { writesOnly: true });
+    await records.append(event(1));
+    clock.advance(1000);
+    await records.append(event(2));
+    assert.equal((await storedAt(a.database, WRITE_FAILED))?.state, 'resolved');
+    clock.advance(-60_000);
+    a.failNext(1, 'unreadable', { writesOnly: true });
+    await records.append(event(3));
+    clock.advance(30_000);
+    await records.append(event(4));
+    const stored = await storedAt(a.database, WRITE_FAILED);
+    assert.deepEqual([stored?.state, stored?.occurrences], ['resolved', 2], 'stuck open after the clock stepped back');
+  });
+
+  it("W5: an unreadable copy's extra failed write is this context's own, and still resolves", async () => {
+    const profile = trustProfile();
+    const a = flakyContext(profile);
+    const { records, clock } = await recordsOn(a.store, profile);
+    profile.settings.items.set('trust.lastStorageIncident', { entries: 'not entries' });
+    a.failNext(1, 'unreadable', { writesOnly: true });
+    await records.raise({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' });
+    // The copy is fixed: the next write replays what memory holds
+    profile.settings.items.delete('trust.lastStorageIncident');
+    clock.advance(1000);
+    await records.append(event(2));
+    const stored = await storedAt(a.database, WRITE_FAILED);
+    assert.equal(stored?.state, 'resolved');
+  });
+});
