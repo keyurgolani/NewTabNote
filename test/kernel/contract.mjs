@@ -14,6 +14,7 @@ import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';
 import { CALLERS, NOW } from './support.mjs';
+import { WRITE_GUARDS } from './write-guards.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
 /** @typedef {import('./support.mjs').ContractContext} ContractContext */
@@ -4324,6 +4325,225 @@ export function runContractSuite(fixture) {
           if (flags.idempotency) assert.deepEqual(second.items, first.items);
           else assert.deepEqual(itemsOf(second), [['n1', 'committed', 'remote-content-unchanged']]);
           assert.deepEqual(await storedNoteOf('n1'), after);
+        },
+      );
+    });
+
+    describe("#17's AC1: every guarded command, sent twice from one version, writes once (#17 PR 4b)", () => {
+      /** @param {string} noteId */
+      const vectorOf = noteId => ctx.adapter.read(['vectors'], tx => tx.get('vectors', noteId));
+
+      /** @param {string} noteId */
+      const versionsOf = async noteId => {
+        const state = await kernel.query({ type: 'getNote', noteId });
+        return state.kind === 'ready' ? [state.data.revision, state.data.placementVersion] : null;
+      };
+
+      /** What a write could change of the note: its record and versions, blocks, entry, and embedding */
+      /** @param {string} noteId */
+      const stateOf = async noteId => [
+        await storedNoteOf(noteId),
+        await versionsOf(noteId),
+        await blocksOf(noteId),
+        await searchEntryOf(noteId),
+        await vectorOf(noteId),
+      ];
+
+      const conflictCount = async () => (await ctx.adapter.read(['conflicts'], tx => tx.getAll('conflicts'))).length;
+
+      /**
+       * A titled note with one block, which trashing keeps, at revision 1 and placement version 0
+       * @param {string} noteId
+       * @param {Partial<CommandOf<'createNote'>>} [fields]
+       */
+      const titled = (noteId, fields = {}) =>
+        createNote({ noteId, name: 'Plan', blocks: someBlocks(noteId, 1), ...fields });
+
+      /**
+       * For each guarded command (write-guards.mjs): `setup` puts note `id` where the command
+       * applies and answers the version both sends are made from, and `send` makes each send. A
+       * derived write's second send says the revision before, since one made from the same
+       * revision lands again.
+       * @type {Record<string, {setup: (id: string) => Promise<number>, send: (id: string, version: number, second: boolean) => Command}>}
+       */
+      const TWICE = {
+        renameNote: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('renameNote', { noteId: id, name: second ? 'Second' : 'First', expectedRevision: version }),
+        },
+        saveNoteContent: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('saveNoteContent', {
+              noteId: id,
+              blocks: [{ ...someBlocks(id, 1)[0], content: second ? 'Second' : 'First' }],
+              expectedRevision: version,
+            }),
+        },
+        deleteBlocks: {
+          setup: async id => (await createNote({ noteId: id, name: 'Plan', blocks: someBlocks(id, 2) }), 1),
+          send: (id, version, second) =>
+            cmd('deleteBlocks', { noteId: id, blockIds: [`${id}-block-${second ? 1 : 0}`], expectedRevision: version }),
+        },
+        insertBlocks: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('insertBlocks', {
+              noteId: id,
+              blocks: [{ id: `${id}-${second ? 'second' : 'first'}`, type: 'text', content: 'More' }],
+              expectedRevision: version,
+            }),
+        },
+        applyDerivedTitle: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('applyDerivedTitle', { noteId: id, name: second ? 'Second' : 'First', expectedRevision: version }),
+        },
+        applyRemoteContent: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('applyRemoteContent', {
+              noteId: id,
+              note: { id, name: second ? 'Second' : 'First' },
+              blocks: [],
+              expectedRevision: version,
+            }),
+        },
+        setPinned: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version, second) =>
+            cmd('setPinned', { noteId: id, pinned: !second, expectedPlacementVersion: version }),
+        },
+        archiveNote: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('archiveNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        unarchiveNote: {
+          setup: async id => (await titled(id), await run(cmd('archiveNote', { noteId: id })), 1),
+          send: (id, version) => cmd('unarchiveNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        trashNote: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('trashNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        restoreNote: {
+          setup: async id => (await titled(id), await run(cmd('trashNote', { noteId: id })), 1),
+          send: (id, version) => cmd('restoreNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        moveNoteToFolder: {
+          setup: async id => {
+            await run(cmd('createFolder', { folderId: `${id}-folder`, name: 'Work', parentId: null }));
+            await titled(id);
+            return 0;
+          },
+          send: (id, version, second) =>
+            cmd('moveNoteToFolder', {
+              noteId: id,
+              folderId: second ? null : `${id}-folder`,
+              expectedPlacementVersion: version,
+            }),
+        },
+        convertNoteToTemplate: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('convertNoteToTemplate', { noteId: id, expectedPlacementVersion: version }),
+        },
+        convertTemplateToNote: {
+          setup: async id => (await titled(id), await run(cmd('convertNoteToTemplate', { noteId: id })), 1),
+          send: (id, version) => cmd('convertTemplateToNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        deleteNotePermanently: {
+          setup: async id => (await titled(id), await run(cmd('trashNote', { noteId: id })), 1),
+          send: (id, version) => cmd('deleteNotePermanently', { noteId: id, expectedPlacementVersion: version }),
+        },
+        applyRemotePlacement: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version, second) =>
+            cmd('applyRemotePlacement', {
+              noteId: id,
+              placement: { pinned: !second },
+              expectedPlacementVersion: version,
+            }),
+        },
+        attachInsights: {
+          setup: async id => (await titled(id), await run(cmd('saveNoteContent', { noteId: id, blocks: [] })), 2),
+          send: (id, version, second) =>
+            cmd('attachInsights', {
+              noteId: id,
+              insights: { todos: [second ? 'Second' : 'First'] },
+              sourceRevision: second ? version - 1 : version,
+            }),
+        },
+        updateSearchIndex: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('updateSearchIndex', {
+              entries: [
+                {
+                  noteId: id,
+                  name: 'Plan',
+                  content: second ? 'Second' : 'First',
+                  sourceRevision: second ? version - 1 : version,
+                },
+              ],
+            }),
+        },
+        saveVector: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('saveVector', { noteId: id, vector: [second ? 2 : 1], sourceRevision: second ? version - 1 : version }),
+        },
+      };
+
+      it('sends each guarded command in the table', () => {
+        const guarded = Object.entries(WRITE_GUARDS)
+          .filter(([, guard]) => guard.kind === 'guarded')
+          .map(([type]) => type);
+        assert.deepEqual(Object.keys(TWICE).sort(), guarded.sort());
+      });
+
+      it(
+        'the first send commits and moves its version, and the second is a conflict that keeps only its record, or a derived write that writes nothing',
+        { skip: flags.revisions ? false : 'only an adapter with revisions checks a version' },
+        async () => {
+          for (const [type, { setup, send }] of Object.entries(TWICE)) {
+            const id = `ac1-${type}`;
+            const guard = WRITE_GUARDS[/** @type {CommandType} */ (type)];
+            const scope = guard.kind === 'guarded' ? guard.scope : null;
+            const version = await setup(id);
+            const before = await versionsOf(id);
+            const first = await kernel.execute(send(id, version, false));
+            assert.equal(first.kind, 'committed', `${type}: ${JSON.stringify(first)}`);
+            assert.ok(first.kind === 'committed' && first.changedIds.length > 0, `${type} changed nothing`);
+            // The first moved the version it was made from, unless it deleted the note
+            if (scope !== 'derived' && type !== 'deleteNotePermanently') {
+              assert.notDeepEqual(await versionsOf(id), before, type);
+            }
+            const after = await stateOf(id);
+            const kept = await conflictCount();
+            const second = await kernel.execute(send(id, version, true));
+            if (scope === 'derived') {
+              assert.deepEqual(
+                second.kind === 'committed' && [second.changedIds, second.severity],
+                [[], 'info'],
+                `${type}: ${JSON.stringify(second)}`,
+              );
+              assert.equal(await conflictCount(), kept, type);
+            } else if (type === 'deleteNotePermanently') {
+              // The first deleted it, so the second finds nothing to delete again
+              assertRejected(second, 'not-found', 'note-not-found');
+              assert.equal(await conflictCount(), kept, type);
+            } else {
+              const code = scope === 'content' ? 'revision-conflict' : 'placement-conflict';
+              assert.deepEqual(
+                second.kind === 'conflict' && [second.code, second.currentRevision],
+                [code, version + 1],
+                `${type}: ${JSON.stringify(second)}`,
+              );
+              assert.equal(await conflictCount(), kept + 1, type);
+            }
+            assert.deepEqual(await stateOf(id), after, type);
+          }
         },
       );
     });
