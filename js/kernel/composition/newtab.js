@@ -7,11 +7,13 @@
  */
 
 import { createAIPort } from '../../services/ai-port.mjs';
+import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
 import { createNoteList } from '../core/application/note-list.js';
+import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
-import { kernelClient, legacyHost } from './host.js';
+import { kernelClient, legacyHost, wakeWorkerToPurge } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
 import { startIndexer } from './workers.js';
@@ -34,8 +36,9 @@ import { startIndexer } from './workers.js';
 
 /**
  * What the page knows of its database outside the kernel (#12 slice 7): whether it's open,
- * and which stores it lacks, as js/storage.js keeps them, read when asked
- * @typedef {Readonly<{openState: string, missingStores: readonly string[]}>} StorageState
+ * which stores it lacks, as js/storage.js keeps them, read when asked, and whether it's at
+ * this build's version, which since #17 PR 1b only the worker's run brings it to
+ * @typedef {Readonly<{openState: string, missingStores: readonly string[], upgraded: () => boolean}>} StorageState
  */
 
 /**
@@ -70,27 +73,112 @@ import { startIndexer } from './workers.js';
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
  *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
- *   syncStore: LegacyStore, startIndexer: () => Worker, loader: unknown}) => NewTabApp} App
+ *   syncStore: LegacyStore, startIndexer: () => Worker, loader: unknown, preUpdateCopy: PreUpdateCopy}) => NewTabApp} App
  */
 
 /** Each LegacyStores handle's calls, as its holder makes them */
 const LEGACY_STORE_CALLS = Object.freeze({
-  searchIndex: ['hasStore', 'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'getAllVectors', 'saveVector'],
+  searchIndex: [
+    'hasStore',
+    'setSearchIndex',
+    'setSearchIndexEntry',
+    'removeSearchIndexEntry',
+    'getAllVectors',
+    'saveVector',
+  ],
   graph: ['getAllNotes', 'getStore'],
   sync: ['getSetting', 'setSetting', 'getStore', 'exportAll', 'importAll', 'importNote', 'saveElement'],
 });
 
 /**
- * The new tab's kernel and its client. It opens the database versioned, as Storage.init did,
- * and runs startup maintenance before any command. Its connection closes when another
- * context upgrades the database, so that upgrade never waits on this tab, and from then on
- * every command answers `reload-required`: the editor keeps its text and asks for a reload.
+ * The pinned pre-migration copy, for Settings > Data & Backup's Export Pre-Update Copy (#17
+ * PR 1b, Q8): `find` names the copy to export, with when it was made, and `export` hands it
+ * over as 1.4.1's import file, once it reads back verified. Both only read, and make no
+ * recovery database on a profile without one.
+ * @typedef {object} PreUpdateCopy
+ * @property {() => Promise<{id: string, createdAt: number} | null>} find
+ * @property {(id: string) => Promise<object>} export
+ */
+
+/**
+ * The new tab's pre-update copy, over the page's IndexedDB, read under the page's Web Locks
+ * (exportPoint takes the points lock shared, so the worker's purge never cuts through it)
+ * @param {{indexedDB?: IDBFactory, keyRange?: typeof IDBKeyRange, crypto?: import('../adapters/indexeddb/records.js').Digester, locks?: import('../adapters/indexeddb/legacy-export.js').SharedLocks | null}} [host]
+ * @returns {PreUpdateCopy}
+ */
+export function createPreUpdateCopy({
+  indexedDB = globalThis.indexedDB,
+  keyRange = globalThis.IDBKeyRange,
+  crypto = /** @type {any} */ (globalThis.crypto),
+  locks = /** @type {any} */ (globalThis.navigator && globalThis.navigator.locks) || null,
+} = {}) {
+  return Object.freeze({
+    async find() {
+      const point = await exportablePointRecord({ indexedDB });
+      return point ? { id: point.id, createdAt: point.createdAt } : null;
+    },
+    export: (/** @type {string} */ pointId) =>
+      exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId, locks }),
+  });
+}
+
+/**
+ * The new tab's kernel and its client. It opens the database as it is on disk (since #17 PR
+ * 1b only the service worker upgrades it), waiting first on the worker's migration run when it
+ * finds none or an older one, and runs startup maintenance before any command. Its connection
+ * closes when the worker upgrades the database, so that upgrade never waits on this tab, and
+ * from then on every command answers `reload-required`: the editor keeps its text and asks for
+ * a reload.
  * @param {LegacyHost} [host]
  * @returns {Client}
  */
 export function createNewTabClient(host = legacyHost()) {
   const adapter = createLegacyAdapter({ ...host, mode: 'versioned' });
   return kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true });
+}
+
+/** The codes of a committed command that deleted notes or folders for good, leaving tombstones */
+const DELETED_CODES = Object.freeze(['note-deleted', 'trash-emptied', 'trash-cleaned', 'folder-deleted']);
+
+/**
+ * Whether `outcome` deleted something for good: a note (a permanent delete, or a trash of an
+ * empty untitled note), Empty trash or trash retention that deleted any, a folder, or a bulk
+ * delete any item of which did
+ * @param {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} outcome
+ * @returns {boolean}
+ */
+function deletedSomething(outcome) {
+  if (outcome.kind === 'bulk') return outcome.items.some(item => deletedSomething(item.outcome));
+  return outcome.kind === 'committed' && DELETED_CODES.includes(outcome.code) && outcome.changedIds.length > 0;
+}
+
+/**
+ * `client`, which wakes the worker to purge (#17 PR 2b) after each command that deleted
+ * something for good, whatever path ran it: removeNotes, a folder's delete, or any other.
+ * The wake is best effort, and never changes the outcome.
+ * @param {Client} client
+ * @param {() => void} wake
+ * @returns {Client}
+ */
+export function withPurgeWake(client, wake) {
+  return Object.freeze({
+    ...client,
+    execute: /** @type {Client['execute']} */ (
+      /** @type {unknown} */ (
+        async (/** @type {import('../core/contracts/commands.js').Command} */ command) => {
+          const outcome = await client.execute(command);
+          if (deletedSomething(/** @type {any} */ (outcome))) {
+            try {
+              wake();
+            } catch {
+              // The worker sweeps at its next start
+            }
+          }
+          return outcome;
+        }
+      )
+    ),
+  });
 }
 
 /**
@@ -172,8 +260,9 @@ export function createNewTabSettingsClient(kernel, host) {
 }
 
 /**
- * Whether the tab's database is open, and which stores it lacks, read from `host`'s storage
- * when asked, as App, the sidebar, and the export notice read them
+ * Whether the tab's database is open, which stores it lacks, and whether it's at this build's
+ * version, read from `host`'s storage when asked, as App, the sidebar, the export notice, the
+ * space notice, and the pre-update copy's section read them
  * @param {LegacyHost} host
  * @returns {StorageState}
  */
@@ -185,6 +274,7 @@ export function createNewTabStorageState(host) {
     get missingStores() {
       return host.storage.missingStores;
     },
+    upgraded: () => host.storage.isUpgraded(),
   });
 }
 
@@ -254,7 +344,7 @@ export function startNewTab({ loader = null } = {}) {
   const start = () => {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = legacyHost();
-    const kernel = createNewTabClient(host);
+    const kernel = withPurgeWake(createNewTabClient(host), () => wakeWorkerToPurge());
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;
@@ -275,6 +365,7 @@ export function startNewTab({ loader = null } = {}) {
       syncStore: stores.sync,
       startIndexer,
       loader,
+      preUpdateCopy: createPreUpdateCopy(),
     });
     built = app;
     return app.init().catch(error => {

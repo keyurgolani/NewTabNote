@@ -6,27 +6,37 @@
  * - atomicMultiStore: false. Each unit commits in its own transaction, as DatabaseManager's
  *   methods always have, so a later unit's failure leaves the earlier units' writes in place.
  *   saveNoteContent is one unit, so its note fields and blocks still commit together.
- * - revisions: false. Records have none, so a save over a newer write wins, and two contexts
- *   saving one note's blocks race until #35's coordinator serializes them.
+ * - revisions: false. It reads no versions and moves none, even on a note #17's adapter gave
+ *   them (#17 PR 2a), so a save over a newer write wins, and two contexts saving one note's
+ *   blocks race until #35's coordinator serializes them.
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  * - backups: true. The legacy import, auto-backup, and export file run here, through
  *   Storage's own code, which #18's backup engine replaces; the other adapters don't run them yet.
  *
- * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
- * older database to version 8 as Storage.init always has, and watches the connection. Their kernels set
- * `maintainOnOpen`, so Storage's startup maintenance runs before any command does, as
- * Storage.init ran it before the app did anything; its first run writes every default over
- * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
- * whatever version is on disk, with no repair, upgrade, or maintenance. A database a newer
+ * The new tab opens it `versioned`: Storage.open, which since #17 PR 1b upgrades nothing (only
+ * the service worker does, through #17's migration runner, and the worker has its own kernel on
+ * #17's adapter), opens whatever version is on disk up to this build's (10 since #17 PR 2a), and watches the connection. The
+ * new tab's kernel sets `maintainOnOpen`, so Storage's startup maintenance runs before any
+ * command does, as Storage.init ran it before the app did anything; its first run writes every
+ * default over what's stored, so nothing may come before it. Its `existing` open (Popup's and
+ * Side Panel's until #17 PR 1b moved them to #17's adapter) is whatever version is on disk,
+ * with no repair, upgrade, or maintenance. A database a newer
  * build upgraded is refused either way, as `unavailable` with cause `newer-schema`. Once
  * another context upgrades the database, or Chrome closes an `existing` connection itself,
  * that connection is gone, and every IndexedDB call answers `reload-required`, which no
  * resend fixes: the page reloads to open it again.
  */
 
-import { STORAGE_EXCEPTIONS, UnavailableError, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
-import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
+import {
+  STORAGE_EXCEPTIONS,
+  UnavailableError,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../../core/contracts/outcomes.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
+import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
 import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
@@ -59,6 +69,8 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {() => Promise<void>} createAutoBackup - 1.4.x's automatic backup, keeping the newest three
  * @property {(extra?: Record<string, unknown>) => Promise<Blob>} exportAllAsBlob - 1.4.x's export file, with `extra` fields
  * @property {string[]} missingStores - the stores the open database lacks
+ * @property {() => boolean} isUpgraded - whether the open database is at this build's version,
+ *   which since #17 PR 1b only the worker's run brings it to
  * @property {() => Promise<Record<string, unknown>>} exportRawStores - every store but settings, read as it is
  * @property {(data: unknown) => unknown} validateImport - a parsed backup's check, which writes nothing
  * @property {(listener: (notice: Readonly<{type: 'settings.changed', keys: readonly string[]}>) => void) => () => void} onSettingsChange
@@ -139,6 +151,19 @@ function storeIn(tx, name) {
 }
 
 /**
+ * A note as this adapter puts it: as the kernel made it on a database at version 10 or later,
+ * and without #17 PR 3's fields (domain/placement.js) below it, where step 10's stores aren't
+ * there yet. 1.4.1 still opens such a database, and it changes only the flags (a trash, a move),
+ * so a field written beside them there would go stale, and #17's transform, which fills only
+ * what's absent, would keep it (review R88). At 10 and later 1.4.x refuses the database.
+ * @param {LegacyStorage} storage
+ * @param {Record<string, unknown>} note
+ */
+function noteFor(storage, note) {
+  return storage.hasStore(IDB_STORES.tombstones) ? note : withoutPlacement(note);
+}
+
+/**
  * The kernel's view of one transaction over `scope`. A store the database lacks reads as
  * empty, as DatabaseManager's reads of auxiliary stores do.
  * @param {LegacyStorage} storage
@@ -179,10 +204,23 @@ function view(storage, tx, scope) {
       handle(store);
       return undefined;
     },
+    // No versions (revisions: false). A record #17's adapter gave versions keeps them, since
+    // every unit puts what it read with only its own fields changed.
+    versions: store => {
+      handle(store);
+      return undefined;
+    },
+    // A database without a derived store skips its writes, and one below version 10 the
+    // tombstone a deletion puts (LATER_STORES), so a note deleted there stays in its recovery
+    // point (#17 PR 2b's declared gap). At 10 the tombstone goes in the delete's own
+    // transaction, without the revision and seq #17's adapter adds, since this one keeps neither.
+    // Below 10 a note goes in without #17 PR 3's fields too (noteFor).
     put: (store, record) => {
       const objectStore = handle(store);
-      if (objectStore) objectStore.put(record);
-      else if (!DERIVED_STORES.includes(store)) throw new UnavailableError('storage', 'store-unavailable', false);
+      if (objectStore) objectStore.put(store === 'notes' ? noteFor(storage, record) : record);
+      else if (!DERIVED_STORES.includes(store) && !LATER_STORES.includes(store)) {
+        throw new UnavailableError('storage', 'store-unavailable', false);
+      }
     },
     delete: (store, key) => {
       const objectStore = handle(store);
@@ -383,7 +421,10 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
     if (code === 'RECOVERY_COPY_FAILED') return unavailable('storage', 'recovery-copy-failed', true);
     const outcome = unavailableFrom(databaseError(error));
     // The storage exception's name, and never its message, so a diagnostic tells them apart
-    const name = typeof (/** @type {{name?: unknown}} */ (error || {}).name) === 'string' ? String(/** @type {any} */ (error).name) : '';
+    const name =
+      typeof (/** @type {{name?: unknown}} */ (error || {}).name) === 'string'
+        ? String(/** @type {any} */ (error).name)
+        : '';
     if (STORAGE_EXCEPTIONS.includes(name)) outcome.exception = name;
     return outcome;
   };

@@ -77,7 +77,11 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
-    this.dbVersion = 8; // Bumped version for snapshots
+    // The newest version this build opens, #17's structural version 10 since #17 PR 2a, which
+    // only the service worker upgrades to (js/kernel/adapters/indexeddb/schema.js's DB_VERSION)
+    this.dbVersion = 10;
+    /** How long a page waits on the worker's migration run before it opens what's there (#17, Q12) */
+    this.workerUpgradeWaitMs = 5000;
     this.db = null;
     // Store names kept as 'canvases' for backward compatibility with existing databases
     this.requiredStores = ['canvases', 'elements', 'settings', 'media', 'search_index', 'folders', 'links', 'themes', 'vectors', 'snapshots'];
@@ -172,14 +176,14 @@ class DatabaseManager {
   }
 
   /**
-   * Open the database at this build's version (8), then run startup maintenance.
+   * Open the database as it is on disk, then run startup maintenance.
    *
-   * Nothing here deletes or rewrites a database. One a newer build upgraded is
-   * left alone: init() rejects with code NEWER_SCHEMA before opening it at 8,
-   * writing default settings, or running the integrity check. A version-8
-   * database with stores missing is kept: without `canvases` or `elements`
-   * init() rejects with MISSING_CORE_STORES; otherwise the app runs with those
-   * features off (see missingStores and transaction()).
+   * Nothing here deletes, upgrades, or rewrites a database. One a newer build
+   * upgraded is left alone: init() rejects with code NEWER_SCHEMA before
+   * writing default settings or running the integrity check. A database with
+   * stores missing is kept: without `canvases` or `elements` init() rejects
+   * with MISSING_CORE_STORES; otherwise the app runs with those features off
+   * (see missingStores and transaction()).
    * @returns {Promise<void>}
    */
   async init() {
@@ -188,16 +192,24 @@ class DatabaseManager {
   }
 
   /**
-   * What init() does before startup maintenance: open the database at this
-   * build's version (8), with the same refusals. The kernel's legacy adapter
-   * opens the new tab's and the service worker's database with this, and runs
-   * maintenance as the runStartupMaintenance command (#12).
+   * What init() does before startup maintenance: open the database, with the
+   * same refusals. The kernel's legacy adapter opens the new tab's database
+   * with this, and runs maintenance as the runStartupMaintenance command (#12).
+   *
+   * Since #17 PR 1b only the service worker upgrades the database, through
+   * #17's migration runner after a verified recovery point, so this opens it at
+   * whatever version is on disk, up to this build's (10), and aborts any
+   * upgrade: on a profile with no database it makes none and rejects with code
+   * NO_DATABASE. A page that finds no database, or one below 10, first wakes the
+   * worker and waits up to 5 seconds for its run (#17, Q12), then opens what's
+   * there: a version-8 database (the run was short of space, say) runs as it
+   * is, and an older one runs with the stores it lacks off.
    *
    * With `watchConnection`, the connection closes when another context upgrades
    * or deletes the database, as openExisting()'s does, and openState says so:
    * 'version-changed', or 'closed-by-browser' when Chrome closed it. The kernel's
-   * legacy adapter asks for it: the service worker opens again on its next
-   * capture, and the new tab's editor keeps its text and asks for a reload.
+   * legacy adapter asks for it: the new tab's editor keeps its text and asks
+   * for a reload.
    * @param {{watchConnection?: boolean}} [options]
    * @returns {Promise<void>}
    */
@@ -206,25 +218,28 @@ class DatabaseManager {
     this.onDiskVersion = null;
     this.missingStores = [];
 
+    if (this.isPageContext()) await this.waitForWorkerUpgrade();
     await this.checkAndRepairDatabase();
     if (/** @type {string} */ (this.openState) === 'newer-version') {
       throw this._newerSchemaError();
     }
     this._throwIfCoreStoresMissing();
 
-    let db;
-    try {
-      db = await this._openAtCurrentVersion();
-    } catch (error) {
-      if (error && error.name === 'VersionError') {
-        // A newer build upgraded the database between the check and this open.
-        this.openState = 'newer-version';
-        this.onDiskVersion = await this._readOnDiskVersion();
-        throw this._newerSchemaError();
-      }
+    const { db, error } = await this._openWithoutCreating();
+    if (!db) {
       this.openState = 'failed';
+      if (error && error.name === 'AbortError') {
+        throw this._codedError('NO_DATABASE', 'There is no notes database yet');
+      }
       console.error('IndexedDB error:', error);
-      throw error;
+      throw error || this._codedError('OPEN_FAILED', 'Notes database could not be opened');
+    }
+    this.onDiskVersion = db.version;
+    if (db.version > this.dbVersion) {
+      // A newer build upgraded the database between the check and this open
+      db.close();
+      this.openState = 'newer-version';
+      throw this._newerSchemaError();
     }
 
     this.db = db;
@@ -244,8 +259,17 @@ class DatabaseManager {
   }
 
   /**
+   * Whether the open database is at this build's version, which only #17's
+   * migration in the service worker brings it to (#17 PR 1b)
+   * @returns {boolean}
+   */
+  isUpgraded() {
+    return Boolean(this.db) && this.db.version >= this.dbVersion;
+  }
+
+  /**
    * Open the database at whatever version it has, with no repair, upgrade, or
-   * maintenance, the way Popup and Side Panel open it. On a profile with no
+   * maintenance, the way Popup and Side Panel opened it before #17 PR 1b. On a profile with no
    * database this makes none and rejects with code NO_DATABASE. One a newer
    * build upgraded is closed again, and this rejects with code NEWER_SCHEMA. A
    * database missing stores opens anyway, and transaction() refuses the
@@ -385,99 +409,10 @@ class DatabaseManager {
   }
 
   /**
-   * Open at this build's version, creating any store an older version lacks.
-   * @returns {Promise<IDBDatabase>}
-   */
-  _openAtCurrentVersion() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
-
-      request.onupgradeneeded = (event) => {
-        console.debug('Upgrading database from version', event.oldVersion, 'to', event.newVersion);
-        this._createMissingStores(request.result);
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-      request.onblocked = () => {
-        console.warn('Database upgrade blocked. Please close other tabs using this extension.');
-      };
-    });
-  }
-
-  /**
-   * Create the version-8 stores an older database lacks. Runs only inside an upgrade.
-   * @param {IDBDatabase} db
-   * @returns {void}
-   */
-  _createMissingStores(db) {
-    // Canvases store
-    if (!db.objectStoreNames.contains('canvases')) {
-      const canvasStore = db.createObjectStore('canvases', { keyPath: 'id' });
-      canvasStore.createIndex('name', 'name', { unique: false });
-      canvasStore.createIndex('updatedAt', 'updatedAt', { unique: false });
-    }
-
-    // Elements store
-    if (!db.objectStoreNames.contains('elements')) {
-      const elementStore = db.createObjectStore('elements', { keyPath: 'id' });
-      elementStore.createIndex('canvasId', 'canvasId', { unique: false });
-      elementStore.createIndex('type', 'type', { unique: false });
-    }
-
-    // Settings store
-    if (!db.objectStoreNames.contains('settings')) {
-      db.createObjectStore('settings', { keyPath: 'key' });
-    }
-
-    if (!db.objectStoreNames.contains('media')) {
-      const mediaStore = db.createObjectStore('media', { keyPath: 'id' });
-      mediaStore.createIndex('canvasId', 'canvasId', { unique: false });
-    }
-
-    // Search index store
-    if (!db.objectStoreNames.contains('search_index')) {
-      db.createObjectStore('search_index', { keyPath: 'noteId' });
-    }
-
-    // Folders store
-    if (!db.objectStoreNames.contains('folders')) {
-      const folderStore = db.createObjectStore('folders', { keyPath: 'id' });
-      folderStore.createIndex('parentId', 'parentId', { unique: false });
-      folderStore.createIndex('name', 'name', { unique: false });
-    }
-
-    // Links store (for bidirectional linking)
-    if (!db.objectStoreNames.contains('links')) {
-      const linkStore = db.createObjectStore('links', { keyPath: 'id' });
-      linkStore.createIndex('fromNoteId', 'fromNoteId', { unique: false });
-      linkStore.createIndex('toNoteId', 'toNoteId', { unique: false });
-    }
-
-    // Themes store
-    if (!db.objectStoreNames.contains('themes')) {
-      const themeStore = db.createObjectStore('themes', { keyPath: 'id' });
-      themeStore.createIndex('name', 'name', { unique: false });
-      themeStore.createIndex('updatedAt', 'updatedAt', { unique: false });
-    }
-
-    // Vectors store (for embeddings)
-    if (!db.objectStoreNames.contains('vectors')) {
-      db.createObjectStore('vectors', { keyPath: 'id' });
-    }
-
-    // Snapshots store (for version history)
-    if (!db.objectStoreNames.contains('snapshots')) {
-      const snapshotStore = db.createObjectStore('snapshots', { keyPath: 'id' });
-      snapshotStore.createIndex('noteId', 'noteId', { unique: false });
-      snapshotStore.createIndex('timestamp', 'timestamp', { unique: false });
-    }
-  }
-
-  /**
-   * Look at the database before opening it at this build's version, through
-   * an unversioned open: record its version and missing stores, and write a
-   * recovery copy when a version-8 database is missing stores. Never deletes
-   * or changes the database.
+   * Look at the database before opening it, through an open that upgrades
+   * nothing and makes no database: record its version and missing stores, and
+   * write #33's recovery copy when a version-8 database is missing stores, as
+   * 1.4.1 does. Never deletes or changes the database.
    * @returns {Promise<void>}
    */
   async checkAndRepairDatabase() {
@@ -489,8 +424,9 @@ class DatabaseManager {
         this.openState = 'newer-version';
         return;
       }
-      // An older database gets its missing stores from the upgrade.
-      if (db.version !== this.dbVersion) return;
+      // Step 9 gives a database every store it lacks, and only a version-8 one got the copy in
+      // 1.4.1, so that stays the one that does
+      if (db.version !== 8) return;
 
       this.missingStores = this.requiredStores.filter((store) => !db.objectStoreNames.contains(store));
       // Page contexts only: the service worker leaves the copy to the next page that opens.
@@ -507,14 +443,39 @@ class DatabaseManager {
   }
 
   /**
-   * Open the database at whatever version it has, without upgrading it.
-   * @returns {Promise<IDBDatabase|null>} null when it can't be opened
+   * Open the database at whatever version it has, without upgrading it, and
+   * without making one when there's none.
+   * @returns {Promise<IDBDatabase|null>} null when there's none or it can't be opened
    */
-  _openUnversioned() {
-    return new Promise((resolve) => {
-      const request = indexedDB.open(this.dbName);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+  async _openUnversioned() {
+    const { db } = await this._openWithoutCreating();
+    return db;
+  }
+
+  /**
+   * A page that finds no database, or one below this build's version, wakes
+   * the service worker and waits for its migration run's answer, at most
+   * workerUpgradeWaitMs (#17, Q12). Never rejects: a worker that can't be
+   * reached, or doesn't answer in time, leaves the page to open what's there.
+   * @returns {Promise<void>}
+   */
+  async waitForWorkerUpgrade() {
+    const version = await this._readOnDiskVersion();
+    if (version !== null && version >= this.dbVersion) return;
+    const chromeApi = this._chromeApi();
+    const runtime = chromeApi && chromeApi.runtime;
+    if (!runtime || typeof runtime.sendMessage !== 'function') return;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, this.workerUpgradeWaitMs);
+      const done = () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      };
+      try {
+        Promise.resolve(runtime.sendMessage({ type: 'storage.migrate' })).then(done, done);
+      } catch (error) {
+        done();
+      }
     });
   }
 
@@ -2487,6 +2448,8 @@ class DatabaseManager {
         local.archived = false;
         local.archivedAt = null;
         local.updatedAt = result.trashedAt;
+        // A lifecycle the kernel wrote beside the flags follows them (#17 PR 3a)
+        if (local.lifecycle !== undefined) local.lifecycle = 'trashed';
         noteStore.put(local);
         result.trashedIds.push(local.id);
       }
@@ -2510,8 +2473,13 @@ class DatabaseManager {
       }
     }
 
+    // The fields #17 PR 3 writes beside the flags (js/kernel/core/domain/placement.js's
+    // PLACEMENT_FIELDS), which a backup from this build or a later one carries: an import drops
+    // them, so the flags it sets are all a note says, and the kernel derives the rest from those.
+    const flagFields = ['placement', 'kind', 'lifecycle'];
     for (const packageNote of plan.notes) {
       const imported = { ...packageNote, id: plan.noteIds.get(packageNote.id), folderId: resolveFolder(packageNote.folderId) };
+      for (const field of flagFields) delete imported[field];
       // Imported notes start outside trash, so an import never queues anything for deletion.
       delete imported.trashed;
       delete imported.trashedAt;

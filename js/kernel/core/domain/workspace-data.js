@@ -1,8 +1,9 @@
 /**
  * What the new tab keeps beside its preferences (#12 slices 6 and 7), by the keys 1.4.x's
  * Storage.setSetting wrote: AI chat's conversations and prompt templates, the first run's end,
- * and the backup bookkeeping. Slice 6's commands write them (application/workspace-data.js),
- * and getWorkspaceData reads them back, each from the settings area its command writes.
+ * and the backup bookkeeping, and since #17 PR 1b what the page reads of the storage upgrade.
+ * Slice 6's commands write them (application/workspace-data.js), and getWorkspaceData reads them
+ * back, each from the settings area its command writes, or the worker, for the upgrade's record.
  */
 
 /**
@@ -28,8 +29,18 @@ export const BACKUP_KEYS = Object.freeze({
 });
 
 /**
- * Each key getWorkspaceData reads, to the settings area its command writes it in
- * @type {Readonly<Record<string, 'chat' | 'onboarding' | 'backup'>>}
+ * The keys of #17's storage upgrade the new tab reads (#17 PR 1b): the service worker's record
+ * of its last migration run, which only the worker writes, and when the space notice was last
+ * put off, which snoozeSpaceNotice writes
+ */
+export const UPGRADE_KEYS = Object.freeze({
+  record: 'storageUpgrade',
+  spaceNotice: 'spaceNoticeSnoozedAt',
+});
+
+/**
+ * Each key getWorkspaceData reads, to the settings area it's kept in
+ * @type {Readonly<Record<string, 'chat' | 'onboarding' | 'backup' | 'upgrade'>>}
  */
 const AREAS = Object.freeze({
   [CHAT_KEYS.note[0]]: 'chat',
@@ -41,6 +52,8 @@ const AREAS = Object.freeze({
   [BACKUP_KEYS.fullExport]: 'backup',
   [BACKUP_KEYS.backup]: 'backup',
   [BACKUP_KEYS.exportNotice]: 'backup',
+  [UPGRADE_KEYS.record]: 'upgrade',
+  [UPGRADE_KEYS.spaceNotice]: 'upgrade',
 });
 
 /** Every key getWorkspaceData reads */
@@ -49,7 +62,7 @@ export const WORKSPACE_DATA_KEYS = Object.freeze(/** @type {string[]} */ (Object
 /**
  * The settings area `key` is kept in
  * @param {string} key - one of WORKSPACE_DATA_KEYS
- * @returns {'chat' | 'onboarding' | 'backup'}
+ * @returns {'chat' | 'onboarding' | 'backup' | 'upgrade'}
  */
 export function workspaceDataArea(key) {
   return AREAS[key];

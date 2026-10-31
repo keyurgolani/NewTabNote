@@ -1,5 +1,7 @@
-// #17 PR 1a, rolling back after step 9 (plan risk 1, review R61's probe F): a profile migrated
-// to 9, then opened by the frozen v1.4.0 and v1.4.1 Storage (test/fixtures/storage/releases/,
+// #17 PR 1a, rolling back after step 9 (plan risk 1, review R61's probe F), and after step 10 since
+// #17 PR 2a, with the ledger, change log, conflict, and tombstone rows it keeps, and since PR 2b
+// with notes deleted for good and the point purged of them: a profile migrated
+// to 10, then opened by the frozen v1.4.0 and v1.4.1 Storage (test/fixtures/storage/releases/,
 // the tags' own files), keeps CanvasTabDB and NewTabNoteRecovery byte for byte, and loses no
 // chrome.storage.local key. v1.4.0 fails with VersionError, since all ten legacy stores are
 // there for its missing-store check to find, and v1.4.1's #33 guard refuses the newer
@@ -16,7 +18,17 @@ import path from 'node:path';
 
 import { maximalFixture } from '../fixtures/storage/generate.mjs';
 import { productionInputs } from './generated-inputs.mjs';
-import { FIXTURES as DIR, dump, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
+import {
+  FIXTURES as DIR,
+  deleteAndPurge,
+  dump,
+  legacyEnv,
+  profileWith,
+  recordsIn,
+  run,
+  synthesized,
+  writeHistory,
+} from './migration-support.mjs';
 
 const FIXTURES = synthesized();
 const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic'];
@@ -41,7 +53,7 @@ async function rollBack(of, tag) {
   return { error: await legacyEnv.runUntil(env, ended), Storage };
 }
 
-describe('a profile migrated to 9, opened by a 1.4.x build', () => {
+describe('a profile migrated to 10, opened by a 1.4.x build', () => {
   for (const id of CASES) {
     for (const tag of ['v1.4.0', 'v1.4.1']) {
       it(`${id}, then ${tag}: refused, and nothing changed or deleted`, async () => {
@@ -96,7 +108,7 @@ async function refusedUnchanged(of, tag) {
   return keys;
 }
 
-describe('a profile with backups, migrated to 9, opened by a 1.4.x build', async () => {
+describe('a profile with backups, migrated to 10, opened by a 1.4.x build', async () => {
   const maximal = maximalFixture(await productionInputs()).fixture;
   const cases = [...WITH_BACKUPS, maximal];
   it('has a fixture recorded from v1.3.0 and one from v1.4.0', () => {
@@ -115,6 +127,59 @@ describe('a profile with backups, migrated to 9, opened by a 1.4.x build', async
         assert.ok(keys.some(key => key.startsWith('recovery_backup_')), 'no recovery_backup_* key to keep');
       });
     }
+  }
+});
+
+describe('a profile at 10 holding a ledger, a change log, a conflict, and a tombstone, opened by a 1.4.x build (#17 PR 2a)', () => {
+  /** @type {Record<string, () => Promise<import('./migration-support.mjs').Profile>>} */
+  const profiles = {
+    'v10.basic': () => profileWith(/** @type {any} */ (FIXTURES.get('v10.basic'))),
+    "v8.basic, migrated, then written through #17's adapter": async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+      assert.equal((await run(of)).status, 'migrated');
+      assert.deepEqual(await writeHistory(of), [
+        'committed',
+        'committed',
+        'conflict',
+        'committed',
+        'committed',
+        'committed',
+        'committed',
+      ]);
+      return of;
+    },
+  };
+  for (const [name, make] of Object.entries(profiles)) {
+    for (const tag of ['v1.4.0', 'v1.4.1']) {
+      it(`${name}, then ${tag}: refused, and nothing changed or deleted`, async () => {
+        const of = await make();
+        const before = await dump(of);
+        const stores = before.databases.find(db => db.name === 'CanvasTabDB')?.stores ?? [];
+        for (const store of ['operations', 'changes', 'conflicts', 'tombstones']) {
+          assert.ok(
+            (stores.find(found => found.name === store)?.records.length ?? 0) > 0,
+            `${name} holds ${store} rows`,
+          );
+        }
+        await refusedUnchanged(of, tag);
+      });
+    }
+  }
+});
+
+describe('a profile at 10 with a note and a folder deleted for good and its point purged, opened by a 1.4.x build (#17 PR 2b)', () => {
+  for (const tag of ['v1.4.0', 'v1.4.1']) {
+    it(`v8.basic, migrated, deleted, and purged, then ${tag}: refused, and nothing changed or deleted`, async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+      assert.equal((await run(of)).status, 'migrated');
+      const { noteId, folderId, purged } = await deleteAndPurge(of);
+      assert.deepEqual([purged.status, purged.tombstones], ['purged', 2]);
+      assert.ok(purged.rows > 1);
+      const before = await dump(of);
+      const tombstones = recordsIn(before, 'CanvasTabDB', 'tombstones').map(record => record.value.id);
+      assert.deepEqual(tombstones.sort(), [folderId, noteId].sort());
+      await refusedUnchanged(of, tag);
+    });
   }
 });
 

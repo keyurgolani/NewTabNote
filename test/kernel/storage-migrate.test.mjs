@@ -1,10 +1,11 @@
-// #17 PR 1a, the migration runner (migrate.js) and the registry's step 9 (registry.js): every
-// synthesized fixture runs to 9 and equals its independently derived expected file, recovery
+// #17 PR 1a, the migration runner (migrate.js) and the registry's steps 9 and 10 (registry.js,
+// step 10 since #17 PR 2a): every synthesized fixture runs to 10 and equals its independently
+// derived expected file, recovery
 // point included; a second run writes nothing; a run stopped at every step or batch and run
 // again ends the same; short of space, blocked, or failing, nothing runs past what failed and
-// the outcome says so; a database outside the matrix stays as it was, with a point; and step 9
-// makes only synchronous createObjectStore, createIndex, and put calls, keeping all ten legacy
-// stores.
+// the outcome says so; a database outside the matrix stays as it was, with a point; and each
+// step makes only synchronous createObjectStore, createIndex, and put calls, keeping all ten
+// legacy stores.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,8 +13,24 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { LEGACY_STORE_NAMES, STEPS, legacySchema } from '../../js/kernel/adapters/indexeddb/registry.js';
+import {
+  DEFAULT_LIMITS,
+  committed,
+  copyPoint,
+  keepVerified,
+  listPoints,
+  openRecovery,
+  startPoint,
+  storesToCopy,
+  verifyPoint,
+} from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import {
+  LATEST_STRUCTURAL,
+  LEGACY_STORE_NAMES,
+  STEPS,
+  legacySchema,
+  schemaAt,
+} from '../../js/kernel/adapters/indexeddb/registry.js';
 import { detectShape, inspect, openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import {
@@ -40,7 +57,7 @@ const FIXTURES = synthesized();
 const OUTCOMES = {
   'none.basic': 'migrated',
   'none.empty-v1': 'migrated',
-  'v9.basic': 'current',
+  'v10.basic': 'current',
   'v8.missing-core': 'refused',
   'v8.extra-store': 'refused',
   'v9.newer': 'refused',
@@ -51,9 +68,9 @@ const outcomeOf = id => /** @type {Record<string, string>} */ (OUTCOMES)[id] || 
 /** A small batch bound, so the copy takes many batches */
 const SMALL = Object.freeze({ records: 2, bytes: 2 * 1024 * 1024 });
 
-describe('every fixture through the registry to 9', () => {
+describe(`every fixture through the registry to ${LATEST_STRUCTURAL}`, () => {
   for (const [id, fixture] of FIXTURES) {
-    it(`${id}: ${outcomeOf(id)}, and the profile equals expected/${id}.v9.json`, async () => {
+    it(`${id}: ${outcomeOf(id)}, and the profile equals expected/${id}.v${LATEST_STRUCTURAL}.json`, async () => {
       const of = await profileWith(fixture);
       const outcome = await run(of);
       assert.equal(outcome.status, outcomeOf(id), JSON.stringify(outcome));
@@ -349,7 +366,7 @@ describe('faults on both databases', () => {
     assert.equal(recordsIn(await dump(of), 'NewTabNoteRecovery', 'points').length, 1);
   });
 
-  it('commit: the receipts transaction aborting after success leaves 9 without a receipt, which the next run writes', async () => {
+  it('commit: the receipts transaction aborting after success leaves 10 without its receipts, which the next run writes', async () => {
     await faulted(of => of.faults.abortAfterNextWrite('migrations', 'AbortError'), 'failed', 'transaction-failed');
   });
 });
@@ -383,6 +400,7 @@ describe('shape detection reads stores, indexes, and meta', () => {
     'v8.missing-core': 'missing-core',
     'v8.extra-store': 'unknown',
     'v9.basic': 'current',
+    'v10.basic': 'current',
     'v9.newer': 'newer',
   };
   for (const [id, fixture] of FIXTURES) {
@@ -460,74 +478,77 @@ describe('shape detection reads stores, indexes, and meta', () => {
   });
 });
 
-describe('step 9 inside its versionchange', () => {
+/**
+ * Runs `step` alone, opening at `version`, on a database made from `fixture`'s CanvasTabDB
+ * stores, with the upgrade's database and transaction wrapped so every call is recorded
+ * @param {any} fixture
+ * @param {{version?: number, step?: import('../../js/kernel/adapters/indexeddb/registry.js').StructuralStep}} [at]
+ */
+async function recorded(fixture, { version = 9, step = STEPS[0] } = {}) {
+  const of = newProfile();
+  await loadFixture(fixture, { factory: of.real });
+  /** @type {string[]} */
+  const calls = [];
+  let returned = false;
+  /** @type {string[]} */
+  const late = [];
   /**
-   * Runs step 9 on a database made from `fixture`'s CanvasTabDB stores, with the upgrade's
-   * database and transaction wrapped so every call is recorded
-   * @param {any} fixture
+   * @template {object} T
+   * @param {T} target
+   * @param {string} label
+   * @returns {T}
    */
-  async function recorded(fixture) {
-    const of = newProfile();
-    await loadFixture(fixture, { factory: of.real });
-    /** @type {string[]} */
-    const calls = [];
-    let returned = false;
-    /** @type {string[]} */
-    const late = [];
-    /**
-     * @template {object} T
-     * @param {T} target
-     * @param {string} label
-     * @returns {T}
-     */
-    const record = (target, label) =>
-      new Proxy(target, {
-        get(object, property) {
-          const value = Reflect.get(object, property, object);
-          if (typeof value !== 'function') {
-            if (property === 'objectStoreNames') return record(/** @type {any} */ (value), 'objectStoreNames');
-            return value;
-          }
-          return (/** @type {unknown[]} */ ...args) => {
-            const call = `${label}.${String(property)}`;
-            (returned ? late : calls).push(call);
-            const out = value.apply(object, args);
-            return out && typeof out === 'object' && 'createIndex' in out ? record(out, 'store') : out;
-          };
-        },
-      });
-    let result;
-    await new Promise((resolve, reject) => {
-      const request = of.real.open('CanvasTabDB', 9);
-      request.onupgradeneeded = () => {
-        const db = record(request.result, 'db');
-        const tx = record(/** @type {IDBTransaction} */ (request.transaction), 'tx');
-        result = STEPS[0].apply(db, tx, { logicalVersion: null });
-        returned = true;
-      };
-      request.onsuccess = () => {
-        request.result.close();
-        resolve(undefined);
-      };
-      request.onerror = () => reject(request.error);
+  const record = (target, label) =>
+    new Proxy(target, {
+      get(object, property) {
+        const value = Reflect.get(object, property, object);
+        if (typeof value !== 'function') {
+          if (property === 'objectStoreNames') return record(/** @type {any} */ (value), 'objectStoreNames');
+          return value;
+        }
+        return (/** @type {unknown[]} */ ...args) => {
+          const call = `${label}.${String(property)}`;
+          (returned ? late : calls).push(call);
+          const out = value.apply(object, args);
+          return out && typeof out === 'object' && 'createIndex' in out ? record(out, 'store') : out;
+        };
+      },
     });
-    await new Promise(resolve => setTimeout(resolve, 10));
-    return { of, calls, late, result };
-  }
+  let result;
+  await new Promise((resolve, reject) => {
+    const request = of.real.open('CanvasTabDB', version);
+    request.onupgradeneeded = () => {
+      const db = record(request.result, 'db');
+      const tx = record(/** @type {IDBTransaction} */ (request.transaction), 'tx');
+      result = step.apply(db, tx, { logicalVersion: null });
+      returned = true;
+    };
+    request.onsuccess = () => {
+      request.result.close();
+      resolve(undefined);
+    };
+    request.onerror = () => reject(request.error);
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  return { of, calls, late, result };
+}
 
-  const ALLOWED = new Set([
-    'db.createObjectStore',
-    'store.createIndex',
-    'store.put',
-    'tx.objectStore',
-    'objectStoreNames.contains',
-  ]);
+/** The calls a structural step may make in its versionchange */
+const ALLOWED = new Set([
+  'db.createObjectStore',
+  'store.createIndex',
+  'store.put',
+  'tx.objectStore',
+  'objectStoreNames.contains',
+]);
 
+describe('step 9 inside its versionchange', () => {
   for (const [id, fixture] of FIXTURES) {
     const kind = fixture.header.shape;
     if (
       kind === 'none' ||
       id === 'v9.basic' ||
+      id === 'v10.basic' ||
       id === 'v9.newer' ||
       id === 'v8.extra-store' ||
       id === 'v8.missing-core'
@@ -558,6 +579,56 @@ describe('step 9 inside its versionchange', () => {
       }
     });
   }
+});
+
+describe('step 10 inside its versionchange (#17 PR 2a)', () => {
+  it('on a database at 9: only createObjectStore, createIndex, and put, synchronously, and every store and record kept', async () => {
+    const fixture = /** @type {any} */ (FIXTURES.get('v9.basic'));
+    const { of, calls, late, result } = await recorded(fixture, { version: 10, step: STEPS[1] });
+    assert.equal(result, undefined, 'returned something, so it could have awaited');
+    assert.deepStrictEqual(late, [], 'called after it returned');
+    assert.deepStrictEqual(
+      calls.filter(call => !ALLOWED.has(call)),
+      [],
+    );
+    // meta's schema at 10 and the change log's empty head, and nothing else
+    assert.equal(calls.filter(call => call === 'store.put').length, 2);
+    const dumped = await dump({ ...of, chrome: { api: { storage: { local: { get: async () => ({}) } } } } });
+    const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));
+    const ten = /** @type {Record<string, any>} */ (schemaAt(10));
+    assert.deepStrictEqual(
+      db.stores.map((/** @type {any} */ store) => store.name),
+      Object.keys(ten).sort(),
+    );
+    for (const store of db.stores) {
+      assert.deepStrictEqual(
+        {
+          keyPath: store.keyPath,
+          indexes: store.indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]),
+        },
+        {
+          keyPath: ten[store.name].keyPath,
+          indexes: ten[store.name].indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]),
+        },
+        store.name,
+      );
+    }
+    // Every record of every store as it was, but meta's, which says 10 and holds the head
+    for (const store of fillCanaries(fixture).databases[0].stores) {
+      if (store.name === 'meta') continue;
+      assert.deepStrictEqual(recordsIn(dumped, 'CanvasTabDB', store.name), store.records, store.name);
+    }
+    assert.deepStrictEqual(
+      recordsIn(dumped, 'CanvasTabDB', 'meta').map(record => record.value),
+      [
+        { key: 'changes', head: 0, floor: 0 },
+        { key: 'schema', structuralVersion: 10, logicalVersion: 1 },
+      ],
+    );
+    for (const name of ['operations', 'changes', 'conflicts', 'tombstones']) {
+      assert.deepStrictEqual(recordsIn(dumped, 'CanvasTabDB', name), [], name);
+    }
+  });
 });
 
 describe('a verified point reused only while it matches the live data (review R61, Q3)', () => {
@@ -666,7 +737,7 @@ describe('an empty CanvasTabDB, and a database with any store, are never deleted
     return of;
   }
 
-  for (const version of [9, 12]) {
+  for (const version of [LATEST_STRUCTURAL, 12]) {
     it(`at version ${version}: unknown, left exactly as it is, and nothing deleted (#33's AC6)`, async () => {
       const of = await made(version);
       const before = await dump(of);
@@ -704,9 +775,184 @@ describe('an empty CanvasTabDB, and a database with any store, are never deleted
     }
   }
 
-  it('an empty database below 9 upgrades in place, and nothing is deleted', async () => {
-    const of = await made(1);
-    assert.equal((await run(of)).status, 'migrated');
-    assert.deepStrictEqual(of.faults.deletes, []);
+  for (const version of [1, 9]) {
+    it(`an empty database at ${version}, below ${LATEST_STRUCTURAL}, upgrades in place, and nothing is deleted`, async () => {
+      const of = await made(version);
+      assert.equal((await run(of)).status, 'migrated');
+      assert.deepStrictEqual(of.faults.deletes, []);
+      assert.equal((await inspect(of.real)).version, LATEST_STRUCTURAL);
+    });
+  }
+});
+
+describe("#61's carry-overs (#17 PR 1b)", () => {
+  it('a run that reuses a point drops an older copy a cut-off run left pinned, so one pinned point stays (carry-over 1)', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const killedAtVerified = {
+      hooks: {
+        between: (/** @type {string} */ label) => {
+          if (label === 'verified') throw new Killed();
+        },
+      },
+    };
+    assert.equal((await run(of, killedAtVerified)).status, 'failed');
+    /** @returns {Promise<any[]>} */
+    const points = async () => recordsIn(await dump(of), 'NewTabNoteRecovery', 'points').map(record => record.value);
+    const [older] = await points();
+    // The user writes on 8, so the next run remakes the point, and is cut off once the newer one
+    // is saved and before the older one goes: put the older record back, as that cut leaves it
+    const db = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const tx = db.transaction('canvases', 'readwrite');
+    const done = committed(tx);
+    tx.objectStore('canvases').put({ ...legacyEnv.note('written-after-point'), name: 'Later' });
+    await done;
+    db.close();
+    assert.equal((await run(of, killedAtVerified)).status, 'failed');
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    const put = recovery.transaction('points', 'readwrite');
+    const putDone = committed(put);
+    put.objectStore('points').put(older);
+    await putDone;
+    recovery.close();
+    assert.deepStrictEqual(
+      (await points()).map(point => [point.id, point.pinned]),
+      [
+        [`pre-migration-${NOW}`, true],
+        [`pre-migration-${NOW}-2`, true],
+      ],
+    );
+
+    // The next run reuses the newer point and drops the older one, as keepVerified would have
+    const outcome = await run(of);
+    assert.equal(outcome.status, 'migrated');
+    assert.equal(outcome.recoveryPointId, `pre-migration-${NOW}-2`);
+    assert.deepStrictEqual(
+      (await points()).map(point => [point.id, point.pinned]),
+      [[`pre-migration-${NOW}-2`, true]],
+    );
+  });
+
+  for (const id of ['v8.missing-core', 'v9.newer']) {
+    it(`${id}: a run on a refused profile reuses its point without reading every store again (carry-over 3)`, async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get(id)));
+      const first = await run(of);
+      assert.equal(first.status, 'refused');
+      const before = of.faults.transactions.length;
+      const second = await run(of);
+      assert.deepStrictEqual([second.status, second.recoveryPointId], ['refused', first.recoveryPointId]);
+      // matchesSource reads each store in its own transaction; the schema read takes them all at once
+      const storeReads = of.faults.transactions
+        .slice(before)
+        .filter(
+          opened =>
+            opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
+        );
+      assert.deepStrictEqual(
+        storeReads.map(opened => opened.names),
+        [],
+      );
+    });
+  }
+
+  it('an unknown shape, which the new tab still writes to, is checked against its point on each run', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.extra-store')));
+    assert.equal((await run(of)).status, 'refused');
+    const before = of.faults.transactions.length;
+    assert.equal((await run(of)).status, 'refused');
+    const storeReads = of.faults.transactions
+      .slice(before)
+      .filter(
+        opened =>
+          opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
+      );
+    assert.ok(storeReads.length > 0);
+  });
+});
+
+describe("a 9 profile #17 PR 1b's run left, updated to 10 (#17 PR 2a, review R88)", () => {
+  /**
+   * v8.basic as #17 PR 1b's worker left it: a verified, pinned point before step 9, then step 9
+   * in its versionchange, and its receipt naming that point
+   * @returns {Promise<{of: Profile, pointId: string}>}
+   */
+  async function leftBy1b() {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const io = { keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto), limits: DEFAULT_LIMITS };
+    const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: true }));
+    const pointId = `pre-migration-${NOW - 60_000}`;
+    try {
+      const { point, progress } = await startPoint(recovery, {
+        id: pointId,
+        kind: 'pre-migration',
+        sourceShape: 'legacy',
+        sourceVersion: 8,
+        structuralVersion: null,
+        logicalVersion: null,
+        target: 9,
+        stores: storesToCopy(source),
+        createdAt: NOW - 60_000,
+      });
+      await copyPoint({ source, recovery, point, progress, io });
+      const [stored] = await listPoints(recovery);
+      assert.deepEqual(await verifyPoint({ recovery, point: stored, io }), { ok: true });
+      await keepVerified({ recovery, point: stored, clock: { now: () => NOW - 30_000 }, io });
+    } finally {
+      source.close();
+      recovery.close();
+    }
+    // Step 9 alone, as 1b's registry had it, and its receipt
+    const db = await new Promise((resolve, reject) => {
+      const request = of.real.open('CanvasTabDB', 9);
+      request.onupgradeneeded = () =>
+        STEPS[0].apply(request.result, /** @type {IDBTransaction} */ (request.transaction), { logicalVersion: null });
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const tx = /** @type {IDBDatabase} */ (db).transaction('migrations', 'readwrite');
+    const written = committed(tx);
+    tx.objectStore('migrations').put({
+      id: 'structural-9',
+      from: 8,
+      to: 9,
+      status: 'completed',
+      startedAt: NOW - 30_000,
+      completedAt: NOW - 30_000,
+      recoveryPointId: pointId,
+      failure: null,
+    });
+    await written;
+    /** @type {IDBDatabase} */ (db).close();
+    return { of, pointId };
+  }
+
+  it("keeps 1b's pinned 8 to 9 point pinned, with an unpinned 9 to 10 point beside it, and both receipts", async () => {
+    const { of, pointId } = await leftBy1b();
+    const shape = detectShape(await inspect(of.real));
+    assert.deepEqual([shape.kind, shape.kind === 'current' && shape.structuralVersion], ['current', 9]);
+    const outcome = await run(of);
+    assert.deepEqual([outcome.status, outcome.steps, outcome.to], ['migrated', ['structural-10'], 10]);
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    let points;
+    try {
+      points = await listPoints(recovery);
+    } finally {
+      recovery.close();
+    }
+    assert.deepEqual(
+      points.map(point => [point.id === pointId, point.sourceVersion, point.target, point.status, point.pinned]),
+      [
+        [true, 8, 9, 'verified', true],
+        [false, 9, 10, 'verified', false],
+      ],
+    );
+    assert.equal(outcome.recoveryPointId, points[1].id);
+    const receipts = recordsIn(await dump(of), 'CanvasTabDB', 'migrations').map(record => record.value);
+    assert.deepEqual(receipts.map(receipt => [receipt.id, receipt.status, receipt.recoveryPointId]).sort(), [
+      ['structural-10', 'completed', points[1].id],
+      ['structural-9', 'completed', pointId],
+    ]);
+    // Settings' pre-update export still offers 1b's point, the one from before any upgrade
+    assert.equal(await exportablePoint({ indexedDB: of.real }), pointId);
   });
 });

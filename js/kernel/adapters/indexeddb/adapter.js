@@ -1,24 +1,43 @@
 /**
  * #17's IndexedDB adapter (#17 slice 1, "Repositories and commit semantics"): the kernel's
  * repository port over CanvasTabDB, with settings in chrome.storage.local. It writes the same
- * records to the same stores as #12's legacy adapter, and changes nothing about the database
- * (schema.js).
+ * records to the same stores as #12's legacy adapter, with three version fields on each note
+ * it writes (versions.js), and #17 PR 2a's bookkeeping beside them, in the stores step 10
+ * makes (registry.js): the ledger (ledger.js), the change log (changes.js), and conflict
+ * records (conflicts.js). Core's deletion puts a tombstone for each note and folder it deletes,
+ * in the delete's own transaction, and this adapter fills in the note's last revision and the
+ * commit's seq there (deletion.js, #17 PR 2b).
  *
  * Every command's units run in one transaction, opened in the task that commits it, readwrite
- * with `durability: 'strict'` whenever a unit writes. A command answers only once that
+ * with `durability: 'strict'` whenever a unit writes or the database keeps a ledger, over the
+ * units' stores and the bookkeeping stores the database has. A command answers only once that
  * transaction fires `complete`, and with a typed `unavailable` outcome when it fires `abort`,
  * even after every request in it succeeded, so nothing is ever reported saved that didn't
- * commit (failures.js has what each failure answers). A unit that stops the command (a
- * rejection or a conflict), or throws, aborts it, so nothing any of its units wrote commits.
+ * commit (failures.js has what each failure answers). The transaction asks for the command's
+ * ledger row and the change log's head before the first unit runs, and once the units have
+ * run, in this order:
+ * - a ledger row for the commandId answers the command: with its outcome again, `replayed`,
+ *   when it's the same command, and `idempotency-key-reuse` when it's another, and the
+ *   transaction aborts, so nothing the units wrote again commits;
+ * - a unit that stopped the command with a rejection, or threw, aborts it, and nothing of it
+ *   is kept;
+ * - a conflict commits only its conflict record and ledger row, since every unit checks the
+ *   version it expects before it writes anything. One after a write aborts as
+ *   `conflict-after-write`, which is a bug in the unit, so no lost update can commit;
+ * - a committed command moves its notes' versions, puts a change-log row for each note and
+ *   folder it wrote, completes each tombstone its units put, and puts its ledger row with the
+ *   outcome, revision and commitSeq included, and commits.
+ * A database below version 10 (a run that left it as it was) has none of those stores, so
+ * commands commit there as they did before, with no ledger row, change, conflict record, or
+ * tombstone, and a resend runs again.
  *
  * A transaction that aborts with an AbortError or an UnknownError runs once more, in a new
  * one, and answers `retries-exhausted` if that fails too (ports/repository.js, Unit). It runs
- * again only when this adapter has opened no write since on any store it writes, as a later
- * command there, such as a newer save of the same note, would land first and be written
+ * again only when this adapter has opened no write since on any store its units write, as a
+ * later command there, such as a newer save of the same note, would land first and be written
  * over; it answers `transaction-failed`, retryable, instead. That holds within one context
  * only: another context's save that commits between the abort and the run again is written
- * over, so the older content wins. It's the two-contexts gap the kernel ledger declares, and
- * once saves carry an expected revision (#17 slice 2) the run again is a conflict instead.
+ * over, unless the save carries the revision it expects, which is then a conflict.
  *
  * A transaction that ends before the command's units have finished, because a unit awaited
  * something other than it, isn't run again, and the command answers as it ends rather than
@@ -28,24 +47,47 @@
  *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
- * - revisions: false. A content revision needs something stored with each note, and #17
- *   slice 1 adds nothing on disk, so a save over a newer write wins, as on the legacy adapter.
- * - idempotency: false. Persisted outcomes live in #17's `operations` store, which the first
- *   schema change (#17 slice 2) creates, so a resent command runs again.
+ * - revisions: true. Each note has a content revision, a placement version, and a source
+ *   revision (versions.js), and a command that expects another is a conflict.
+ * - idempotency: true, on a database at version 10, for catalog commands made of units: their
+ *   outcome is kept in the ledger in the commit's own transaction. Settings commands and
+ *   startup maintenance write to chrome.storage.local, outside any IndexedDB transaction, so
+ *   they keep none, and a resend writes the same values again. A bulk command's key is
+ *   reserved in memory, in this adapter, from its first recall, since recall is synchronous:
+ *   another context, or this one after the worker restarts, doesn't see the reservation,
+ *   though each of the bulk command's items still answers from its own ledger row.
  *
- * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})` where
- * they make the legacy adapter today, `versioned` for the new tab and the service worker and
- * `existing` for Popup and Side Panel (connection.js). No shipped entry point does yet.
+ * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
+ * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
+ * to this build's version, `existing` when the run left it as it was), Popup's and Side
+ * Panel's (`existing`). The new tab stays on #12's legacy adapter until #17 PR 4 moves it
+ * (connection.js).
  */
 
-import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
-import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
-import { silentLogger } from '../../core/ports/runtime.js';
+import { COMMANDS } from '../../core/contracts/commands.js';
+import { UnavailableError, committed, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
+import { digestOf } from '../../core/memory/fingerprint.js';
+import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
+import { systemClock } from '../../core/ports/runtime.js';
+import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
+import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
+import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
+import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
+import {
+  CHANGES_KEY,
+  CHANGES_STORE,
+  CONFLICTS_STORE,
+  META_STORE,
+  OPERATIONS_STORE,
+  TOMBSTONES_STORE,
+} from './registry.js';
 import { abort, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
+import { createVersionTracker } from './versions.js';
 
 /** @typedef {import('../../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../core/ports/repository.js').StoreName} StoreName */
@@ -53,9 +95,15 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 /** @typedef {import('../../core/ports/repository.js').Tx} Tx */
 /** @typedef {import('../../core/ports/repository.js').Unit} Unit */
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
+/** @typedef {import('../../core/ports/repository.js').CommitResult} CommitResult */
+/** @typedef {import('../../core/ports/idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
+/** @typedef {import('../../core/ports/commit-log.js').CommitLog} CommitLog */
+/** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
-/** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
+/** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
+/** @typedef {import('./versions.js').VersionTracker} VersionTracker */
+/** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
 /**
  * chrome.storage.local, or anything with its promise-returning get and set
@@ -70,15 +118,26 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
  * @property {SettingsStore} settings
  * @property {OpenMode} [mode] - versioned unless given
  * @property {number} [openWithinMs] - how long open() waits for a blocked or slow open (connection.js)
- * @property {boolean} [pageContext]
- *   Whether this is a page, which saves the missing-stores recovery copy as it opens versioned
- *   (recovery.js). A page has a document and the service worker doesn't, as Storage tells them
- *   apart, so a root leaves it out.
- * @property {import('./recovery.js').Locks} [locks] - navigator.locks unless given
- * @property {Logger} [logger] - where a recovery copy that failed is reported; silent unless given
+ * @property {boolean} [requireCore] - an `existing` open refuses a database without notes or blocks (connection.js)
+ * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
+ *   What an `existing` open waits on first when there's no database or an older one: a page's
+ *   wait on the worker's migration run (connection.js)
+ * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
+ * @property {typeof IDBKeyRange} [keyRange] - for the change log's reads, the global one unless given
  */
 
-/** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>, close: () => void}} IndexedDbAdapter */
+/**
+ * @typedef {KernelAdapter & {
+ *   mode: OpenMode,
+ *   open: () => Promise<void>,
+ *   close: () => void,
+ *   ledger: IdempotencyLedger,
+ *   commitLog: CommitLog,
+ *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
+ * }} IndexedDbAdapter
+ *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
+ *   `sweepLedger` their retention (ledger.js), which only the worker runs
+ */
 
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
@@ -112,16 +171,63 @@ function present(db, stores) {
 }
 
 /**
+ * The bookkeeping stores a database has: all of step 10's on a database at version 10, and
+ * none below it, where commands commit as they did before step 10
+ * @typedef {object} Books
+ * @property {readonly string[]} names
+ * @property {boolean} ledger - `operations`
+ * @property {boolean} log - `changes`, with its head in `meta`
+ * @property {boolean} conflicts
+ * @property {boolean} tombstones
+ */
+
+/** @type {Books} */
+const NO_BOOKS = Object.freeze({
+  names: Object.freeze([]),
+  ledger: false,
+  log: false,
+  conflicts: false,
+  tombstones: false,
+});
+
+/**
+ * @param {IDBDatabase} db
+ * @returns {Books}
+ */
+function booksOf(db) {
+  const has = (/** @type {string} */ name) => db.objectStoreNames.contains(name);
+  if (!has(OPERATIONS_STORE)) return NO_BOOKS;
+  const log = has(CHANGES_STORE) && has(META_STORE);
+  const names = [OPERATIONS_STORE, ...(log ? [CHANGES_STORE, META_STORE] : [])];
+  if (has(CONFLICTS_STORE)) names.push(CONFLICTS_STORE);
+  if (has(TOMBSTONES_STORE)) names.push(TOMBSTONES_STORE);
+  return { names, ledger: true, log, conflicts: has(CONFLICTS_STORE), tombstones: has(TOMBSTONES_STORE) };
+}
+
+/**
+ * Whether `work` is a catalog command, which the ledger keys by its commandId. Work that isn't,
+ * such as #20's storage probe, which writes and deletes a record of its own, keeps no ledger
+ * row and never replays one, so each run of it runs, and it leaves CanvasTabDB as it found it.
+ * @param {Work} work
+ */
+const isCatalogCommand = work => {
+  const { type } = /** @type {{type?: unknown}} */ (work.command);
+  return typeof type === 'string' && Object.hasOwn(COMMANDS, type);
+};
+
+/**
  * A unit's view of its command's transaction: only the stores it named, and no writes when
  * it only reads. A store the database lacks reads as empty, as DatabaseManager's reads of
- * auxiliary stores do.
+ * auxiliary stores do. Notes come back as stored, versions included, and every note read or
+ * written goes through the transaction's version tracker (versions.js).
  * @param {IDBDatabase} db
  * @param {IDBTransaction | null} tx - null when the database has none of the command's stores
  * @param {readonly StoreName[]} scope
  * @param {boolean} writable
+ * @param {VersionTracker} tracker
  * @returns {Tx}
  */
-function view(db, tx, scope, writable) {
+function view(db, tx, scope, writable, tracker) {
   /**
    * @param {StoreName} store
    * @returns {IDBObjectStore | null}
@@ -140,37 +246,77 @@ function view(db, tx, scope, writable) {
     if (!writable) throw new UnavailableError('adapter', 'write-in-readonly-transaction', false);
     return handle(store);
   };
+  /**
+   * @param {StoreName} store
+   * @param {Array<Record<string, unknown>>} records
+   */
+  const sawAll = (store, records) => {
+    if (store === 'notes') for (const record of records) tracker.saw(/** @type {string} */ (record.id), record);
+    return records;
+  };
   return /** @type {Tx} */ ({
     get: async (store, key) => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.get(key)) : undefined;
+      const record = objectStore ? await result(objectStore.get(key)) : undefined;
+      if (store === 'notes') tracker.saw(key, record);
+      return record;
     },
     getAll: async store => {
       const objectStore = handle(store);
-      return objectStore ? result(objectStore.getAll()) : [];
+      return sawAll(store, objectStore ? await result(objectStore.getAll()) : []);
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
       const key = indexValue(value);
-      return objectStore ? result(objectStore.index(index).getAll(key)) : [];
+      return sawAll(store, objectStore ? await result(objectStore.index(index).getAll(key)) : []);
     },
     getKeysByIndex: async (store, index, value) => {
       const objectStore = handle(store);
       const key = indexValue(value);
       return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
     },
-    revision: store => {
+    revision: (store, key) => {
       handle(store);
-      return undefined;
+      return store === 'notes' ? tracker.versions(key)?.revision : undefined;
+    },
+    versions: (store, key) => {
+      handle(store);
+      return store === 'notes' ? tracker.versions(key) : undefined;
     },
     put: (store, record) => {
       const objectStore = writing(store);
-      if (objectStore) objectStore.put(record);
-      else if (!DERIVED_STORES.includes(store)) throw new UnavailableError('storage', 'store-unavailable', false);
+      if (!objectStore) {
+        // A derived store's writes are skipped where it's missing, and below version 10 a
+        // deletion's tombstone, as commands committed before step 10 (#17 PR 2b's declared gap)
+        if (!DERIVED_STORES.includes(store) && !LATER_STORES.includes(store)) {
+          throw new UnavailableError('storage', 'store-unavailable', false);
+        }
+        return;
+      }
+      if (store === 'notes') {
+        // Below version 10, which 1.4.1 still opens and where only its flags would follow it, a
+        // note goes in without #17 PR 3's fields, as on the legacy adapter (review R88)
+        tracker.putNote(
+          objectStore,
+          db.objectStoreNames.contains(TOMBSTONES_STORE) ? record : withoutPlacement(record),
+        );
+        return;
+      }
+      objectStore.put(record);
+      if (store === 'folders') tracker.touched('folder', /** @type {string} */ (record.id));
+      else if (store === 'tombstones') tracker.tombstone(/** @type {TombstoneRecord} */ (record));
+      else tracker.wrote();
     },
     delete: (store, key) => {
       const objectStore = writing(store);
-      if (objectStore) objectStore.delete(key);
+      if (!objectStore) return;
+      if (store === 'notes') {
+        tracker.deleteNote(objectStore, key);
+        return;
+      }
+      objectStore.delete(key);
+      if (store === 'folders') tracker.touched('folder', key);
+      else tracker.wrote();
     },
   });
 }
@@ -180,20 +326,33 @@ function view(db, tx, scope, writable) {
  * @param {IDBDatabase} db
  * @param {IDBTransaction | null} tx
  * @param {Unit[]} units
+ * @param {VersionTracker} tracker
  * @returns {Promise<Outcome | void>}
  */
-async function runUnits(db, tx, units) {
+async function runUnits(db, tx, units, tracker) {
   for (const unit of units) {
     if (unit.when && !unit.when()) continue;
-    const stop = await unit.run(view(db, tx, unit.stores, (unit.mode || 'readwrite') === 'readwrite'));
+    const stop = await unit.run(view(db, tx, unit.stores, (unit.mode || 'readwrite') === 'readwrite', tracker));
     if (stop) return stop;
   }
   return undefined;
 }
 
 /**
+ * A request's result, or why it failed, never a rejection
+ * @template T
+ * @param {IDBRequest<T>} request
+ * @returns {Promise<{value: T} | {error: unknown}>}
+ */
+const settled = request =>
+  result(request).then(
+    value => ({ value }),
+    error => ({ error }),
+  );
+
+/**
  * A readwrite transaction this adapter opened: its place in the order it opened them, from 1,
- * and the IndexedDB stores it spans. `seq` 0, over no store, is a run that opened none.
+ * and the IndexedDB stores its units span. `seq` 0, over no store, is a run that opened none.
  * @typedef {{seq: number, names: readonly string[]}} Write
  */
 
@@ -201,9 +360,9 @@ async function runUnits(db, tx, units) {
 const NO_WRITE = Object.freeze({ seq: 0, names: Object.freeze([]) });
 
 /**
- * How one run of a command's units ended: its answer, whether another run could get past the
- * failure, and the readwrite transaction it opened
- * @typedef {{outcome: Outcome, transient: boolean, write: Write}} Attempt
+ * How one run of a command's units ended: its answer, whether it replays a kept outcome,
+ * whether another run could get past the failure, and the readwrite transaction it opened
+ * @typedef {{outcome: Outcome, replayed: boolean, transient: boolean, write: Write}} Attempt
  */
 
 /**
@@ -213,15 +372,21 @@ const NO_WRITE = Object.freeze({ seq: 0, names: Object.freeze([]) });
  * @returns {Attempt}
  */
 function failed(cause, write) {
-  return { outcome: unavailableFrom(failureOf(cause)), transient: isTransient(cause), write };
+  return { outcome: unavailableFrom(failureOf(cause)), replayed: false, transient: isTransient(cause), write };
 }
 
 /** @param {Outcome} outcome @returns {Attempt} */
-const answered = outcome => ({ outcome, transient: false, write: NO_WRITE });
+const answered = outcome => ({ outcome, replayed: false, transient: false, write: NO_WRITE });
 
 const endedEarly = () => answered(unavailable('adapter', 'transaction-ended-early', false));
 
 const aborted = () => new DOMException('The transaction was aborted', 'AbortError');
+
+/**
+ * What a run's units and its bookkeeping came to, before the transaction ends: an answer that
+ * aborts it, an outcome to answer once it commits, or a throw
+ * @typedef {{abort: Attempt} | {commit: Outcome} | {error: unknown}} Decided
+ */
 
 /**
  * @param {IndexedDbOptions} options
@@ -232,13 +397,13 @@ export function createIndexedDbAdapter({
   settings,
   mode = 'versioned',
   openWithinMs,
-  pageContext = typeof document !== 'undefined',
-  locks = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks : undefined,
-  logger = silentLogger,
+  requireCore = false,
+  awaitUpgrade = null,
+  clock = systemClock,
+  keyRange,
 }) {
-  // Only a page's versioned open saves the copy, as only the new tab's Storage.open does
-  const recovery = mode === 'versioned' && pageContext ? { settings, locks, logger } : null;
-  const connection = createConnection({ indexedDB, mode, openWithinMs, recovery });
+  const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
+  const database = () => connection.database();
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another
@@ -293,11 +458,71 @@ export function createIndexedDbAdapter({
   /** How many readwrite transactions this adapter has opened */
   let writesOpened = 0;
   /**
-   * The last readwrite transaction this adapter opened over each IndexedDB store, so a retry
-   * can tell whether a later write went first on any store it writes
+   * The last readwrite transaction this adapter opened over each IndexedDB store its units
+   * write, so a retry can tell whether a later write went first on any of them. The
+   * bookkeeping stores every commit spans aren't counted: each command's rows there are its
+   * own, and the change log's head is read in the transaction that moves it.
    * @type {Map<string, number>}
    */
   const lastWrite = new Map();
+
+  /**
+   * Keeps a conflict that wrote nothing: its record and its ledger row, in `tx`
+   * @param {IDBTransaction} tx
+   * @param {Books} books
+   * @param {Work} work
+   * @param {Conflict} conflict
+   */
+  const keepConflict = (tx, books, work, conflict) => {
+    const at = clock.now();
+    if (books.conflicts) tx.objectStore(CONFLICTS_STORE).put(conflictRecord(work, conflict, at));
+    if (books.ledger && isCatalogCommand(work))
+      tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
+  };
+
+  /**
+   * A committed command's bookkeeping, in `tx`: its notes' versions, its change-log rows and
+   * tombstones, and its ledger row. Answers the outcome, with the primary note's revision and
+   * the commit's seq.
+   * @param {IDBTransaction} tx
+   * @param {Books} books
+   * @param {Work} work
+   * @param {VersionTracker} tracker
+   * @param {Promise<{value: unknown} | {error: unknown}>} headRead
+   * @returns {Promise<Outcome>}
+   */
+  const keepCommit = async (tx, books, work, tracker, headRead) => {
+    const scope = work.scope || 'content';
+    const primary = work.primary && work.primary();
+    const revised = scope === 'content' && Boolean(work.revised && work.revised());
+    const writable = tx.mode === 'readwrite' && tx.objectStoreNames.contains(IDB_STORES.notes);
+    const { revision, changes, deleted } = writable
+      ? await tracker.settle({
+          notes: tx.objectStore(IDB_STORES.notes),
+          tombstones: books.tombstones ? tx.objectStore(TOMBSTONES_STORE) : null,
+          primary: primary && { store: primary.store, key: primary.key },
+          revised,
+        })
+      : { revision: undefined, changes: [], deleted: [] };
+    /** @type {Outcome} */
+    let outcome = work.done();
+    if (revision !== undefined) outcome = { ...outcome, revision };
+    /** @type {number | null} */
+    let seq = null;
+    if (books.log && changes.length > 0) {
+      const head = await headRead;
+      if ('error' in head) throw head.error;
+      seq = writeChanges(tx, logHead(head.value), changes, work.commandId);
+      outcome = { ...outcome, commitSeq: seq };
+    }
+    // Core's deletion put each tombstone in this transaction (#17 PR 2b); it gets the note's last
+    // revision and this commit's seq here (deletion.js)
+    if (books.tombstones) finishTombstones(tx.objectStore(TOMBSTONES_STORE), tracker.tombstones(), { deleted, seq });
+    if (books.ledger && isCatalogCommand(work) && outcome.kind === 'committed') {
+      tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, outcome, clock.now()));
+    }
+    return outcome;
+  };
 
   /**
    * One run of a command's units, all in one transaction, which it opens before it returns
@@ -311,23 +536,46 @@ export function createIndexedDbAdapter({
     /** @type {IDBTransaction | null} */
     let tx = null;
     let write = NO_WRITE;
+    let books = NO_BOOKS;
     try {
       db = connection.database();
-      const stores = units.flatMap(unit => unit.stores);
-      const names = present(db, stores);
-      const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite');
+      const unitStores = units.flatMap(unit => unit.stores);
+      // The primary note's revision may move, or be reported, though no unit touches the note
+      /** @type {StoreName[]} */
+      const primaryStores = work.primary ? ['notes'] : [];
+      const names = present(db, [...unitStores, ...primaryStores]);
+      // A deletion's own rows in step 10's stores aren't counted for a retry, as the
+      // bookkeeping isn't: each command's tombstones and conflict records are its own
+      const unitNames = present(
+        db,
+        unitStores.filter(store => !LATER_STORES.includes(store)),
+      );
+      books = booksOf(db);
+      const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite') || books.ledger;
       if (names.length > 0 && writes) {
-        tx = db.transaction(names, 'readwrite', STRICT);
-        write = { seq: ++writesOpened, names };
-        for (const name of names) lastWrite.set(name, write.seq);
+        tx = db.transaction([...new Set([...names, ...books.names])], 'readwrite', STRICT);
+        write = { seq: ++writesOpened, names: unitNames };
+        for (const name of unitNames) lastWrite.set(name, write.seq);
       } else if (names.length > 0) {
+        books = NO_BOOKS;
         tx = db.transaction(names, 'readonly');
+      } else {
+        books = NO_BOOKS;
       }
     } catch (error) {
       return Promise.resolve(answered(unavailableFrom(startFailure(error))));
     }
+    const tracker = createVersionTracker({ scope: work.scope, sourceRevision: work.sourceRevision });
+    // Asked for before any unit runs, so the units' requests still go out in the calling task
+    /** @type {Promise<{value: unknown} | {error: unknown} | null>} */
+    const kept =
+      tx && books.ledger && isCatalogCommand(work)
+        ? settled(tx.objectStore(OPERATIONS_STORE).get(work.commandId))
+        : Promise.resolve(null);
+    const headRead =
+      tx && books.log ? settled(tx.objectStore(META_STORE).get(CHANGES_KEY)) : Promise.resolve({ value: undefined });
     /** @type {Promise<{stop: Outcome | void} | {error: unknown}>} */
-    const running = runUnits(db, tx, units).then(
+    const running = runUnits(db, tx, units, tracker).then(
       stop => ({ stop }),
       error => ({ error }),
     );
@@ -339,8 +587,33 @@ export function createIndexedDbAdapter({
         return answered(first.stop || work.done());
       });
     }
-    const ended = ending(tx);
-    return Promise.race([running, ended.then(end => ({ end }))]).then(async first => {
+    const open = tx;
+    const ended = ending(open);
+    /** @type {Promise<Decided>} */
+    const deciding = running.then(async first => {
+      try {
+        // A ledger row answers first: a resend of a command that committed or conflicted gets
+        // that outcome again, whatever its units found this time
+        const row = await kept;
+        if (row && 'value' in row && row.value) {
+          const { outcome, replayed } = replayFrom(/** @type {any} */ (row.value), work.command);
+          return { abort: { outcome, replayed, transient: false, write: NO_WRITE } };
+        }
+        if ('error' in first) return { error: first.error };
+        const { stop } = first;
+        if (stop && stop.kind === 'conflict') {
+          // A unit checks the version it expects before it writes, so this is a bug in the unit
+          if (tracker.written()) return { abort: answered(unavailable('adapter', 'conflict-after-write', false)) };
+          keepConflict(open, books, work, stop);
+          return { commit: stop };
+        }
+        if (stop) return { abort: answered(stop) };
+        return { commit: await keepCommit(open, books, work, tracker, headRead) };
+      } catch (error) {
+        return { error };
+      }
+    });
+    return Promise.race([deciding, ended.then(end => ({ end }))]).then(async first => {
       // The transaction ended while a unit still ran, because the unit awaited something else.
       // One that committed may hold what the unit wrote before that, so the command can't say it
       // saved; one that aborted holds nothing and says why. Neither runs again, as that unit may
@@ -351,20 +624,20 @@ export function createIndexedDbAdapter({
           : { ...failed(first.end.error || aborted(), write), transient: false };
       }
       if ('error' in first) {
-        abort(tx);
+        abort(open);
         const end = await ended;
         if (end.committed) return endedEarly();
         // Its own error says why the transaction aborted, when it aborted for one
         return failed(end.error || first.error, write);
       }
-      if (first.stop) {
-        abort(tx);
+      if ('abort' in first) {
+        abort(open);
         // Committed before the abort could land, so what came before the stop is stored
         if ((await ended).committed) return endedEarly();
-        return answered(first.stop);
+        return first.abort;
       }
       const end = await ended;
-      if (end.committed) return answered(work.done());
+      if (end.committed) return answered(first.commit);
       return failed(end.error || aborted(), write);
     });
   };
@@ -372,19 +645,21 @@ export function createIndexedDbAdapter({
   /**
    * @param {Work} work
    * @param {Unit[]} units
-   * @returns {Promise<Outcome>}
+   * @returns {Promise<CommitResult>}
    */
   const commitUnits = (work, units) =>
     attempt(work, units).then(first => {
-      if (!first.transient) return first.outcome;
+      if (!first.transient) return { outcome: first.outcome, replayed: first.replayed };
       // Another run would queue behind every transaction opened since over its stores, so a
       // later command this context sent, such as a newer save of the same note, would land
       // first and then be written over. So it runs again only when no write opened after it on
       // any store it writes. One on other stores, such as filing into a folder, can't be.
       const overtaken = first.write.names.some(name => lastWrite.get(name) !== first.write.seq);
-      if (overtaken) return unavailable('storage', 'transaction-failed', true);
+      if (overtaken) return { outcome: unavailable('storage', 'transaction-failed', true), replayed: false };
       return attempt(work, units).then(second =>
-        second.transient ? unavailable('storage', 'retries-exhausted', true) : second.outcome,
+        second.transient
+          ? { outcome: unavailable('storage', 'retries-exhausted', true), replayed: false }
+          : { outcome: second.outcome, replayed: second.replayed },
       );
     });
 
@@ -433,32 +708,52 @@ export function createIndexedDbAdapter({
     return work.done();
   };
 
+  /**
+   * Each bulk command's digest, by commandId, from its first recall in this adapter
+   * @type {Map<string, string>}
+   */
+  const bulkKeys = new Map();
+
+  /** @type {CommitLog | null} */
+  let commitLog = null;
+
   return Object.freeze({
     name: 'indexeddb',
     mode,
-    flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false, backups: false }),
+    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
 
     open: () => connection.open(),
     close: () => connection.close(),
 
-    // Nothing is kept per commandId (idempotency: false)
-    recall: () => undefined,
+    // What commit keeps is in IndexedDB, which nothing reads synchronously, so a command's own
+    // record answers from commit. Only a bulk command's reservation, which no transaction
+    // keeps, answers here.
+    recall(command) {
+      const reserved = bulkKeys.get(command.commandId);
+      if (reserved !== undefined) {
+        return reserved === digestOf(command) ? undefined : rejected('validation', 'idempotency-key-reuse');
+      }
+      if (COMMANDS[command.type].bulk) bulkKeys.set(command.commandId, digestOf(command));
+      return undefined;
+    },
 
     commit(work) {
       const { effect } = work;
-      /** @type {Promise<Outcome>} */
-      let outcome;
+      /** @type {Promise<CommitResult>} */
+      let pending;
       try {
-        if (effect.kind === 'units') outcome = commitUnits(work, effect.units);
-        else if (effect.kind === 'settings') outcome = commitSettings(work, effect.area, effect.values);
-        // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
-        else if (effect.kind === 'backup') outcome = Promise.resolve(unavailable('adapter', 'backups-need-legacy-storage', false));
-        else outcome = maintain(work);
+        if (effect.kind === 'units') pending = commitUnits(work, effect.units);
+        else if (effect.kind === 'settings') {
+          pending = commitSettings(work, effect.area, effect.values).then(outcome => ({ outcome, replayed: false }));
+        } else if (effect.kind === 'backup') {
+          // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
+          pending = Promise.resolve({ outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false });
+        } else pending = maintain(work).then(outcome => ({ outcome, replayed: false }));
       } catch (error) {
-        outcome = Promise.resolve(unavailableFrom(failureOf(error)));
+        pending = Promise.resolve({ outcome: unavailableFrom(failureOf(error)), replayed: false });
       }
-      return outcome.then(
-        value => ({ outcome: value, replayed: false }),
+      return pending.then(
+        value => value,
         error => ({ outcome: unavailableFrom(failureOf(error)), replayed: false }),
       );
     },
@@ -479,7 +774,7 @@ export function createIndexedDbAdapter({
         throw startFailure(error);
       }
       try {
-        return await body(view(db, tx, stores, false));
+        return await body(view(db, tx, stores, false, createVersionTracker()));
       } catch (error) {
         throw failureOf(error);
       }
@@ -506,5 +801,12 @@ export function createIndexedDbAdapter({
       });
       return values;
     },
+
+    ledger: createIndexedDbLedger({ database }),
+    get commitLog() {
+      if (!commitLog) commitLog = createIndexedDbCommitLog({ database, keyRange: keyRange || globalThis.IDBKeyRange });
+      return commitLog;
+    },
+    sweepLedger: () => sweepLedger({ database, now: clock.now() }),
   });
 }

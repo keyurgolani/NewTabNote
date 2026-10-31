@@ -1,8 +1,8 @@
 /**
  * A pre-migration recovery point as the file 1.4.1's Import reads (#17, "Recovery points"), so
  * a user can always go back to 1.4.1: `{version: 1, exportedAt, canvases, elements, media,
- * folders}`, the shape 1.4.1's exportAll writes and its Storage.importData takes. #17 PR 1b
- * puts it behind Settings > Data & Backup (Q8); nothing calls it yet.
+ * folders}`, the shape 1.4.1's exportAll writes and its Storage.importData takes. Settings >
+ * Data & Backup's Export Pre-Update Copy runs it (Q8), through the new tab's composition root.
  *
  * - `canvases`: every note 1.4.1's own export holds, which is every note outside trash,
  *   archived notes and templates included, with every field as the point copied it
@@ -14,16 +14,31 @@
  * - `media`: every media row, each Blob as a data URL; 1.4.1 skips a row whose note isn't in
  *   the file, as it does for 1.4.0's exports
  * - `folders`: every folder
- * Blobs anywhere else become data URLs too (recovery.js), so the file is plain JSON.
+ * Blobs anywhere else become data URLs too, so the file is plain JSON.
  *
  * It exports only a point that is verified and reads back verified now, so a damaged copy is
- * never handed out as a backup. #17 PR 3 writes placement, `kind`, `lifecycle`, and `dailyKey`
- * back as the legacy fields here, once points can hold them.
+ * never handed out as a backup. It reads the point across many transactions, so it holds Web
+ * Lock `storage.migrate` shared while it does (#17 PR 2b): the worker's purge and migration
+ * runner hold it exclusive, so the export never reads a point between two of their batches,
+ * and a note deleted for good is either all there, before its purge, or not there at all.
+ *
+ * Each note goes as 1.4.1 stores one: without #17 PR 3's fields beside its flags (placement,
+ * `kind`, and `lifecycle`; domain/placement.js), which a point taken after the transform holds.
+ * The flags already say what those do, and 1.4.1 keeps a field it doesn't know while it
+ * changes the flags, so one left in would come back stale on the next upgrade (#17 PR 3, Q8).
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
-import { withDataUrls } from './recovery.js';
-import { DEFAULT_LIMITS, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
+import { withDataUrls } from './data-urls.js';
+import {
+  DEFAULT_LIMITS,
+  POINTS_LOCK,
+  listPoints,
+  openRecovery,
+  readPointStore,
+  verifyPoint,
+} from './recovery-points.js';
 
 /** @typedef {import('./recovery-points.js').Point} Point */
 /** @typedef {import('./records.js').Digester} Digester */
@@ -57,13 +72,31 @@ async function valuesOf(recovery, point, store, io) {
 }
 
 /**
- * The export of point `pointId`. Rejects with an UnavailableError, `storage`, when there's no
- * such pre-migration point (`no-recovery-point`) or it doesn't verify
- * (`recovery-point-unverified`).
+ * Web Locks, or anything with its request(name, options, callback)
+ * @typedef {{request: (name: string, options: {mode: 'shared'}, callback: () => Promise<any>) => Promise<any>}} SharedLocks
+ */
+
+/**
+ * The export of point `pointId`, read under `locks`' points lock, shared, when there are
+ * locks. Rejects with an UnavailableError, `storage`, when there's no such pre-migration point
+ * (`no-recovery-point`) or it doesn't verify (`recovery-point-unverified`).
+ * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester, clock: Clock, pointId: string, locks?: SharedLocks | null}} options
+ * @returns {Promise<LegacyExport>}
+ */
+export function exportPoint(options) {
+  const { locks } = options;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(POINTS_LOCK, { mode: 'shared' }, () => exportUnlocked(options));
+  }
+  return exportUnlocked(options);
+}
+
+/**
+ * exportPoint's read, under whatever lock its caller holds
  * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester, clock: Clock, pointId: string}} options
  * @returns {Promise<LegacyExport>}
  */
-export async function exportPoint({ indexedDB, keyRange, crypto, clock, pointId }) {
+async function exportUnlocked({ indexedDB, keyRange, crypto, clock, pointId }) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) throw new UnavailableError('storage', 'no-recovery-point', false);
   try {
@@ -75,7 +108,7 @@ export async function exportPoint({ indexedDB, keyRange, crypto, clock, pointId 
     const verdict = await verifyPoint({ recovery, point, io });
     if (!verdict.ok) throw new UnavailableError('storage', 'recovery-point-unverified', false);
 
-    const notes = await valuesOf(recovery, point, 'canvases', io);
+    const notes = (await valuesOf(recovery, point, 'canvases', io)).map(withoutPlacement);
     const canvases = notes.filter(note => !note.trashed);
     const trashedCanvases = notes.filter(note => note.trashed);
     const exported = new Set(canvases.map(note => note.id));
@@ -102,6 +135,18 @@ export async function exportPoint({ indexedDB, keyRange, crypto, clock, pointId 
  * @returns {Promise<string | null>}
  */
 export async function exportablePoint({ indexedDB }) {
+  const point = await exportablePointRecord({ indexedDB });
+  return point ? point.id : null;
+}
+
+/**
+ * The newest verified pre-migration point, the pinned one first, as its record (ids, versions,
+ * times, and hashes, never content), or null. Settings > Data & Backup shows its `createdAt`.
+ * Makes no recovery database on a profile without one.
+ * @param {{indexedDB: IDBFactory}} options
+ * @returns {Promise<Point | null>}
+ */
+export async function exportablePointRecord({ indexedDB }) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) return null;
   try {
@@ -109,7 +154,7 @@ export async function exportablePoint({ indexedDB }) {
       point => point.kind === 'pre-migration' && point.status === 'verified',
     );
     const pinned = points.filter(point => point.pinned).pop();
-    return (pinned || points.pop() || { id: null }).id;
+    return pinned || points.pop() || null;
   } finally {
     recovery.close();
   }

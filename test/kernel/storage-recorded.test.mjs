@@ -1,10 +1,10 @@
 // #28 slice 3, the release fixtures (test/fixtures/storage/recorded/, recorded by
 // scripts/fixtures/record-release.mjs from each tag's own code in #34's harness): one for every
 // release from v1.0.0 to v1.4.0, each the tag's by commit and tree; each loads and dumps back as
-// itself; each runs through #17's registry to 9 and equals its expected file, which
-// derive-expected.mjs derives without the runner, recovery point included; a run stopped at
-// each step and run again ends the same; and the canaries hold every user-text field the seed
-// wrote, so no recorded value came from a real profile.
+// itself; each runs through #17's registry to its newest version (10 since #17 PR 2a) and
+// equals its expected file, which derive-expected.mjs derives without the runner, recovery
+// point included; a run stopped at each step and run again ends the same; and the canaries hold
+// every user-text field the seed wrote, so no recorded value came from a real profile.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { canarySlots, dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { FIXTURES, Killed, asDumped, dump, expectedFor, newProfile, profileWith, run } from './migration-support.mjs';
 
 /** @typedef {import('../fixtures/storage/load-fixture.mjs').Fixture} Fixture */
@@ -133,7 +134,7 @@ describe('the recorded release fixtures', () => {
       assert.deepStrictEqual(dumped, fillCanaries({ ...fixture, chromeStorageLocal: fixture.chromeStorageLocal || {} }));
     });
 
-    it(`${header.id}: migrated to 9, the profile equals expected/${header.id}.v9.json`, async () => {
+    it(`${header.id}: migrated to ${LATEST_STRUCTURAL}, the profile equals expected/${header.id}.v${LATEST_STRUCTURAL}.json`, async () => {
       const of = await profileWith(fixture);
       const outcome = await run(of);
       assert.equal(outcome.status, 'migrated', JSON.stringify(outcome));

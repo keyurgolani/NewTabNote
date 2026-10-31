@@ -329,7 +329,8 @@ describe('the new tab loads its failure events lazily (js/kernel/composition/laz
  * @param {any} env
  */
 function breakTrustDatabase(env) {
-  const real = env.indexedDB;
+  // What the worker would open otherwise, which another setup may have wrapped already
+  const real = env.global.indexedDB;
   env.global.indexedDB = {
     open(name, version) {
       if (name === 'NewTabNoteTrust') throw new DOMException(`${MESSAGE} ${URL_CANARY}`, 'UnknownError');
@@ -341,12 +342,41 @@ function breakTrustDatabase(env) {
   };
 }
 
-/** Every capture's block write throws, with the canaries in its message */
-function failEveryTransaction(worker) {
-  worker.Storage.transaction = () => {
-    throw canaryError();
-  };
-}
+/**
+ * Every capture's transaction throws, with the canaries in its message. Since #17 PR 1b the
+ * worker's kernel runs on #17's adapter, not on its Storage global, so this wraps each
+ * CanvasTabDB connection the worker opens (`setup`), and arms them once the worker has
+ * started (`mutate`), so its migration run and startup maintenance go through.
+ */
+const failEveryTransaction = {
+  setup(env) {
+    const real = env.global.indexedDB;
+    const armed = { on: false };
+    env.global.__failTransactions = armed;
+    env.global.indexedDB = {
+      open(name, version) {
+        const request = version === undefined ? real.open(name) : real.open(name, version);
+        if (name === 'CanvasTabDB') {
+          request.addEventListener('success', () => {
+            const db = request.result;
+            const transaction = db.transaction;
+            db.transaction = (...args) => {
+              if (armed.on) throw canaryError();
+              return transaction.apply(db, args);
+            };
+          });
+        }
+        return request;
+      },
+      deleteDatabase: name => real.deleteDatabase(name),
+      databases: () => real.databases(),
+      cmp: (a, b) => real.cmp(a, b),
+    };
+  },
+  mutate(worker) {
+    worker.__failTransactions.on = true;
+  },
+};
 
 /** A capture of a canary page and selection from the context menu */
 async function captureCanary(worker) {
@@ -375,7 +405,7 @@ async function newerProfile(env) {
 
 describe('the worker reports background capture and storage init (js/background.js)', () => {
   it('a failed capture is a capture.failed event and capture incident, with no canary', async () => {
-    const worker = await loadBackground({ mutate: failEveryTransaction });
+    const worker = await loadBackground(failEveryTransaction);
     await captureCanary(worker);
     const seen = await inspect(worker.indexedDB);
     const captures = failures(seen.events);
@@ -383,7 +413,8 @@ describe('the worker reports background capture and storage init (js/background.
     for (const [code, fields] of captures) {
       assert.equal(code, 'capture.failed');
       assert.equal(fields.surface, 'worker-internal');
-      assert.match(String(fields.commandId), /^[0-9]{13}-[a-z0-9]{0,9}$/);
+      // The worker's commandIds are UUIDs since #17 PR 2a
+      assert.match(String(fields.commandId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       assert.deepEqual(
         Object.keys(fields).filter(name => !['surface', 'commandId', 'cause', 'errorCode', 'retryable', 'exception'].includes(name)),
         [],
@@ -430,7 +461,7 @@ describe('the worker reports background capture and storage init (js/background.
   });
 
   for (const [what, options] of [
-    ['a capture that fails', { mutate: failEveryTransaction }],
+    ['a capture that fails', failEveryTransaction],
     ['a database that would not open', { setup: newerProfile, opens: false }],
     ['a capture that saves', {}],
   ]) {
@@ -447,9 +478,15 @@ describe('the worker reports background capture and storage init (js/background.
       await captureCanary(broken);
       const a = await observed(working);
       const b = await observed(broken);
-      // Today's Daily Note's ids and times differ run to run; everything else is the same
+      // Today's Daily Note's ids and times differ run to run, and so do the ledger's times and
+      // digests of commands that carry them (#17 PR 2a); everything else is the same
       const shape = value => {
-        const shaped = JSON.parse(JSON.stringify(value).replace(/[0-9]{13}-[a-z0-9]{0,9}/g, 'ID').replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order)":[^,}]+/g, '"$1":0'));
+        const shaped = JSON.parse(JSON.stringify(value)
+          .replace(/[0-9]{13}-[a-z0-9]{0,9}/g, 'ID')
+          .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'ID')
+          .replace(/pre-migration-[0-9]+/g, 'pre-migration-ID')
+          .replace(/"digest":"[0-9a-f]{64}"/g, '"digest":"DIGEST"')
+          .replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order|startedAt|completedAt|at|sweptAt|deletedAt)":[^,}]+/g, '"$1":0'));
         // Records come in key order, and keys differ run to run
         for (const { records } of Object.values(shaped.notes.stores)) records.sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1));
         return shaped;
@@ -818,26 +855,33 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
 
   it('a capture that commits after one that failed is a capture.committed event, which resolves it', async () => {
     let failing = true;
-    const worker = await loadBackground({
-      mutate: global => {
-        const transaction = global.Storage.transaction.bind(global.Storage);
-        global.Storage.transaction = (...args) => {
-          if (failing) throw canaryError();
-          return transaction(...args);
-        };
-      },
-    });
-    const tab = { id: 9, windowId: 1, url: URL_CANARY, title: TITLE };
-    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
-    await worker.drain();
-    failing = false;
-    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
-    await worker.drain();
-    const seen = await inspect(worker.indexedDB);
-    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['capture/capture-failed/-', 'resolved']]);
-    const codes = failures(seen.events).map(([code]) => code);
-    assert.deepEqual(codes, ['capture.failed', 'capture.committed']);
-    assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+    // The worker's kernel is on #17's adapter since #17 PR 1b, so the first capture fails where
+    // that opens its transaction on CanvasTabDB, once the worker's run and open are done
+    const { IDBDatabase } = require('fake-indexeddb');
+    const transaction = IDBDatabase.prototype.transaction;
+    try {
+      const worker = await loadBackground({
+        mutate: () => {
+          IDBDatabase.prototype.transaction = function failingOnce(...args) {
+            if (failing && this.name === 'CanvasTabDB') throw canaryError();
+            return transaction.apply(this, args);
+          };
+        },
+      });
+      const tab = { id: 9, windowId: 1, url: URL_CANARY, title: TITLE };
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+      await worker.drain();
+      failing = false;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+      await worker.drain();
+      const seen = await inspect(worker.indexedDB);
+      assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['capture/capture-failed/-', 'resolved']]);
+      const codes = failures(seen.events).map(([code]) => code);
+      assert.deepEqual(codes, ['capture.failed', 'capture.committed']);
+      assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+    } finally {
+      IDBDatabase.prototype.transaction = transaction;
+    }
   });
 
   it('a worker start reconciles the held failures of a context whose NewTabNoteTrust would not open', async () => {

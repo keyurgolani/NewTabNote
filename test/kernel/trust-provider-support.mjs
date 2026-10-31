@@ -9,7 +9,9 @@ import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 
 import { createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
-import { createRecoveryReader, createVectorsReader } from '../../js/kernel/adapters/indexeddb/health.js';
+import { createMigrationReader, createRecoveryReader, createVectorsReader } from '../../js/kernel/adapters/indexeddb/health.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createInProcessTransport } from '../../js/kernel/core/messaging/in-process.js';
 import { createLookup } from '../../js/kernel/core/messaging/operations.js';
@@ -20,7 +22,7 @@ import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { health } from '../../js/trust/core/families.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
-import { KeyRange } from './migration-support.mjs';
+import { KeyRange, legacyEnv } from './migration-support.mjs';
 import { adapterOn, profile } from './storage-fixture.mjs';
 import { realTimers } from './trust-support.mjs';
 
@@ -87,7 +89,10 @@ export function settingsOf(of) {
  * @param {{events?: () => Promise<any[]>}} [options]
  */
 export async function providerContext(of = freshProfile(), { events = async () => [] } = {}) {
-  const adapter = adapterOn(of);
+  // The adapter on the path capture uses, as the worker opens it since #17 PR 1b: existing
+  // below the latest version, versioned at it (or on a profile with no database yet)
+  const { version } = await inspect(of.real);
+  const adapter = adapterOn(of, { mode: version > 0 && version < LATEST_STRUCTURAL ? 'existing' : 'versioned' });
   // A profile the adapter refuses (a newer schema, say) still gets a context, whose probes say so
   await adapter.open().catch(() => {});
   const root = createRegistryRoot({ host: 'workspace' });
@@ -96,9 +101,17 @@ export async function providerContext(of = freshProfile(), { events = async () =
   /** @type {ProviderContext} */
   const context = {
     storage: adapter,
+    migration: createMigrationReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
     settings: settingsOf(of),
     secrets: createLegacySecretReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
-    recovery: createRecoveryReader({ indexedDB: of.faults.factory, keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto) }),
+    // The readiness check verifies a point under the points lock, shared, as the purge's readers
+    // do (#17 PR 2b), so it never reads one between two of the purge's batches
+    recovery: createRecoveryReader({
+      indexedDB: of.faults.factory,
+      keyRange: KeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      locks: legacyEnv.createLockManager(),
+    }),
     vectors: createVectorsReader({ indexedDB: of.faults.factory }),
     permissions: grantedAsDeclared(),
     manifest: MANIFEST,

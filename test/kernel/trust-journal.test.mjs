@@ -284,6 +284,32 @@ describe('logger.event (#20 slice 1, AC3)', () => {
     ]);
   });
 
+  it("raises a stopped recovery-point purge's incident keyed by the point, and takes its end (#17 PR 2b)", async () => {
+    assert.deepEqual(EVENT_CODES['storage.purge-stopped'], {
+      fields: ['errorCode', 'subjectId', 'surface'],
+      incident: { providerId: 'recovery-readiness', faultCode: 'purge-stopped', severity: 'degraded' },
+      quietWhileOpen: true,
+    });
+    assert.deepEqual(EVENT_CODES['storage.purge-completed'], {
+      fields: ['subjectId'],
+      resolves: 'storage.purge-stopped',
+    });
+    const { journal, records } = await journalOn({ strict: true });
+    const pointId = 'pre-migration-1792497600000';
+    journal.event('storage.purge-stopped', {
+      surface: 'worker-internal',
+      errorCode: 'record-mismatch',
+      subjectId: pointId,
+    });
+    assert.equal(journal.event('storage.purge-completed', { subjectId: pointId }), true);
+    await journal.flush();
+    const incidents = await records.incidents();
+    assert.deepEqual(
+      incidents.map(incident => [incident.key, incident.severity, incident.occurrences]),
+      [[`recovery-readiness/purge-stopped/${pointId}`, 'degraded', 1]],
+    );
+  });
+
   it('gives a logger an event method and leaves its level methods console-only', () => {
     const logger = createLogger('warn');
     const journal = /** @type {any} */ ({ event: () => true });

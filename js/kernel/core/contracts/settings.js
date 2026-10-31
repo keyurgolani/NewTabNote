@@ -46,7 +46,8 @@ export const workspaceSession = v.strictObject({
  * What the new tab keeps beside its preferences (domain/workspace-data.js), as slice 6's
  * commands write it: AI chat's two conversations and its prompt templates, as the chat saved
  * them, whether the first run finished, the last full export and backup, and the export
- * notice's outcome
+ * notice's outcome; and since #17 PR 1b the worker's record of its last migration run, a
+ * status, a failure code, and when, and when the space notice was last put off
  */
 export const workspaceDataValues = v.strictObject({
   aiChatHistory: v.optional(content(v.array(v.unknown()))),
@@ -64,6 +65,14 @@ export const workspaceDataValues = v.strictObject({
       at: v.optional(v.number()),
     }),
   ),
+  storageUpgrade: v.optional(
+    v.looseObject({
+      status: v.optional(v.string()),
+      code: v.optional(v.nullable(v.string())),
+      at: v.optional(v.number()),
+    }),
+  ),
+  spaceNoticeSnoozedAt: v.optional(timestamp),
 });
 
 /**

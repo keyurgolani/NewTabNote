@@ -103,6 +103,16 @@ export const ERROR_CODES = Object.freeze([
   'count-mismatch',
   'id-set-mismatch',
   'content-mismatch',
+  // #17 PR 1b's migration run: a versioned open below this build's version, and why a run
+  // stopped or failed
+  'migration-required',
+  'space-short',
+  'schema-mismatch',
+  'recovery-point-unverified',
+  'point-missing',
+  'locks-unavailable',
+  // A database whose shape no step knows, which the run refuses (migrate.js)
+  'unknown-shape',
   // #13's answers that didn't come (contracts/transport-codes.js)
   'unavailable',
   'deadline-exceeded',
@@ -145,8 +155,15 @@ export const FAULT_CODES = Object.freeze([
   'legacy-secret',
   // Recovery readiness, messaging, and the registry's resolution report (slice 2's providers)
   'point-unverified',
+  // #17's recovery-point purge, stopped at a point that didn't verify (event-codes.js)
+  'purge-stopped',
   'unreachable',
   'contribution-unavailable',
+  // A migration to the latest version not done yet, failed, or blocked, with version 8 still
+  // working (storage's check)
+  'migration-pending',
+  'migration-failed',
+  'migration-blocked',
   // A write to NewTabNoteTrust that failed, counted while the store won't take writes
   'write-failed',
 ]);

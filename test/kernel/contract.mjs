@@ -12,6 +12,7 @@ import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { placementOf } from '../../js/product/placement.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -93,6 +94,25 @@ const storageNote = (id, name, now) => ({
   settings: { gridType: 'dots', backgroundColor: '#fafafa' },
 });
 
+/**
+ * The placement, kind, and lifecycle the kernel writes beside a note's flags (#17 PR 3a,
+ * js/kernel/core/domain/placement.js)
+ * @param {Record<string, unknown>} placement
+ * @param {'note' | 'template'} [kind]
+ * @param {'active' | 'archived' | 'trashed'} [lifecycle]
+ */
+const group = (placement, kind = 'note', lifecycle = 'active') => ({ placement, kind, lifecycle });
+
+/** Projects' Unfiled, where a new note with no folder goes (#17 PR 3, Q3) */
+const UNFILED = Object.freeze({ kind: 'collection', folderId: null });
+
+/**
+ * The lifecycle #1's states give, trash before archive
+ * @param {{trashed: boolean, archived: boolean}} states
+ * @returns {'active' | 'archived' | 'trashed'}
+ */
+const lifecycleOfStates = states => (states.trashed ? 'trashed' : states.archived ? 'archived' : 'active');
+
 /** The preferences Storage.initializeDefaultSettings writes on first run (js/storage.js) */
 const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
   theme: 'system',
@@ -111,6 +131,20 @@ const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
 
 /** The workspace session keys Storage.initializeDefaultSettings writes on first run */
 const STORAGE_DEFAULT_SESSION = Object.freeze({ openTabs: null, activeTabIndex: 0 });
+
+/** The versions #17's IndexedDB adapter keeps on each note it writes (adapters/indexeddb/versions.js) */
+const VERSION_FIELDS = Object.freeze(['revision', 'placementVersion', 'sourceRevision']);
+
+/**
+ * A note's own fields, without the versions an adapter may keep on its record, which outcomes
+ * and getNote report, so one note compares alike on every adapter
+ * @template {Record<string, unknown> | undefined} T
+ * @param {T} note
+ * @returns {T}
+ */
+const withoutVersions = note =>
+  note &&
+  /** @type {T} */ (Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field))));
 
 /**
  * @param {ContractFixture} fixture
@@ -155,7 +189,14 @@ export function runContractSuite(fixture) {
      * @param {string} noteId
      * @returns {Promise<NoteRecord | undefined>}
      */
-    const noteOf = async noteId => {
+    const noteOf = async noteId => withoutVersions(await storedNoteOf(noteId));
+
+    /**
+     * The note as getNote reads it, versions included, as every other query reads it
+     * @param {string} noteId
+     * @returns {Promise<NoteRecord | undefined>}
+     */
+    const storedNoteOf = async noteId => {
       const state = await kernel.query({ type: 'getNote', noteId });
       return state.kind === 'ready' ? state.data.note : undefined;
     };
@@ -223,10 +264,10 @@ export function runContractSuite(fixture) {
       (await ctx.adapter.read([store], tx => tx.getAll(store))).map(record => record.id).sort();
 
     describe('notes', () => {
-      it('createNote stores the record Storage.createNote has always written, and a search entry', async () => {
+      it('createNote stores the record Storage.createNote has always written, its group in Unfiled beside it (#17 PR 3a), and a search entry', async () => {
         const outcome = await run(cmd('createNote', { noteId: 'n1' }));
         assert.deepEqual([outcome.code, outcome.changedIds], ['note-created', ['n1']]);
-        assert.deepEqual(await noteOf('n1'), storageNote('n1', 'Untitled', NOW));
+        assert.deepEqual(await noteOf('n1'), { ...storageNote('n1', 'Untitled', NOW), ...group(UNFILED) });
         assert.deepEqual(await searchEntryOf('n1'), { noteId: 'n1', name: 'Untitled', content: '', updatedAt: NOW });
       });
 
@@ -251,6 +292,7 @@ export function runContractSuite(fixture) {
           folderId: 'f1',
           pinned: true,
           titleManuallySet: true,
+          ...group({ kind: 'collection', folderId: 'f1' }),
         });
         assertRejected(
           await kernel.execute(cmd('createNote', { noteId: 'n2', pinned: /** @type {any} */ ('yes') })),
@@ -1451,6 +1493,15 @@ export function runContractSuite(fixture) {
             },
           ],
         );
+        // Each carries when it was captured, which a UUID doesn't say, for the readers that go by
+        // when each block was made (#17 PR 2a)
+        assert.deepEqual(
+          (await blocksOf('d1')).map(({ createdAt, updatedAt, order }) => [createdAt, updatedAt, order]),
+          [
+            [NOW, NOW, NOW],
+            [NOW, NOW, NOW],
+          ],
+        );
       });
 
       it('starts a new Daily Note from the Daily Note template, and an archived one still counts', async () => {
@@ -1509,6 +1560,7 @@ export function runContractSuite(fixture) {
           ...storageNote('d1', 'Daily Note - Oct 20, 2026', NOW),
           isDaily: true,
           dateStr: '2026-10-20',
+          ...group({ kind: 'daily', dateKey: '2026-10-20' }),
         });
         assert.deepEqual(await searchEntryOf('d1'), {
           noteId: 'd1',
@@ -1977,7 +2029,12 @@ export function runContractSuite(fixture) {
         ctx.clock.advance();
         const moved = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
         assert.deepEqual([moved.code, moved.changedIds], ['note-moved', ['n1']]);
-        assert.deepEqual(await noteOf('n1'), { ...before, folderId: 'f1', updatedAt: NOW + 1000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          folderId: 'f1',
+          updatedAt: NOW + 1000,
+          placement: { kind: 'collection', folderId: 'f1' },
+        });
         // Already there: it commits naming nothing, and writes nothing
         ctx.clock.advance();
         const again = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
@@ -1995,7 +2052,7 @@ export function runContractSuite(fixture) {
         );
         assert.equal((await noteOf('n1'))?.folderId, 'f1');
         await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: null }));
-        assert.equal((await noteOf('n1'))?.folderId, null);
+        assert.deepEqual([(await noteOf('n1'))?.folderId, (await noteOf('n1'))?.placement], [null, UNFILED]);
         assert.equal((await blocksOf('n1')).length, 2);
       });
 
@@ -2016,11 +2073,23 @@ export function runContractSuite(fixture) {
         const blocks = await blocksOf('n1');
         ctx.clock.advance();
         assert.equal((await run(cmd('convertNoteToTemplate', { noteId: 'n1' }))).code, 'note-made-template');
-        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: true, folderId: null, updatedAt: NOW + 1000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          isTemplate: true,
+          folderId: null,
+          updatedAt: NOW + 1000,
+          ...group(UNFILED, 'template'),
+        });
         assert.deepEqual([await idsIn('active'), await idsIn('templates')], [[], ['n1']]);
         ctx.clock.advance();
         assert.equal((await run(cmd('convertTemplateToNote', { noteId: 'n1' }))).code, 'template-made-note');
-        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: false, folderId: null, updatedAt: NOW + 2000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          isTemplate: false,
+          folderId: null,
+          updatedAt: NOW + 2000,
+          ...group(UNFILED),
+        });
         assert.deepEqual([await idsIn('active'), await idsIn('templates')], [['n1'], []]);
         assert.deepEqual(await blocksOf('n1'), blocks);
         for (const type of /** @type {const} */ (['convertNoteToTemplate', 'convertTemplateToNote'])) {
@@ -2037,7 +2106,7 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await idsIn('templates'), ['n1']);
       });
 
-      it("deleteNotePermanently deletes a trashed note with what Storage.permanentlyDeleteNote deletes, and refuses one that isn't in the trash", async () => {
+      it("deleteNotePermanently deletes a trashed note with what Storage.permanentlyDeleteNote deleted, its search entry and links too, and refuses one that isn't in the trash", async () => {
         await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
         await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
         await seed('media', [
@@ -2065,13 +2134,11 @@ export function runContractSuite(fixture) {
           [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
           [['m-kept'], ['kept'], ['s-kept']],
         );
-        // Its links and search entry stay, as Storage.permanentlyDeleteNote leaves them, until #17's deletion
+        // Its link and search entry go too since #17 PR 2b, which Storage.permanentlyDeleteNote left
         const links = await ctx.adapter.read(['links'], tx => tx.getAll('links'));
-        assert.deepEqual(
-          links.map(link => link.id),
-          ['l1'],
-        );
-        assert.ok(await searchEntryOf('n1'));
+        assert.deepEqual(links, []);
+        assert.equal(await searchEntryOf('n1'), undefined);
+        assert.ok(await searchEntryOf('kept'));
         assertRejected(
           await kernel.execute(cmd('deleteNotePermanently', { noteId: 'n1' })),
           'not-found',
@@ -2161,6 +2228,287 @@ export function runContractSuite(fixture) {
           }
         }
         assert.deepEqual(await idsIn('trashed'), ['t1']);
+      });
+    });
+
+    describe('deletion for good leaves tombstones (#17 PR 2b)', () => {
+      /** @returns {Promise<Array<Record<string, unknown>>>} */
+      const tombstones = () => ctx.adapter.read(['tombstones'], tx => tx.getAll('tombstones'));
+
+      /**
+       * A tombstone as this adapter keeps it: on one with revisions, with the note's last
+       * content revision and the commit's change-log seq (null without a log)
+       * @param {Record<string, unknown>} fields
+       * @param {number} [lastRevision]
+       */
+      const tombstoneOf = (fields, lastRevision) => ({
+        purge: 'pending',
+        ...fields,
+        ...(flags.revisions ? { lastRevision, seq: null } : {}),
+      });
+
+      /**
+       * The tombstones, with each seq read as null, so one adapter's log and another's lack of
+       * one compare alike; each seq that's there is checked to be a count first
+       */
+      const storedTombstones = async () =>
+        (await tombstones()).map(tombstone => {
+          if (!flags.revisions) return tombstone;
+          assert.ok(tombstone.seq === null || Number.isSafeInteger(tombstone.seq), JSON.stringify(tombstone));
+          return { ...tombstone, seq: null };
+        });
+
+      /**
+       * @param {string} noteId
+       * @param {number} trashedAt
+       */
+      const inTrash = async (noteId, trashedAt) => {
+        await createNote({ noteId, name: noteId, blocks: someBlocks(noteId, 1) });
+        await seed('notes', [{ ...(await noteOf(noteId)), id: noteId, trashed: true, trashedAt }]);
+      };
+
+      it('a note deleted for good takes every row it owns, its links both ways, and leaves its tombstone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
+        await createNote({ noteId: 'other', name: 'Other' });
+        await seed('media', [
+          { id: 'm1', canvasId: 'n1' },
+          { id: 'm-kept', canvasId: 'kept' },
+        ]);
+        await seed('vectors', [{ id: 'n1' }, { id: 'kept' }]);
+        await seed('snapshots', [
+          { id: 's1', noteId: 'n1', timestamp: NOW },
+          { id: 's-kept', noteId: 'kept', timestamp: NOW },
+        ]);
+        await seed('links', [
+          { id: 'from-n1', fromNoteId: 'n1', toNoteId: 'kept', createdAt: NOW },
+          { id: 'to-n1', fromNoteId: 'kept', toNoteId: 'n1', createdAt: NOW },
+          { id: 'kept-other', fromNoteId: 'kept', toNoteId: 'other', createdAt: NOW },
+        ]);
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        ctx.clock.advance();
+        assert.equal((await run(cmd('deleteNotePermanently', { noteId: 'n1' }))).code, 'note-deleted');
+        assert.deepEqual(
+          [await noteOf('n1'), await blocksOf('n1'), await searchEntryOf('n1')],
+          [undefined, [], undefined],
+        );
+        assert.deepEqual(
+          [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
+          [['m-kept'], ['kept'], ['s-kept']],
+        );
+        const links = await ctx.adapter.read(['links'], tx => tx.getAll('links'));
+        assert.deepEqual(
+          links.map(link => link.id),
+          ['kept-other'],
+        );
+        assert.ok(await searchEntryOf('kept'));
+        assert.equal((await blocksOf('kept')).length, 1);
+        assert.deepEqual(await storedTombstones(), [
+          tombstoneOf({ entityType: 'note', id: 'n1', deletedAt: NOW + 1000, reason: 'deleted' }, 1),
+        ]);
+      });
+
+      it('each way of deleting a note for good gives its tombstone its reason', async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        await createNote({ noteId: 'empty' });
+        await inTrash('emptied', NOW - DAY);
+        assert.equal((await run(cmd('trashNote', { noteId: 'empty' }))).code, 'note-deleted');
+        assert.deepEqual((await run(cmd('emptyTrash', {}))).changedIds, ['emptied']);
+        await inTrash('expired', NOW - 31 * DAY);
+        assert.deepEqual((await run(cmd('runTrashCleanup', {}))).changedIds, ['expired']);
+        await inTrash('bulk', NOW - DAY);
+        const bulk = bulkOf(await kernel.execute(cmd('runBulkAction', { action: 'delete', noteIds: ['bulk'] })));
+        assert.deepEqual(bulk.committedIds, ['bulk']);
+        const byId = Object.fromEntries((await storedTombstones()).map(tombstone => [tombstone.id, tombstone]));
+        assert.deepEqual(byId, {
+          empty: tombstoneOf({ entityType: 'note', id: 'empty', deletedAt: NOW, reason: 'empty-note' }, 1),
+          emptied: tombstoneOf({ entityType: 'note', id: 'emptied', deletedAt: NOW, reason: 'trash-emptied' }, 1),
+          expired: tombstoneOf({ entityType: 'note', id: 'expired', deletedAt: NOW, reason: 'trash-expired' }, 1),
+          bulk: tombstoneOf({ entityType: 'note', id: 'bulk', deletedAt: NOW, reason: 'deleted' }, 1),
+        });
+      });
+
+      it('a delete that fails to store leaves no tombstone, and a trash leaves none', async () => {
+        await inTrash('t1', NOW - 1000);
+        ctx.failNextWrite('notes');
+        assert.equal((await kernel.execute(cmd('emptyTrash', {}))).kind, 'unavailable');
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        await run(cmd('archiveNote', { noteId: 't1' }));
+        assert.deepEqual(await tombstones(), []);
+      });
+
+      it('deleteFolder leaves a tombstone for each folder it deletes, and none for the notes it files', async () => {
+        await run(cmd('createFolder', { folderId: 'a', name: 'A', parentId: null }));
+        await run(cmd('createFolder', { folderId: 'b', name: 'B', parentId: 'a' }));
+        await run(cmd('createFolder', { folderId: 'kept', name: 'Kept', parentId: null }));
+        await createNote({ noteId: 'filed', name: 'Filed', folderId: 'b' });
+        ctx.clock.advance();
+        assert.equal((await run(cmd('deleteFolder', { folderId: 'a' }))).code, 'folder-deleted');
+        // A folder has no revision, and its tombstone's seq is the commit's where there's a log
+        const stored = (await tombstones()).map(tombstone => {
+          const rest = { ...tombstone };
+          delete rest.seq;
+          return rest;
+        });
+        assert.deepEqual(
+          stored.sort((x, y) => (String(x.id) < String(y.id) ? -1 : 1)),
+          ['a', 'b'].map(id => ({
+            entityType: 'folder',
+            id,
+            deletedAt: NOW + 1000,
+            reason: 'deleted',
+            purge: 'pending',
+          })),
+        );
+        assert.equal((await noteOf('filed'))?.folderId, null);
+      });
+
+      it(
+        'deleting a note drops the conflict records of saves that lost to it, whose text they keep',
+        { skip: flags.revisions ? false : 'only an adapter with revisions keeps conflicts' },
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
+          for (const noteId of ['n1', 'kept']) {
+            const stale = await kernel.execute(
+              cmd('saveNoteContent', { noteId, blocks: someBlocks(noteId, 2), expectedRevision: 0 }),
+            );
+            assert.equal(stale.kind, 'conflict', JSON.stringify(stale));
+          }
+          assert.ok(ctx.conflicts);
+          assert.equal((await ctx.conflicts()).length, 2);
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+          const left = /** @type {Array<{commandId: string, command: Command}>} */ (await ctx.conflicts());
+          assert.deepEqual(
+            left.map(kept => /** @type {{noteId?: string}} */ (kept.command).noteId),
+            ['kept'],
+          );
+        },
+      );
+
+      it(
+        'a database below version 10 has no tombstones, and a delete there commits without one',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          await ctx.close();
+          ctx = await /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout)([
+            'tombstones',
+          ]);
+          kernel = ctx.kernel();
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          assert.equal((await run(cmd('deleteNotePermanently', { noteId: 'n1' }))).code, 'note-deleted');
+          await run(cmd('createFolder', { folderId: 'f1', name: 'F', parentId: null }));
+          assert.equal((await run(cmd('deleteFolder', { folderId: 'f1' }))).code, 'folder-deleted');
+          assert.deepEqual([await noteOf('n1'), await tombstones()], [undefined, []]);
+        },
+      );
+    });
+
+    describe('placement, kind, and lifecycle beside the flags (#17 PR 3a)', () => {
+      /** @param {string} noteId */
+      const groupOf = async noteId => {
+        const note = await noteOf(noteId);
+        return note && { placement: note.placement, kind: note.kind, lifecycle: note.lifecycle };
+      };
+      /**
+       * The group #1's placementOf reads from the note's flags now, with the folders as committed
+       * @param {string} noteId
+       */
+      const placementOfFlags = async noteId => {
+        const note = /** @type {NoteRecord} */ (await noteOf(noteId));
+        const folders = await kernel.query({ type: 'listFolders' });
+        const live = folders.kind === 'ready' ? folders.data.map(folder => folder.id) : [];
+        const { placement, states } = placementOf(/** @type {any} */ (note), live);
+        return group(placement, states.template ? 'template' : 'note', lifecycleOfStates(states));
+      };
+
+      it("every command that sets a flag keeps the group in step, as #1's placementOf reads the flags", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        /** @type {Array<[Command, ReturnType<typeof group>]>} */
+        const steps = [
+          [cmd('setPinned', { noteId: 'n1', pinned: true }), group(UNFILED)],
+          [cmd('archiveNote', { noteId: 'n1' }), group(UNFILED, 'note', 'archived')],
+          [cmd('unarchiveNote', { noteId: 'n1' }), group(UNFILED)],
+          [cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('trashNote', { noteId: 'n1' }), group({ kind: 'collection', folderId: 'f1' }, 'note', 'trashed')],
+          [cmd('restoreNote', { noteId: 'n1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('deleteFolder', { folderId: 'f1' }), group(UNFILED)],
+          [cmd('convertNoteToTemplate', { noteId: 'n1' }), group(UNFILED, 'template')],
+          [cmd('convertTemplateToNote', { noteId: 'n1' }), group(UNFILED)],
+        ];
+        for (const [command, expected] of steps) {
+          ctx.clock.advance();
+          await run(command);
+          assert.deepEqual(await groupOf('n1'), expected, command.type);
+          assert.deepEqual(
+            await groupOf('n1'),
+            await placementOfFlags('n1'),
+            `${command.type}, as placementOf reads it`,
+          );
+        }
+      });
+
+      it("a capture's new Daily Note is under its date, in a folder while one holds it, and under its date again once out", async () => {
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const capture = /** @type {const} */ ({ type: 'text', content: 'Hi' });
+        committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture })));
+        const daily = { kind: 'daily', dateKey: '2026-10-20' };
+        assert.deepEqual(await groupOf('d1'), group(daily));
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        await run(cmd('moveNoteToFolder', { noteId: 'd1', folderId: 'f1' }));
+        assert.deepEqual(await groupOf('d1'), group({ kind: 'collection', folderId: 'f1' }));
+        await run(cmd('moveNoteToFolder', { noteId: 'd1', folderId: null }));
+        assert.deepEqual(await groupOf('d1'), group(daily));
+        assert.deepEqual(await groupOf('d1'), await placementOfFlags('d1'));
+        // ensureDailyNote finds that one, and makes none
+        await run(cmd('ensureDailyNote', { noteId: 'd2' }));
+        assert.equal(await noteOf('d2'), undefined);
+      });
+
+      it('a note the transform put in Inbox stays there through pins, archives, and the trash, and a move takes it to its folder, then to Unfiled, never back', async () => {
+        await seed('notes', [{ ...storageNote('inbox', 'Untitled', NOW), ...group({ kind: 'inbox' }) }]);
+        await run(cmd('saveNoteContent', { noteId: 'inbox', blocks: someBlocks('inbox', 1) }));
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        /** @type {Array<[Command, ReturnType<typeof group>]>} */
+        const steps = [
+          [cmd('renameNote', { noteId: 'inbox', name: 'Untitled 2' }), group({ kind: 'inbox' })],
+          [cmd('setPinned', { noteId: 'inbox', pinned: true }), group({ kind: 'inbox' })],
+          [cmd('archiveNote', { noteId: 'inbox' }), group({ kind: 'inbox' }, 'note', 'archived')],
+          [cmd('trashNote', { noteId: 'inbox' }), group({ kind: 'inbox' }, 'note', 'trashed')],
+          [cmd('restoreNote', { noteId: 'inbox' }), group({ kind: 'inbox' })],
+          [cmd('moveNoteToFolder', { noteId: 'inbox', folderId: 'f1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('moveNoteToFolder', { noteId: 'inbox', folderId: null }), group(UNFILED)],
+        ];
+        for (const [command, expected] of steps) {
+          await run(command);
+          assert.deepEqual(await groupOf('inbox'), expected, command.type);
+        }
+      });
+
+      it('a 1.4.x note a command changes stays without the group, which the transform fills from its flags then', async () => {
+        await seed('notes', [storageNote('legacy', 'Plan', NOW)]);
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        for (const command of [
+          cmd('setPinned', { noteId: 'legacy', pinned: true }),
+          cmd('archiveNote', { noteId: 'legacy' }),
+          cmd('moveNoteToFolder', { noteId: 'legacy', folderId: 'f1' }),
+          cmd('trashNote', { noteId: 'legacy' }),
+          cmd('restoreNote', { noteId: 'legacy' }),
+          cmd('deleteFolder', { folderId: 'f1' }),
+          cmd('convertNoteToTemplate', { noteId: 'legacy' }),
+        ]) {
+          await run(command);
+          const note = /** @type {NoteRecord} */ (await noteOf('legacy'));
+          assert.deepEqual(
+            ['placement', 'kind', 'lifecycle'].filter(field => field in note),
+            [],
+            command.type,
+          );
+        }
       });
     });
 
@@ -2328,7 +2676,9 @@ export function runContractSuite(fixture) {
           { aiChatHistory: history, noteChatMessages: messages, globalChatHistory: [], globalChatMessages: [] },
         );
         assertRejected(
-          await kernel.execute(cmd('saveChatHistory', /** @type {any} */ ({ chat: 'side', history: [], messages: [] }))),
+          await kernel.execute(
+            cmd('saveChatHistory', /** @type {any} */ ({ chat: 'side', history: [], messages: [] })),
+          ),
           'validation',
           'invalid-command',
         );
@@ -2345,7 +2695,9 @@ export function runContractSuite(fixture) {
       });
 
       it('saveTheme makes a theme, then a save of it replaces its name and properties and keeps the rest', async () => {
-        const made = await run(cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }));
+        const made = await run(
+          cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }),
+        );
         assert.deepEqual(made.changedIds, ['th1']);
         assert.ok(!JSON.stringify(made).includes('Dusk'), 'the outcome carries no theme name');
         assert.deepEqual(await themeOf('th1'), {
@@ -2398,6 +2750,14 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await settingsIn('backup', ['preMigrationNotice']), {
           preMigrationNotice: { version: 1, outcome: 'dismissed', at: NOW + 500 },
         });
+      });
+
+      it("snoozeSpaceNotice puts the space notice off from the kernel clock's now, and getWorkspaceData reads it back (#17 PR 1b)", async () => {
+        assert.deepEqual((await run(cmd('snoozeSpaceNotice', {}))).changedIds, ['spaceNoticeSnoozedAt']);
+        assert.deepEqual(await settingsIn('upgrade', ['spaceNoticeSnoozedAt']), { spaceNoticeSnoozedAt: NOW });
+        const read = await kernel.query({ type: 'getWorkspaceData', keys: ['spaceNoticeSnoozedAt', 'storageUpgrade'] });
+        assert.equal(read.kind, 'ready');
+        assert.deepEqual(/** @type {any} */ (read).data, { spaceNoticeSnoozedAt: NOW });
       });
 
       it(
@@ -2616,7 +2976,7 @@ export function runContractSuite(fixture) {
         assert.equal((await kernel.query({ type: 'listNotes', view: 'trashed' })).kind, 'empty');
       });
 
-      it("lists Popup's view by archivedAt and trashedAt, templates included, and Side Panel's with every note", async () => {
+      it("lists Popup's view without what's archived or trashed, by flag or time, templates included, and Side Panel's with every note", async () => {
         await createNote({ noteId: 'kept', name: 'Kept' });
         ctx.clock.advance();
         await createNote({ noteId: 'arch', name: 'Archived' });
@@ -2629,7 +2989,8 @@ export function runContractSuite(fixture) {
           { ...storageNote('template', 'Template', ctx.clock.now()), isTemplate: true },
           { ...storageNote('flags', 'Flags only', ctx.clock.advance()), archived: true, trashed: true },
         ]);
-        assert.deepEqual(await idsIn('popup'), ['flags', 'template', 'kept']);
+        // 1.4.x's Popup listed a note archived and trashed by flag alone (review R88's fix)
+        assert.deepEqual(await idsIn('popup'), ['template', 'kept']);
         assert.deepEqual(await idsIn('sidePanel'), ['flags', 'template', 'gone', 'arch', 'kept']);
         for (const caller of [CALLERS.popup, CALLERS.sidepanel]) {
           const state = await ctx.kernel(caller).query({ type: 'listNotes', view: 'popup' });
@@ -2688,7 +3049,7 @@ export function runContractSuite(fixture) {
           .filter(/** @returns {id is string} */ id => typeof id === 'string' && id !== 'gone');
         assert.deepEqual(state.kind === 'ready' && state.data.map(note => note.id), inLinkOrder);
         assert.deepEqual([...inLinkOrder].sort(), ['archived', 'plain', 'trashed']);
-        assert.deepEqual(state.kind === 'ready' && state.data[0], await noteOf(inLinkOrder[0]));
+        assert.deepEqual(state.kind === 'ready' && state.data[0], await storedNoteOf(inLinkOrder[0]));
         assert.deepEqual(await kernel.query({ type: 'getBacklinks', noteId: 'plain' }), { kind: 'empty', asOf: NOW });
         assert.deepEqual(await kernel.query(/** @type {any} */ ({ type: 'getBacklinks', noteId: '' })), {
           kind: 'failed',
@@ -2716,7 +3077,7 @@ export function runContractSuite(fixture) {
           byId(
             await Promise.all(
               ['archived', 'plain', 'template', 'trashed'].map(
-                async id => /** @type {NoteRecord} */ (await noteOf(id)),
+                async id => /** @type {NoteRecord} */ (await storedNoteOf(id)),
               ),
             ),
           ),
@@ -2740,7 +3101,7 @@ export function runContractSuite(fixture) {
           found.notes.map(note => note.id),
           ['n2', 'n3', 'no-entry'],
         );
-        assert.deepEqual(found.notes[0], await noteOf('n2'));
+        assert.deepEqual(found.notes[0], await storedNoteOf('n2'));
         assert.deepEqual(found.searchEntries, [await searchEntryOf('n2'), await searchEntryOf('n3')]);
         assert.deepEqual(await kernel.query({ type: 'getNotesByIds', noteIds: ['gone'] }), {
           kind: 'empty',
@@ -3034,6 +3395,7 @@ export function runContractSuite(fixture) {
           'setInsightsPending',
           'setPinned',
           'setPreferences',
+          'snoozeSpaceNotice',
           'trashNote',
           'unarchiveNote',
         ]);
@@ -3188,6 +3550,28 @@ export function runContractSuite(fixture) {
           assert.equal(moved.revision, folder.revision);
         },
       );
+
+      it('folders carry no versions: no folder command reports a revision, on any adapter (#17 PR 2a)', async () => {
+        const outcomes = [
+          await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null })),
+          await run(cmd('renameFolder', { folderId: 'f1', name: 'Work 2' })),
+          await run(cmd('createFolder', { folderId: 'f2', name: 'Home', parentId: null })),
+          await run(cmd('moveFolder', { folderId: 'f1', parentId: 'f2' })),
+          await run(cmd('setFolderCollapsed', { folderId: 'f1', collapsed: true })),
+          await run(cmd('deleteFolder', { folderId: 'f2' })),
+        ];
+        assert.deepEqual(
+          outcomes.map(outcome => [outcome.code, outcome.revision]),
+          [
+            ['folder-created', undefined],
+            ['folder-renamed', undefined],
+            ['folder-created', undefined],
+            ['folder-moved', undefined],
+            ['folder-collapsed', undefined],
+            ['folder-deleted', undefined],
+          ],
+        );
+      });
     });
 
     describe(`adapter flags: ${JSON.stringify(flags)}`, () => {
@@ -3197,7 +3581,7 @@ export function runContractSuite(fixture) {
 
       it(
         flags.revisions
-          ? 'revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that writes nothing'
+          ? 'revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that changes nothing in the note or its blocks'
           : 'no revisions: outcomes carry none, and a stale expectedRevision is saved over (the last write wins)',
         async () => {
           const created = await run(cmd('createNote', { noteId: 'n1' }));
@@ -3296,6 +3680,122 @@ export function runContractSuite(fixture) {
             }),
           );
           committedOf(save);
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: each command that takes an expected version is a conflict when the note has moved past it, and changes nothing'
+          : 'no revisions: a command sent with an expected version the note moved past commits (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+          const loaded = await kernel.query({ type: 'getNote', noteId: 'n1' });
+          const { revision, placementVersion } =
+            loaded.kind === 'ready' ? loaded.data : { revision: undefined, placementVersion: undefined };
+          if (flags.revisions) assert.deepEqual([revision, placementVersion], [1, 0]);
+          else assert.deepEqual([revision, placementVersion], [undefined, undefined]);
+          // Another context renames it and pins it, so both its versions move past what was loaded
+          await run(cmd('renameNote', { noteId: 'n1', name: 'Renamed' }));
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const before = await noteOf('n1');
+          const stale = /** @type {Command[]} */ ([
+            cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 1 }),
+            cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'], expectedRevision: 1 }),
+            cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), expectedRevision: 1 }),
+            cmd('setPinned', { noteId: 'n1', pinned: false, expectedPlacementVersion: 0 }),
+            cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
+            cmd('trashNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
+            cmd('moveNoteToFolder', { noteId: 'n1', folderId: null, expectedPlacementVersion: 0 }),
+            cmd('convertNoteToTemplate', { noteId: 'n1', expectedPlacementVersion: 0 }),
+          ]);
+          if (!flags.revisions) {
+            for (const command of stale) committedOf(await kernel.execute(command));
+            return;
+          }
+          for (const command of stale) {
+            const outcome = await kernel.execute(command);
+            const content = 'expectedRevision' in command;
+            assert.deepEqual(
+              outcome.kind === 'conflict' && [outcome.code, outcome.currentRevision],
+              content ? ['revision-conflict', 2] : ['placement-conflict', 1],
+              `${command.type}: ${JSON.stringify(outcome)}`,
+            );
+          }
+          assert.deepEqual(await noteOf('n1'), before);
+          assert.equal((await blocksOf('n1')).length, 2);
+          assert.ok(ctx.conflicts);
+          assert.deepEqual(
+            (await ctx.conflicts()).map(kept => kept.commandId).sort(),
+            stale.map(command => command.commandId).sort(),
+          );
+          // Sent with the versions it has now, each commits
+          committedOf(await kernel.execute(cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 2 })));
+          committedOf(await kernel.execute(cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 1 })));
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a note no command moved has versions 0, and placement commands move only the placement version'
+          : 'no revisions: getNote reports no versions',
+        async () => {
+          // A note as 1.4.x stored it, which no command of this adapter wrote
+          await seed('notes', [storageNote('kept', 'Kept', NOW)]);
+          const read = async () => {
+            const state = await kernel.query({ type: 'getNote', noteId: 'kept' });
+            return state.kind === 'ready' ? [state.data.revision, state.data.placementVersion] : null;
+          };
+          assert.deepEqual(await read(), flags.revisions ? [0, 0] : [undefined, undefined]);
+          await run(cmd('setPinned', { noteId: 'kept', pinned: true }));
+          await run(cmd('archiveNote', { noteId: 'kept' }));
+          assert.deepEqual(await read(), flags.revisions ? [0, 2] : [undefined, undefined]);
+          const saved = await run(
+            cmd('saveNoteContent', { noteId: 'kept', blocks: someBlocks('kept', 1), expectedRevision: 0 }),
+          );
+          assert.equal(saved.revision, flags.revisions ? 1 : undefined);
+          assert.deepEqual(await read(), flags.revisions ? [1, 2] : [undefined, undefined]);
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: insights from a revision older than the ones the note has are dropped as insights-stale, and newer ones land'
+          : 'no revisions: insights land whatever revision they say they came from',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1) }));
+          const fresh = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['New'] }, sourceRevision: 2 }),
+          );
+          assert.deepEqual([fresh.code, fresh.changedIds], ['insights-attached', ['n1']]);
+          const old = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Old'] }, sourceRevision: 1 }),
+          );
+          if (flags.revisions) {
+            assert.deepEqual([old.code, old.changedIds, old.severity], ['insights-stale', [], 'info']);
+            assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['New'] });
+          } else {
+            assert.equal(old.code, 'insights-attached');
+            assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Old'] });
+          }
+          // Ones made from the same revision, or with none given, land, each on its own
+          const again = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Again'] }, sourceRevision: 2 }),
+          );
+          assert.deepEqual([again.code, again.changedIds], ['insights-attached', ['n1']]);
+          assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Again'] });
+          const any = await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Any'] } }));
+          assert.deepEqual([any.code, any.changedIds], ['insights-attached', ['n1']]);
+          assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Any'] });
+          for (const sourceRevision of [-1, 1.5, '2']) {
+            assertRejected(
+              await kernel.execute(
+                cmd('attachInsights', /** @type {any} */ ({ noteId: 'n1', insights: null, sourceRevision })),
+              ),
+              'validation',
+              'invalid-command',
+            );
+          }
         },
       );
 

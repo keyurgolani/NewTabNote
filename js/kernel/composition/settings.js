@@ -118,6 +118,7 @@ export class SettingsWriteError extends Error {
  * @property {() => Promise<Committed>} completeOnboarding
  * @property {(what: {fullExport: boolean, backup: boolean}) => Promise<Committed>} recordBackup
  * @property {(version: number, outcome: 'exported' | 'dismissed' | 'not-needed') => Promise<Committed>} recordExportNotice
+ * @property {() => Promise<Committed>} snoozeSpaceNotice - puts the space notice off, from the kernel clock's now
  * @property {() => Promise<Committed>} createAutoBackup
  * @property {(backup: Record<string, unknown>, mode: 'merge' | 'replace', counts: {notes: number, blocks: number,
  *   media: number, skippedMedia: number}) => Promise<ImportSummary>} importBackup
@@ -162,7 +163,11 @@ export function createSettingsClient(client, { onSettingsChange = noChanges } = 
    */
   const write = async (type, fields) => {
     const outcome = await client.execute(
-      /** @type {import('../core/contracts/commands.js').CommandOf<T>} */ ({ ...fields, type, commandId: client.ids.next() }),
+      /** @type {import('../core/contracts/commands.js').CommandOf<T>} */ ({
+        ...fields,
+        type,
+        commandId: client.ids.next(),
+      }),
     );
     if (outcome.kind !== 'committed') throw new SettingsWriteError(type, /** @type {Outcome} */ (outcome));
     return outcome;
@@ -171,7 +176,7 @@ export function createSettingsClient(client, { onSettingsChange = noChanges } = 
   /**
    * A query's data, `none` when nothing is stored. Rejects when it fails.
    * @template {'getPreferences' | 'getWorkspaceSession' | 'getWorkspaceData' | 'listThemes' | 'exportBackup'
- *   | 'profileHoldsContent'} T
+   *   | 'profileHoldsContent'} T
    * @template N
    * @param {import('../core/contracts/queries.js').QueryOf<T>} query
    * @param {N} none
@@ -236,6 +241,8 @@ export function createSettingsClient(client, { onSettingsChange = noChanges } = 
     recordBackup: ({ fullExport, backup }) => write('recordBackup', { fullExport, backup }),
 
     recordExportNotice: (version, outcome) => write('recordExportNotice', { version, outcome }),
+
+    snoozeSpaceNotice: () => write('snoozeSpaceNotice', {}),
 
     createAutoBackup: () => write('createAutoBackup', {}),
 
