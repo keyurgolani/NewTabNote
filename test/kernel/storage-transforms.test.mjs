@@ -1,4 +1,5 @@
-// #17 PR 3a's data transforms (transforms.js) and logical 2: under Web Lock storage.migrate held
+// #17 PR 3a's data transforms (transforms.js) and logical 2, and PR 3b's logical 3, each Daily
+// Note's local key, with the daily index: under Web Lock storage.migrate held
 // exclusive, after the worker's run, each note gets its placement, kind, and lifecycle by #1's
 // rules and an updatedAt an index can hold, in strict batches of at most 100 notes or 2 MB that
 // read what they write, with nothing else changed; a commit between two batches stands; cut off
@@ -29,6 +30,7 @@ import {
 import { DB_NAME } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import {
+  TRANSFORM_DAILY_KEY,
   TRANSFORM_KEY,
   TRANSFORM_RETRY_AFTER_MS,
   TRANSFORM_STOP_KEY,
@@ -36,6 +38,7 @@ import {
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { placementOf } from '../../js/product/placement.js';
 import {
   KeyRange,
   dump,
@@ -335,17 +338,20 @@ describe('logical 2 (#17 PR 3a)', () => {
       failure: null,
       counts: { read: 14, filled: 14, staleFolder: 1, dailyWithoutDate: 1 },
     });
-    assert.deepEqual((await receiptsIn(of)).find(found => found.id === 'logical-3'), {
-      id: 'logical-3',
-      from: 2,
-      to: 3,
-      status: 'completed',
-      startedAt: RUN_START,
-      completedAt: RUN_START,
-      recoveryPointId: point.id,
-      failure: null,
-      counts: { read: 14, filled: 1, rekeyed: 0, duplicates: 0 },
-    });
+    assert.deepEqual(
+      (await receiptsIn(of)).find(found => found.id === 'logical-3'),
+      {
+        id: 'logical-3',
+        from: 2,
+        to: 3,
+        status: 'completed',
+        startedAt: RUN_START,
+        completedAt: RUN_START,
+        recoveryPointId: point.id,
+        failure: null,
+        counts: { read: 14, filled: 1, rekeyed: 0, duplicates: 0 },
+      },
+    );
     const settled = await dump(of);
     const again = await transform(of, { clock: later });
     assert.deepEqual([again.status, again.steps, again.filled], ['current', [], 0]);
@@ -387,6 +393,210 @@ describe('logical 2 (#17 PR 3a)', () => {
     });
     const reading = Object.values(notes).find(note => note.name === 'Reading list');
     assert.deepEqual(after[reading.id], { ...reading, ...BASIC_GROUPS['Reading list'] });
+  });
+});
+
+describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily index", () => {
+  const EVENING = /** @type {any} */ (synthesized().get('v8.evening-daily-notes'));
+  /** The transform's clock, in Los Angeles, where the fixture's Daily Notes were made */
+  const inLA = { now: () => RUN_START, zone: () => 'America/Los_Angeles' };
+  /** What logical 3 gives each of the fixture's Daily Notes, by #17's rules (domain/daily.js) */
+  const KEYS = /** @type {Record<string, {dailyKey: string, dailyDuplicateOf: string | null}>} */ ({
+    // Made in the evening, keyed by the next day's UTC date: each moves to the date its name gives
+    'daily-oct-7-evening': { dailyKey: '2025-10-07', dailyDuplicateOf: null },
+    'daily-oct-8-evening': { dailyKey: '2025-10-08', dailyDuplicateOf: null },
+    // A race's two: the earlier holds the date, and the other names it
+    'daily-oct-10-a': { dailyKey: '2025-10-10', dailyDuplicateOf: null },
+    'daily-oct-10-b': { dailyKey: '2025-10-10', dailyDuplicateOf: 'daily-oct-10-a' },
+    // That evening's: its own date is held, so it stays where 1.4.x showed it
+    'daily-oct-10-evening': { dailyKey: '2025-10-11', dailyDuplicateOf: null },
+    'daily-oct-12-planned': { dailyKey: '2025-10-12', dailyDuplicateOf: null },
+  });
+  const INDEX = {
+    '2025-10-07': 'daily-oct-7-evening',
+    '2025-10-08': 'daily-oct-8-evening',
+    '2025-10-10': 'daily-oct-10-a',
+    '2025-10-11': 'daily-oct-10-evening',
+    '2025-10-12': 'daily-oct-12-planned',
+  };
+
+  /** The fixture at 8, migrated to 11 by the run, which made its pinned point */
+  const evening = async () => {
+    const of = await profileWith(EVENING);
+    assert.equal((await run(of)).status, 'migrated');
+    return of;
+  };
+
+  /**
+   * The daily index, by date
+   * @param {Profile} of
+   */
+  const indexIn = async of =>
+    Object.fromEntries(
+      recordsIn(await dump(of), 'CanvasTabDB', 'daily_index').map(({ value }) => [value.dailyKey, value.noteId]),
+    );
+
+  /**
+   * Each Daily Note's name and blocks
+   * @param {Profile} of
+   */
+  const writtenIn = async of => {
+    const dumped = await dump(of);
+    const blocks = recordsIn(dumped, 'CanvasTabDB', 'elements').map(({ value }) => value);
+    return Object.fromEntries(
+      recordsIn(dumped, 'CanvasTabDB', 'canvases')
+        .map(({ value }) => value)
+        .filter(note => note.isDaily)
+        .map(note => [note.id, { name: note.name, blocks: blocks.filter(block => block.canvasId === note.id) }]),
+    );
+  };
+
+  it('gives each Daily Note its key, moves one made in the evening to the date its name gives when no other holds it, and fills the daily index', async () => {
+    const of = await evening();
+    const before = await notesIn(of);
+    const [point] = await pointsIn(of);
+    const outcome = await transform(of, { clock: inLA });
+    assert.deepEqual([outcome.status, outcome.steps], ['transformed', ['logical-2', 'logical-3']]);
+    const after = await notesIn(of);
+    for (const [id, key] of Object.entries(KEYS)) {
+      assert.deepEqual(
+        [after[id].dailyKey, after[id].dateStr, after[id].dailyTimeZone, after[id].dailyDuplicateOf],
+        [key.dailyKey, key.dailyKey, null, key.dailyDuplicateOf],
+        id,
+      );
+      // Its daily placement follows the date it holds
+      assert.deepEqual(after[id].placement, { kind: 'daily', dateKey: key.dailyKey }, id);
+    }
+    // No other note gets a key
+    for (const note of Object.values(after)) if (!note.isDaily) assert.equal('dailyKey' in note, false, note.id);
+    assert.deepEqual(await indexIn(of), INDEX);
+    const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-3');
+    assert.deepEqual(
+      [receipt.from, receipt.to, receipt.recoveryPointId, receipt.counts],
+      [2, 3, point.id, { read: Object.keys(before).length, filled: 6, rekeyed: 2, duplicates: 1 }],
+    );
+    // Its pinned point holds every note as 1.4.x keyed it
+    const file = await exportPoint({ indexedDB: of.real, keyRange: KeyRange, crypto, clock: later, pointId: point.id });
+    const held = Object.fromEntries(file.canvases.map(note => [/** @type {any} */ (note).id, note]));
+    assert.equal(/** @type {any} */ (held['daily-oct-7-evening']).dateStr, '2025-10-08');
+  });
+
+  it("every 1.4.x Daily Note keyed by its UTC date whose local date is free ends on the calendar under the date its name gives (the lead's ask)", async () => {
+    const of = await evening();
+    const before = Object.values(await notesIn(of)).filter(note => note.isDaily);
+    assert.equal((await transform(of, { clock: inLA })).status, 'transformed');
+    const after = await notesIn(of);
+    // #1's findings name each one 1.4.x keyed by its UTC date, and its local date
+    const moved = [];
+    for (const note of before) {
+      const finding = placementOf(note, new Set()).findings.find(found => found.code === 'daily-utc-key');
+      if (!finding || finding.code !== 'daily-utc-key') continue;
+      // Free: no Daily Note 1.4.x keyed by its own date holds it
+      const held = before.some(
+        other =>
+          other.id !== note.id &&
+          other.dateStr === finding.localKey &&
+          !placementOf(other, new Set()).findings.some(found => found.code === 'daily-utc-key'),
+      );
+      if (held) continue;
+      const named = /^Daily Note - (\w+) (\d+), (\d+)$/.exec(note.name);
+      assert.ok(named, note.id);
+      const calendar = after[note.id].dailyKey || after[note.id].dateStr;
+      assert.equal(calendar, finding.localKey, note.id);
+      assert.equal(
+        new Date(`${calendar}T12:00:00Z`).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          timeZone: 'UTC',
+        }),
+        `${named[1]} ${named[2]}, ${named[3]}`,
+        note.id,
+      );
+      moved.push(note.id);
+    }
+    assert.deepEqual(moved.sort(), ['daily-oct-7-evening', 'daily-oct-8-evening']);
+  });
+
+  it("changes no Daily Note's name or blocks (the lead's ask)", async () => {
+    const of = await evening();
+    const before = await writtenIn(of);
+    assert.equal((await transform(of, { clock: inLA })).status, 'transformed');
+    assert.deepEqual(await writtenIn(of), before);
+  });
+
+  it('takes a date back from a Daily Note made after the one that holds it, whose entry the index had, which becomes its duplicate', async () => {
+    const of = await evening();
+    // A Daily Note the kernel made for Oct 10 at 11, with its entry, after the race's two
+    const later = {
+      ...legacyNote('kernel-oct-10', { name: 'Daily Note - Oct 10, 2025', isDaily: true, dateStr: '2025-10-10' }),
+      createdAt: Date.UTC(2025, 9, 20),
+      dailyKey: '2025-10-10',
+      dailyTimeZone: 'America/Los_Angeles',
+      dailyDuplicateOf: null,
+    };
+    const db = await done(of.real.open('CanvasTabDB'));
+    const tx = db.transaction(['canvases', 'daily_index'], 'readwrite');
+    tx.objectStore('canvases').put(later);
+    tx.objectStore('daily_index').put({ dailyKey: '2025-10-10', noteId: 'kernel-oct-10' });
+    await committed(tx);
+    db.close();
+    assert.equal((await transform(of, { clock: inLA })).status, 'transformed');
+    const after = await notesIn(of);
+    assert.equal((await indexIn(of))['2025-10-10'], 'daily-oct-10-a');
+    assert.deepEqual(
+      [after['kernel-oct-10'].dailyKey, after['kernel-oct-10'].dailyDuplicateOf, after['kernel-oct-10'].dailyTimeZone],
+      ['2025-10-10', 'daily-oct-10-a', 'America/Los_Angeles'],
+    );
+    assert.equal(after['daily-oct-10-a'].dailyDuplicateOf, null);
+  });
+
+  it('leaves a Daily Note a command keyed otherwise once the run read the notes as that command left it', async () => {
+    const of = await evening();
+    const outcome = await transform(of, {
+      clock: inLA,
+      hooks: {
+        between: async label => {
+          if (label !== 'daily-assigned') return;
+          // As a lookup in another zone might key it, between the run's read and its batches
+          const db = await done(of.real.open('CanvasTabDB'));
+          const tx = db.transaction(['canvases'], 'readwrite');
+          const store = tx.objectStore('canvases');
+          const note = await done(store.get('daily-oct-12-planned'));
+          store.put({ ...note, dailyKey: '2025-10-13', dateStr: '2025-10-13' });
+          await committed(tx);
+          db.close();
+        },
+      },
+    });
+    assert.equal(outcome.status, 'transformed');
+    const planned = (await notesIn(of))['daily-oct-12-planned'];
+    assert.deepEqual([planned.dailyKey, planned.dateStr], ['2025-10-13', '2025-10-13']);
+    assert.equal((await indexIn(of))['2025-10-12'], undefined);
+  });
+
+  it('cut off at any stop, a second run ends where an uncut run does, with the same keys and index', async () => {
+    const limits = { records: 2, bytes: DEFAULT_LIMITS.bytes };
+    const reference = await evening();
+    assert.equal((await transform(reference, { clock: inLA, limits })).status, 'transformed');
+    const expected = { notes: await notesIn(reference), index: await indexIn(reference) };
+    let stops = 0;
+    for (let at = 1; ; at++) {
+      const of = await evening();
+      const cut = killAt(at);
+      const first = await transform(of, { clock: inLA, limits, hooks: cut.hooks });
+      if (cut.reached.count < at) {
+        assert.equal(first.status, 'transformed');
+        stops = at - 1;
+        break;
+      }
+      const label = `cut at ${at} (${cut.reached.labels.at(-1)})`;
+      assert.equal(first.status, 'failed', label);
+      await transform(of, { clock: inLA, limits });
+      assert.deepEqual({ notes: await notesIn(of), index: await indexIn(of) }, expected, label);
+      assert.equal(TRANSFORM_DAILY_KEY in (await metaIn(of)), false, label);
+    }
+    assert.ok(stops > 12, `${stops} stops`);
   });
 });
 
