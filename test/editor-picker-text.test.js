@@ -1,9 +1,10 @@
 'use strict';
 
-// Names render as text in the editor's pickers, and stored HTML is parsed in an inert
+// Names render as text in the editor's pickers, and stored HTML is never parsed in the page's
 // document. The wiki-link picker, the template picker, and the slash menu build each item from
 // DOM nodes, with the name set as text, so a name shows exactly as typed. Reading stored HTML
-// for its text parses it in a document of its own, never an element of the page's.
+// for its text parsed it in a document of its own (#105); since #14 slice 1 it reads through
+// the block projections' tokenizer, with no document at all.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -66,8 +67,8 @@ describe("names render as text in the editor's pickers", () => {
   });
 });
 
-describe('stored HTML is parsed in an inert document', () => {
-  it("reading stored HTML for its text makes no element in the page's document", () => {
+describe('stored HTML is never parsed in the page', () => {
+  it("reading stored HTML for its text makes no element in the page's document, nor a document of its own", () => {
     const doc = new FakeDocument();
     const made = [];
     const create = doc.createElement.bind(doc);
@@ -86,9 +87,9 @@ describe('stored HTML is parsed in an inert document', () => {
     };
     const { editor } = editorOn(doc);
     made.length = 0;
-    assert.equal(editor.stripHtmlTags('<b>Milk</b> and <i>eggs</i>'), 'Milk and eggs');
+    assert.equal(editor.extractBlockTextContent({ type: 'text', content: '<b>Milk</b> and <i>eggs</i>' }), 'Milk and eggs');
     assert.deepEqual(made, [], "it made an element in the page's document");
-    assert.equal(inert.length, 1, 'it parsed in a document of its own');
-    assert.equal(editor.stripHtmlTags(''), '');
+    assert.equal(inert.length, 0, 'it made a document: the block projections read markup with a tokenizer (#14)');
+    assert.equal(editor.extractBlockTextContent({ type: 'text', content: '' }), '');
   });
 });

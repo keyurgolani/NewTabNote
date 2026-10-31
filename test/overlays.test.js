@@ -218,7 +218,6 @@ describe('a note that loads focuses its first block, unless focus is in an open 
     Object.assign(editor, {
       renderBlocks: noop, renderBacklinks: noop, updateTimestampDisplay: noop, updateSaveStatus: noop, clearBlockSelection: noop,
       placeCaretAtEnd: noop, renderInsights: async () => {}, startInsightsPollingIfNeeded: async () => {},
-      stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
     });
     return { env, doc, editor, firstBlock };
   }
