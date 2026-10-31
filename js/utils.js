@@ -323,13 +323,6 @@ const Utils = {
   },
 
   /**
-   * Show toast notification
-   * @param {string} message - Toast message text
-   * @param {string} [type='info'] - Toast type ('info', 'error', 'success')
-   * @param {number} [duration=3000] - Duration in milliseconds
-   * @returns {void}
-   */
-  /**
    * What a toast says when the notes kernel didn't commit a write: `action`, such as "Failed
    * to archive note", and why. A note or folder deleted elsewhere says so, since trying again
    * can't help; anything else asks for another try.
@@ -345,6 +338,13 @@ const Utils = {
     return `${action}. Please try again.`;
   },
 
+  /**
+   * Show toast notification
+   * @param {string} message - Toast message text
+   * @param {string} [type='info'] - Toast type ('info', 'error', 'success')
+   * @param {number} [duration=3000] - Duration in milliseconds
+   * @returns {void}
+   */
   showToast(message, type = 'info', duration = 3000) {
     if (typeof document === 'undefined') {
       console.debug(`Toast (${type}): ${message}`);
