@@ -65,8 +65,9 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  */
 
 /**
- * The trust records a provider may read: the open incidents slice 1b's failure sites raise
- * @typedef {{incidents(): Promise<readonly import('../records.js').Incident[]>}} IncidentReader
+ * The trust records a provider may read: the open incidents slice 1b's failure sites raise,
+ * and whether NewTabNoteTrust takes writes (`fallback` while it doesn't)
+ * @typedef {{incidents(): Promise<readonly import('../records.js').Incident[]>, state?: () => string}} IncidentReader
  */
 
 /**
