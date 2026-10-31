@@ -445,6 +445,42 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates), []);
   });
 
+  it('after a failed read, an edit of a default template the stored list lacks is kept when submitted again, beside the stored ones', async () => {
+    const stored = { aiPromptTemplates: [{ id: 'mine', label: 'Mine', prompt: 'My prompt', scope: 'note', behavior: 'send' }] };
+    const { env, chat, toasts, ids } = await afterFailedRead(stored);
+    // Settings' template editor, as newtab.html has it
+    const editor = env.document.stub([
+      { id: 'ai-prompt-template-form', tag: 'form' }, { id: 'ai-prompt-template-edit-id', tag: 'input' },
+      { id: 'ai-prompt-template-label', tag: 'input' }, { id: 'ai-prompt-template-scope', tag: 'select' },
+      { id: 'ai-prompt-template-behavior', tag: 'select' }, { id: 'ai-prompt-template-prompt', tag: 'textarea' },
+      { id: 'ai-template-save-btn', tag: 'button' },
+    ]);
+    const form = editor['ai-prompt-template-form'];
+    const before = env.chrome.writes().length;
+
+    // The user edits a default, which the list stored doesn't have
+    chat.openAIPromptTemplateEditor('note-summarize');
+    editor['ai-prompt-template-label'].value = 'Short summary';
+    editor['ai-prompt-template-prompt'].value = 'Summarize this note in three lines';
+    // Its save reads the stored list first, which shows, and is refused. The editor keeps the text
+    await chat.submitAIPromptTemplateForm();
+    assert.deepEqual(ids(), ['mine']);
+    assert.deepEqual(env.chrome.writes().slice(before), [], 'nothing is written');
+    assert.equal(form.classList.contains('hidden'), false);
+    assert.equal(editor['ai-prompt-template-label'].value, 'Short summary');
+
+    // Submitted again, it saves as a new template, after the stored one, which is as it was
+    await chat.submitAIPromptTemplateForm();
+    assert.deepEqual(env.chrome.writes().slice(before).map((write) => write.keys), [['setting_aiPromptTemplates']]);
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates), [
+      ...stored.aiPromptTemplates,
+      { id: 'note-summarize', label: 'Short summary', prompt: 'Summarize this note in three lines', scope: 'note', behavior: 'send' },
+    ]);
+    assert.deepEqual(ids(), ['mine', 'note-summarize']);
+    assert.equal(form.classList.contains('hidden'), true);
+    assert.deepEqual(toasts, [['Failed to save AI prompt templates', 'error'], ['AI prompt templates updated', 'success']]);
+  });
+
   it('after a failed read with no prompt templates stored, the first Settings edit saves', async () => {
     const { env, chat, ids } = await afterFailedRead({});
     assert.equal(await chat.persistAIPromptTemplates(chat.aiPromptTemplates.slice(1), 'AI prompt template removed'), true);

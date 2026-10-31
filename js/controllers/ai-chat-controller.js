@@ -2515,7 +2515,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   /**
    * The read the first save after a failed one makes first. It rejects when the read fails
    * again, and when it finds a list stored, which then shows in place of the defaults, so
-   * that save is refused. With no list stored, the save goes ahead.
+   * that save is refused. With no list stored, the save goes ahead. A refused edit stays in
+   * Settings' editor, and submitted again it saves into the list now shown
+   * (submitAIPromptTemplateForm).
    * @returns {Promise<void>}
    */
   async readAIPromptTemplatesBeforeSave() {
@@ -2813,12 +2815,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       behavior,
     };
 
-    if (editingId) {
-      const index = nextTemplates.findIndex(template => template.id === editingId);
-      if (index !== -1) {
-        nextTemplates[index] = nextTemplate;
-      }
+    const index = editingId ? nextTemplates.findIndex(template => template.id === editingId) : -1;
+    if (index !== -1) {
+      nextTemplates[index] = nextTemplate;
     } else {
+      // A new template, or an edit of one the list no longer has: a save refused after a failed
+      // read shows the stored list in place of the defaults the editor opened on
       nextTemplates.push(nextTemplate);
     }
 
