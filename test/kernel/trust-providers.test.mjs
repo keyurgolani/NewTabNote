@@ -256,9 +256,17 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
   });
 
   it('coordinator: verified while ready, degraded by why not, unreachable when it fails, unverified while it starts (#35)', async () => {
+    // Its label, as the lead signed it off (#20's owner): the name the status pages use
+    assert.equal(
+      /** @type {any} */ (PROVIDERS.find(descriptor => descriptor.id === 'coordinator')).label,
+      'Background tasks',
+    );
     const run = await checkOf('coordinator', HEALTHY);
     assert.deepEqual([run.receipt.status, run.faults], ['verified', []]);
-    assert.deepEqual(run.looked.map(item => item.faultCode).sort(), ['start-failed', 'unreachable']);
+    assert.deepEqual(
+      run.looked.map(item => item.faultCode),
+      ['start-failed'],
+    );
     /** @param {Record<string, unknown>} health - what the coordinator answers, over a ready one */
     const answering = health => ({
       messaging: {
@@ -313,12 +321,20 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
         ['degraded', { errorCode }, []],
         reason,
       );
-      assert.deepEqual(degraded.looked.map(item => item.faultCode).sort(), ['start-failed', 'unreachable'], reason);
+      assert.deepEqual(
+        degraded.looked.map(item => item.faultCode),
+        ['start-failed'],
+        reason,
+      );
     }
+    // A port that can't be reached is messaging's incident, so this one raises none and looks for none
     const down = await checkOf('coordinator', {
       messaging: { query: async () => failed('coordinator', 'unavailable') },
     });
-    assert.deepEqual([down.receipt.status, down.faults.map(fault => fault.faultCode)], ['degraded', ['unreachable']]);
+    assert.deepEqual(
+      [down.receipt.status, down.receipt.consequenceKey, down.faults, down.looked],
+      ['degraded', 'platform.coordinator-unreachable', [], []],
+    );
     const starting = await checkOf('coordinator', answering({ status: 'degraded', reason: 'starting' }));
     assert.deepEqual(
       [starting.receipt.status, starting.receipt.evidence, starting.looked],
@@ -417,6 +433,26 @@ describe('trust.summary over the providers (#20 AC1, AC3)', () => {
     assert.equal(after.worstCore, 'verified');
     assert.equal(after.capture, 'safe');
     assert.equal(after.route, 'trust');
+  });
+
+  it("a port that can't be reached is one incident, messaging's, which the coordinator provider defers to (#35)", async () => {
+    const down = { ...HEALTHY, messaging: { query: async () => failed('coordinator', 'unavailable') } };
+    const { trust, records } = await trustOn(down);
+    await trust.verify({
+      type: 'trust.verify',
+      commandId: '00000000-0000-4000-8000-0000000000c1',
+      trigger: 'verify-now',
+      providerIds: ['messaging', 'coordinator'],
+    });
+    const ran = (await records.latestReceipts()).map(receipt => [receipt.providerId, receipt.status]).sort();
+    assert.deepEqual(ran, [
+      ['coordinator', 'degraded'],
+      ['messaging', 'degraded'],
+    ]);
+    assert.deepEqual(
+      (await records.incidents()).map(incident => [incident.providerId, incident.faultCode]),
+      [['messaging', 'unreachable']],
+    );
   });
 
   it('a storage probe the disk refuses puts capture at risk and routes to recovery', async () => {

@@ -18,6 +18,7 @@ import {
   coordinatorHandlers,
   coordinatorInstanceId,
   createCoordinator,
+  journal,
   unavailableCoordinator,
 } from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
@@ -389,5 +390,5 @@ try {
 } catch (error) {
   // The stand-in stays, every capture says it couldn't open the notes, and #20 hears why
   console.error("NewTabNote: the background coordinator couldn't be built", error);
-  failureEvents.event('coordinator.start-failed', {}, error);
+  journal(failureEvents, 'coordinator.start-failed', {}, error);
 }

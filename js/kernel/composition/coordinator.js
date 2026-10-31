@@ -70,12 +70,14 @@ export function coordinatorInstanceId() {
 }
 
 /**
+ * Journals `code` through `events`, and never throws, whatever `events` does: js/background.js
+ * journals through it too, in top-level code, where a throw would stop the worker's start
  * @param {Events | null | undefined} events
  * @param {string} code
  * @param {Record<string, unknown>} fields
  * @param {unknown} [error]
  */
-function journal(events, code, fields, error) {
+export function journal(events, code, fields, error) {
   try {
     if (events) events.event(code, fields, error);
   } catch {

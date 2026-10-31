@@ -4,9 +4,9 @@
  *
  * - Coordinator asks #35's coordinator for `system.coordinatorHealth` through the context's
  *   client. `verified` when it's ready, and `degraded` with a `start-failed` incident when the
- *   worker couldn't build its kernel, so no capture is saved. One whose database won't open is
- *   `degraded` with no incident of its own, since the storage provider reports that one. No
- *   answer is `unreachable`, as for messaging, and one still starting is `unverified`.
+ *   worker couldn't build its kernel, so no capture is saved. One whose database won't open, or
+ *   that doesn't answer, is `degraded` with no incident of its own, since the storage provider
+ *   and messaging report those. One still starting is `unverified`.
  * - Messaging asks #13's coordinator for `system.messagingHealth` through the context's client,
  *   a real round trip over whichever transport its root chose. `verified` when it answers with
  *   counters its schema takes, and `degraded` with an `unreachable` incident when the
@@ -74,17 +74,22 @@ export const coordinator = Object.freeze({
   async check(context) {
     const client = portOf(context, 'messaging');
     const answer = await client.query({ type: 'system.coordinatorHealth' });
-    if (answer.kind === 'failed') return unreachable(answer);
+    // A port that can't be reached is messaging's incident, not a second one here
+    if (answer.kind === 'failed') {
+      return {
+        status: 'degraded',
+        evidence: failureEvidence(answer),
+        consequenceKey: 'platform.coordinator-unreachable',
+        preserved: [...WITHOUT_COORDINATOR],
+      };
+    }
     // An answer its schema refuses, or one still loading: nothing was verified
     if (answer.kind !== 'ready' || !v.is(coordinatorHealth, answer.data)) {
       return { status: 'unverified', evidence: { errorCode: 'invalid-check-result' } };
     }
     const health = v.parse(coordinatorHealth, answer.data);
-    /** @type {CheckResult['looked']} it answered, so it was reached, and whether it was built shows */
-    const looked = [
-      { faultCode: 'start-failed', subjectId: null },
-      { faultCode: 'unreachable', subjectId: null },
-    ];
+    /** @type {CheckResult['looked']} it answered, so whether its kernel was built shows */
+    const looked = [{ faultCode: 'start-failed', subjectId: null }];
     if (health.status === 'ready') {
       const count = health.commands.reduce((sum, outcome) => sum + outcome.count, 0);
       return {
