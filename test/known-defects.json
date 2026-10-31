@@ -76,6 +76,25 @@
       "tests": [
         "KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)"
       ]
+    },
+    {
+      "id": "KD-012",
+      "ownerIssue": 18,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/e64ece891b40b584e69833f478a9b8b179746530/js/ui/export-notice.js#L122-L123",
+      "tests": [
+        "KD-012 a first run records \"not-needed\", so neither the sample note nor later notes bring the notice",
+        "KD-012 a profile with no notes records \"not-needed\", and its first notes never bring the notice",
+        "KD-012 the notice is in place before the note's first block, a region named by its heading whose live part holds only its text",
+        "KD-012 Export JSON asks to check the file; Done records \"exported\", and the file is the one Settings exports",
+        "KD-012 a tab opened after an Export JSON starts at the check-the-file step",
+        "KD-012 an Export JSON right after typing has the edit in the file",
+        "KD-012 an export from Settings moves the notice to the check-the-file step in every tab",
+        "KD-012 Not now records \"dismissed\", every tab drops the notice, and the note stays as it was",
+        "KD-012 the title stays the first stop after the header, so typing a title there leaves the notice alone",
+        "KD-012 the notice's buttons come next, at least 44 by 44, and letters typed on one go to the note",
+        "KD-012 Space on Not now records \"dismissed\" and puts focus and the caret back where they were",
+        "KD-012 with split view open, letters typed from a header button or the notice go to the active left pane's note"
+      ]
     }
   ]
 }
