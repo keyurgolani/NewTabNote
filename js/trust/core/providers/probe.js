@@ -12,9 +12,14 @@
  *   not merged yet (#17 slice 2) nothing else keeps a capture. The journal backlog, the journal
  *   probe, and "degraded but safe when only CanvasTabDB fails" come with that journal.
  * - Storage probes the `notes` store. `action-required` on `quota` or `version-too-new`,
- *   `failed` on any other failure that isn't retryable, such as CanvasTabDB not opening. The
- *   integrity scan's findings and open conflicts that would make it `degraded` come with #17's
- *   later PRs, which add them.
+ *   `failed` on any other failure that isn't retryable, such as CanvasTabDB not opening, and
+ *   `degraded` (capture still safe) when the probe commits while NewTabNoteTrust takes no
+ *   writes, so a CanvasTabDB probe never resolves the records' own
+ *   `storage/open-failed/NewTabNoteTrust` incident. The integrity scan's findings and open
+ *   conflicts that would also make it `degraded` come with #17's later PRs, which add them.
+ *
+ * Both are core, so a verified one resolves its provider's open incidents, slice 1b's
+ * `capture.failed` and `storage.open-failed` ones included: the write path works now.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
  * nothing either way, so it's `unverified` with its code. A record already under the probe's
