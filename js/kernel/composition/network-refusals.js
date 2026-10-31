@@ -33,3 +33,17 @@ export function journalRefusals(scope, events) {
     return false;
   }
 }
+
+/**
+ * Have the guard on `scope` refuse every destination from now on, as the service worker does
+ * when the destination client finds a problem with the registry. Reported once. Never throws.
+ * @param {any} scope
+ */
+export function refuseEveryDestination(scope) {
+  try {
+    const handle = scope && scope[GUARD];
+    if (handle && typeof handle.refuseAll === 'function') handle.refuseAll();
+  } catch {
+    // The client refuses every request on its own
+  }
+}

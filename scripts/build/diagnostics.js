@@ -55,7 +55,7 @@ const CODES = Object.freeze({
   'guard/page-first': 'a page\'s first script isn\'t the network guard (js/network-guard.js) as a classic script, or the build wrote no guard',
   'guard/worker-first': 'the service worker\'s or a module worker\'s first module in execution order isn\'t the network guard\'s',
   'guard/not-installed': 'the built network guard doesn\'t wrap every network API it covers, throws, or lets a call to an unregistered destination go',
-  'guard/registry-unreadable': 'the built network guard\'s destination registry has a problem, so it would refuse every destination',
+  'guard/registry-unreadable': 'the destination registry has a problem, so the page guard would refuse every destination: the build won\'t inline it, or the built guard can\'t read its rows',
   'env/canary': 'a canary secret set in the build\'s environment reached its logs, dist/, or the zip',
   'budget/entry': 'a page or the service worker the build has with no build/budgets.json row, a row for an entry it doesn\'t have that isn\'t planned, or a planned row for one it has',
   'budget/bytes': 'an entry\'s start JS, CSS, HTML, or fonts is over its build/budgets.json row, raw or gzip',
