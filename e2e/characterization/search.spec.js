@@ -1,11 +1,12 @@
 /**
- * Characterization: sidebar search. Ledgered in test/known-defects.json.
+ * Characterization: sidebar search. Its ledgered defect, a keyword match with no note id, is fixed
+ * (#22), so this is a plain test now.
  */
 
 const { test, expect } = require('../harness');
 const driver = require('./driver');
 
-test.fail("KD-001 sidebar search for a word only in a block's text finds the note", async ({ extension }) => {
+test("sidebar search for a word only in a block's text finds the note", async ({ extension }) => {
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   await driver.writeNote(page, { title: 'Groceries', lines: ['Buy saffron and limes'] });
