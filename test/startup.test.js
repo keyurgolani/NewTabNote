@@ -424,6 +424,107 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
   });
 });
 
+describe("the new tab on a database the worker's run left below this version, through its root on #17's adapter (#17 PR 4a, risk 3)", () => {
+  /** A recorded release fixture (#28), loaded into `env`'s IndexedDB and chrome.storage.local as that release left them */
+  async function recorded(env, name) {
+    const { loadFixture } = await import('./fixtures/storage/load-fixture.mjs');
+    const file = path.join(__dirname, 'fixtures', 'storage', 'recorded', `${name}.json`);
+    const fixtureData = JSON.parse(fs.readFileSync(file, 'utf8'));
+    await loadFixture(fixtureData, { factory: env.indexedDB, storage: env.chrome.api.storage.local });
+    return fixtureData;
+  }
+
+  /** The missing-stores copies #33 writes, as chrome.storage.local holds them */
+  const missingStoreCopies = (env) => recoveryCopies(env).filter(([, copy]) => copy.reason === 'missing-stores');
+
+  /** What a command answered, as [kind, cause, code] */
+  const answer = (outcome) => [outcome.kind, outcome.cause, outcome.code];
+
+  const V2_MISSING = ['search_index', 'folders', 'links', 'themes', 'vectors', 'snapshots'];
+  for (const [label, name, version, missing] of [
+    ['version 2, its settings in IndexedDB (1.1.2)', 'v2-idb-settings.v1.1.2', 2, V2_MISSING],
+    ['version 2, its settings in chrome.storage.local (1.1.5)', 'v2-local-settings.v1.1.5', 2, V2_MISSING],
+    ['version 7 (1.2.0)', 'v7.v1.2.0', 7, ['snapshots']],
+  ]) {
+    it(`${label}: opens as it is, with what it lacks off rather than failing, a note still saving, and no #33 copy, which is only for 8`, async () => {
+      const env = createLegacyEnv();
+      const release = await recorded(env, name);
+      const before = await dumpDatabase(env.indexedDB);
+      assert.equal(before.version, version);
+      env.load(...STORAGE_FILES);
+      const { root, adapter, client } = await newTabRootOn(env);
+      const state = root.createNewTabStorageState(adapter);
+      assert.deepEqual([state.openState, [...state.missingStores]], ['open', missing]);
+
+      // The release's notes are there to read
+      const notes = listed(await client.query({ type: 'listNotes', view: 'withArchived' }));
+      const stored = release.databases[0].stores.find((store) => store.name === 'canvases').records.map((record) => record.key);
+      assert.ok(notes.length > 0 && notes.every((n) => stored.includes(n.id)), JSON.stringify(notes.map((n) => n.id)));
+      const [first] = notes;
+
+      // What it lacks reads as nothing, and a write to it is refused, writing nothing
+      const refused = [];
+      if (missing.includes('folders')) {
+        assert.deepEqual(listed(await client.query({ type: 'listFolders' })), []);
+        refused.push(await client.execute({ type: 'createFolder', commandId: 'folder-1', folderId: 'f-new', name: 'Work', parentId: null }));
+      }
+      if (missing.includes('themes')) {
+        assert.deepEqual(listed(await client.query({ type: 'listThemes' })), []);
+        refused.push(await client.execute({ type: 'saveTheme', commandId: 'theme-1', themeId: 't-new', name: 'New', properties: {} }));
+      }
+      assert.deepEqual(listed(await client.query({ type: 'listSnapshots', noteId: first.id })), []);
+      refused.push(await client.execute({
+        type: 'saveSnapshot',
+        commandId: 'snapshot-1',
+        noteId: first.id,
+        snapshotId: 'snap-new',
+        blocks: [{ id: 'sb', type: 'text', content: 'Kept' }],
+        title: 'Kept',
+      }));
+      for (const outcome of refused) assert.deepEqual(answer(plain(outcome)), ['unavailable', 'storage', 'store-unavailable'], JSON.stringify(plain(outcome)));
+      assert.deepEqual(await dumpDatabase(env.indexedDB), before, 'the open and the refused writes changed nothing');
+      assert.deepEqual(missingStoreCopies(env), [], 'no copy below 8');
+
+      // A note and its blocks still save, its derived search entry and links skipped where they're missing
+      const made = plain(await client.execute({ type: 'createNote', commandId: 'note-1', noteId: 'still-works', name: 'Still works' }));
+      assert.equal(made.kind, 'committed', JSON.stringify(made));
+      const saved = plain(await client.execute({
+        type: 'saveNoteContent',
+        commandId: 'save-1',
+        noteId: 'still-works',
+        blocks: [block('sw1', 'still-works', 0, 'typed on an old profile')],
+        linkedNames: [first.name],
+      }));
+      assert.equal(saved.kind, 'committed', JSON.stringify(saved));
+      const after = await dumpDatabase(env.indexedDB);
+      assert.equal(after.version, version, 'the page upgrades nothing');
+      assert.equal(recordsOf(after, 'canvases')['still-works'].name, 'Still works');
+      assert.equal(recordsOf(after, 'elements').sw1.content, 'typed on an old profile');
+    });
+  }
+
+  it("version 8 missing stores: #33's copy is written before the tab can run anything, once, with what the database held", async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['themes', 'snapshots'] });
+    const before = await dumpDatabase(env.indexedDB);
+    env.load(...STORAGE_FILES);
+    const { root, adapter, client } = await newTabRootOn(env);
+    // Ready means the copy is there: it's written before the adapter's open, so before any command
+    const copies = missingStoreCopies(env);
+    assert.equal(copies.length, 1, 'one copy, from the adapter or the holders\' Storage, whichever came first');
+    const [[, copy]] = copies;
+    assert.deepEqual(
+      copy.canvases.map((n) => n.id).sort(),
+      before.stores.canvases.records.map((record) => record.key).sort(),
+      'it holds the notes as they were',
+    );
+    assert.deepEqual([...root.createNewTabStorageState(adapter).missingStores], ['themes', 'snapshots']);
+    const made = plain(await client.execute({ type: 'createNote', commandId: 'note-1', noteId: 'after-copy', name: 'After the copy' }));
+    assert.equal(made.kind, 'committed', JSON.stringify(made));
+    assert.equal(missingStoreCopies(env).length, 1, 'and no second one');
+  });
+});
+
 describe('startup: version 8 without elements', () => {
   it('refuses with MISSING_CORE_STORES, changes nothing, and saves a recovery copy', async () => {
     const env = createLegacyEnv();
