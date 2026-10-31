@@ -405,3 +405,157 @@ describe("#84's check: write-failed resolves by counting", () => {
     assert.equal(stored?.state, 'resolved');
   });
 });
+
+describe("#84's second check: write-failed resolves only when every occurrence is this context's", () => {
+  /** @param {Profile} profile */
+  const flakyContext = profile => {
+    const database = databaseFor(profile);
+    return { database, ...flakyStore(database) };
+  };
+
+  it("B1: B's own failure and landed write leave write-failed open when it also holds A's", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const a = flakyContext(profile);
+    const b = flakyContext(profile);
+    const ra = await recordsOn(a.store, profile, { clock, prefix: 'aaaa' });
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    a.failNext(1000, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    assert.equal((await ra.records.append(event(1))).recorded, false);
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(2))).recorded, true);
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(3))).recorded, false);
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(4))).recorded, true);
+    assert.equal((await storedAt(b.database, WRITE_FAILED))?.state, 'open', "B resolved A's failure");
+    const summary = /** @type {any} */ (await (await useCases(rb.records, clock)).trust.summary()).data;
+    assert.ok(summary.actionRequired >= 1);
+  });
+
+  it("B1b: the same, with a healthy C replaying A's entry first", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const a = flakyContext(profile);
+    const b = flakyContext(profile);
+    const c = databaseFor(profile);
+    const ra = await recordsOn(a.store, profile, { clock, prefix: 'aaaa' });
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    const rc = await recordsOn(c, profile, { clock, prefix: 'cccc' });
+    a.failNext(1000, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await ra.records.append(event(1));
+    clock.advance(10);
+    await rc.records.append(event(2));
+    clock.advance(10);
+    await rb.records.append(event(3));
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await rb.records.append(event(4));
+    clock.advance(10);
+    await rb.records.append(event(5));
+    assert.equal((await storedAt(c, WRITE_FAILED))?.state, 'open');
+  });
+
+  it("B2: a landed write that couldn't read the copy resolves nothing, and leaves A's failure open", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const a = flakyContext(profile);
+    const b = flakyContext(profile);
+    const c = databaseFor(profile);
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    const ra = await recordsOn(a.store, profile, { clock, prefix: 'aaaa' });
+    const rc = await recordsOn(c, profile, { clock, prefix: 'cccc' });
+    clock.advance(10);
+    await rb.records.append(event(1));
+    a.failNext(1000, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await ra.records.append(event(2));
+    clock.advance(10);
+    await rc.records.append(event(3));
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await rb.records.append(event(4));
+    const get = profile.settings.get;
+    profile.settings.get = async keys => {
+      if (keys.includes('trust.lastStorageIncident')) throw new Error('read failed');
+      return get(keys);
+    };
+    clock.advance(10);
+    assert.equal((await rb.records.append(event(5))).recorded, true);
+    profile.settings.get = get;
+    assert.equal((await storedAt(c, WRITE_FAILED))?.state, 'open', "A's occurrence stood in for B's unread one");
+  });
+
+  it("B2b: a landed write that couldn't read the copy doesn't resolve this context's own failure either", async () => {
+    const profile = trustProfile();
+    const b = flakyContext(profile);
+    const { records, clock } = await recordsOn(b.store, profile, { prefix: 'bbbb' });
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    await records.append(event(1));
+    const get = profile.settings.get;
+    profile.settings.get = async keys => {
+      if (keys.includes('trust.lastStorageIncident')) throw new Error('read failed');
+      return get(keys);
+    };
+    clock.advance(10);
+    assert.equal((await records.append(event(2))).recorded, true);
+    profile.settings.get = get;
+    assert.notEqual((await storedAt(b.database, WRITE_FAILED))?.state, 'resolved');
+    // The next write that reads the copy resolves it
+    clock.advance(10);
+    await records.append(event(3));
+    assert.equal((await storedAt(b.database, WRITE_FAILED))?.state, 'resolved');
+  });
+
+  it('B3: a context whose first writes failed resolves them on its first landed write', async () => {
+    const profile = trustProfile();
+    const a = flakyContext(profile);
+    a.failNext(1, 'unreadable', { writesOnly: true });
+    const { records, clock } = await recordsOn(a.store, profile);
+    clock.advance(1000);
+    await records.append(event(1));
+    const stored = await storedAt(a.database, WRITE_FAILED);
+    assert.deepEqual([stored?.state, stored?.occurrences], ['resolved', 1]);
+  });
+
+  it("B4: a dismissal elsewhere doesn't stop this context's own failure resolving when its write lands", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const b = flakyContext(profile);
+    const c = databaseFor(profile);
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    const rc = await recordsOn(c, profile, { clock, prefix: 'cccc' });
+    b.failNext(1, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await rb.records.append(event(1));
+    clock.advance(10);
+    await rc.records.append(event(2));
+    const incident = await storedAt(c, WRITE_FAILED);
+    clock.advance(10);
+    await rc.records.dismiss(incident.id, true);
+    clock.advance(10);
+    await rb.records.append(event(3));
+    assert.equal((await storedAt(c, WRITE_FAILED))?.state, 'resolved');
+  });
+
+  it("B5: this context's own entry, replayed by another context first, still resolves on its write", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const b = flakyContext(profile);
+    const c = databaseFor(profile);
+    const rb = await recordsOn(b.store, profile, { clock, prefix: 'bbbb' });
+    const rc = await recordsOn(c, profile, { clock, prefix: 'cccc' });
+    b.failNext(2, 'unreadable', { writesOnly: true });
+    clock.advance(10);
+    await rb.records.append(event(1));
+    await rb.records.append(event(2));
+    clock.advance(10);
+    await rc.records.append(event(3));
+    clock.advance(10);
+    await rb.records.append(event(4));
+    assert.equal((await storedAt(c, WRITE_FAILED))?.state, 'resolved');
+  });
+});
