@@ -92,10 +92,12 @@ function guardOrderProblems(report, root, sourcePath) {
 }
 
 /**
- * Stand-ins for a page's network APIs, each recording a call that went through
+ * Stand-ins for a page's network APIs, each recording a call that went through, and the
+ * runtime the guard sends its refusal reports to the service worker through
  * @param {string[]} sent
+ * @param {unknown[]} messages
  */
-function standIns(sent) {
+function standIns(sent, messages) {
   class XMLHttpRequest extends EventTarget {
     open() {}
     setRequestHeader() {}
@@ -117,7 +119,7 @@ function standIns(sent) {
   }
   return {
     location: new URL('chrome-extension://ntn-build-check/newtab.html'),
-    chrome: { runtime: { id: 'ntn-build-check' } },
+    chrome: { runtime: { id: 'ntn-build-check', sendMessage: async (/** @type {unknown} */ message) => { messages.push(message); } } },
     URL,
     Request,
     Headers,
@@ -151,8 +153,10 @@ function checkGuardScript(files) {
   if (!files.has(GUARD_SCRIPT)) return [problem('guard/not-installed', GUARD_SCRIPT, 'the package has no network guard')];
   /** @type {string[]} */
   const sent = [];
+  /** @type {any[]} */
+  const messages = [];
   /** @type {any} */
-  const scope = standIns(sent);
+  const scope = standIns(sent, messages);
   const context = vm.createContext(scope);
   vm.runInContext('globalThis.self = globalThis; globalThis.window = globalThis;', context);
   /** @type {Problem[]} */
@@ -174,18 +178,18 @@ function checkGuardScript(files) {
   ].filter(([, fn]) => !fn || /** @type {any} */ (fn)[GUARD] !== true).map(([name]) => name);
   if (unmarked.length > 0) fail(`it doesn't wrap ${unmarked.join(', ')}`);
   // Read in the guard's own realm: a symbol-keyed global it defines stays there
-  const handle = vm.runInContext('globalThis[Symbol.for("ntn.networkGuard")]', context);
-  /** @type {Array<{errorCode?: string}>} */
-  const reports = [];
-  if (!handle || typeof handle.onRefused !== 'function') fail('it leaves no handle on the page for its refusals to be journaled through');
-  else handle.onRefused((/** @type {{errorCode?: string}} */ report) => reports.push(report));
+  const mark = vm.runInContext('globalThis[Symbol.for("ntn.networkGuard")]', context);
+  if (!mark || mark.surface !== 'newtab') fail('it leaves no mark on the page, with the surface it guards');
+  const reports = () => messages.filter((message) => message && message.type === 'NETWORK_REFUSED').map((message) => message.report || {});
+  const unreadable = reports().some((report) => report.errorCode === 'registry-unreadable');
   try {
     if (scope.navigator.sendBeacon('https://unregistered.invalid/collect', 'x') !== false || sent.length > 0) fail('a call to an unregistered destination went');
+    if (!reports().some((report) => report.errorCode !== 'registry-unreadable')) fail('it sends the service worker no report of a call it refused, so the refusal reaches no journal');
     if (scope.navigator.sendBeacon('chrome-extension://ntn-build-check/beacon', 'x') !== true) fail("a call to this extension's own origin didn't go");
   } catch (error) {
     fail(`a call threw: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`);
   }
-  if (reports.some((report) => report.errorCode === 'registry-unreadable')) {
+  if (unreadable) {
     problems.push(problem('guard/registry-unreadable', GUARD_SCRIPT, 'its registry has a problem, so it refuses every destination. npm run check:destinations says which row.'));
   }
   return problems;

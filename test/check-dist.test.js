@@ -18,13 +18,15 @@ const temps = [];
 after(() => temps.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
 
 // A network guard as the build's check runs it (scripts/build/guard.js): it marks each API it
-// wraps, leaves its handle, and lets only this extension's own origin through. The real one is
-// js/network-guard.js bundled, which test/network-guard.test.js covers.
+// wraps, leaves its mark, lets only this extension's own origin through, and sends the worker a
+// report of what it refused. The real one is js/network-guard.js bundled, which
+// test/network-guard.test.js covers.
 const GUARD = '(function(){var G=Symbol.for("ntn.networkGuard");function m(f){Object.defineProperty(f,G,{value:true});return f}'
-  + 'self[G]={surface:"newtab",onRefused:function(){}};var f=self.fetch;self.fetch=m(function(u,i){return f.call(self,u,i)});'
+  + 'self[G]={surface:"newtab"};var f=self.fetch;self.fetch=m(function(u,i){return f.call(self,u,i)});'
   + 'var P=self.XMLHttpRequest.prototype,o=P.open,s=P.send;P.open=m(function(){return o.apply(this,arguments)});P.send=m(function(){return s.apply(this,arguments)});'
   + 'self.WebSocket=m(self.WebSocket);self.EventSource=m(self.EventSource);var b=self.navigator.sendBeacon;'
-  + 'self.navigator.sendBeacon=m(function(u,d){return String(u).indexOf("chrome-extension://")===0?b.call(this,u,d):false})})();';
+  + 'self.navigator.sendBeacon=m(function(u,d){if(String(u).indexOf("chrome-extension://")===0)return b.call(this,u,d);'
+  + 'chrome.runtime.sendMessage({type:"NETWORK_REFUSED",report:{surface:"newtab",errorCode:"destination-refused",count:1}});return false})})();';
 
 // Two pages that load the network guard first, then their entry chunks, and preload the chunk
 // those import, a module worker chunk, a lazy chunk, a stylesheet, a vendored classic script,
@@ -120,6 +122,8 @@ describe('scripts/check-dist.js', () => {
     assertFails(run(buildDir({ 'js/network-guard.js': GUARD.replace('String(u).indexOf("chrome-extension://")===0', 'true') })),
       '[guard/not-installed] js/network-guard.js: a call to an unregistered destination went');
     assertFails(run(buildDir({ 'js/network-guard.js': 'throw new Error("x");' })), '[guard/not-installed] js/network-guard.js: it threw as it ran');
+    assertFails(run(buildDir({ 'js/network-guard.js': GUARD.replace('chrome.runtime.sendMessage({type:"NETWORK_REFUSED",report:{surface:"newtab",errorCode:"destination-refused",count:1}});', '') })),
+      '[guard/not-installed] js/network-guard.js: it sends the service worker no report of a call it refused');
   });
 
   it('fails on a file nothing names, and on an import of a bare specifier or a path outside the build', () => {
