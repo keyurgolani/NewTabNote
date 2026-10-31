@@ -325,7 +325,7 @@
     {
       "file": "js/storage.js",
       "rule": "getStore",
-      "count": 39,
+      "count": 30,
       "owner": 17,
       "removeWhen": "#17 slice 6 deletes getStore, once DatabaseManager is a facade over #12's ports backed by #17's adapter",
       "verify": "npm run check:boundaries"
@@ -333,7 +333,7 @@
     {
       "file": "js/storage.js",
       "rule": "objectStore",
-      "count": 21,
+      "count": 15,
       "owner": 17,
       "removeWhen": "#17 slice 6: DatabaseManager is a facade over #12's ports backed by #17's IndexedDB adapter",
       "verify": "npm run check:boundaries"

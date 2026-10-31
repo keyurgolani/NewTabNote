@@ -74,6 +74,14 @@ function spyTransactions(storage) {
 const writesOf = (opened) => opened.filter((t) => t.mode === 'readwrite');
 
 /**
+ * Puts `blocks` as another writer would, one at a time (Storage.saveElements had no caller once
+ * the new tab wrote through #17's adapter, and went with #17 PR 4a)
+ */
+async function putBlocks(Storage, blocks) {
+  for (const saved of blocks) await Storage.saveElement(saved);
+}
+
+/**
  * Every transaction any fake-indexeddb connection opens from now on, as #17's adapter opens the
  * new tab's since #17 PR 4a, in place of Storage's, until `restore`
  * @returns {{opened: {stores: string[], mode: string}[], restore: () => void}}
@@ -772,7 +780,7 @@ describe('BlockEditor reloading the open note', () => {
     editor = makeEditor(env);
     await editor.loadNote('A');
     // Another writer adds a block, as the AI insert does before it reloads the note.
-    await Storage.saveElements([block('ai1', 'A', 5, 'from AI')]);
+    await putBlocks(Storage, [block('ai1', 'A', 5, 'from AI')]);
   });
 
   it('keeps an edit typed while the reload reads the note', async () => {
@@ -916,7 +924,7 @@ describe('BlockEditor template inserts (#12)', () => {
     // form 1.4.x's Utils.generateId gave every block, which begins with when it was made.
     const Storage = env.get('Storage');
     await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000000000-t1aaaaaaa', 'C', 1, 'second shown'),
       block('1700000005000-t2bbbbbbb', 'C', 0, 'first shown'),
     ]);
@@ -944,7 +952,7 @@ describe('BlockEditor template inserts (#12)', () => {
     await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
     // Two blocks from 1.4.x, whose ids sort by time, then two a 2a build made, whose UUIDs don't:
     // one typed, and one captured, which has no createdAt and keeps its capture time as order
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000000000-aaaaaaaaa', 'C', 3, 'made first', { createdAt: 1700000000000 }),
       block('0f2c41aa-0000-4000-8000-000000000003', 'C', 0, 'made third', { createdAt: 1700000002000 }),
       block('1700000001000-bbbbbbbbb', 'C', 2, 'made second', { createdAt: 1700000001000 }),
@@ -988,7 +996,7 @@ describe('BlockEditor template inserts (#12)', () => {
     // copy a new id, which begins with when it went in, and kept the createdAt of the block it
     // copied, from before the typed ones. Both copies went in within one millisecond, where 1.4.x's
     // id order fell to the random rest of each id: their order breaks that tie.
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000100000-k2m9x0a1b', 'C', 0, 'typed first', { createdAt: 1700000100000 }),
       block('1700000101000-a0b1c2d3e', 'C', 1, 'typed second', { createdAt: 1700000101000 }),
       block('1700000200000-zz9y8x7w6', 'C', 2, 'copy put in first', { createdAt: 1700000000000 }),
@@ -1008,7 +1016,7 @@ describe('BlockEditor template inserts (#12)', () => {
     const capturedAt = 1761800000000;
     const first = 'f0000000-0000-4000-8000-000000000001';
     const second = '00000000-0000-4000-8000-000000000002';
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       captureBlock({ id: first, noteId: 'C', capture: { type: 'text', content: 'captured first' }, now: capturedAt }),
       captureBlock({ id: second, noteId: 'C', capture: { type: 'text', content: 'captured second' }, now: capturedAt + 60_000 }),
     ]);
@@ -1234,7 +1242,9 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
 
   it("moving the open note into a folder survives the editor's next save", async () => {
     const folder = await Storage.createFolder('Work');
-    await Storage.moveNoteToFolder('A', folder.id); // the sidebar's move
+    // The sidebar's move, which goes through the kernel
+    const moved = await env.kernel.execute({ type: 'moveNoteToFolder', commandId: 'move-a', noteId: 'A', folderId: folder.id });
+    assert.equal(moved.kind, 'committed', JSON.stringify(moved));
     const stored = await saveEdit('typed after the move');
     assert.equal(stored.folderId, folder.id, 'the save left the folder alone');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed after the move' });

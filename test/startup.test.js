@@ -301,14 +301,19 @@ describe('startup: version 8 without themes (AC6)', () => {
     assert.equal(recoveryCopies(env).length, 0);
   });
 
-  it('runs without custom themes: reads are empty, a write reaches its error', async () => {
+  it("runs without custom themes, through the new tab's root on #17's adapter: the list is empty, a theme's save answers that its store is missing and writes nothing, and a note still saves (#17 PR 4a)", async () => {
     const env = createLegacyEnv();
     await fixture(env.indexedDB, { omit: ['themes'] });
-    const { Storage } = await startStorage(env);
-    assert.deepEqual(plain(await Storage.getCustomThemes()), []);
-    await assert.rejects(Storage.saveCustomTheme({ name: 'New' }), { code: 'STORE_UNAVAILABLE' });
-    const created = await Storage.createNote('Still works');
-    assert.ok(await Storage.getNote(created.id));
+    env.load(...STORAGE_FILES);
+    const { client } = await newTabRootOn(env);
+    assert.deepEqual(listed(await client.query({ type: 'listThemes' })), []);
+    const before = await dumpDatabase(env.indexedDB);
+    const saved = plain(await client.execute({ type: 'saveTheme', commandId: 'theme-1', themeId: 'theme-new', name: 'New', properties: {} }));
+    assert.deepEqual([saved.kind, saved.cause, saved.code], ['unavailable', 'storage', 'store-unavailable'], JSON.stringify(saved));
+    assert.deepEqual(await dumpDatabase(env.indexedDB), before);
+    const made = plain(await client.execute({ type: 'createNote', commandId: 'note-1', noteId: 'still-works', name: 'Still works' }));
+    assert.equal(made.kind, 'committed', JSON.stringify(made));
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases')['still-works'].name, 'Still works');
   });
 
   it('the new tab names the features that are off and points to Export', async () => {
@@ -380,18 +385,30 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
     assert.equal(result.notes, 1);
   });
 
-  it('a missing auxiliary store does not stop note and block writes', async () => {
+  it("a missing auxiliary store does not stop note and block writes, through the new tab's root on #17's adapter (#17 PR 4a)", async () => {
     const env = createLegacyEnv();
     await fixture(env.indexedDB, { omit: ['search_index', 'links', 'snapshots'] });
-    const { Storage } = await startStorage(env);
-    const created = await Storage.createNote('Indexed later');
-    await Storage.saveNoteWithBlocks(created, [block('nb', created.id, 0, 'body')]);
-    await Storage.updateNoteNameInSearchIndex(created.id, 'Renamed');
-    await Storage.updateNoteLinks(created.id, ['Kept']);
-    assert.deepEqual(plain(await Storage.getSearchIndex()), []);
-    assert.deepEqual(plain(await Storage.getBacklinks('n1')), []);
-    assert.deepEqual(plain(await Storage.getSnapshots('n1')), []);
-    assert.equal((await Storage.getElementsByNote(created.id)).length, 1);
+    env.load(...STORAGE_FILES);
+    const { client } = await newTabRootOn(env);
+    const run = async (command) => {
+      const outcome = plain(await client.execute({ commandId: `${command.type}-${command.noteId}`, ...command }));
+      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+    };
+    await run({ type: 'createNote', noteId: 'later', name: 'Indexed later' });
+    // The save's wiki link to "Kept" and its search entry are derived, so they're skipped
+    await run({
+      type: 'saveNoteContent',
+      noteId: 'later',
+      blocks: [block('nb', 'later', 0, 'body')],
+      name: 'Renamed',
+      linkedNames: ['Kept'],
+    });
+    await run({ type: 'renameNote', noteId: 'later', name: 'Renamed again' });
+    assert.deepEqual(listed(await client.query({ type: 'listSearchEntries' })), []);
+    assert.deepEqual(listed(await client.query({ type: 'getBacklinks', noteId: 'n1' })), []);
+    assert.deepEqual(listed(await client.query({ type: 'listSnapshots', noteId: 'n1' })), []);
+    assert.deepEqual(listed(await client.query({ type: 'getNoteBlocks', noteId: 'later' })).map((b) => b.content), ['body']);
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases').later.name, 'Renamed again');
   });
 });
 
@@ -736,6 +753,28 @@ describe('background capture on a version-8 database', () => {
     assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
   });
 });
+
+/**
+ * The new tab's kernel and its adapter, as its root makes them from the page's globals (#17's
+ * adapter since #17 PR 4a, with Storage open beside it for the holders), once it's ready
+ */
+async function newTabRootOn(env) {
+  const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  const host = root.newTabHost();
+  const adapter = root.createNewTabAdapter(host);
+  const client = root.createNewTabClient(adapter, host);
+  const failure = await client.whenReady();
+  assert.equal(failure, null, `the new tab's kernel didn't start: ${JSON.stringify(plain(failure))}`);
+  return { root, adapter, client };
+}
+
+/** What a query answered, as a list: its data when it's ready, and none when it's empty */
+function listed(state) {
+  const answer = plain(state);
+  if (answer.kind === 'empty') return [];
+  assert.equal(answer.kind, 'ready', JSON.stringify(answer));
+  return answer.data;
+}
 
 /**
  * The database's state App reads, as the new tab's root makes it from its adapter (#17's since

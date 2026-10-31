@@ -1,7 +1,7 @@
 // #17 PR 4a: the storage guard's raw export, moved from js/storage.js's exportRawStores to
 // adapters/indexeddb/raw-export.js, which the new tab's Recovery now calls. It writes the file
-// Storage's wrote, for each database the guard shows its screen for, and every other one, and
-// changes nothing.
+// the frozen v1.4.1's Storage writes (test/fixtures/storage/releases/), as js/storage.js's did,
+// for each database the guard shows its screen for, and every other one, and changes nothing.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -48,12 +48,13 @@ async function made(spec) {
 }
 
 /**
- * js/storage.js's raw export of `of`'s database, as the guard's page made it before #17 PR 4a
+ * The frozen v1.4.1 Storage's raw export of `of`'s database, as the guard's page made it before
+ * #17 PR 4a
  * @param {Profile} of
  */
 async function storageExport(of) {
   const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
-  env.load('js/utils.js', 'js/storage.js');
+  env.load('test/fixtures/storage/releases/v1.4.1/js/utils.js', 'test/fixtures/storage/releases/v1.4.1/js/storage.js');
   return legacyEnv.plain(await env.get('Storage').exportRawStores());
 }
 

@@ -7,6 +7,7 @@
 
 import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
+import { chromeSettingsChanges } from '../../js/kernel/composition/host.js';
 import {
   createNewTabBackupCheck,
   createNewTabNoteList,
@@ -73,13 +74,14 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
-    // It hears of settings changes as the new tab's does, through the page's Storage
-    settingsClient: createSettingsClient(client, { onSettingsChange: listener => storage.onSettingsChange(listener) }),
-    // The state Storage keeps, read when asked, in the shape the root reads it from #17's adapter
+    // It hears of settings changes as the new tab's does, from chrome.storage.onChanged (#17 PR 4a)
+    settingsClient: createSettingsClient(client, { onSettingsChange: chromeSettingsChanges() }),
+    // The state Storage keeps, read when asked, in the shape the root reads it from #17's adapter,
+    // which is at this build's version once the worker's run brought it there
     storageState: createNewTabStorageState({
       openState: () => storage.openState,
       missingStores: () => storage.missingStores,
-      upgraded: () => storage.isUpgraded(),
+      upgraded: () => Boolean(storage.db) && storage.db.version >= storage.dbVersion,
     }),
     // The raw export over the page's IndexedDB, as the root's (raw-export.js)
     recovery: createNewTabRecovery({ indexedDB: globalThis.indexedDB }),

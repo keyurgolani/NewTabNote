@@ -29,6 +29,11 @@ const KERNEL_STORES = /** @type {Record<string, StoreName>} */ (
 );
 
 /**
+ * A page context: its legacy-env environment and the Storage it loaded
+ * @typedef {{env: any, storage: any}} PageContext
+ */
+
+/**
  * @typedef {object} LegacyContext
  * @property {any} env - the legacy-env environment
  * @property {any} storage - its DatabaseManager, the page's `Storage`
@@ -60,6 +65,36 @@ export function legacyContext(sharedWith, { worker = true } = {}) {
   const abortingOnCommit = [];
   failWrites(storage, failing, abortingOnCommit);
   return { env, storage, failing, abortingOnCommit };
+}
+
+/** Where the frozen 1.4.1 files are (test/fixtures/storage/releases/) */
+const RELEASE_141 = 'test/fixtures/storage/releases/v1.4.1/js';
+
+/**
+ * A page context running the frozen v1.4.1 Storage, with this build's Utils, whose helpers the
+ * Storage calls are unchanged since 1.4.1 and which the editor's files need. legacy-parity holds
+ * the kernel's copies of 1.4.x's rules to it since #17 PR 4a took js/storage.js's own copies
+ * out, which matched 1.4.1's line for line. Its `storage.open()` opens the database at 1.4.1's
+ * version with none of init()'s first-run settings or integrity check, as js/storage.js's
+ * open() did. Pass another context's `env` to share its IndexedDB and chrome.*.
+ * @param {any} [sharedWith]
+ * @returns {PageContext}
+ */
+export function releaseContext(sharedWith) {
+  const env = legacyEnv.createLegacyEnv(
+    sharedWith
+      ? { context: 'page', indexedDB: sharedWith.indexedDB, chrome: sharedWith.chrome, worker: false }
+      : { context: 'page', worker: false },
+  );
+  env.load('js/utils.js', `${RELEASE_141}/storage.js`);
+  const storage = env.get('Storage');
+  storage.open = async () => {
+    const db = await storage._openAtCurrentVersion();
+    storage.db = db;
+    storage.missingStores = storage.requiredStores.filter((/** @type {string} */ name) => !db.objectStoreNames.contains(name));
+    storage.openState = 'open';
+  };
+  return { env, storage };
 }
 
 /**
@@ -129,7 +164,7 @@ export function kernelFor(adapter, { ids, clock }, caller = CALLERS.newtab) {
   return createKernel({ adapter, policy: createBaselinePolicy(), caller, ids, clock });
 }
 
-/** @param {LegacyContext[]} contexts */
+/** @param {PageContext[]} contexts */
 export function closeAll(contexts) {
   for (const { storage } of contexts) if (storage.db) storage.db.close();
 }

@@ -340,7 +340,8 @@ describe('T1: auto-title while the note is edited', () => {
     await drive(env, editor.flushSave());
     await execute(env, 'setPinned', { noteId: 'A', pinned: true });
     const folder = await Storage.createFolder('Errands');
-    await Storage.moveNoteToFolder('A', folder.id);
+    // The sidebar's move, which goes through the kernel
+    await execute(env, 'moveNoteToFolder', { noteId: 'A', folderId: folder.id });
 
     const writes = spyWrites(env);
     await ai.answer('generateTitle', 'Groceries');
@@ -521,7 +522,8 @@ describe('T4: insights write the insight fields only', () => {
     await execute(env, 'setPinned', { noteId: 'A', pinned: true });
     writes = spyWrites(env);
     updates = [];
-    for (const method of ['updateNote', 'saveNoteWithBlocks', 'setSetting']) {
+    // Storage's writes a job could still make (saveNoteWithBlocks went with #17 PR 4a)
+    for (const method of ['updateNote', 'setSetting']) {
       const real = Storage[method].bind(Storage);
       Storage[method] = (...args) => { updates.push(method); return real(...args); };
     }

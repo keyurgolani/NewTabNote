@@ -1,6 +1,7 @@
 // The rules the kernel copies from production code (#12, "Data and migration"), each run
-// both ways from the same records: production js/storage.js, background.js, or the
-// controller that applies the rule, in one profile, and the kernel over the legacy adapter
+// both ways from the same records: 1.4.x's Storage, the frozen v1.4.1's since #17 PR 4a took
+// js/storage.js's copies of its writers out, which matched it line for line, background.js, or
+// the controller that applies the rule, in one profile, and the kernel over the legacy adapter
 // in another. Each pair has to leave the same records. Two rules the kernel changes on
 // purpose are left out, as #12 has them: attachInsights writes only insight fields, and
 // applyDerivedTitle drops its title once the user set one. Two more since #17 PR 3a, each
@@ -20,7 +21,7 @@ import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
-import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv, releaseContext } from './legacy-fixture.mjs';
 import { testIds } from './support.mjs';
 
 // #34's worker harness is CommonJS, and starts background.js as the module worker it is,
@@ -30,6 +31,7 @@ const workerHarness = createRequire(import.meta.url)('../helpers/load-background
 const RUNS_MODULES = typeof (/** @type {any} */ (vm).SourceTextModule) === 'function';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
+/** @typedef {import('./legacy-fixture.mjs').PageContext} PageContext */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
@@ -44,7 +46,7 @@ const TIME_FIELDS = new Set(['createdAt', 'updatedAt', 'archivedAt', 'trashedAt'
 /** What the editor loads before it can open a note, past what every legacy context loads */
 const EDITOR_FILES = ['js/core/storage-error.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/editor.js'];
 
-/** @type {LegacyContext[]} */
+/** @type {PageContext[]} */
 const opened = [];
 after(() => closeAll(opened));
 
@@ -66,13 +68,14 @@ function stamped(value) {
 }
 
 /**
- * Two profiles that start from the same records: `viaStorage` for production code, and
- * `viaKernel` for the kernel, whose clock is the real one, as Storage's is
+ * Two profiles that start from the same records: `viaStorage` for 1.4.x's code, the frozen
+ * v1.4.1 Storage since #17 PR 4a took js/storage.js's own copies of its writers out
+ * (releaseContext), and `viaKernel` for the kernel, whose clock is the real one, as Storage's is
  * @param {Record<string, unknown[]>} [records] - rows per IndexedDB store
- * @returns {Promise<{viaStorage: LegacyContext, viaKernel: LegacyContext, kernel: Kernel}>}
+ * @returns {Promise<{viaStorage: PageContext, viaKernel: LegacyContext, kernel: Kernel}>}
  */
 async function twin(records = {}) {
-  const viaStorage = legacyContext();
+  const viaStorage = releaseContext();
   const viaKernel = legacyContext();
   opened.push(viaStorage, viaKernel);
   for (const { env } of [viaStorage, viaKernel]) await legacyEnv.createDatabase(env.indexedDB, { records });
@@ -85,7 +88,7 @@ async function twin(records = {}) {
 /**
  * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written',
  * and each note without the group the kernel writes beside its flags (groupsIn reads that)
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @param {string[]} names
  * @returns {Promise<any>}
  */
@@ -104,7 +107,7 @@ async function recordsIn(context, names) {
 
 /**
  * Each note's placement, kind, and lifecycle, by id, for the notes that have them (#17 PR 3a)
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @returns {Promise<Record<string, Record<string, unknown>>>}
  */
 async function groupsIn(context) {
@@ -124,7 +127,7 @@ async function groupsIn(context) {
  * What #17's transform writes on a profile's notes (logical 2, transforms.js), put straight into
  * its database, since a profile at version 8 has no `meta` for a run to read. The run starts
  * now, as the parity kernels' clocks read, which a trashed note's time in the trash takes.
- * @param {LegacyContext} context
+ * @param {PageContext} context
  */
 async function filledAsTheTransformFills(context) {
   /** @type {IDBDatabase} */
@@ -157,7 +160,7 @@ async function filledAsTheTransformFills(context) {
  * Each search entry's name. Storage.updateNote stamps the entry again on every note write,
  * and the kernel only on a rename, which #12 has as the one command that updates the search
  * index, so a command that isn't a rename leaves the entry's time out of the comparison.
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @returns {Promise<Record<string, unknown>>}
  */
 async function searchNames(context) {
@@ -168,7 +171,7 @@ async function searchNames(context) {
 /**
  * A Daily Note as a profile holds it: its record, its search entry, and its blocks in order,
  * with the ids each side gives the template's copies left out
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @param {string} noteId
  */
 async function dailyNoteMade(context, noteId) {
@@ -288,7 +291,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     // Template copies line up by order, since each side gives them its own ids, and the
     // capture's own block is left out: Storage.ensureDailyNote makes the note without one
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const made = async context => {
       const found = await recordsIn(context, ['canvases', 'search_index', 'elements']);
       const copies = Object.values(found.elements)
@@ -509,7 +512,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     /**
      * The fields a rename decides: the title, whether the user set it, when a model did, and
      * the search entry. The editor's save writes the rest of the note too.
-     * @param {LegacyContext} context
+     * @param {PageContext} context
      */
     const title = async context => {
       const found = await recordsIn(context, ['canvases', 'search_index']);
@@ -662,7 +665,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       await kernel.execute({ type: 'saveNoteContent', commandId: 'c1', noteId: 'n1', blocks, linkedNames }),
     );
     // Each side gives its links ids of its own, so they compare by what they link
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const links = async context =>
       Object.values((await recordsIn(context, ['links'])).links)
         .map(({ id, ...link }) => link)
@@ -1243,7 +1246,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
   /**
    * Everything chrome.storage.local holds for `context`, with a time a write stamped read as
    * 'written'
-   * @param {LegacyContext} context
+   * @param {PageContext} context
    * @returns {Promise<Record<string, any>>}
    */
   const localOf = async context => {
@@ -1299,7 +1302,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assertCommitted(
       await kernel.execute({ type: 'saveTheme', commandId: 'c1', themeId: saved.id, name: 'Dusk', properties }),
     );
-    const themes = async (/** @type {LegacyContext} */ context) =>
+    const themes = async (/** @type {PageContext} */ context) =>
       legacyEnv.plain(await context.storage.getCustomThemes()).map((/** @type {any} */ theme) => ({
         ...theme,
         updatedAt: theme.updatedAt > SEEDED_AT ? 'written' : theme.updatedAt,
@@ -1354,7 +1357,12 @@ describe("the kernel's copies of production rules, run both ways", () => {
         { id: 'untimed', name: 'No time', properties: {} },
       ],
     });
-    const storage = viaKernel.storage;
+    // The Theme Builder's saves, by 1.4.1's Storage on the kernel's profile, since js/storage.js's
+    // copy of saveCustomTheme went with #17 PR 4a
+    const old = releaseContext(viaKernel.env);
+    opened.push(old);
+    await old.storage.open();
+    const { storage } = old;
     await storage.saveCustomTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
     await new Promise(resolve => setTimeout(resolve, 2));
     await storage.saveCustomTheme({ name: 'Dawn', properties: { '--bg-primary': '#fafafa' } });
@@ -1440,7 +1448,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       // Each backup is keyed by its time, so the next one gets a key of its own
       await new Promise(resolve => setTimeout(resolve, 2));
     }
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const backups = async context => {
       const stored = await localOf(context);
       const keys = Object.keys(stored).filter(key => key.startsWith('auto_backup_'));
@@ -1472,18 +1480,20 @@ describe("the kernel's copies of production rules, run both ways", () => {
       await kernel.execute({ type: 'importBackup', commandId: 'c1', mode: 'replace', backup: structuredClone(backup) })
     );
     assertCommitted(outcome);
-    // The note it added, then the folder it added, then the note it trashed, as Storage's result names them
+    // The note it added, then the folder it added, then the note it trashed, as Storage's result
+    // names them. 1.4.1's names no folders it added, and every folder in the file is new here.
     assert.equal(outcome.changedIds.length, 3);
-    assert.deepEqual(outcome.changedIds.slice(1), [...result.addedFolderIds, ...result.trashedIds]);
+    const addedFolderIds = backup.folders.map(added => added.id);
+    assert.deepEqual(outcome.changedIds.slice(1), [...addedFolderIds, ...result.trashedIds]);
 
     /** Each context's records, with the import's new ids as the order they were made in */
-    const shaped = async (/** @type {LegacyContext} */ context, /** @type {string} */ importedId) => {
+    const shaped = async (/** @type {PageContext} */ context, /** @type {string} */ importedId) => {
       const { canvases: notes, elements: blocks, folders } = await recordsIn(context, ['canvases', 'elements', 'folders']);
       const rename = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value).replaceAll(importedId, 'IMPORTED'));
       return rename({ notes, blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })), folders });
     };
     assert.deepEqual(await shaped(viaKernel, outcome.changedIds[0]), await shaped(viaStorage, result.importedIds[0]));
-    const copies = async (/** @type {LegacyContext} */ context) =>
+    const copies = async (/** @type {PageContext} */ context) =>
       Object.keys(await localOf(context)).filter(key => key.startsWith('recovery_backup_')).length;
     assert.deepEqual([await copies(viaKernel), await copies(viaStorage)], [1, 1]);
   });
@@ -1492,7 +1502,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
   /**
    * A profile's snapshots by key, with each written time read as 'written'
-   * @param {LegacyContext} context
+   * @param {PageContext} context
    */
   const snapshotsIn = async context => {
     const { snapshots } = await recordsIn(context, ['snapshots']);
@@ -1641,7 +1651,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const links = async context =>
       Object.values((await recordsIn(context, ['links'])).links).map(({ id, ...link }) => link);
     assert.deepEqual(await links(viaKernel), await links(viaStorage));

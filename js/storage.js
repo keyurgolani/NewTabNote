@@ -31,7 +31,6 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
     },
     onChanged: {
       addListener: () => { },
-      // onSettingsChange's unsubscribe calls it
       removeListener: () => { }
     }
   };
@@ -102,12 +101,6 @@ class DatabaseManager {
      * @type {'closed'|'open'|'newer-version'|'missing-core-stores'|'failed'|'version-changed'|'closed-by-browser'}
      */
     this.openState = 'closed';
-    /**
-     * What runs when another context upgrades the database, before a watched connection
-     * closes (beforeConnectionCloses)
-     * @type {Set<() => void>}
-     */
-    this._closeFlushers = new Set();
     /** @type {number|null} Version of the database on disk, read before opening */
     this.onDiskVersion = null;
     /** @type {Array<string>} Stores a version-8 database is missing */
@@ -265,15 +258,6 @@ class DatabaseManager {
   }
 
   /**
-   * Whether the open database is at this build's version, which only #17's
-   * migration in the service worker brings it to (#17 PR 1b)
-   * @returns {boolean}
-   */
-  isUpgraded() {
-    return Boolean(this.db) && this.db.version >= this.dbVersion;
-  }
-
-  /**
    * Open the database at whatever version it has, with no repair, upgrade, or
    * maintenance, the way Popup and Side Panel opened it before #17 PR 1b. On a profile with no
    * database this makes none and rejects with code NO_DATABASE. One a newer
@@ -318,9 +302,8 @@ class DatabaseManager {
    */
   _watchConnection(db) {
     db.onversionchange = () => {
-      // The page's pending saves go first: each opens its transaction now, which the close
-      // lets finish
-      if (this.db === db) this._runCloseFlushers();
+      // The new tab's pending saves go through #17's adapter, which flushes them before its own
+      // connection closes (#17 PR 4a), so nothing here waits on them
       db.close();
       if (this.db === db) this.openState = 'version-changed';
     };
@@ -328,34 +311,6 @@ class DatabaseManager {
     db.onclose = () => {
       if (this.db === db) this.openState = 'closed-by-browser';
     };
-  }
-
-  /**
-   * Run `flush` when another context upgrades or deletes the database, right before a watched
-   * connection closes: the new tab's editors write what they have pending, each opening its
-   * transaction before `flush` returns, so it commits before the connection goes. A
-   * connection Chrome closes itself is gone already, so nothing runs then.
-   * @param {() => void} flush - Synchronous; what it throws is logged
-   * @returns {() => void} Stops running it
-   */
-  beforeConnectionCloses(flush) {
-    this._closeFlushers.add(flush);
-    return () => {
-      this._closeFlushers.delete(flush);
-    };
-  }
-
-  /**
-   * @returns {void}
-   */
-  _runCloseFlushers() {
-    for (const flush of Array.from(this._closeFlushers)) {
-      try {
-        flush();
-      } catch (error) {
-        console.error('A save before the notes database closed failed:', error);
-      }
-    }
   }
 
   /**
@@ -552,28 +507,6 @@ class DatabaseManager {
     await this._writeRecoveryBackup(copy, (key) => ({
       [this.missingStoresCopyKey]: { key, missingStores: copy.missingStores, timestamp: copy.timestamp },
     }));
-  }
-
-  /**
-   * Read every store except `settings` through an unversioned open, changing
-   * nothing. The newer-version and incomplete-database screens offer this
-   * when the regular export can't run.
-   * @returns {Promise<{rawExport: true, onDiskVersion: number, exportedAt: number, stores: Object<string, Array<*>>}>}
-   */
-  async exportRawStores() {
-    const db = await this._openUnversioned();
-    if (!db) throw new Error("couldn't open the notes database");
-    try {
-      /** @type {Object<string, Array<*>>} */
-      const stores = {};
-      for (const name of Array.from(db.objectStoreNames)) {
-        if (name === 'settings') continue;
-        stores[name] = await this._readStoreForCopy(db, name);
-      }
-      return { rawExport: true, onDiskVersion: db.version, exportedAt: Date.now(), stores };
-    } finally {
-      db.close();
-    }
   }
 
   /**
@@ -922,51 +855,6 @@ class DatabaseManager {
     return notes.find(n => n.isDaily && n.dateStr === todayStr);
   }
 
-  /**
-   * Create daily note for today if it doesn't exist
-   */
-  async ensureDailyNote() {
-    let note = await this.getTodayNote();
-    if (!note) {
-      const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
-      const name = `Daily Note - ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-      note = await this.createNote(name);
-      note.isDaily = true;
-      note.dateStr = todayStr;
-      await this.updateNote(note);
-
-      // Check for daily note template
-      const templateId = await this.getSetting('dailyNoteTemplate');
-      if (templateId) {
-        await this.applyTemplateToNote(note.id, templateId);
-      }
-    }
-    return note;
-  }
-
-  /**
-   * Create or get daily note for a specific date
-   */
-  async ensureDailyNoteForDate(dateStr) {
-    const notes = await this.getAllNotes(true);
-    let note = notes.find(n => n.isDaily && n.dateStr === dateStr);
-    if (!note) {
-      const date = new Date(dateStr + 'T00:00:00');
-      const name = `Daily Note - ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-      note = await this.createNote(name);
-      note.isDaily = true;
-      note.dateStr = dateStr;
-      await this.updateNote(note);
-
-      const templateId = await this.getSetting('dailyNoteTemplate');
-      if (templateId) {
-        await this.applyTemplateToNote(note.id, templateId);
-      }
-    }
-    return note;
-  }
-
   // ============ Note Operations ============
 
   /**
@@ -1073,57 +961,6 @@ class DatabaseManager {
   }
 
   /**
-   * Apply a template to a note
-   */
-  async applyTemplateToNote(noteId, templateId) {
-    const templateElements = await this.getElementsByNote(templateId);
-    if (!templateElements || templateElements.length === 0) return;
-
-    const note = await this.getNote(noteId);
-    if (!note) return;
-
-    // Build replacement variables
-    const now = new Date();
-    const variables = {
-      '{{date}}': now.toLocaleDateString(),
-      '{{time}}': now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      '{{title}}': note.name || 'Untitled',
-      '{{datetime}}': now.toLocaleString(),
-    };
-
-    const processText = (text) => {
-      if (typeof text !== 'string') return text;
-      let result = text;
-      for (const [key, value] of Object.entries(variables)) {
-        result = result.split(key).join(value);
-      }
-      return result;
-    };
-
-    // Clone and save elements
-    for (const element of templateElements) {
-      const newElement = {
-        ...element,
-        id: Utils.generateId(),
-        canvasId: noteId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
-      if (newElement.content) {
-        newElement.content = processText(newElement.content);
-      }
-      if (newElement.tableData) {
-        newElement.tableData = newElement.tableData.map(row =>
-          row.map(cell => processText(cell))
-        );
-      }
-
-      await this.saveElement(newElement);
-    }
-  }
-
-  /**
    * Get all template notes
    */
   async getTemplates() {
@@ -1192,23 +1029,6 @@ class DatabaseManager {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     }), 'setSearchIndex');
-  }
-
-  /**
-   * Update search index for a note
-   */
-  async updateNoteSearchIndex(noteId, data) {
-    if (!this.hasStore('search_index')) return;
-    return this.withRetry(async () => {
-      const store = this.getStore('search_index', 'readwrite');
-      const entry = await store.get(noteId);
-      if (entry) {
-        const updatedEntry = { ...entry, ...data, updatedAt: Date.now() };
-        await store.put(updatedEntry);
-      } else {
-        await store.add({ noteId, ...data, updatedAt: Date.now() });
-      }
-    }, 'updateNoteSearchIndex');
   }
 
   /**
@@ -1301,18 +1121,6 @@ class DatabaseManager {
   }
 
   /**
-   * Restore note from trash
-   */
-  async restoreNote(id) {
-    const note = await this.getNote(id);
-    if (!note) return null;
-
-    note.trashed = false;
-    note.trashedAt = null;
-    return this.updateNote(note);
-  }
-
-  /**
    * Get trashed notes
    */
   async getTrashedNotes() {
@@ -1364,74 +1172,10 @@ class DatabaseManager {
   }
 
   /**
-   * Perform an action on multiple notes at once
-   * @param {Array<string>} ids - Array of note IDs
-   * @param {string} action - 'trash', 'archive', 'unarchive', 'restore', 'delete'
-   */
-  async bulkNoteAction(ids, action) {
-    if (!ids || ids.length === 0) return [];
-
-    const results = [];
-    for (const id of ids) {
-      let result;
-      switch (action) {
-        case 'trash':
-          result = await this.trashNote(id);
-          break;
-        case 'archive':
-          result = await this.archiveNote(id);
-          break;
-        case 'unarchive':
-          result = await this.unarchiveNote(id);
-          break;
-        case 'restore':
-          result = await this.restoreNote(id);
-          break;
-        case 'delete':
-          result = await this.permanentlyDeleteNote(id);
-          break;
-      }
-      results.push(result);
-    }
-    return results;
-  }
-
-  /**
    * Alias for getElementsByNote for backward compatibility/consistency
    */
   async getElements(noteId) {
     return this.getElementsByNote(noteId);
-  }
-
-  /**
-   * Clean up old trashed notes (auto-delete after retention period)
-   * @param {number} [retentionDays=30]
-   * @returns {Promise<Array<string>>} The IDs of the notes it deleted
-   */
-  async cleanupTrash(retentionDays = 30) {
-    const trashedNotes = await this.getTrashedNotes();
-    const cutoffTime = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
-
-    const expiredNotes = trashedNotes.filter(note =>
-      note.trashedAt && note.trashedAt < cutoffTime
-    );
-
-    for (const note of expiredNotes) {
-      await this.permanentlyDeleteNote(note.id);
-    }
-
-    return expiredNotes.map((note) => note.id);
-  }
-
-  /**
-   * Empty trash (permanently delete all trashed notes)
-   */
-  async emptyTrash() {
-    const trashedNotes = await this.getTrashedNotes();
-    for (const note of trashedNotes) {
-      await this.permanentlyDeleteNote(note.id);
-    }
-    return trashedNotes.length;
   }
 
   /**
@@ -1465,83 +1209,6 @@ class DatabaseManager {
       };
       request.onerror = () => reject(request.error);
     }), 'updateNote');
-  }
-
-  /**
-   * Write a note and its blocks in one readwrite transaction on `canvases` and
-   * `elements`, so a note is never stored without the blocks the editor had for it.
-   * Sets `updatedAt` like updateNote. The transaction opens synchronously, before
-   * this returns, which lets pagehide and visibilitychange handlers use it.
-   *
-   * Trash and archive state stays as stored: the editor never sets it, and its
-   * copy of the note can be older than a trash, restore, or import Replace done
-   * meanwhile (in this tab or another). The stored values are copied onto `note`.
-   *
-   * A note that is no longer stored was deleted after the editor loaded it
-   * (emptying trash, or trashNote deleting an empty untitled note). Writing it
-   * would bring it back, so the transaction aborts, blocks included, and the
-   * promise resolves with null. Every editor note comes from a stored one: notes
-   * are created and imported in IndexedDB before an editor loads them.
-   * @param {Object} note - Note record (`updatedAt` is set on it)
-   * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
-   * @returns {Promise<Object|null>} The note once the transaction completes, or null when
-   *   the note no longer exists and nothing was written
-   */
-  saveNoteWithBlocks(note, elements) {
-    note.updatedAt = Date.now();
-    return new Promise((resolve, reject) => {
-      const tx = this.transaction(['canvases', 'elements'], 'readwrite');
-      let gone = false;
-      tx.oncomplete = () => resolve(note);
-      tx.onerror = () => {
-        if (!gone) reject(tx.error);
-      };
-      tx.onabort = () => {
-        if (gone) resolve(null);
-        else reject(tx.error || new Error('saveNoteWithBlocks transaction aborted'));
-      };
-      // A put that throws (for example DataCloneError) must not let the rest commit.
-      const fail = (error) => {
-        tx.abort();
-        reject(error);
-      };
-      try {
-        const elementStore = tx.objectStore('elements');
-        for (const element of elements) {
-          elementStore.put(element);
-        }
-        const canvases = tx.objectStore('canvases');
-        const read = canvases.get(note.id);
-        read.onsuccess = () => {
-          if (!read.result) {
-            gone = true;
-            tx.abort();
-            return;
-          }
-          try {
-            this._keepStoredNoteState(note, read.result);
-            canvases.put(note);
-          } catch (error) {
-            fail(error);
-          }
-        };
-      } catch (error) {
-        fail(error);
-      }
-    });
-  }
-
-  /**
-   * Copy the stored trash and archive fields onto a note about to be written.
-   * @param {Object} note
-   * @param {Object} stored - The note as stored
-   * @returns {void}
-   */
-  _keepStoredNoteState(note, stored) {
-    for (const field of ['trashed', 'trashedAt', 'archived', 'archivedAt']) {
-      if (field in stored) note[field] = stored[field];
-      else delete note[field];
-    }
   }
 
   /**
@@ -1614,18 +1281,6 @@ class DatabaseManager {
   }
 
   /**
-   * Update a folder
-   */
-  async updateFolder(folder) {
-    folder.updatedAt = Date.now();
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const request = this.getStore('folders', 'readwrite').put(folder);
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
-    }), 'updateFolder');
-  }
-
-  /**
    * Delete a folder and its contents (recursive)
    */
   async deleteFolder(folderId) {
@@ -1678,104 +1333,7 @@ class DatabaseManager {
     }), 'deleteFolder');
   }
 
-  /**
-   * Move note to folder
-   */
-  async moveNoteToFolder(noteId, folderId) {
-    const note = await this.getNote(noteId);
-    if (note) {
-      note.folderId = folderId;
-      return this.updateNote(note);
-    }
-    return false;
-  }
-
-  /**
-   * Delete note (moves to trash - soft delete)
-   */
-  async deleteNote(id) {
-    return this.trashNote(id);
-  }
-
   // ============ Linking & Backlinks Operations ============
-
-  /**
-   * Update internal links for a note
-   * @param {string} fromNoteId - The source note
-   * @param {Array<string>} targetNoteNames - Names of notes being linked to
-   */
-  async updateNoteLinks(fromNoteId, targetNoteNames) {
-    // A side effect of saving: skipped while the links store is missing.
-    if (!this.hasStore('links')) return;
-    if (!targetNoteNames || targetNoteNames.length === 0) {
-      // Clear existing links from this note
-      await this.clearLinksFromNote(fromNoteId);
-      return;
-    }
-
-    // 1. Find IDs for these note names
-    const allNotes = await this.getAllNotes(true);
-    const targetIds = [];
-
-    targetNoteNames.forEach(name => {
-      const targetNote = allNotes.find(n => n.name && n.name.toLowerCase() === name.toLowerCase());
-      if (targetNote && targetNote.id !== fromNoteId) {
-        targetIds.push(targetNote.id);
-      }
-    });
-
-    // 2. Clear old links and add new ones
-    return this.withRetry(() => {
-      const tx = this.transaction('links', 'readwrite');
-      const store = tx.objectStore('links');
-
-      // Manual clear
-      const index = store.index('fromNoteId');
-      const request = index.getAll(fromNoteId);
-
-      return new Promise((resolve, reject) => {
-        request.onsuccess = async () => {
-          const existingLinks = request.result;
-          existingLinks.forEach(link => store.delete(link.id));
-
-          // Add new unique links
-          const uniqueTargetIds = [...new Set(targetIds)];
-          uniqueTargetIds.forEach(toNoteId => {
-            store.add({
-              id: Utils.generateId(),
-              fromNoteId,
-              toNoteId,
-              createdAt: Date.now()
-            });
-          });
-
-          resolve();
-        };
-        request.onerror = () => reject(request.error);
-      });
-    }, 'updateNoteLinks');
-  }
-
-  /**
-   * Clear all links originating from a note
-   */
-  async clearLinksFromNote(noteId) {
-    if (!this.hasStore('links')) return;
-    return this.withRetry(() => {
-      const tx = this.transaction('links', 'readwrite');
-      const store = tx.objectStore('links');
-      const index = store.index('fromNoteId');
-      const request = index.getAll(noteId);
-
-      return new Promise((resolve) => {
-        request.onsuccess = () => {
-          request.result.forEach(link => store.delete(link.id));
-          resolve();
-        };
-        request.onerror = () => resolve();
-      });
-    }, 'clearLinksFromNote');
-  }
 
   /**
    * Get all backlinks for a note
@@ -1817,21 +1375,6 @@ class DatabaseManager {
   }
 
   /**
-   * Save multiple elements
-   */
-  async saveElements(elements) {
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const tx = this.transaction('elements', 'readwrite');
-      const store = tx.objectStore('elements');
-
-      elements.forEach((el) => store.put(el));
-
-      tx.oncomplete = () => resolve(elements);
-      tx.onerror = () => reject(tx.error);
-    }), 'saveElements');
-  }
-
-  /**
    * Get elements by note ID
    * Note: Index name 'canvasId' kept for backward compatibility
    */
@@ -1843,18 +1386,6 @@ class DatabaseManager {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-  }
-
-  /**
-   * Delete element
-   */
-  async deleteElement(id) {
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('elements', 'readwrite');
-      const request = store.delete(id);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    }), 'deleteElement');
   }
 
   /**
@@ -1884,26 +1415,6 @@ class DatabaseManager {
   }
 
   // ============ Media Operations ============
-
-  /**
-   * Save media blob
-   */
-  async saveMedia(id, canvasId, blob, type) {
-    const media = {
-      id,
-      canvasId,
-      blob,
-      type,
-      createdAt: Date.now(),
-    };
-
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('media', 'readwrite');
-      const request = store.put(media);
-      request.onsuccess = () => resolve(media);
-      request.onerror = () => reject(request.error);
-    }), 'saveMedia');
-  }
 
   /**
    * Get media by ID
@@ -2027,30 +1538,6 @@ class DatabaseManager {
    * values it needs again (getSetting), as the write it hears of has already landed.
    * @typedef {Readonly<{type: 'settings.changed', keys: readonly string[]}>} SettingsChanged
    */
-
-  /**
-   * Add listener for settings changes (for cross-tab sync)
-   * @param {(notice: SettingsChanged) => void} callback
-   * @returns {() => void} Removes the listener
-   */
-  onSettingsChange(callback) {
-    /**
-     * @param {Object<string, unknown>} changes - chrome.storage's, whose values never go further
-     * @param {string} areaName
-     */
-    const listener = (changes, areaName) => {
-      if (areaName !== 'local') return;
-      const keys = Object.keys(changes)
-        .filter((key) => key.startsWith('setting_'))
-        .map((key) => key.substring(8));
-      if (keys.length > 0) {
-        callback(Object.freeze({ type: 'settings.changed', keys: Object.freeze(keys) }));
-      }
-    };
-    const chromeApi = this._chromeApi();
-    chromeApi.storage.onChanged.addListener(listener);
-    return () => chromeApi.storage.onChanged.removeListener(listener);
-  }
 
   /**
    * Initialize default settings in chrome.storage.local on first load
@@ -2229,43 +1716,6 @@ class DatabaseManager {
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
     }), []);
-  }
-
-  /**
-   * Export single note
-   */
-  async exportNote(noteId) {
-    const stored = await this.getNote(noteId);
-    const note = stored && this._withoutNewFields(stored);
-    const elements = await this.getElementsByNote(noteId);
-
-    // Get media for this note
-    const media = await this._readAux(() => new Promise((resolve, reject) => {
-      // Index name 'canvasId' kept for backward compatibility
-      const request = this.getStore('media').index('canvasId').getAll(noteId);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    }), []);
-
-    // Convert blobs to base64
-    const mediaWithBase64 = await Promise.all(
-      media.map(async (m) => {
-        if (m.blob instanceof Blob) {
-          const base64 = await Utils.readFileAsDataURL(m.blob);
-          return { ...m, blob: base64 };
-        }
-        return m;
-      })
-    );
-
-    return {
-      version: 1,
-      exportedAt: Date.now(),
-      // Key name 'canvases' kept for backward compatibility with existing exports
-      canvases: [note],
-      elements,
-      media: mediaWithBase64,
-    };
   }
 
   /**
@@ -2567,33 +2017,6 @@ class DatabaseManager {
   }
 
   /**
-   * Save a custom theme
-   */
-  async saveCustomTheme(theme) {
-    if (!theme.id) theme.id = Utils.generateId();
-    theme.updatedAt = Date.now();
-
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('themes', 'readwrite');
-      const request = store.put(theme);
-      request.onsuccess = () => resolve(theme);
-      request.onerror = () => reject(request.error);
-    }), 'saveCustomTheme');
-  }
-
-  /**
-   * Delete a custom theme
-   */
-  async deleteCustomTheme(id) {
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('themes', 'readwrite');
-      const request = store.delete(id);
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
-    }), 'deleteCustomTheme');
-  }
-
-  /**
    * Save a vector embedding for a note
    */
   async saveVector(noteId, vector) {
@@ -2633,35 +2056,6 @@ class DatabaseManager {
   // ============ Snapshot / Version History Operations ============
 
   /**
-   * Save a version snapshot for a note.
-   * @param {string} noteId
-   * @param {Array<Object>} blocks - Serialized block data
-   * @param {string} title - Note title at snapshot time
-   * @returns {Promise<Object>} The saved snapshot
-   */
-  async saveSnapshot(noteId, blocks, title) {
-    const snapshot = {
-      id: Utils.generateId(),
-      noteId,
-      timestamp: Date.now(),
-      blocks,
-      title,
-    };
-
-    await this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('snapshots', 'readwrite');
-      const request = store.put(snapshot);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    }), 'saveSnapshot');
-
-    // Prune to max 50 per note
-    await this.pruneSnapshots(noteId, 50);
-
-    return snapshot;
-  }
-
-  /**
    * Get all snapshots for a note, sorted newest-first.
    * @param {string} noteId
    * @returns {Promise<Array<Object>>}
@@ -2677,42 +2071,6 @@ class DatabaseManager {
       };
       request.onerror = () => reject(request.error);
     }), []);
-  }
-
-  /**
-   * Delete a single snapshot by ID.
-   * @param {string} id
-   * @returns {Promise<void>}
-   */
-  async deleteSnapshot(id) {
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const store = this.getStore('snapshots', 'readwrite');
-      const request = store.delete(id);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    }), 'deleteSnapshot');
-  }
-
-  /**
-   * Prune snapshots for a note, keeping only the most recent `maxCount`.
-   * @param {string} noteId
-   * @param {number} maxCount
-   * @returns {Promise<number>} Number of snapshots removed
-   */
-  async pruneSnapshots(noteId, maxCount) {
-    const snapshots = await this.getSnapshots(noteId);
-    if (snapshots.length <= maxCount) return 0;
-
-    const toRemove = snapshots.slice(maxCount);
-    return this.withRetry(() => new Promise((resolve, reject) => {
-      const tx = this.transaction('snapshots', 'readwrite');
-      const store = tx.objectStore('snapshots');
-      for (const s of toRemove) {
-        store.delete(s.id);
-      }
-      tx.oncomplete = () => resolve(toRemove.length);
-      tx.onerror = () => reject(tx.error);
-    }), 'pruneSnapshots');
   }
 
   /**
