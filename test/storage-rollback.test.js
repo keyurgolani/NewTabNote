@@ -46,6 +46,11 @@ async function migrated(id) {
   await startWorker(worker);
   const upgrade = await worker.global.storageUpgrade;
   assert.equal(upgrade.status, 'migrated', id);
+  // The worker journals the upgrade in NewTabNoteTrust after it (#20): let that write land
+  // before the profile is dumped, so the dump holds every database the worker made
+  for (let round = 0; round < 10_000 && process.getActiveResourcesInfo().includes('Immediate'); round++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   assert.equal(worker.chrome.local.setting_storageUpgrade.status, 'migrated');
   const dump = () => load.dumpFixture({ factory: worker.indexedDB, storage: worker.chrome.api.storage.local });
   return { worker, dump };

@@ -18,7 +18,7 @@ import { manualClock, realTimers } from './trust-support.mjs';
 /** @typedef {import('../../js/trust/core/checks.js').CheckRun} CheckRun */
 
 /** A migration reader at the latest version, for the probes these tests drive (#20 slice 4 prerequisites, part 2) */
-const AT_LATEST = Object.freeze({ read: async () => ({ version: 9, latest: 9, status: 'migrated', code: null }) });
+const AT_LATEST = Object.freeze({ current: async () => ({ version: 9, latest: 9, status: 'migrated', code: null }) });
 
 /**
  * A core provider's check, run into a receipt

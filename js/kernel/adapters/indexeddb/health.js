@@ -167,7 +167,7 @@ export function createMigrationReader({ indexedDB, settings }) {
      * code, null when there's no record. Opens without upgrading and writes nothing.
      * @returns {Promise<MigrationState>}
      */
-    async read() {
+    async current() {
       /** @type {IDBDatabase | null} */
       let db = null;
       let version = 0;
