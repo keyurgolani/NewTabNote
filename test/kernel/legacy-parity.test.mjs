@@ -115,7 +115,9 @@ async function groupsIn(context) {
   /** @type {Record<string, Record<string, unknown>>} */
   const groups = {};
   for (const [key, note] of Object.entries(legacyEnv.recordsOf(dump, 'canvases'))) {
-    const group = Object.fromEntries(PLACEMENT_FIELDS.filter(field => field in note).map(field => [field, note[field]]));
+    const group = Object.fromEntries(
+      PLACEMENT_FIELDS.filter(field => field in note).map(field => [field, note[field]]),
+    );
     if (Object.keys(group).length > 0) groups[key] = group;
   }
   return groups;

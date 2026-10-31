@@ -2444,7 +2444,11 @@ export function runContractSuite(fixture) {
           ctx.clock.advance();
           await run(command);
           assert.deepEqual(await groupOf('n1'), expected, command.type);
-          assert.deepEqual(await groupOf('n1'), await placementOfFlags('n1'), `${command.type}, as placementOf reads it`);
+          assert.deepEqual(
+            await groupOf('n1'),
+            await placementOfFlags('n1'),
+            `${command.type}, as placementOf reads it`,
+          );
         }
       });
 
@@ -2465,7 +2469,7 @@ export function runContractSuite(fixture) {
         assert.equal(await noteOf('d2'), undefined);
       });
 
-      it("a note the transform put in Inbox stays there through pins, archives, and the trash, and a move takes it to its folder, then to Unfiled, never back", async () => {
+      it('a note the transform put in Inbox stays there through pins, archives, and the trash, and a move takes it to its folder, then to Unfiled, never back', async () => {
         await seed('notes', [{ ...storageNote('inbox', 'Untitled', NOW), ...group({ kind: 'inbox' }) }]);
         await run(cmd('saveNoteContent', { noteId: 'inbox', blocks: someBlocks('inbox', 1) }));
         await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
