@@ -166,31 +166,43 @@ const SCHEME_START = '(?<![\\p{L}\\p{N}:._-])';
  * - a named host, IPv4 address, or `localhost` with a port, a query, or a fragment
  * - a known TLD, an IPv4 address, or `localhost` with a path
  * each with any userinfo before it. Every quantifier that could run on is bounded by a
- * character its neighbour can't take, so a check stays linear in the text's length.
+ * character its neighbour can't take, or runs to the end of its match, so each check is
+ * linear in the text's length (records.test's raw timing test holds them to it). The query
+ * or fragment rule matches a whole host path and keeps only one with a `?` or `#` followed
+ * by something, rather than searching the path for one, which would scan the rest of the
+ * text again from every host.
+ * @type {ReadonlyArray<{pattern: RegExp, keeps: (link: string) => boolean}>}
  */
-const LINK_PATTERNS = Object.freeze([
-  new RegExp(
-    [
-      `${SCHEME_START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\\\\\\\)\\S*`,
-      `${SCHEME_START}(?:https?|ftps?|wss?):(?:[\\/\\\\]\\S+|${ANY_HOST}\\S*)`,
-      `${SCHEME_START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
-        'magnet:\\?\\S+|about:(?:blank|config|newtab|home|preferences|settings|debugging|addons|srcdoc)\\b\\S*|' +
-        '(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|skype:[a-z0-9._-]+\\S*|callto:\\S+|facetime:[+\\d]\\S*|irc:\\S+)',
-      `${SCHEME_START}www\\.\\S+`,
-    ].join('|'),
-    'giu',
-  ),
-  new RegExp(
-    [
-      `${BARE_START}${USER}:[^\\s@/:]*@(?:${ANY_HOST}|${IPV4}|${IPV6}|localhost)(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
-      `${BARE_START}${IPV6}(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
-      `${BARE_START}(?:${USER}@)?${ANY_HOST}[/\\\\][^\\s?#]*[?#]\\S+`,
-      `${BARE_START}(?:${USER}@)?(?:${NAMED_HOST}|${IPV4}|localhost)(?:${PORT}(?:[/?#\\\\]\\S*)?|[?#]\\S+)`,
-      `${BARE_START}(?:${USER}@)?(?:${KNOWN_HOST}|${IPV4}|localhost)[/\\\\]\\S*`,
-    ].join('|'),
-    'giu',
-  ),
-]);
+export const LINK_PATTERNS = Object.freeze(
+  [
+    new RegExp(
+      [
+        `${SCHEME_START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\\\\\\\)\\S*`,
+        `${SCHEME_START}(?:https?|ftps?|wss?):(?:[\\/\\\\]\\S+|${ANY_HOST}\\S*)`,
+        `${SCHEME_START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
+          'magnet:\\?\\S+|about:(?:blank|config|newtab|home|preferences|settings|debugging|addons|srcdoc)\\b\\S*|' +
+          '(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|skype:[a-z0-9._-]+\\S*|callto:\\S+|facetime:[+\\d]\\S*|irc:\\S+)',
+        `${SCHEME_START}www\\.\\S+`,
+      ].join('|'),
+      'giu',
+    ),
+    new RegExp(
+      [
+        `${BARE_START}${USER}:[^\\s@/:]*@(?:${ANY_HOST}|${IPV4}|${IPV6}|localhost)(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
+        `${BARE_START}${IPV6}(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
+        `${BARE_START}(?:${USER}@)?(?:${NAMED_HOST}|${IPV4}|localhost)(?:${PORT}(?:[/?#\\\\]\\S*)?|[?#]\\S+)`,
+        `${BARE_START}(?:${USER}@)?(?:${KNOWN_HOST}|${IPV4}|localhost)[/\\\\]\\S*`,
+      ].join('|'),
+      'giu',
+    ),
+    new RegExp(`${BARE_START}(?:${USER}@)?${ANY_HOST}[/\\\\]\\S*`, 'giu'),
+  ].map((pattern, index) => ({
+    pattern,
+    // Any host path is a link only with a query or a fragment in it, after the punctuation that
+    // ends the sentence comes off
+    keeps: index === 2 ? (/** @type {string} */ link) => /[?#]\S/.test(splitTrailing(link)[0]) : () => true,
+  })),
+);
 
 /** What a redacted link reads as */
 export const LINK_PLACEHOLDER = '[link]';
@@ -215,7 +227,10 @@ const forMatching = text => text.replace(IGNORABLES, '').replace(OTHER_DOTS, '.'
 /** @param {string} text */
 const hasLink = text => {
   const read = forMatching(text);
-  return LINK_PATTERNS.some(pattern => new RegExp(pattern.source, pattern.flags.replace('g', '')).test(read));
+  return LINK_PATTERNS.some(({ pattern, keeps }) => {
+    for (const [match] of read.matchAll(new RegExp(pattern.source, pattern.flags))) if (keeps(match)) return true;
+    return false;
+  });
 };
 
 /**
@@ -588,8 +603,9 @@ const MAX_SOURCE_TEXT = 1024;
  */
 export function redactText(text, max) {
   const redacted = LINK_PATTERNS.reduce(
-    (current, pattern) =>
+    (current, { pattern, keeps }) =>
       current.replace(pattern, match => {
+        if (!keeps(match)) return match;
         const [, after] = splitTrailing(match);
         return `${LINK_PLACEHOLDER}${after}`;
       }),
