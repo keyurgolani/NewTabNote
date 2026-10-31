@@ -3,13 +3,11 @@
  */
 
 /**
- * The shared DatabaseManager from storage.js. The bare `Storage` global also
- * names the DOM's Web Storage type, so typed calls go through this.
- * @returns {DatabaseManager}
+ * Whether the page has version history: off once a snapshot write answers that the database,
+ * one an older profile left, has no snapshots store, as 1.4.x kept it off. Every editor on the
+ * page, the PiP editor's included, shares it.
  */
-function editorStorage() {
-  return /** @type {any} */ (globalThis).Storage;
-}
+const VERSION_HISTORY = { off: false };
 
 /**
  * What keeps keys pressed outside the note off it while it's open
@@ -1160,6 +1158,33 @@ class BlockEditor {
     }
     const maxOrder = Math.max(...this.blocks.map(b => b.order || 0));
     return maxOrder + 1;
+  }
+
+  /**
+   * Take blocks AI chat is inserting into the loaded note (insertBlocks) at `index`, or after
+   * the last block, in the task the insert's transaction opens, so a save from then on writes
+   * them and every other block where the insert stores them. Undo history goes, as the reload
+   * that showed an insert before cleared it.
+   * @param {string} noteId
+   * @param {Array<Object>} blocks - the inserted blocks, ids included
+   * @param {number} [index]
+   * @returns {() => void} Takes them out again, for an insert that wasn't stored
+   */
+  placeInsertedBlocks(noteId, blocks, index) {
+    if (noteId !== this.noteId) return () => {};
+    const added = blocks.map((data) => Block.deserialize(data));
+    const at = index === undefined ? this.blocks.length : Math.min(index, this.blocks.length);
+    this.blocks.splice(at, 0, ...added);
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this._contentUndoPending = {};
+    this.renderBlocks();
+    return () => {
+      if (noteId !== this.noteId) return;
+      const ids = new Set(added.map((block) => block.id));
+      this.blocks = this.blocks.filter((block) => !ids.has(block.id));
+      this.renderBlocks();
+    };
   }
 
   /**
@@ -3844,6 +3869,12 @@ class BlockEditor {
     this._saveSeq = 0;
     /** @type {Map<string, number>} Newest capture per note whose transaction has opened */
     this._writtenSeq = new Map();
+    /** @type {Map<string, number>} Per note, the newest capture whose save failed and that no later save stored */
+    this._failedSeq = new Map();
+    /** @type {string|null} The note a revert is replacing the blocks of, while it commits */
+    this._revertingNoteId = null;
+    /** A flush during the revert kept what was on screen as a snapshot */
+    this._revertEditsKept = false;
     /** @type {Set<{state: EditorSaveState, promise: Promise<void>}>} */
     this._inFlightSaves = new Set();
     /** Load counter; a load that is no longer the latest drops its result */
@@ -3908,18 +3939,6 @@ class BlockEditor {
     }, (error) => {
       console.warn('Could not read the title the note kept', error && error.message);
     });
-  }
-
-  /**
-   * The loaded note as stored, for the one write that still puts a whole note record
-   * (_revertToSnapshot): it sets its own fields on it, so a pin, folder, trash, or archive set
-   * elsewhere stays. The editor's copy no longer takes the stored state from each save, as
-   * Storage.saveNoteWithBlocks gave it. Null when the note was deleted meanwhile, which it
-   * leaves deleted. #12 slice 4b2b moves it to restoreSnapshot.
-   * @returns {Promise<Object|null>}
-   */
-  _storedNote() {
-    return this.documentClient.readNote(this.noteId);
   }
 
   /**
@@ -4022,7 +4041,14 @@ class BlockEditor {
   _startDue() {
     const { loaded, loadedIsRetry, others } = this._takeDueWork();
     const work = others.map((copy) => this._rewrite(copy));
-    if (loaded) work.push(this._startSave(loadedIsRetry));
+    // While a revert commits, the loaded note's save waits for it, and then writes the
+    // restored blocks (see _revertToSnapshot)
+    if (loaded && this._isReverting()) {
+      this._loadedDue = true;
+      this._heldSaveDue = true;
+    } else if (loaded) {
+      work.push(this._startSave(loadedIsRetry));
+    }
     return Promise.all(work).then(() => {});
   }
 
@@ -4183,6 +4209,7 @@ class BlockEditor {
    */
   _onSaveFailed(error, state) {
     console.error('Failed to save:', error);
+    if ((this._failedSeq.get(state.noteId) || 0) < state.seq) this._failedSeq.set(state.noteId, state.seq);
     if (state.isRetry) {
       this.updateSaveStatus('Error saving');
       Utils.showToast('Failed to save note. Please try again.', 'error');
@@ -4268,6 +4295,10 @@ class BlockEditor {
    * @returns {void}
    */
   _afterSaveWrite(state, result) {
+    // A save that stored the note's text clears an older one's failure
+    if (result !== 'gone' && result !== 'reload' && (this._failedSeq.get(state.noteId) || 0) <= state.seq) {
+      this._failedSeq.delete(state.noteId);
+    }
     if (result === 'title-kept') this._showStoredTitle(state.noteId);
     if (result === 'gone') {
       this._onNoteGone(state);
@@ -4377,6 +4408,12 @@ class BlockEditor {
     const work = due ? this._takeDueWork() : { loaded: false, loadedIsRetry: false, others: [] };
     for (const copy of work.others) this._rewrite(copy);
     if (!work.loaded && waiting.length === 0) return;
+    // A revert is replacing the blocks on screen: what was typed into them goes into version
+    // history, and none of it goes back onto the note over the restored blocks
+    if (this._isReverting()) {
+      this._keepEditsOfRevert();
+      return;
+    }
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
     const state = this._captureSaveState(isRetry);
@@ -5381,12 +5418,11 @@ class BlockEditor {
   // ============ Version History / Snapshots (Req 31) ============
 
   /**
-   * Start the 5-minute auto-snapshot interval.
+   * Start the 5-minute auto-snapshot interval, unless the page has no version history.
    */
   _startSnapshotInterval() {
     this._stopSnapshotInterval();
-    // Version history is off while the snapshots store is missing.
-    if (!editorStorage().hasStore('snapshots')) return;
+    if (VERSION_HISTORY.off) return;
     this._snapshotInterval = setInterval(() => this._autoSnapshot(), 5 * 60 * 1000);
   }
 
@@ -5401,19 +5437,50 @@ class BlockEditor {
   }
 
   /**
-   * Auto-save a snapshot if content has changed since last snapshot (Req 31.1).
+   * Save a snapshot if content has changed since last snapshot (Req 31.1), through saveSnapshot.
+   * The note and its blocks are taken now.
+   * @returns {Promise<void>}
    */
-  async _autoSnapshot() {
-    if (!this._snapshotDirty || !this.noteId || !this.noteData) return;
-    if (!editorStorage().hasStore('snapshots')) return;
+  _autoSnapshot() {
+    if (!this._snapshotDirty || !this.noteId || !this.noteData || VERSION_HISTORY.off) return Promise.resolve();
     this._snapshotDirty = false;
+    const blocks = this.blocks.map(b => b.serialize());
+    return this.documentClient.saveSnapshot(this.noteId, blocks, this.noteData.name || 'Untitled').then((outcome) => {
+      if (outcome.kind === 'committed' || this._versionHistoryGone(outcome)) return;
+      // Its kind and code, never what the note holds
+      console.warn('Auto-snapshot not stored:', outcome.kind, outcome.code);
+    });
+  }
 
+  /**
+   * Turn version history off for the page when `outcome` says the database has no snapshots
+   * store, as 1.4.x kept it off for such a database.
+   * @param {{kind: string, code?: string}} outcome
+   * @returns {boolean} Whether it did
+   */
+  _versionHistoryGone(outcome) {
+    if (outcome.kind !== 'unavailable' || outcome.code !== 'store-unavailable') return false;
+    VERSION_HISTORY.off = true;
+    this._stopSnapshotInterval();
+    return true;
+  }
+
+  /**
+   * One snapshot, blocks included, for its preview or a revert. Null, with a toast, when it
+   * can't be read or is gone.
+   * @param {string} snapshotId
+   * @returns {Promise<Object|null>}
+   */
+  async _readSnapshot(snapshotId) {
+    let snap = null;
     try {
-      const blocks = this.blocks.map(b => b.serialize());
-      await Storage.saveSnapshot(this.noteId, blocks, this.noteData.name || 'Untitled');
-    } catch (e) {
-      console.warn('Auto-snapshot failed:', e);
+      snap = await this.documentClient.snapshot(snapshotId);
+    } catch (error) {
+      if (this._isReloadRequired(error)) this._onReloadRequired();
+      else console.warn('Snapshot could not be read', error && error.message);
     }
+    if (!snap) Utils.showToast('Failed to load snapshot', 'error');
+    return snap;
   }
 
   /**
@@ -5428,7 +5495,23 @@ class BlockEditor {
     }
     this._versionHistoryOpen = true;
 
-    const snapshots = await Storage.getSnapshots(this.noteId);
+    // Each snapshot's id, time, and title; a preview or a revert reads its blocks
+    const noteId = this.noteId;
+    let snapshots = [];
+    try {
+      if (noteId) snapshots = await this.documentClient.snapshots(noteId);
+    } catch (error) {
+      this._versionHistoryOpen = false;
+      if (this._isReloadRequired(error)) this._onReloadRequired();
+      else console.warn('Version history could not be read', error && error.message);
+      Utils.showToast('Failed to load version history', 'error');
+      return;
+    }
+    // Another note opened while the list was read
+    if (noteId !== this.noteId) {
+      this._versionHistoryOpen = false;
+      return;
+    }
 
     const panel = this.doc.createElement('div');
     panel.id = 'version-history-panel';
@@ -5516,9 +5599,12 @@ class BlockEditor {
 
   /**
    * Show a read-only preview of a snapshot (Req 31.3).
-   * @param {Object} snap - Snapshot object
+   * @param {{id?: string, timestamp: number, blocks?: Array<Object>}} summary - The snapshot as
+   *   version history lists it, whose blocks are read now, or one with its blocks
    */
-  _previewSnapshot(snap) {
+  async _previewSnapshot(summary) {
+    const snap = Array.isArray(summary.blocks) ? summary : await this._readSnapshot(summary.id);
+    if (!snap) return;
     // Remove existing preview
     const existing = this.doc.getElementById('snapshot-preview-modal');
     if (existing) existing.remove();
@@ -5590,63 +5676,112 @@ class BlockEditor {
   }
 
   /**
-   * Revert current note to a snapshot's content (Req 31.4).
-   * @param {Object} snap - Snapshot object
+   * @returns {boolean} True while a revert of the loaded note commits
    */
-  async _revertToSnapshot(snap) {
+  _isReverting() {
+    return Boolean(this.noteId) && this._revertingNoteId === this.noteId;
+  }
+
+  /**
+   * Keep the loaded note's blocks as they are on screen as a snapshot, while a revert replaces
+   * them, rather than save them onto the note. Its transaction opens before this returns, so a
+   * page-hide flush stores it.
+   * @returns {void}
+   */
+  _keepEditsOfRevert() {
+    const noteId = this.noteId;
+    const typed = this.blocks.map((b) => b.serialize());
+    this._snapshotDirty = false;
+    this._revertEditsKept = true;
+    this.documentClient.saveSnapshot(noteId, typed, (this.noteData && this.noteData.name) || 'Untitled').then((kept) => {
+      if (kept.kind !== 'committed') console.warn('Snapshot of edits made during a revert not stored:', kept.kind, kept.code);
+    });
+  }
+
+  /**
+   * Revert current note to a snapshot's content (Req 31.4), with restoreSnapshot: in one unit
+   * the note as stored becomes a snapshot, the snapshot's blocks replace the note's, and its
+   * title the note's name, while a pin, folder, trash, or hand-set title made elsewhere stays.
+   * The edits waiting to save are written first, so that snapshot holds them. While the revert
+   * commits, no save writes the loaded note: the debounce and save() wait for it, and a flush
+   * (the page hiding or closing, the connection closing) keeps what's on screen as a snapshot
+   * of its own (_keepEditsOfRevert), so the replaced blocks never go back onto the note.
+   * @param {{id: string, timestamp: number}} summary - The snapshot, as version history lists it
+   */
+  async _revertToSnapshot(summary) {
+    const noteId = this.noteId;
     let confirmed = true;
     if (typeof confirmDialog === 'function') {
       confirmed = await confirmDialog({
         title: 'Revert to Snapshot',
-        message: `Replace current content with the version from ${new Date(snap.timestamp).toLocaleString()}? This will save the current content as a new snapshot first.`,
+        message: `Replace current content with the version from ${new Date(summary.timestamp).toLocaleString()}? This will save the current content as a new snapshot first.`,
         confirmText: 'Revert',
         danger: true,
       });
     }
-    if (!confirmed) return;
+    if (!confirmed || !noteId || noteId !== this.noteId) return;
 
-    // Save current state as a snapshot before reverting
-    try {
-      const currentBlocks = this.blocks.map(b => b.serialize());
-      await Storage.saveSnapshot(this.noteId, currentBlocks, this.noteData.name || 'Untitled');
-    } catch (e) {
-      console.warn('Failed to save pre-revert snapshot:', e);
+    const snap = await this._readSnapshot(summary.id);
+    if (!snap || noteId !== this.noteId) return;
+
+    await this.flushSave();
+    // Another note opened meanwhile, or text on screen isn't stored, so the snapshot taken first
+    // wouldn't hold it: nothing is reverted, and the text stays
+    if (noteId !== this.noteId || this.noteGone || this.reloadRequired) return;
+    if (this._failedSeq.has(noteId)) {
+      Utils.showToast("Failed to revert: your latest changes aren't saved yet. Please try again.", 'error');
+      return;
     }
 
-    // Delete existing blocks for this note
-    const existingElements = await Storage.getElementsByNote(this.noteId);
-    const ids = existingElements.map(el => el.id);
-    if (ids.length > 0) {
-      await Storage.deleteElements(ids);
-    }
-
-    // Restore blocks from snapshot
-    this.blocks = [];
-    for (let i = 0; i < snap.blocks.length; i++) {
-      const data = snap.blocks[i];
-      const block = Block.deserialize(data);
-      this.blocks.push(block);
-
-      const saveData = block.serialize();
-      saveData.canvasId = this.noteId;
-      saveData.order = i;
-      await Storage.saveElement(saveData);
-    }
-
-    // Update note title if snapshot had one
-    if (snap.title && this.noteData) {
-      this.noteData.name = snap.title;
-      this.titleEl.textContent = snap.title;
-      // Onto the note as stored (_storedNote), as restoreSnapshot will write it
-      const stored = await this._storedNote();
-      if (stored) {
-        stored.name = snap.title;
-        await Storage.updateNote(stored);
-      }
-    }
-
-    this.renderBlocks();
+    // Its transaction opens now, with nothing waiting to save
+    const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
+    this._revertingNoteId = noteId;
+    this._revertEditsKept = false;
     this._snapshotDirty = false;
+    const holding = !this._savesHeld;
+    if (holding) this.holdSaves();
+    let outcome;
+    try {
+      outcome = await restoring;
+    } catch (error) {
+      outcome = { kind: 'unavailable', code: 'revert-failed' };
+      console.error('Failed to revert:', error && error.message);
+    }
+
+    if (outcome.kind !== 'committed') {
+      this._revertingNoteId = null;
+      // Nothing was reverted: what was typed meanwhile saves to the note as it is, a flush's
+      // snapshot of it included
+      if (this._revertEditsKept || this._snapshotDirty) {
+        this._loadedDue = true;
+        this._heldSaveDue = true;
+      }
+      if (holding) this.releaseSaves();
+      this._versionHistoryGone(outcome);
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
+        this._onReloadRequired();
+        return;
+      }
+      // Its kind and code, never what the note holds
+      console.error('Revert not stored:', outcome.kind, outcome.code);
+      Utils.showToast('Failed to revert to snapshot', 'error');
+      return;
+    }
+
+    if (noteId === this.noteId) {
+      // Text typed while the revert committed went into the blocks it replaced: it goes into
+      // version history, so it isn't lost
+      if (this._snapshotDirty) this._keepEditsOfRevert();
+      this.blocks = (snap.blocks || []).map((data) => Block.deserialize(data));
+      if (snap.title && this.noteData) {
+        this.noteData.name = snap.title;
+        this.titleEl.textContent = snap.title;
+      }
+      this.renderBlocks();
+      this._snapshotDirty = false;
+    }
+    this._revertingNoteId = null;
+    if (holding) this.releaseSaves();
 
     // Close version history panel
     const panel = this.doc.getElementById('version-history-panel');

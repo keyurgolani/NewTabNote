@@ -16,7 +16,7 @@
 import * as v from '../../../lib/valibot/index.mjs';
 
 /** The kinds of entity an id can name, which a catalog entry's `entityTypes` lists */
-export const ENTITY_TYPES = Object.freeze(/** @type {const} */ (['note', 'block', 'folder']));
+export const ENTITY_TYPES = Object.freeze(/** @type {const} */ (['note', 'block', 'folder', 'snapshot']));
 
 /** @typedef {(typeof ENTITY_TYPES)[number]} EntityType */
 

@@ -42,6 +42,9 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/run-startup-maintenance.js').RunStartupMaintenance} RunStartupMaintenance */
 /** @typedef {import('./operations/set-insights-pending.js').SetInsightsPending} SetInsightsPending */
 /** @typedef {import('./operations/record-job-run.js').RecordJobRun} RecordJobRun */
+/** @typedef {import('./operations/save-snapshot.js').SaveSnapshot} SaveSnapshot */
+/** @typedef {import('./operations/restore-snapshot.js').RestoreSnapshot} RestoreSnapshot */
+/** @typedef {import('./operations/insert-blocks.js').InsertBlocks} InsertBlocks */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -49,7 +52,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
  *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | RunBulkAction
  *   | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance
- *   | SetInsightsPending | RecordJobRun} Command
+ *   | SetInsightsPending | RecordJobRun | SaveSnapshot | RestoreSnapshot | InsertBlocks} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -60,9 +63,9 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  */
 
 /**
- * What the commit feed names a commit by. `job` is the jobs' own bookkeeping, which changes
- * no note, so a note list ignores it.
- * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'system'} Aggregate
+ * What the commit feed names a commit by. `job` is the jobs' own bookkeeping, and `snapshot` a
+ * note's version history, neither of which changes a note, so a note list ignores both.
+ * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'snapshot' | 'system'} Aggregate
  */
 
 /**
@@ -158,6 +161,16 @@ export const COMMANDS = Object.freeze({
   // The auto-title and insights jobs run in the new tab until #35 moves them
   setInsightsPending: entry('set-insights-pending', 'job', ['newtab'], { entityTypes: ['note'] }),
   recordJobRun: entry('record-job-run', 'job', ['newtab'], { entityTypes: [] }),
+  // Version history and AI chat's inserts, which only the new tab's editor and chat have run
+  saveSnapshot: entry('save-snapshot', 'snapshot', ['newtab'], {
+    entityTypes: ['note', 'snapshot', 'block'],
+    maxBytes: LARGE,
+  }),
+  restoreSnapshot: entry('restore-snapshot', 'note', ['newtab'], {
+    entityTypes: ['note', 'snapshot', 'block'],
+    maxBytes: LARGE,
+  }),
+  insertBlocks: entry('insert-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
 });
 
 /** @type {readonly CommandType[]} */

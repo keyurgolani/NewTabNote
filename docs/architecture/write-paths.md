@@ -10,7 +10,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| kernel command, slice 4 | 32 | #12 slice 4 (notes and blocks) routes it through the command. |
+| kernel command, slice 4 | 21 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 17 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 37 | #12 slice 6 (preferences and session) routes it through the command. |
 | deleted in slice 7 | 43 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
@@ -19,7 +19,7 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
 | ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
-| Total | 151 | |
+| Total | 140 | |
 
 No row is UI-only. Presentation state (panels, the palette index, selection mode, the calendar month) isn't persisted, and every persisted preference goes through the settings port.
 
@@ -28,15 +28,15 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | Command | Status | Rows |
 | --- | --- | --- |
 | `runStartupMaintenance` | kernel command, slice 4 | 0 |
-| `createNote` | kernel command, slice 4 | 13 |
+| `createNote` | kernel command, slice 4 | 11 |
 | `importNote` | kernel command, slice 4 | 8 |
 | `ensureDailyNote` | kernel command, slice 4 | 7 |
 | `captureToDailyNote` | kernel command, slice 4 | 0 |
 | `saveNoteContent` | kernel command, slice 4 | 0 |
-| `insertBlocks` | kernel command, slice 4 | 9 |
+| `insertBlocks` | kernel command, slice 4 | 5 |
 | `deleteBlocks` | kernel command, slice 4 | 0 |
-| `saveSnapshot` | kernel command, slice 4 | 1 |
-| `restoreSnapshot` | kernel command, slice 4 | 4 |
+| `saveSnapshot` | kernel command, slice 4 | 0 |
+| `restoreSnapshot` | kernel command, slice 4 | 0 |
 | `renameNote` | kernel command, slice 4 | 1 |
 | `setPinned` | kernel command, slice 4 | 2 |
 | `archiveNote` | kernel command, slice 4 | 2 |
@@ -138,14 +138,8 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/controllers/ai-chat-controller.js` | [374](../../js/controllers/ai-chat-controller.js#L374) | `AIChatController.saveNoteChatHistory` | `this.storage.setSetting('noteChatMessages', …)` | `saveChatHistory` | kernel command, slice 6 |
 | `js/controllers/ai-chat-controller.js` | [378](../../js/controllers/ai-chat-controller.js#L378) | `AIChatController.saveGlobalChatHistory` | `this.storage.setSetting('globalChatHistory', …)` | `saveChatHistory` | kernel command, slice 6 |
 | `js/controllers/ai-chat-controller.js` | [379](../../js/controllers/ai-chat-controller.js#L379) | `AIChatController.saveGlobalChatHistory` | `this.storage.setSetting('globalChatMessages', …)` | `saveChatHistory` | kernel command, slice 6 |
-| `js/controllers/ai-chat-controller.js` | [2112](../../js/controllers/ai-chat-controller.js#L2112) | `AIChatController.refreshNoteMetadataAfterInsert` | `this.storage.updateNote({preview, todoProgress})` | `insertBlocks` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2120](../../js/controllers/ai-chat-controller.js#L2120) | `AIChatController.refreshNoteMetadataAfterInsert` | `this.storage.updateNoteLinks(…)` | `insertBlocks` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2150](../../js/controllers/ai-chat-controller.js#L2150) | `AIChatController.appendAIResponseToNote` | `this.storage.saveElement(…)` | `insertBlocks` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2161](../../js/controllers/ai-chat-controller.js#L2161) | `AIChatController.appendAIResponseToNote` | `this.storage.saveElements(…)` | `insertBlocks` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2178](../../js/controllers/ai-chat-controller.js#L2178) | `AIChatController.createNoteFromAIResponse` | `this.storage.createNote(…)` | `createNote` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2181](../../js/controllers/ai-chat-controller.js#L2181) | `AIChatController.createNoteFromAIResponse` | `this.storage.saveElements(…)` | `createNote` | kernel command, slice 4 |
-| `js/controllers/ai-chat-controller.js` | [2482](../../js/controllers/ai-chat-controller.js#L2482) | `AIChatController.loadAIPromptTemplates` | `this.storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | kernel command, slice 6 |
-| `js/controllers/ai-chat-controller.js` | [2496](../../js/controllers/ai-chat-controller.js#L2496) | `AIChatController.persistAIPromptTemplates` | `this.storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | kernel command, slice 6 |
+| `js/controllers/ai-chat-controller.js` | [2461](../../js/controllers/ai-chat-controller.js#L2461) | `AIChatController.loadAIPromptTemplates` | `this.storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | kernel command, slice 6 |
+| `js/controllers/ai-chat-controller.js` | [2475](../../js/controllers/ai-chat-controller.js#L2475) | `AIChatController.persistAIPromptTemplates` | `this.storage.setSetting('aiPromptTemplates', …)` | `saveAIPromptTemplates` | kernel command, slice 6 |
 | `js/controllers/notes-manager.js` | [111](../../js/controllers/notes-manager.js#L111) | `NotesManager.archiveNote` | `this.storage.archiveNote(…)` | `archiveNote` | kernel command, slice 4 |
 | `js/controllers/notes-manager.js` | [133](../../js/controllers/notes-manager.js#L133) | `NotesManager.unarchiveNote` | `this.storage.unarchiveNote(…)` | `unarchiveNote` | kernel command, slice 4 |
 | `js/controllers/notes-manager.js` | [143](../../js/controllers/notes-manager.js#L143) | `NotesManager.trashNoteById` | `this.storage.trashNote(…)` | `trashNote` | kernel command, slice 5 |
@@ -210,11 +204,6 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/controllers/tab-controller.js` | [603](../../js/controllers/tab-controller.js#L603) | `TabController.cacheLastOpenedNoteId` | `chrome.storage.local.set({lastOpenedNoteId})` | `saveWorkspaceSession` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [70](../../js/controllers/theme-builder-controller.js#L70) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.saveCustomTheme(…)` | `saveTheme` | kernel command, slice 6 |
 | `js/controllers/theme-builder-controller.js` | [71](../../js/controllers/theme-builder-controller.js#L71) | `ThemeBuilderController.setupThemeBuilder > click listener` | `this.storage.setSetting('theme', …)` | `setPreferences` | kernel command, slice 6 |
-| `js/editor.js` | [5409](../../js/editor.js#L5409) | `BlockEditor._autoSnapshot` | `Storage.saveSnapshot(…)` | `saveSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5607](../../js/editor.js#L5607) | `BlockEditor._revertToSnapshot` | `Storage.saveSnapshot(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5616](../../js/editor.js#L5616) | `BlockEditor._revertToSnapshot` | `Storage.deleteElements(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5629](../../js/editor.js#L5629) | `BlockEditor._revertToSnapshot` | `Storage.saveElement(…)` | `restoreSnapshot` | kernel command, slice 4 |
-| `js/editor.js` | [5640](../../js/editor.js#L5640) | `BlockEditor._revertToSnapshot` | `Storage.updateNote({name})` | `restoreSnapshot` | kernel command, slice 4 |
 | `js/llm.js` | [130](../../js/llm.js#L130) | `LLMService.setEndpoint` | `Storage.setSetting('llmEndpoint', …)` | `saveProviderSettings` | no live caller |
 | `js/llm.js` | [662](../../js/llm.js#L662) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [674](../../js/llm.js#L674) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
@@ -224,13 +213,13 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/onboarding.js` | [49](../../js/onboarding.js#L49) | `OnboardingManager.setupFirstRun` | `Storage.setSetting('autoTitleEnabled', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/onboarding.js` | [50](../../js/onboarding.js#L50) | `OnboardingManager.setupFirstRun` | `Storage.setSetting('insightsEnabled', …)` | `setPreferences` | kernel command, slice 6 |
 | `js/onboarding.js` | [66](../../js/onboarding.js#L66) | `OnboardingManager.markComplete` | `Storage.setSetting('hasCompletedOnboarding', …)` | `completeOnboarding` | kernel command, slice 6 |
-| `js/services/sync-service.js` | [300](../../js/services/sync-service.js#L300) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [302](../../js/services/sync-service.js#L302) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [326](../../js/services/sync-service.js#L326) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [327](../../js/services/sync-service.js#L327) | `SyncService.disconnect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [328](../../js/services/sync-service.js#L328) | `SyncService.disconnect` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [419](../../js/services/sync-service.js#L419) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [490](../../js/services/sync-service.js#L490) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [496](../../js/services/sync-service.js#L496) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [514](../../js/services/sync-service.js#L514) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [303](../../js/services/sync-service.js#L303) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [305](../../js/services/sync-service.js#L305) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [329](../../js/services/sync-service.js#L329) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [330](../../js/services/sync-service.js#L330) | `SyncService.disconnect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [331](../../js/services/sync-service.js#L331) | `SyncService.disconnect` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [422](../../js/services/sync-service.js#L422) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [493](../../js/services/sync-service.js#L493) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [499](../../js/services/sync-service.js#L499) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [517](../../js/services/sync-service.js#L517) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | ledgered to #19 |
 | `js/ui/export-notice.js` | [151](../../js/ui/export-notice.js#L151) | `ExportNotice.record > write` | `this.storage.setSetting('preMigrationNotice', …)` | `recordExportNotice` | kernel command, slice 6 |

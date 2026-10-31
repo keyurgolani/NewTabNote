@@ -952,6 +952,448 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe('version history', () => {
+      /**
+       * A note's snapshots as listSnapshots lists them
+       * @param {string} noteId
+       */
+      const listOf = async noteId => {
+        const state = await kernel.query({ type: 'listSnapshots', noteId });
+        return state.kind === 'ready' ? state.data : [];
+      };
+
+      /** @param {string} snapshotId */
+      const snapshotOf = async snapshotId => {
+        const state = await kernel.query({ type: 'getSnapshot', snapshotId });
+        return state.kind === 'ready' ? state.data : undefined;
+      };
+
+      /**
+       * Blocks as the editor serializes them, which a snapshot holds
+       * @param {string[]} contents
+       */
+      const serialized = contents => contents.map((content, index) => ({ id: `s-${index}`, type: 'text', content }));
+
+      /**
+       * A note with blocks, a pin, a folder, a trash, and a hand-set title, made the ways the user
+       * makes them, and a snapshot of it from before
+       */
+      const placedNote = async () => {
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        await createNote({ noteId: 'n1', name: 'Draft', blocks: someBlocks('n1', 3) });
+        await run(
+          cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'old', blocks: serialized(['Then']), title: 'Then' }),
+        );
+        await run(cmd('renameNote', { noteId: 'n1', name: 'Now' }));
+        await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+        await seed('notes', [{ .../** @type {NoteRecord} */ (await noteOf('n1')), folderId: 'f1' }]);
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        ctx.clock.advance();
+      };
+
+      it('saveSnapshot stores the record Storage.saveSnapshot stores, stamped by the kernel clock, and the queries read it', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        ctx.clock.advance();
+        const outcome = await run(
+          cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: serialized(['Milk']), title: 'Plan' }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['snapshot-saved', ['s1']]);
+        assert.deepEqual(await snapshotOf('s1'), {
+          id: 's1',
+          noteId: 'n1',
+          timestamp: NOW + 1000,
+          blocks: serialized(['Milk']),
+          title: 'Plan',
+        });
+        ctx.clock.advance();
+        await run(
+          cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's2', blocks: serialized(['Eggs']), title: 'Later' }),
+        );
+        assert.deepEqual(await listOf('n1'), [
+          { id: 's2', timestamp: NOW + 2000, title: 'Later' },
+          { id: 's1', timestamp: NOW + 1000, title: 'Plan' },
+        ]);
+        assert.equal((await kernel.query({ type: 'listSnapshots', noteId: 'n2' })).kind, 'empty');
+        assert.equal((await kernel.query({ type: 'getSnapshot', snapshotId: 'gone' })).kind, 'empty');
+        assert.equal((await kernel.query({ type: 'listSnapshots', noteId: /** @type {any} */ (7) })).kind, 'failed');
+      });
+
+      it("keeps a note's newest 50, as Storage.pruneSnapshots does, and no other note's", async () => {
+        await createNote({ noteId: 'n1' });
+        await createNote({ noteId: 'n2' });
+        const old = Array.from({ length: 50 }, (_, index) => ({
+          id: `old-${String(index).padStart(2, '0')}`,
+          noteId: 'n1',
+          timestamp: NOW - 1000 * (index + 1),
+          blocks: [],
+          title: `${index}`,
+        }));
+        await seed('snapshots', [...old, { id: 'other', noteId: 'n2', timestamp: 1, blocks: [], title: 'Other' }]);
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'new', blocks: [], title: 'New' }));
+        const kept = (await listOf('n1')).map(summary => summary.id);
+        assert.equal(kept.length, 50);
+        assert.deepEqual([kept[0], kept.at(-1)], ['new', 'old-48']);
+        assert.equal(await snapshotOf('old-49'), undefined, 'the oldest goes');
+        assert.deepEqual(
+          (await listOf('n2')).map(summary => summary.id),
+          ['other'],
+        );
+      });
+
+      it("saveSnapshot of a note that's gone, or under a snapshot's id, is refused and stores nothing", async () => {
+        assertRejected(
+          await kernel.execute(cmd('saveSnapshot', { noteId: 'gone', snapshotId: 's1', blocks: [], title: 'X' })),
+          'not-found',
+          'note-not-found',
+        );
+        assert.equal(await snapshotOf('s1'), undefined);
+        await createNote({ noteId: 'n1' });
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: serialized(['First']), title: 'A' }));
+        assertRejected(
+          await kernel.execute(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: [], title: 'B' })),
+          'validation',
+          'snapshot-exists',
+        );
+        assert.equal((await snapshotOf('s1'))?.title, 'A');
+      });
+
+      it('restoreSnapshot puts back the blocks and the title, keeps the pin, folder, trash, and hand-set flag, and snapshots the note first', async () => {
+        await placedNote();
+        const before = /** @type {NoteRecord} */ (await noteOf('n1'));
+        assert.deepEqual(
+          [before.pinned, before.folderId, before.trashed, before.titleManuallySet],
+          [true, 'f1', true, true],
+        );
+        const outcome = await run(
+          cmd('restoreSnapshot', {
+            noteId: 'n1',
+            snapshotId: 'old',
+            preSnapshotId: 'pre',
+            blocks: serialized(['Then']),
+            name: 'Then',
+          }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['snapshot-restored', ['n1']]);
+        assert.deepEqual(await noteOf('n1'), { ...before, name: 'Then', updatedAt: NOW + 1000 });
+        assert.deepEqual(await blocksOf('n1'), [
+          { id: 's-0', type: 'text', content: 'Then', canvasId: 'n1', order: 0 },
+        ]);
+        assert.equal((await searchEntryOf('n1'))?.name, 'Then');
+        // What the note was, as stored, with no note or place of its own in each block
+        assert.deepEqual(await snapshotOf('pre'), {
+          id: 'pre',
+          noteId: 'n1',
+          timestamp: NOW + 1000,
+          blocks: someBlocks('n1', 3).map(({ id, type, content }) => ({ id, type, content })),
+          title: 'Now',
+        });
+        assert.deepEqual(
+          (await listOf('n1')).map(summary => summary.id),
+          ['pre', 'old'],
+        );
+      });
+
+      it('restoreSnapshot without a title leaves the name as it is', async () => {
+        await createNote({ noteId: 'n1', name: 'Kept', blocks: someBlocks('n1', 1) });
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'old', blocks: serialized(['Then']), title: '' }));
+        await run(
+          cmd('restoreSnapshot', {
+            noteId: 'n1',
+            snapshotId: 'old',
+            preSnapshotId: 'pre',
+            blocks: serialized(['Then']),
+          }),
+        );
+        assert.equal((await noteOf('n1'))?.name, 'Kept');
+        assert.equal((await searchEntryOf('n1'))?.name, 'Kept');
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.content),
+          ['Then'],
+        );
+      });
+
+      it("restoreSnapshot of another note's snapshot, a snapshot or note that's gone, or onto a snapshot's id writes nothing", async () => {
+        await createNote({ noteId: 'n1', name: 'One', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'n2', name: 'Two' });
+        await run(cmd('saveSnapshot', { noteId: 'n2', snapshotId: 'theirs', blocks: serialized(['X']), title: 'Two' }));
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'mine', blocks: serialized(['Y']), title: 'One' }));
+        const before = [await noteOf('n1'), await blocksOf('n1'), await listOf('n1')];
+        /** @param {Partial<CommandOf<'restoreSnapshot'>>} fields */
+        const restore = fields =>
+          kernel.execute(
+            cmd('restoreSnapshot', {
+              noteId: 'n1',
+              snapshotId: 'mine',
+              preSnapshotId: 'pre',
+              blocks: serialized(['Y']),
+              name: 'One',
+              ...fields,
+            }),
+          );
+        assertRejected(await restore({ snapshotId: 'theirs' }), 'validation', 'snapshot-of-another-note');
+        assertRejected(await restore({ snapshotId: 'gone' }), 'not-found', 'snapshot-not-found');
+        assertRejected(await restore({ preSnapshotId: 'theirs' }), 'validation', 'snapshot-exists');
+        assertRejected(await restore({ preSnapshotId: 'mine' }), 'validation', 'invalid-command');
+        assertRejected(await restore({ noteId: 'gone' }), 'not-found', 'note-not-found');
+        assertRejected(await restore({ blocks: [{ id: 'x', canvasId: 'n2' }] }), 'validation', 'block-of-another-note');
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1')], before);
+      });
+
+      it('restoreSnapshot is one unit on every adapter: a write it fails leaves the blocks, the note, and the snapshots as they were', async () => {
+        await placedNote();
+        const before = [await noteOf('n1'), await blocksOf('n1'), await listOf('n1')];
+        // The note's write is its last, so the snapshot and the blocks have been written when it fails
+        ctx.failNextWrite('notes');
+        const outcome = await kernel.execute(
+          cmd('restoreSnapshot', {
+            noteId: 'n1',
+            snapshotId: 'old',
+            preSnapshotId: 'pre',
+            blocks: serialized(['Then']),
+            name: 'Then',
+          }),
+        );
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1')], before);
+        assert.equal((await searchEntryOf('n1'))?.name, 'Now');
+      });
+
+      it("a snapshot moves no revision and publishes as a snapshot, and a restore moves the note's", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        /** @type {CommitEvent[]} */
+        const seen = [];
+        kernel.subscribe(event => {
+          seen.push(event);
+        });
+        const revisionOf = async () => {
+          const state = await kernel.query({ type: 'getNote', noteId: 'n1' });
+          return state.kind === 'ready' ? state.data.revision : undefined;
+        };
+        const created = await revisionOf();
+        const saved = await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: [], title: 'Plan' }));
+        assert.equal(saved.revision, undefined);
+        assert.equal(await revisionOf(), created);
+        const restored = await run(
+          cmd('restoreSnapshot', { noteId: 'n1', snapshotId: 's1', preSnapshotId: 'pre', blocks: [], name: 'Plan' }),
+        );
+        if (flags.revisions) {
+          assert.equal(await revisionOf(), /** @type {number} */ (created) + 1);
+          assert.equal(restored.revision, /** @type {number} */ (created) + 1);
+        } else {
+          assert.equal(await revisionOf(), undefined);
+        }
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(
+          seen.map(event => ({ ...event, ids: [...event.ids] })),
+          [
+            { aggregate: 'snapshot', ids: ['s1'] },
+            { aggregate: 'note', ids: ['n1'] },
+          ],
+        );
+      });
+
+      it(
+        'on a database without the snapshots store, saving one is refused as store-unavailable and nothing commits',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const other = await startWithout(['snapshots']);
+          try {
+            const tab = other.kernel();
+            committedOf(await tab.execute(newCommand(other.ids, 'createNote', { noteId: 'n1', name: 'Plan' })));
+            const saved = await tab.execute(
+              newCommand(other.ids, 'saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: [], title: 'Plan' }),
+            );
+            assert.deepEqual(
+              saved.kind === 'unavailable' && { cause: saved.cause, code: saved.code },
+              { cause: 'storage', code: 'store-unavailable' },
+              JSON.stringify(saved),
+            );
+            const restored = await tab.execute(
+              newCommand(other.ids, 'restoreSnapshot', {
+                noteId: 'n1',
+                snapshotId: 's1',
+                preSnapshotId: 'pre',
+                blocks: [],
+                name: 'Then',
+              }),
+            );
+            assert.notEqual(restored.kind, 'committed', JSON.stringify(restored));
+            assert.equal((await tab.query({ type: 'listSnapshots', noteId: 'n1' })).kind, 'empty');
+            const note = await tab.query({ type: 'getNote', noteId: 'n1' });
+            assert.equal(note.kind === 'ready' && note.data.note.name, 'Plan');
+          } finally {
+            await other.close();
+          }
+        },
+      );
+    });
+
+    describe('insertBlocks', () => {
+      /**
+       * Blocks as AI chat parses a reply into them, each with the id the chat took for it
+       * @param {string[]} contents
+       */
+      const reply = contents => contents.map((content, index) => ({ id: `ai-${index}`, type: 'text', content }));
+
+      /** @param {string} noteId */
+      const placesOf = async noteId => (await blocksOf(noteId)).map(block => [block.id, block.order]);
+
+      it('at a place, moves the blocks at or past it down, stores the new ones there, and the note shows them', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 3) });
+        await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+        const before = /** @type {NoteRecord} */ (await noteOf('n1'));
+        ctx.clock.advance();
+        const outcome = await run(
+          cmd('insertBlocks', {
+            noteId: 'n1',
+            blocks: [
+              { id: 'ai-0', type: 'todo', content: 'Call', checked: true },
+              { id: 'ai-1', type: 'todo', content: 'Write' },
+            ],
+            atOrder: 1,
+          }),
+        );
+        assert.deepEqual([outcome.code, outcome.changedIds], ['blocks-inserted', ['n1']]);
+        assert.deepEqual(await placesOf('n1'), [
+          ['n1-block-0', 0],
+          ['ai-0', 1],
+          ['ai-1', 2],
+          ['n1-block-1', 3],
+          ['n1-block-2', 4],
+        ]);
+        const added = (await blocksOf('n1')).find(block => block.id === 'ai-0');
+        assert.deepEqual(added, {
+          id: 'ai-0',
+          type: 'todo',
+          content: 'Call',
+          checked: true,
+          canvasId: 'n1',
+          order: 1,
+          createdAt: NOW + 1000,
+          updatedAt: NOW + 1000,
+        });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          preview: 'Line 0',
+          todoProgress: { completed: 1, total: 2 },
+          updatedAt: NOW + 1000,
+        });
+      });
+
+      it('with no place, adds the blocks after the last one, and a note with none starts at 0', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await run(cmd('insertBlocks', { noteId: 'n1', blocks: reply(['One', 'Two']) }));
+        assert.deepEqual(await placesOf('n1'), [
+          ['n1-block-0', 0],
+          ['n1-block-1', 1],
+          ['ai-0', 2],
+          ['ai-1', 3],
+        ]);
+        await createNote({ noteId: 'n2' });
+        await run(
+          cmd('insertBlocks', { noteId: 'n2', blocks: [{ id: 'first', type: 'text', content: '<b>Hello</b>' }] }),
+        );
+        assert.deepEqual(await placesOf('n2'), [['first', 0]]);
+        const made = await noteOf('n2');
+        assert.deepEqual([made?.preview, made?.todoProgress], ['Hello', null]);
+      });
+
+      it("replaces the note's wiki links with the ones its blocks hold once the new ones are in", async () => {
+        await createNote({
+          noteId: 'n1',
+          name: 'Plan',
+          blocks: [{ id: 'b0', type: 'text', content: 'See [[Groceries]]' }],
+        });
+        await createNote({ noteId: 'g', name: 'Groceries' });
+        await createNote({ noteId: 'w', name: 'Work' });
+        await run(cmd('insertBlocks', { noteId: 'n1', blocks: reply(['And [[work]]']), atOrder: 0 }));
+        const links = await ctx.adapter.read(['links'], tx => tx.getAllByIndex('links', 'fromNoteId', 'n1'));
+        assert.deepEqual(links.map(link => link.toNoteId).sort(), ['g', 'w']);
+      });
+
+      it("is refused for a note that's gone, a block another note holds, or a block id already stored, and writes nothing", async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
+        const before = [await noteOf('n1'), await blocksOf('n1'), await blocksOf('n2')];
+        /** @param {Partial<CommandOf<'insertBlocks'>>} fields */
+        const insert = fields => kernel.execute(cmd('insertBlocks', { noteId: 'n1', blocks: reply(['X']), ...fields }));
+        assertRejected(await insert({ noteId: 'gone' }), 'not-found', 'note-not-found');
+        assertRejected(await insert({ blocks: [{ id: 'n2-block-0' }] }), 'validation', 'block-of-another-note');
+        assertRejected(await insert({ blocks: [{ id: 'x', canvasId: 'n2' }] }), 'validation', 'block-of-another-note');
+        assertRejected(await insert({ blocks: [{ id: 'n1-block-1' }] }), 'validation', 'duplicate-block');
+        assertRejected(await insert({ blocks: [{ id: 'x' }, { id: 'x' }] }), 'validation', 'duplicate-block');
+        assertRejected(await insert({ blocks: [] }), 'validation', 'invalid-command');
+        assertRejected(await insert({ atOrder: -1 }), 'validation', 'invalid-command');
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await blocksOf('n2')], before);
+      });
+
+      it('moves, adds, and sets the preview in one unit on every adapter: a write it fails leaves them as they were', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 3) });
+        const before = [await noteOf('n1'), await blocksOf('n1')];
+        ctx.failNextWrite('notes');
+        const outcome = await kernel.execute(cmd('insertBlocks', { noteId: 'n1', blocks: reply(['X']), atOrder: 0 }));
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1')], before);
+      });
+
+      it("moves the note's revision, publishes the note, and a save sent from before it keeps the inserted blocks", async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 1) });
+        /** @type {CommitEvent[]} */
+        const seen = [];
+        kernel.subscribe(event => {
+          seen.push(event);
+        });
+        const created = await kernel.query({ type: 'getNote', noteId: 'n1' });
+        const inserted = await run(cmd('insertBlocks', { noteId: 'n1', blocks: reply(['From the chat']) }));
+        if (flags.revisions) {
+          const revision = created.kind === 'ready' ? created.data.revision : undefined;
+          assert.equal(inserted.revision, /** @type {number} */ (revision) + 1);
+        }
+        // An editor save from what it held before the insert puts its own blocks and deletes
+        // none, so the inserted block stays
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [{ ...someBlocks('n1', 1)[0], content: 'Typed' }] }));
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.content),
+          ['Typed', 'From the chat'],
+        );
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(
+          seen.map(event => ({ ...event, ids: [...event.ids] })),
+          [
+            { aggregate: 'note', ids: ['n1'] },
+            { aggregate: 'note', ids: ['n1'] },
+          ],
+        );
+      });
+    });
+
+    describe('version history and inserts run from the new tab only', () => {
+      it('refuses each from Popup, Side Panel, and the service worker', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 1) });
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: [], title: 'Plan' }));
+        const before = [await noteOf('n1'), await blocksOf('n1')];
+        for (const caller of [CALLERS.popup, CALLERS.sidepanel, CALLERS['worker-internal']]) {
+          const other = ctx.kernel(caller);
+          for (const command of [
+            cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's2', blocks: [], title: 'X' }),
+            cmd('restoreSnapshot', { noteId: 'n1', snapshotId: 's1', preSnapshotId: 'p', blocks: [] }),
+            cmd('insertBlocks', { noteId: 'n1', blocks: [{ id: 'ai-0', type: 'text', content: 'X' }] }),
+          ]) {
+            assertRejected(await other.execute(command), 'policy', 'not-on-surface');
+          }
+          for (const query of /** @type {const} */ ([
+            { type: 'listSnapshots', noteId: 'n1' },
+            { type: 'getSnapshot', snapshotId: 's1' },
+          ])) {
+            assert.deepEqual(await other.query(query), { kind: 'failed', cause: 'policy', code: 'not-on-surface' });
+          }
+        }
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1')], before);
+        assert.equal((await kernel.query({ type: 'getSnapshot', snapshotId: 's2' })).kind, 'empty');
+      });
+    });
+
     describe('captureToDailyNote', () => {
       const page = /** @type {const} */ ({ type: 'bookmark', url: 'https://example.test/page', title: 'Example page' });
 
@@ -1738,13 +2180,16 @@ export function runContractSuite(fixture) {
           'createFolder',
           'createNote',
           'deleteBlocks',
+          'insertBlocks',
           'moveFolder',
           'recordJobRun',
           'renameNote',
           'restoreNote',
+          'restoreSnapshot',
           'runBulkAction',
           'runStartupMaintenance',
           'saveNoteContent',
+          'saveSnapshot',
           'saveWorkspaceSession',
           'setInsightsPending',
           'setPinned',

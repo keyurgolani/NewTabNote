@@ -2083,41 +2083,32 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   // ─── Append / Create note from AI response ───
 
-  createPersistentBlocksForNote(noteId, blocks, startOrder = 0) {
-    const timestamp = Date.now();
-    return blocks.map((block, index) => ({
-      ...block,
-      id: Utils.generateId(),
-      canvasId: noteId,
-      order: startOrder + index,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }));
+  /**
+   * The chat's blocks as insertBlocks takes them, each with an id taken now. The kernel gives
+   * them their note, place, and times.
+   * @param {Array<Object>} blocks
+   * @returns {Array<Object>}
+   */
+  blocksForInsert(blocks) {
+    return blocks.map(block => ({ ...block, id: this.documentClient.newId() }));
   }
 
-  async refreshNoteMetadataAfterInsert(noteId) {
-    const note = await this.storage.getNote(noteId);
-    if (!note) return;
-
-    const blocks = (await this.storage.getElementsByNote(noteId))
-      .sort((left, right) => (left.order || 0) - (right.order || 0));
-
-    if (typeof SidebarUtils !== 'undefined') {
-      const metadata = SidebarUtils.buildNoteSaveMetadata(blocks);
-      note.preview = metadata.preview;
-      note.todoProgress = metadata.todoProgress;
+  /**
+   * Add blocks to a note with insertBlocks, which moves the note's blocks at or past `atOrder`
+   * down, stores the new ones, and sets the note's preview, todo progress, and links from its
+   * blocks as stored, as this controller's three writes did after its block writes. Rejects
+   * when it isn't stored.
+   * @param {string} noteId
+   * @param {Array<Object>} blocks
+   * @param {number} [atOrder] - after the note's last block when left out
+   * @returns {Promise<void>}
+   */
+  async insertBlocksInto(noteId, blocks, atOrder) {
+    if (blocks.length > 0) {
+      const outcome = await this.documentClient.insertBlocks(noteId, this.blocksForInsert(blocks), atOrder);
+      // Its kind and code, never what the blocks hold
+      if (outcome.kind !== 'committed') throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
     }
-
-    await this.storage.updateNote(note);
-
-    const linkNames = Utils.extractWikiLinks(
-      blocks
-        .map(block => block.content || block.title || block.caption || '')
-        .filter(Boolean)
-        .join('\n')
-    );
-    await this.storage.updateNoteLinks(noteId, linkNames);
-
     if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
   }
 
@@ -2127,44 +2118,44 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       Utils.showToast('No note is currently open', 'error');
       return;
     }
+    // The note is taken before anything is awaited, and the blocks go to it
+    const noteId = editor.noteId;
 
     try {
       const parsedBlocks = Array.isArray(blocksOrContent)
         ? blocksOrContent
         : this.buildAIInsertBlocks(blocksOrContent);
 
+      // What the editor holds is stored first, each block at its index, so the cursor's place
+      // below is the stored one
       await editor.save();
 
       // Insert at cursor position if a block is focused, otherwise append at end (Req 19.3)
-      let startOrder;
-      if (editor.activeBlock) {
+      let atOrder;
+      if (editor.noteId === noteId && editor.activeBlock) {
         const activeIdx = editor.blocks.findIndex(b => b.id === editor.activeBlock);
-        if (activeIdx !== -1) {
-          startOrder = (editor.blocks[activeIdx].order || activeIdx) + 1;
-          // Shift subsequent blocks to make room
-          const existingElements = await this.storage.getElementsByNote(editor.noteId);
-          const toShift = existingElements.filter(el => (el.order || 0) >= startOrder);
-          for (const el of toShift) {
-            el.order = (el.order || 0) + parsedBlocks.length;
-            await this.storage.saveElement(el);
-          }
-        } else {
-          startOrder = await editor.getNextBlockOrder();
-        }
-      } else {
-        startOrder = await editor.getNextBlockOrder();
+        if (activeIdx !== -1) atOrder = activeIdx + 1;
       }
 
-      const elements = this.createPersistentBlocksForNote(editor.noteId, parsedBlocks, startOrder);
-
-      await this.storage.saveElements(elements);
-      await this.refreshNoteMetadataAfterInsert(editor.noteId);
-      await editor.loadNote(editor.noteId);
+      if (parsedBlocks.length > 0) {
+        const blocks = this.blocksForInsert(parsedBlocks);
+        // The insert's transaction opens now, and the editor takes the blocks in the same task,
+        // so a save from here on writes every block where the insert puts it
+        const inserting = this.documentClient.insertBlocks(noteId, blocks, atOrder);
+        const takeBack = editor.noteId === noteId ? editor.placeInsertedBlocks(noteId, blocks, atOrder) : () => {};
+        const outcome = await inserting;
+        if (outcome.kind !== 'committed') {
+          takeBack();
+          // Its kind and code, never what the blocks hold
+          throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
+        }
+      }
+      if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
       if (this.onRefreshNotesList) await this.onRefreshNotesList();
 
-      Utils.showToast(`Added ${elements.length} AI block${elements.length === 1 ? '' : 's'} to note`, 'success');
+      Utils.showToast(`Added ${parsedBlocks.length} AI block${parsedBlocks.length === 1 ? '' : 's'} to note`, 'success');
     } catch (error) {
-      console.error('Failed to append content:', error);
+      console.error('Failed to append content:', error && error.message);
       Utils.showToast('Failed to add content', 'error');
     }
   }
@@ -2174,21 +2165,21 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       const parsedBlocks = Array.isArray(blocksOrContent)
         ? blocksOrContent
         : this.buildAIInsertBlocks(blocksOrContent);
-      const note = await this.storage.createNote('AI Generated');
-      const elements = this.createPersistentBlocksForNote(note.id, parsedBlocks, 0);
-
-      await this.storage.saveElements(elements);
-      await this.refreshNoteMetadataAfterInsert(note.id);
+      // The note's id is taken now, so the blocks name it
+      const noteId = this.documentClient.newId();
+      const created = await this.documentClient.createNote({ noteId, name: 'AI Generated' });
+      if (created.kind !== 'committed') throw new Error(`Not stored: note (${created.kind}: ${created.code})`);
+      await this.insertBlocksInto(noteId, parsedBlocks);
       if (this.onRefreshNotesList) await this.onRefreshNotesList();
-      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
+      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
 
       Utils.showToast('New note created from AI response', 'success');
 
       if (this.llm.isConfigured()) {
-        this.generateTitleForNewNote(note.id, rawContent || parsedBlocks.map(block => block.content || '').join('\n'));
+        this.generateTitleForNewNote(noteId, rawContent || parsedBlocks.map(block => block.content || '').join('\n'));
       }
     } catch (error) {
-      console.error('Failed to create note:', error);
+      console.error('Failed to create note:', error && error.message);
       Utils.showToast('Failed to create note', 'error');
     }
   }

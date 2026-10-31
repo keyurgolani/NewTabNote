@@ -39,6 +39,7 @@ import { maintenanceCommands } from './maintenance.js';
 import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
 import { sessionCommands, sessionQueries } from './session.js';
+import { snapshotCommands, snapshotQueries } from './snapshots.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/commands.js').CommandType} CommandType */
@@ -92,6 +93,7 @@ const COMMAND_HANDLERS = Object.freeze({
   ...sessionCommands,
   ...maintenanceCommands,
   ...jobCommands,
+  ...snapshotCommands,
 });
 
 /** @type {Readonly<{[T in QueryType]: QueryHandler<T>}>} */
@@ -101,6 +103,7 @@ const QUERY_HANDLERS = Object.freeze({
   ...preferenceQueries,
   ...sessionQueries,
   ...jobQueries,
+  ...snapshotQueries,
 });
 
 /**

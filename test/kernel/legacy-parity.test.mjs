@@ -841,4 +841,211 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     );
   });
+  // ============ Version history and AI chat inserts (#12 slice 4b2b) ============
+
+  /**
+   * A profile's snapshots by key, with each written time read as 'written'
+   * @param {LegacyContext} context
+   */
+  const snapshotsIn = async context => {
+    const { snapshots } = await recordsIn(context, ['snapshots']);
+    return Object.fromEntries(
+      Object.entries(snapshots).map(([key, snapshot]) => [
+        key,
+        { ...snapshot, timestamp: snapshot.timestamp > SEEDED_AT ? 'written' : snapshot.timestamp },
+      ]),
+    );
+  };
+
+  /**
+   * `count` snapshots of `noteId`, oldest last, as 1.4.x's interval left them
+   * @param {string} noteId
+   * @param {number} count
+   */
+  const oldSnapshots = (noteId, count) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `old-${String(index).padStart(2, '0')}`,
+      noteId,
+      timestamp: SEEDED_AT - 1000 * (index + 1),
+      blocks: [{ id: `b${index}`, type: 'text', content: `${index}` }],
+      title: `Then ${index}`,
+    }));
+
+  it('saveSnapshot stores the record Storage.saveSnapshot stores, and keeps the 50 Storage.pruneSnapshots keeps', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('n1', { name: 'Plan' }), legacyEnv.note('n2')],
+      snapshots: [...oldSnapshots('n1', 50), ...oldSnapshots('n2', 1).map(s => ({ ...s, id: 'other', noteId: 'n2' }))],
+    });
+    const blocks = [legacyEnv.block('a', 'n1', 0, 'Milk'), legacyEnv.block('b', 'n1', 1, 'Eggs')].map(
+      ({ canvasId, order, ...serialized }) => serialized,
+    );
+    const made = legacyEnv.plain(await viaStorage.storage.saveSnapshot('n1', blocks, 'Plan'));
+    assertCommitted(
+      await kernel.execute({
+        type: 'saveSnapshot',
+        commandId: 'c1',
+        noteId: 'n1',
+        snapshotId: made.id,
+        blocks,
+        title: 'Plan',
+      }),
+    );
+    const kept = await snapshotsIn(viaKernel);
+    assert.deepEqual(kept, await snapshotsIn(viaStorage));
+    assert.equal(Object.values(kept).filter(snapshot => snapshot.noteId === 'n1').length, 50);
+    assert.equal(kept['old-49'], undefined, 'the oldest goes');
+    assert.deepEqual(Object.keys(kept[made.id]).sort(), ['blocks', 'id', 'noteId', 'timestamp', 'title']);
+  });
+
+  it("restoreSnapshot leaves what 1.4.x's revert left: the snapshot first, the blocks, and the name", async () => {
+    const records = {
+      canvases: [legacyEnv.note('n1', { name: 'Now', pinned: true, folderId: 'f1', titleManuallySet: true })],
+      elements: [legacyEnv.block('a', 'n1', 0, 'Oat milk'), legacyEnv.block('b', 'n1', 1, 'Eggs')],
+      snapshots: [
+        {
+          id: 'then',
+          noteId: 'n1',
+          timestamp: SEEDED_AT - 1,
+          blocks: [legacyEnv.block('a', 'n1', 0, 'Milk')].map(({ canvasId, order, ...serialized }) => serialized),
+          title: 'Then',
+        },
+      ],
+    };
+    const { viaStorage, viaKernel, kernel } = await twin(records);
+    const { storage } = viaStorage;
+    // 1.4.x's _revertToSnapshot, with the editor's blocks as its last save stored them
+    const snap = legacyEnv.plain((await storage.getSnapshots('n1'))[0]);
+    const current = legacyEnv
+      .plain(await storage.getElementsByNote('n1'))
+      .map((/** @type {any} */ { canvasId, order, ...serialized }) => serialized);
+    const pre = legacyEnv.plain(await storage.saveSnapshot('n1', current, 'Now'));
+    await storage.deleteElements(['a', 'b']);
+    for (let i = 0; i < snap.blocks.length; i++)
+      await storage.saveElement({ ...snap.blocks[i], canvasId: 'n1', order: i });
+    const stored = legacyEnv.plain(await storage.getNote('n1'));
+    await storage.updateNote({ ...stored, name: snap.title });
+
+    assertCommitted(
+      await kernel.execute({
+        type: 'restoreSnapshot',
+        commandId: 'c1',
+        noteId: 'n1',
+        snapshotId: 'then',
+        preSnapshotId: pre.id,
+        blocks: snap.blocks,
+        name: snap.title,
+      }),
+    );
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    assert.deepEqual(await snapshotsIn(viaKernel), await snapshotsIn(viaStorage));
+    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+  });
+
+  it("insertBlocks leaves what AI chat's insert at the cursor left, preview, todo progress, and links included", async () => {
+    const records = {
+      canvases: [legacyEnv.note('n1', { name: 'Plan' }), legacyEnv.note('w', { name: 'Work' })],
+      elements: [
+        legacyEnv.block('a', 'n1', 0, 'Milk'),
+        legacyEnv.block('b', 'n1', 1, 'Eggs'),
+        legacyEnv.block('c', 'n1', 2, 'Bread'),
+      ],
+    };
+    const { viaStorage, viaKernel, kernel } = await twin(records);
+    viaStorage.env.load('js/sidebar-utils.js');
+    const { storage } = viaStorage;
+    const SidebarUtils = viaStorage.env.get('SidebarUtils');
+    const Utils = viaStorage.env.get('Utils');
+    const reply = [
+      { id: 'ai-1', type: 'text', content: 'See [[work]]' },
+      { id: 'ai-2', type: 'todo', content: 'Call the bakery', checked: true },
+    ];
+    // 1.4.x's appendAIResponseToNote with the cursor on the first block, then
+    // refreshNoteMetadataAfterInsert
+    const startOrder = 1;
+    for (const element of legacyEnv.plain(await storage.getElementsByNote('n1'))) {
+      if ((element.order || 0) >= startOrder)
+        await storage.saveElement({ ...element, order: element.order + reply.length });
+    }
+    const now = Date.now();
+    await storage.saveElements(
+      reply.map((block, index) => ({
+        ...block,
+        canvasId: 'n1',
+        order: startOrder + index,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    const note = legacyEnv.plain(await storage.getNote('n1'));
+    const blocks = legacyEnv
+      .plain(await storage.getElementsByNote('n1'))
+      .sort((/** @type {any} */ left, /** @type {any} */ right) => (left.order || 0) - (right.order || 0));
+    Object.assign(note, SidebarUtils.buildNoteSaveMetadata(blocks));
+    await storage.updateNote(note);
+    const text = blocks
+      .map((/** @type {any} */ block) => block.content || block.title || block.caption || '')
+      .filter(Boolean)
+      .join('\n');
+    await storage.updateNoteLinks('n1', Utils.extractWikiLinks(text));
+
+    assertCommitted(
+      await kernel.execute({ type: 'insertBlocks', commandId: 'c1', noteId: 'n1', blocks: reply, atOrder: 1 }),
+    );
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    /** @param {LegacyContext} context */
+    const links = async context =>
+      Object.values((await recordsIn(context, ['links'])).links).map(({ id, ...link }) => link);
+    assert.deepEqual(await links(viaKernel), await links(viaStorage));
+    assert.equal((await links(viaKernel)).length, 1);
+  });
+
+  it("the kernel's preview, todo progress, and wiki-link names are SidebarUtils' and Utils'", async () => {
+    const page = legacyContext();
+    opened.push(page);
+    page.env.load('js/sidebar-utils.js');
+    const SidebarUtils = page.env.get('SidebarUtils');
+    const Utils = page.env.get('Utils');
+    const { noteSaveMetadata, wikiLinkNames } = await import('../../js/kernel/core/domain/note.js');
+    const long = `${'word '.repeat(40)}end`;
+    /** @type {Array<Array<Record<string, unknown>>>} */
+    const cases = [
+      [],
+      [
+        { type: 'text', content: '' },
+        { type: 'text', content: '<p>Hello&nbsp;<b>there</b><br>friend</p>' },
+      ],
+      [{ type: 'toggle', content: '<i>Open</i>', children: 'inside' }],
+      [{ type: 'bookmark', title: 'A page', description: 'About it', url: 'https://example.test/' }],
+      [{ type: 'equation', equation: 'E = mc^2' }],
+      [
+        {
+          type: 'table',
+          tableData: [
+            ['<b>a</b>', ''],
+            ['c', 'd'],
+          ],
+        },
+      ],
+      [
+        { type: 'file', fileName: 'notes.pdf' },
+        { type: 'video', videoUrl: 'https://example.test/v' },
+      ],
+      [
+        { type: 'todo', content: 'one', checked: true },
+        { type: 'todo', content: 'two' },
+        { type: 'todo', checked: true },
+      ],
+      [{ type: 'text', content: long }],
+      [{ type: 'divider' }, { type: 'image', imageUrl: 'data:' }],
+    ];
+    for (const blocks of cases) {
+      const records = blocks.map((block, index) => ({ id: `b${index}`, canvasId: 'n1', ...block }));
+      assert.deepEqual(noteSaveMetadata(records), legacyEnv.plain(SidebarUtils.buildNoteSaveMetadata(records)));
+    }
+    for (const text of ['', 'none', '[[A]] and [[ B ]] and [[A]]', '[[]] [[x]y]] [[Nested [[Inner]]]]', '[[a\nb]]']) {
+      assert.deepEqual(wikiLinkNames(text), legacyEnv.plain(Utils.extractWikiLinks(text)), text);
+    }
+  });
 });

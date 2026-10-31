@@ -75,6 +75,20 @@ const COMMAND_SAMPLES = {
   deleteBlocks: { noteId: 'n1', blockIds: ['b1', 'never-saved'] },
   applyDerivedTitle: { noteId: 'n1', name: 'Derived', contentHash: 'h1' },
   attachInsights: { noteId: 'n1', insights: { todos: ['Call'] }, contentHash: 'h1' },
+  saveSnapshot: {
+    noteId: 'n1',
+    snapshotId: 's1',
+    blocks: [{ id: 'b1', type: 'text', content: 'Line' }],
+    title: 'Plan',
+  },
+  restoreSnapshot: {
+    noteId: 'n1',
+    snapshotId: 's1',
+    preSnapshotId: 's2',
+    blocks: [{ id: 'b1', type: 'text', content: 'Line' }],
+    name: 'Plan',
+  },
+  insertBlocks: { noteId: 'n1', blocks: [{ id: 'b2', type: 'text', content: 'From the chat' }], atOrder: 1 },
   captureToDailyNote: {
     noteId: 'd1',
     blockId: 'b9',
@@ -107,6 +121,8 @@ const QUERY_SAMPLES = {
   getPopupInsightsEnabled: {},
   getInsightsPending: { noteId: 'n1' },
   getJobRuns: {},
+  listSnapshots: { noteId: 'n1' },
+  getSnapshot: { snapshotId: 's1' },
 };
 
 /** The coordinator's own queries, which take no field */

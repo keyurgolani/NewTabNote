@@ -367,6 +367,9 @@ describe('the contract schema lint (#13, AC5)', () => {
       captureToDailyNote: ['capture.content', 'capture.source', 'capture.title', 'capture.url'],
       createFolder: ['name'],
       saveWorkspaceSession: ['session.openTabs.[]'],
+      saveSnapshot: ['blocks.[]', 'title'],
+      restoreSnapshot: ['blocks.[]', 'name'],
+      insertBlocks: ['blocks.[]'],
       // A whole block is content, since any of its fields can hold what the user wrote
       blockInput: ['(root)'],
       blockRecord: ['(root)'],
@@ -375,6 +378,7 @@ describe('the contract schema lint (#13, AC5)', () => {
       noteRecord: ['insights', 'name', 'preview'],
       // A search entry holds a note's name and text, and the tags found in it
       searchEntryRecord: ['(root)'],
+      snapshotRecord: ['blocks', 'title'],
       workspaceSession: ['openTabs.[]'],
     });
   });
