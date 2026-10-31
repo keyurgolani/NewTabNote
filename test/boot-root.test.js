@@ -209,9 +209,10 @@ describe('the boot root loads the workspace chunk and calls its boot() (js/entri
     assert.deepEqual(failed, [{ buildId: 'build-a', chunk: 'newtab', reason: 'uncaught' }]);
   });
 
-  it('is the one module newtab.html loads, after the classic boot guard, and loads js/workspace.js as the workspace chunk', () => {
+  it('is the one module newtab.html loads, after the network guard and the classic boot guard, and loads js/workspace.js as the workspace chunk', () => {
     const scripts = htmlTags(read('newtab.html')).filter((tag) => tag.name === 'script');
     assert.deepEqual(scripts.map((tag) => [tag.attributes.get('src'), tag.attributes.get('type') || 'classic']), [
+      ['js/network-guard.js', 'classic'],
       ['js/entries/boot-guard.js', 'classic'],
       ['js/entries/newtab.js', 'module'],
     ]);

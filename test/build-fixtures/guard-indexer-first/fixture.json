@@ -1,0 +1,13 @@
+{
+  "rule": "the indexer, a module worker, doesn't import the network guard first",
+  "expect": [
+    "guard/worker-first"
+  ],
+  "edits": [
+    {
+      "file": "js/workers/indexer.js",
+      "replace": "import '../kernel/composition/network-guard-first.js';\n",
+      "with": ""
+    }
+  ]
+}

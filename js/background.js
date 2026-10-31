@@ -10,6 +10,9 @@
  * (test/background-coordinator.test.js lists each listener, and which start it).
  */
 
+// The network guard first, ahead of every other module (#21 slice 1b): it wraps the worker's
+// fetch before anything else can call it, and never throws
+import './kernel/composition/network-guard-first.js';
 // utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
 import './utils.js';
 import './storage.js';
@@ -17,6 +20,12 @@ import { createWorkerClient, installWorkerRouter } from './kernel/composition/ba
 import { coordinatorInstanceId, createCoordinator, unavailableCoordinator } from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
+import { REGISTRY_PROBLEMS } from './kernel/composition/destinations.js';
+import { journalRefusals, refuseEveryDestination } from './kernel/composition/network-refusals.js';
+
+// A registry the destination client found a problem with: the client refuses every request,
+// and so does the network guard, which reports why once (#21 slice 1b)
+if (REGISTRY_PROBLEMS.length > 0) refuseEveryDestination(self);
 
 /** This worker instance's id, which #13's router sends in each welcome (#35) */
 const instanceId = coordinatorInstanceId();
@@ -141,17 +150,37 @@ async function ensureOffscreenDocument() {
     return;
   }
 
-  // Create offscreen document if it doesn't exist
-  if (creatingOffscreen) {
-    await creatingOffscreen;
-  } else {
+  // Create offscreen document if it doesn't exist. One that couldn't be made is made again at
+  // the next request, so a failure once doesn't send every later one around it.
+  if (!creatingOffscreen) {
     creatingOffscreen = chrome.offscreen.createDocument({
       url: 'offscreen.html',
       reasons: ['DOM_SCRAPING'],
       justification: 'Making API requests to bypass CORS for Ollama and other LLM providers'
+    }).finally(() => {
+      creatingOffscreen = null;
     });
-    await creatingOffscreen;
-    creatingOffscreen = null;
+  }
+  await creatingOffscreen;
+}
+
+/** How long the worker waits for the offscreen document's answer before it fetches itself */
+const OFFSCREEN_ANSWER_MS = 30_000;
+
+/**
+ * `message` sent to the offscreen document, and its answer, or undefined when it doesn't
+ * answer within OFFSCREEN_ANSWER_MS
+ * @param {object} message
+ * @returns {Promise<unknown>}
+ */
+async function askOffscreen(message) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), OFFSCREEN_ANSWER_MS); });
+  try {
+    return await Promise.race([chrome.runtime.sendMessage(message), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -197,12 +226,12 @@ async function handleApiRequest(request) {
       /** @type {{method: string, body?: string}} */
       const options = { method: checked.method };
       if (checked.body !== undefined) options.body = checked.body;
-      const response = await chrome.runtime.sendMessage({
+      const response = /** @type {{ok: boolean, status: number, data: *} | {error: string} | undefined} */ (await askOffscreen({
         type: 'OFFSCREEN_API_REQUEST',
         url: checked.url,
         options,
         loopbackOrigin: new URL(checked.url).origin,
-      });
+      }));
       // Its answer is final, an error included, so the loopback origin is reached once. The
       // worker fetches itself only when the document can't be reached or doesn't answer
       if (response) return response;
@@ -371,6 +400,8 @@ async function captureToDailyNote(item) {
 try {
   const events = createFailureEvents({ surface: 'worker-internal' });
   failureEvents = events;
+  // The calls the network guard refused, the ones it held since the worker started first
+  journalRefusals(self, events);
   // Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
   // reconcile now, not only at the next failure; with none held this reads one key and opens
   // nothing

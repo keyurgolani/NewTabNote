@@ -184,6 +184,10 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
       'https://api.openai.com/v1/%2e%2e/models',
       'https://api.openai.com/v1/%2E./models',
       'https://api.openai.com/v1/.%2e/models',
+      // An encoded percent sign, which would decode to another escape
+      'https://api.openai.com/v1/%252e%252e/models',
+      'https://api.openai.com/v1/%252fmodels',
+      'https://api.openai.com/v1/models%25',
     ]) {
       assert.equal(take(url).ok, false, url);
     }
@@ -241,6 +245,31 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
     assert.deepEqual(client.headerProblems(gemini, {}, 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=10'), []);
   });
 
+  it('reads headers as fetch does, through the platform Headers: any iterable of pairs, read once', () => {
+    const url = 'https://api.openai.com/v1/models';
+    const openai = take(url).row;
+    const sets = [new Set([['X-Other', '1']]), (function* pairs() { yield ['X-Other', '1']; })(), new Map([['X-Other', '1']])];
+    for (const headers of sets) assert.notDeepEqual(client.headerProblems(openai, headers, url), [], String(headers.constructor.name));
+    assert.deepEqual(client.headerPairs(new Set([['Authorization', 'Bearer test']])), [['authorization', 'Bearer test']]);
+    assert.deepEqual(client.headerPairs((function* pairs() { yield ['Content-Type', 'application/json']; })()), [['content-type', 'application/json']]);
+    // What fetch would refuse is refused, not read some other way
+    for (const headers of [[['Authorization']], 'Authorization: x', [['Bad Name', 'x']]]) {
+      assert.equal(client.headerPairs(headers), null, JSON.stringify(headers));
+      assert.notDeepEqual(client.headerProblems(openai, headers, url), [], JSON.stringify(headers));
+    }
+  });
+
+  it('sends exactly the header pairs it read, never the caller\'s object again', () => {
+    const openai = take('https://api.openai.com/v1/models').row;
+    let reads = 0;
+    const shifting = { *[Symbol.iterator]() { reads += 1; yield ['Authorization', 'Bearer test']; if (reads > 1) yield ['X-Other', '1']; } };
+    const init = client.requestInit(openai, { method: 'GET', headers: shifting });
+    assert.equal(reads, 1);
+    assert.deepEqual(init.headers, [['authorization', 'Bearer test']]);
+    assert.notEqual(init.headers, shifting);
+    assert.throws(() => client.requestInit(openai, { method: 'GET', headers: [['Authorization']] }), TypeError);
+  });
+
   it('reads every header form: a Headers instance, a list of pairs, and a record', () => {
     const openai = take('https://api.openai.com/v1/models').row;
     const url = 'https://api.openai.com/v1/models';
@@ -271,7 +300,7 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
   it('a request with a credential or a body goes with no cookies and no redirect followed, and a model download as before', () => {
     const openai = take('https://api.openai.com/v1/models').row;
     assert.deepEqual(client.requestInit(openai, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', credentials: 'omit', redirect: 'error',
+      method: 'POST', headers: [['content-type', 'application/json']], body: '{}', credentials: 'omit', redirect: 'error',
     });
     assert.deepEqual(client.requestInit(openai, { method: 'GET' }), { method: 'GET', credentials: 'omit', redirect: 'error' });
     const model = take('https://huggingface.co/x').row;

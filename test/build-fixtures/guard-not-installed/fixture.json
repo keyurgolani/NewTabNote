@@ -1,0 +1,13 @@
+{
+  "rule": "the network guard each page loads first doesn't install, so it wraps nothing",
+  "expect": [
+    "guard/not-installed"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/network-guard-first.js",
+      "replace": "installContextGuard(globalThis);",
+      "with": "globalThis.ntnFixtureGuard = installContextGuard;"
+    }
+  ]
+}

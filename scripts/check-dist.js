@@ -7,7 +7,8 @@
  * the build, and nothing ships unnamed (scripts/build/closure.js); each page preloads exactly
  * the chunks its module scripts import, and loads no module as a classic script; and the
  * service worker is one self-contained module, which loads nothing after it starts and never
- * waits at its top level (scripts/build/background.js).
+ * waits at its top level (scripts/build/background.js); and each page's first script is the
+ * network guard, which wraps every network API it covers (scripts/build/guard.js).
  *
  * #13 AC7 had every module under the contract, messaging, and registry directories ship whether
  * anything imported it yet or not, since a module missing from the copied tree broke whichever
@@ -23,6 +24,7 @@ const path = require('path');
 const { fromDirectory } = require('./build/package-files.js');
 const { checkClosure, checkPreloads, checkClassicScripts } = require('./build/closure.js');
 const { checkBackgroundOutput } = require('./build/background.js');
+const { checkGuardPages, checkGuardScript } = require('./build/guard.js');
 const { format, plural } = require('./build/diagnostics.js');
 const { ASSETS_DIR, CLASSIC_SCRIPTS } = require('./build/vite-config.js');
 
@@ -46,7 +48,7 @@ function main(argv = process.argv.slice(2), { log = console.log, error = console
 
   const files = fromDirectory(dir, `${name}/`);
   const closure = checkClosure(files);
-  const problems = [...closure.problems, ...checkPreloads(files), ...checkClassicScripts(files), ...checkBackgroundOutput(files)];
+  const problems = [...closure.problems, ...checkPreloads(files), ...checkClassicScripts(files), ...checkBackgroundOutput(files), ...checkGuardPages(files), ...checkGuardScript(files)];
   if (problems.length > 0) {
     error(`check:dist failed: ${plural(problems.length, 'problem')} in ${name}/`);
     problems.forEach(found => error(`  - ${format(found)}`));

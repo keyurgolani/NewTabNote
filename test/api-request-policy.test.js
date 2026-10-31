@@ -349,6 +349,39 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
     }
   });
 
+  it("makes the offscreen document again at the next loopback request when making it failed, instead of fetching itself from then on", async () => {
+    const { env, offscreen, fetches, ask } = await worker();
+    let made = 0;
+    env.chrome.api.runtime.getContexts = async () => [];
+    env.chrome.api.offscreen = {
+      createDocument: async () => {
+        made += 1;
+        if (made === 1) throw new Error('Only a single offscreen document may be created');
+      },
+    };
+    const message = { type: 'API_REQUEST', url: 'http://localhost:11434/api/tags', options: { method: 'GET' } };
+    assert.equal((await ask(message, page())).ok, true);
+    assert.equal((await ask(message, page())).ok, true);
+    assert.equal(made, 2);
+    assert.equal(offscreen.length, 1, 'the second request went through the document');
+    assert.deepEqual(fetches.map(({ url }) => url), ['http://localhost:11434/api/tags'], 'only the first fell back');
+  });
+
+  it("fetches itself once when the offscreen document doesn't answer within 30 s, and not before", async () => {
+    const { env, offscreen, fetches, ask } = await worker({ offscreenAnswer: () => new Promise(() => {}) });
+    const pending = ask({ type: 'API_REQUEST', url: 'http://localhost:11434/api/chat', options: { method: 'POST', body: '{}' } }, page());
+    // The worker's timers run on the test's fake clock
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    env.clock.tick(29_999);
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(fetches, []);
+    env.clock.tick(1);
+    const answer = await within(pending, 1000);
+    assert.equal(answer && answer.ok, true);
+    assert.equal(offscreen.length, 1);
+    assert.deepEqual(fetches.map(({ url }) => url), ['http://localhost:11434/api/chat']);
+  });
+
   it('Ollama on its default and on a custom localhost port goes to the offscreen document, with its origin', async () => {
     const { env, offscreen, ask } = await worker();
     assert.equal((await ask({ type: 'API_REQUEST', url: 'http://localhost:11434/api/tags', options: { method: 'GET' } }, page())).ok, true);

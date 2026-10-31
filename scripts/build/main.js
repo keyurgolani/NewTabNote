@@ -37,6 +37,7 @@ const { checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, checkBundl
 const { checkEnvironment, checkSourceEnvironment } = require('./environment.js');
 const { checkCommonJs } = require('./commonjs.js');
 const { checkBackgroundOutput, checkBackgroundSources } = require('./background.js');
+const { checkGuardPages, checkGuardScript } = require('./guard.js');
 const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build-info.js');
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
@@ -157,6 +158,8 @@ async function copyUnbundled(root, outDir, mode) {
     fs.writeFileSync(target, data);
   };
   for (const [file, how] of Object.entries(CLASSIC_SCRIPTS)) {
+    // The guard pass wrote it (scripts/build/vite-config.js)
+    if (how === 'bundle') continue;
     const source = fs.readFileSync(path.join(root, file));
     if (how === 'as-is') {
       copy(file, source);
@@ -206,9 +209,11 @@ function firstParty(sources) {
  */
 function checkOutput(outDir, bundled, root) {
   const files = fromDirectory(outDir, 'the build');
-  // A script a page loads as a classic script and the bundle also holds as a module would run twice
-  const loadMode = Object.keys(CLASSIC_SCRIPTS).filter((file) => bundled.modules[file])
-    .map((file) => problem('build/load-mode', file, `a page loads it as a classic script, and the bundle holds it as a module too, in ${bundled.modules[file].join(', ')}`));
+  // A script a page loads as a classic script and the bundle also holds as a module would run
+  // twice; the one the guard pass bundles is held by its own file alone
+  const heldElsewhere = (/** @type {string} */ file) => (bundled.modules[file] || []).filter((holder) => holder !== file);
+  const loadMode = Object.keys(CLASSIC_SCRIPTS).filter((file) => heldElsewhere(file).length > 0)
+    .map((file) => problem('build/load-mode', file, `a page loads it as a classic script, and the bundle holds it as a module too, in ${heldElsewhere(file).join(', ')}`));
   const modules = [...new Set([...bundled.graphs.pages, ...bundled.graphs.background])].sort();
   const sources = sourcesOf(modules, root);
   const background = new Set(bundled.graphs.background);
@@ -230,6 +235,9 @@ function checkOutput(outDir, bundled, root) {
     // Vendored modules too: the bundler wraps one as readily, and swaps its require (#99's delta)
     ...checkCommonJs(sources),
     ...checkBackgroundOutput(files),
+    // The network guard first on every page, and the one the pages run (#21 slice 1b)
+    ...checkGuardPages(files),
+    ...checkGuardScript(files),
     ...checkBackgroundSources(firstParty(sources).filter(({ file }) => background.has(file))),
   ];
 }

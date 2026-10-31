@@ -297,6 +297,12 @@ describe('recover-orphans: "Recover N blocks into a new Inbox note" (#20, refine
 });
 
 /**
+ * The indexer's first import, the network guard, which test/network-guard.test.js covers. This
+ * file reads only the entries the indexer builds, so it runs the rest as a script.
+ */
+const GUARD_IMPORT = "import '../kernel/composition/network-guard-first.js';\n";
+
+/**
  * js/workers/indexer.js as the page runs it, in a context of its own: its INDEX_NOTES answer
  * @param {unknown[]} notes
  * @param {Record<string, unknown[]>} blocks
@@ -308,7 +314,9 @@ function indexerEntries(notes, blocks) {
     postMessage: (/** @type {any} */ message) => posted.push(message),
     onmessage: /** @type {any} */ (null),
   };
-  vm.runInNewContext(fs.readFileSync(new URL('../../js/workers/indexer.js', import.meta.url), 'utf8'), { self });
+  const source = fs.readFileSync(new URL('../../js/workers/indexer.js', import.meta.url), 'utf8');
+  assert.ok(source.includes(GUARD_IMPORT), 'the indexer imports the network guard first');
+  vm.runInNewContext(source.replace(GUARD_IMPORT, ''), { self });
   self.onmessage({ data: { type: 'INDEX_NOTES', data: { notes, blocks } } });
   // Out of the worker's realm, so its arrays compare as this one's do
   return JSON.parse(JSON.stringify(posted[0].data));

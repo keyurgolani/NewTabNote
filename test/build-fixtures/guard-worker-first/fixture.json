@@ -1,0 +1,18 @@
+{
+  "rule": "the service worker imports other modules ahead of the network guard, which would run unguarded",
+  "expect": [
+    "guard/worker-first"
+  ],
+  "edits": [
+    {
+      "file": "js/background.js",
+      "replace": "import './kernel/composition/network-guard-first.js';\n",
+      "with": ""
+    },
+    {
+      "file": "js/background.js",
+      "replace": "import './storage.js';\n",
+      "with": "import './storage.js';\nimport './kernel/composition/network-guard-first.js';\n"
+    }
+  ]
+}
