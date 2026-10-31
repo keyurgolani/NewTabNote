@@ -126,6 +126,21 @@ describe('the analyzer (scripts/build/budgets.js)', () => {
     assert.equal(graphs.moment, undefined, 'a planned chunk the build lacks has no graph');
   });
 
+  it('counts the chunk the root loads at once as start, not lazy, so the row measures the tab and not only its root', () => {
+    const { files, chunks, loaderChunks } = bundleFixture();
+    const booted = analyze({ chunks, files, loaderChunks, budgets: budgetsFor() }).newtab;
+    assert.deepEqual(booted.boots, [{ chunk: 'workspace', file: 'assets/workspace.js', from: 'assets/newtab.js' }]);
+    // Without startChunks the workspace and what it imports would be lazy, the way the byte-mode
+    // probe files them, and start JS would be the root, its loader and the boot guard
+    const rootOnly = analyze({ chunks, files, loaderChunks, budgets: budgetsFor({ newtab: { ...budgetsFor().entries.newtab, startChunks: undefined } }) }).newtab;
+    assert.ok(rootOnly.lazy.files.some(entry => entry.file === 'assets/workspace.js') && rootOnly.lazy.files.some(entry => entry.file === 'assets/host.js'));
+    assert.ok(!booted.lazy.files.some(entry => entry.file === 'assets/workspace.js' || entry.file === 'assets/host.js'));
+    const sum = list => list.reduce((total, file) => total + files.read(file).length, 0);
+    assert.equal(rootOnly.start.bytes.js.raw, sum(['assets/newtab.js', 'js/entries/boot-guard.js', 'js/runtime/lazy.js']));
+    assert.equal(booted.start.bytes.js.raw, rootOnly.start.bytes.js.raw + sum(['assets/workspace.js', 'assets/host.js']));
+    assert.ok(booted.start.modules.includes('js/kernel/composition/host.js'));
+  });
+
   it('names a package by node_modules or its vendored record, and matches globs by folder', () => {
     const vendored = new Map([['js/lib/chart.js', 'chart.js'], ['js/lib/valibot/', 'valibot']]);
     assert.equal(packageOf('node_modules/@scope/pkg/x.js', vendored), '@scope/pkg');
@@ -170,6 +185,28 @@ describe('the budget gate', () => {
     assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, dependencies: ['chart.js', 'fuse.js', 'jszip', 'valibot', 'left-pad', '@xenova/transformers'] } })), [
       "budget/dependency newtab: its graph holds some-parser, which its row doesn't allow",
       'budget/dependency newtab: its row allows left-pad, which its graph no longer holds: take it out',
+    ]);
+  });
+
+  it('holds the row to the chunk the root boots: a row between the root and the tab fails', () => {
+    const newtab = budgetsFor().entries.newtab;
+    const graphs = analyze({ ...bundleFixture(), budgets: budgetsFor() });
+    const root = graphs.newtab.start.bytes.js.raw - [...graphs.newtab.start.files].filter(entry => entry.file === 'assets/workspace.js' || entry.file === 'assets/host.js').reduce((sum, entry) => sum + entry.raw, 0);
+    const between = { ...newtab, start: { ...newtab.start, js: { raw: root + 1, gzip: 100 * KIB } } };
+    assert.match(run(budgetsFor({ newtab: between })).join('\n'), /^budget\/bytes newtab: its start JS is \d+ bytes raw/);
+    // Counting only the root, the same row would pass without checking the tab
+    assert.deepEqual(run(budgetsFor({ newtab: { ...between, startChunks: undefined } })), []);
+  });
+
+  it("fails a startChunks name the build doesn't have, or one nothing on the page's start loads", () => {
+    const newtab = budgetsFor().entries.newtab;
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, startChunks: ['workspace', 'shell'] } })), [
+      "budget/entry newtab: its row's startChunks names shell, and the build has no loader chunk by that name, so its start would leave out what the page loads at boot",
+    ]);
+    const fixture = bundleFixture();
+    fixture.chunks[0] = { ...fixture.chunks[0], dynamicImports: [] };
+    assert.deepEqual(run(budgetsFor(), fixture), [
+      "budget/entry newtab: its row's startChunks names workspace (assets/workspace.js), and nothing on the page's start loads it with import(): the row says the page boots a chunk it doesn't",
     ]);
   });
 

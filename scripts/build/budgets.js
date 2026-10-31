@@ -80,6 +80,9 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
  * @property {Part} start
  * @property {Part} lazy
  * @property {Part} workers
+ * @property {Array<{chunk: string, file: string | null, from: string | null}>} [boots] - for a page,
+ *   each of its row's startChunks: the chunk's file (null: the build has no such loader chunk) and
+ *   the start chunk whose import() loads it (null: nothing on the page's start does)
  */
 
 /**
@@ -261,6 +264,8 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
     let startChunks = new Set();
     let kind = 'page';
     let at = '';
+    /** @type {NonNullable<EntryGraph['boots']>} */
+    const boots = [];
     if (entry.page) {
       if (!files.has(entry.page)) continue;
       at = entry.page;
@@ -284,7 +289,16 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
           if (file !== null) start.set(file, 'css');
         }
       }
-      for (const name of entry.startChunks || []) if (loaderChunks[name]) roots.push(loaderChunks[name]);
+      // What the page loads at once through its loader counts as start: today's root loads the
+      // workspace chunk, the whole tab, at boot. Each one has to be built, and loaded by an
+      // import() on the page's own start, or the row would measure only the root
+      const own = closure(roots);
+      for (const chunk of entry.startChunks || []) {
+        const file = loaderChunks[chunk] || null;
+        const from = file === null ? null : [...own].sort().find((at) => (byFile.get(at)?.dynamicImports || []).includes(file)) || null;
+        boots.push({ chunk, file, from });
+        if (file !== null) roots.push(file);
+      }
       startChunks = closure(roots);
     } else if (entry.chunk) {
       if (!loaderChunks[entry.chunk]) continue;
@@ -312,6 +326,7 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
     }
     addFonts(lazyTyped);
     graphs[name] = { kind, at, start: partOf(start), lazy: partOf(lazyTyped), workers: partOf(new Map([...workers].map((file) => [file, 'js']))) };
+    if (boots.length > 0) graphs[name].boots = boots;
   }
   return graphs;
 }
@@ -380,6 +395,10 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
   for (const [name, graph] of Object.entries(graphs)) {
     const entry = budgets.entries[name];
     if (!entry || entry.planned) continue;
+    for (const boot of graph.boots || []) {
+      if (boot.file === null) problems.push(problem('budget/entry', name, `its row's startChunks names ${boot.chunk}, and the build has no loader chunk by that name, so its start would leave out what the page loads at boot`));
+      else if (boot.from === null) problems.push(problem('budget/entry', name, `its row's startChunks names ${boot.chunk} (${boot.file}), and nothing on the page's start loads it with import(): the row says the page boots a chunk it doesn't`));
+    }
     for (const [type, limit] of Object.entries(entry.start || {})) {
       if (!limit) continue;
       const measured = graph.start.bytes[type] || { raw: 0, gzip: 0, files: 0 };

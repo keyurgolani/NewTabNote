@@ -1,0 +1,16 @@
+{
+  "rule": "the new tab's start JS counts the workspace chunk its root loads at boot: a row of 20 KiB, over the root's 7.1 KiB and under the tab's 547.5 KiB, fails (#27 AC3)",
+  "expect": [
+    "budget/bytes"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 716800, \"gzip\": 204800 }",
+      "with": "\"js\": { \"raw\": 20480, \"gzip\": 204800 }"
+    }
+  ]
+}
