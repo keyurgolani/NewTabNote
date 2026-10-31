@@ -487,7 +487,7 @@ describe('a check resolves what it observes (6b)', () => {
     assert.equal((await at(records, 'recovery-readiness/point-unverified/-'))?.state, 'resolved');
   });
 
-  it("#78's local inference: a check that observes load-failed resolves the incident 1b's failure event raised", async () => {
+  it("#78's local inference: a status-only reporter leaves 1b's load-failed open; a check that looked resolves it", async () => {
     const profile = trustProfile();
     const db = databaseOn(profile);
     opened.push(db);
@@ -497,15 +497,32 @@ describe('a check resolves what it observes (6b)', () => {
     await journal.flush();
     assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'open');
     clock.advance(1000);
-    // A provider that can't observe it leaves it open; one that can, and finds it gone, resolves it
-    const blind = await useCases(records, clock, [provider('local-inference', () => ({ status: 'verified' }))]);
-    await blind.trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
-    assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'open');
-    clock.advance(1000);
-    const seeing = await useCases(records, clock, [
-      provider('local-inference', () => ({ status: 'unverified' }), { observes: ['load-failed'] }),
+    // #80's review (R6e): reading its own incident and answering by status alone isn't looking
+    const statusOnly = await useCases(records, clock, [
+      provider(
+        'local-inference',
+        async () => {
+          const failing = (await records.incidents()).some(
+            incident => incident.faultCode === 'load-failed' && incident.state !== 'resolved',
+          );
+          return failing ? { status: 'action-required' } : { status: 'not-configured' };
+        },
+        { observes: ['load-failed'] },
+      ),
     ]);
-    await seeing.trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+    await statusOnly.trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal(
+      (await at(records, 'local-inference/load-failed/-'))?.state,
+      'open',
+      'a status-only reporter resolved its own incident',
+    );
+    clock.advance(1000);
+    const looking = await useCases(records, clock, [
+      provider('local-inference', () => ({ status: 'verified', looked: [{ faultCode: 'load-failed' }] }), {
+        observes: ['load-failed'],
+      }),
+    ]);
+    await looking.trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
     assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'resolved');
   });
 
@@ -529,5 +546,234 @@ describe('a check resolves what it observes (6b)', () => {
     await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
     await settle();
     assert.equal((await at(records, 'index/lagging/-'))?.state, 'open');
+  });
+});
+
+describe("#80's review round", () => {
+  it("R6a: a check whose read failed answers unverified, and doesn't resolve what it couldn't look at", async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    let portFails = false;
+    const check = async () =>
+      portFails
+        ? { status: 'unverified', evidence: { errorCode: 'unreadable' } }
+        : {
+            status: 'action-required',
+            faults: [{ faultCode: 'legacy-secret', severity: 'data-risk' }],
+            looked: [{ faultCode: 'legacy-secret' }],
+          };
+    const { trust } = await useCases(records, clock, [provider('credentials', check, { observes: ['legacy-secret'] })]);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'credentials/legacy-secret/-'))?.state, 'open');
+    clock.advance(1000);
+    portFails = true;
+    await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+    assert.equal(
+      (await at(records, 'credentials/legacy-secret/-'))?.state,
+      'open',
+      'a check that could not look resolved it',
+    );
+  });
+
+  it('looked is per subject: a check that looked at one subject resolves only that one', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    await records.raise({
+      providerId: 'credentials',
+      faultCode: 'legacy-secret',
+      subjectId: 'settings',
+      severity: 'data-risk',
+    });
+    await records.raise({
+      providerId: 'credentials',
+      faultCode: 'legacy-secret',
+      subjectId: 'canvases',
+      severity: 'data-risk',
+    });
+    clock.advance(1000);
+    const providers = [
+      provider(
+        'credentials',
+        () => ({ status: 'verified', looked: [{ faultCode: 'legacy-secret', subjectId: 'settings' }] }),
+        {
+          observes: ['legacy-secret'],
+        },
+      ),
+    ];
+    const { trust } = await useCases(records, clock, providers);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'credentials/legacy-secret/settings'))?.state, 'resolved');
+    assert.equal((await at(records, 'credentials/legacy-secret/canvases'))?.state, 'open');
+  });
+
+  it('R6b: a check resolves only sightings from before it started', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    /** @type {() => void} */
+    let started = () => {};
+    const startedNow = new Promise(resolve => {
+      started = () => resolve(undefined);
+    });
+    const check = async () => {
+      started();
+      await gate;
+      return { status: 'verified', looked: [{ faultCode: 'load-failed' }] };
+    };
+    const { trust, journal } = await useCases(records, clock, [
+      provider('local-inference', check, { observes: ['load-failed'] }),
+    ]);
+    const verifying = trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    await startedNow;
+    clock.advance(100);
+    journal.event('embeddings.load-failed', { errorCode: 'quota' });
+    await journal.flush();
+    clock.advance(100);
+    release();
+    await verifying;
+    assert.equal(
+      (await at(records, 'local-inference/load-failed/-'))?.state,
+      'open',
+      'resolved a sighting from while it ran',
+    );
+  });
+
+  it("R6d: observes refuses the records' own faults, open-failed and write-failed", () => {
+    const root = createRegistryRoot({ host: 'workspace' });
+    const base = provider('storage', () => ({ status: 'verified' }), { group: 'storage' });
+    root.register(health, [
+      { ...base, id: 'storage', rank: 1, observes: ['open-failed'] },
+      { ...base, id: 'capture', rank: 2, observes: ['write-failed'] },
+      { ...base, id: 'backup', rank: 3, observes: ['quota'] },
+    ]);
+    const states = Object.fromEntries(root.resolve().contributions.map(item => [item.id, item.state]));
+    assert.deepEqual(states, { storage: 'unresolved', capture: 'unresolved', backup: 'enabled' });
+  });
+
+  it('nit 9: a result that looked at a fault outside observes is answered as outside the schema', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
+    clock.advance(1000);
+    const providers = [
+      provider('index', () => ({ status: 'verified', looked: [{ faultCode: 'lagging' }, { faultCode: 'stalled' }] }), {
+        observes: ['lagging'],
+      }),
+    ];
+    const { trust } = await useCases(records, clock, providers);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'index/lagging/-'))?.state, 'open');
+    const [receipt] = await records.latestReceipts();
+    assert.deepEqual([receipt.status, receipt.evidence.errorCode], ['unverified', 'invalid-check-result']);
+    assert.ok((await records.events()).some(item => item.code === 'trust.check-failed'));
+  });
+
+  it('nit 9: a result that reports a fault outside observes is answered as outside the schema', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    const providers = [
+      provider('index', () => ({ status: 'degraded', faults: [{ faultCode: 'stalled', severity: 'degraded' }] }), {
+        observes: ['lagging'],
+      }),
+    ];
+    const { trust } = await useCases(records, clock, providers);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    const [receipt] = await records.latestReceipts();
+    assert.deepEqual([receipt.status, receipt.evidence.errorCode], ['unverified', 'invalid-check-result']);
+    assert.equal(await at(records, 'index/stalled/-'), undefined);
+  });
+
+  it('I-a: a summary whose store read fails says nothing is safe', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const f = flakyStore(db);
+    const rb = await recordsOn(f.store, profile, { clock, prefix: 'bbbb' });
+    const providers = [provider('capture', () => ({ status: 'verified', capture: 'safe' }), { core: true })];
+    const { trust } = await useCases(rb.records, clock, providers);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    await rb.records.raise(CAP);
+    assert.equal(/** @type {any} */ (await trust.summary()).data.capture, 'at-risk');
+    // The receipts read answers, the incidents read doesn't
+    f.failNext(1, 'retries-exhausted', { after: 1 });
+    const summary = /** @type {any} */ (await trust.summary()).data;
+    assert.equal(rb.records.state(), 'open');
+    assert.notEqual(summary.capture, 'safe');
+    assert.ok(summary.actionRequired >= 1);
+    assert.equal(summary.route, 'recovery');
+  });
+
+  it('I-a: trust.report and recovery.incidents say when the store read failed', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const f = flakyStore(db);
+    const { records, clock } = await recordsOn(f.store, profile);
+    const { trust } = await useCases(records, clock);
+    assert.equal(/** @type {any} */ (await trust.report()).data.storeRead, true);
+    // trust.report reads receipts, runs, then incidents
+    f.failNext(1, 'retries-exhausted', { after: 2 });
+    assert.equal(/** @type {any} */ (await trust.report()).data.storeRead, false);
+    f.failNext(1, 'retries-exhausted');
+    assert.equal(/** @type {any} */ (await trust.incidents()).data.storeRead, false);
+  });
+
+  it('R1a: a context that recovers from a failed reconnect resolves its own open-failed', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const db = databaseOn(profile);
+    opened.push(db);
+    let open = 'ok';
+    let closeNext = 0;
+    /** @type {TrustStore} */
+    const store = {
+      open: () => (open === 'ok' ? db.open() : Promise.reject(new UnavailableError('storage', 'open-failed', true))),
+      close: () => db.close(),
+      run: (stores, mode, unit) => {
+        if (closeNext > 0) {
+          closeNext--;
+          return Promise.reject(new UnavailableError('storage', 'database-closed', true));
+        }
+        if (open !== 'ok') return Promise.reject(new UnavailableError('storage', 'database-closed', true));
+        return db.run(stores, mode, unit);
+      },
+    };
+    const rb = await recordsOn(store, profile, { clock, prefix: 'bbbb' });
+    clock.advance(1000);
+    closeNext = 1;
+    open = 'fail';
+    assert.equal((await rb.records.append(event(1))).recorded, false);
+    clock.advance(31_000);
+    open = 'ok';
+    assert.equal((await rb.records.append(event(2))).recorded, true);
+    clock.advance(1000);
+    await rb.records.append(event(3));
+    assert.equal((await storedAt(db, OPEN_FAILED))?.state, 'resolved');
+  });
+
+  it('nit 8: the diagnostics preview says when the incidents it holds may be incomplete', async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    const { trust } = await useCases(records, clock);
+    profile.settings.failGets = 1;
+    const exported = /** @type {any} */ (await trust.exportDiagnostics());
+    assert.ok(exported.data.notices.includes('incidents-incomplete'), JSON.stringify(exported.data.notices));
   });
 });
