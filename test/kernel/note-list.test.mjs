@@ -555,7 +555,7 @@ describe('the note-list projection', () => {
     assert.deepEqual(reads, ['getNoteList', ...Array(4).fill('getNotesByIds n2')], 'three retries again, not fewer');
   });
 
-  it("a reload that reads what a failed read of search entries alone missed leaves the list ready, with its retries back", async () => {
+  it('a reload that reads what a failed read of search entries alone missed leaves the list ready, with its retries back', async () => {
     let failing = false;
     const { list, run, reads } = start({
       around: async (query, read) =>
