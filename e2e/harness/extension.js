@@ -33,7 +33,8 @@ const WORKER_TIMEOUT_MS = 10_000;
 const ACTIVATION_TIMEOUT_MS = 10_000;
 const WORKER_READ_TIMEOUT_MS = 5_000;
 const LOCALE = 'en-US';
-const TIME_ZONE = 'UTC';
+// UTC, unless a run names another zone, as a pass on the local Daily Note key does (#17 PR 3b)
+const TIME_ZONE = process.env.NTN_E2E_TIME_ZONE || 'UTC';
 // worker-hooks.js logs each report as a console error that starts with this
 const WORKER_UNCAUGHT_TAG = '[ntn-harness:uncaught]';
 // Written next to the worker script, so its relative imports resolve as before. Chrome
@@ -508,4 +509,4 @@ function harnessFor(worker) {
   return null;
 }
 
-module.exports = { launchExtension, resolveDist, harnessFor, SURFACES, VIEWPORT };
+module.exports = { launchExtension, resolveDist, harnessFor, SURFACES, VIEWPORT, TIME_ZONE };

@@ -117,7 +117,8 @@ npm run verify:reproducible
 npm run release
 
 # Extension tests in Playwright's Chromium. They test the build in dist/ (or NTN_DIST, with
-# its dist-report/ beside it) and never build it, so run npm run build first.
+# its dist-report/ beside it) and never build it, so run npm run build first. The browser
+# runs in UTC, or in the zone NTN_E2E_TIME_ZONE names (an IANA name such as America/Los_Angeles).
 node_modules/.bin/playwright install --no-shell chromium   # once
 npm run test:extension
 
