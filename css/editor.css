@@ -5928,8 +5928,9 @@ kbd {
 }
 
 /* Settings > Data & Backup: the copy from before the update (js/ui/pre-update-copy.js). Its
-   guidance and status lines take --text-secondary, about 5:1 on the section in the light and
-   dark themes; the setting hint's --text-muted is under 3:1 there (ledgered for #24 and #16). */
+   guidance and status lines are setting hints in size, in --text-secondary, about 5:1 on the
+   section in the light and dark themes, where the hint's --text-muted is under 3:1 (ledgered
+   for #24 and #16). */
 .pre-update-copy-row[hidden] {
   display: none;
 }
@@ -5937,8 +5938,6 @@ kbd {
 .pre-update-copy-guidance,
 .pre-update-copy-status {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
   color: var(--text-secondary);
 }
 

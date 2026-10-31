@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory } = require('fake-indexeddb');
-const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, plain, note, block } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, workerRun, dumpDatabase, recordsOf, settle, plain, note, block } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
@@ -25,7 +25,9 @@ async function started(records) {
   const real = new IDBFactory();
   const { faultyFactory } = await import('./kernel/storage-faults.mjs');
   const faults = faultyFactory(real);
+  // With no records, the database the worker's run makes on a fresh profile (#17 PR 1b)
   if (records) await createDatabase(real, { records });
+  else await workerRun(real);
   const env = createLegacyEnv({ indexedDB: faults.factory, document: null });
   env.load(...FILES);
   const storage = env.get('Storage');

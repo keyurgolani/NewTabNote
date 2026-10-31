@@ -90,24 +90,20 @@ expectFailure("KD-002 the capture-selection command saves the selected text and 
 // Self-tests: the capture checks fail on a worker that writes more than one capture's worth
 const CAPTURE_CHECKS = [selectionMenuSavesText, pageMenuSavesBookmark, pageCommandSavesBookmark];
 
-// Every block written to the elements store is written a second time under another id
-function saveEachBlockTwice(worker) {
-  const storage = worker.Storage;
-  const transaction = storage.transaction.bind(storage);
-  storage.transaction = (stores, mode) => {
-    const tx = transaction(stores, mode);
-    const objectStore = tx.objectStore.bind(tx);
-    tx.objectStore = name => {
-      const store = objectStore(name);
-      if (name !== 'elements') return store;
-      const put = store.put.bind(store);
-      store.put = element => {
-        put({ ...element, id: `${element.id}-again` });
-        return put(element);
-      };
-      return store;
-    };
-    return tx;
+// Every block written to the elements store is written a second time under another id. The
+// worker writes through #17's adapter on IndexedDB itself (#17 PR 1b), so this changes
+// fake-indexeddb's put, and gives back what puts it back.
+function saveEachBlockTwice() {
+  const { IDBObjectStore } = require('fake-indexeddb');
+  const put = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function putTwice(value, key) {
+    if (this.name === 'elements' && value && typeof value === 'object') {
+      put.call(this, { ...value, id: `${value.id}-again` }, key);
+    }
+    return put.call(this, value, key);
+  };
+  return () => {
+    IDBObjectStore.prototype.put = put;
   };
 }
 
@@ -119,7 +115,13 @@ function captureTwice(worker) {
 for (const [mutant, mutate] of [['saves each block twice', saveEachBlockTwice], ['captures each time twice', captureTwice]]) {
   test(`the capture checks fail on a worker that ${mutant}`, async () => {
     for (const check of CAPTURE_CHECKS) {
-      await assert.rejects(check(await loadBackground({ mutate })), assert.AssertionError, `${check.name} passed`);
+      let undo = null;
+      try {
+        const worker = await loadBackground({ mutate: global => { undo = mutate(global); } });
+        await assert.rejects(check(worker), assert.AssertionError, `${check.name} passed`);
+      } finally {
+        if (typeof undo === 'function') undo();
+      }
     }
   });
 }

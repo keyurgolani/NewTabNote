@@ -4,11 +4,10 @@
  */
 
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
-import { kernelClient } from './host.js';
-import { pageHost } from './popup.js';
+import { kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').Client} Client */
-/** @typedef {import('./popup.js').PageHost} PageHost */
+/** @typedef {import('./host.js').PageHost} PageHost */
 
 /**
  * Side Panel's kernel and its client, on #17's IndexedDB adapter (#17 PR 1b, Q3), opened as

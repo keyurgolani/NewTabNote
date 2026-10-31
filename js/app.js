@@ -340,7 +340,13 @@ class App {
       };
       this.exportNotice = new ExportNotice(noticeDeps);
       // #17 PR 1b: while the upgrade waits for free space, its notice takes the region instead
-      this.spaceNotice = new SpaceNotice(noticeDeps);
+      this.spaceNotice = new SpaceNotice({
+        ...noticeDeps,
+        settings: {
+          read: (key) => appStorage().readSetting(key),
+          snooze: () => appStorage().setSetting('spaceNoticeSnoozedAt', Date.now()),
+        },
+      });
       /** @param {any} notice */
       const decide = (notice) => notice.isDue().catch((error) => {
         console.error('Export notice: could not decide whether to show it', error);
@@ -853,30 +859,29 @@ class App {
     this.aiChatController.noteTabs = this.tabController.noteTabs;
     this.aiChatController.noteList = this.noteList;
 
+    // Settings > Data & Backup's copy from before the update (#17 PR 1b) reads its state each
+    // time Settings opens
+    const preUpdateSection = document.getElementById('pre-update-copy');
+    if (preUpdateSection && this.preUpdateCopy) {
+      this.preUpdateCopySection = new PreUpdateCopySection({
+        copy: this.preUpdateCopy,
+        // The worker's record of its last run, read through the page's settings port
+        readUpgrade: async () => (await this.settings.workspaceData(['storageUpgrade'])).storageUpgrade,
+      });
+      this.preUpdateCopySection.mount(preUpdateSection);
+    }
     this.settingsController = new SettingsController({
       settings: this.settings,
       documentClient: this.documentClient,
       validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
+      onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
       // JSZip loads at the first Markdown export (#27 slice 3), and its section says when an
       // export failed, with Try again and the page's guarded Reload (#27 slice 3b)
       loadLibrary: this.libraryLoader(),
       partReload: this.partReload(),
     });
-
-    // Settings > Data & Backup's copy from before the update (#17 PR 1b) reads its state each
-    // time Settings opens
-    const preUpdateSection = document.getElementById('pre-update-copy');
-    if (preUpdateSection && this.preUpdateCopy) {
-      this.preUpdateCopySection = new PreUpdateCopySection({
-        // The worker's record of its last run, read through the page's settings port
-        storage: { readSetting: async (key) => (await this.settings.workspaceData([key]))[key] },
-        copy: this.preUpdateCopy,
-      });
-      this.preUpdateCopySection.mount(preUpdateSection);
-      this.settingsController.onSettingsOpened = () => this.preUpdateCopySection.refresh();
-    }
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();

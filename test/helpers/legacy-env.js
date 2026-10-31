@@ -495,7 +495,16 @@ function createChromeStub() {
     lastError: undefined,
     id: 'test-extension',
     getURL: (p) => `chrome-extension://test-extension/${p}`,
-    sendMessage() { return Promise.resolve(); },
+    // A page's storage.migrate wakes the worker and waits for its migration run (#17 PR 1b, Q12);
+    // createLegacyEnv answers it as the worker would (workerRun), and anything else resolves
+    sendMessage(message) {
+      if (message && message.type === 'storage.migrate' && typeof runtime.answerMigrate === 'function') {
+        return runtime.answerMigrate();
+      }
+      return Promise.resolve();
+    },
+    /** @type {null | (() => Promise<unknown>)} */
+    answerMigrate: null,
     getContexts: async () => [],
     onMessage: createEventStub(),
     onInstalled: createEventStub(),
@@ -687,6 +696,11 @@ function createLegacyEnv(options = {}) {
   const clock = new FakeClock();
   const frames = [];
   const chrome = options.chrome || createChromeStub();
+  // A page that wakes the worker on a profile with no database gets the database the worker's
+  // run makes there; options.worker: false leaves it unanswered, as with no worker
+  if (options.worker !== false && !chrome.api.runtime.answerMigrate) {
+    chrome.api.runtime.answerMigrate = () => workerRun(indexedDB);
+  }
   const locks = options.locks === null ? undefined : (options.locks || createLockManager());
   const channels = options.channels || createChannelBus();
   const logs = [];
@@ -789,6 +803,31 @@ function createLegacyEnv(options = {}) {
 }
 
 // ─── Database fixtures ───
+
+/**
+ * What the service worker's migration run does when a page wakes it (#17 PR 1b), for the one
+ * shape a page test needs it for: on a profile with no database it runs the real runner,
+ * which makes CanvasTabDB at version 9. A database already there is left as it is, as when the
+ * worker's run was short of space or hasn't reached it; the migration suites
+ * (test/kernel/storage-migrate.test.mjs) run every other shape.
+ * @param {IDBFactory} indexedDB
+ * @returns {Promise<{status: string}>}
+ */
+async function workerRun(indexedDB) {
+  const databases = await indexedDB.databases();
+  if (databases.some((db) => db.name === DB_NAME)) return { status: 'left-as-it-is' };
+  const { runMigrations } = await import('../../js/kernel/adapters/indexeddb/migrate.js');
+  const outcome = await runMigrations({
+    indexedDB,
+    keyRange: IDBKeyRange,
+    locks: createLockManager(),
+    estimate: null,
+    crypto: globalThis.crypto,
+    clock: { now: () => Date.now() },
+    logger: { warn() {} },
+  });
+  return { status: outcome.status };
+}
 
 /** The ten stores of the 1.4.0 schema (version 8), as storage.js creates them. */
 const SCHEMA_V8 = {
@@ -1312,6 +1351,7 @@ module.exports = {
   bootNewTab,
   shownTabs,
   createDatabase,
+  workerRun,
   dumpDatabase,
   recordsOf,
   requestToPromise,
