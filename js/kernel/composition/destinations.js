@@ -28,6 +28,21 @@
 
 // security/destinations.json's rows, as `npm run check:destinations -- --write` writes them
 import { DESTINATION_ROWS } from './destination-rows.js';
+// The rules themselves, which the network guard reads too (#21 slice 1b)
+import {
+  CREDENTIAL_CARRIERS,
+  HEADER_NAME,
+  LOOPBACK_HOSTS,
+  carriesCredential,
+  encodedPathProblem,
+  headerPairs,
+  headerRefusal,
+  matchDestination,
+  originParts,
+  queryCarriesCredential,
+} from './destination-match.js';
+
+export { carriesCredential, headerPairs };
 
 /**
  * One registry row (security/destinations.json)
@@ -54,74 +69,10 @@ const CREDENTIALS = Object.freeze(['none', 'bearer', 'x-api-key', 'x-goog-api-ke
 const METHODS = Object.freeze(['GET', 'POST']);
 const LOCATIONS = Object.freeze(['remote', 'loopback']);
 const REACHED_BY = Object.freeze(['fetch', 'image', 'frame']);
-const LOOPBACK_HOSTS = Object.freeze(['localhost', '127.0.0.1']);
 /** The header each credential scheme travels in */
 const CREDENTIAL_HEADERS = Object.freeze({ bearer: 'authorization', 'x-api-key': 'x-api-key', 'x-goog-api-key': 'x-goog-api-key', basic: 'authorization' });
-/** Query parameters that would carry a credential in the URL, which no request may, in any case */
-const CREDENTIAL_PARAMS = Object.freeze(['key', 'api_key', 'api-key', 'apikey', 'x-api-key', 'x-goog-api-key', 'token', 'access_token', 'auth']);
-/** Headers that carry a credential, which a row without one never lists, and which make a request credentialed */
-const CREDENTIAL_CARRIERS = Object.freeze(['authorization', 'proxy-authorization', 'x-api-key', 'x-goog-api-key', 'api-key', 'cookie']);
 /** The port each scheme answers on when it names none, which a row's origin never spells out */
 const DEFAULT_PORTS = Object.freeze({ 'http:': '80', 'https:': '443' });
-/** A header name as RFC 9110 defines a token */
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-
-/**
- * `value` parsed with `URL`, or null
- * @param {unknown} value
- * @returns {URL | null}
- */
-function parse(value) {
-  if (typeof value !== 'string' || value === '') return null;
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A row's origin split into scheme, host (a leading `*.` for subdomains), and port (`*` for
- * any loopback port), or null when it isn't one
- * @param {unknown} origin
- * @returns {{protocol: string, host: string, wildcard: boolean, port: string} | null}
- */
-function originParts(origin) {
-  if (typeof origin !== 'string') return null;
-  const match = /^(https?):\/\/(\*\.)?([a-z0-9.-]+)(?::(\*|\d+))?$/.exec(origin);
-  if (!match) return null;
-  const [, scheme, star, host, port = ''] = match;
-  // Labels of letters, digits, and inner dashes, as `URL` writes a host back; read without
-  // `URL`, so a check at load never depends on it
-  const labels = host.split('.');
-  if (!labels.every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return null;
-  if (port !== '' && port !== '*' && (Number(port) > 65535 || String(Number(port)) !== port)) return null;
-  return { protocol: `${scheme}:`, host, wildcard: Boolean(star), port };
-}
-
-/**
- * Whether `path` holds an encoded separator (%2F, %5C), an encoded percent sign (%25), or a
- * segment that's an encoded dot run (., .. spelled with %2E), in any case
- * @param {string} path
- * @returns {boolean}
- */
-function encodedPathProblem(path) {
-  // An encoded percent sign would decode to another escape, one of these among them
-  if (/%(?:2f|5c|25)/i.test(path)) return true;
-  return path.split('/').some(segment => /%2e/i.test(segment) && /^\.{1,2}$/.test(segment.replace(/%2e/gi, '.')));
-}
-
-/**
- * The path of a URL as it was given, before `URL` resolves its dot segments
- * @param {string} raw
- * @returns {string}
- */
-function givenPath(raw) {
-  const afterScheme = raw.indexOf('//');
-  const start = afterScheme === -1 ? 0 : raw.indexOf('/', afterScheme + 2);
-  if (start === -1) return '/';
-  return raw.slice(start).split(/[?#]/)[0];
-}
 
 /**
  * Whether two rows could take the same request: one origin and way, prefixes where one holds
@@ -232,33 +183,6 @@ export const REGISTRY_PROBLEMS = REGISTRY.problems;
 export const DESTINATIONS = REGISTRY.destinations;
 
 /**
- * Whether `url`'s host and port are `row`'s origin; a loopback row's only at `loopback`
- * @param {Destination} row
- * @param {URL} url
- * @param {string | null} loopback
- * @returns {boolean}
- */
-function originMatches(row, url, loopback) {
-  const parts = /** @type {NonNullable<ReturnType<typeof originParts>>} */ (originParts(row.origin));
-  if (url.protocol !== parts.protocol) return false;
-  if (row.location === 'loopback') return loopback !== null && url.origin === loopback && url.hostname === parts.host;
-  if (parts.wildcard) return url.hostname.endsWith(`.${parts.host}`) && url.port === parts.port;
-  return url.hostname === parts.host && url.port === parts.port;
-}
-
-/**
- * Whether `pathname` is under `prefix`: a prefix ending in / takes the paths below it, and any
- * other the path itself and the paths below it
- * @param {string} prefix
- * @param {string} pathname
- * @returns {boolean}
- */
-function underPrefix(prefix, pathname) {
-  if (prefix.endsWith('/')) return pathname.startsWith(prefix);
-  return pathname === prefix || pathname.startsWith(`${prefix}/`);
-}
-
-/**
  * The row `url` reaches with `method`, or why it's refused
  * @param {unknown} url
  * @param {{method?: string, loopback?: string | null, reachedBy?: Destination['reachedBy']}} [options]
@@ -266,41 +190,8 @@ function underPrefix(prefix, pathname) {
  *   origin allowed, or null for none
  * @returns {{ok: true, row: Destination, url: URL} | {ok: false, code: 'destination-refused' | 'invalid-method'}}
  */
-export function destinationFor(url, { method = 'GET', loopback = null, reachedBy = 'fetch' } = {}) {
-  const parsed = parse(url);
-  if (!parsed || parsed.username !== '' || parsed.password !== '') return { ok: false, code: 'destination-refused' };
-  // Before any prefix is matched: what `URL` resolves and what it keeps encoded alike
-  if (encodedPathProblem(givenPath(String(url))) || encodedPathProblem(parsed.pathname)) return { ok: false, code: 'destination-refused' };
-  const upper = typeof method === 'string' ? method.toUpperCase() : '';
-  let methodRefused = false;
-  for (const row of DESTINATIONS) {
-    if (row.reachedBy !== reachedBy || !originMatches(row, parsed, loopback) || !underPrefix(row.pathPrefix, parsed.pathname)) continue;
-    if (row.methods.includes(upper)) return { ok: true, row, url: parsed };
-    methodRefused = true;
-  }
-  return { ok: false, code: methodRefused ? 'invalid-method' : 'destination-refused' };
-}
-
-/**
- * A request's headers as name and value pairs, read as fetch reads them, through the
- * platform's own `new Headers(value)`: a Headers, a record, or any iterable of pairs (a list, a
- * Set, a generator), each read once. Names come lowercased. Null for headers fetch would refuse,
- * or where the platform has no Headers.
- * @param {unknown} headers
- * @returns {Array<[string, string]> | null}
- */
-export function headerPairs(headers) {
-  if (headers === null || headers === undefined) return [];
-  const Platform = globalThis.Headers;
-  if (typeof Platform !== 'function') return null;
-  try {
-    /** @type {Array<[string, string]>} */
-    const pairs = [];
-    new Platform(/** @type {HeadersInit} */ (headers)).forEach((value, name) => pairs.push([name, value]));
-    return pairs;
-  } catch {
-    return null;
-  }
+export function destinationFor(url, options = {}) {
+  return matchDestination(DESTINATIONS, url, options);
 }
 
 /**
@@ -309,11 +200,7 @@ export function headerPairs(headers) {
  * @returns {string[]}
  */
 export function queryProblems(url) {
-  const parsed = parse(url);
-  if (parsed && [...parsed.searchParams.keys()].some(key => CREDENTIAL_PARAMS.includes(key.toLowerCase()))) {
-    return ['a credential in the URL'];
-  }
-  return [];
+  return queryCarriesCredential(url) ? ['a credential in the URL'] : [];
 }
 
 /**
@@ -327,13 +214,13 @@ export function queryProblems(url) {
 export function headerProblems(row, headers, url) {
   /** @type {string[]} */
   const problems = [];
-  const allowed = new Set(row.headers.map(name => name.toLowerCase()));
   const pairs = headerPairs(headers);
   if (pairs === null) return ['headers fetch would refuse', ...queryProblems(url)];
   for (const [name, value] of pairs) {
-    if (!HEADER_NAME.test(name)) problems.push('a header name that is not a token');
-    else if (!allowed.has(name.toLowerCase())) problems.push(`a header ${row.id} doesn't take`);
-    if (/[\r\n]/.test(value)) problems.push('a line break in a header value');
+    const refusal = headerRefusal(row, name, value);
+    if (refusal === 'not-a-token') problems.push('a header name that is not a token');
+    else if (refusal === 'not-listed') problems.push(`a header ${row.id} doesn't take`);
+    else if (refusal === 'line-break') problems.push('a line break in a header value');
   }
   return [...problems, ...queryProblems(url)];
 }
@@ -356,13 +243,4 @@ export function requestInit(row, init) {
   const credentialSent = pairs.some(([name]) => CREDENTIAL_CARRIERS.includes(name));
   if (row.credential !== 'none' || credentialSent || init.body !== undefined) built.redirect = 'error';
   return built;
-}
-
-/**
- * Whether `pairs` (headerPairs) carry a credential
- * @param {ReadonlyArray<readonly [string, string]>} pairs
- * @returns {boolean}
- */
-export function carriesCredential(pairs) {
-  return pairs.some(([name]) => CREDENTIAL_CARRIERS.includes(name.toLowerCase()));
 }

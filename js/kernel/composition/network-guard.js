@@ -21,12 +21,25 @@
  * time and then at most once an hour, with the count so far: `network.request-refused` in the
  * diagnostic journal (event-codes.js). Reports made before a listener connects wait for it.
  *
- * A registry with a problem (REGISTRY_PROBLEMS) refuses every destination, reported once at
- * install. installGuard never throws, and wraps each API on its own, so one it can't wrap
+ * It reads the registry's rows cut to what it checks (destination-match.js's guardRows), and
+ * the rules from the same module the destination client uses. The page guard's build inlines
+ * the rows already cut, after destinations.js has validated them, so it carries no validator: a
+ * row that isn't a row's shape makes it refuse every destination, as does refuseAll(), which
+ * the service worker calls when the client finds a problem with the registry. Either is
+ * reported once. installGuard never throws, and wraps each API on its own, so one it can't wrap
  * leaves the others wrapped. Loading this module touches no browser API.
  */
 
-import { REGISTRY_PROBLEMS, carriesCredential, destinationFor, headerPairs, headerProblems } from './destinations.js';
+import { DESTINATION_ROWS } from './destination-rows.js';
+import {
+  LOOPBACK_HOSTS,
+  carriesCredential,
+  guardRows,
+  headerPairs,
+  headerRefusal,
+  matchDestination,
+  queryCarriesCredential,
+} from './destination-match.js';
 
 /** The guard's mark: on each function it wraps, and on the context, where its handle is */
 export const GUARD = Symbol.for('ntn.networkGuard');
@@ -39,9 +52,6 @@ export const REFUSAL_REPORT_MS = 60 * 60 * 1000;
 
 /** How many reports wait for a listener, at most */
 const WAITING_REPORTS = 32;
-
-/** The only hosts that are local */
-const LOOPBACK_HOSTS = Object.freeze(['localhost', '127.0.0.1']);
 
 /** The schemes a context reaches without a row */
 const OWN_SCHEMES = Object.freeze(['blob:', 'data:']);
@@ -65,6 +75,7 @@ const INIT_KEYS = Object.freeze([
  * @property {string} surface
  * @property {(listener: (report: RefusalReport) => void) => void} onRefused - the reports that
  *   waited go to the first listener
+ * @property {() => void} refuseAll - refuse every destination from now on, reported once
  */
 
 /**
@@ -78,7 +89,7 @@ const INIT_KEYS = Object.freeze([
  * @property {string} surface - the context, as the journal names it (surfaces.js)
  * @property {LoopbackSource} [loopback]
  * @property {() => number} [now]
- * @property {readonly string[]} [problems] - the registry's (REGISTRY_PROBLEMS)
+ * @property {unknown} [rows] - the registry's rows (destination-rows.js)
  */
 
 /**
@@ -98,7 +109,7 @@ function marked(fn) {
  * @param {GuardOptions} options
  * @returns {GuardHandle}
  */
-export function installGuard(scope, { surface, loopback = () => null, now = () => Date.now(), problems = REGISTRY_PROBLEMS }) {
+export function installGuard(scope, { surface, loopback = () => null, now = () => Date.now(), rows = DESTINATION_ROWS }) {
   if (scope[GUARD]) return scope[GUARD];
 
   /** @type {Map<RefusalCode, {count: number, reportedAt: number | null}>} */
@@ -143,6 +154,14 @@ export function installGuard(scope, { surface, loopback = () => null, now = () =
     }
   };
 
+  const registry = guardRows(rows);
+  let sound = registry !== null;
+  const refuseAll = () => {
+    if (!sound) return;
+    sound = false;
+    refused('registry-unreadable', 0);
+  };
+
   /** @type {GuardHandle} */
   const handle = Object.freeze({
     surface,
@@ -151,6 +170,7 @@ export function installGuard(scope, { surface, loopback = () => null, now = () =
       listeners.push(listener);
       if (listeners.length === 1) for (const report of waiting.splice(0)) emit(report);
     },
+    refuseAll,
   });
   try {
     Object.defineProperty(scope, GUARD, { value: handle, writable: false, configurable: false, enumerable: false });
@@ -158,7 +178,6 @@ export function installGuard(scope, { surface, loopback = () => null, now = () =
     // A context that won't hold the handle is still wrapped below
   }
 
-  const sound = Array.isArray(problems) && problems.length === 0;
   if (!sound) refused('registry-unreadable', 0);
 
   /** The last loopback origin `loopback` answered, for the calls that can't wait for it */
@@ -227,16 +246,16 @@ export function installGuard(scope, { surface, loopback = () => null, now = () =
       const url = parse(raw);
       if (!url) return { ok: false, code: 'destination-refused' };
       if (OWN_SCHEMES.includes(url.protocol) || isOwn(url)) return { ok: true, credentialed: false };
-      if (!sound) return { ok: false, code: 'registry-unreadable' };
+      if (!sound || registry === null) return { ok: false, code: 'registry-unreadable' };
       if (pairs === null) return { ok: false, code: 'headers-refused' };
       const local = allowedLoopback === ANY_LOOPBACK
         ? (url.protocol === 'http:' && LOOPBACK_HOSTS.includes(url.hostname) ? url.origin : null)
         : allowedLoopback;
       // An absolute URL as given, so a dot segment `URL` would resolve is still seen
       const given = typeof raw === 'string' && parse(raw) !== null && /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : url.href;
-      const found = destinationFor(given, { method, loopback: local, reachedBy: 'fetch' });
+      const found = matchDestination(registry, given, { method, loopback: local });
       if (!found.ok) return { ok: false, code: 'destination-refused' };
-      if (headerProblems(found.row, pairs, url.href).length > 0) return { ok: false, code: 'headers-refused' };
+      if (pairs.some(([name, value]) => headerRefusal(found.row, name, value) !== null) || queryCarriesCredential(url.href)) return { ok: false, code: 'headers-refused' };
       return { ok: true, credentialed: found.row.credential !== 'none' || carriesCredential(pairs) || body };
     } catch {
       return { ok: false, code: 'destination-refused' };

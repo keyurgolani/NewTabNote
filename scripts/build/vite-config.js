@@ -80,6 +80,9 @@ const CLASSIC_SCRIPTS = Object.freeze({
 /** The network guard each page loads first, which the guard pass bundles (#21 slice 1b) */
 const GUARD_SCRIPT = 'js/network-guard.js';
 
+/** The registry's rows as the sources import them, which the guard pass inlines cut */
+const ROWS_MODULE = 'js/kernel/composition/destination-rows.js';
+
 /**
  * The page's loader (#27 slice 3), which ships at its own path as a chunk of its own, so the
  * closure check knows the one file it lets build a path at run time (scripts/build/closure.js)
@@ -251,6 +254,8 @@ function workerTerserPlugin() {
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
+ * @property {readonly object[]} [guardRows] - for the guard pass: the registry's rows, validated
+ *   and cut to what the guard reads (scripts/build/guard.js's guardRegistry)
  */
 
 /**
@@ -419,12 +424,35 @@ function backgroundConfig(options) {
 }
 
 /**
+ * A plugin that hands the guard pass `rows` for the registry's rows module, so the page guard
+ * carries only what it reads, and no validator: the build validated them first
+ * @param {string} root
+ * @param {readonly object[]} rows
+ * @returns {Plugin}
+ */
+function guardRowsPlugin(root, rows) {
+  const ids = new Set([path.join(root, ROWS_MODULE)]);
+  try {
+    ids.add(path.join(fs.realpathSync(root), ROWS_MODULE));
+  } catch {
+    // Sources that aren't there have no real path
+  }
+  return {
+    name: 'ntn:guard-rows',
+    load(id) {
+      return ids.has(id) ? `export const DESTINATION_ROWS = ${JSON.stringify(rows)};\n` : null;
+    },
+  };
+}
+
+/**
  * The guard pass
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
 function guardConfig(options) {
-  const { root, report, onLog } = options;
+  const { root, report, onLog, guardRows = null } = options;
+  if (guardRows === null) throw new Error('the guard pass needs the registry rows it inlines');
   return {
     ...common(options),
     build: {
@@ -443,7 +471,7 @@ function guardConfig(options) {
         onLog,
       },
     },
-    plugins: [reportPlugin(report, 'guard')],
+    plugins: [guardRowsPlugin(root, guardRows), reportPlugin(report, 'guard')],
   };
 }
 
@@ -454,6 +482,7 @@ module.exports = {
   BACKGROUND_ENTRY,
   CLASSIC_SCRIPTS,
   GUARD_SCRIPT,
+  ROWS_MODULE,
   LOADER,
   STATIC_FILES,
   ASSETS_DIR,

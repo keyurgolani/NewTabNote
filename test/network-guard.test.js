@@ -240,7 +240,7 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
 
   it('with a registry it cannot read, refuses every destination, says so once at install, and still lets its own origin through', async () => {
     const { scope, sent } = context();
-    const handle = guard.installGuard(scope, { surface: 'newtab', problems: ['a row with a problem'] });
+    const handle = guard.installGuard(scope, { surface: 'newtab', rows: [{ origin: 'not an origin' }] });
     const reports = [];
     handle.onRefused((report) => reports.push(report));
     assert.equal(scope.fetch[guard.GUARD], true);
@@ -250,6 +250,33 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     await scope.fetch(`${OWN}/build-info.json`);
     assert.equal(sent.length, 1);
     assert.deepEqual(reports, [{ surface: 'newtab', errorCode: 'registry-unreadable', count: 0 }]);
+  });
+
+  it('refuses every destination once told to, as the worker tells it when the client finds a problem with the registry, and says so once', async () => {
+    const { scope, sent, reports, handle } = guarded();
+    await scope.fetch('https://huggingface.co/x');
+    handle.refuseAll();
+    handle.refuseAll();
+    await assert.rejects(scope.fetch('https://huggingface.co/x'), TypeError);
+    assert.equal(scope.navigator.sendBeacon(`${OWN}/beacon`, 'x'), true, "its own origin still goes");
+    assert.equal(sent.length, 2);
+    assert.deepEqual(reports, [{ surface: 'newtab', errorCode: 'registry-unreadable', count: 0 }]);
+  });
+
+  it('reads rows cut to what it checks, and refuses every destination when one is not the shape a row has', async () => {
+    const { guardRows } = await import('../js/kernel/composition/destination-match.js');
+    const rows = JSON.parse(read('security/destinations.json')).destinations;
+    const cut = guardRows(rows);
+    assert.equal(cut.length, rows.filter((row) => row.reachedBy === 'fetch').length);
+    assert.deepEqual(Object.keys(cut[0]).sort(), ['credential', 'headers', 'location', 'methods', 'origin', 'pathPrefix']);
+    assert.deepEqual(guardRows(cut), cut, 'cutting again changes nothing');
+    for (const bad of [null, {}, [null], [{ ...rows[0], origin: 'https://api.openai.com/v1' }], [{ ...rows[0], location: 'loopback' }], [{ ...rows[0], methods: 'GET' }], [{ ...rows[0], headers: [1] }]]) {
+      assert.equal(guardRows(bad), null, JSON.stringify(bad));
+    }
+    const { scope, sent } = guarded({ rows: cut });
+    await scope.fetch('https://api.openai.com/v1/models', { headers: { Authorization: 'Bearer test' } });
+    await assert.rejects(scope.fetch('https://www.google.com/s2/favicons?domain=example.test'), TypeError, 'an image row is no fetch row');
+    assert.equal(sent.length, 1);
   });
 
   it("refuses a registry with a problem, or one it can't read, as it loads, without throwing", () => {
@@ -430,5 +457,52 @@ describe('the service worker, whose first module is the guard (js/background.js)
     assert.deepEqual(broken.fetched, []);
     const refusals = (await journal(broken.indexedDB)).filter(([code]) => code === 'network.request-refused');
     assert.deepEqual(refusals, [['network.request-refused', { surface: 'worker-internal', errorCode: 'registry-unreadable', count: 0 }]]);
+  });
+});
+
+describe('other realms, which the guard does not wrap and the CSP covers (PR 3)', () => {
+  const { filesUnder } = require('./helpers/source-package');
+  const API = '(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon)';
+  // The guard reaches its context's APIs through the scope it's handed
+  const GUARD_FILES = ['js/kernel/composition/network-guard.js'];
+
+  /** Each place a first-party file reaches a network API, or another realm, through anything but its own globals */
+  function reaches(file, text) {
+    const found = [];
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    // Its own globals, bare or through the names a page, a worker, and both call them by
+    const own = ['window', 'self', 'globalThis', 'navigator', 'window.navigator', 'self.navigator', 'globalThis.navigator'];
+    for (const match of code.matchAll(new RegExp(`([\\w$.\\]\\)]+)\\s*\\??\\.\\s*${API}\\b|\\[\\s*['"\`]${API}['"\`]\\s*\\]`, 'g'))) {
+      const receiver = match[1];
+      if (receiver && own.includes(receiver)) continue;
+      found.push(`${file}: ${match[0]}`);
+    }
+    for (const match of code.matchAll(/\.\s*(?:contentWindow|contentDocument)\b|\bwindow\.open\s*\(|\bdocumentPictureInPicture\.window\b|\b(?:const|let|var)\s*\{[^}'"]*?\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*[,}:][^=]*=\s*(?!globalThis\b|window\b|self\b)[\w$.]+/g)) {
+      found.push(`${file}: ${match[0]}`);
+    }
+    return found;
+  }
+
+  it("no first-party code reaches a network API through another realm: a frame's window, a window it opens, or the Picture-in-Picture window", () => {
+    const files = filesUnder('js').filter((file) => /\.m?js$/.test(file) && !file.startsWith('js/lib/') && !GUARD_FILES.includes(file));
+    assert.ok(files.length > 100, `${files.length} files`);
+    assert.deepEqual(files.flatMap((file) => reaches(file, read(file))), []);
+  });
+
+  it('would catch a call through the Picture-in-Picture window, a frame, a window it opens, or a name read off one', () => {
+    for (const text of [
+      'this.pipWindow.fetch(url);',
+      'documentPictureInPicture.window.fetch(url);',
+      "frame.contentWindow.XMLHttpRequest;",
+      "const opened = window.open('about:blank');",
+      "new pip['WebSocket'](url);",
+      'const { fetch } = pipWindow;',
+      'pipWindow.navigator.sendBeacon(url);',
+    ]) {
+      assert.notDeepEqual(reaches('js/x.js', text), [], text);
+    }
+    for (const text of ['fetch(url);', 'window.fetch(url);', 'navigator.sendBeacon(url, data);', 'new XMLHttpRequest();', 'self.fetch(url)', 'globalThis.fetch(url)']) {
+      assert.deepEqual(reaches('js/x.js', text), [], text);
+    }
   });
 });

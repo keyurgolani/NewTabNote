@@ -4,7 +4,7 @@
  * indexer. installContextGuard names the context by its location and gives the guard the
  * loopback origin it may reach:
  *
- * - a page and the service worker: the stored Ollama URL's origin (api-request.js's
+ * - a page and the service worker: the stored Ollama URL's origin (destination-match.js's
  *   storedLoopbackOrigin), read when a call to a loopback host is made, so a URL changed in
  *   Settings applies to the next call;
  * - the offscreen document, which has no chrome.storage and takes only the worker's requests,
@@ -15,7 +15,7 @@
  * boot guard among them.
  */
 
-import { storedLoopbackOrigin } from './api-request.js';
+import { storedLoopbackOrigin } from './destination-match.js';
 import { ANY_LOOPBACK, installGuard } from './network-guard.js';
 
 /** The pages, by file, as the journal names them (surfaces.js) */

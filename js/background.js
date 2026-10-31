@@ -26,7 +26,12 @@ import {
 } from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
-import { journalRefusals } from './kernel/composition/network-refusals.js';
+import { REGISTRY_PROBLEMS } from './kernel/composition/destinations.js';
+import { journalRefusals, refuseEveryDestination } from './kernel/composition/network-refusals.js';
+
+// A registry the destination client found a problem with: the client refuses every request,
+// and so does the network guard, which reports why once (#21 slice 1b)
+if (REGISTRY_PROBLEMS.length > 0) refuseEveryDestination(self);
 
 /** This worker instance's id, which #13's router sends in each welcome (#35) */
 const instanceId = coordinatorInstanceId();

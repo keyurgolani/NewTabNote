@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
 const { pagesConfig, backgroundConfig, guardConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
-const { guardOrderProblems } = require('./guard.js');
+const { guardOrderProblems, guardRegistry } = require('./guard.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./vite-config.js').BundleReport} BundleReport */
@@ -264,7 +264,10 @@ async function bundle({ root, outDir, mode, buildId }) {
   try {
     await vite.build(pagesConfig(options));
     await vite.build(backgroundConfig(options));
-    await vite.build(guardConfig(options));
+    // The page guard inlines the registry's rows cut, once they're validated
+    const registry = await guardRegistry(root);
+    if ('problem' in registry) problems.push(registry.problem);
+    else await vite.build(guardConfig({ ...options, guardRows: registry.rows }));
   } catch (error) {
     problems.push(bundlerProblem(error, root));
   }

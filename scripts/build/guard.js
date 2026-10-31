@@ -11,15 +11,18 @@
  *   guard/not-installed       the built js/network-guard.js, run on stand-ins for a page's
  *                             APIs, doesn't mark each one it wraps, or lets a call to an
  *                             unregistered destination go
- *   guard/registry-unreadable the built guard's registry has a problem, so it refuses every
- *                             destination: no build ships one
+ *   guard/registry-unreadable the destination registry has a problem (destinations.js says
+ *                             which), so the build won't inline it in the page guard, or the
+ *                             built guard reads rows it can't use and refuses every destination
  *
  * The pages pass bundles js/network-guard.js into a classic script at its own path, and the
  * report (scripts/build/vite-config.js's reportPlugin) records each chunk's modules in
  * execution order, which guardOrderProblems reads.
  */
 
+const path = require('node:path');
 const vm = require('node:vm');
+const { pathToFileURL } = require('node:url');
 const { problem } = require('./diagnostics.js');
 const { htmlTags } = require('./markup.js');
 const { resolve } = require('./closure.js');
@@ -188,4 +191,25 @@ function checkGuardScript(files) {
   return problems;
 }
 
-module.exports = { checkGuardPages, checkGuardScript, guardOrderProblems, GUARD_FIRST };
+/**
+ * The registry's rows for the page guard: validated by the destination client, then cut to
+ * what the guard reads (destination-match.js's guardRows), from the sources at `root`
+ * @param {string} root
+ * @returns {Promise<{rows: readonly object[]} | {problem: Problem}>}
+ */
+async function guardRegistry(root) {
+  const fail = (/** @type {string} */ message) => ({ problem: problem('guard/registry-unreadable', 'security/destinations.json', message) });
+  try {
+    const at = (/** @type {string} */ file) => pathToFileURL(path.join(root, file)).href;
+    const client = await import(at('js/kernel/composition/destinations.js'));
+    const match = await import(at('js/kernel/composition/destination-match.js'));
+    if (client.REGISTRY_PROBLEMS.length > 0) return fail(`the registry has ${client.REGISTRY_PROBLEMS.length === 1 ? 'a problem' : 'problems'}, so the page guard would refuse every destination: ${client.REGISTRY_PROBLEMS.join('; ')}. npm run check:destinations checks it.`);
+    const rows = match.guardRows(client.DESTINATIONS);
+    if (rows === null) return fail("the page guard can't read the registry's rows");
+    return { rows };
+  } catch (error) {
+    return fail(`the registry couldn't be read: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`);
+  }
+}
+
+module.exports = { checkGuardPages, checkGuardScript, guardOrderProblems, guardRegistry, GUARD_FIRST };
