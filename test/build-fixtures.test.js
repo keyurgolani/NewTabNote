@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
-const { readFixtures, reportedCodes } = require('../scripts/build/verify-fixtures.js');
+const { readFixtures, reportedCodes, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
 
 const ROOT = path.join(__dirname, '..');
 const fixtures = readFixtures();
@@ -26,6 +26,12 @@ describe('test/build-fixtures/', () => {
     const missing = Object.keys(CODES).filter((code) => !NOT_RULES.includes(code) && !covered.has(code));
     assert.deepEqual(missing, [], 'no fixture fails with these codes');
     assert.ok(fixtures.some((fixture) => fixture.kind === 'canary'));
+  });
+
+  it("sets the canary under a VITE_ name too, which Vite hands to import.meta.env from the environment even with envDir: false", () => {
+    // #99's review: the release's secret names and the common ones, and none Vite reads itself
+    assert.ok(CANARY_NAMES.includes('NTN_CANARY_SECRET'));
+    assert.ok(CANARY_NAMES.some((name) => name.startsWith('VITE_')), CANARY_NAMES.join(', '));
   });
 
   it('gives each fixture a rule, known codes, and a kind and modes the runner knows', () => {

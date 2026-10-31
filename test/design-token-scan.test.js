@@ -169,6 +169,25 @@ describe('what the scanner counts', () => {
     assert.equal(counts['css/a.css']['undefined-var'], 2);
   });
 
+  it("lets a page's own stylesheet, named for it, define for that page and itself only, as the <style> block it replaced did", () => {
+    // #27 slice 2 moved the Popup's and the Side Panel's <style> blocks to css/popup.css and
+    // css/sidepanel.css, and #99's review: their definitions mustn't satisfy the new tab's
+    // stylesheets, whose undefined var(--bg-tertiary) uses are 1.4.x defects for #16
+    const undefinedVars = (counts, file) => (counts[file] || {})['undefined-var'];
+    const counts = scanFixtures({
+      'popup.html': '<link rel="stylesheet" href="css/popup.css"><div style="--inline: 0; margin: var(--popup-only)"></div>',
+      'css/popup.css': ':root { --popup-only: 1px } a { margin: var(--popup-only); padding: var(--inline); color: var(--shared) }',
+      'newtab.html': '<div style="margin: var(--popup-only)"></div>',
+      'css/editor.css': ':root { --shared: red } a { margin: var(--popup-only); padding: var(--inline) }',
+      'js/x.js': "el.style.margin = 'var(--popup-only)';",
+    }).counts;
+    assert.equal(undefinedVars(counts, 'popup.html'), undefined);
+    assert.equal(undefinedVars(counts, 'css/popup.css'), undefined);
+    assert.equal(undefinedVars(counts, 'newtab.html'), 1);
+    assert.equal(undefinedVars(counts, 'css/editor.css'), 2);
+    assert.equal(undefinedVars(counts, 'js/x.js'), 1);
+  });
+
   it('getPropertyValue reads of anything but a registered color token', () => {
     assert.equal(countsOf('js/x.js', `const s = getComputedStyle(el);
       s.getPropertyValue('--bg-primary');

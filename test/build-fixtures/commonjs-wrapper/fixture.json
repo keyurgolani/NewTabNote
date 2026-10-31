@@ -1,0 +1,12 @@
+{
+  "rule": "a legacy file names a free exports, so the bundler wraps it as CommonJS",
+  "expect": [
+    "build/commonjs"
+  ],
+  "edits": [
+    {
+      "file": "js/core/storage-error.js",
+      "append": "\nexports.ntnFixture = true;\n"
+    }
+  ]
+}

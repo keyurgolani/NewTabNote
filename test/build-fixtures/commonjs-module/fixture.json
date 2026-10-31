@@ -1,0 +1,12 @@
+{
+  "rule": "a legacy file reads module outside its dual export's typeof check, which the build's define makes undefined.exports",
+  "expect": [
+    "build/commonjs"
+  ],
+  "edits": [
+    {
+      "file": "js/core/storage-error.js",
+      "append": "\nmodule.exports.ntnFixture = true;\n"
+    }
+  ]
+}
