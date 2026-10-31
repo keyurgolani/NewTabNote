@@ -3234,6 +3234,28 @@ export function runContractSuite(fixture) {
           assert.equal(moved.revision, folder.revision);
         },
       );
+
+      it('folders carry no versions: no folder command reports a revision, on any adapter (#17 PR 2a)', async () => {
+        const outcomes = [
+          await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null })),
+          await run(cmd('renameFolder', { folderId: 'f1', name: 'Work 2' })),
+          await run(cmd('createFolder', { folderId: 'f2', name: 'Home', parentId: null })),
+          await run(cmd('moveFolder', { folderId: 'f1', parentId: 'f2' })),
+          await run(cmd('setFolderCollapsed', { folderId: 'f1', collapsed: true })),
+          await run(cmd('deleteFolder', { folderId: 'f2' })),
+        ];
+        assert.deepEqual(
+          outcomes.map(outcome => [outcome.code, outcome.revision]),
+          [
+            ['folder-created', undefined],
+            ['folder-renamed', undefined],
+            ['folder-created', undefined],
+            ['folder-moved', undefined],
+            ['folder-collapsed', undefined],
+            ['folder-deleted', undefined],
+          ],
+        );
+      });
     });
 
     describe(`adapter flags: ${JSON.stringify(flags)}`, () => {
@@ -3440,9 +3462,14 @@ export function runContractSuite(fixture) {
             assert.equal(old.code, 'insights-attached');
             assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Old'] });
           }
-          // Ones made from the same revision, or with none given, land
-          await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Again'] }, sourceRevision: 2 }));
-          await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Any'] } }));
+          // Ones made from the same revision, or with none given, land, each on its own
+          const again = await run(
+            cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Again'] }, sourceRevision: 2 }),
+          );
+          assert.deepEqual([again.code, again.changedIds], ['insights-attached', ['n1']]);
+          assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Again'] });
+          const any = await run(cmd('attachInsights', { noteId: 'n1', insights: { todos: ['Any'] } }));
+          assert.deepEqual([any.code, any.changedIds], ['insights-attached', ['n1']]);
           assert.deepEqual((await noteOf('n1'))?.insights, { todos: ['Any'] });
           for (const sourceRevision of [-1, 1.5, '2']) {
             assertRejected(
