@@ -82,6 +82,28 @@ export const RUN_STATES = Object.freeze(
 
 /** @typedef {(typeof RUN_STATES)[number]} RunState */
 
+/**
+ * A remediation run's steps, in order (#20, "Remediation pipeline"). A run's record names the
+ * step it's on, written before the step starts, so a run cut off anywhere says where it
+ * stopped. `record` is the last write, of how it ended.
+ */
+export const RUN_STEPS = Object.freeze(
+  /** @type {const} */ (['plan', 'preview', 'protect', 'apply', 'verify', 'record']),
+);
+
+/** @typedef {(typeof RUN_STEPS)[number]} RunStep */
+
+/**
+ * What a remediation's class needs before apply, beside its preview: the user's confirmation,
+ * a verified #17 recovery point, a recovery file saved in this run, and the action's name
+ * typed out
+ */
+export const PROTECTIONS = Object.freeze(
+  /** @type {const} */ (['confirmation', 'recovery-point', 'recovery-file', 'typed-phrase']),
+);
+
+/** @typedef {(typeof PROTECTIONS)[number]} Protection */
+
 /** The run states nothing moves on from */
 export const FINISHED_RUN_STATES = Object.freeze(
   /** @type {const} */ (['succeeded', 'failed', 'cancelled', 'interrupted']),

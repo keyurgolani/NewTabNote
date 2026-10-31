@@ -62,6 +62,10 @@ export const EVENT_CODES = Object.freeze({
     fields: Object.freeze(['incidentId', 'providerId', 'faultCode', 'severity', 'count']),
   }),
   'incident.resolved': Object.freeze({ fields: Object.freeze(['incidentId', 'providerId', 'faultCode']) }),
+  // A remediation run that ended, or that the next start found cut off (slice 3's pipeline)
+  'remediation.finished': Object.freeze({
+    fields: Object.freeze(['runId', 'remediationId', 'state', 'outcome', 'durationMs', 'recoveryPointId', 'count']),
+  }),
   'diagnostics.rejected': Object.freeze({ fields: Object.freeze(['reason', 'count']) }),
   'diagnostics.exported': Object.freeze({ fields: Object.freeze(['records', 'bytes']) }),
 });
