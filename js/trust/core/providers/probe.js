@@ -18,8 +18,10 @@
  *   `degraded` come with #17's later PRs, which add them.
  *
  * Each observes the faults it reports (`quota`, `version-too-new`, `probe-failed`), so a later
- * answer that no longer reports one resolves it. Neither observes `open-failed`: that's the
- * records' own and slice 1b's failure site's, and resolves through them.
+ * answer that no longer reports one resolves it. Storage also observes `open-failed`: a probe
+ * that opened CanvasTabDB resolves slice 1b's `storage/open-failed/CanvasTabDB`, and one that
+ * found it won't open reports that incident. The records' own `open-failed` for
+ * NewTabNoteTrust is never a check's to resolve.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
  * nothing either way, so it's `unverified` with its code. A record already under the probe's
@@ -46,12 +48,18 @@ export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
 const PROBE_COMMAND_ID = 'trust-probe';
 
 /**
- * What a probe that committed looked at: every fault it observes, on CanvasTabDB. One that
- * failed looked at nothing beyond the fault it reports, and one that verified nothing, at
- * nothing, so neither resolves anything.
+ * What a probe that committed looked at: every fault it observes, on CanvasTabDB, which it
+ * opened, so Storage's includes slice 1b's `storage/open-failed/CanvasTabDB`. One that failed
+ * looked at nothing beyond the fault it reports, and one that verified nothing, at nothing, so
+ * neither resolves anything.
+ * @param {readonly string[]} [also]
  * @returns {NonNullable<CheckResult['looked']>}
  */
-const lookedAll = () => ['quota', 'version-too-new', 'probe-failed'].map(faultCode => ({ faultCode, subjectId: 'CanvasTabDB' }));
+const lookedAll = (also = []) =>
+  ['quota', 'version-too-new', 'probe-failed', ...also].map(faultCode => ({ faultCode, subjectId: 'CanvasTabDB' }));
+
+/** Open failures, which Storage reports as slice 1b's worker does: `open-failed` on CanvasTabDB */
+const OPEN_CODES = Object.freeze(['open-failed', 'missing-core-stores', 'no-database']);
 
 /** The failures that need the user, not a retry: a full disk, or a newer build's database */
 const ACTION_CODES = Object.freeze(['quota', 'version-too-new']);
@@ -185,10 +193,10 @@ export const storage = Object.freeze({
           evidence: { subjectId: 'NewTabNoteTrust' },
           consequenceKey: 'storage.trust-records-unavailable',
           preserved: ['capture', 'editing', 'reading'],
-          looked: lookedAll(),
+          looked: lookedAll(['open-failed']),
         };
       }
-      return { status: 'verified', capture: 'safe', looked: lookedAll() };
+      return { status: 'verified', capture: 'safe', looked: lookedAll(['open-failed']) };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     if (failure.kind === 'action') {
@@ -208,8 +216,8 @@ export const storage = Object.freeze({
       consequenceKey: 'storage.unavailable',
       faults: [
         {
-          // `open-failed` is the records' own and slice 1b's, which no check may observe
-          faultCode: 'probe-failed',
+          // A database that won't open is the incident slice 1b's worker raises, keyed alike
+          faultCode: failure.code !== null && OPEN_CODES.includes(failure.code) ? 'open-failed' : 'probe-failed',
           subjectId: 'CanvasTabDB',
           severity: 'capture-risk',
           affected: ['capture', 'editing', 'reading'],
