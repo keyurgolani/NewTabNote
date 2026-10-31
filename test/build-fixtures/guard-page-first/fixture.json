@@ -1,0 +1,18 @@
+{
+  "rule": "a page loads another script ahead of the network guard, which would reach the network unguarded",
+  "expect": [
+    "guard/page-first"
+  ],
+  "edits": [
+    {
+      "file": "popup.html",
+      "replace": "  <script vite-ignore src=\"js/network-guard.js\"></script>\n",
+      "with": ""
+    },
+    {
+      "file": "popup.html",
+      "replace": "  <script type=\"module\" src=\"js/popup.js\"></script>",
+      "with": "  <script type=\"module\" src=\"js/popup.js\"></script>\n  <script vite-ignore src=\"js/network-guard.js\"></script>"
+    }
+  ]
+}

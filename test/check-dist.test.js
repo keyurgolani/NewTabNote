@@ -17,9 +17,18 @@ const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 const temps = [];
 after(() => temps.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
 
-// Two pages that load their entry chunks and preload the chunk those import, a module worker
-// chunk, a lazy chunk, a stylesheet, a vendored classic script, the self-contained service
-// worker, and the files build/static-assets.json lists
+// A network guard as the build's check runs it (scripts/build/guard.js): it marks each API it
+// wraps, leaves its handle, and lets only this extension's own origin through. The real one is
+// js/network-guard.js bundled, which test/network-guard.test.js covers.
+const GUARD = '(function(){var G=Symbol.for("ntn.networkGuard");function m(f){Object.defineProperty(f,G,{value:true});return f}'
+  + 'self[G]={surface:"newtab",onRefused:function(){}};var f=self.fetch;self.fetch=m(function(u,i){return f.call(self,u,i)});'
+  + 'var P=self.XMLHttpRequest.prototype,o=P.open,s=P.send;P.open=m(function(){return o.apply(this,arguments)});P.send=m(function(){return s.apply(this,arguments)});'
+  + 'self.WebSocket=m(self.WebSocket);self.EventSource=m(self.EventSource);var b=self.navigator.sendBeacon;'
+  + 'self.navigator.sendBeacon=m(function(u,d){return String(u).indexOf("chrome-extension://")===0?b.call(this,u,d):false})})();';
+
+// Two pages that load the network guard first, then their entry chunks, and preload the chunk
+// those import, a module worker chunk, a lazy chunk, a stylesheet, a vendored classic script,
+// the self-contained service worker, and the files build/static-assets.json lists
 const BUILD = {
   'manifest.json': JSON.stringify({
     manifest_version: 3,
@@ -30,8 +39,8 @@ const BUILD = {
     background: { service_worker: 'js/background.js', type: 'module' },
     icons: { 48: 'icons/icon48.png' },
   }),
-  'newtab.html': '<script src="js/lib/fuse.js"></script><script type="module" crossorigin src="/assets/newtab-A1.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js"><link rel="stylesheet" crossorigin href="/assets/newtab-C3.css">',
-  'sidepanel.html': '<script type="module" crossorigin src="/assets/sidepanel-F6.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js">',
+  'newtab.html': '<script src="js/network-guard.js"></script><script src="js/lib/fuse.js"></script><script type="module" crossorigin src="/assets/newtab-A1.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js"><link rel="stylesheet" crossorigin href="/assets/newtab-C3.css">',
+  'sidepanel.html': '<script src="js/network-guard.js"></script><script type="module" crossorigin src="/assets/sidepanel-F6.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js">',
   'assets/newtab-A1.js': 'import{h as e}from"./host-B2.js";new Worker(new URL("/assets/indexer-D4.js",""+import.meta.url),{type:"module"});const t=()=>import("./trust-E5.js");',
   'assets/sidepanel-F6.js': 'import{h as e}from"./host-B2.js";console.log(e);',
   'assets/host-B2.js': 'export const h=1;',
@@ -39,6 +48,7 @@ const BUILD = {
   'assets/indexer-D4.js': 'self.onmessage=()=>{};',
   'assets/newtab-C3.css': '.a{background:url(/icons/icon48.png)}',
   'js/lib/fuse.js': 'var Fuse=1;',
+  'js/network-guard.js': GUARD,
   'js/background.js': 'chrome.runtime.onInstalled.addListener(()=>{chrome.tabs.create({url:chrome.runtime.getURL("newtab.html")})});self.later=async()=>{await (1)};',
   'icons/icon48.png': '',
   LICENSE: 'MIT',
@@ -79,7 +89,7 @@ describe('scripts/check-dist.js', () => {
   it('passes on a build laid out as the bundler writes one, and says what it holds', () => {
     const { code, output } = run(buildDir());
     assert.equal(code, 0, output);
-    assert.match(output, /^check:dist: OK, .+\/ closes over its 16 files: 2 pages, 5 chunks, 1 classic script, and a self-contained module service worker \(js\/background\.js\)$/);
+    assert.match(output, /^check:dist: OK, .+\/ closes over its 17 files: 2 pages, 5 chunks, 2 classic scripts, and a self-contained module service worker \(js\/background\.js\)$/);
   });
 
   it('fails on a chunk the build lacks, naming what needs it, and pr-gate\'s excerpt starts at the report', () => {
@@ -101,6 +111,17 @@ describe('scripts/check-dist.js', () => {
       'has no js/background.js, the service worker the manifest names');
   });
 
+  it("fails on a page whose first script isn't the network guard, and on a guard that doesn't wrap what it covers or lets a call go", () => {
+    assertFails(run(buildDir({ 'sidepanel.html': '<script type="module" crossorigin src="/assets/sidepanel-F6.js"></script><script src="js/network-guard.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js">' })),
+      'check:dist failed: 1 problem in ', '[guard/page-first] sidepanel.html: its first script at 1:1 is /assets/sidepanel-F6.js, not the network guard');
+    assertFails(run(buildDir({ 'newtab.html': '<script defer src="js/network-guard.js"></script><script src="js/lib/fuse.js"></script><script type="module" crossorigin src="/assets/newtab-A1.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js"><link rel="stylesheet" crossorigin href="/assets/newtab-C3.css">' })),
+      '[guard/page-first] newtab.html: it loads the network guard at 1:1 as a module, async, or deferred');
+    assertFails(run(buildDir({ 'js/network-guard.js': GUARD.replace('self.WebSocket=m(self.WebSocket);', '') })), '[guard/not-installed] js/network-guard.js: it doesn\'t wrap WebSocket');
+    assertFails(run(buildDir({ 'js/network-guard.js': GUARD.replace('String(u).indexOf("chrome-extension://")===0', 'true') })),
+      '[guard/not-installed] js/network-guard.js: a call to an unregistered destination went');
+    assertFails(run(buildDir({ 'js/network-guard.js': 'throw new Error("x");' })), '[guard/not-installed] js/network-guard.js: it threw as it ran');
+  });
+
   it('fails on a file nothing names, and on an import of a bare specifier or a path outside the build', () => {
     assertFails(run(buildDir({ 'assets/stale-G7.js': 'export const s=1;' })), 'check:dist failed: 1 problem in ', '[closure/unreferenced] assets/stale-G7.js: nothing in ');
     assertFails(run(buildDir({ 'assets/trust-E5.js': 'import"valibot";export const t=1;' })),
@@ -116,7 +137,7 @@ describe('scripts/check-dist.js', () => {
       [{ 'js/lib/fuse.js': 'var Fuse=import.meta.url;' }, '1:10'],
     ]) {
       assertFails(run(buildDir(edits)), 'check:dist failed: 1 problem in ',
-        `[build/load-mode] js/lib/fuse.js: newtab.html loads it as a classic script at 1:1, but it has an import or export statement or import.meta at ${at}, which only a module parses`);
+        `[build/load-mode] js/lib/fuse.js: newtab.html loads it as a classic script at 1:44, but it has an import or export statement or import.meta at ${at}, which only a module parses`);
     }
     // A module script may, and so may a classic script's import()
     assert.equal(run(buildDir({ 'js/lib/fuse.js': 'var Fuse=1;self.later=()=>import("../../assets/trust-E5.js");' })).code, 0);

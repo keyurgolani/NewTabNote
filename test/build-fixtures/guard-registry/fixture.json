@@ -1,0 +1,13 @@
+{
+  "rule": "a destination registry row has a problem, so the network guard would refuse every destination",
+  "expect": [
+    "guard/registry-unreadable"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/destination-rows.js",
+      "replace": "    \"id\": \"openai\",\n    \"kind\": \"packaged\",",
+      "with": "    \"id\": \"openai\",\n    \"kind\": \"unknown\","
+    }
+  ]
+}
