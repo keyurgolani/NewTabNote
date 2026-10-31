@@ -201,7 +201,7 @@ export const PROVIDERS = Object.freeze([
     id: 'coordinator',
     group: 'platform',
     rank: 5,
-    label: 'Background coordinator',
+    label: 'Background tasks',
     operation: 'coordinator.query-health',
     observes: ['start-failed', 'unreachable'],
     freshnessMs: HOUR,
