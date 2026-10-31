@@ -12,7 +12,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createLegacyEnv, createDatabase, FakeDocument } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, FakeDocument, settingsOf, startEditorClient } = require('./helpers/legacy-env');
 
 const ROOT = path.join(__dirname, '..');
 const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
@@ -21,8 +21,7 @@ const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(
 async function llmPage() {
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
-  const storage = env.get('Storage');
-  await storage.init();
+  const storage = settingsOf(env);
   /** @type {Array<{url: string, headers: Record<string, string>}>} */
   const requests = [];
   env.global.fetch = async (url, options = {}) => {
@@ -122,10 +121,10 @@ describe("sync's export skips the IndexedDB settings store (#21 slice 1a)", () =
     const env = createLegacyEnv();
     await createDatabase(env.indexedDB, { records: { settings: [{ key: 'llmApiKey', value: key }, { key: 'theme', value: 'dark' }] } });
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/core/logger.js', 'js/services/sync-service.js');
-    const storage = env.get('Storage');
-    await storage.init();
+    // Sync's handle, as the new tab's root gives it, whose export is getSyncData's (#17 PR 4b)
+    await startEditorClient(env);
     const SyncService = env.get('SyncService');
-    const service = new SyncService({ storage, logger: env.get('createLogger("error")') });
+    const service = new SyncService({ storage: env.stores.sync, logger: env.get('createLogger("error")') });
     const exported = await service._exportLocalData();
     assert.equal(JSON.stringify(exported).includes(key), false, 'the export holds the key');
     assert.equal(Object.hasOwn(exported, 'settings'), false);
@@ -171,8 +170,7 @@ async function settingsPage(provider, key) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   env.global.ResizablePanel = class {};
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
-  const storage = env.get('Storage');
-  await storage.init();
+  const storage = settingsOf(env);
   await storage.setSetting('llmProvider', provider);
   if (key) {
     await storage.setSetting('llmApiKey', key);
@@ -188,7 +186,7 @@ async function settingsPage(provider, key) {
   doc.body.appendChild(select);
   doc.body.appendChild(field);
   const AIChatController = env.get('AIChatController');
-  const chat = new AIChatController({ storage, domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
+  const chat = new AIChatController({ domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
   /** @type {Array<[string, string]>} */
   const listed = [];
   chat.loadAndPopulateModels = async (shown, apiKey) => { listed.push([shown, apiKey]); };
@@ -218,8 +216,7 @@ describe("a key's provider is recorded safely (#21 slice 1a)", () => {
     const env = createLegacyEnv({ document: new FakeDocument() });
     env.global.ResizablePanel = class {};
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
-    const storage = env.get('Storage');
-    await storage.init();
+    const storage = settingsOf(env);
     await storage.setSetting('llmProvider', 'openai');
     const llm = env.get('LLM');
     await llm.init();
@@ -231,7 +228,7 @@ describe("a key's provider is recorded safely (#21 slice 1a)", () => {
     doc.body.appendChild(select);
     doc.body.appendChild(input);
     const AIChatController = env.get('AIChatController');
-    const chat = new AIChatController({ storage, domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
+    const chat = new AIChatController({ domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
     /** @type {Array<[string, string]>} */
     const listed = [];
     chat.loadAndPopulateModels = async (provider, apiKey) => { listed.push([provider, apiKey]); };

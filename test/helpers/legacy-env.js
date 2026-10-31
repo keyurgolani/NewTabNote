@@ -1130,8 +1130,9 @@ function testDocumentClient(client) {
 /**
  * Make the document client the page's editors read and write through
  * (test/helpers/editor-client.mjs): a new tab's kernel on #17's adapter, opened as the new tab's
- * root opens it (#17 PR 4a), over the database the page's Storage has to have started, once
- * it's open. Each editor makeEditor makes for the page gets it. The page's note list
+ * root opens it (#17 PR 4a), once the worker's run has had its turn, as the root waits on it.
+ * The page's Storage needn't have started (#17 PR 4b). Each editor makeEditor makes for the
+ * page gets it. The page's note list
  * (js/kernel/core/application/note-list.js), on the same kernel, becomes `env.noteList`, and
  * starts reading. It takes test/helpers/page-module.js, so node runs with
  * --experimental-vm-modules (npm test passes it).
@@ -1171,6 +1172,26 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
   return env.documentClient;
 }
 
+/**
+ * A test's hand on the page's settings where 1.4.x keeps them, `setting_<key>` in
+ * chrome.storage.local, read and written straight there (#17 PR 4b): a write is one set, so
+ * every tab hears of it, as it would of another tab's or the first run's, and a read answers
+ * the stored value, or `defaultValue` (null unless given) where there's none
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {{setSetting: (key: string, value: unknown) => Promise<void>,
+ *   getSetting: (key: string, defaultValue?: unknown) => Promise<unknown>}}
+ */
+function settingsOf(env) {
+  const local = env.chrome.api.storage.local;
+  return {
+    setSetting: (key, value) => local.set({ [`setting_${key}`]: value }),
+    async getSetting(key, defaultValue = null) {
+      const stored = (await local.get([`setting_${key}`]))[`setting_${key}`];
+      return stored !== undefined ? stored : defaultValue;
+    },
+  };
+}
+
 /** Where the frozen 1.4.1 Storage is (test/fixtures/storage/releases/) */
 const RELEASE_141_STORAGE = 'test/fixtures/storage/releases/v1.4.1/js/storage.js';
 
@@ -1208,8 +1229,9 @@ async function releaseStorage(env) {
  * Its document client becomes the one makeEditor gives editors, and `env.adapter` the adapter.
  * The page's clients are the root's, as startEditorClient sets them: `env.kernel`,
  * `env.noteList`, `env.settingsClient`, and what App gives its controllers of the database
- * (`env.storageState`, `env.recovery`, `env.validateBackup`). Storage must not have started:
- * the root opens it, so a test of a path #17 PR 4a ported calls none of Storage's opens.
+ * (`env.storageState`, `env.recovery`, `env.validateBackup`), with the narrow handles App gives
+ * NotesManager, GraphView and SyncService (`env.stores`, #17 PR 4b). Storage must not have
+ * started: the root opens it, so a test of a path #17 PR 4a ported calls none of Storage's opens.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @returns {Promise<Object>} the document client, once the kernel is ready
  */
@@ -1229,6 +1251,7 @@ async function startNewTabKernel(env) {
   env.storageState = root.createNewTabStorageState(adapter);
   env.recovery = root.createNewTabRecovery(host);
   env.validateBackup = root.createNewTabBackupCheck();
+  env.stores = root.createNewTabLegacyStores(kernel, host, env.storageState);
   return env.documentClient;
 }
 
@@ -1442,6 +1465,7 @@ module.exports = {
   runUntil,
   bootNewTab,
   releaseStorage,
+  settingsOf,
   shownTabs,
   createDatabase,
   workerRun,
