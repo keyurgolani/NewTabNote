@@ -90,7 +90,7 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'Storage',
     operation: 'storage.probe-readwrite',
-    observes: ['quota', 'version-too-new', 'probe-failed', 'open-failed'],
+    observes: ['quota', 'version-too-new', 'probe-failed', 'open-failed', 'migration-pending', 'migration-failed', 'migration-blocked'],
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open', 'save-salvage-file'],

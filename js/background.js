@@ -8,21 +8,22 @@
  * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
  */
 
-// utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
+// utils.js and storage.js put Utils and Storage on self. The worker's kernel no longer runs on
+// Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import {
+  MIGRATE_MESSAGE,
+  createWorkerClient,
+  installWorkerRouter,
+  migrationEvents,
+  workerHost,
+} from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
-
-/**
- * The worker's kernel. It opens the database and runs startup maintenance now, as
- * Storage.init() did here, and a capture waits for both.
- */
-const kernel = createWorkerClient();
 
 /**
  * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
@@ -36,11 +37,20 @@ const failureEvents = createFailureEvents({ surface: 'worker-internal' });
 // nothing
 failureEvents.reconcile();
 
+/**
+ * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
+ * after a verified recovery point, then opens the database and runs startup maintenance, and a
+ * capture waits for all of it, except while an older build's open page blocks the upgrade.
+ * Each run it makes goes to the journal as its own migration event (#20).
+ */
+const kernel = createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event) });
+
 // The worker's storage init: an open that failed is a storage incident now, not only when a
 // capture finds it
 kernel.whenReady().then(
   failure => {
-    if (!failure) return;
+    // A blocked upgrade is the run's own event (storage.migration-blocked), not a failed open
+    if (!failure || failure.code === 'blocked-upgrade') return;
     failureEvents.event(
       'storage.open-failed',
       { subjectId: 'CanvasTabDB', durationMs: Math.max(0, Date.now() - openStartedAt) },
@@ -66,11 +76,15 @@ installWorkerRouter();
  */
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
+/** The latest migration attempt's outcome, for #34's harness, which seeds a profile only once it's in */
+Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => kernel.migration.done, configurable: true });
 
 /** Why a capture can't be saved (the reasons the new tab shows) */
 const CAPTURE_REFUSALS = {
   newerSchema: "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
   missingCoreStores: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+  // #17 PR 1b: the upgrade waits on an open page of an older version, and there's no journal yet
+  blockedUpgrade: 'NewTabNote is updating how your notes are stored, and an open NewTabNote tab or window is holding them. Close or reload it, then try again.',
 };
 
 /**
@@ -82,6 +96,7 @@ const CAPTURE_REFUSALS = {
 function captureRefusal({ cause, code }) {
   if (cause === 'newer-schema') return CAPTURE_REFUSALS.newerSchema;
   if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
+  if (code === 'blocked-upgrade') return CAPTURE_REFUSALS.blockedUpgrade;
   return null;
 }
 
@@ -159,6 +174,22 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // A page that found no database, or an older one, waits on the migration (#17, Q12): the
+  // attempt in progress, or after one that was short of space or failed, a new one. Only its
+  // status goes back, never anything stored. It's accepted only from the extension's own
+  // senders (#21's isOwnSender, as API_REQUEST below), a page in a tab included, since a new
+  // attempt can make another full recovery point.
+  if (request && request.type === MIGRATE_MESSAGE) {
+    if (!isOwnSender(sender)) {
+      sendResponse({ status: 'refused' });
+      return false;
+    }
+    kernel.migration.request().then(
+      outcome => sendResponse({ status: outcome.status }),
+      () => sendResponse({ status: 'failed' }),
+    );
+    return true;
+  }
   if (request && request.type === 'API_REQUEST') {
     // Only this extension's own pages and worker (#21): a web page or another extension
     // never gets a request made for it

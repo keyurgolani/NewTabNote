@@ -110,6 +110,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     chat: new Map(),
     onboarding: new Map(),
     backup: new Map(),
+    upgrade: new Map(),
     idbSettings: new Map(),
   };
   /** @type {Promise<unknown>} */

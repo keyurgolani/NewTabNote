@@ -16,9 +16,11 @@
  * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
  *   (js/runtime/lazy.js), which JSZip loads through at the first Markdown export (#27 slice 3).
  *   Without it, JSZip is the global its script defined, as before.
+ * @param {(() => Promise<void>)|null} [deps.onOpened] - Runs each time Settings opens, for sections
+ *   that read their state then (#17 PR 1b)
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null }) {
+  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, onOpened = null }) {
     this.settings = settings;
     this.loadLibrary = loadLibrary;
     /** @type {any} */
@@ -26,6 +28,8 @@ class SettingsController {
     this.validateBackup = validateBackup;
     this.domRefs = domRefs;
     this.logger = logger;
+    /** @type {(() => Promise<void>)|null} */
+    this.onSettingsOpened = onOpened;
 
     // App-level callbacks (set by App after construction)
     this.onApplyTheme = null;
@@ -522,6 +526,9 @@ class SettingsController {
     this.switchSettingsCategory('general');
 
     await this.updateSettingsUI();
+    if (this.onSettingsOpened) {
+      await this.onSettingsOpened().catch((error) => console.warn('A settings section could not read its state:', error));
+    }
   }
 
   async updateSettingsUI() {
