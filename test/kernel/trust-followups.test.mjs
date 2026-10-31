@@ -137,6 +137,7 @@ const provider = (id, check, extra = {}) => ({
   freshnessMs: 60_000,
   triggers: ['verify-now'],
   fixtures: ['truthful-receipt'],
+  observes: [],
   implementation: { check },
   ...extra,
 });
@@ -332,10 +333,10 @@ describe("#68's follow-ups (the fourth delta check)", () => {
     assert.equal((await storedAt(x, WRITE_FAILED))?.occurrences, 4);
   });
 
-  it('D8: the first write after NewTabNoteTrust opens resolves the open-failed incident the records raised', async () => {
+  it('D8: the first write after NewTabNoteTrust opens resolves the open-failed sightings before it, and a later one reopens it', async () => {
     const profile = trustProfile();
     const clock = manualClock();
-    await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
+    const ra = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
     await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'cccc' });
     const up = databaseOn(profile);
     opened.push(up);
@@ -343,9 +344,15 @@ describe("#68's follow-ups (the fourth delta check)", () => {
     const stored = await storedAt(up, OPEN_FAILED);
     assert.equal(stored?.state, 'resolved', 'open-failed stays open after the store opened');
     assert.equal(stored?.occurrences, 2);
+    // Part 2: A still can't open, and its next write says so, so B doesn't answer all clear
     clock.advance(60_000);
+    assert.equal(
+      (await ra.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } })).recorded,
+      false,
+    );
     const summary = await summaryOf(rb.records, clock);
-    assert.deepEqual([summary.actionRequired, summary.route], [0, 'trust']);
+    assert.equal((await at(rb.records, OPEN_FAILED))?.state, 'open');
+    assert.deepEqual([summary.actionRequired >= 1, summary.route], [true, 'recovery']);
   });
 
   it('D10: without locks, two concurrent writes in one context replay a memory remainder once', async () => {

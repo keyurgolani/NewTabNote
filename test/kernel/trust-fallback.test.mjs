@@ -56,11 +56,12 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     assert.deepEqual([other.recorded, other.held, other.incident], [false, false, null]);
 
     const copy = /** @type {any} */ (profile.settings.items.get(KEY));
-    // The failed open() holds NewTabNoteTrust's own open-failed incident (round 4)
+    // The failed open() holds NewTabNoteTrust's own open-failed incident (round 4), and each
+    // failed write while the store won't open here sights it again (part 2)
     assert.deepEqual(copy.entries.map((/** @type {any} */ entry) => [entry.key, entry.count]).sort(), [
       ['capture/capture-failed/-', 1],
       ['storage/open-failed/-', 2],
-      [OPEN_FAILED_KEY, 1],
+      [OPEN_FAILED_KEY, 5],
       [WRITE_FAILED_KEY, 4],
     ]);
     assert.ok(
@@ -70,7 +71,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     assert.deepEqual(shown.map(incident => [incident.key, incident.occurrences]).sort(), [
       ['capture/capture-failed/-', 1],
       ['storage/open-failed/-', 2],
-      [OPEN_FAILED_KEY, 1],
+      [OPEN_FAILED_KEY, 5],
       [WRITE_FAILED_KEY, 4],
     ]);
     assert.deepEqual(await records.events(), []);

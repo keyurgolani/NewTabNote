@@ -11,6 +11,10 @@ import { incidentSchema } from '../records.js';
 
 export const payload = queryPayload('recovery.incidents', { includeResolved: v.optional(v.boolean()) });
 
-export const result = queryStateSchema(v.strictObject({ incidents: v.array(incidentSchema) }));
+// `copyRead` and `recordsRead`: whether this read of the settings copy, and of NewTabNoteTrust,
+// answered; when either didn't, incidents may be missing
+export const result = queryStateSchema(
+  v.strictObject({ incidents: v.array(incidentSchema), copyRead: v.boolean(), recordsRead: v.boolean() }),
+);
 
 /** @typedef {v.InferOutput<typeof payload>} RecoveryIncidentsQuery */

@@ -381,6 +381,7 @@ describe('seeded canaries reach no record, journal event, report, or log line (#
         freshnessMs: 60_000,
         triggers: ['verify-now'],
         fixtures: ['truthful-receipt'],
+        observes: [],
         implementation: { check },
       })),
     );

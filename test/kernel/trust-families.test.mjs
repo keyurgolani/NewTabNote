@@ -54,6 +54,7 @@ const provider = (id, group, rank, check, extra = {}) => ({
   freshnessMs: DAY,
   triggers: ['open', 'verify-now'],
   fixtures: ['truthful-receipt'],
+  observes: [],
   implementation: { check },
   ...extra,
 });
@@ -73,29 +74,50 @@ const PROVIDERS = [
       core: true,
     },
   ),
-  provider('storage', 'storage', 20, () => storageAnswer.next, { core: true }),
+  provider('storage', 'storage', 20, () => storageAnswer.next, {
+    core: true,
+    observes: ['scan-findings', 'quota'],
+  }),
   // unconfigured
   provider('sync', 'sync', 10, () => ({ status: 'not-configured' })),
   // stale: verified, with a window the test moves the clock past
   provider('backup', 'backup', 10, () => ({ status: 'verified', evidence: { ageMs: 1000 } }), { freshnessMs: 60_000 }),
   // degraded, with a fault
-  provider('index', 'indexing', 10, () => ({
-    status: 'degraded',
-    consequenceKey: 'indexing.lagging',
-    preserved: ['capture', 'editing'],
-    faults: [{ faultCode: 'lagging', severity: 'degraded', affected: ['search'] }],
-  })),
+  provider(
+    'index',
+    'indexing',
+    10,
+    () => ({
+      status: 'degraded',
+      consequenceKey: 'indexing.lagging',
+      preserved: ['capture', 'editing'],
+      faults: [{ faultCode: 'lagging', severity: 'degraded', affected: ['search'] }],
+    }),
+    { observes: ['lagging'] },
+  ),
   // failed, with a fault
-  provider('permissions', 'permissions', 10, () => ({
-    status: 'failed',
-    faults: [{ faultCode: 'grant-missing', subjectId: 'contextMenus', severity: 'data-risk' }],
-  })),
+  provider(
+    'permissions',
+    'permissions',
+    10,
+    () => ({
+      status: 'failed',
+      faults: [{ faultCode: 'grant-missing', subjectId: 'contextMenus', severity: 'data-risk' }],
+    }),
+    { observes: ['grant-missing'] },
+  ),
   // recovering: degraded with the remediation that's under way as its next action
-  provider('local-inference', 'inference', 10, () => ({
-    status: 'degraded',
-    nextAction: 'rebuild-index',
-    faults: [{ faultCode: 'model-rebuilding', severity: 'degraded' }],
-  })),
+  provider(
+    'local-inference',
+    'inference',
+    10,
+    () => ({
+      status: 'degraded',
+      nextAction: 'rebuild-index',
+      faults: [{ faultCode: 'model-rebuilding', severity: 'degraded' }],
+    }),
+    { observes: ['model-rebuilding'] },
+  ),
   // unverifiable: never answers, so its check times out
   provider('ai-scope-grants', 'inference', 20, () => new Promise(() => {}), { timeoutMs: 20 }),
   // a network check, which opening Trust never runs
@@ -158,6 +180,7 @@ describeRegistryConformance('health (#20)', {
           timeoutMs: data.timeoutMs,
           freshnessMs: data.freshnessMs,
           core: data.core === true,
+          observes: data.observes,
           check: context => /** @type {any} */ (implementation).check(context),
         },
         { clock, timers: realTimers },
@@ -173,6 +196,13 @@ describeRegistryConformance('health (#20)', {
       assert.equal(receipt.freshnessMs, data.freshnessMs, 'a receipt carries its declared freshness');
       assert.ok(checkEvidence(receipt.evidence).ok);
       assert.notEqual(run.outcome, 'invalid', `${contribution.ref} answered something a receipt can't hold`);
+      // A check reports only faults it declares it observes, so its passing check can resolve them
+      for (const fault of run.faults) {
+        assert.ok(
+          data.observes.includes(fault.faultCode),
+          `${contribution.ref} reported ${fault.faultCode}, which it doesn't list in observes`,
+        );
+      }
     },
   },
 });
@@ -341,7 +371,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     storageAnswer.next = {
       status: 'failed',
       capture: 'at-risk',
-      faults: [{ faultCode: 'open-failed', severity: 'capture-risk' }],
+      faults: [{ faultCode: 'quota', severity: 'capture-risk' }],
     };
     try {
       await trust.verify({
@@ -380,7 +410,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['storage'] });
       summary = await summaryOf(trust);
       assert.equal(summary.actionRequired, 1);
-      storageAnswer.next = { status: 'verified', capture: 'safe' };
+      storageAnswer.next = { status: 'verified', capture: 'safe', looked: [{ faultCode: 'scan-findings' }] };
       await trust.verify({ type: 'trust.verify', commandId: 'c3', trigger: 'verify-now', providerIds: ['storage'] });
       const [resolved] = await records.incidents();
       assert.equal(resolved.state, 'resolved');

@@ -2,7 +2,8 @@
  * trust.report, catalog version 1 (#20, "Contracts"): every provider the root registered,
  * with the verification operation and freshness it declares, its latest receipt, and the
  * status that receipt reads as now (`stale` past its window, `unverified` with no receipt
- * yet), plus the stored incidents and remediation runs. Ids, codes, counts, and times only.
+ * yet), plus the stored incidents (and whether the settings copy could be read for them) and
+ * remediation runs. Ids, codes, counts, and times only.
  * Slice 2 adds the legacy copies as restore points (approved AC6's).
  */
 
@@ -31,6 +32,11 @@ export const reportSchema = v.strictObject({
     }),
   ),
   incidents: v.array(incidentSchema),
+  // Whether this report's read of the settings copy answered: when it didn't, incidents other
+  // contexts hold may be missing
+  copyRead: v.boolean(),
+  // Whether this report's read of NewTabNoteTrust's incidents answered
+  recordsRead: v.boolean(),
   runs: v.array(runSchema),
 });
 

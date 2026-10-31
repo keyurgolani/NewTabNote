@@ -279,7 +279,8 @@ describe("#68's second review round", () => {
       (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
       [
         // The failed open() holds NewTabNoteTrust's own incident (round 4)
-        ['storage/open-failed/NewTabNoteTrust', 1],
+        // The failed open() and each of the 260 writes (part 2)
+        ['storage/open-failed/NewTabNoteTrust', 261],
         ['storage/write-failed/-', 260],
       ],
     );

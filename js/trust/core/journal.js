@@ -124,19 +124,26 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
         return refuse(refused.reason, refused.field);
       }
       const at = clock.now();
-      // An event that raises an incident is one operation: the raise counts its failed write,
-      // so the event's own append doesn't count a second
-      track(records.append({ at, code, fields: checked.value }, { internal: Boolean(entry.incident) }));
-      if (entry.incident) {
-        const subjectId = checked.value.subjectId;
-        track(
-          records.raise({
-            ...entry.incident,
-            subjectId: typeof subjectId === 'string' ? subjectId : null,
-            evidence: checked.value,
-          }),
-        );
+      const appended = { at, code, fields: checked.value };
+      if (!entry.incident) {
+        track(records.append(appended));
+        return true;
       }
+      // An event that raises an incident is one operation, which counts one failed write: the
+      // raise goes first, and the append counts its own failure only when the raise didn't
+      const subjectId = checked.value.subjectId;
+      const raised = records.raise({
+        ...entry.incident,
+        subjectId: typeof subjectId === 'string' ? subjectId : null,
+        evidence: checked.value,
+      });
+      track(raised);
+      track(
+        raised.then(
+          result => records.append(appended, { internal: !result.recorded }),
+          () => records.append(appended),
+        ),
+      );
       return true;
     },
 
