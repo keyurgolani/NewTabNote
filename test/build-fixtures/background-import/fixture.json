@@ -3,6 +3,7 @@
   "expect": [
     "background/not-self-contained"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/background.js",

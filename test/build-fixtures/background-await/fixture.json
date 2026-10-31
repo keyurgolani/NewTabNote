@@ -3,6 +3,7 @@
   "expect": [
     "background/top-level-await"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/background.js",

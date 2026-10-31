@@ -3,6 +3,7 @@
   "expect": [
     "budget/dependency"
   ],
+  "securityEntry": true,
   "modes": [
     "production"
   ],

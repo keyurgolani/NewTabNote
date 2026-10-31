@@ -3,6 +3,7 @@
   "expect": [
     "closure/non-literal"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/background.js",

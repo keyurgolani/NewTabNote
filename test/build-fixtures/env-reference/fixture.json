@@ -3,6 +3,7 @@
   "expect": [
     "env/reference"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/offscreen.js",
