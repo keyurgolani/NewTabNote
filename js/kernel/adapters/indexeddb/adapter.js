@@ -60,8 +60,9 @@
  * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
  * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
  * to this build's version, `existing` when the run left it as it was), Popup's and Side
- * Panel's (`existing`). The new tab stays on #12's legacy adapter until #17 PR 4 moves it
- * (connection.js).
+ * Panel's (`existing`), and since #17 PR 4a the new tab's (`existing`, with its maintenance,
+ * #33's copy and the backup tasks; composition/newtab.js), which #12's legacy adapter was
+ * until then (connection.js).
  */
 
 import { COMMANDS } from '../../core/contracts/commands.js';

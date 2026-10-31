@@ -1,28 +1,36 @@
 // The rules the kernel copies from production code (#12, "Data and migration"), each run
 // both ways from the same records: 1.4.x's Storage, the frozen v1.4.1's since #17 PR 4a took
 // js/storage.js's copies of its writers out, which matched it line for line, background.js, or
-// the controller that applies the rule, in one profile, and the kernel over the legacy adapter
-// in another. Each pair has to leave the same records. Two rules the kernel changes on
+// the controller that applies the rule, in one profile, and the kernel in another, on #17's
+// adapter since #17 PR 4a deleted the legacy adapter, opened as the new tab's root opens a
+// database the worker's run didn't reach: as it is, at 8. Each pair has to leave the same records. Two rules the kernel changes on
 // purpose are left out, as #12 has them: attachInsights writes only insight fields, and
 // applyDerivedTitle drops its title once the user set one. Two more since #17 PR 3a, each
 // checked as the difference it is: the kernel writes placement, kind, and lifecycle beside the
 // flags on a note it makes (domain/placement.js), which the comparisons take off and check
 // apart, and it lists a note without an updatedAt the index holds (KD-011), which Storage lists
-// once #17's transform has filled the field.
+// once #17's transform has filled the field. And #17's adapter puts a note's versions on its
+// record (#17 PR 2a, versions.js), at 8 too, which the comparisons take off and createNote's
+// case checks.
 
 import { createRequire } from 'node:module';
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { filledByLogical2 } from '../../js/kernel/adapters/indexeddb/transforms.js';
+import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
+import { isEmpty, isUntitled } from '../../js/kernel/core/domain/note.js';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
-import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv, releaseContext } from './legacy-fixture.mjs';
-import { testIds } from './support.mjs';
+import { closeAll, legacyContext, legacyEnv, releaseContext } from './legacy-fixture.mjs';
+import { CALLERS, testIds } from './support.mjs';
 
 // #34's worker harness is CommonJS, and starts background.js as the module worker it is,
 // which takes vm.SourceTextModule: npm test starts node with --experimental-vm-modules
@@ -50,6 +58,39 @@ const EDITOR_FILES = ['js/core/storage-error.js', 'js/sidebar-utils.js', 'js/blo
 const opened = [];
 after(() => closeAll(opened));
 
+/** @type {{IDBKeyRange: typeof IDBKeyRange}} */
+const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
+
+/** @type {Array<{close: () => void}>} */
+const adapters = [];
+after(() => adapters.forEach(adapter => adapter.close()));
+
+/**
+ * The kernel on #17's adapter over `context`'s profile, opened as the new tab's root opens a
+ * database the worker's run didn't reach: as it is, with the backup tasks (composition/newtab.js),
+ * and the real clock, as Storage's is
+ * @param {PageContext} context
+ * @returns {Promise<Kernel>}
+ */
+async function kernelOver(context) {
+  const adapter = createIndexedDbAdapter({
+    indexedDB: context.env.indexedDB,
+    settings: context.env.chrome.api.storage.local,
+    keyRange: KeyRange,
+    mode: 'existing',
+    backups: true,
+  });
+  adapters.push(adapter);
+  await adapter.open();
+  return createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: CALLERS.newtab,
+    ids: testIds('k'),
+    clock: { now: () => Date.now() },
+  });
+}
+
 /**
  * `value` with each time a write stamped, any after the seeded ones, read as 'written', so
  * Storage's Date.now() and the kernel's clock compare equal
@@ -70,24 +111,31 @@ function stamped(value) {
 /**
  * Two profiles that start from the same records: `viaStorage` for 1.4.x's code, the frozen
  * v1.4.1 Storage since #17 PR 4a took js/storage.js's own copies of its writers out
- * (releaseContext), and `viaKernel` for the kernel, whose clock is the real one, as Storage's is
+ * (releaseContext), and `viaKernel` for the kernel, whose clock is the real one, as Storage's is.
+ * The kernel's profile has a 1.4.1 Storage open too, which a case reads it through.
  * @param {Record<string, unknown[]>} [records] - rows per IndexedDB store
- * @returns {Promise<{viaStorage: PageContext, viaKernel: LegacyContext, kernel: Kernel}>}
+ * @returns {Promise<{viaStorage: PageContext, viaKernel: PageContext, kernel: Kernel}>}
  */
 async function twin(records = {}) {
   const viaStorage = releaseContext();
-  const viaKernel = legacyContext();
+  const viaKernel = releaseContext();
   opened.push(viaStorage, viaKernel);
   for (const { env } of [viaStorage, viaKernel]) await legacyEnv.createDatabase(env.indexedDB, { records });
   await viaStorage.storage.open();
-  const adapter = adapterFor(viaKernel);
-  await adapter.open();
-  return { viaStorage, viaKernel, kernel: kernelFor(adapter, { ids: testIds('k'), clock: { now: () => Date.now() } }) };
+  await viaKernel.storage.open();
+  return { viaStorage, viaKernel, kernel: await kernelOver(viaKernel) };
 }
 
 /**
+ * `note` without the versions #17's adapter puts on a note's record (#17 PR 2a)
+ * @param {Record<string, unknown>} note
+ */
+const withoutVersions = note => Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field)));
+
+/**
  * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written',
- * and each note without the group the kernel writes beside its flags (groupsIn reads that)
+ * and each note without the group the kernel writes beside its flags (groupsIn reads that) or
+ * its versions
  * @param {PageContext} context
  * @param {string[]} names
  * @returns {Promise<any>}
@@ -99,7 +147,10 @@ async function recordsIn(context, names) {
       names.map(name => {
         const records = legacyEnv.recordsOf(dump, name);
         if (name !== 'canvases') return [name, records];
-        return [name, Object.fromEntries(Object.entries(records).map(([key, note]) => [key, withoutPlacement(note)]))];
+        return [
+          name,
+          Object.fromEntries(Object.entries(records).map(([key, note]) => [key, withoutVersions(withoutPlacement(note))])),
+        ];
       }),
     ),
   );
@@ -211,6 +262,14 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assertCommitted(await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: made.id, name: 'Plan' }));
     const stores = ['canvases', 'search_index'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    // #17's adapter gives the note its versions, which 1.4.x keeps as fields it doesn't read
+    /** @param {PageContext} context */
+    const versionsIn = async context => {
+      const note = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(context.env.indexedDB), 'canvases')[made.id];
+      return VERSION_FIELDS.map(field => note[field]);
+    };
+    assert.deepEqual(await versionsIn(viaKernel), [1, 0, 0]);
+    assert.deepEqual(await versionsIn(viaStorage), [undefined, undefined, undefined]);
     // 1.4.1 still opens version 8, so the group waits for the run and the transform; the contract
     // suite checks the one the kernel writes at 10
     assert.deepEqual(await groupsIn(viaKernel), {});
@@ -993,7 +1052,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
   it("the note list's views list what Storage lists, in its order, at load and after each commit, and the note without an indexed updatedAt last (#17 PR 3a, KD-011)", async () => {
     const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
-    const context = legacyContext();
+    const context = releaseContext();
     opened.push(context);
     await legacyEnv.createDatabase(context.env.indexedDB, {
       records: {
@@ -1017,11 +1076,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
         ],
       },
     });
-    const adapter = adapterFor(context);
-    await adapter.open();
-    const kernel = kernelFor(adapter, { ids: testIds('k'), clock: { now: () => Date.now() } });
+    const kernel = await kernelOver(context);
     const list = createNoteList({ query: kernel.query, subscribe: kernel.subscribe, whenReady: kernel.whenReady });
     const { storage } = context;
+    await storage.open();
     /** @type {Array<[NoteView, () => Promise<Array<{id: string}>>]>} */
     const views = [
       ['active', () => storage.getAllNotes()],
@@ -1359,10 +1417,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     });
     // The Theme Builder's saves, by 1.4.1's Storage on the kernel's profile, since js/storage.js's
     // copy of saveCustomTheme went with #17 PR 4a
-    const old = releaseContext(viaKernel.env);
-    opened.push(old);
-    await old.storage.open();
-    const { storage } = old;
+    const { storage } = viaKernel;
     await storage.saveCustomTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
     await new Promise(resolve => setTimeout(resolve, 2));
     await storage.saveCustomTheme({ name: 'Dawn', properties: { '--bg-primary': '#fafafa' } });
@@ -1656,6 +1711,54 @@ describe("the kernel's copies of production rules, run both ways", () => {
       Object.values((await recordsIn(context, ['links'])).links).map(({ id, ...link }) => link);
     assert.deepEqual(await links(viaKernel), await links(viaStorage));
     assert.equal((await links(viaKernel)).length, 1);
+  });
+
+  it('decides untitled and empty the way Storage.isNoteUntitled and Storage.isNoteEmpty do', async () => {
+    const page = releaseContext();
+    opened.push(page);
+    /** @type {Array<Record<string, unknown>[]>} */
+    const blockSets = [
+      [],
+      [{ content: '<p> </p>' }],
+      [{ content: '<p>x</p>' }],
+      [{ imageUrl: 'data:,' }],
+      [{ tableData: [['Header 1', ' ']] }],
+      [{ tableData: [['Header 1'], ['cell']] }],
+      [{ url: 'https://example.test', title: 'Example' }],
+      [{ url: 'https://example.test' }],
+      [{ children: '<p>child</p>' }],
+      [{ equation: ' ' }],
+      [{ equation: 'x' }],
+      // Only text blocks of spaces, line breaks, and non-breaking spaces are empty
+      [{ content: ' <br>&nbsp;<BR/>\n&NBSP;<br />' }, { content: null }],
+      [{ type: undefined, content: ' ' }],
+      [{ content: '<b></b>' }],
+      [{ content: '<img src="data:,">' }],
+      [{ content: 5 }],
+      [{ type: 'divider' }],
+      [{ type: 'image', imageUrl: 'data:,' }],
+      [{ type: 'table', tableData: [['Header 1', ' ']] }],
+      [{ type: 'bookmark', url: 'https://example.test', title: 'Example' }],
+      [{ content: '' }, { type: 'divider' }],
+    ];
+    await legacyEnv.createDatabase(page.env.indexedDB, {
+      records: {
+        elements: blockSets.flatMap((blocks, set) =>
+          blocks.map((fields, index) =>
+            legacyEnv.block(`b${set}-${index}`, `set${set}`, index, '', { content: '', ...fields }),
+          ),
+        ),
+      },
+    });
+    await page.storage.open();
+    for (const [set, blocks] of blockSets.entries()) {
+      const stored = legacyEnv.plain(await page.storage.getElementsByNote(`set${set}`));
+      assert.equal(isEmpty(stored), await page.storage.isNoteEmpty(`set${set}`), JSON.stringify(blocks));
+    }
+    for (const name of ['', '  ', 'Untitled', 'untitled 4', 'Untitled draft', 'Plan', undefined]) {
+      const note = { id: 'n', name };
+      assert.equal(isUntitled(note), Boolean(page.storage.isNoteUntitled(note)), JSON.stringify(name));
+    }
   });
 
   it("the kernel's preview, todo progress, and wiki-link names are SidebarUtils' and Utils'", async () => {

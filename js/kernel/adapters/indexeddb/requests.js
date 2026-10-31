@@ -1,7 +1,7 @@
 /**
- * The IndexedDB request helpers both kernel adapters over CanvasTabDB use: #17's (adapter.js)
- * and #12's legacy one (adapters/legacy/adapter.js), which takes these, the store names
- * (schema.js), and the setting keys (settings.js) from here, so the two can't drift apart.
+ * The IndexedDB request helpers #17's adapter over CanvasTabDB (adapter.js) and its stores'
+ * modules use. #12's legacy adapter took these, the store names (schema.js), and the setting
+ * keys (settings.js) from here too, so the two couldn't drift apart, until #17 PR 4a deleted it.
  */
 
 import { isId } from '../../core/contracts/checks.js';

@@ -1,7 +1,7 @@
 /**
- * What the composition roots share (#12, "Where the kernel runs"): the legacy storage and
- * settings a page or the worker loaded, and the kernel each root builds on its adapter, with
- * the client it hands out.
+ * What the composition roots share (#12, "Where the kernel runs"): the settings and the
+ * storage host a page or the worker reads from its globals, and the kernel each root builds on
+ * its adapter, with the client it hands out.
  *
  * Loading this module touches no browser API, so a root can load before its page's or the
  * worker's globals exist, as js/background.js needs. Everything here reads them when it's
@@ -13,8 +13,7 @@ import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './ids.js';
 
-/** @typedef {import('../adapters/legacy/adapter.js').LegacyStorage} LegacyStorage */
-/** @typedef {import('../adapters/legacy/adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
 /** @typedef {import('../core/application/kernel.js').KernelClient} KernelClient */
 /** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -22,11 +21,13 @@ import { randomIds } from './ids.js';
 /** @typedef {import('../core/ports/runtime.js').Logger} Logger */
 
 /**
- * What the legacy adapter runs on: js/storage.js's DatabaseManager, which the page or the
- * worker imports before it builds its kernel, and chrome.storage.local.
- * @typedef {object} LegacyHost
- * @property {LegacyStorage} storage
- * @property {SettingsStore} settings
+ * js/storage.js's DatabaseManager, which the new tab's root opens beside #17's adapter for the
+ * holders #22 and #19 own until #17 PR 4b makes it a facade (newtab.js). TypeScript reads the
+ * legacy `Storage` global as the DOM's Storage, so the root reads it through this.
+ * @typedef {object} LegacyStorage
+ * @property {(options?: {watchConnection?: boolean}) => Promise<void>} open
+ * @property {string} openState
+ * @property {string[]} missingStores
  */
 
 /**
@@ -71,18 +72,6 @@ export function chromeSettingsChanges() {
     const { onChanged } = chrome.storage;
     onChanged.addListener(heard);
     return () => onChanged.removeListener(heard);
-  };
-}
-
-/**
- * The `Storage` global js/storage.js sets, and chrome.storage.local, both read when a call
- * reaches them
- * @returns {LegacyHost}
- */
-export function legacyHost() {
-  return {
-    storage: /** @type {LegacyStorage} */ (/** @type {{Storage?: unknown}} */ (globalThis).Storage),
-    settings: chromeSettings(),
   };
 }
 
