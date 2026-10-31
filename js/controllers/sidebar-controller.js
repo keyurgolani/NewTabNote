@@ -1062,6 +1062,19 @@ class SidebarController {
   /** @private */
   static get VIRTUAL_SCROLL_ITEM_HEIGHT() { return 68; }
 
+  /**
+   * A folder row's arrow and folder icons, packaged markup
+   * @private
+   */
+  static get FOLDER_ICONS() {
+    return `<svg class="folder-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+        <svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>`;
+  }
+
   async renderNotesList() {
     const list = document.getElementById('sidebar-notes-list');
     if (!list) return;
@@ -1163,15 +1176,12 @@ class SidebarController {
 
       const header = document.createElement('div');
       header.className = 'sidebar-folder-header';
-      header.innerHTML = `
-        <svg class="folder-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-        <svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span class="folder-name">${folder.name}</span>
-      `;
+      // The icons are packaged markup; the name is set as text, so it shows exactly as typed
+      header.innerHTML = SidebarController.FOLDER_ICONS;
+      const name = document.createElement('span');
+      name.className = 'folder-name';
+      name.textContent = folder.name;
+      header.appendChild(name);
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();
