@@ -137,6 +137,8 @@ class App {
     this.startIndexer = startIndexer;
     this.editor = null;
     this.secondaryEditor = null;
+    // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
+    this._emptyStateHolds = 0;
     // Search Indexer
     this.searchEngine = new SearchEngine();
     // Sidebar controller
@@ -184,20 +186,22 @@ class App {
   /**
    * removeNotes' leave (js/kernel/composition/removal.js): panes on the notes write what they
    * have pending and move to other notes before the write, and its answer finishes the move or
-   * undoes it after (TabController.leaveNotes). A failure there is logged and never stops the
-   * write.
+   * undoes it after (TabController.leaveNotes), with the empty state held until then
+   * (holdEmptyState). A failure there is logged and never stops the write.
    * @param {Array<string>} ids
-   * @returns {Promise<{arrive: Function, restore: Function}|null>}
+   * @returns {Promise<{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}|null>}
    */
   async leaveNotes(ids) {
+    let departure;
     try {
       // A new note a pane gets comes through the kernel (createTabNote), so the lists have it
       // from the commit feed
-      return await this.tabController.leaveNotes(ids);
+      departure = await this.tabController.leaveNotes(ids);
     } catch (error) {
       console.error('Moving panes off notes that are leaving failed:', error);
       return null;
     }
+    return departure ? this.holdEmptyState(departure) : null;
   }
 
   /**
@@ -1167,13 +1171,48 @@ class App {
    * left, and takes it away once one is back. A reload doesn't: another tab's change reaches
    * the lists only through one, and leaves this tab's editor area as it is
    * (TabController._onNotesLeftElsewhere). The one reload that does is a note opened from
-   * Settings' notes list (showOpenedNote).
+   * Settings' notes list (showOpenedNote). While panes move off notes that are leaving, it
+   * waits for them (holdEmptyState).
    * @returns {void}
    */
   followEmptyState() {
     this.noteList.subscribe((change) => {
-      if (change.reason === 'commit') this.updateEmptyState();
+      if (change.reason === 'commit' && !this._emptyStateHolds) this.updateEmptyState();
     });
+  }
+
+  /**
+   * The empty state holds while panes move off notes that are leaving (leaveNotes). The write
+   * commits before a pane with no other note to show gets a new one, so following each commit
+   * would show the empty state and then take it away. Once the panes have moved, or gone back,
+   * and the lists have every commit, it follows the list once.
+   * @param {{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}} departure
+   * @returns {{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}}
+   */
+  holdEmptyState(departure) {
+    this._emptyStateHolds = (this._emptyStateHolds || 0) + 1;
+    let held = true;
+    const release = async () => {
+      if (!held) return;
+      held = false;
+      this._emptyStateHolds -= 1;
+      if (this._emptyStateHolds > 0) return;
+      try {
+        await this.noteList.settled();
+      } catch {
+        // It follows what the lists have
+      }
+      if (!this._emptyStateHolds) this.updateEmptyState();
+    };
+    /** @param {(ids: Array<string>) => Promise<unknown>} move */
+    const thenRelease = (move) => async (ids) => {
+      try {
+        return await move(ids);
+      } finally {
+        await release();
+      }
+    };
+    return { arrive: thenRelease(departure.arrive), restore: thenRelease(departure.restore) };
   }
 
   /**
