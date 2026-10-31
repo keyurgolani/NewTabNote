@@ -1,6 +1,12 @@
 /**
- * The platform providers (#20, "Providers", Messaging, contributions, block types):
+ * The platform providers (#20, "Providers", Messaging, contributions, block types; #35's
+ * coordinator):
  *
+ * - Coordinator asks #35's coordinator for `system.coordinatorHealth` through the context's
+ *   client. `verified` when it's ready, and `degraded` with a `start-failed` incident when the
+ *   worker couldn't build its kernel, so no capture is saved. One whose database won't open is
+ *   `degraded` with no incident of its own, since the storage provider reports that one. No
+ *   answer is `unreachable`, as for messaging, and one still starting is `unverified`.
  * - Messaging asks #13's coordinator for `system.messagingHealth` through the context's client,
  *   a real round trip over whichever transport its root chose. `verified` when it answers with
  *   counters its schema takes, and `degraded` with an `unreachable` incident when the
@@ -19,6 +25,7 @@
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
+import { coordinatorHealth } from '../../../kernel/core/contracts/operations/system-coordinator-health.js';
 import { messagingHealth } from '../../../kernel/core/contracts/operations/system-messaging-health.js';
 import { resolutionReport } from '../../../kernel/registry/report.js';
 import { failureEvidence, portOf } from './context.js';
@@ -34,6 +41,90 @@ const UNAVAILABLE_STATES = Object.freeze(['unresolved', 'temporarily-unavailable
 
 /** What still works while the coordinator can't be reached, in R1 */
 const WITHOUT_COORDINATOR = Object.freeze(['capture', 'editing', 'reading']);
+
+/** What still works while the worker can't build its kernel, in R1: each page commits in its own context */
+const WITHOUT_COORDINATOR_KERNEL = Object.freeze(['editing', 'reading']);
+
+/** The registered error code each reason the coordinator's database didn't open is evidence as */
+const STORAGE_REASONS = Object.freeze({
+  'newer-schema': 'version-too-new',
+  'missing-core-stores': 'missing-core-stores',
+  'storage-unavailable': 'storage-unavailable',
+});
+
+/**
+ * A failed query: the coordinator's answer that it can't, unreachable, refused, or late
+ * @param {{cause?: unknown, code?: unknown}} answer
+ * @returns {CheckResult}
+ */
+const unreachable = answer => ({
+  status: 'degraded',
+  evidence: failureEvidence(answer),
+  consequenceKey: 'platform.coordinator-unreachable',
+  preserved: [...WITHOUT_COORDINATOR],
+  faults: [{ faultCode: 'unreachable', subjectId: null, severity: 'degraded', preserved: [...WITHOUT_COORDINATOR] }],
+  looked: [{ faultCode: 'unreachable', subjectId: null }],
+});
+
+export const coordinator = Object.freeze({
+  /**
+   * @param {Readonly<Record<string, unknown>>} context
+   * @returns {Promise<CheckResult>}
+   */
+  async check(context) {
+    const client = portOf(context, 'messaging');
+    const answer = await client.query({ type: 'system.coordinatorHealth' });
+    if (answer.kind === 'failed') return unreachable(answer);
+    // An answer its schema refuses, or one still loading: nothing was verified
+    if (answer.kind !== 'ready' || !v.is(coordinatorHealth, answer.data)) {
+      return { status: 'unverified', evidence: { errorCode: 'invalid-check-result' } };
+    }
+    const health = v.parse(coordinatorHealth, answer.data);
+    /** @type {CheckResult['looked']} it answered, so it was reached, and whether it was built shows */
+    const looked = [
+      { faultCode: 'start-failed', subjectId: null },
+      { faultCode: 'unreachable', subjectId: null },
+    ];
+    if (health.status === 'ready') {
+      const count = health.commands.reduce((sum, outcome) => sum + outcome.count, 0);
+      return {
+        status: 'verified',
+        evidence: health.startedAt === null ? { count } : { count, since: health.startedAt },
+        looked,
+      };
+    }
+    if (health.reason === 'coordinator-unavailable') {
+      return {
+        status: 'degraded',
+        evidence: { errorCode: 'coordinator-unavailable' },
+        consequenceKey: 'platform.coordinator-start-failed',
+        preserved: [...WITHOUT_COORDINATOR_KERNEL],
+        faults: [
+          {
+            faultCode: 'start-failed',
+            subjectId: null,
+            severity: 'capture-risk',
+            affected: ['capture'],
+            preserved: [...WITHOUT_COORDINATOR_KERNEL],
+          },
+        ],
+        looked,
+      };
+    }
+    if (health.reason !== undefined && Object.prototype.hasOwnProperty.call(STORAGE_REASONS, health.reason)) {
+      return {
+        status: 'degraded',
+        evidence: { errorCode: STORAGE_REASONS[/** @type {keyof typeof STORAGE_REASONS} */ (health.reason)] },
+        consequenceKey: 'storage.unavailable',
+        looked,
+      };
+    }
+    // Still starting, or a reason this build doesn't know yet: nothing was verified
+    return health.reason === 'starting'
+      ? { status: 'unverified', evidence: { errorCode: 'open-pending' } }
+      : { status: 'unverified' };
+  },
+});
 
 export const messaging = Object.freeze({
   /**
@@ -51,17 +142,7 @@ export const messaging = Object.freeze({
         looked: [{ faultCode: 'unreachable', subjectId: null }],
       };
     }
-    // A failed query is the coordinator's answer that it can't: unreachable, refused, or late
-    if (answer.kind === 'failed') {
-      return {
-        status: 'degraded',
-        evidence: failureEvidence(answer),
-        consequenceKey: 'platform.coordinator-unreachable',
-        preserved: [...WITHOUT_COORDINATOR],
-        faults: [{ faultCode: 'unreachable', subjectId: null, severity: 'degraded', preserved: [...WITHOUT_COORDINATOR] }],
-        looked: [{ faultCode: 'unreachable', subjectId: null }],
-      };
-    }
+    if (answer.kind === 'failed') return unreachable(answer);
     // An answer its schema refuses, or one still loading: nothing was verified
     return { status: 'unverified', evidence: { errorCode: 'invalid-check-result' } };
   },

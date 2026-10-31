@@ -1,7 +1,7 @@
 /**
  * The coordinator's own queries (#13, "Query"): what only the coordinator holds, so a page asks
  * it over the port instead of reading a repository in-process. The router answers
- * `system.messagingHealth` here, and #35 adds `jobs.status` and `system.coordinatorHealth`.
+ * `system.messagingHealth` itself, and #35's coordinator `system.coordinatorHealth`.
  *
  * Each entry is a query entry like the kernel's (contracts/queries.js), and names its schema
  * module under contracts/operations/ the same way, a dot written as a hyphen. The kernel never
@@ -20,12 +20,16 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  */
 const PAGES = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel', 'recovery']));
 
-/** @type {Readonly<Record<'system.messagingHealth', QueryEntry>>} */
-export const SYSTEM_QUERIES = Object.freeze({
-  'system.messagingHealth': Object.freeze({
+/**
+ * A system query's entry: one the pages ask, small, and cancellable at any time
+ * @param {string} schema
+ * @returns {QueryEntry}
+ */
+const systemQuery = schema =>
+  Object.freeze({
     kind: /** @type {const} */ ('query'),
     version: 1,
-    schema: './operations/system-messaging-health.js',
+    schema,
     surfaces: PAGES,
     maxBytes: SMALL_MESSAGE_BYTES,
     deadlineMs: QUERY_DEADLINE_MS,
@@ -34,7 +38,12 @@ export const SYSTEM_QUERIES = Object.freeze({
     journaled: /** @type {const} */ (false),
     entityTypes: Object.freeze([]),
     destinations: Object.freeze([]),
-  }),
+  });
+
+/** @type {Readonly<Record<'system.messagingHealth' | 'system.coordinatorHealth', QueryEntry>>} */
+export const SYSTEM_QUERIES = Object.freeze({
+  'system.messagingHealth': systemQuery('./operations/system-messaging-health.js'),
+  'system.coordinatorHealth': systemQuery('./operations/system-coordinator-health.js'),
 });
 
 /** @typedef {keyof typeof SYSTEM_QUERIES} SystemQueryType */

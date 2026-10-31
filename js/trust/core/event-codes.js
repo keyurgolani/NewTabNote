@@ -7,11 +7,12 @@
  * A code that stands for a failure the Recovery Center shows also names the incident it
  * raises: its provider, fault, and severity, keyed with the event's `subjectId` when it has
  * one, so a repeat updates the one incident. The failure sites #20 slice 1b moves here are
- * background capture, embedding load, worker storage init, auto-backup, and indexer start.
+ * background capture, embedding load, worker storage init, auto-backup, and indexer start, and
+ * #35 adds the coordinator's start.
  *
  * A code that stands for a success at one of those sites names the failure code whose incident
- * it resolves (`resolves`): the indexer's first answer, an auto-backup that saved, and a
- * capture that committed. It resolves only the sightings it counted just before it (the
+ * it resolves (`resolves`): the indexer's first answer, an auto-backup that saved, a capture
+ * that committed, and a coordinator that started. It resolves only the sightings it counted just before it (the
  * records' occurrence snapshot, never clocks), and is journaled only when it resolved one.
  * For each of them a success in one context is evidence for a failure in another: the indexer
  * and auto-backup run the same package on the same profile in every tab, and every capture
@@ -82,10 +83,24 @@ export const EVENT_CODES = Object.freeze({
     fields: Object.freeze([...ERROR, 'surface']),
     incident: Object.freeze({ providerId: 'index', faultCode: 'indexer-start-failed', severity: 'degraded' }),
   }),
+  // #35's coordinator, whose kernel the worker couldn't build: no capture is saved, and each
+  // page still edits and reads in its own context
+  'coordinator.start-failed': Object.freeze({
+    fields: Object.freeze([...ERROR, 'surface']),
+    incident: Object.freeze({
+      providerId: 'coordinator',
+      faultCode: 'start-failed',
+      severity: 'capture-risk',
+      affected: Object.freeze(['capture']),
+      preserved: Object.freeze(['editing', 'reading']),
+    }),
+    quietWhileOpen: true,
+  }),
   // The successes at those sites, each resolving its site's incident
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),
   'indexer.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'indexer.start-failed' }),
+  'coordinator.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'coordinator.start-failed' }),
   // The Trust Center's own
   'trust.check-failed': Object.freeze({
     fields: Object.freeze(['providerId', 'durationMs', ...ERROR]),

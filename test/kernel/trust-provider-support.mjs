@@ -1,14 +1,16 @@
 // What slice 2's health providers run on in tests: one browser profile (fake-indexeddb behind
 // the fault wrapper, legacy-env's chrome.storage.local stub) with #17's IndexedDB adapter open
 // on it, the legacy secret reader and the IndexedDB readers over the same factory, a
-// coordinator that answers system.messagingHealth through #13's client, a registry root, and
-// the trust records, put together as a root would pass them in the registry context.
+// coordinator that answers system.messagingHealth and, ready, system.coordinatorHealth through
+// #13's client, a registry root, and the trust records, put together as a root would pass them
+// in the registry context.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 
 import { createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
+import { coordinatorHandlers, createCoordinator } from '../../js/kernel/composition/coordinator.js';
 import { createRecoveryReader, createVectorsReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createInProcessTransport } from '../../js/kernel/core/messaging/in-process.js';
@@ -42,9 +44,34 @@ export const grantedAsDeclared = () => ({
 export const freshProfile = () => ({ ...profile(), logs: [] });
 
 /**
- * A client of a router of its own, as a page's in-process transport gives it
+ * #35's coordinator, started on a kernel that opened, as the worker's router asks it for
+ * system.coordinatorHealth
  */
-export function messagingClient() {
+export async function readyCoordinator() {
+  const kernel = /** @type {any} */ ({
+    execute: async () => ({
+      kind: 'committed',
+      code: 'test',
+      changedIds: [],
+      messageKey: 'committed.test',
+      severity: 'success',
+    }),
+    query: async () => ({ kind: 'empty', asOf: 0 }),
+    subscribe: () => () => {},
+    whenReady: async () => null,
+    ids: { next: () => 'test-id' },
+  });
+  const coordinator = createCoordinator({ instanceId: 'coordinator-test', makeKernel: () => kernel });
+  await coordinator.start();
+  return coordinator;
+}
+
+/**
+ * A client of a router of its own, as a page's in-process transport gives it, which answers
+ * system.coordinatorHealth from `coordinator` when it's given one
+ * @param {{coordinator?: import('../../js/kernel/composition/coordinator.js').Coordinator}} [options]
+ */
+export function messagingClient({ coordinator } = {}) {
   const clock = { now: () => Date.now() };
   const router = createRouter({
     policy: createBaselinePolicy(),
@@ -52,6 +79,7 @@ export function messagingClient() {
     timers: realTimers,
     coordinatorId: 'coordinator-test',
     extensionVersion: MANIFEST.version,
+    handlers: coordinator ? coordinatorHandlers(() => coordinator, clock) : {},
   });
   const client = createClient({
     transport: createInProcessTransport({ router, surface: 'newtab' }),
@@ -104,7 +132,7 @@ export async function providerContext(of = freshProfile(), { events = async () =
     manifest: MANIFEST,
     commitLog: createMemoryCommitLog(),
     pipelines: [],
-    messaging: messagingClient(),
+    messaging: messagingClient({ coordinator: await readyCoordinator() }),
     resolutions: () => [resolution],
     trust: { eventsRead: async () => ({ events: await events(), ok: true }) },
   };

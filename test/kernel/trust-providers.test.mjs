@@ -82,10 +82,17 @@ describeRegistryConformance('health providers (#20 slice 2)', {
 describe('the providers (#20 slice 2, "Providers")', () => {
   it('lists every registered provider once, and the registered ids are exactly these', () => {
     assert.deepEqual(PROVIDERS.map(descriptor => descriptor.id).sort(), [...PROVIDER_IDS].sort());
-    assert.deepEqual(
-      [...REAL].sort(),
-      ['block-types', 'capture', 'contributions', 'index', 'messaging', 'permissions', 'recovery-readiness', 'storage'],
-    );
+    assert.deepEqual([...REAL].sort(), [
+      'block-types',
+      'capture',
+      'contributions',
+      'coordinator',
+      'index',
+      'messaging',
+      'permissions',
+      'recovery-readiness',
+      'storage',
+    ]);
     assert.deepEqual(Object.keys(INTERIM).sort(), ['ai-scope-grants', 'backup', 'credentials', 'local-inference', 'remote-ai', 'sync']);
     for (const descriptor of PROVIDERS) {
       assert.equal(typeof descriptor.load, 'function', `${descriptor.id} loads its check lazily`);
@@ -113,6 +120,7 @@ describe('the providers (#20 slice 2, "Providers")', () => {
       'local-inference': 'not-configured',
       // No pipeline consumes the commit feed before #22
       index: 'not-configured',
+      coordinator: 'verified',
       messaging: 'verified',
       contributions: 'verified',
       // No root registers #14's block family yet
@@ -245,6 +253,79 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
     assert.deepEqual(failedRun.faults.map(fault => fault.faultCode), ['unreachable']);
     const odd = { messaging: { query: async () => ready(1, { protocol: 'nope' }) } };
     assert.equal((await checkOf('messaging', odd)).receipt.status, 'unverified');
+  });
+
+  it('coordinator: verified while ready, degraded by why not, unreachable when it fails, unverified while it starts (#35)', async () => {
+    const run = await checkOf('coordinator', HEALTHY);
+    assert.deepEqual([run.receipt.status, run.faults], ['verified', []]);
+    assert.deepEqual(run.looked.map(item => item.faultCode).sort(), ['start-failed', 'unreachable']);
+    /** @param {Record<string, unknown>} health - what the coordinator answers, over a ready one */
+    const answering = health => ({
+      messaging: {
+        query: async () =>
+          ready(1, {
+            status: 'ready',
+            coordinatorId: 'c1',
+            startedAt: 1,
+            commands: [],
+            oldestOrphanedEntryAt: null,
+            ...health,
+          }),
+      },
+    });
+    const counted = await checkOf(
+      'coordinator',
+      answering({
+        commands: [
+          { outcome: 'committed', count: 2 },
+          { outcome: 'rejected', count: 1 },
+        ],
+      }),
+    );
+    assert.deepEqual(counted.receipt.evidence, { count: 3, since: 1 });
+    // A worker that couldn't build its kernel saves no capture, and every page still edits and reads
+    const unbuilt = await checkOf(
+      'coordinator',
+      answering({ status: 'degraded', reason: 'coordinator-unavailable', startedAt: null }),
+    );
+    assert.deepEqual(
+      [unbuilt.receipt.status, unbuilt.receipt.evidence, unbuilt.receipt.consequenceKey, unbuilt.receipt.preserved],
+      [
+        'degraded',
+        { errorCode: 'coordinator-unavailable' },
+        'platform.coordinator-start-failed',
+        ['editing', 'reading'],
+      ],
+    );
+    assert.deepEqual(
+      unbuilt.faults.map(fault => [fault.faultCode, fault.severity, fault.affected, fault.preserved]),
+      [['start-failed', 'capture-risk', ['capture'], ['editing', 'reading']]],
+    );
+    // A database that won't open is the storage provider's incident, not a second one here
+    for (const [reason, errorCode] of [
+      ['newer-schema', 'version-too-new'],
+      ['missing-core-stores', 'missing-core-stores'],
+      ['storage-unavailable', 'storage-unavailable'],
+    ]) {
+      const degraded = await checkOf('coordinator', answering({ status: 'degraded', reason }));
+      assert.deepEqual(
+        [degraded.receipt.status, degraded.receipt.evidence, degraded.faults],
+        ['degraded', { errorCode }, []],
+        reason,
+      );
+      assert.deepEqual(degraded.looked.map(item => item.faultCode).sort(), ['start-failed', 'unreachable'], reason);
+    }
+    const down = await checkOf('coordinator', {
+      messaging: { query: async () => failed('coordinator', 'unavailable') },
+    });
+    assert.deepEqual([down.receipt.status, down.faults.map(fault => fault.faultCode)], ['degraded', ['unreachable']]);
+    const starting = await checkOf('coordinator', answering({ status: 'degraded', reason: 'starting' }));
+    assert.deepEqual(
+      [starting.receipt.status, starting.receipt.evidence, starting.looked],
+      ['unverified', { errorCode: 'open-pending' }, []],
+    );
+    const odd = await checkOf('coordinator', answering({ commands: [{ outcome: 'saved', count: 1 }] }));
+    assert.equal(odd.receipt.status, 'unverified');
   });
 
   it('contributions: degraded while one is unresolved or temporarily unavailable, and block types waits for #14', async () => {

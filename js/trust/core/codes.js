@@ -117,6 +117,10 @@ export const ERROR_CODES = Object.freeze([
   'check-timed-out',
   'invalid-check-result',
   'provider-unavailable',
+  // #35's coordinator, degraded (system.coordinatorHealth): its kernel couldn't be built, or
+  // its database couldn't be opened
+  'coordinator-unavailable',
+  'storage-unavailable',
 ]);
 
 /** Faults an incident can be about, from the failure sites and the providers that report them */
@@ -147,6 +151,8 @@ export const FAULT_CODES = Object.freeze([
   'point-unverified',
   'unreachable',
   'contribution-unavailable',
+  // #35's coordinator, whose kernel the worker couldn't build
+  'start-failed',
   // A write to NewTabNoteTrust that failed, counted while the store won't take writes
   'write-failed',
 ]);
@@ -168,6 +174,7 @@ export const PROVIDER_IDS = Object.freeze([
   'remote-ai',
   'local-inference',
   'index',
+  'coordinator',
   'messaging',
   'contributions',
   'block-types',

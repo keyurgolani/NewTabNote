@@ -58,21 +58,23 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
 
 /**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
- * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake
- * and system.messagingHealth, and no page opens a port yet, since no client moves to it before
- * #35's later slices. js/background.js calls this at its top level, synchronously, so the
+ * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake,
+ * system.messagingHealth and system.coordinatorHealth, and no page opens a port yet, since no
+ * client moves to it before #35's later slices. js/background.js calls this at its top level, synchronously, so the
  * listener is there before Chrome hands over the port that woke the worker. It never throws,
  * since a throw there would stop every listener the worker registers: `report` hears why a
  * router couldn't be installed, and what a port's listener threw.
  *
  * #35's coordinator gives it this instance's id, which each welcome sends, `status`, which
- * each welcome says, and the session hooks, whose `opened` starts the coordinator.
+ * each welcome says, the session hooks, whose `opened` starts the coordinator, and the
+ * handler for system.coordinatorHealth.
  * @param {{
  *   runtime?: unknown,
  *   report?: (error: unknown) => void,
  *   coordinatorId?: string,
  *   status?: () => import('../core/messaging/router.js').CoordinatorStatus,
  *   sessions?: import('../core/messaging/router.js').SessionHooks,
+ *   handlers?: Readonly<Record<string, import('../core/messaging/router.js').Handler>>,
  * }} [options] - `runtime` is chrome.runtime unless a test passes another
  * @returns {Router | null} the router, or null when it couldn't be installed
  */
@@ -82,6 +84,7 @@ export function installWorkerRouter({
   coordinatorId,
   status,
   sessions,
+  handlers,
 } = {}) {
   try {
     const worker = /** @type {WorkerRuntime} */ (runtime);
@@ -93,6 +96,7 @@ export function installWorkerRouter({
       extensionVersion: worker.getManifest().version,
       status,
       sessions,
+      handlers,
       logger: messagingLogger,
     });
     installRuntimePort({ runtime: worker, router, report });
