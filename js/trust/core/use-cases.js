@@ -65,6 +65,15 @@ import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
  */
 
 /**
+ * recovery.raise's answer for an incident memory and the settings copy hold
+ * @param {string} incidentId
+ * @returns {import('./operations/recovery-raise.js').Held}
+ */
+export function heldOutcome(incidentId) {
+  return { kind: 'held', code: 'incident-held', incidentId, messageKey: 'held.incident-held', severity: 'warning' };
+}
+
+/**
  * Whether a check of `costClass` runs for `trigger`
  * @param {CostClass} costClass
  * @param {Trigger} trigger
@@ -100,6 +109,16 @@ export function worstStatus(statuses) {
  * }} options
  */
 export function createTrustUseCases({ records, journal, clock, timers, locks = null, registry, versions, migrations }) {
+  /**
+   * Journals what a use case did. While NewTabNoteTrust won't take writes these would fail
+   * too, so they're skipped: one failed operation counts one failed write, not one per event.
+   * @param {string} code
+   * @param {Record<string, unknown>} fields
+   */
+  const note = (code, fields) => {
+    if (records.state() !== 'fallback') journal.event(code, fields);
+  };
+
   /** @returns {ProviderInfo[]} the resolved health providers that can run here, in browse order */
   const providers = () =>
     registry.resolution
@@ -134,10 +153,11 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
   };
 
   /**
-   * Runs one provider's check and stores what it found. Answers its receipt, or null when the
-   * store wouldn't take it (the storage incident counts that).
+   * Runs one provider's check and stores what it found. Answers its receipt, and whether all
+   * of it landed: the receipt, each fault's incident (a held storage incident counts as kept),
+   * and a passing check's resolution. What didn't land is counted in the storage incident.
    * @param {ProviderInfo} provider
-   * @returns {Promise<HealthReceipt | null>}
+   * @returns {Promise<{receipt: HealthReceipt | null, complete: boolean}>}
    */
   const verifyOne = async provider => {
     const loaded = await registry.runtime.load(provider.ref);
@@ -151,14 +171,14 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
           };
     const run = await runCheck({ ...provider, check }, { context: registry.context || {}, clock, timers });
     if (run.outcome === 'timed-out') {
-      journal.event('trust.check-timed-out', {
+      note('trust.check-timed-out', {
         providerId: provider.id,
         durationMs: run.receipt.durationMs,
         timeoutMs: provider.timeoutMs,
       });
     } else if (run.outcome !== 'answered') {
       const exception = run.receipt.evidence.exception;
-      journal.event('trust.check-failed', {
+      note('trust.check-failed', {
         providerId: provider.id,
         durationMs: run.receipt.durationMs,
         errorCode: run.outcome === 'invalid' ? 'invalid-check-result' : 'check-threw',
@@ -166,20 +186,26 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       });
     }
     const recorded = await records.record(run.receipt);
-    for (const fault of run.faults) await records.raise(fault);
-    if (!recorded.recorded) return null;
+    let complete = recorded.recorded;
+    for (const fault of run.faults) {
+      const raised = await records.raise(fault);
+      if (!raised.recorded && !raised.held) complete = false;
+    }
+    if (!recorded.recorded) return { receipt: null, complete: false };
     const { receipt } = recorded;
     if (receipt.status === 'verified') {
       const still = run.faults.map(fault => incidentKey(fault.providerId, fault.faultCode, fault.subjectId));
-      for (const incident of await records.resolve(provider.id, still)) {
-        journal.event('incident.resolved', {
+      const resolved = await records.resolve(provider.id, still);
+      if (!resolved.recorded) return { receipt, complete: false };
+      for (const incident of resolved.resolved) {
+        note('incident.resolved', {
           incidentId: incident.id,
           providerId: incident.providerId,
           faultCode: incident.faultCode,
         });
       }
     }
-    return receipt;
+    return { receipt, complete };
   };
 
   return Object.freeze({
@@ -215,7 +241,8 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
           worstCore: worstStatus(core.map(({ status }) => status)),
           // While writes fail, nothing proves capture safe
           capture: atRisk ? 'at-risk' : safe && records.state() !== 'fallback' ? 'safe' : 'unknown',
-          actionRequired: needsAction.length,
+          // While writes fail, something always needs action, whatever the timestamps say
+          actionRequired: Math.max(needsAction.length, records.state() === 'fallback' ? 1 : 0),
           route: atRisk || storageDown ? 'recovery' : 'trust',
           records: records.state(),
           groups,
@@ -288,11 +315,11 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         let unrecorded = 0;
         for (const provider of chosen) {
           const one = () => verifyOne(provider);
-          const receipt = locks ? await locks.request(`trust.check.${provider.id}`, one) : await one();
+          const { receipt, complete } = locks ? await locks.request(`trust.check.${provider.id}`, one) : await one();
           if (receipt) changed.push(receipt.id);
-          else unrecorded++;
+          if (!complete) unrecorded++;
         }
-        // A check whose receipt the store wouldn't take is never reported as recorded
+        // A check any part of which the store wouldn't take is never reported as recorded
         if (unrecorded > 0) return unavailable('storage', 'not-recorded', true);
         return committed('trust-verified', changed, changed.length === 0 ? { severity: 'info' } : {});
       } catch (error) {
@@ -310,20 +337,19 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       const { type, commandId, ...input } = checked.output;
       try {
         const { incident, held, recorded } = await records.raise(input);
-        // Not recorded, and not a storage incident memory holds: the write-failed incident counts it
-        if (!recorded && !(held && incident)) return unavailable('storage', 'not-recorded', true);
-        if (!incident) return unavailable('storage', 'not-recorded', true);
-        journal.event('incident.raised', {
+        // Held in memory and the settings copy until NewTabNoteTrust takes writes again: its own
+        // kind, so no caller reads it as a committed write
+        if (!recorded && held && incident) return heldOutcome(incident.id);
+        // Not recorded and not held: the write-failed incident counts it
+        if (!recorded || !incident) return unavailable('storage', 'not-recorded', true);
+        note('incident.raised', {
           incidentId: incident.id,
           providerId: incident.providerId,
           faultCode: incident.faultCode,
           severity: incident.severity,
           count: incident.occurrences,
         });
-        // Held only in memory (and the settings copy), until NewTabNoteTrust takes writes again
-        return held
-          ? committed('incident-held', [incident.id], { severity: 'warning' })
-          : committed('incident-raised', [incident.id]);
+        return committed('incident-raised', [incident.id]);
       } catch (error) {
         return unavailableFrom(error);
       }
@@ -333,7 +359,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     async exportDiagnostics() {
       try {
         const exported = await buildDiagnostics({ records, journal, clock, versions, migrations });
-        journal.event('diagnostics.exported', { records: exported.fields.length, bytes: exported.bytes });
+        note('diagnostics.exported', { records: exported.fields.length, bytes: exported.bytes });
         return exported;
       } catch (error) {
         return unavailableFrom(error);

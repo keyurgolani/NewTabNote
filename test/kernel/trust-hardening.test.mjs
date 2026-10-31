@@ -158,6 +158,8 @@ describe("#68's review round", () => {
     assert.deepEqual((await c.records.incidents()).map(incident => incident.key).sort(), [
       'capture/capture-failed/-',
       'storage/open-failed/-',
+      // A's failed open() holds NewTabNoteTrust's own incident (round 4)
+      'storage/open-failed/NewTabNoteTrust',
       'storage/write-failed/-',
     ]);
   });
@@ -181,7 +183,10 @@ describe("#68's review round", () => {
     assert.deepEqual(await records.runs(), []);
     assert.deepEqual(
       (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
-      [['storage/write-failed/-', 60]],
+      [
+        ['storage/open-failed/NewTabNoteTrust', 1],
+        ['storage/write-failed/-', 60],
+      ],
     );
   });
 
@@ -218,8 +223,8 @@ describe("#68's review round", () => {
     const c = databaseOn(profile);
     opened.push(c);
     const { records } = await recordsOn(c, profile, { clock, prefix: 'cccc' });
-    const [incident] = await records.incidents();
-    assert.equal(incident.occurrences, 2);
+    const incident = (await records.incidents()).find(item => item.key === 'storage/open-failed/-');
+    assert.equal(incident?.occurrences, 2);
   });
 
   it('7: any provider, fault, and subject the records accept make a valid incident key', async () => {
@@ -262,13 +267,15 @@ describe("#68's review round", () => {
     const up = await recordsOn(database, profile, { clock, prefix: 'bbbb' });
     await aborted;
     const reconciled = (await up.records.events()).filter(event => event.code === 'trust.reconciled');
-    // The held open-failed incident and the failed write, once each
+    // The held open-failed incident, the failed write, and the failed open() (round 4), once each
     assert.deepEqual(
       reconciled.map(event => event.fields.count),
-      [2],
+      [3],
     );
     // An incident a remediation is working on stays remediating when a held copy reconciles
-    const [incident] = await up.records.incidents();
+    const incident = /** @type {import('../../js/trust/core/records.js').Incident} */ (
+      (await up.records.incidents()).find(item => item.key === 'storage/open-failed/-')
+    );
     await database.run(['incidents'], 'readwrite', async tx =>
       tx.put('incidents', { ...incident, state: 'remediating' }),
     );
@@ -277,8 +284,8 @@ describe("#68's review round", () => {
     const database2 = databaseOn(profile);
     opened.push(database2);
     const again = await recordsOn(database2, profile, { clock, prefix: 'cccc' });
-    const [after] = await again.records.incidents();
-    assert.equal(after.state, 'remediating');
+    const remediated = (await again.records.incidents()).find(item => item.key === 'storage/open-failed/-');
+    assert.equal(remediated?.state, 'remediating');
   });
 
   it('10: an open that answered open-pending opens once the connection does', async () => {
@@ -322,7 +329,8 @@ describe("#68's review round", () => {
       faultCode: 'open-failed',
       severity: 'capture-risk',
     });
-    assert.equal(outcome.kind, 'committed');
+    // Round 4: a held raise answers its own kind, never committed
+    assert.equal(outcome.kind, 'held');
     assert.equal(/** @type {any} */ (outcome).code, 'incident-held');
   });
 

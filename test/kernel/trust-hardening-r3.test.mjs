@@ -155,7 +155,9 @@ describe("#68's third review round", () => {
     const { records, clock } = await recordsOn(database, profile);
     await records.raise(CAP);
     clock.advance(-30_000);
-    assert.equal((await records.resolve('capture', [])).length, 1);
+    const done = await records.resolve('capture', []);
+    assert.ok(done.recorded);
+    assert.equal(done.resolved.length, 1);
   });
 
   it('P3: a sighting written after a resolution in the same millisecond reopens', async () => {
@@ -312,7 +314,8 @@ describe("#68's third review round", () => {
     const { store, failNext } = flaky(profile);
     const { records, clock } = await recordsOn(store, profile);
     const { trust } = useCases(records, clock);
-    failNext(4);
+    // Four writes fail; the reads around them (round 4 reads the store to time a held sighting) don't
+    failNext(4, 'unreadable', { writesOnly: true });
     const raised = await trust.raise({ type: 'recovery.raise', commandId: 'c1', ...IDX });
     assert.equal(raised.kind, 'unavailable');
     assert.equal(/** @type {any} */ (raised).code, 'not-recorded');

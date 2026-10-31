@@ -123,7 +123,9 @@ export function describeTrustStore(name, { make }) {
       const { records, clock } = await fresh(make);
       const { incident } = await raised(records, { providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
       clock.advance(10);
-      const [resolved] = await records.resolve('index', []);
+      const done = await records.resolve('index', []);
+      assert.ok(done.recorded);
+      const [resolved] = done.resolved;
       assert.equal(resolved.state, 'resolved');
       assert.equal(resolved.resolvedAt, clock.now());
       clock.advance(10);
@@ -140,8 +142,9 @@ export function describeTrustStore(name, { make }) {
       await records.raise({ providerId: 'index', faultCode: 'stalled', severity: 'degraded' });
       await records.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' });
       const done = await records.resolve('index', ['index/stalled/-']);
+      assert.ok(done.recorded);
       assert.deepEqual(
-        done.map(incident => incident.key),
+        done.resolved.map(incident => incident.key),
         ['index/lagging/-'],
       );
       const states = Object.fromEntries((await records.incidents()).map(incident => [incident.key, incident.state]));

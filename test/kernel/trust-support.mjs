@@ -161,6 +161,8 @@ export function flakyStore(store) {
     typeError: false,
     /** How many runs go through before the failures start */
     after: 0,
+    /** Whether only readwrite runs fail, as a store that reads but won't take writes does */
+    writesOnly: false,
   };
   return {
     store: /** @type {TrustStore} */ ({
@@ -171,7 +173,7 @@ export function flakyStore(store) {
           plan.after--;
           return store.run(stores, mode, unit);
         }
-        if (plan.count > 0) {
+        if (plan.count > 0 && !(plan.writesOnly && mode === 'readonly')) {
           plan.count--;
           if (plan.typeError) return Promise.reject(new TypeError('a store that broke'));
           return Promise.reject(new UnavailableError(plan.cause, plan.code, false));
@@ -179,12 +181,13 @@ export function flakyStore(store) {
         return store.run(stores, mode, unit);
       },
     }),
-    /** @param {number} count @param {string} [code] @param {{typeError?: boolean, after?: number}} [options] */
-    failNext(count, code = 'unreadable', { typeError = false, after = 0 } = {}) {
+    /** @param {number} count @param {string} [code] @param {{typeError?: boolean, after?: number, writesOnly?: boolean}} [options] */
+    failNext(count, code = 'unreadable', { typeError = false, after = 0, writesOnly = false } = {}) {
       plan.count = count;
       plan.code = code;
       plan.typeError = typeError;
       plan.after = after;
+      plan.writesOnly = writesOnly;
     },
   };
 }

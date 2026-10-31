@@ -23,9 +23,9 @@ import { EVENT_CODES, isEventCode } from './event-codes.js';
 /** @typedef {import('./trust-records.js').TrustRecords} TrustRecords */
 
 /**
- * Why an event didn't reach the journal: refused, or (`write-failed`) accepted and then
- * thrown out by the records, which only a programming error does, since a store that fails
- * leaves the event in memory
+ * Why an event didn't reach the journal: refused, or (`write-failed`) accepted and then not
+ * stored, because NewTabNoteTrust wouldn't take the write (nothing keeps the event; the
+ * storage incident counts the failed write) or the records threw
  * @typedef {'unregistered-code' | 'field-not-allowed' | 'value-not-allowed' | 'not-an-object' | 'write-failed'} RejectionReason
  */
 
@@ -76,7 +76,10 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
     const last = journaledAt[reason];
     if (last !== undefined && now - last < REJECTION_JOURNAL_MS) return;
     journaledAt[reason] = now;
-    track(records.append({ at: now, code: 'diagnostics.rejected', fields: { reason, count: counts[reason] } }), false);
+    track(
+      records.append({ at: now, code: 'diagnostics.rejected', fields: { reason, count: counts[reason] } }, { internal: true }),
+      false,
+    );
   };
 
   /**

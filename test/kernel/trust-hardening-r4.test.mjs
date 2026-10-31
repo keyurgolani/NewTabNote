@@ -12,7 +12,15 @@ import { health } from '../../js/trust/core/families.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases } from '../../js/trust/core/use-cases.js';
-import { brokenFactory, databaseOn, flakyStore, hexIds, manualClock, realTimers, trustProfile } from './trust-support.mjs';
+import {
+  brokenFactory,
+  databaseOn,
+  flakyStore,
+  hexIds,
+  manualClock,
+  realTimers,
+  trustProfile,
+} from './trust-support.mjs';
 
 /** @typedef {import('../../js/trust/core/ports.js').TrustStore} TrustStore */
 /** @typedef {import('../../js/kernel/registry/validate.js').Descriptor} Descriptor */
@@ -37,7 +45,13 @@ const CAP = Object.freeze({
  * @param {{clock?: ReturnType<typeof manualClock>, prefix?: string}} [options]
  */
 async function recordsOn(store, profile, { clock = manualClock(), prefix = 'a1b2' } = {}) {
-  const records = createTrustRecords({ store, settings: profile.settings, clock, ids: hexIds(prefix), locks: profile.locks });
+  const records = createTrustRecords({
+    store,
+    settings: profile.settings,
+    clock,
+    ids: hexIds(prefix),
+    locks: profile.locks,
+  });
   const result = await records.open();
   return { records, clock, result };
 }
