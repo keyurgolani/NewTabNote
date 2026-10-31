@@ -63,7 +63,7 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @property {FolderRecord} folders
  * @property {SearchEntry} searchIndex
  * @property {{id: string, canvasId?: unknown} & Record<string, unknown>} media
- * @property {{id: string} & Record<string, unknown>} vectors
+ * @property {import('../domain/note.js').VectorRecord} vectors
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
  * @property {import('../domain/note.js').LinkRecord} links
  * @property {import('../domain/theme.js').ThemeRecord} themes

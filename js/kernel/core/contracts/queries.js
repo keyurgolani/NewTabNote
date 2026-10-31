@@ -41,6 +41,10 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/list-themes.js').ListThemes} ListThemes */
 /** @typedef {import('./operations/export-backup.js').ExportBackup} ExportBackup */
 /** @typedef {import('./operations/profile-holds-content.js').ProfileHoldsContent} ProfileHoldsContent */
+/** @typedef {import('./operations/list-links.js').ListLinks} ListLinks */
+/** @typedef {import('./operations/list-vectors.js').ListVectors} ListVectors */
+/** @typedef {import('../domain/note.js').LinkRecord} LinkRecord */
+/** @typedef {import('../domain/note.js').VectorRecord} VectorRecord */
 /** @typedef {import('./settings.js').WorkspaceDataValues} WorkspaceDataValues */
 /** @typedef {import('./entities.js').ThemeEntity} ThemeEntity */
 /** @typedef {import('../domain/snapshot.js').SnapshotRecord} SnapshotRecord */
@@ -51,7 +55,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
  *   | ListSnapshots | GetSnapshot | FindDailyNote
- *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent} Query
+ *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -84,6 +88,8 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {ThemeEntity[]} listThemes
  * @property {Blob} exportBackup
  * @property {boolean} profileHoldsContent
+ * @property {LinkRecord[]} listLinks
+ * @property {VectorRecord[]} listVectors
  */
 
 /**
@@ -166,6 +172,9 @@ export const QUERIES = Object.freeze({
   exportBackup: entry('export-backup', [], NEW_TAB),
   // The export notice decides once whether the profile has anything to export
   profileHoldsContent: entry('profile-holds-content', [], NEW_TAB),
+  // The graph view's links and #22's embeddings, which only the new tab reads (#17 PR 4b)
+  listLinks: entry('list-links', [], NEW_TAB),
+  listVectors: entry('list-vectors', [], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */
