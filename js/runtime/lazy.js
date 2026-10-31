@@ -15,9 +15,11 @@
  * A file that doesn't load sends the loader to build-info.json, read uncached. For the same
  * build it retries once with ?r=1, a URL the module map hasn't cached as failed: a chunk at
  * build-info.json's chunks[name], a library at its own path. A chunk whose stylesheet didn't
- * load never ran its code, since its import waits on its stylesheets, so its retry is the same
- * load, which puts the stylesheet in again and waits for it: a chunk is never loaded without its
- * stylesheets. A library keeps its path from build to build, so the loader reads build-info.json
+ * load still answers loaded: the retry imports its code alone, and Vite's preload never puts a
+ * URL in twice, so a later load runs the chunk's code without the stylesheet too. No lazy chunk
+ * has a stylesheet today. The first one that does has to bring the fix: the loader puts the
+ * failed stylesheet in itself with ?r=1 and waits for it, and answers chunk-missing when that
+ * fails too. A library keeps its path from build to build, so the loader reads build-info.json
  * before it puts one in, and under another build's it runs none. Each failure logs one line with
  * the build ID, the name, and the reason, never what threw. A library that failed stays failed
  * until its retry runs, as a missing one did before, and a retry called again while one runs
@@ -119,9 +121,6 @@ export const seams = Object.freeze(/** @type {Seams} */ ({
  */
 const NOT_LOADED = /dynamically imported module|Importing a module script failed|Unable to preload CSS/i;
 
-/** How Vite's preload says which of a chunk's stylesheets didn't load: by its URL */
-const SHEET_NOT_LOADED = /Unable to preload CSS for (\S+)/i;
-
 /**
  * Whether a load threw because a file didn't load
  * @param {unknown} error
@@ -129,16 +128,6 @@ const SHEET_NOT_LOADED = /Unable to preload CSS for (\S+)/i;
  */
 function didNotLoad(error) {
   return error instanceof Error && NOT_LOADED.test(error.message);
-}
-
-/**
- * The URL of the stylesheet whose failure stopped a load, or null when something else did
- * @param {unknown} error
- * @returns {string | null}
- */
-function failedSheet(error) {
-  const found = error instanceof Error ? SHEET_NOT_LOADED.exec(error.message) : null;
-  return found ? found[1] : null;
 }
 
 /**
@@ -205,28 +194,13 @@ export function createLoader(host) {
   function loadChunk(name, load) {
     const again = () => loadChunk(name, load);
     return settle(name, async () => {
-      /** @type {string | null} */
-      let sheet = null;
       try {
         return loaded(await load());
       } catch (error) {
         if (!didNotLoad(error)) return failed('evaluation-failed', again);
-        sheet = failedSheet(error);
-        if (sheet !== null) dropSheet(sheet);
       }
       const info = await buildInfo();
       if (isOtherBuild(info)) return failed('build-mismatch', again);
-      if (sheet !== null) {
-        // The stylesheet stopped the import before the chunk's code ran, so the retry is the same
-        // load, which puts the stylesheet in again and waits for it, and never the code alone
-        try {
-          return loaded(await load());
-        } catch (error) {
-          const still = failedSheet(error);
-          if (still !== null) dropSheet(still);
-          return failed(didNotLoad(error) ? 'chunk-missing' : 'evaluation-failed', again);
-        }
-      }
       const file = info && info.chunks && typeof info.chunks[name] === 'string' ? info.chunks[name] : null;
       if (file === null) return failed('chunk-missing', again);
       try {
@@ -337,18 +311,6 @@ export function createLoader(host) {
    */
   function stylesheets() {
     return host.document ? Array.from(host.document.querySelectorAll('link[rel~="stylesheet"], style')) : [];
-  }
-
-  /**
-   * Take out the page's link to a stylesheet that didn't load. Vite's preload passes over a link
-   * the page has, so without this the next load of its chunk would run the chunk's code without
-   * it; with it, that load puts the stylesheet in again and waits for it.
-   * @param {string} url
-   */
-  function dropSheet(url) {
-    for (const sheet of stylesheets()) {
-      if (sheet.tagName === 'LINK' && /** @type {HTMLLinkElement} */ (sheet).href === url) sheet.remove();
-    }
   }
 
   /**
