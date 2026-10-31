@@ -139,22 +139,38 @@ export function isOwnSender(sender, extensionId = globalThis.chrome?.runtime?.id
 }
 
 /**
- * Whether `sender` is this extension's service worker: its id, the manifest's
- * background.service_worker URL, and no tab. The offscreen document takes only the worker, which
- * checked the request and the Ollama URL first.
+ * The service worker's script URL, from the manifest's background.service_worker: through
+ * getManifest where the runtime has it, and read from the package's manifest.json where it
+ * hasn't, as in the offscreen document. Null when neither tells.
+ * @param {{getURL?: (path: string) => string, getManifest?: () => unknown}} [runtime] - chrome.runtime
+ *   unless a test passes another
+ * @param {(url: string) => Promise<unknown>} [read] - reads a JSON file in the package
+ * @returns {Promise<string | null>}
+ */
+export async function workerScriptUrl(runtime = globalThis.chrome?.runtime, read = url => fetch(url).then(response => response.json())) {
+  try {
+    if (!runtime || typeof runtime.getURL !== 'function') return null;
+    const manifest = /** @type {{background?: {service_worker?: unknown}} | undefined} */ (
+      typeof runtime.getManifest === 'function' ? runtime.getManifest() : await read(runtime.getURL('manifest.json')));
+    const script = manifest?.background?.service_worker;
+    return typeof script === 'string' && script !== '' ? runtime.getURL(script) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `sender` is this extension's service worker: its id, its script URL (workerScriptUrl),
+ * and no tab. The offscreen document takes only the worker, which checked the request and the
+ * Ollama URL first.
  * @param {unknown} sender
- * @param {{id?: string, getURL?: (path: string) => string, getManifest?: () => unknown}} [runtime]
- *   chrome.runtime unless a test passes another
+ * @param {{id?: string, workerUrl: string | null}} worker - `id` is chrome.runtime.id unless a test passes another
  * @returns {boolean}
  */
-export function isWorkerSender(sender, runtime = globalThis.chrome?.runtime) {
-  if (!runtime || typeof runtime.getURL !== 'function' || typeof runtime.getManifest !== 'function') return false;
-  if (sender === null || typeof sender !== 'object') return false;
-  const { id, url, tab } = /** @type {{id?: unknown, url?: unknown, tab?: unknown}} */ (sender);
-  if (tab !== undefined || !isOwnSender(sender, runtime.id)) return false;
-  const manifest = /** @type {{background?: {service_worker?: unknown}} | undefined} */ (runtime.getManifest());
-  const script = manifest?.background?.service_worker;
-  return typeof script === 'string' && id === runtime.id && url === runtime.getURL(script);
+export function isWorkerSender(sender, { id = globalThis.chrome?.runtime?.id, workerUrl }) {
+  if (typeof workerUrl !== 'string' || sender === null || typeof sender !== 'object') return false;
+  const { url, tab } = /** @type {{url?: unknown, tab?: unknown}} */ (sender);
+  return tab === undefined && isOwnSender(sender, id) && url === workerUrl;
 }
 
 /**

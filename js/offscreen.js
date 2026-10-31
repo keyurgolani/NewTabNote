@@ -8,21 +8,21 @@
  * it checks again here, sent with fetch, Content-Type only, no cookies, and no redirect followed.
  */
 
-import { checkRequest, isWorkerSender, loopbackOrigin, send } from './kernel/composition/api-request.js';
+import { checkRequest, isWorkerSender, loopbackOrigin, send, workerScriptUrl } from './kernel/composition/api-request.js';
+
+// The worker's script URL, read once: this document's chrome.runtime has no getManifest
+const workerUrl = workerScriptUrl();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.type === 'OFFSCREEN_API_REQUEST') {
-    if (!isWorkerSender(sender)) {
-      sendResponse({ error: 'request-refused' });
-      return false;
-    }
-    const checked = checkRequest(request, { loopback: loopbackOrigin(request.loopbackOrigin) });
-    // Only the loopback origin: anything else the worker fetches itself
-    if (!checked.ok || !checked.loopback) {
-      sendResponse({ error: 'request-refused' });
-      return false;
-    }
-    handleApiRequest(checked)
+    workerUrl
+      .then(/** @returns {Promise<{ok: boolean, status: number, data: unknown} | {error: string}>} */ async url => {
+        if (!isWorkerSender(sender, { workerUrl: url })) return { error: 'request-refused' };
+        const checked = checkRequest(request, { loopback: loopbackOrigin(request.loopbackOrigin) });
+        // Only the loopback origin: anything else the worker fetches itself
+        if (!checked.ok || !checked.loopback) return { error: 'request-refused' };
+        return handleApiRequest(checked);
+      })
       .then(sendResponse)
       .catch(error => sendResponse({ error: error.message }));
     return true;

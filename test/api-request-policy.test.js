@@ -141,19 +141,32 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
   });
 
   it('takes only the service worker as the sender of an offscreen request', () => {
-    const runtime = { id: 'test-extension', getURL: (file) => `${OWN}/${file}`, getManifest: () => ({ background: { service_worker: 'js/background.js' } }) };
-    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: `${OWN}/js/background.js` }, runtime), true);
+    const workerUrl = `${OWN}/js/background.js`;
+    const own = { id: 'test-extension', workerUrl };
+    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: workerUrl }, own), true);
     for (const sender of [
       undefined,
       page(),
       page('offscreen.html'),
-      { id: 'test-extension', url: `${OWN}/js/background.js`, tab: { id: 1 } },
+      { id: 'test-extension', url: workerUrl, tab: { id: 1 } },
       { id: 'another-extension', url: 'chrome-extension://another-extension/js/background.js' },
-      { id: 'test-extension', url: `${OWN}/js/background.js?x` },
+      { id: 'test-extension', url: `${workerUrl}?x` },
     ]) {
-      assert.equal(policy.isWorkerSender(sender, runtime), false, JSON.stringify(sender));
+      assert.equal(policy.isWorkerSender(sender, own), false, JSON.stringify(sender));
     }
-    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: `${OWN}/js/background.js` }, { id: 'test-extension', getURL: runtime.getURL }), false);
+    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: workerUrl }, { id: 'test-extension', workerUrl: null }), false);
+  });
+
+  it("finds the worker's script URL in the manifest, read from the package where the runtime has no getManifest", async () => {
+    const getURL = (file) => `${OWN}/${file}`;
+    const manifest = { background: { service_worker: 'js/background.js' } };
+    assert.equal(await policy.workerScriptUrl({ getURL, getManifest: () => manifest }), `${OWN}/js/background.js`);
+    const read = [];
+    const offscreenRuntime = { getURL };
+    assert.equal(await policy.workerScriptUrl(offscreenRuntime, async (url) => (read.push(url), manifest)), `${OWN}/js/background.js`);
+    assert.deepEqual(read, [`${OWN}/manifest.json`]);
+    assert.equal(await policy.workerScriptUrl(offscreenRuntime, async () => { throw new Error('unreadable'); }), null);
+    assert.equal(await policy.workerScriptUrl({ getURL, getManifest: () => ({}) }), null);
   });
 
   it('every file that asks the proxy for a request names only listed origins', () => {
