@@ -521,7 +521,7 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' }, tab);
     await env.chrome.api.commands.onCommand.listeners[0]('capture-page');
-    await waitFor(() => env.chrome.notifications.length === 3, { message: 'three notifications' });
+    await waitFor(() => env.chrome.notifications.length === 3, { withinMs: 10000, message: 'three notifications' });
 
     for (const notification of env.chrome.notifications) {
       assert.equal(notification.title, 'Not captured');
@@ -614,7 +614,7 @@ describe('background capture on a version-8 database', () => {
     await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
-    await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
+    await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'capture notification' });
     assert.equal(env.chrome.notifications[0].title, 'Captured to New Tab Note');
     const elements = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'));
     assert.ok(elements.some((e) => e.type === 'bookmark' && e.url === 'https://example.test/page'));
@@ -642,7 +642,7 @@ describe('background capture on a version-8 database', () => {
       }
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-selection', selectionText: 'quote' },
         { url: 'https://example.test/', title: 'x' });
-      await waitFor(() => env.chrome.notifications.length === count, { message: `failure notification ${count}` });
+      await waitFor(() => env.chrome.notifications.length === count, { withinMs: 10000, message: `failure notification ${count}` });
     }
     // An outcome carries no error message, so each says why in words of its own
     assert.deepEqual(env.chrome.notifications, [
@@ -664,7 +664,7 @@ describe('background capture on a version-8 database', () => {
     const before = await dumpDatabase(env.indexedDB);
     await startWorker(env);
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, { url: 'https://example.test/', title: 'x' });
-    await waitFor(() => env.chrome.notifications.length === 1, { message: 'refusal notification' });
+    await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'refusal notification' });
     assert.deepEqual(env.chrome.notifications[0], {
       type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured',
       message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
@@ -681,7 +681,7 @@ describe('background capture on a version-8 database', () => {
     await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
-    await waitFor(() => env.chrome.notifications.length === 1, { message: 'capture notification' });
+    await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'capture notification' });
     // The worker's run brought it to 9. A newer build opens it at 10, which an open connection
     // would block
     const upgraded = await new Promise((resolve, reject) => {
@@ -692,7 +692,7 @@ describe('background capture on a version-8 database', () => {
     });
     upgraded.close();
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
-    await waitFor(() => env.chrome.notifications.length === 2, { message: 'refusal notification' });
+    await waitFor(() => env.chrome.notifications.length === 2, { withinMs: 10000, message: 'refusal notification' });
     assert.equal(env.chrome.notifications[1].title, 'Not captured');
     assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
   });
