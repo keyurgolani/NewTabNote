@@ -326,7 +326,10 @@ async function pointForRun(options) {
       await discardPoint(recovery, point.id, io);
       return { status: 'failed', code: 'recovery-point-unverified', read: true };
     }
-    return { status: 'ready', point: await keepVerified({ recovery, point: /** @type {Point} */ (stored), clock, io }) };
+    return {
+      status: 'ready',
+      point: await keepVerified({ recovery, point: /** @type {Point} */ (stored), clock, io }),
+    };
   } finally {
     if (recovery) recovery.close();
   }
@@ -447,7 +450,9 @@ async function recordStop(db, stop, logger) {
  */
 function standing(stop, now, retryAfterMs) {
   if (!stop || stop.target !== LATEST_LOGICAL || typeof stop.at !== 'number') return false;
-  return (stop.status === 'space-blocked' || stop.status === 'failed') && now >= stop.at && now - stop.at < retryAfterMs;
+  return (
+    (stop.status === 'space-blocked' || stop.status === 'failed') && now >= stop.at && now - stop.at < retryAfterMs
+  );
 }
 
 /**

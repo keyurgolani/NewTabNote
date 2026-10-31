@@ -153,13 +153,20 @@ describe('the group the kernel writes and keeps in step', () => {
     }
   });
 
-  it("withPlacementGroup leaves a note without its group as it is, for the transform to fill from the flags then", () => {
+  it('withPlacementGroup leaves a note without its group as it is, for the transform to fill from the flags then', () => {
     const after = { id: 'n', folderId: 'f1', archived: true };
     assert.equal(withPlacementGroup({ id: 'n', folderId: null }, after), after);
   });
 
   it('withPlacementGroup follows the flags: kind and lifecycle always, and the placement only when the folder or the daily state moved', () => {
-    const inbox = { id: 'n', name: 'Untitled', folderId: null, placement: { kind: 'inbox' }, kind: 'note', lifecycle: 'active' };
+    const inbox = {
+      id: 'n',
+      name: 'Untitled',
+      folderId: null,
+      placement: { kind: 'inbox' },
+      kind: 'note',
+      lifecycle: 'active',
+    };
     // A pin, an archive, or a trash keeps the transform's Inbox
     assert.deepEqual(withPlacementGroup(inbox, { ...inbox, archived: true }), {
       ...inbox,
@@ -189,7 +196,13 @@ describe('the group the kernel writes and keeps in step', () => {
   it('withoutPlacement takes exactly the fields PLACEMENT_FIELDS names, and leaves every flag', () => {
     const note = withNewPlacement({ id: 'n', name: 'Plan', folderId: 'f1', archived: true, isTemplate: false });
     for (const field of PLACEMENT_FIELDS) assert.ok(field in note, field);
-    assert.deepEqual(withoutPlacement(note), { id: 'n', name: 'Plan', folderId: 'f1', archived: true, isTemplate: false });
+    assert.deepEqual(withoutPlacement(note), {
+      id: 'n',
+      name: 'Plan',
+      folderId: 'f1',
+      archived: true,
+      isTemplate: false,
+    });
     assert.deepEqual(PLACEMENT_FIELDS, ['placement', 'kind', 'lifecycle']);
   });
 });
