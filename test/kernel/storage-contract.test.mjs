@@ -56,16 +56,15 @@ it('only these roots load the IndexedDB adapter: the service worker, Popup, and 
   );
 });
 
-it("lacks only the backups flag the ledger declares, as a gap #18's backup engine closes", () => {
-  assert.equal(indexedDbFixture.flags.backups, false);
+it('has every flag, so the ledger declares no gap for it: the backup tasks run on it since #17 PR 4a', () => {
+  assert.deepEqual(
+    Object.entries(indexedDbFixture.flags).filter(([, has]) => !has),
+    [],
+  );
   const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/architecture/kernel-ledger.json'), 'utf8'));
-  /** @type {Array<{file: string, rule: string, owner: number, verify: string}>} */
   const gaps = ledger.rows.filter(
     (/** @type {{rule: string, file: string}} */ row) =>
       row.rule === 'declared-gap' && row.file === 'js/kernel/adapters/indexeddb/adapter.js',
   );
-  assert.deepEqual(
-    gaps.map(row => [row.owner, row.verify]),
-    [[18, 'npm run test:kernel: the backups check in test/kernel/contract.mjs']],
-  );
+  assert.deepEqual(gaps, []);
 });

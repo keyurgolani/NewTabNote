@@ -199,16 +199,16 @@ describe('scripts/check-boundaries.js with canned hits', () => {
       row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 17, { verify: `contract suite: ${name}` }));
     const elsewhere = row('js/editor.js', 'declared-gap', 1, 35, { verify: 'editor saves race' });
     const fifth = row('js/kernel/adapters/legacy/adapter.js', 'declared-gap', 1, 2, { verify: 'contract suite: moment' });
-    // #17's adapter declares the one gap #18 closes, and only #18 owns it
+    // #17's adapter declares none since its PR 4a runs the backup tasks, so the row #18 owned
+    // until then is one on a module that declares no gaps
     const backups = row('js/kernel/adapters/indexeddb/adapter.js', 'declared-gap', 1, 18, { verify: 'contract suite: backups' });
-    const misowned = row('js/kernel/adapters/indexeddb/adapter.js', 'declared-gap', 1, 17, { verify: 'contract suite: other' });
-    writeLedger(root, [...gaps, backups, elsewhere, fifth, misowned]);
-    const base = { 'origin/next': [...gaps, backups, elsewhere, fifth, misowned] };
+    writeLedger(root, [...gaps, backups, elsewhere, fifth]);
+    const base = { 'origin/next': [...gaps, backups, elsewhere, fifth] };
     assertFails(await run(root, ['--base', 'origin/next'], { base }),
-      'js/editor.js declared-gap (editor saves race) is a declared-gap row, so its file is '
-        + 'js/kernel/adapters/legacy/adapter.js or js/kernel/adapters/indexeddb/adapter.js',
+      'js/editor.js declared-gap (editor saves race) is a declared-gap row, so its file is js/kernel/adapters/legacy/adapter.js',
       'js/kernel/adapters/legacy/adapter.js declared-gap (contract suite: moment) is a declared-gap row, so #17 owns it',
-      'js/kernel/adapters/indexeddb/adapter.js declared-gap (contract suite: other) is a declared-gap row, so #18 owns it');
+      'js/kernel/adapters/indexeddb/adapter.js declared-gap (contract suite: backups) is a declared-gap row, so its file is '
+        + 'js/kernel/adapters/legacy/adapter.js');
   });
 
   it('tells declared-gap rows on one file apart by verify, and rejects two with the same verify', async () => {
