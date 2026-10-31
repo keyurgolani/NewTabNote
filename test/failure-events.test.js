@@ -203,7 +203,7 @@ describe('failure events (js/kernel/composition/trust.js)', () => {
     assertNoCanary(seen.text, 'NewTabNoteTrust, the settings area, or the export');
   });
 
-  it("gives the records the browser's timers, which bound reads of the settings copy (#75)", async () => {
+  it("gives the records the browser's timers, which bound reads of the settings copy", async () => {
     const { timers } = trust.browserTrustHost();
     let fired = false;
     const handle = timers.set(() => {

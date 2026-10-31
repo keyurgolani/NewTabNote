@@ -49,7 +49,7 @@ import { createTrustRecords } from '../../trust/core/trust-records.js';
  * @property {Clock} clock
  * @property {Ids} ids
  * @property {Timers} [timers] - setTimeout and clearTimeout, which bound the records' reads of
- *   the settings copy once they take them (#75); without them a read waits as long as it takes
+ *   the settings copy; without them a read waits as long as it takes
  */
 
 /**
@@ -174,10 +174,8 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
       journal = Promise.resolve().then(async () => {
         const { indexedDB, keyRange, settings, locks, clock, ids, timers = null } = host();
         const store = createTrustDatabase({ indexedDB, keyRange });
-        // `timers` bound the settings copy's reads in the records that take them (#75); records
-        // without that option ignore it
-        const options = { store, settings, clock, ids, locks, timers };
-        const records = createTrustRecords(options);
+        // `timers` bound the records' reads of the settings copy (COPY_READ_MS)
+        const records = createTrustRecords({ store, settings, clock, ids, locks, timers });
         await records.open();
         return createDiagnosticJournal({ records, clock });
       });
