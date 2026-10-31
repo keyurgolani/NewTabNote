@@ -38,8 +38,9 @@
  * Before a run reuses a verified point, matchesSource reads the live stores the same way and
  * compares them with the manifest, so a point older than the data it stands for is remade.
  *
- * Only migrate.js writes points, under Web Lock `storage.migrate`, so each point is changed by
- * one writer at a time and its record is kept in memory between batches.
+ * Only migrate.js and #20's repair-points.js write points, both under Web Lock
+ * `storage.migrate`, so each point is changed by one writer at a time and its record is kept
+ * in memory between batches.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -67,7 +68,11 @@ export const BATCH_BYTES = 2 * 1024 * 1024;
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
 
-/** @typedef {'pre-migration'} PointKind */
+/**
+ * `pre-migration` before a structural step (migrate.js), and `pre-repair` before a reversible
+ * #20 remediation changes anything (repair-points.js), each under Web Lock `storage.migrate`
+ * @typedef {'pre-migration' | 'pre-repair'} PointKind
+ */
 
 /**
  * @typedef {object} StoreManifest

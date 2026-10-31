@@ -201,8 +201,60 @@ export const REASON_CODES = Object.freeze([
   'write-failed',
 ]);
 
-/** What a remediation run ended with: an error code, or one of these */
-export const RUN_OUTCOMES = Object.freeze([...ERROR_CODES, 'verified', 'not-verified', 'cancelled-by-user']);
+/**
+ * Why a remediation run stopped short, or didn't start (slice 3's pipeline,
+ * remediation/pipeline.js): a gate its class sets that wasn't met, a step that failed, or a
+ * file that wasn't saved as written. Codes only, never a message.
+ */
+export const REMEDIATION_CODES = Object.freeze([
+  // The run itself: another context holds its key, it doesn't apply, it expired, or its
+  // record wouldn't write
+  'remediation-running',
+  'not-applicable',
+  'run-not-found',
+  'run-expired',
+  'not-recorded',
+  'interrupted',
+  // The gates (gates.js)
+  'not-confirmed',
+  'phrase-mismatch',
+  'preview-changed',
+  'deletes-user-records',
+  // The steps
+  'preview-failed',
+  'preview-invalid',
+  'protect-failed',
+  'apply-failed',
+  'verify-failed',
+  'nothing-to-do',
+  // The recovery point a reversible run takes first (#17's NewTabNoteRecovery)
+  'no-recovery-point',
+  'recovery-point-unverified',
+  'recovery-unavailable',
+  'space-short',
+  // Save as file and the salvage file (saved-file.js): "saved" means written, closed, read
+  // back, parsed, and counted, and anything less is one of these
+  'picker-unavailable',
+  'file-not-saved',
+  'file-unreadable',
+  'file-mismatch',
+  'build-failed',
+  // What a saved salvage or restore-point file read: some of its sources, or none of them,
+  // and an irreversible run's recovery file that didn't read CanvasTabDB
+  'saved-partial',
+  'nothing-readable',
+  'salvage-incomplete',
+  // Refusals before a run starts: a subject the remediation doesn't take, no Web Locks to keep
+  // it to one context, and a regenerable or non-destructive preview that changes user records
+  'subject-not-allowed',
+  'no-locks',
+  'changes-user-records',
+]);
+
+/** What a remediation run ended with: an error code, a remediation code, or one of these */
+export const RUN_OUTCOMES = Object.freeze([
+  ...new Set([...ERROR_CODES, ...REMEDIATION_CODES, 'verified', 'not-verified', 'cancelled-by-user']),
+]);
 
 /** The capabilities an incident affects, or a degraded system still preserves */
 export const CAPABILITIES = Object.freeze([
