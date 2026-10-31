@@ -3,8 +3,9 @@
  * modal open, a printable key goes to the note, except Space (or Enter) on a button or
  * link, which presses it. Text typed in a note, in either pane of split view, stays where
  * it is typed, and undo, redo, and deleting a block selection act in one pane. Each test
- * ends with the uncaught-exception check. The split-view test that types from #47's notice is
- * KD-012 since #17 PR 1b, which retires that notice on an upgraded database.
+ * ends with the uncaught-exception check. The split-view test's half that types from #47's
+ * notice is KD-012 since #17 PR 1b, which retires that notice on an upgraded database; its
+ * header-button half runs on its own.
  */
 
 const { test, expect, expectNoUncaught } = require('../harness');
@@ -61,7 +62,7 @@ async function splitViewOnTwoNotes(extension) {
 const typedAtEnd = (blocks, letters) => blocks.map((block, index) => (
   index === blocks.length - 1 ? { ...block, text: block.text + letters } : block));
 
-test.fail('KD-012 with split view open, letters typed from a header button or the notice go to the active left pane\'s note', async ({ extension }) => {
+test('with split view open, letters typed from a header button go to the active left pane\'s note', async ({ extension }) => {
   const page = await splitViewOnTwoNotes(extension);
   const left = await driver.blocks(page);
   const right = await driver.rightPaneBlocks(page);
@@ -69,13 +70,21 @@ test.fail('KD-012 with split view open, letters typed from a header button or th
   await driver.focusHeaderButton(page, 'Settings');
   await page.keyboard.type('hello');
   await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'hello'));
+  expect(await driver.rightPaneBlocks(page)).toEqual(right);
+  await expectNoUncaught(extension, page);
+});
+
+test.fail('KD-012 with split view open, letters typed from the notice go to the active left pane\'s note', async ({ extension }) => {
+  const page = await splitViewOnTwoNotes(extension);
+  const left = await driver.blocks(page);
+  const right = await driver.rightPaneBlocks(page);
 
   // The notice's Not now, a Shift+Tab before the left note's first block
   await driver.clickBlock(page, 0);
   await page.keyboard.press('Shift+Tab');
   expect(await driver.focused(page)).toEqual({ kind: 'button', text: 'Not now' });
   await page.keyboard.type('world');
-  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'helloworld'));
+  await expect.poll(() => driver.blocks(page)).toEqual(typedAtEnd(left, 'world'));
   expect(await driver.rightPaneBlocks(page)).toEqual(right);
   await expectNoUncaught(extension, page);
 });

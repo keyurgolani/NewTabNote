@@ -45,6 +45,11 @@ import { hostTimers, randomIds } from './messaging.js';
  */
 
 /**
+ * Timers the keepalive runs on: the worker's own unless a test passes a fake clock's
+ * @typedef {{setInterval: (fn: () => void, ms: number) => unknown, clearInterval: (id: unknown) => void}} KeepaliveTimers
+ */
+
+/**
  * What the worker's storage runs on, read from the worker's globals unless a test passes it
  * @typedef {object} WorkerHost
  * @property {IDBFactory} indexedDB
@@ -54,13 +59,18 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {Estimate | null} estimate
  * @property {Digester} crypto
  * @property {string | null} [version] - the build's manifest version, which a record that stands must match
+ * @property {(() => unknown) | null} [keepAlive]
+ *   A light extension API call, made every KEEPALIVE_MS while a run is in progress, since
+ *   Chrome stops an extension worker that goes 30 seconds without an event or an extension
+ *   API call, and IndexedDB work counts as neither
+ * @property {KeepaliveTimers} [timers]
  */
 
 /**
  * The run's outcome as the worker records it, under chrome.storage.local
- * `setting_storageUpgrade`: a status, a failure code, when, and the build that ran it, never
- * content
- * @typedef {{status: MigrationOutcome['status'], code: string | null, at: number, version: string | null}} UpgradeRecord
+ * `setting_storageUpgrade`: a status, a failure code, when, the build that ran it, and whether
+ * the run read the stores (`costly`), never content
+ * @typedef {{status: MigrationOutcome['status'], code: string | null, at: number, version: string | null, costly: boolean}} UpgradeRecord
  */
 
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
@@ -70,12 +80,16 @@ export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 export { MIGRATE_MESSAGE };
 
 /**
- * How long a run that stopped short of space, or failed, stands before a worker start of the
- * same build tries again. Each try reads every store to measure it, and a space-blocked
- * profile wakes the worker with every new tab, so it doesn't try on each one. An update tries
- * at once.
+ * How long a run that read the stores and then stopped short of space, or failed, stands
+ * before another start of the same build tries again. Each such try reads every store to
+ * measure it, and a space-blocked profile wakes the worker with every new tab, so it doesn't
+ * try on each one. An update, and a run that read nothing (no database, or a failure before
+ * the copy), try at once.
  */
 export const RETRY_AFTER_MS = 30 * 60 * 1000;
+
+/** How often the keepalive calls an extension API while a run is in progress, under Chrome's 30 s */
+export const KEEPALIVE_MS = 20 * 1000;
 
 /**
  * Where the runner and the worker's storage warn, with ids, codes, and statuses only
@@ -93,6 +107,7 @@ export function workerHost() {
   const nav = /** @type {Navigator & {storage?: {estimate?: () => Promise<{quota?: number, usage?: number}>}}} */ (
     globalThis.navigator
   );
+  const runtime = globalThis.chrome && globalThis.chrome.runtime;
   return {
     indexedDB: globalThis.indexedDB,
     keyRange: globalThis.IDBKeyRange,
@@ -101,6 +116,7 @@ export function workerHost() {
     estimate: nav && nav.storage && typeof nav.storage.estimate === 'function' ? () => nav.storage.estimate() : null,
     crypto: /** @type {Digester} */ (/** @type {unknown} */ (globalThis.crypto)),
     version: manifestVersion(),
+    keepAlive: runtime && typeof runtime.getPlatformInfo === 'function' ? () => runtime.getPlatformInfo() : null,
   };
 }
 
@@ -117,8 +133,15 @@ function manifestVersion() {
 }
 
 /**
- * Whether `record` is a run of this build that stopped short of space or failed less than
- * RETRY_AFTER_MS ago
+ * Whether a run's outcome came after reading the stores: it found a database with stores, so it
+ * measured them for the space check, and copied and verified them if there was room
+ * @param {MigrationOutcome} outcome
+ */
+const readTheStores = outcome => outcome.shape !== null && outcome.shape !== 'none';
+
+/**
+ * Whether `record` is a run of this build that read the stores and then stopped short of space
+ * or failed, less than RETRY_AFTER_MS ago
  * @param {unknown} record
  * @param {number} now
  * @param {string | null} version
@@ -126,14 +149,16 @@ function manifestVersion() {
  */
 function standing(record, now, version) {
   if (!record || typeof record !== 'object') return false;
-  const { status, at, version: ranBy = null } = /** @type {UpgradeRecord} */ (record);
-  if (ranBy !== version) return false;
+  const { status, at, version: ranBy = null, costly = true } = /** @type {UpgradeRecord} */ (record);
+  if (ranBy !== version || costly === false) return false;
   return (status === 'space-blocked' || status === 'failed') && typeof at === 'number' && now - at < RETRY_AFTER_MS;
 }
 
 /**
- * Records `outcome` where the new tab reads it, when it differs from what's there. Best
- * effort: the run's work is done either way.
+ * Records a run's `outcome` where the new tab reads it. A run that stopped short of space or
+ * failed is written every time it runs, so its time starts the next RETRY_AFTER_MS; any other
+ * outcome only when it changes, so the pages' settings listeners don't hear every worker start.
+ * Best effort: the run's work is done either way.
  * @param {SettingsStore} settings
  * @param {MigrationOutcome} outcome
  * @param {unknown} stored
@@ -143,84 +168,147 @@ function standing(record, now, version) {
  */
 async function record(settings, outcome, stored, now, version) {
   const code = outcome.failure ? outcome.failure.code : null;
+  const costly = readTheStores(outcome);
   const previous = /** @type {Partial<UpgradeRecord>} */ (stored && typeof stored === 'object' ? stored : {});
-  // A status that stands keeps its time, so a retry after RETRY_AFTER_MS still happens
-  if (previous.status === outcome.status && previous.code === code && (previous.version ?? null) === version) return;
+  const backsOff = outcome.status === 'space-blocked' || outcome.status === 'failed';
+  const same =
+    previous.status === outcome.status &&
+    previous.code === code &&
+    (previous.version ?? null) === version &&
+    (previous.costly ?? true) === costly;
+  if (same && !backsOff) return;
   try {
-    await settings.set({ [UPGRADE_RECORD_KEY]: { status: outcome.status, code, at: now, version } });
+    await settings.set({ [UPGRADE_RECORD_KEY]: { status: outcome.status, code, at: now, version, costly } });
   } catch (error) {
     storageLogger.warn('storage-upgrade-record-failed', { status: outcome.status, error });
   }
 }
 
 /**
- * The worker's client, with the migration run behind it
- * @typedef {Client & {migration: {done: Promise<MigrationOutcome>, blocked: () => boolean}}} WorkerClient
+ * The worker's migration, as its client exposes it
+ * @typedef {object} WorkerMigration
+ * @property {Promise<MigrationOutcome>} done - the latest attempt's outcome
+ * @property {() => Promise<MigrationOutcome>} request
+ *   What a page's storage.migrate gets (#17, Q12): the attempt running now, or, after one that
+ *   stopped short of space or failed, a new one, which the backoff holds back only for a run
+ *   that read the stores
+ * @property {() => boolean} blocked - whether the run's upgrade waits on another connection now
+ * @property {() => boolean} running - whether an attempt is in progress, which the keepalive spans
  */
 
 /**
- * The worker's kernel and its client. It starts the migration run now (unless one that stopped
- * short of space or failed stands, RETRY_AFTER_MS), and builds the kernel on #17's adapter once
- * the run has finished, as the top of this file says. Its caller, `worker-internal`, may
- * capture and maintain, and nothing else. Until the run has finished, every call waits for it,
- * except while the upgrade is blocked (an open page of an older build holds the database):
- * then `whenReady` and every command answer `blocked-upgrade`, retryable, at once, so a capture
- * says "Not captured" rather than wait. Its connection closes when another context upgrades or
- * deletes the database, so it never blocks one, and the next command opens it again once.
+ * The worker's client, with the migration behind it
+ * @typedef {Client & {migration: WorkerMigration}} WorkerClient
+ */
+
+/**
+ * The worker's kernel and its client. It starts a migration attempt now: a run, unless one of
+ * this build that read the stores and then stopped short of space or failed stands
+ * (RETRY_AFTER_MS). It builds the kernel on #17's adapter once the attempt is done, as the top
+ * of this file says, and builds it again after every later attempt. Its caller,
+ * `worker-internal`, may capture and maintain, and nothing else. Until an attempt is done,
+ * every call waits for it, except while the upgrade is blocked (an open page of an older build
+ * holds the database): then `whenReady` and every command answer `blocked-upgrade`, retryable,
+ * at once, so a capture says "Not captured" rather than wait. Its connection closes when
+ * another context upgrades or deletes the database, so it never blocks one, and the next
+ * command starts another attempt, which upgrades only after its own verified point, then opens
+ * the database again once. A run keeps the worker alive (KEEPALIVE_MS) until it ends.
  * @param {WorkerHost} [host]
  * @returns {WorkerClient}
  */
 export function createWorkerClient(host = workerHost()) {
+  const version = host.version ?? null;
+  const timers = host.timers || { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval };
   /** @type {MigrationRun | null} */
   let run = null;
+  let attempts = 0;
+  let settled = 0;
   /** Whether the run's upgrade waits on another connection now */
   const blocked = () => run !== null && run.state() === 'blocked-upgrade';
   /** What waits on the run, told when the upgrade turns out blocked */
   /** @type {Set<() => void>} */
   const onBlock = new Set();
-  /** @type {Promise<MigrationOutcome>} */
-  const done = Promise.resolve()
-    .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
-    .catch(() => ({}))
-    .then(stored => {
-      const previous = /** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY];
-      const now = systemClock.now();
-      if (standing(previous, now, host.version ?? null)) {
-        /** @type {MigrationOutcome} */
-        const kept = {
-          status: previous.status,
-          shape: null,
-          to: null,
-          steps: [],
-          recoveryPointId: null,
-          failure: previous.code ? { code: previous.code } : null,
-        };
-        return kept;
-      }
-      run = startMigrations({
-        indexedDB: host.indexedDB,
-        keyRange: host.keyRange,
-        locks: host.locks,
-        estimate: host.estimate,
-        crypto: host.crypto,
-        clock: systemClock,
-        logger: storageLogger,
-        onBlocked: () => {
-          // migrate.js marks the run blocked before it calls this
-          for (const stop of [...onBlock]) stop();
-          onBlock.clear();
-        },
-      });
-      return run.done.then(async outcome => {
-        await record(host.settings, outcome, previous, systemClock.now(), host.version ?? null);
-        return outcome;
-      });
-    });
 
-  /** @returns {Promise<Client>} */
-  const build = () =>
-    done.then(outcome => {
-      const upgraded = outcome.status === 'migrated' || outcome.status === 'current';
+  /**
+   * Calls an extension API every KEEPALIVE_MS until `ending` settles
+   * @param {Promise<unknown>} ending
+   */
+  const keepAliveUntil = ending => {
+    if (typeof host.keepAlive !== 'function') return;
+    const keepAlive = host.keepAlive;
+    const id = timers.setInterval(() => {
+      try {
+        Promise.resolve(keepAlive()).catch(() => {});
+      } catch {
+        // A keepalive that throws keeps nothing alive, and stops nothing either
+      }
+    }, KEEPALIVE_MS);
+    ending.finally(() => timers.clearInterval(id)).catch(() => {});
+  };
+
+  /**
+   * One attempt: read the record, then run unless a run that read the stores stands
+   * @returns {Promise<MigrationOutcome>}
+   */
+  const attempt = () => {
+    attempts += 1;
+    /** @type {Promise<MigrationOutcome>} */
+    const outcome = Promise.resolve()
+      .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
+      .catch(() => ({}))
+      .then(stored => {
+        const previous = /** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY];
+        if (standing(previous, systemClock.now(), version)) {
+          /** @type {MigrationOutcome} */
+          const kept = {
+            status: previous.status,
+            shape: null,
+            to: null,
+            steps: [],
+            recoveryPointId: null,
+            failure: previous.code ? { code: previous.code } : null,
+          };
+          return kept;
+        }
+        run = startMigrations({
+          indexedDB: host.indexedDB,
+          keyRange: host.keyRange,
+          locks: host.locks,
+          estimate: host.estimate,
+          crypto: host.crypto,
+          clock: systemClock,
+          logger: storageLogger,
+          onBlocked: () => {
+            // migrate.js marks the run blocked before it calls this
+            for (const stop of [...onBlock]) stop();
+            onBlock.clear();
+          },
+        });
+        return run.done.then(async ended => {
+          await record(host.settings, ended, previous, systemClock.now(), version);
+          return ended;
+        });
+      });
+    keepAliveUntil(outcome);
+    outcome.then(
+      () => {
+        settled += 1;
+      },
+      () => {
+        settled += 1;
+      },
+    );
+    return outcome;
+  };
+
+  /**
+   * The kernel on the database `outcome` left: versioned at 9, as it is otherwise
+   * @param {Promise<MigrationOutcome>} outcome
+   * @returns {Promise<Client>}
+   */
+  const build = outcome =>
+    outcome.then(ended => {
+      const upgraded = ended.status === 'migrated' || ended.status === 'current';
       const adapter = createIndexedDbAdapter({
         indexedDB: host.indexedDB,
         settings: host.settings,
@@ -230,7 +318,22 @@ export function createWorkerClient(host = workerHost()) {
       return kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
     });
 
-  let client = build();
+  let done = attempt();
+  let client = build(done);
+
+  /** Starts another attempt, and builds the kernel on it */
+  const again = () => {
+    done = attempt();
+    client = build(done);
+    return done;
+  };
+
+  /** @returns {Promise<MigrationOutcome>} */
+  const request = () => {
+    // One in progress, blocked or not, is the answer: another would only queue behind it
+    if (settled < attempts) return done;
+    return done.then(ended => (ended.status === 'space-blocked' || ended.status === 'failed' ? again() : ended));
+  };
 
   /** @returns {Unavailable} */
   const blockedUpgrade = () => unavailable('storage', 'blocked-upgrade', true);
@@ -261,9 +364,11 @@ export function createWorkerClient(host = workerHost()) {
       const outcome = await ready.execute(command);
       if (outcome.kind !== 'unavailable' || outcome.code !== 'reload-required') return outcome;
       // The connection went before this command's transaction began, so nothing of it
-      // committed: a new connection, and the command once more
-      client = build();
-      return (await client).execute(command);
+      // committed. The database may have been replaced since, so another attempt first, which
+      // upgrades only after its own verified point, then a new connection and the command once more.
+      again();
+      const next = await unlessBlocked(client);
+      return next ? next.execute(command) : blockedUpgrade();
     }
   );
 
@@ -288,7 +393,14 @@ export function createWorkerClient(host = workerHost()) {
       return ready ? ready.whenReady() : blockedUpgrade();
     },
     ids: legacyIds,
-    migration: Object.freeze({ done, blocked }),
+    migration: Object.freeze({
+      get done() {
+        return done;
+      },
+      request,
+      blocked,
+      running: () => settled < attempts,
+    }),
   });
 }
 

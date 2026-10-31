@@ -49,6 +49,7 @@ function spaceNotice(env, Storage, { exports = [true] } = {}) {
     settings: {
       read: (key) => Storage.readSetting(key),
       snooze: () => Storage.setSetting('spaceNoticeSnoozedAt', Date.now()),
+      upgraded: () => Storage.isUpgraded(),
     },
   });
 }
@@ -146,6 +147,14 @@ describe('the space notice', () => {
     fire(second.env, { [SNOOZED]: { newValue: Date.now() } });
     await settle();
     assert.equal(shown(other), false);
+  });
+});
+
+describe('a space-blocked record the worker could not replace (review R79)', () => {
+  it('says nothing once the database is at 9: the notice is not due', async () => {
+    const { env, Storage } = await setup({ status: 'space-blocked', upgraded: true });
+    assert.equal(Storage.isUpgraded(), true);
+    assert.equal(await spaceNotice(env, Storage).isDue(), false);
   });
 });
 

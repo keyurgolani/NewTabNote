@@ -90,10 +90,7 @@
         "KD-012 an Export JSON right after typing has the edit in the file",
         "KD-012 an export from Settings moves the notice to the check-the-file step in every tab",
         "KD-012 Not now records \"dismissed\", every tab drops the notice, and the note stays as it was",
-        "KD-012 the title stays the first stop after the header, so typing a title there leaves the notice alone",
-        "KD-012 the notice's buttons come next, at least 44 by 44, and letters typed on one go to the note",
-        "KD-012 Space on Not now records \"dismissed\" and puts focus and the caret back where they were",
-        "KD-012 with split view open, letters typed from a header button or the notice go to the active left pane's note"
+        "KD-012 with split view open, letters typed from the notice go to the active left pane's note"
       ]
     }
   ]
