@@ -51,6 +51,10 @@ function spyAdapter(inner, log) {
       log.push('exportBackup');
       return inner.exportBackup(extra);
     },
+    exportData: () => {
+      log.push('exportData');
+      return inner.exportData();
+    },
   };
 }
 

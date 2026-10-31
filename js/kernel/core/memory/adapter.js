@@ -593,6 +593,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
     // The export file is 1.4.x's Storage code (the `backups` flag)
     exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
+    exportData: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
 
     conflicts: () =>
       [...storeOf('conflicts').values()].map(record => ({
