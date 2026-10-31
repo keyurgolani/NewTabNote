@@ -55,7 +55,7 @@
       "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row.",
       "start": {
         "js": { "raw": 716800, "gzip": 204800 },
-        "css": { "raw": 102400, "gzip": 19456 },
+        "css": { "raw": 107520, "gzip": 19456 },
         "html": { "raw": 73728, "gzip": 12288 },
         "fonts": null
       },

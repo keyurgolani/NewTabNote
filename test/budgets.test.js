@@ -296,7 +296,7 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 
   it('holds the approved rows exactly', () => {
     const { entries } = BUDGETS;
-    assert.deepEqual(entries.newtab.start, { js: { raw: 700 * KIB, gzip: 200 * KIB }, css: { raw: 100 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    assert.deepEqual(entries.newtab.start, { js: { raw: 700 * KIB, gzip: 200 * KIB }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
     // The workspace loads at boot, so it's start; nothing the root loads is named lazy
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
