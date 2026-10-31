@@ -225,7 +225,11 @@ async function record(settings, outcome, stored, now, version) {
  */
 export function createWorkerClient(host = workerHost()) {
   const version = host.version ?? null;
-  const timers = host.timers || { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval };
+  /** @type {KeepaliveTimers} */
+  const timers = host.timers || {
+    setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
+    clearInterval: id => globalThis.clearInterval(/** @type {ReturnType<typeof setInterval>} */ (id)),
+  };
   /** @type {MigrationRun | null} */
   let run = null;
   let attempts = 0;
