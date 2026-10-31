@@ -203,8 +203,15 @@ describe('each composition root', () => {
         capture: { type: 'text', content: id },
       });
     assert.equal((await capture('first')).kind, 'committed');
-    // A newer build's upgrade: nothing blocks it, and the worker's next open finds it too new
-    const upgraded = await legacyEnv.requestToPromise(tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
+    // A newer build's upgrade: neither of the new tab's connections blocks it, #17's adapter's or
+    // the holders' Storage's (#17 PR 4a), nor the worker's, and the worker's next open finds it
+    // too new
+    const upgraded = await new Promise((resolve, reject) => {
+      const request = tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('a connection the new tab or the worker held blocked the upgrade'));
+    });
     /** @type {IDBDatabase} */ (upgraded).close();
     assert.equal(tab.storage.openState, 'version-changed');
     assert.deepEqual([adapter.openState(), adapter.upgraded()], ['version-changed', false]);
