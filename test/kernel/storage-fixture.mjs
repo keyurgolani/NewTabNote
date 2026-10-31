@@ -109,6 +109,8 @@ export function closeAll(of) {
  * opens it once its run has made the database, or over a version-8 database without
  * `missing`'s stores, opened as it is, as the worker does when its run left the database as
  * it was, and as Popup does (#17 PR 1b: a versioned open would give it the stores it lacks).
+ * Its adapters run the backup tasks, as the new tab's does since #17 PR 4a (the lead's Q1);
+ * storage-backups.test.mjs holds one without them, as the other roots make theirs.
  * @param {StoreName[]} missing
  * @returns {ReturnType<ContractFixture['start']>}
  */
@@ -117,7 +119,7 @@ async function startIndexedDb(missing) {
   const clock = testClock();
   const ids = testIds();
   /** @type {Partial<IndexedDbOptions>} */
-  const options = { clock };
+  const options = { clock, backups: true };
   if (missing.length > 0) {
     await legacyEnv.createDatabase(first.real, { omit: missing.map(store => IDB_STORES[store]) });
     options.mode = 'existing';
@@ -151,7 +153,7 @@ async function startIndexedDb(missing) {
 /** @type {ContractFixture} */
 export const indexedDbFixture = {
   name: 'indexeddb',
-  flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
+  flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: true }),
   start: () => startIndexedDb([]),
   startWithout: startIndexedDb,
 };

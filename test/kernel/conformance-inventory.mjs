@@ -155,11 +155,14 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const HELPERS = Object.freeze({
+  // #17 PR 4a: 1.4.x's backup tasks and export file, which #17's adapter runs where its root
+  // asks (`backups`), and the kernel-adapter suite's backups checks run on it
+  'js/kernel/adapters/indexeddb/backups.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies, and those copies. The
-  // pre-update copy's export and #20's salvage file, both unshared, load it too
+  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies and export files, and those
+  // copies. The pre-update copy's export and #20's salvage file, both unshared, load it too
   'js/kernel/adapters/indexeddb/data-urls.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2b's tombstones: the adapter completes them, and the purge (unshared, so not named
   // here) reads and marks them

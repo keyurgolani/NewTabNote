@@ -235,8 +235,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
  * What an adapter guarantees. The contract suite expects the documented difference for
- * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger, as
- * is `backups` on #17's adapter, which #18's backup engine closes.
+ * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger.
+ * #17's adapter has `backups` where its root asks for it, the new tab's (#17 PR 4a).
  * @typedef {object} AdapterFlags
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
@@ -255,8 +255,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   such as #20's storage probe, keeps no record, so every run of it runs.
  * @property {boolean} backups
  *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
- *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery
- *   copy, keys, retention, and record shapes included. One without answers `unavailable`,
+ *   (exportBackup): the import, auto-backup, and export do what 1.4.x's Storage did, recovery
+ *   copy, keys, retention, and record shapes included, through Storage's own code on the legacy
+ *   adapter and backups.js's port of it on #17's. One without answers `unavailable`,
  *   `adapter`, `backups-need-legacy-storage`, and writes nothing, until #18's backup engine
  *   runs on every adapter.
  */
