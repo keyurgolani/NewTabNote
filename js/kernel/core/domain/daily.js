@@ -152,9 +152,9 @@ const inMadeOrder = (a, b) => (madeBefore(a.note, b.note) ? -1 : madeBefore(b.no
  *    stays never keeps a later one off its own date: someone who opened Daily every morning and
  *    evening has an evening note for each day, and one that stays on the next day's date would
  *    otherwise hold every later evening note where 1.4.x showed it.
- * A note in the trash or a template gets its key, its local date for one 1.4.x keyed by its UTC
- * date, and holds none. Every Daily Note whose key another holds names that note as
- * `duplicateOf`. One without a valid `dateStr` or `dailyKey` gets no key.
+ * A note in the trash or a template gets its key by the same rules, so it moves only to a date no
+ * note holds (#1's contract), and holds none. Every Daily Note whose key another holds names that
+ * note as `duplicateOf`. One without a valid `dateStr` or `dailyKey` gets no key.
  * @param {Iterable<DailyRecord>} notes
  * @param {string} zone
  * @returns {Map<string, DailyAssignment>}
@@ -195,17 +195,17 @@ export function assignDailyKeys(notes, zone) {
   /** @type {DailyRecord[]} */
   const stay = [];
   for (const { note, localKey } of rekeys) {
-    if (!canHoldKey(note) || !holders.has(localKey)) {
+    if (holders.has(localKey)) {
+      stay.push(note);
+    } else {
       keys.set(note.id, { dailyKey: localKey, rekeyed: true });
       if (canHoldKey(note)) holders.set(localKey, note);
-    } else {
-      stay.push(note);
     }
   }
   for (const note of stay) {
     const dateStr = /** @type {string} */ (note.dateStr);
     keys.set(note.id, { dailyKey: dateStr, rekeyed: false });
-    if (!holders.has(dateStr)) holders.set(dateStr, note);
+    if (canHoldKey(note) && !holders.has(dateStr)) holders.set(dateStr, note);
   }
 
   /** @type {Map<string, DailyAssignment>} */
