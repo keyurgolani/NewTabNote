@@ -176,7 +176,9 @@ describe('conformance coverage finds a suite or a port', () => {
     assert.ok(runs.includes('test/kernel/commit-log.test.mjs'));
     const renamed = {
       [suite]: (tree.read(suite) ?? '').replace('export function describeCommitLog(', 'export function conformanceOf('),
-      ...Object.fromEntries(runs.map(run => [run, (tree.read(run) ?? '').replaceAll('describeCommitLog', 'conformanceOf')])),
+      ...Object.fromEntries(
+        runs.map(run => [run, (tree.read(run) ?? '').replaceAll('describeCommitLog', 'conformanceOf')]),
+      ),
     };
     assert.deepEqual(problemsWith(renamed, { PORTS: portsWith('commit-log', { suite: { module: suite, runner: 'conformanceOf' } }) }), []);
   });

@@ -64,13 +64,14 @@ export const LEGACY_STORE_NAMES = Object.freeze(Object.keys(STORE_SCHEMAS).sort(
  * survives:
  * - `operations`: the idempotency ledger, `{opId, digest, outcome, at}` per committed or
  *   conflicted command (ledger.js)
- * - `changes`: the change log, `{seq, entityType, entityId, revision, opId, ops}`, one entry per
- *   entity per commit, `ops` empty until #17 PR 4 (changes.js)
+ * - `changes`: the change log, `{seq, entityType, entityId, revision, opId, ops, position}`, one
+ *   entry per entity per commit, `ops` empty until #17 PR 4 (changes.js)
  * - `conflicts`: `{id, noteId, scope, expected, current, at, command}`, keyed by the commandId
  *   that lost (conflicts.js)
- * - `tombstones`: `{entityType, id, deletedAt, lastRevision, seq, reason, purge}`, content-free,
- *   which #17 PR 2b's permanent deletion writes. Only a tombstone whose recovery-point purge is
- *   pending holds `purge`, so its index lists just those.
+ * - `tombstones`: `{entityType, id, deletedAt, lastRevision, seq, reason, purge}`, content-free.
+ *   #17's adapter writes one for each note a commit deletes, with no `purge`, and #17 PR 2b's
+ *   permanent deletion writes it in core instead. Only a tombstone whose recovery-point purge
+ *   is pending holds `purge`, so its index lists just those.
  */
 export const OPERATIONS_STORE = 'operations';
 export const CHANGES_STORE = 'changes';
