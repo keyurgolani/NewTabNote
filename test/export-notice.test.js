@@ -11,7 +11,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, settle, waitFor, plain, note, block, FakeDocument,
-  startEditorClient,
+  startEditorClient, watchTransactions,
 } = require('./helpers/legacy-env');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -537,9 +537,23 @@ describe('the receipt Settings writes after a full export', () => {
   });
 
   it('a failed export says so and hands nothing over', async () => {
-    const { Storage, settings, toasts, downloads } = await settingsSetup();
-    Storage.exportAllAsBlob = async () => { throw new Error('read failed'); };
-    assert.equal(await settings.exportAll(), false);
+    const { settings, toasts, downloads } = await settingsSetup();
+    // The read fails: the readonly transaction over the notes and blocks that #17's adapter
+    // reads the export in since #17 PR 4a
+    let failed = false;
+    const unwatch = watchTransactions(({ stores, mode, name, open }) => {
+      if (!failed && name === 'CanvasTabDB' && mode === 'readonly' && stores.includes('canvases') && stores.includes('elements')) {
+        failed = true;
+        throw new DOMException('read failed', 'UnknownError');
+      }
+      return open();
+    });
+    try {
+      assert.equal(await settings.exportAll(), false);
+    } finally {
+      unwatch();
+    }
+    assert.equal(failed, true, 'the read failed');
     assert.equal(downloads.length, 0);
     assert.deepEqual(toasts, [{ message: 'Export failed', kind: 'error' }]);
   });

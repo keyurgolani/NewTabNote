@@ -8,7 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument,
-  makeEditor, runUntil, shownTabs, startEditorClient,
+  makeEditor, runUntil, shownTabs, startEditorClient, watchTransactions,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -598,12 +598,12 @@ describe('Replace all (AC4)', () => {
     controller.onFlushEditors = () => tabs.flushEditorsForImport();
     controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
 
-    // Right after the commit's transaction opens, the user types and the tab is hidden.
-    const realTransaction = Storage.transaction.bind(Storage);
+    // Right after the commit's transaction opens, the user types and the tab is hidden: the one
+    // #17's adapter commits the import in since #17 PR 4a, the first to write folders
     let hidden = false;
-    Storage.transaction = (stores, mode) => {
-      const tx = realTransaction(stores, mode);
-      if (!hidden && mode === 'readwrite' && [].concat(stores).includes('folders')) {
+    const unwatch = watchTransactions(({ stores, mode, name, open }) => {
+      const tx = open();
+      if (!hidden && name === 'CanvasTabDB' && mode === 'readwrite' && stores.includes('folders')) {
         hidden = true;
         typeInto(editors.primary, 'typed while the import commits');
         env.clock.tick(500); // comes due while saves are held
@@ -611,9 +611,12 @@ describe('Replace all (AC4)', () => {
         env.document.fire('visibilitychange');
       }
       return tx;
-    };
-    await replaceAll(env, controller, sameProfileBackup());
-    Storage.transaction = realTransaction;
+    });
+    try {
+      await replaceAll(env, controller, sameProfileBackup());
+    } finally {
+      unwatch();
+    }
     assert.equal(hidden, true, 'the page hid during the commit');
 
     const db = await dumpDatabase(env.indexedDB);
@@ -633,14 +636,12 @@ describe('Replace all (AC4)', () => {
       reload: { value: async () => { refreshes += 1; return env.noteList.reload(); } },
     });
     // The commit lands, then the next chrome.storage.local write (the open tabs) fails
-    const realImport = Storage.importData.bind(Storage);
-    Storage.importData = async (...args) => {
-      const result = await realImport(...args);
-      env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
-      return result;
-    };
-
-    await replaceAll(env, controller, sameProfileBackup());
+    const unwatch = afterImportCommits(() => env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded')));
+    try {
+      await replaceAll(env, controller, sameProfileBackup());
+    } finally {
+      unwatch();
+    }
 
     assert.ok(toasts.some((t) => t.kind === 'success' && t.message.startsWith('Imported 5 notes')), 'the import is reported');
     assert.deepEqual(toasts.filter((t) => t.kind === 'error'), [
@@ -657,15 +658,18 @@ describe('Replace all (AC4)', () => {
     const channel = { sent: [], postMessage(data) { this.sent.push(plain(data)); } };
     tabs.channel = channel;
     const controller = wireImport(makeController(env), tabs);
-    const realImport = Storage.importData.bind(Storage);
-    Storage.importData = async (...args) => {
-      const result = await realImport(...args);
+    let failed = false;
+    const unwatch = afterImportCommits(() => {
+      failed = true;
       env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
-      return result;
-    };
+    });
+    try {
+      await replaceAll(env, controller, sameProfileBackup());
+    } finally {
+      unwatch();
+    }
 
-    await replaceAll(env, controller, sameProfileBackup());
-
+    assert.equal(failed, true, 'a write after the commit failed');
     assert.equal(channel.sent.length, 1);
     assert.deepEqual(channel.sent[0].left.slice().sort(), ['A', 'D', 'E']);
   });
@@ -874,6 +878,22 @@ describe('The import file input', () => {
 function typeInto(editor, text) {
   editor.blocks[0].content = text;
   editor.scheduleSave();
+}
+
+/**
+ * Run `then` as the import's commit lands: once the transaction #17's adapter commits it in
+ * (#17 PR 4a), the first to write folders, completes. Answers what takes the watch off.
+ */
+function afterImportCommits(then) {
+  let seen = false;
+  return watchTransactions(({ stores, mode, name, open }) => {
+    const tx = open();
+    if (!seen && name === 'CanvasTabDB' && mode === 'readwrite' && stores.includes('folders')) {
+      seen = true;
+      tx.addEventListener('complete', () => then());
+    }
+    return tx;
+  });
 }
 
 /** Wire an import the way App does: hold and flush the editors, then move panes and open what Merge added. */
