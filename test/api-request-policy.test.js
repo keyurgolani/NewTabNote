@@ -260,7 +260,11 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
   it('answers a loopback request it cannot check in time with request-refused', async () => {
     const { env, offscreen, ask } = await worker();
     env.chrome.api.storage.local.get = () => new Promise(() => {});
-    const answer = await within(ask({ type: 'API_REQUEST', url: 'http://localhost:11434/api/tags', options: { method: 'GET' } }, page()), 5000);
+    const pending = ask({ type: 'API_REQUEST', url: 'http://localhost:11434/api/tags', options: { method: 'GET' } }, page());
+    // The worker's timers run on the test's fake clock
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    env.clock.tick(5000);
+    const answer = await within(pending, 1000);
     assert.deepEqual(answer, { error: 'request-refused' });
     assert.deepEqual(offscreen, []);
   });

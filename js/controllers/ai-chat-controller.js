@@ -2237,16 +2237,18 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       this.updateAISidebarState();
     });
 
-    const debouncedApiKeySave = Utils.debounce(async (value) => {
-      await this.llm.setApiKey(value);
-      if (value && this.llm.provider !== 'none') {
-        await this.loadAndPopulateModels(this.llm.provider, value);
+    // A key is saved for the provider shown when it was typed, even when the provider changes
+    // before the save, and it lists that provider's models only while it's still the one shown
+    const debouncedApiKeySave = Utils.debounce(async (value, provider) => {
+      await this.llm.setApiKey(value, provider);
+      if (value && provider !== 'none' && provider === this.llm.provider) {
+        await this.loadAndPopulateModels(provider, value);
       }
       this.updateAISidebarState();
     }, 800);
 
     apiKeyInput?.addEventListener('input', (e) => {
-      debouncedApiKeySave(e.target.value);
+      debouncedApiKeySave(e.target.value, this.llm.provider);
     });
 
     modelSelect?.addEventListener('change', async (e) => {

@@ -68,6 +68,29 @@ function ollamaOriginsCommand() {
 }
 
 /**
+ * The providers whose keys start with a prefix no other provider's does: a saved key with no
+ * provider recorded yet (1.4.x) belongs to the one its prefix names. A plain `sk-` is several
+ * providers', so it names none.
+ */
+const KEY_PREFIXES = Object.freeze([
+  ['sk-ant-', 'anthropic'],
+  ['sk-or-', 'openrouter'],
+  ['AIza', 'gemini'],
+  ['gsk_', 'groq'],
+  ['xai-', 'xai'],
+]);
+
+/**
+ * The provider a key's prefix names, or null
+ * @param {string} key
+ * @returns {string | null}
+ */
+function providerOfKey(key) {
+  const found = KEY_PREFIXES.find(([prefix]) => key.startsWith(prefix));
+  return found ? found[1] : null;
+}
+
+/**
  * The legacy Storage global's setting write, as js/storage.js defines it
  * @typedef {{setSetting(key: string, value: unknown): Promise<void>}} SettingWriter
  */
@@ -103,10 +126,19 @@ class LLMService {
     }
     this.savedKey = stored.llmApiKey;
     this.keyProvider = stored.llmApiKeyProvider;
-    // 1.4.x saved one key with no provider: it belongs to the provider it's used with now
-    if (this.savedKey && !this.keyProvider && this.provider !== 'none') {
-      this.keyProvider = this.provider;
-      await /** @type {SettingWriter} */ (/** @type {unknown} */ (Storage)).setSetting('llmApiKeyProvider', this.keyProvider);
+    // 1.4.x saved one key with no provider: it belongs to the provider its prefix names, or
+    // else to the provider in use now; with none in use, it waits for one
+    if (this.savedKey && !this.keyProvider) {
+      const owner = providerOfKey(this.savedKey) || (this.provider !== 'none' ? this.provider : null);
+      if (owner) {
+        this.keyProvider = owner;
+        // Held in memory when the write fails, so the start goes on; the next start tries again
+        try {
+          await /** @type {SettingWriter} */ (/** @type {unknown} */ (Storage)).setSetting('llmApiKeyProvider', owner);
+        } catch (error) {
+          console.warn("LLM: couldn't record the saved key's provider", error && error.message);
+        }
+      }
     }
     this.apiKey = this.keyFor(this.provider);
     this.model = stored.llmModel;
@@ -188,8 +220,10 @@ class LLMService {
   async fetchViaBackground(url, options = {}) {
     // Check if chrome.runtime is available (extension context)
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      /** @type {any} */
+      let proxied;
       try {
-        return await new Promise((resolve, reject) => {
+        proxied = await new Promise((resolve, reject) => {
           const timeoutId = setTimeout(() => {
             reject(new Error('Background worker timeout'));
           }, 30000); // 30 second timeout
@@ -215,17 +249,19 @@ class LLMService {
                 reject(new Error('No response from background worker'));
                 return;
               }
-              if (response.error) {
-                reject(new Error(response.error));
-                return;
-              }
+              // The worker's answer is final, a refusal included: the page never sends the
+              // request itself instead
               resolve(response);
             }
           );
         });
       } catch (bgError) {
         console.warn('Background fetch failed, trying direct fetch:', bgError.message);
-        // Fall through to direct fetch
+        // Fall through to direct fetch: no worker, no answer, or none in time
+      }
+      if (proxied !== undefined) {
+        if (proxied.error) throw new Error(proxied.error);
+        return proxied;
       }
     }
 
@@ -726,15 +762,20 @@ class LLMService {
     await this.setModel(defaultModel);
   }
 
-  async setApiKey(apiKey) {
-    this.apiKey = apiKey;
+  /**
+   * Save `apiKey` for `provider`, the provider in use unless given: the one it was typed for
+   * @param {string} apiKey
+   * @param {string} [provider]
+   */
+  async setApiKey(apiKey, provider = this.provider) {
     this.savedKey = apiKey;
-    this.keyProvider = apiKey ? this.provider : null;
+    this.keyProvider = apiKey ? provider : null;
+    this.apiKey = this.keyFor(this.provider);
     await Storage.setSetting('llmApiKey', apiKey);
     await /** @type {SettingWriter} */ (/** @type {unknown} */ (Storage)).setSetting('llmApiKeyProvider', this.keyProvider);
     
     // Clear cached models to force refresh with new key
-    delete this.cachedModels[this.provider];
+    delete this.cachedModels[provider];
   }
 
   async setModel(model) {

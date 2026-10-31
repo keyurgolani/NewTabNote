@@ -13,7 +13,7 @@ import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
-import { checkRequest, fetchInit, isOwnSender, storedLoopbackOrigin } from './kernel/composition/api-request.js';
+import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
@@ -215,23 +215,9 @@ async function handleApiRequest(request) {
   }
 
   try {
-    const response = await fetch(checked.url, fetchInit(checked));
-    console.debug('Background: Fetch response status:', response.status);
-
-    const contentType = response.headers.get('content-type') || '';
-
-    let data;
-    if (contentType.includes('application/json')) {
-      data = await response.json();
-    } else {
-      data = await response.text();
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      data: data
-    };
+    const answer = await send(checked);
+    console.debug('Background: Fetch response status:', answer.status);
+    return answer;
   } catch (error) {
     console.error('Background: Fetch error:', error.message);
     return {
