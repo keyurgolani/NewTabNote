@@ -278,7 +278,7 @@ describe('the model layer is pure, DOM-free, and static (#14, "Projections", cod
     }
   });
 
-  it("loads statically, and each surface loads what it reads: the new tab all of it, the others only previews", () => {
+  it("loads statically, and each surface loads what it reads: the new tab all of it, the others only previews and wiki-link names", () => {
     /** @param {string} file @param {Set<string>} seen */
     const walk = (file, seen) => {
       if (seen.has(file)) return seen;
@@ -310,10 +310,11 @@ describe('the model layer is pure, DOM-free, and static (#14, "Projections", cod
     assert.deepEqual(scriptsOf('sidepanel.html').sort(), ['insights-summary.js', 'sidepanel.js']);
     // The new tab's bridge reads every projection and the codec
     assert.deepEqual(blocksIn(scriptsOf('newtab.html').filter(name => !name.startsWith('lib/'))), sources.map(([name]) => name).sort());
-    // The Popup, the Side Panel and the service worker read only previews, through the note
-    // domain, so the tokenizer and its table of character references stay off them
+    // The Popup, the Side Panel and the service worker read only previews and wiki-link names,
+    // through the note domain, so the tokenizer and its table of character references stay off
+    // them
     for (const entries of [scriptsOf('popup.html'), scriptsOf('sidepanel.html'), ['background.js']]) {
-      assert.deepEqual(blocksIn(entries), ['previews.js', 'strip-tags.js'], entries.join(', '));
+      assert.deepEqual(blocksIn(entries), ['previews.js', 'strip-tags.js', 'wiki-links.js'], entries.join(', '));
     }
   });
 
