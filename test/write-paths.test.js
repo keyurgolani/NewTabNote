@@ -53,10 +53,10 @@ describe('the write-path doc', () => {
 
   it("Storage's own deletes run on no live path, so every delete leaves its tombstone (#17 PR 2b)", () => {
     // DatabaseManager's deletes leave no tombstone, so a note they deleted would stay in the
-    // recovery points: each call is App's copy of a controller path, for slice 7 to delete
+    // recovery points. #12 slice 7 deleted App's copies of the controller paths that called
+    // them, so none is listed now, and one that comes back has to be one of these
     const { rows } = collect(ROOT);
     const deletes = rows.filter(row => /\.(permanentlyDeleteNote|emptyTrash|cleanupTrash|deleteFolder|bulkNoteAction)\(/.test(row.call));
-    assert.ok(deletes.length >= 3, `${deletes.length} delete calls`);
     for (const row of deletes) {
       assert.ok(['deleted in slice 7', 'no live caller'].includes(row.status), `${row.method}: ${row.call} is ${row.status}`);
     }
