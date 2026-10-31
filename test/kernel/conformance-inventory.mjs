@@ -286,6 +286,11 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
+  // #17 PR 4a: moved from js/storage.js, which the new tab no longer needs for it
+  'js/kernel/adapters/indexeddb/raw-export.js': {
+    implements: "the new tab's Recovery (composition/newtab.js): the storage guard's raw export of CanvasTabDB",
+    tests: 'test/kernel/storage-raw-export.test.mjs',
+  },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
   // the one implementation of its port, which no shipped root makes until slice 4
   'js/kernel/adapters/indexeddb/salvage-reader.js': {

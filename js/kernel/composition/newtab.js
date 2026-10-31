@@ -11,6 +11,7 @@ import { createAIPort } from '../../services/ai-port.mjs';
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
+import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { createNoteList } from '../core/application/note-list.js';
 import { UnavailableError } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
@@ -133,8 +134,7 @@ export function createPreUpdateCopy({
  * What the new tab's root runs on (#17 PR 4a): Popup's host, which is the page's IndexedDB,
  * chrome.storage.local, and its wait on the worker's run (Q12), with the page's Web Locks for
  * #33's copy, where it hears of settings changes, and js/storage.js's DatabaseManager, which the
- * narrow LegacyStores and the storage guard's raw export still call until #17 PR 4b makes it a
- * facade over the tab's kernel
+ * narrow LegacyStores still call until #17 PR 4b makes it a facade over the tab's kernel
  * @typedef {PageHost & {locks: CopyLocks | null, changes: SettingsChanges, storage: LegacyStorage}} NewTabHost
  */
 
@@ -366,12 +366,15 @@ export function createNewTabStorageState(adapter) {
 }
 
 /**
- * The storage guard's raw export, on `host`'s storage
- * @param {Pick<NewTabHost, 'storage'>} host
+ * The storage guard's raw export over the page's IndexedDB (adapters/indexeddb/raw-export.js),
+ * Storage's own until #17 PR 4a: every store but settings, read as it is, changing nothing
+ * @param {Pick<NewTabHost, 'indexedDB'>} host
  * @returns {Recovery}
  */
 export function createNewTabRecovery(host) {
-  return Object.freeze({ exportRawStores: () => host.storage.exportRawStores() });
+  return Object.freeze({
+    exportRawStores: () => exportRawStores({ indexedDB: host.indexedDB, clock: systemClock }),
+  });
 }
 
 /**
