@@ -193,17 +193,20 @@ describe('loadChunk (js/runtime/lazy.js)', () => {
   });
 
   /**
-   * A chunk's load as Vite's preload runs it: it puts in each of the chunk's stylesheets the page
-   * has no link to, waits for it, and imports the chunk's code only once every one loaded. A link
-   * the page has already, one that failed included, it passes over. `plays` says how each
+   * A chunk's load as Vite 8's preload runs it (preloadOnce in its helper): it puts in each of the
+   * chunk's stylesheets it hasn't put in before, waits for it, and imports the chunk's code only
+   * once every one loaded. It remembers every URL it put in, one that failed included, and passes
+   * over it on any later load, so a stylesheet never goes in twice. `plays` says how each
    * stylesheet it puts in goes: 'error', or anything else for a load.
    */
   function preloading(document, href, plays) {
     const runs = [];
+    const seen = new Set();
     const load = async () => {
-      if (document.querySelectorAll().some((sheet) => sheet.href === href)) {
+      if (seen.has(href)) {
         runs.push('passed over');
       } else {
+        seen.add(href);
         document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'stylesheet', href }));
         const play = plays.shift();
         runs.push(play);
@@ -217,33 +220,22 @@ describe('loadChunk (js/runtime/lazy.js)', () => {
   const sheet = 'chrome-extension://ntn/assets/workspace-A1.css';
   const links = (document) => document.head.children.filter((child) => child.href === sheet);
 
-  it("counts a chunk whose stylesheet didn't load as not loaded: its one retry loads it again with the stylesheet, never its code alone", async () => {
-    const { createLoader } = await lazy();
-    const document = fakeDocument();
-    const { host, calls } = fakeHost({ document });
-    const { load, runs } = preloading(document, sheet, ['error', 'error', 'load']);
-    const result = await createLoader(host).loadChunk('workspace', load);
-    assert.equal(result.reason, 'chunk-missing');
-    assert.deepEqual(runs, ['error', 'error'], 'the retry put the stylesheet in again and waited for it');
-    assert.deepEqual(calls.imported, [], "no import of the chunk's code without its stylesheet");
-    assert.deepEqual(links(document), [], 'the failed link is gone, so the next load waits for the stylesheet too');
-    assert.deepEqual(calls.warned.map(([, detail]) => detail), [{ buildId: 'build-a', chunk: 'workspace', reason: 'chunk-missing' }]);
-
-    const retried = await result.retry();
-    assert.deepEqual(retried, { status: 'loaded', module: { workspace: true } });
-    assert.deepEqual(runs, ['error', 'error', 'load']);
-    assert.equal(links(document).length, 1);
-  });
-
-  it('answers loaded once the stylesheet loads on the retry, with the module that load imported', async () => {
+  // No lazy chunk has a stylesheet today. The first one that does has to bring the loader's own
+  // retry of its stylesheet, and this case changes with it.
+  it("answers loaded without a stylesheet that didn't load: the retry imports the chunk's code alone, and no later load puts the stylesheet in", async () => {
     const { createLoader } = await lazy();
     const document = fakeDocument();
     const { host, calls } = fakeHost({ document });
     const { load, runs } = preloading(document, sheet, ['error', 'load']);
-    assert.deepEqual(await createLoader(host).loadChunk('workspace', load), { status: 'loaded', module: { workspace: true } });
-    assert.deepEqual(runs, ['error', 'load']);
-    assert.deepEqual(calls.imported, []);
-    assert.deepEqual(calls.fetched, ['chrome-extension://ntn/build-info.json']);
+    const loader = createLoader(host);
+    assert.deepEqual(await loader.loadChunk('workspace', load), { status: 'loaded', module: { retried: true } });
+    assert.deepEqual(calls.imported, ['chrome-extension://ntn/assets/workspace-A1.js?r=1'], 'the code alone, at its own path');
+    assert.deepEqual(runs, ['error']);
+    assert.equal(links(document).length, 1, 'the failed link stays');
+    assert.deepEqual(calls.warned, []);
+
+    assert.deepEqual(await loader.loadChunk('workspace', load), { status: 'loaded', module: { workspace: true } });
+    assert.deepEqual(runs, ['error', 'passed over'], 'the preload remembers the URL, so the stylesheet never goes in again');
     assert.equal(links(document).length, 1);
   });
 
