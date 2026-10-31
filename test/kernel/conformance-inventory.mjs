@@ -158,6 +158,8 @@ export const HELPERS = Object.freeze({
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies, and those copies
+  'js/kernel/adapters/indexeddb/data-urls.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2b's tombstones: the adapter completes them, and the purge (unshared, so not named
   // here) reads and marks them
   'js/kernel/adapters/indexeddb/deletion.js': ['js/kernel/adapters/indexeddb/adapter.js'],
@@ -169,6 +171,7 @@ export const HELPERS = Object.freeze({
   // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
   // Storage's
   'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/indexeddb/changes.js',
