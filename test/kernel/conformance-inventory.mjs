@@ -158,7 +158,8 @@ export const HELPERS = Object.freeze({
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies, and those copies
+  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies, and those copies. The
+  // pre-update copy's export and #20's salvage file, both unshared, load it too
   'js/kernel/adapters/indexeddb/data-urls.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2b's tombstones: the adapter completes them, and the purge (unshared, so not named
   // here) reads and marks them
@@ -275,11 +276,6 @@ export const UNSHARED = Object.freeze({
   },
   'js/kernel/adapters/indexeddb/legacy-export.js': {
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
-    tests: 'test/kernel/storage-legacy-export.test.mjs',
-  },
-  // #17 PR 1b took #33's copy back to js/storage.js, and with it the module these lived in
-  'js/kernel/adapters/indexeddb/data-urls.js': {
-    implements: "Blobs as data URLs, in the pre-update copy's export and #20's salvage file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
