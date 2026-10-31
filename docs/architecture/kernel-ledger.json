@@ -50,7 +50,7 @@
     {
       "file": "js/controllers/ai-chat-controller.js",
       "rule": "this.storage",
-      "count": 26,
+      "count": 19,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -82,7 +82,7 @@
     {
       "file": "js/controllers/notes-manager.js",
       "rule": "this.storage",
-      "count": 21,
+      "count": 17,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -90,7 +90,7 @@
     {
       "file": "js/controllers/settings-controller.js",
       "rule": "this.storage",
-      "count": 32,
+      "count": 19,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -106,23 +106,15 @@
     {
       "file": "js/controllers/sidebar-controller.js",
       "rule": "this.storage",
-      "count": 9,
+      "count": 4,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
     },
     {
       "file": "js/controllers/tab-controller.js",
-      "rule": "chrome.storage.local",
-      "count": 4,
-      "owner": 17,
-      "removeWhen": "#12 slice 6: TabController saves the last-opened note with saveWorkspaceSession, through the settings repository",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/controllers/tab-controller.js",
       "rule": "this.storage",
-      "count": 11,
+      "count": 9,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -130,10 +122,18 @@
     {
       "file": "js/controllers/theme-builder-controller.js",
       "rule": "this.storage",
-      "count": 5,
+      "count": 3,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
+    },
+    {
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "rule": "declared-gap",
+      "count": 1,
+      "owner": 18,
+      "removeWhen": "#18's backup engine runs the import and auto-backup on #17's IndexedDB adapter, so createAutoBackup and importBackup commit there as they do on the legacy adapter, which runs 1.4.x's Storage code for them until then",
+      "verify": "npm run test:kernel: the backups check in test/kernel/contract.mjs"
     },
     {
       "file": "js/kernel/adapters/legacy/adapter.js",
@@ -202,7 +202,7 @@
     {
       "file": "js/onboarding.js",
       "rule": "Storage",
-      "count": 5,
+      "count": 1,
       "owner": 12,
       "removeWhen": "#12 slice 6: onboarding writes go through kernel commands",
       "verify": "npm run check:boundaries"
@@ -274,7 +274,7 @@
     {
       "file": "js/ui/export-notice.js",
       "rule": "this.storage",
-      "count": 6,
+      "count": 5,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"

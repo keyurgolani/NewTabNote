@@ -54,7 +54,9 @@ test('auto-title, insights, and AI chat title and insights land through the kern
   const noteId = await page.evaluate(() => app.editor.noteId);
   await page.evaluate(() => app.kernel.execute({ type: 'setPinned', commandId: 'pin-e2e', noteId: app.editor.noteId, pinned: true }));
 
-  // The auto-title job names the untitled note, and the editor and its tab show it
+  // The auto-title job names the untitled note, and the editor and its tab show it. It runs
+  // only switched on (#12 slice 6), as onboarding leaves it, and switching it on starts a run
+  await page.evaluate(() => chrome.storage.local.set({ setting_autoTitleEnabled: true }));
   await page.evaluate(() => app.notesManager.runAutoTitle());
   await expect.poll(async () => (await storedNote(page, noteId)).name).toBe('Groceries');
   await expect.poll(() => driver.noteTitle(page)).toBe('Groceries');
@@ -73,13 +75,16 @@ test('auto-title, insights, and AI chat title and insights land through the kern
   expect(stored.insights.todos).toEqual(['Buy milk']);
   expect(stored.pinned).toBe(true);
 
-  // The insights job runs over both notes
+  // The insights job runs over both notes, switched on, which starts a run
+  await page.evaluate(() => chrome.storage.local.set({ setting_insightsEnabled: true }));
   await page.evaluate(() => app.notesManager.runInsightsExtraction());
-  const review = await page.evaluate(async () => {
-    const state = await app.kernel.query({ type: 'listNotes', view: 'active' });
-    return state.data.find(note => note.name === 'Review');
-  });
-  expect(review.insights.tags).toEqual(['errands']);
+  await expect.poll(async () => {
+    const review = await page.evaluate(async () => {
+      const state = await app.kernel.query({ type: 'listNotes', view: 'active' });
+      return state.data.find(note => note.name === 'Review');
+    });
+    return review && review.insights ? review.insights.tags : null;
+  }).toEqual(['errands']);
 
   // AI chat's Extract insights and a title it generated, confirmed
   await page.evaluate(() => app.aiChatController.extractInsightsFromChat());

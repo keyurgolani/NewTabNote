@@ -70,7 +70,7 @@ async function start(env) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
   tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
   tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   // App passes the tab's note list, which has read every list once its kernel was ready
@@ -231,6 +231,64 @@ describe('startup: restoring the saved workspace', () => {
   });
 });
 
+describe("startup's session writes (#12 slice 6)", () => {
+  let env;
+
+  beforeEach(async () => {
+    env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+  });
+
+  /** chrome.storage.local's writes while `run` runs */
+  async function writesDuring(run) {
+    const before = env.chrome.writes().length;
+    await run();
+    return env.chrome.writes().slice(before).map((write) => write.keys.slice().sort());
+  }
+
+  it('a restore that opens what is stored, split view included, writes nothing', async () => {
+    saveWorkspace(env, {
+      tabs: [{ noteId: 'A', name: 'Alpha' }, { noteId: 'B', name: 'Beta' }],
+      active: 0,
+      split: true,
+      secondary: 'B',
+      lastOpened: 'A',
+    });
+    const { tabs } = await start(env);
+    assert.equal(await tabs.lastOpenedNoteId(), 'A');
+
+    assert.deepEqual(await writesDuring(() => tabs.loadSavedTabs()), []);
+    assert.deepEqual([tabs.editor.noteId, tabs.splitViewEnabled, tabs.secondaryEditor.noteId], ['A', true, 'B']);
+  });
+
+  it("a restore that drops a tab, its note deleted meanwhile, saves the layout it opened, in one write", async () => {
+    saveWorkspace(env, {
+      tabs: [{ noteId: 'GONE', name: 'Gone' }, { noteId: 'A', name: 'Alpha' }, { noteId: 'B', name: 'Beta' }],
+      active: 2,
+      lastOpened: 'B',
+    });
+    const { tabs } = await start(env);
+
+    assert.deepEqual(await writesDuring(() => tabs.loadSavedTabs()), [
+      ['lastOpenedNoteId', 'setting_activeTabIndex', 'setting_openTabs', 'setting_splitViewEnabled'],
+    ]);
+    assert.deepEqual(plain(env.chrome.local.setting_openTabs), [{ noteId: 'A', name: 'Alpha' }, { noteId: 'B', name: 'Beta' }]);
+    assert.equal(env.chrome.local.setting_activeTabIndex, 1);
+    assert.equal(env.chrome.local.lastOpenedNoteId, 'B');
+  });
+
+  it('switching tabs saves the tabs and the last-opened note in one write', async () => {
+    saveWorkspace(env, { tabs: [{ noteId: 'A', name: 'Alpha' }, { noteId: 'B', name: 'Beta' }], active: 0, lastOpened: 'A' });
+    const { tabs } = await start(env);
+    await tabs.loadSavedTabs();
+
+    assert.deepEqual(await writesDuring(() => tabs.switchToTab(1)), [
+      ['lastOpenedNoteId', 'setting_activeTabIndex', 'setting_openTabs', 'setting_splitViewEnabled'],
+    ]);
+    assert.equal(env.chrome.local.lastOpenedNoteId, 'B');
+  });
+});
+
 describe('startup with one active note', () => {
   it('a saved split view whose right note is in trash stays closed, with no empty right pane', async () => {
     const env = createLegacyEnv();
@@ -308,31 +366,33 @@ describe('split view', () => {
 });
 
 describe('the cached last-opened note', () => {
-  it('reads as null when chrome.storage fails or returns nothing', async () => {
+  it('reads as null when chrome.storage fails or nothing is cached, so the start opens the first note', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
-    await start(env);
-    const TabController = env.get('TabController');
-    const local = env.chrome.api.storage.local;
-    const runtime = env.chrome.api.runtime;
-    const realGet = local.get;
+    const { tabs } = await start(env);
+    // Each start reads the session once (getWorkspaceSession), so each case is a new start
+    const fresh = () => { tabs._startupSession = null; return tabs.lastOpenedNoteId(); };
 
     env.chrome.local.lastOpenedNoteId = 'A';
-    assert.equal(await TabController.getCachedLastOpenedNoteId(), 'A');
+    assert.equal(await fresh(), 'A');
 
-    local.get = (keys, callback) => {
-      setImmediate(() => {
-        runtime.lastError = { message: 'IO error' };
-        try { callback(undefined); } finally { runtime.lastError = undefined; }
-      });
-    };
-    assert.equal(await TabController.getCachedLastOpenedNoteId(), null, 'a failed read');
+    // The kernel's query answers `failed`, which a start reads as nothing cached (slice 6's call)
+    env.chrome.failNextGet();
+    assert.equal(await fresh(), null, 'a failed read');
 
-    local.get = (keys, callback) => { setImmediate(() => callback(undefined)); };
-    assert.equal(await TabController.getCachedLastOpenedNoteId(), null, 'no result');
-
-    local.get = realGet;
     delete env.chrome.local.lastOpenedNoteId;
-    assert.equal(await TabController.getCachedLastOpenedNoteId(), null, 'nothing cached');
+    assert.equal(await fresh(), null, 'nothing cached');
+  });
+
+  it('after a failed read, a start restores nothing and writes nothing over the saved tabs', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    saveWorkspace(env, { tabs: ['A', 'B'], active: 1, lastOpened: 'B' });
+    const { tabs } = await start(env);
+    const before = JSON.parse(JSON.stringify(env.chrome.local));
+    env.chrome.failNextGet();
+    await tabs.loadSavedTabs();
+    assert.ok(tabs.editor.noteId, 'a note opened');
+    assert.deepEqual(JSON.parse(JSON.stringify(env.chrome.local)), before, 'the saved tabs are as they were');
   });
 });

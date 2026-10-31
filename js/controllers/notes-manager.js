@@ -755,7 +755,8 @@ class NotesManager {
   // ─── Auto-Title ───
 
   /**
-   * Setup auto-title feature
+   * Setup auto-title feature: as the page starts, and when another tab changes its switch or
+   * interval. Switched off, or with no provider, its timer stops.
    */
   async setupAutoTitle() {
     const { autoTitleEnabled: enabled = false, autoTitleInterval: interval = 15 } =
@@ -764,7 +765,21 @@ class NotesManager {
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedAutoTitles(interval);
       this.startAutoTitleInterval(interval);
+    } else {
+      this.stopAutoTitleInterval();
     }
+  }
+
+  /**
+   * Whether `job` is switched on now, read again from what's stored, so a switch turned off
+   * here or in another tab stops the next provider call of a run already going. A read that
+   * fails reads as off, so no note text goes to the provider on a guess.
+   * @param {'autoTitleEnabled'|'insightsEnabled'} key
+   * @returns {Promise<boolean>}
+   */
+  async jobEnabled(key) {
+    const stored = await this.jobPreferences([key]);
+    return stored[key] === true;
   }
 
   /**
@@ -847,6 +862,9 @@ class NotesManager {
         const contentHash = this.generateContentHash(content);
         if (note.lastTitleContentHash && note.lastTitleContentHash === contentHash) continue;
 
+        // Switched off meanwhile, here or in another tab: no more note text goes to the provider
+        if (!(await this.jobEnabled('autoTitleEnabled'))) break;
+
         try {
           this.logger.debug('NotesManager', `Generating title for note: ${noteId}`);
 
@@ -903,24 +921,11 @@ class NotesManager {
     }
   }
 
-  /**
-   * Update auto-title settings and restart interval if needed
-   */
-  async updateAutoTitleSettings(enabled, interval) {
-    await this.storage.setSetting('autoTitleEnabled', enabled);
-    await this.storage.setSetting('autoTitleInterval', interval);
-
-    if (enabled && this.llm.isConfigured()) {
-      this.startAutoTitleInterval(interval);
-    } else {
-      this.stopAutoTitleInterval();
-    }
-  }
-
   // ─── Insights Extraction ───
 
   /**
-   * Setup insights extraction feature
+   * Setup insights extraction feature: as the page starts, and when another tab changes its
+   * switch or interval. Switched off, or with no provider, its timer stops.
    */
   async setupInsightsExtraction() {
     const { insightsEnabled: enabled = false, insightsInterval: interval = 360 } =
@@ -929,6 +934,8 @@ class NotesManager {
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedInsightsExtraction(interval);
       this.startInsightsInterval(interval);
+    } else {
+      this.stopInsightsInterval();
     }
   }
 
@@ -1007,6 +1014,9 @@ class NotesManager {
         const contentHash = this.generateContentHash(content);
         if (note.lastInsightsContentHash && note.lastInsightsContentHash === contentHash) continue;
 
+        // Switched off meanwhile, here or in another tab: no more note text goes to the provider
+        if (!(await this.jobEnabled('insightsEnabled'))) break;
+
         try {
           this.logger.debug('NotesManager', `Extracting insights for note: ${noteId}`);
 
@@ -1064,20 +1074,6 @@ class NotesManager {
       console.error('Insights extraction run failed:', error);
     } finally {
       this.insightsRunning = false;
-    }
-  }
-
-  /**
-   * Update insights settings and restart interval if needed
-   */
-  async updateInsightsSettings(enabled, interval) {
-    await this.storage.setSetting('insightsEnabled', enabled);
-    await this.storage.setSetting('insightsInterval', interval);
-
-    if (enabled && this.llm.isConfigured()) {
-      this.startInsightsInterval(interval);
-    } else {
-      this.stopInsightsInterval();
     }
   }
 

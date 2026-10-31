@@ -72,7 +72,7 @@ function unitAtATime(inner, between) {
   return {
     ...inner,
     name: 'unit-at-a-time',
-    flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false }),
+    flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false, backups: false }),
     recall: () => undefined,
     async commit(work) {
       if (work.effect.kind !== 'units') return inner.commit(work);

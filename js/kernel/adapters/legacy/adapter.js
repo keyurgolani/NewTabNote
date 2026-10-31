@@ -10,6 +10,8 @@
  *   saving one note's blocks race until #35's coordinator serializes them.
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
+ * - backups: true. The legacy import and auto-backup run here, through Storage's own code,
+ *   which #18's backup engine replaces; the other adapters don't run them yet.
  *
  * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
  * older database to version 8 as Storage.init always has, and watches the connection. Their kernels set
@@ -23,7 +25,7 @@
  * resend fixes: the page reloads to open it again.
  */
 
-import { UnavailableError, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { UnavailableError, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
@@ -52,6 +54,9 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {string} openState - `version-changed` or `closed-by-browser` once a connection openExisting opened is gone
  * @property {(flush: () => void) => () => void} beforeConnectionCloses - runs `flush` when another
  *   context upgrades the database, before a watched connection closes
+ * @property {(data: unknown, mode: 'merge' | 'replace') => Promise<import('../../core/ports/repository.js').ImportReceipt>} importData
+ *   1.4.x's import, recovery copy before Replace all included, in one transaction
+ * @property {() => Promise<void>} createAutoBackup - 1.4.x's automatic backup, keeping the newest three
  */
 
 /**
@@ -327,6 +332,53 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
   };
 
   /**
+   * A legacy backup task, run by 1.4.x's own Storage code (#18 owns the engine that replaces
+   * it). The import commits in one transaction, after Replace all's recovery copy, so its
+   * outcome is committed only once all of it is, and names what it added and trashed. A
+   * refused backup, a recovery copy that couldn't be saved, or an aborted commit leaves
+   * IndexedDB as it was, and answers with a code, never the error's text.
+   * @param {Work} work
+   * @param {import('../../core/ports/repository.js').BackupTask} task
+   * @returns {Promise<Outcome>}
+   */
+  const runBackup = async (work, task) => {
+    if (mode !== 'versioned') return unavailable('adapter', 'backup-needs-versioned-open', false);
+    try {
+      if (mustReconnect()) await reconnect();
+      if (task.action === 'auto') {
+        await storage.createAutoBackup();
+        return work.done();
+      }
+      const receipt = await storage.importData(task.backup, task.mode);
+      return work.done({
+        importedIds: [...receipt.importedIds],
+        addedFolderIds: [...receipt.addedFolderIds],
+        trashedIds: [...receipt.trashedIds],
+      });
+    } catch (error) {
+      return backupFailure(error);
+    }
+  };
+
+  /**
+   * What a failed backup task answers: a backup 1.4.x's import refused is `validation`, one it
+   * couldn't save a recovery copy for is `storage`, and anything else is how storage failed
+   * @param {unknown} error
+   * @returns {Outcome}
+   */
+  const backupFailure = error => {
+    const { code, message } = /** @type {{code?: unknown, message?: unknown}} */ (error || {});
+    if (code === 'IMPORT_INVALID') {
+      const text = String(message);
+      if (text.includes('folders store')) return rejected('validation', 'folders-store-missing');
+      if (text.includes('media store')) return rejected('validation', 'media-store-missing');
+      return rejected('validation', 'import-invalid');
+    }
+    if (code === 'RECOVERY_COPY_FAILED') return unavailable('storage', 'recovery-copy-failed', true);
+    return unavailableFrom(databaseError(error));
+  };
+
+  /**
    * Nothing is kept per commandId, so no outcome is ever a replay.
    * @param {Promise<Outcome>} outcome
    * @returns {Promise<CommitResult>}
@@ -336,7 +388,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
   return Object.freeze({
     name: 'legacy',
     mode,
-    flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false }),
+    flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false, backups: true }),
 
     async open() {
       try {
@@ -370,6 +422,7 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
           ),
         );
       }
+      if (effect.kind === 'backup') return fresh(runBackup(work, effect));
       // Popup and Side Panel never repair or maintain the database
       if (mode !== 'versioned') {
         return fresh(Promise.resolve(unavailable('adapter', 'maintenance-needs-versioned-open', false)));

@@ -64,12 +64,15 @@ class ExportNotice {
   /**
    * @param {Object} deps
    * @param {DatabaseManager} deps.storage
+   * @param {{recordExportNotice: (version: number, outcome: string) => Promise<unknown>}} deps.settings - The
+   *   page's settings port (js/kernel/composition/settings.js), which records the outcome
    * @param {() => Promise<boolean>} deps.onExport - Export JSON; resolves true once the browser has the file
    * @param {((returnFocus: ReturnFocus|null) => void)|null} [deps.onClose] - Runs when the notice
    *   closes while it holds focus, with where focus was before it moved into the notice
    */
-  constructor({ storage, onExport, onClose = null }) {
+  constructor({ storage, settings, onExport, onClose = null }) {
     this.storage = storage;
+    this.settings = settings;
     this.onExport = onExport;
     this.onClose = onClose;
     /** @type {HTMLElement|null} #export-notice, while the notice shows */
@@ -148,7 +151,8 @@ class ExportNotice {
     const write = async () => {
       const current = await this.storage.readSetting(EXPORT_NOTICE_SETTING);
       if (ExportNotice.isRecorded(current) && !(outcome === 'exported' && current.outcome === 'dismissed')) return;
-      await this.storage.setSetting(EXPORT_NOTICE_SETTING, { version: EXPORT_NOTICE_VERSION, outcome, at: Date.now() });
+      // { version, outcome, at }, stamped by the kernel's clock
+      await this.settings.recordExportNotice(EXPORT_NOTICE_VERSION, outcome);
     };
     const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
     if (!locks || typeof locks.request !== 'function') {

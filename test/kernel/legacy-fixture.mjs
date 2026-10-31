@@ -8,7 +8,7 @@ import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { CALLERS, testClock, testIds } from './support.mjs';
+import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/adapters/legacy/adapter.js').LegacyAdapter} LegacyAdapter */
 /** @typedef {import('../../js/kernel/adapters/legacy/adapter.js').OpenMode} OpenMode */
@@ -163,7 +163,7 @@ async function startLegacy(missing) {
       };
     },
     failNextWrite: target => {
-      if (target === 'preferences' || target === 'session' || target === 'jobs') first.env.chrome.failNextSet();
+      if (isSettingsArea(target)) first.env.chrome.failNextSet();
       else first.failing.push(target);
     },
     close: async () => closeAll(contexts),
@@ -173,7 +173,7 @@ async function startLegacy(missing) {
 /** @type {ContractFixture} */
 export const legacyFixture = {
   name: 'legacy',
-  flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false }),
+  flags: Object.freeze({ atomicMultiStore: false, revisions: false, idempotency: false, backups: true }),
   start: () => startLegacy([]),
   startWithout: startLegacy,
 };

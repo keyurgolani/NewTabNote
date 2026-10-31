@@ -97,13 +97,14 @@ const GENERIC_WRITE_NAMES = new Set(['init']);
 
 /**
  * App's components: a write-named call on `this.<component>` is that component's own method.
- * `documentClient` is the editors' document client (js/kernel/composition/document.js), whose
- * writes are kernel commands, so nothing it calls is a Storage write.
+ * `documentClient` is the editors' document client (js/kernel/composition/document.js), and
+ * `settings` the page's settings port (js/kernel/composition/settings.js), whose writes are
+ * kernel commands, so nothing either calls is a Storage write.
  */
 const COMPONENTS = new Set([
   'sidebarController', 'tabController', 'aiChatController', 'settingsController', 'themeBuilderController',
   'analyticsController', 'notesManager', 'shortcutsManager', 'exportImportService', 'syncService', 'graphView', 'domRefs',
-  'documentClient',
+  'documentClient', 'settings',
 ]);
 
 /** The controllers App creates in init(); `if (this.<controller>)` hands a method off to one */
@@ -165,7 +166,7 @@ const COMMANDS = {
   setPreferences: { slice: 6 },
   saveWorkspaceSession: { slice: 6 },
   saveChatHistory: { slice: 6 },
-  saveAIPromptTemplates: { slice: 6 },
+  savePromptTemplates: { slice: 6 },
   saveTheme: { slice: 6 },
   completeOnboarding: { slice: 6 },
   recordBackup: { slice: 6 },
@@ -243,7 +244,7 @@ const RULES = [
   { command: 'applyRemoteChanges', file: 'js/services/sync-service.js', op: ['importNote', 'importAll', 'saveElement'] },
   { command: 'saveWorkspaceSession', op: ['setSetting', 'set'], key: SESSION_KEYS },
   { command: 'saveChatHistory', op: 'setSetting', key: CHAT_KEYS },
-  { command: 'saveAIPromptTemplates', op: 'setSetting', key: 'aiPromptTemplates' },
+  { command: 'savePromptTemplates', op: 'setSetting', key: 'aiPromptTemplates' },
   { command: 'saveTheme', op: 'saveCustomTheme' },
   { command: 'completeOnboarding', op: 'setSetting', key: 'hasCompletedOnboarding' },
   { command: 'recordBackup', op: 'setSetting', key: ['lastBackupAt', 'lastFullExportAt'] },

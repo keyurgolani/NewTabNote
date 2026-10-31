@@ -375,6 +375,11 @@ describe('the contract schema lint (#13, AC5)', () => {
       saveSnapshot: ['blocks.[]', 'title'],
       restoreSnapshot: ['blocks.[]', 'name'],
       insertBlocks: ['blocks.[]'],
+      // AI chat's conversations and prompt templates, a theme's name, and a backup file
+      saveChatHistory: ['history', 'messages'],
+      savePromptTemplates: ['templates'],
+      saveTheme: ['name'],
+      importBackup: ['backup'],
       // A whole block is content, since any of its fields can hold what the user wrote
       blockInput: ['(root)'],
       blockRecord: ['(root)'],

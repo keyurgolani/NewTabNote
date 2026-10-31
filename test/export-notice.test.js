@@ -11,6 +11,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, settle, waitFor, plain, note, block, FakeDocument,
+  startEditorClient,
 } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/ui/export-notice.js'];
@@ -38,9 +39,17 @@ async function setup({ omit = [], canvases, elements, files = FILES, ...shared }
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
+  // The page's settings port, which records the outcome, as App gives the notice
+  await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
-  return { env, Storage, toasts, ExportNotice: env.get('ExportNotice') };
+  const PageNotice = env.get('ExportNotice');
+  const ExportNotice = class extends PageNotice {
+    constructor(deps) {
+      super({ settings: env.settingsClient, ...deps });
+    }
+  };
+  return { env, Storage, toasts, ExportNotice };
 }
 
 /** #export-notice as newtab.html has it, between the note's title and its blocks. */
@@ -65,6 +74,7 @@ function showNotice(env, Storage, { exports = [true], onClose = null } = {}) {
   const calls = { exports: 0, closes: [] };
   const notice = new (env.get('ExportNotice'))({
     storage: Storage,
+    settings: env.settingsClient,
     onExport: async () => exports[calls.exports++],
     onClose: (returnFocus) => {
       calls.closes.push(returnFocus);
@@ -358,6 +368,7 @@ describe('the notice', () => {
     let exports = 0;
     const notice = new (env.get('ExportNotice'))({
       storage: Storage,
+      settings: env.settingsClient,
       onExport: () => { exports += 1; return new Promise((resolve) => { finish = resolve; }); },
     });
     const card = noticeMarkup(env);
@@ -452,7 +463,12 @@ describe('the receipt Settings writes after a full export', () => {
     const context = await setup({ files: SETTINGS_FILES });
     const downloads = [];
     context.env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
-    const settings = new (context.env.get('SettingsController'))({ storage: context.Storage, domRefs: null, logger: null });
+    const settings = new (context.env.get('SettingsController'))({
+      storage: context.Storage,
+      settings: context.env.settingsClient,
+      domRefs: null,
+      logger: null,
+    });
     return { ...context, settings, downloads };
   }
 

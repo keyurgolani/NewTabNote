@@ -41,13 +41,13 @@ class OnboardingManager {
   }
 
   /**
-   * Configure default settings for first-run users.
+   * Configure default settings for first-run users, in one write through the page's settings
+   * port (js/kernel/composition/settings.js).
+   * @param {{setPreferences: (values: Object) => Promise<unknown>}} settings
    * @returns {Promise<void>}
    */
-  static async setupFirstRun() {
-    await Storage.setSetting('embeddingsEnabled', true);
-    await Storage.setSetting('autoTitleEnabled', true);
-    await Storage.setSetting('insightsEnabled', true);
+  static async setupFirstRun(settings) {
+    await settings.setPreferences({ embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true });
   }
 
   /**
@@ -59,11 +59,12 @@ class OnboardingManager {
   }
 
   /**
-   * Mark onboarding as complete and persist the flag.
+   * Mark onboarding as complete and persist the flag, through the page's settings port.
+   * @param {{completeOnboarding: () => Promise<unknown>}} settings
    * @returns {Promise<void>}
    */
-  static async markComplete() {
-    await Storage.setSetting('hasCompletedOnboarding', true);
+  static async markComplete(settings) {
+    await settings.completeOnboarding();
   }
 
   /**

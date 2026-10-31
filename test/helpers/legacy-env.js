@@ -1026,7 +1026,7 @@ function testDocumentClient(client) {
 async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
-  const { kernel, documentClient, noteList, removalFor } = pageClientsFor({
+  const { kernel, documentClient, noteList, removalFor, settingsClient } = pageClientsFor({
     storage: env.get('Storage'),
     settings: env.chrome.api.storage.local,
     onListQuery,
@@ -1039,6 +1039,8 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) 
   env.noteList = noteList;
   // The page's removeNotes, over the pane moves a test's page gives it (bootNewTab)
   env.removalFor = removalFor;
+  // The page's settings port (js/kernel/composition/settings.js), which controllers take as `settings`
+  env.settingsClient = settingsClient;
   return env.documentClient;
 }
 
@@ -1059,6 +1061,7 @@ async function startNewTabKernel(env) {
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
   env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, host));
   env.noteList = root.createNewTabNoteList(kernel);
+  env.settingsClient = root.createNewTabSettingsClient(kernel);
   return env.documentClient;
 }
 
@@ -1181,7 +1184,7 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
   // As App's port, the tab of a note saved as a new one follows it
   const navigation = () => ({
     ...quietNavigation(),

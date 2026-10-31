@@ -8,8 +8,10 @@
  * @param {Logger} deps.logger
  */
 class ThemeBuilderController {
-  constructor({ storage, domRefs, logger }) {
+  constructor({ storage, settings, domRefs, logger }) {
     this.storage = storage;
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are saved through */
+    this.settings = settings;
     this.domRefs = domRefs;
     this.logger = logger;
 
@@ -65,8 +67,9 @@ class ThemeBuilderController {
           name: name,
           properties: this.tempThemeProperties
         };
-        const savedTheme = await this.storage.saveCustomTheme(theme);
-        await this.storage.setSetting('theme', savedTheme.id);
+        // The theme, then the preference that applies it: a theme that didn't save is never applied
+        const themeId = await this.settings.saveTheme(theme);
+        await this.settings.setPreferences({ theme: themeId });
         if (this.onApplyTheme) this.onApplyTheme();
         modal.classList.add('hidden');
         if (this._focusTrapCleanup) { this._focusTrapCleanup(); this._focusTrapCleanup = null; }

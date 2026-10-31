@@ -12,8 +12,10 @@
  *   (js/kernel/composition/document.js): each names its note, and none takes a note record
  */
 class AIChatController {
-  constructor({ storage, domRefs, logger, llm, documentClient = null }) {
+  constructor({ storage, settings = null, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js): the panel's width, the chats, and the prompt templates */
+    this.settings = settings;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;
@@ -275,7 +277,7 @@ class AIChatController {
       direction: 'left',
       onResizeEnd: async (width) => {
         this.aiSidebarWidth = width;
-        await this.storage.setSetting('aiSidebarWidth', this.aiSidebarWidth);
+        await this.settings.setPreferences({ aiSidebarWidth: this.aiSidebarWidth });
       },
     });
   }
@@ -370,13 +372,12 @@ class AIChatController {
   }
 
   async saveNoteChatHistory() {
-    await this.storage.setSetting('aiChatHistory', this.aiChatHistory);
-    await this.storage.setSetting('noteChatMessages', this.noteChatMessages);
+    // The history and the messages in one write
+    await this.settings.saveChatHistory('note', this.aiChatHistory, this.noteChatMessages);
   }
 
   async saveGlobalChatHistory() {
-    await this.storage.setSetting('globalChatHistory', this.globalChatHistory);
-    await this.storage.setSetting('globalChatMessages', this.globalChatMessages);
+    await this.settings.saveChatHistory('global', this.globalChatHistory, this.globalChatMessages);
   }
 
   // ─── Clear chat ───
@@ -2470,7 +2471,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     if (savedTemplates === null || !Array.isArray(savedTemplates)) {
       try {
-        await this.storage.setSetting('aiPromptTemplates', this.aiPromptTemplates);
+        await this.settings.savePromptTemplates(this.aiPromptTemplates);
       } catch (error) {
         console.warn('Failed to seed AI prompt templates:', error);
       }
@@ -2484,7 +2485,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const sanitized = this.sanitizeAIPromptTemplates(templates);
 
     try {
-      await this.storage.setSetting('aiPromptTemplates', sanitized);
+      await this.settings.savePromptTemplates(sanitized);
       this.aiPromptTemplates = sanitized;
       this.renderAIPromptSuggestions();
       this.renderAIPromptTemplateSettings();

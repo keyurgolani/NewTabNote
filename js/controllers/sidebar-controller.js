@@ -13,8 +13,10 @@
  *   one from the commit feed, with no refresh.
  */
 class SidebarController {
-  constructor({ storage, domRefs, logger, documentClient = null }) {
+  constructor({ storage, settings, domRefs, logger, documentClient = null }) {
     this.storage = storage;
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are saved through */
+    this.settings = settings;
     this.domRefs = domRefs;
     this.logger = logger;
     this.documentClient = documentClient;
@@ -281,7 +283,7 @@ class SidebarController {
     if (sortSelect) {
       sortSelect.addEventListener('change', async (e) => {
         this.sidebarSortMode = e.target.value;
-        await this.storage.setSetting('sidebarSortMode', this.sidebarSortMode);
+        await this.settings.setPreferences({ sidebarSortMode: this.sidebarSortMode });
         await this.renderNotesList();
       });
     }
@@ -564,7 +566,7 @@ class SidebarController {
   async toggleSidebar(force) {
     this.sidebarOpen = force !== undefined ? force : !this.sidebarOpen;
     this.updateSidebarState();
-    await this.storage.setSetting('sidebarOpen', this.sidebarOpen);
+    await this.settings.setPreferences({ sidebarOpen: this.sidebarOpen });
   }
 
   applySidebarWidth() {
@@ -621,7 +623,7 @@ class SidebarController {
       direction: 'right',
       onResizeEnd: async (width) => {
         this.sidebarWidth = width;
-        await this.storage.setSetting('sidebarWidth', this.sidebarWidth);
+        await this.settings.setPreferences({ sidebarWidth: this.sidebarWidth });
       },
     });
   }
@@ -636,12 +638,12 @@ class SidebarController {
     listBtn.addEventListener('click', async () => {
       this.sidebarViewMode = 'list';
       this.applySidebarViewMode();
-      await this.storage.setSetting('sidebarViewMode', 'list');
+      await this.settings.setPreferences({ sidebarViewMode: 'list' });
     });
     cardsBtn.addEventListener('click', async () => {
       this.sidebarViewMode = 'cards';
       this.applySidebarViewMode();
-      await this.storage.setSetting('sidebarViewMode', 'cards');
+      await this.settings.setPreferences({ sidebarViewMode: 'cards' });
     });
   }
 

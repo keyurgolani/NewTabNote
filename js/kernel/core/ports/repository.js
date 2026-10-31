@@ -32,6 +32,7 @@ export const STORES = Object.freeze({
   vectors: Object.freeze({ keyPath: 'id' }),
   snapshots: Object.freeze({ keyPath: 'id' }),
   links: Object.freeze({ keyPath: 'id' }),
+  themes: Object.freeze({ keyPath: 'id' }),
 });
 
 /** @typedef {keyof typeof STORES} StoreName */
@@ -46,6 +47,7 @@ export const STORES = Object.freeze({
  * @property {{id: string} & Record<string, unknown>} vectors
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
  * @property {import('../domain/note.js').LinkRecord} links
+ * @property {import('../domain/theme.js').ThemeRecord} themes
  */
 
 /**
@@ -91,10 +93,13 @@ export const STORES = Object.freeze({
  */
 
 /**
- * Where a settings effect writes: the preferences, the workspace session, or `jobs`, the
- * bookkeeping the auto-title and insights jobs keep (when each last ran, and which note's
- * insights are being extracted), under the keys 1.4.x's Storage.setSetting wrote
- * @typedef {'preferences' | 'session' | 'jobs'} SettingsArea
+ * Where a settings effect writes, under the keys 1.4.x's Storage.setSetting wrote: the
+ * preferences, the workspace session, `jobs` (the bookkeeping the auto-title and insights jobs
+ * keep: when each last ran, and which note's insights are being extracted), `chat` (AI chat's
+ * histories and prompt templates), `onboarding` (whether the first run finished), or `backup`
+ * (when the last backup and full export were made, and the pre-migration export notice's
+ * outcome)
+ * @typedef {'preferences' | 'session' | 'jobs' | 'chat' | 'onboarding' | 'backup'} SettingsArea
  */
 
 /**
@@ -109,11 +114,29 @@ export const STORES = Object.freeze({
 export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
- * What a command changes: units over the stores, keys in a settings area, or startup
- * maintenance.
+ * A backup task the legacy import and auto-backup run (#18 owns the real engine): `import`
+ * runs 1.4.x's Storage.importData on a parsed backup, its recovery copy before Replace all
+ * included, and `auto` its Storage.createAutoBackup. Only an adapter with the `backups` flag
+ * runs one.
+ * @typedef {{action: 'import', mode: 'merge' | 'replace', backup: Record<string, unknown>} | {action: 'auto'}} BackupTask
+ */
+
+/**
+ * What a committed import did, for its outcome: the new ids of the notes it added, in backup
+ * order, the ids of the folders it added, and the ids of the notes Replace all moved to trash
+ * @typedef {object} ImportReceipt
+ * @property {string[]} importedIds
+ * @property {string[]} addedFolderIds
+ * @property {string[]} trashedIds
+ */
+
+/**
+ * What a command changes: units over the stores, keys in a settings area, startup
+ * maintenance, or a legacy backup task.
  * @typedef {{kind: 'units', units: Unit[]}
  *   | {kind: 'settings', area: SettingsArea, values: Record<string, unknown>}
- *   | {kind: 'maintenance'}} Effect
+ *   | {kind: 'maintenance'}
+ *   | ({kind: 'backup'} & BackupTask)} Effect
  */
 
 /**
@@ -147,7 +170,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   on by one, for a content command only. Placement and derived writes (pin, archive, trash,
  *   restore, a folder move, insights) leave it where it was, so they never turn a save into a
  *   conflict.
- * @property {() => Committed} done - the outcome once everything committed
+ * @property {(receipt?: ImportReceipt) => Committed} done
+ *   The outcome once everything committed. A backup import's adapter hands it the receipt.
  */
 
 /**
@@ -158,7 +182,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
  * What an adapter guarantees. The contract suite expects the documented difference for
- * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger.
+ * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger, as
+ * is `backups` on #17's adapter, which #18's backup engine closes.
  * @typedef {object} AdapterFlags
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
@@ -172,6 +197,11 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   first recall: the same commandId with another selection is key reuse, even when both are
  *   sent at once, and a resend runs again, so each item that committed or conflicted answers
  *   from its own record and each other item runs again.
+ * @property {boolean} backups
+ *   The adapter runs the legacy backup tasks (BackupTask): the import and auto-backup run
+ *   1.4.x's Storage code, recovery copy, keys, retention, and record shapes included. One
+ *   without answers `unavailable`, `adapter`, `backups-need-legacy-storage`, and writes
+ *   nothing, until #18's backup engine runs on every adapter.
  */
 
 /**
