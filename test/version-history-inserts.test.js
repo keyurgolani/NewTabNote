@@ -464,9 +464,13 @@ describe('a flush while a revert commits keeps the screen and the note the same 
     const reverting = editor._revertToSnapshot(summary);
     await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
     type(editor, 'Typed');
-    await runUntil(env, editor.save());
+    let saved = false;
+    const saving = editor.save().then(() => { saved = true; });
+    await settle();
+    assert.equal(saved, false, 'save() resolves once the revert is done');
     release();
     await runUntil(env, reverting);
+    await runUntil(env, saving);
     client.restoreSnapshot = real;
     await runUntil(env, editor.flushSave());
     assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
@@ -492,6 +496,80 @@ describe('a flush while a revert commits keeps the screen and the note the same 
     env.clock.tick(600);
     await runUntil(env, editor.flushSave());
     assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Typed while it failed'], ['a2', 'Eggs']]);
+  });
+});
+
+describe('an AI insert confirmed while a revert commits (the #70 delta check)', () => {
+  it('waits for the revert, then goes in after the restored blocks, and the screen shows it', async () => {
+    const records = {
+      canvases: [note('A', { name: 'Plan' })],
+      elements: [block('0-a', 'A', 0, 'One'), block('0-b', 'A', 1, 'Two')],
+    };
+    const { env, Storage, toasts } = await page({ records });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    // After the snapshot: a third block, saved
+    editor.blocks.push(env.get('Block').deserialize({ id: '0-c', type: 'text', content: 'Three' }));
+    editor.scheduleSave();
+    env.clock.tick(600);
+    await runUntil(env, editor.flushSave());
+
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return held.then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(summary);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    // The cursor is in the block the revert takes away
+    editor.activeBlock = '0-c';
+    let appended = false;
+    const appending = aiChat(env, Storage, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
+      .then(() => { appended = true; });
+    await settle();
+    assert.equal(appended, false, 'the append waits for the revert');
+    release();
+    await runUntil(env, reverting);
+    await runUntil(env, appending);
+    client.restoreSnapshot = real;
+    env.clock.tick(2000);
+    await runUntil(env, editor.flushSave());
+
+    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['One', 'Two', 'New1']);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['One', 'Two', 'New1']);
+    assert.deepEqual(toasts.at(-1), { message: 'Added 1 AI block to note', kind: 'success' });
+  });
+
+  it("flushSave while a revert commits waits for it, rather than going round and storing nothing", async () => {
+    const { env, Storage } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return held.then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(summary);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed');
+    let flushed = false;
+    const flushing = editor.flushSave().then(() => { flushed = true; });
+    await settle();
+    assert.equal(flushed, false, 'the flush waits for the revert');
+    release();
+    await runUntil(env, reverting);
+    await runUntil(env, flushing);
+    client.restoreSnapshot = real;
+    assert.equal(editor._hasPendingSave(), false, 'nothing is left pending');
+    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
   });
 });
 

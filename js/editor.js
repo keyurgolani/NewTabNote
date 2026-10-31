@@ -3875,6 +3875,10 @@ class BlockEditor {
     this._revertingNoteId = null;
     /** A flush during the revert kept what was on screen as a snapshot */
     this._revertEditsKept = false;
+    /** @type {Promise<void>} Resolves once the revert in progress is done */
+    this._revertDone = Promise.resolve();
+    /** @type {() => void} */
+    this._endRevert = () => {};
     /** @type {Set<{state: EditorSaveState, promise: Promise<void>}>} */
     this._inFlightSaves = new Set();
     /** Load counter; a load that is no longer the latest drops its result */
@@ -4046,6 +4050,10 @@ class BlockEditor {
     if (loaded && this._isReverting()) {
       this._loadedDue = true;
       this._heldSaveDue = true;
+      // Resolves once the revert is done and the save it lets through has finished, so a caller
+      // that needs the note stored (AI insert, flushSave) waits for that, not for nothing
+      const revert = this._revertDone;
+      work.push(revert.then(() => this.flushSave()));
     } else if (loaded) {
       work.push(this._startSave(loadedIsRetry));
     }
@@ -5736,6 +5744,9 @@ class BlockEditor {
     // Its transaction opens now, with nothing waiting to save
     const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
     this._revertingNoteId = noteId;
+    this._revertDone = new Promise((resolve) => {
+      this._endRevert = resolve;
+    });
     this._revertEditsKept = false;
     this._snapshotDirty = false;
     const holding = !this._savesHeld;
@@ -5757,6 +5768,7 @@ class BlockEditor {
         this._heldSaveDue = true;
       }
       if (holding) this.releaseSaves();
+      this._endRevert();
       this._versionHistoryGone(outcome);
       if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
         this._onReloadRequired();
@@ -5782,6 +5794,7 @@ class BlockEditor {
     }
     this._revertingNoteId = null;
     if (holding) this.releaseSaves();
+    this._endRevert();
 
     // Close version history panel
     const panel = this.doc.getElementById('version-history-panel');

@@ -555,6 +555,33 @@ describe('the note-list projection', () => {
     assert.deepEqual(reads, ['getNoteList', ...Array(4).fill('getNotesByIds n2')], 'three retries again, not fewer');
   });
 
+  it("a reload that reads what a failed read of search entries alone missed leaves the list ready, with its retries back", async () => {
+    let failing = false;
+    const { list, run, reads } = start({
+      around: async (query, read) =>
+        failing && query.type === 'getNotesByIds'
+          ? { kind: 'failed', cause: 'storage', code: 'read-failed' }
+          : read(query),
+    });
+    await run('createNote', { noteId: 'n1', name: 'One' });
+    await list.settled();
+    // The indexer wrote n1's entry, and every read of it fails
+    failing = true;
+    reads.length = 0;
+    await list.searchEntriesChanged(['n1']);
+    await list.settled();
+    assert.deepEqual(reads, Array(4).fill('getNotesByIds n1'), 'one read and three retries');
+    assert.deepEqual(list.state(), { kind: 'stale', asOf: NOW });
+    // A reload reads every entry, so nothing is left unread
+    failing = false;
+    assert.deepEqual(await list.reload(), { kind: 'ready', asOf: NOW });
+    failing = true;
+    reads.length = 0;
+    await run('renameNote', { noteId: 'n1', name: 'Uno' });
+    await list.settled();
+    assert.deepEqual(reads, Array(4).fill('getNotesByIds n1'), 'three retries again, not fewer');
+  });
+
   it('stays stale after a failed reload, even once a read of changes succeeds, until a reload succeeds', async () => {
     let failReload = false;
     const { list, run } = start({
