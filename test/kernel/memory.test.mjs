@@ -254,7 +254,8 @@ describe("the in-memory adapter, given #13's ledger and commit log", () => {
       kind: 'changes',
       entries: [
         { commitSeq: 1, entityType: 'note', entityId: 'n1', revision: 1 },
-        { commitSeq: 2, entityType: 'folder', entityId: 'f1', revision: 1 },
+        // Folders carry no versions, as on #17's adapter
+        { commitSeq: 2, entityType: 'folder', entityId: 'f1', revision: 0 },
       ],
       cursor: 2,
       more: false,
@@ -272,7 +273,7 @@ describe("the in-memory adapter, given #13's ledger and commit log", () => {
     assert.deepEqual(await commitLog.readChangesSince(2, 10), {
       kind: 'changes',
       entries: [
-        { commitSeq: 3, entityType: 'folder', entityId: 'f1', revision: 1 },
+        { commitSeq: 3, entityType: 'folder', entityId: 'f1', revision: 0 },
         { commitSeq: 3, entityType: 'note', entityId: 'n1', revision: 1 },
       ],
       cursor: 3,

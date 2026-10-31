@@ -995,6 +995,32 @@ describe('BlockEditor template inserts (#12)', () => {
     const stored = (await Storage.getElementsByNote('A')).sort((a, b) => a.order - b.order).map((b) => b.content);
     assert.deepEqual(plain(stored).slice(1, 3), ['second shown', 'first shown'], 'and saves them in that order');
   });
+
+  it('inserts them in the order they were made when legacy and UUID ids mix, as 1.4.x did by id (#17 PR 2a)', async () => {
+    const { env } = await setup();
+    const Storage = env.get('Storage');
+    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    // Two blocks from 1.4.x, whose ids sort by time, then two a 2a build made, whose UUIDs don't:
+    // one typed, and one captured, which has no createdAt and keeps its capture time as order
+    await Storage.saveElements([
+      block('1700000000000-aaaaaaaaa', 'C', 3, 'made first', { createdAt: 1700000000000 }),
+      block('0f2c41aa-0000-4000-8000-000000000003', 'C', 0, 'made third', { createdAt: 1700000002000 }),
+      block('1700000001000-bbbbbbbbb', 'C', 2, 'made second', { createdAt: 1700000001000 }),
+      block('00a1b2c3-0000-4000-8000-000000000004', 'C', 1700000003000, 'captured last', { createdAt: undefined }),
+    ]);
+    await Storage.deleteElements(['c1']);
+    const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
+    await editor.loadNote('A');
+    const blockEl = { dataset: { id: 'a1' }, querySelector: () => ({ textContent: '/template' }) };
+    editor.doc.defaultView.getSelection = () => ({
+      rangeCount: 1,
+      getRangeAt: () => ({ startContainer: { parentElement: { closest: () => blockEl } } }),
+    });
+    await runUntil(env, editor.selectTemplateItem('C'));
+    await runUntil(env, editor.flushSave());
+
+    assert.deepEqual(editor.blocks.slice(1, 5).map((b) => b.content), ['made first', 'made second', 'made third', 'captured last']);
+  });
 });
 
 describe('BlockEditor save hold (import)', () => {

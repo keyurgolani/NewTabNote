@@ -1964,12 +1964,18 @@ class BlockEditor {
    * Select a template to insert
    */
   async selectTemplateItem(templateId) {
-    // In id order, as 1.4.x's Storage.getElementsByNote listed them, which is the order they
-    // were made in, not always the order the template shows them. Kept on purpose for R1's no
-    // visible change rule, so a later slice can choose the order the template shows instead.
+    // In the order they were made, not always the order the template shows them, as 1.4.x's
+    // Storage.getElementsByNote listed them by id when every id began with the time it was made.
+    // Kept on purpose for R1's no visible change rule, so a later slice can choose the order the
+    // template shows instead. Since #17 PR 2a ids are UUIDs, which say nothing of time, so this
+    // goes by when each block was made: its createdAt, which every block the editor makes has
+    // (blocks.js), or for a captured block, which has none, its order, which is when it was
+    // captured. The id only breaks a tie.
+    const madeAt = (block) =>
+      typeof block.createdAt === 'number' ? block.createdAt : typeof block.order === 'number' ? block.order : 0;
     const templateBlocks = (await this.documentClient.blocksOf(templateId))
       .slice()
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      .sort((a, b) => madeAt(a) - madeAt(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     if (!templateBlocks || templateBlocks.length === 0) {
       this.hideTemplateMenu();
       return;
