@@ -840,9 +840,9 @@ class App {
       validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
+      onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
       // JSZip loads at the first Markdown export (#27 slice 3)
       loadLibrary: this.libraryLoader(),
-      onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
     });
 
     // Wire callbacks so the controller can trigger App-level actions
