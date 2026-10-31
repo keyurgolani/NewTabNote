@@ -177,7 +177,11 @@ const STEP_10 = Object.freeze({
       if (!db.objectStoreNames.contains(name)) createStore(db, name, shape);
     }
     const meta = tx.objectStore(META_STORE);
-    meta.put({ key: SCHEMA_KEY, structuralVersion: 10, logicalVersion: context.logicalVersion ?? BASE_LOGICAL_VERSION });
+    meta.put({
+      key: SCHEMA_KEY,
+      structuralVersion: 10,
+      logicalVersion: context.logicalVersion ?? BASE_LOGICAL_VERSION,
+    });
     meta.put({ key: CHANGES_KEY, head: 0, floor: 0 });
   },
 });

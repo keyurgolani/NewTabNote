@@ -18,6 +18,7 @@ import {
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
 
@@ -96,7 +97,7 @@ describe("the worker's composition root", () => {
     const later = createWorkerClient(hostOf(of));
     assert.equal((await later.migration.done).status, 'migrated');
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     assert.equal((await capture(later, 'on-9')).kind, 'committed');
   });
 
@@ -222,7 +223,7 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).costly, false);
     // A reload of the page asks again, and the run goes at once
     assert.equal((await worker.migration.request()).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     assert.equal((await capture(worker, 'after-retry')).kind, 'committed');
   });
 
@@ -239,8 +240,8 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     const recorded = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
     of.chrome.local[UPGRADE_RECORD_KEY] = { ...recorded, at: recorded.at - RETRY_AFTER_MS - 1 };
     assert.equal((await worker.migration.request()).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
-    // Its kernel follows: a capture now lands on 9
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
+    // Its kernel follows: a capture now lands on this build's version
     assert.equal((await capture(worker, 'on-9')).kind, 'committed');
   });
 
@@ -264,20 +265,23 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const worker = createWorkerClient(hostOf(of));
     assert.equal((await capture(worker, 'first')).kind, 'committed');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     // R79's probe: another context deletes it and makes it again at 8, with a note
     await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
     await legacyEnv.createDatabase(of.real, {
       records: { canvases: [legacyEnv.note('recreated', { name: 'Recreated' })] },
     });
     assert.equal((await capture(worker, 'second')).kind, 'committed');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     // The step ran only after a verified point of the recreated database
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     const points = await listPoints(recovery);
     recovery.close();
     const latest = points.filter(point => point.kind === 'pre-migration' && point.status === 'verified').pop();
-    assert.ok(latest && latest.sourceVersion === 8 && latest.target === 9, JSON.stringify(points.map(p => p.id)));
+    assert.ok(
+      latest && latest.sourceVersion === 8 && latest.target === DB_VERSION,
+      JSON.stringify(points.map(p => p.id)),
+    );
     const exported = await exportPoint({
       indexedDB: of.real,
       keyRange: KeyRange,

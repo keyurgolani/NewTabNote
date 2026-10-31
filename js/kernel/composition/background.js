@@ -10,10 +10,12 @@
  *
  * Since #17 PR 1b the worker is the one context that upgrades CanvasTabDB: building its client
  * starts the migration runner (migrate.js) under Web Lock `storage.migrate`, which makes the
- * verified `pre-migration` recovery point and then opens the database at 9. Its kernel is on
- * #17's IndexedDB adapter, opened once the run has finished: `versioned`, with startup
- * maintenance, when the database is at 9, and `existing` when the run left it as it was
- * (short of space, refused, or failed), so captures keep working on the shape that's there.
+ * verified `pre-migration` recovery point and then opens the database at this build's version
+ * (10 since #17 PR 2a). Its kernel is on #17's IndexedDB adapter, opened once the run has
+ * finished: `versioned`, with startup maintenance, when the database is at that version, and
+ * `existing` when the run left it as it was (short of space, refused, or failed), so captures
+ * keep working on the shape that's there. Once it's open at version 10, the worker sweeps the
+ * adapter's ledger, at most once a day (ledger.js).
  * The run's outcome goes to chrome.storage.local (`setting_storageUpgrade`), which the new tab
  * reads for its space notice and Settings > Data & Backup.
  */
@@ -27,7 +29,7 @@ import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
-import { legacyIds, systemClock } from '../core/ports/runtime.js';
+import { systemClock } from '../core/ports/runtime.js';
 import { MIGRATE_MESSAGE, chromeSettings, kernelClient } from './host.js';
 import { hostTimers, randomIds } from './messaging.js';
 
@@ -127,7 +129,7 @@ export const KEEPALIVE_MS = 20 * 1000;
 /**
  * The answers after which a command starts another attempt and runs once more: its connection
  * went (another context upgraded or deleted the database), or its versioned open found the
- * database older than 9, which only the runner upgrades
+ * database older than this build's version, which only the runner upgrades
  */
 const RETRIED_CODES = Object.freeze(['reload-required', 'migration-required']);
 
@@ -428,7 +430,22 @@ export function createWorkerClient(host = workerHost()) {
   let adapter = null;
 
   /**
-   * The kernel on the database `outcome` left: versioned at 9, as it is otherwise. An outcome
+   * The ledger's retention on `opened`, once its kernel is ready, in the background: it never
+   * holds up a command, sweeps at most once a day, and a sweep the worker's stop cuts off
+   * finishes at the next start (ledger.js). Pages never sweep.
+   * @param {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter} opened
+   * @param {Client} built
+   */
+  const sweepOnce = (opened, built) => {
+    built
+      .whenReady()
+      .then(failure => (failure ? undefined : opened.sweepLedger()))
+      .catch(error => storageLogger.warn('storage-ledger-sweep-failed', { code: failureOf(error).code }));
+  };
+
+  /**
+   * The kernel on the database `outcome` left: versioned at this build's version, as it is
+   * otherwise. An outcome
    * kept from a standing record changes nothing, so `keep`, the client before it, stays. Any
    * other closes the adapter it replaces, so the worker holds one connection (review R79).
    * @param {Promise<MigrationOutcome>} outcome
@@ -447,7 +464,9 @@ export function createWorkerClient(host = workerHost()) {
         requireCore: true,
       });
       if (replaced) replaced.close();
-      return kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
+      const built = kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
+      sweepOnce(adapter, built);
+      return built;
     });
 
   let done = attempt();
@@ -558,7 +577,7 @@ export function createWorkerClient(host = workerHost()) {
       if (ready === undefined) return notOpened();
       return ready.whenReady();
     },
-    ids: legacyIds,
+    ids: randomIds,
     migration: Object.freeze({
       get done() {
         return done;
