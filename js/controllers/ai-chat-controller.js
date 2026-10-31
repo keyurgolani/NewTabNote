@@ -36,6 +36,8 @@ class AIChatController {
 
     // Prompt templates
     this.aiPromptTemplates = [];
+    /** @type {boolean} Their read failed, so the ones shown are the defaults, not what's stored */
+    this.aiPromptTemplatesUnread = false;
     this.aiPromptTemplateEditingId = null;
 
     // Insert preview
@@ -2448,7 +2450,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * The prompt templates as stored, read through the settings port. A read that works and
    * finds no list of them stored shows the defaults and saves them, as 1.4.x seeded them. A
    * read that fails shows the defaults too, and writes nothing: 1.4.x saved them over the
-   * templates it couldn't read.
+   * templates it couldn't read. The first save after that reads them again first
+   * (persistAIPromptTemplates).
    * @returns {Promise<Array<Object>>}
    */
   async loadAIPromptTemplates() {
@@ -2459,11 +2462,13 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // As getSetting warned of a failed read
       console.warn('Error getting setting:', error);
       this.aiPromptTemplates = this.getDefaultAIPromptTemplates();
+      this.aiPromptTemplatesUnread = true;
       this.renderAIPromptSuggestions();
       return this.aiPromptTemplates;
     }
     const savedTemplates = stored.aiPromptTemplates;
     this.aiPromptTemplates = this.sanitizeAIPromptTemplates(savedTemplates);
+    this.aiPromptTemplatesUnread = false;
 
     if (!Array.isArray(savedTemplates)) {
       try {
@@ -2477,10 +2482,21 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     return this.aiPromptTemplates;
   }
 
+  /**
+   * Save `templates` as the prompt templates, from Settings' edit, reorder, delete or reset.
+   * After a read that failed, the ones shown are the defaults, not what's stored, so the first
+   * save reads them again first (readAIPromptTemplatesBeforeSave): it goes ahead only when no
+   * list is stored. A refused save takes the usual failure path, so none writes over a list it
+   * never read.
+   * @param {Array<Object>} templates
+   * @param {string} [successMessage]
+   * @returns {Promise<boolean>} whether they were saved
+   */
   async persistAIPromptTemplates(templates, successMessage = '') {
     const sanitized = this.sanitizeAIPromptTemplates(templates);
 
     try {
+      if (this.aiPromptTemplatesUnread) await this.readAIPromptTemplatesBeforeSave();
       await this.settings.savePromptTemplates(sanitized);
       this.aiPromptTemplates = sanitized;
       this.renderAIPromptSuggestions();
@@ -2494,6 +2510,22 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       Utils.showToast('Failed to save AI prompt templates', 'error');
       return false;
     }
+  }
+
+  /**
+   * The read the first save after a failed one makes first. It rejects when the read fails
+   * again, and when it finds a list stored, which then shows in place of the defaults, so
+   * that save is refused. With no list stored, the save goes ahead.
+   * @returns {Promise<void>}
+   */
+  async readAIPromptTemplatesBeforeSave() {
+    const { aiPromptTemplates: stored } = await this.settings.workspaceData(['aiPromptTemplates']);
+    this.aiPromptTemplatesUnread = false;
+    if (!Array.isArray(stored)) return;
+    this.aiPromptTemplates = this.sanitizeAIPromptTemplates(stored);
+    this.renderAIPromptSuggestions();
+    this.renderAIPromptTemplateSettings();
+    throw new Error('the stored prompt templates were read only now, so this save was refused');
   }
 
   createAIPromptSuggestionButton(template, variant = 'note') {

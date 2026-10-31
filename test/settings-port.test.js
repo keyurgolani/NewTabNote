@@ -409,6 +409,49 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     assert.equal(env.chrome.writes().length, again);
   });
 
+  /** AI chat after a failed read of its prompt templates, with Settings' toasts recorded */
+  const afterFailedRead = async (stored) => {
+    const env = await tabWith(stored, { failing: true });
+    const toasts = [];
+    env.get('Utils').showToast = (message, kind) => toasts.push([message, kind]);
+    const chat = chatOf(env);
+    chat.renderAIPromptSuggestions = () => {};
+    chat.renderAIPromptTemplateSettings = () => {};
+    await chat.loadAIPromptTemplates();
+    return { env, chat, toasts, ids: () => plain(chat.aiPromptTemplates.map((template) => template.id)) };
+  };
+
+  it('after a failed read, a Settings edit of the prompt templates reads them first and writes nothing over the ones stored', async () => {
+    const stored = { aiPromptTemplates: [{ id: 'mine', label: 'Mine', prompt: 'My prompt', scope: 'note', behavior: 'send' }] };
+    const { env, chat, toasts, ids } = await afterFailedRead(stored);
+    assert.deepEqual(ids(), DEFAULT_PROMPT_TEMPLATES);
+    const before = env.chrome.writes().length;
+
+    // Its read fails again: the delete is refused
+    env.chrome.failNextGet();
+    assert.equal(await chat.persistAIPromptTemplates(chat.aiPromptTemplates.slice(1), 'AI prompt template removed'), false);
+    assert.deepEqual(ids(), DEFAULT_PROMPT_TEMPLATES);
+    // Its read finds the stored list: that shows, and the delete is refused
+    assert.equal(await chat.persistAIPromptTemplates(chat.aiPromptTemplates.slice(1), 'AI prompt template removed'), false);
+    assert.deepEqual(ids(), ['mine']);
+    assert.deepEqual(env.chrome.writes().slice(before), [], 'nothing is written');
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates), stored.aiPromptTemplates, 'the stored templates are as they were');
+    // Through the failure path Settings already has
+    assert.deepEqual(toasts, [['Failed to save AI prompt templates', 'error'], ['Failed to save AI prompt templates', 'error']]);
+
+    // The next edit is of the list that's stored, and saves
+    assert.equal(await chat.persistAIPromptTemplates([], 'AI prompt template removed'), true);
+    assert.deepEqual(env.chrome.writes().slice(before).map((write) => write.keys), [['setting_aiPromptTemplates']]);
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates), []);
+  });
+
+  it('after a failed read with no prompt templates stored, the first Settings edit saves', async () => {
+    const { env, chat, ids } = await afterFailedRead({});
+    assert.equal(await chat.persistAIPromptTemplates(chat.aiPromptTemplates.slice(1), 'AI prompt template removed'), true);
+    assert.deepEqual(ids(), DEFAULT_PROMPT_TEMPLATES.slice(1));
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates.map((template) => template.id)), DEFAULT_PROMPT_TEMPLATES.slice(1));
+  });
+
   it('a custom theme the page starts on, and the theme options, come from the themes the port lists', async () => {
     const env = await tabWith({});
     const themeId = await env.settingsClient.saveTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
