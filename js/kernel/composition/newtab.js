@@ -17,7 +17,7 @@ import { UnavailableError } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
-import { chromeSettingsChanges, kernelClient, pageHost, wakeWorkerToPurge } from './host.js';
+import { chromeBackupSettings, chromeSettingsChanges, kernelClient, pageHost, wakeWorkerToPurge } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
 import { startIndexer } from './workers.js';
@@ -134,7 +134,8 @@ export function createPreUpdateCopy({
  * What the new tab's root runs on (#17 PR 4a): Popup's host, which is the page's IndexedDB,
  * chrome.storage.local, and its wait on the worker's run (Q12), with the page's Web Locks for
  * #33's copy, where it hears of settings changes, and js/storage.js's DatabaseManager, which the
- * narrow LegacyStores still call until #17 PR 4b makes it a facade over the tab's kernel
+ * narrow LegacyStores still call until #17 PR 4b makes it a facade over the tab's kernel. Its
+ * chrome.storage.local has the remove the backup tasks prune with too (chromeBackupSettings).
  * @typedef {PageHost & {locks: CopyLocks | null, changes: SettingsChanges, storage: LegacyStorage}} NewTabHost
  */
 
@@ -145,6 +146,8 @@ export function createPreUpdateCopy({
 export function newTabHost() {
   return {
     ...pageHost(),
+    // With remove, which the automatic backup prunes the oldest with
+    settings: chromeBackupSettings(),
     locks: /** @type {CopyLocks | null} */ (/** @type {unknown} */ (globalThis.navigator?.locks || null)),
     changes: chromeSettingsChanges(),
     storage: /** @type {LegacyStorage} */ (/** @type {{Storage?: unknown}} */ (globalThis).Storage),
