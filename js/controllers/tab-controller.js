@@ -1013,6 +1013,8 @@ class TabController {
         return;
       }
       this._setSplitView(false);
+      // Saved now, so a reload keeps it (1.4.x saved it only with the next tab change)
+      await this.saveTabs();
       return;
     }
     // A right pane without a note would take typing and save none of it
@@ -1021,6 +1023,7 @@ class TabController {
       return;
     }
     this._setSplitView(true);
+    await this.saveTabs();
   }
 
   /**

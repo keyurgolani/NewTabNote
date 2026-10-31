@@ -307,6 +307,8 @@ class AIChatController {
 
     this.aiSidebarOpen = true;
     this.updateAISidebarState();
+    // Opened on the Smart tab, which drew nothing while the sidebar was closed
+    if (this.aiActiveTab === 'smart') this.updateSmartSuggestions(true);
 
     // Lazy-load AI embedding model on first AI sidebar open (Req 27.3)
     if (this.onLoadEmbeddingsModel) {
@@ -2826,7 +2828,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   // ─── Smart suggestions ───
 
   async updateSmartSuggestions(force = false) {
-    if (this.aiActiveTab !== 'smart' && !force) return;
+    // Only while the AI sidebar is open on the Smart tab: a closed sidebar sends no note text
+    // to the provider, and opening it on Smart refreshes it (openAISidebar)
+    if (!this.aiSidebarOpen || this.aiActiveTab !== 'smart') return;
 
     const editor = this.getEditor ? this.getEditor() : null;
     if (!editor || !editor.noteId) return;

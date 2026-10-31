@@ -23,7 +23,10 @@
  * @typedef {Omit<import('../core/contracts/commands.js').CommandOf<T>, 'type' | 'commandId'>} Fields
  */
 
-/** A settings write that didn't commit. Its message names the command, kind, and code only. */
+/**
+ * A settings write that didn't commit. Its message names the command, kind, and code only. It
+ * is named SettingsWriteError, or for the storage exception the outcome names, when it names one.
+ */
 export class SettingsWriteError extends Error {
   /**
    * @param {string} type - the command's
@@ -43,6 +46,9 @@ export class SettingsWriteError extends Error {
       this.unavailableCause = outcome.cause;
       /** @type {boolean | undefined} */
       this.retryable = outcome.retryable;
+      // Named for the storage exception the write failed with, when the outcome names one
+      // (`exception`), so the failure events keep it as the error's name
+      if (outcome.exception) this.name = outcome.exception;
     }
   }
 }

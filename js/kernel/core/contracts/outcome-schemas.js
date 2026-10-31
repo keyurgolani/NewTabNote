@@ -7,7 +7,7 @@
 
 import * as v from '../../../lib/valibot/index.mjs';
 import { code, commitSeq, count, id, revision } from './fields.js';
-import { FAIL_CAUSES, REJECT_REASONS, UNAVAILABLE_CAUSES } from './outcomes.js';
+import { FAIL_CAUSES, REJECT_REASONS, STORAGE_EXCEPTIONS, UNAVAILABLE_CAUSES } from './outcomes.js';
 
 /** @typedef {import('./outcomes.js').Outcome} Outcome */
 
@@ -47,6 +47,7 @@ export const unavailableSchema = v.strictObject({
   cause: v.picklist(UNAVAILABLE_CAUSES),
   code,
   retryable: v.boolean(),
+  exception: v.optional(v.picklist(STORAGE_EXCEPTIONS)),
   messageKey,
   severity,
 });
