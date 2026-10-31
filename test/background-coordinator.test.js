@@ -191,6 +191,125 @@ describe('a worker whose storage can\'t be reached', () => {
   });
 });
 
+describe("a worker whose coordinator can't serve", () => {
+  /** After load, a Storage global that throws when it's read, so building the worker's kernel throws */
+  function storageThrows(global) {
+    Object.defineProperty(global, 'Storage', {
+      configurable: true,
+      get() {
+        throw new Error('test: Storage unreachable');
+      },
+      set() {},
+    });
+  }
+
+  /** Every database the worker opens, by name; NewTabNoteTrust's throws when `failTrust` */
+  function recordOpens(env, opens, { failTrust = false } = {}) {
+    const factory = env.indexedDB;
+    const open = factory.open.bind(factory);
+    factory.open = (name, ...rest) => {
+      opens.push(name);
+      if (failTrust && name === 'NewTabNoteTrust') throw new Error("test: the journal won't open");
+      return open(name, ...rest);
+    };
+  }
+
+  /** An install, a menu capture and an Alt+P capture, then a page's hello, and what each got */
+  async function useWorker(worker) {
+    await worker.dispatch('runtime.onInstalled', { reason: 'install' });
+    await worker.drain();
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    await worker.dispatch('commands.onCommand', 'capture-page');
+    await worker.drain();
+    return {
+      menus: worker.contextMenus().map((menu) => menu.id),
+      notes: plain(worker.env.chrome.notifications).map((note) => [note.title, note.message]),
+      welcome: await welcomeOf(worker, 'session-1'),
+    };
+  }
+
+  // Today's words for a database the worker couldn't open, for each capture
+  const UNAVAILABLE = {
+    menus: ['capture-page', 'capture-selection'],
+    notes: [
+      ['Not captured', "NewTabNote couldn't open your notes, so nothing was saved."],
+      ['Not captured', "NewTabNote couldn't open your notes, so nothing was saved."],
+    ],
+    welcome: { status: 'degraded', reason: 'coordinator-unavailable' },
+  };
+
+  for (const failTrust of [false, true]) {
+    it(`whose kernel can't be built keeps its menus, and answers each capture and a hello as unavailable${failTrust ? ", with a journal that won't open" : ''}`, async () => {
+      const opens = [];
+      const worker = await loadBackground({
+        start: false,
+        opens: false,
+        setup: (env) => recordOpens(env, opens, { failTrust }),
+        mutate: storageThrows,
+      });
+      await worker.drain();
+      assert.deepEqual(opens, [], 'nothing opens at load');
+      assert.deepEqual(Object.keys(worker.listenerCounts()).sort(), Object.keys(LISTENERS).sort());
+      assert.deepEqual(await useWorker(worker), UNAVAILABLE);
+      assert.equal(opens.includes('CanvasTabDB'), false);
+      if (!failTrust) assert.deepEqual((await trustOf(worker.indexedDB)).events, ['capture.failed', 'capture.failed']);
+    });
+  }
+
+  it('whose coordinator throws while js/background.js builds it keeps the stand-in, and every listener', async () => {
+    const worker = await loadBackground({
+      start: false,
+      opens: false,
+      rewrite: {
+        'js/kernel/composition/coordinator.js': (source) => source.replace(
+          'export function createCoordinator({',
+          "export function createCoordinator() {\n  throw new Error('test: building the coordinator threw');\n}\n\nfunction createCoordinatorAsWritten({",
+        ),
+      },
+    });
+    await worker.drain();
+    assert.deepEqual(Object.keys(worker.listenerCounts()).sort(), Object.keys(LISTENERS).sort());
+    assert.deepEqual(await useWorker(worker), UNAVAILABLE);
+    assert.deepEqual((await trustOf(worker.indexedDB)).events, ['capture.failed', 'capture.failed']);
+    const errors = worker.env.logs.filter((log) => log.level === 'error').map((log) => String(log.args[0]));
+    assert.ok(errors.includes("NewTabNote: the background coordinator couldn't be built"), JSON.stringify(errors));
+  });
+
+  it("opens no database for an API_REQUEST from the extension's own page, or a toolbar click", async () => {
+    const opens = [];
+    const fetched = [];
+    const worker = await loadBackground({
+      start: false,
+      setup: (env) => {
+        recordOpens(env, opens);
+        // Chrome's URL, which the worker's request check parses with, and a fetch that answers
+        env.global.URL = URL;
+        env.global.fetch = async (url) => {
+          fetched.push(String(url));
+          return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}), text: async () => '{}' };
+        };
+      },
+    });
+    await worker.drain();
+    let answer;
+    await worker.dispatch(
+      'runtime.onMessage',
+      { type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: { method: 'GET' } },
+      { id: SENDER_ID, url: `chrome-extension://${SENDER_ID}/newtab.html` },
+      (response) => {
+        answer = response;
+      },
+    );
+    await worker.drain();
+    await worker.dispatch('action.onClicked', worker.tab);
+    await worker.drain();
+    assert.deepEqual(fetched, ['https://api.openai.com/v1/models']);
+    assert.equal(answer && answer.status, 200);
+    assert.deepEqual(opens, []);
+  });
+});
+
 describe('the read-only integrity check', () => {
   /** A worker that counts its integrity checks, and the CanvasTabDB opens it makes */
   async function counting() {

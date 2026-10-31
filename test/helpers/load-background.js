@@ -79,10 +79,13 @@ async function drain() {
  * specifiers, and evaluated once, imports first. importScripts() throws, as it does in a
  * module worker. Resolves once the graph has evaluated, so its listeners are registered;
  * rejects with what a module threw while it evaluated, which would stop the real worker.
+ * `rewrite` maps a module's path from the repository root to a function that changes its
+ * source, for a test of a module that throws; each must change a module the graph loads.
  * @param {ReturnType<typeof createLegacyEnv>} env
+ * @param {{rewrite?: Record<string, (source: string) => string>}} [options]
  * @returns {Promise<void>}
  */
-async function startWorker(env) {
+async function startWorker(env, { rewrite = {} } = {}) {
   if (typeof vm.SourceTextModule !== 'function') {
     throw new Error('test/helpers/load-background.js runs the module service worker with vm.SourceTextModule, '
       + 'which needs node --experimental-vm-modules (npm test passes it)');
@@ -96,9 +99,18 @@ async function startWorker(env) {
   env.global.crypto = webcrypto;
 
   const modules = new Map();
+  const rewritten = new Set();
   const moduleFor = file => {
     if (!modules.has(file)) {
-      modules.set(file, new vm.SourceTextModule(fs.readFileSync(file, 'utf8'), {
+      const name = path.relative(ROOT, file).split(path.sep).join('/');
+      let source = fs.readFileSync(file, 'utf8');
+      if (Object.hasOwn(rewrite, name)) {
+        const changed = rewrite[name](source);
+        if (changed === source) throw new Error(`rewrite left ${name} as it was`);
+        source = changed;
+        rewritten.add(name);
+      }
+      modules.set(file, new vm.SourceTextModule(source, {
         context: env.context,
         identifier: pathToFileURL(file).href,
       }));
@@ -112,6 +124,8 @@ async function startWorker(env) {
     }
     return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
   });
+  const unused = Object.keys(rewrite).filter(name => !rewritten.has(name));
+  if (unused.length > 0) throw new Error(`rewrite names modules the worker doesn't load: ${unused.join(', ')}`);
   await worker.evaluate();
 }
 
@@ -123,8 +137,9 @@ async function startWorker(env) {
  * global, and with `opens: false` a worker whose database didn't open is returned rather than
  * refused, for #20's failure-site tests (test/failure-events.test.js). With `start: false`
  * the worker is returned as its modules leave it, before any event, for #35's tests of what
- * starts its coordinator (test/background-coordinator.test.js).
- * @param {{mutate?: (worker: any) => void, setup?: (env: any) => Promise<void> | void, opens?: boolean, start?: boolean}} [options]
+ * starts its coordinator (test/background-coordinator.test.js), and `rewrite` goes to
+ * startWorker, for its test of a coordinator that throws while it's built.
+ * @param {{mutate?: (worker: any) => void, setup?: (env: any) => Promise<void> | void, opens?: boolean, start?: boolean, rewrite?: Record<string, (source: string) => string>}} [options]
  * @returns {Promise<{
  *   tab: {id: number, windowId: number, url: string, title: string},
  *   selection: {text: string, title: string, url: string},
@@ -134,7 +149,7 @@ async function startWorker(env) {
  *   indexedDB: any,
  * }>}
  */
-async function loadBackground({ mutate, setup, opens = true, start = true } = {}) {
+async function loadBackground({ mutate, setup, opens = true, start = true, rewrite } = {}) {
   if (fs.existsSync(DEFINE_ALLOWLIST)) {
     throw new Error(`${path.relative(ROOT, DEFINE_ALLOWLIST)} exists: set each of its rows to its release-build value in test/helpers/load-background.js before loading the worker`);
   }
@@ -151,7 +166,7 @@ async function loadBackground({ mutate, setup, opens = true, start = true } = {}
   };
 
   if (setup) await setup(env);
-  await startWorker(env);
+  await startWorker(env, { rewrite });
   const events = eventFakes(env.chrome.api);
   /**
    * Fire a chrome.* event at the worker's listeners, as Chrome would, and wait for what they
