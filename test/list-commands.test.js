@@ -91,7 +91,7 @@ function type(editor, text) {
 
 function assertNoRefresh(reloads) {
   assert.equal(reloads.sidebar, 0, 'the sidebar read no list again');
-  assert.equal(reloads.page(), 0, 'nothing asked App to refresh');
+  assert.equal(reloads.page(), 0, 'TabController read no list again');
   assert.equal(reloads.list(), 0, 'the note list read no list again');
 }
 

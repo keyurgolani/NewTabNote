@@ -13,7 +13,6 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | kernel command, slice 4 | 0 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 0 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 0 | #12 slice 6 (preferences and session) routes it through the command. |
-| deleted in slice 7 | 0 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
 | no live caller | 0 | Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become. |
 | ledgered to #11 | 6 | Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows). |
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
@@ -74,7 +73,7 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | `updateSearchIndex` | ledgered to #22 | 3 |
 | `saveVector` | ledgered to #22 | 1 |
 
-Rows marked "deleted in slice 7" or "no live caller" are counted under the command the call would become.
+Rows marked "no live caller" are counted under the command the call would become.
 
 Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.
 
@@ -84,16 +83,16 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/controllers/notes-manager.js` | [1195](../../js/controllers/notes-manager.js#L1195) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1205](../../js/controllers/notes-manager.js#L1205) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1209](../../js/controllers/notes-manager.js#L1209) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1335](../../js/controllers/notes-manager.js#L1335) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
-| `js/llm.js` | [109](../../js/llm.js#L109) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [719](../../js/llm.js#L719) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [733](../../js/llm.js#L733) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [734](../../js/llm.js#L734) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [742](../../js/llm.js#L742) | `LLMService.setModel` | `Storage.setSetting('llmModel', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [747](../../js/llm.js#L747) | `LLMService.setOllamaUrl` | `Storage.setSetting('ollamaUrl', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/controllers/notes-manager.js` | [1223](../../js/controllers/notes-manager.js#L1223) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1233](../../js/controllers/notes-manager.js#L1233) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1237](../../js/controllers/notes-manager.js#L1237) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1363](../../js/controllers/notes-manager.js#L1363) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
+| `js/llm.js` | [138](../../js/llm.js#L138) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [756](../../js/llm.js#L756) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [775](../../js/llm.js#L775) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [776](../../js/llm.js#L776) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [784](../../js/llm.js#L784) | `LLMService.setModel` | `Storage.setSetting('llmModel', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [789](../../js/llm.js#L789) | `LLMService.setOllamaUrl` | `Storage.setSetting('ollamaUrl', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/services/sync-service.js` | [299](../../js/services/sync-service.js#L299) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [301](../../js/services/sync-service.js#L301) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [325](../../js/services/sync-service.js#L325) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |

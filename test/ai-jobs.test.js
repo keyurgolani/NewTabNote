@@ -18,6 +18,7 @@ const FILES = [
   'js/sidebar-utils.js',
   'js/blocks.js',
   'js/editor.js',
+  'js/controllers/tab-controller.js',
   'js/controllers/notes-manager.js',
   'js/controllers/ai-chat-controller.js',
 ];
@@ -100,10 +101,25 @@ async function drive(env, promise) {
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /**
- * NotesManager as App wires it, with the editor as the one getEditor answers, and the open
- * tabs as `tabs`
+ * TabController's tab bar on `tabs` as its open tabs, as App hands its noteTabs to NotesManager
+ * and AI chat. It counts what it draws and saves, in `drawn` and `saved`, and keeps both off
+ * the page.
  */
-function notesManager(env, Storage, { ai, editor, tabs = [] }) {
+function tabBar(env, tabs) {
+  const bar = new (env.get('TabController'))({
+    settings: env.settingsClient, domRefs: null, logger: quietLogger, documentClient: env.documentClient,
+  });
+  Object.assign(bar, { openTabs: tabs, drawn: 0, saved: 0 });
+  bar.renderTabs = () => { bar.drawn += 1; };
+  bar.saveTabs = async () => { bar.saved += 1; };
+  return bar;
+}
+
+/**
+ * NotesManager as App wires it, with the editor as the one getEditor answers, and the open
+ * tabs as `tabs`, on `bar`
+ */
+function notesManager(env, Storage, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
   const NotesManager = env.get('NotesManager');
   const manager = new NotesManager({
     storage: Storage,
@@ -114,10 +130,7 @@ function notesManager(env, Storage, { ai, editor, tabs = [] }) {
   });
   Object.assign(manager, {
     getEditor: () => editor,
-    getOpenTabs: () => tabs,
-    onRenderTabs: () => {},
-    onSaveTabs: async () => {},
-    onRenderNotesList: () => {},
+    noteTabs: bar.noteTabs,
   });
   return manager;
 }
@@ -129,7 +142,7 @@ function notesManager(env, Storage, { ai, editor, tabs = [] }) {
 const jobsOn = (env) => env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true, setting_insightsEnabled: true });
 
 /** AIChatController as App wires it, with its chat log reduced to a list */
-function aiChat(env, { ai, editor, tabs = [] }) {
+function aiChat(env, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
     settings: env.settingsClient,
@@ -141,10 +154,7 @@ function aiChat(env, { ai, editor, tabs = [] }) {
   chat.messages = [];
   Object.assign(chat, {
     getEditor: () => editor,
-    onGetOpenTabs: () => tabs,
-    onRenderTabs: () => {},
-    onSaveTabs: async () => {},
-    onRenderNotesList: async () => {},
+    noteTabs: bar.noteTabs,
     addChatMessage: (content, type) => chat.messages.push({ content, type }),
   });
   return chat;
@@ -396,10 +406,8 @@ describe('T3: a title set by hand stays', () => {
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
-    const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs });
-    const rendered = [];
-    manager.onRenderTabs = () => rendered.push('tabs');
-    manager.onRenderNotesList = () => rendered.push('list');
+    const bar = tabBar(env, tabs);
+    const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs, bar });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
@@ -411,7 +419,9 @@ describe('T3: a title set by hand stays', () => {
 
     const stored = await Storage.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Mine', true]);
-    assert.deepEqual([editor.titleEl.textContent, tabs[0].name, rendered], ['Untitled', 'Untitled', []]);
+    assert.deepEqual([editor.titleEl.textContent, tabs[0].name, bar.drawn, bar.saved], ['Untitled', 'Untitled', 0, 0]);
+    await drive(env, env.noteList.settled());
+    assert.equal(env.noteList.note('A').name, 'Mine', 'the list shows the title set by hand');
   });
 
   it('(ii) a title typed and not yet saved when the derived one commits wins: it stays on screen and lands after', async () => {

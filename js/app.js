@@ -105,16 +105,19 @@ class App {
    * removeNotes (js/kernel/composition/removal.js). `storageState` is what the tab knows of its
    * database outside the kernel, whether it's open and which stores it lacks; `recovery` the
    * storage guard's raw export; `validateBackup` an import's check of a backup, which writes
-   * nothing; and `legacyStorage` js/storage.js's, which the graph view (#22), the search index
-   * and vectors (#22), and sync (#19) still go through until their issues move them.
+   * nothing. `searchIndexStore`, `graphStore` and `syncStore` are narrow handles on
+   * js/storage.js, with only the calls NotesManager's search index and vectors (#22), the
+   * graph view (#22), and sync (#19) still make until their issues move them.
    * `startIndexer` starts the search indexer's module worker (js/kernel/composition/workers.js);
    * without it nothing indexes.
    * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
-   *   storageState?: any, recovery?: any, validateBackup?: any, legacyStorage?: any, startIndexer?: any}} [options]
+   *   storageState?: any, recovery?: any, validateBackup?: any, searchIndexStore?: any, graphStore?: any,
+   *   syncStore?: any, startIndexer?: any}} [options]
    */
   constructor({
     kernel, documentClient, settings, ai, noteList, events = null, removal,
-    storageState, recovery, validateBackup, legacyStorage, startIndexer = null,
+    storageState, recovery, validateBackup, searchIndexStore, graphStore, syncStore,
+    startIndexer = null,
   } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
@@ -128,12 +131,14 @@ class App {
     this.storageState = storageState;
     this.recovery = recovery;
     this.validateBackup = validateBackup;
-    this.legacyStorage = legacyStorage;
+    this.searchIndexStore = searchIndexStore;
+    this.graphStore = graphStore;
+    this.syncStore = syncStore;
     this.startIndexer = startIndexer;
     this.editor = null;
     this.secondaryEditor = null;
-    // Tab management
-    this._openTabs = []; // Until TabController exists; see the openTabs accessor
+    // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
+    this._emptyStateHolds = 0;
     // Search Indexer
     this.searchEngine = new SearchEngine();
     // Sidebar controller
@@ -161,13 +166,6 @@ class App {
     // Core infrastructure
     this.domRefs = null;
     this.logger = null;
-    this.triggerIndexing = Utils.debounce((noteId) => {
-      if (noteId && this.notesManager) {
-        this.notesManager.updateNoteIndex(noteId);
-      } else {
-        this.rebuildSearchIndex();
-      }
-    }, 300);
   }
 
   /**
@@ -186,37 +184,24 @@ class App {
   }
 
   /**
-   * The open tabs. TabController owns them and replaces the array when it
-   * restores the saved tabs, so this reads its current array, never a copy.
-   * @returns {Array<any>}
-   */
-  get openTabs() {
-    return this.tabController ? this.tabController.openTabs : this._openTabs;
-  }
-
-  /** @param {Array<any>} tabs */
-  set openTabs(tabs) {
-    if (this.tabController) this.tabController.openTabs = tabs;
-    else this._openTabs = tabs;
-  }
-
-  /**
    * removeNotes' leave (js/kernel/composition/removal.js): panes on the notes write what they
    * have pending and move to other notes before the write, and its answer finishes the move or
-   * undoes it after (TabController.leaveNotes). A failure there is logged and never stops the
-   * write.
+   * undoes it after (TabController.leaveNotes), with the empty state held until then
+   * (holdEmptyState). A failure there is logged and never stops the write.
    * @param {Array<string>} ids
-   * @returns {Promise<{arrive: Function, restore: Function}|null>}
+   * @returns {Promise<{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}|null>}
    */
   async leaveNotes(ids) {
+    let departure;
     try {
       // A new note a pane gets comes through the kernel (createTabNote), so the lists have it
       // from the commit feed
-      return await this.tabController.leaveNotes(ids);
+      departure = await this.tabController.leaveNotes(ids);
     } catch (error) {
       console.error('Moving panes off notes that are leaving failed:', error);
       return null;
     }
+    return departure ? this.holdEmptyState(departure) : null;
   }
 
   /**
@@ -225,7 +210,7 @@ class App {
    * @returns {void}
    */
   notesLeft(ids) {
-    if (this.tabController) this.tabController.announceNotesLeft(ids);
+    this.tabController.announceNotesLeft(ids);
   }
 
   /**
@@ -297,6 +282,7 @@ class App {
       await this.noteList.settled();
       const lists = this.noteList.state();
       if (lists.kind === 'failed') throw storageFailure({ ...lists, messageKey: `unavailable.${lists.cause}` });
+      this.followEmptyState();
 
       // Initialize editors
       const editorChangeHandler = Utils.debounce(() => {
@@ -398,9 +384,7 @@ class App {
         await this.initAnalyticsController();
         await this.initGraphView();
         await this.initSyncService();
-        if (this.notesManager) {
-          await this.notesManager.deferredInit();
-        }
+        await this.notesManager.deferredInit();
       };
 
       if (typeof requestIdleCallback === 'function') {
@@ -583,10 +567,10 @@ class App {
 
   /**
    * After a note-list write through the kernel (a new note, the Daily Note): once it
-   * committed, the tab's note list has it, from the commit feed with no refresh, and the empty
-   * state follows, as the refresh after the Storage write showed them. A write that didn't
-   * commit is logged by its outcome's kind and code, never the note's content, and its toast
-   * says `action` failed and why (Utils.writeFailureMessage).
+   * committed and the tab's note list has it, from the commit feed with no refresh, and the
+   * empty state has followed the list (followEmptyState). A write that didn't commit is
+   * logged by its outcome's kind and code, never the note's content, and its toast says
+   * `action` failed and why (Utils.writeFailureMessage).
    * @param {{kind: string, reason?: string, code?: string}} outcome
    * @param {string} action - such as "Failed to create note"
    * @returns {Promise<boolean>} whether it committed
@@ -598,7 +582,6 @@ class App {
       return false;
     }
     await this.noteList.settled();
-    this.updateEmptyState();
     return true;
   }
 
@@ -743,10 +726,9 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => this.createTabNote();
-    this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
+    // Another new tab's change reads the lists again through it
     this.tabController.noteList = this.noteList;
-    this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     this.aiChatController = new AIChatController({
       settings: this.settings,
@@ -763,20 +745,13 @@ class App {
     this.aiChatController.getEditor = () => this.getEditor();
     this.aiChatController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.aiChatController.onOpenNoteById = (noteId) => this.openNoteById(noteId);
-    this.aiChatController.onRefreshNotesList = () => this.refreshNotesList();
-    this.aiChatController.onRenderNotesList = () => this.renderNotesList();
     this.aiChatController.onEnsureDailyNote = () => this.ensureDailyNote();
     this.aiChatController.onOpenNewTab = () => this.openNewTab();
     this.aiChatController.onOpenSettingsModal = () => this.openSettingsModal();
     this.aiChatController.onCloseAllModals = () => this.closeAllModals();
-    this.aiChatController.onGetOpenTabs = () => this.openTabs;
-    this.aiChatController.onRenderTabs = () => this.renderTabs();
-    this.aiChatController.onSaveTabs = () => this.saveTabs();
+    // A title it applies names the note's tab through TabController; the list shows it from the commit feed
+    this.aiChatController.noteTabs = this.tabController.noteTabs;
     this.aiChatController.noteList = this.noteList;
-    this.aiChatController.onTriggerIndexing = () => this.triggerIndexing();
-    this.aiChatController.onLoadEmbeddingsModel = () => {
-      if (this.notesManager) this.notesManager.loadEmbeddingsModel();
-    };
 
     this.settingsController = new SettingsController({
       settings: this.settings,
@@ -797,11 +772,13 @@ class App {
       this.themeBuilderController.openThemeBuilder();
     };
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
-    this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
+    // An import, and a note opened from its Current Note list, read the lists again through it
+    this.settingsController.noteList = this.noteList;
+    // A note its notes list opened may be one another tab made: the sidebar marks it, and
+    // the empty state goes if it showed, as the refresh had them do
+    this.settingsController.onNoteOpened = () => this.showOpenedNote();
     this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
     this.settingsController.removal = this.removal;
-    this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
-    this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
       this.aiChatController.renderAIPromptTemplateSettings();
     };
@@ -822,9 +799,7 @@ class App {
       }
     };
     this.settingsController.onAISidebarWidthChanged = (value) => {
-      if (this.aiChatController) {
-        this.aiChatController.aiSidebarWidth = value;
-      }
+      this.aiChatController.aiSidebarWidth = value;
       const aiSidebar = document.getElementById('ai-sidebar');
       if (aiSidebar && this.aiChatController.aiSidebarOpen) {
         aiSidebar.style.width = value + 'px';
@@ -842,29 +817,31 @@ class App {
 
     this.notesManager = new NotesManager({
       // The search index and vectors (#22)
-      storage: this.legacyStorage,
+      storage: this.searchIndexStore,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: this.ai,
       documentClient: this.documentClient,
+      settings: this.settings,
       startIndexer: this.startIndexer,
     });
+    // Its jobs follow their switches and intervals through the settings port from now on, so
+    // one flipped while the later controllers start sets its job up, once
+    this.notesManager.followJobSettings();
+    // AI chat's writes index again, and its sidebar loads the embedding model, through NotesManager (#22)
+    this.aiChatController.indexing = this.notesManager.indexing;
 
     // The note list it reads, and tells when the indexer wrote search entries
     this.notesManager.noteList = this.noteList;
     this.notesManager.searchEngine = this.searchEngine;
 
     // Wire callbacks so the manager can trigger App-level actions
-    this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
-    this.notesManager.onRenderNotesList = () => this.renderNotesList();
     this.notesManager.removal = this.removal;
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
-    this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
     this.notesManager.getEditor = () => this.getEditor();
-    this.notesManager.getOpenTabs = () => this.openTabs;
-    this.notesManager.onRenderTabs = () => this.renderTabs();
-    this.notesManager.onSaveTabs = () => this.saveTabs();
+    // A title a job derives names the note's tab through TabController, as AI chat's does
+    this.notesManager.noteTabs = this.tabController.noteTabs;
 
     this.shortcutsManager = new ShortcutsManager({
       domRefs: this.domRefs,
@@ -883,13 +860,12 @@ class App {
     // The note list and the empty state show the Daily Note once it's there, with no refresh
     this.shortcutsManager.onEnsureDailyNote = () => this.ensureDailyNote();
     this.shortcutsManager.onCycleTab = (dir) => {
-      if (this.tabController) this.tabController.cycleTab(dir);
+      this.tabController.cycleTab(dir);
     };
-    this.shortcutsManager.onCloseCurrentTab = () => {
-      if (this.tabController) return this.tabController.closeCurrentTab();
-    };
+    this.shortcutsManager.onCloseCurrentTab = () => this.tabController.closeCurrentTab();
     this.shortcutsManager.getEditor = () => this.getEditor();
-    this.shortcutsManager.getOpenTabs = () => this.openTabs;
+    // The palette marks the notes open in tabs, as TabController has them
+    this.shortcutsManager.noteTabs = this.tabController.noteTabs;
     // The palette's Show and Hide labels say what the sidebars show
     this.shortcutsManager.getSidebarOpen = () => this.sidebarController.sidebarOpen;
     this.shortcutsManager.getAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
@@ -905,7 +881,6 @@ class App {
 
     // Wire App-level callbacks
     this.exportImportService.getEditor = () => this.getEditor();
-    this.exportImportService.onRefreshNotesList = () => this.refreshNotesList();
     this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
 
     this.themeBuilderController = new ThemeBuilderController({
@@ -979,7 +954,7 @@ class App {
 
     this.graphView = new GraphView({
       // The notes and links it draws (#22)
-      storage: this.legacyStorage,
+      storage: this.graphStore,
       logger: this.logger,
     });
 
@@ -999,7 +974,7 @@ class App {
 
     this.syncService = new SyncService({
       // Sync's settings and data (#19)
-      storage: this.legacyStorage,
+      storage: this.syncStore,
       logger: this.logger,
     });
 
@@ -1191,20 +1166,64 @@ class App {
   }
 
   /**
-   * Read the note lists again, after a write made outside the kernel or another tab's change,
-   * and show them, as this refresh always did: the sidebar's lists, counts, calendar, and
-   * tabs, keeping its virtual scroller, the empty state, and the palette while it's open. With
-   * `listsOnly`, as for another tab's change, the lists and counts refresh and the editor
-   * area stays as it is. A reload shim until #12 slice 7: a write routed through a command
-   * reaches the list from the commit feed instead.
-   * @param {{listsOnly?: boolean}} [options]
+   * The empty state follows the tab's note list, in place of the refresh and the callbacks
+   * that updated it: each change this tab commits shows it once no active or archived note is
+   * left, and takes it away once one is back. A reload doesn't: another tab's change reaches
+   * the lists only through one, and leaves this tab's editor area as it is
+   * (TabController._onNotesLeftElsewhere). The one reload that does is a note opened from
+   * Settings' notes list (showOpenedNote). While panes move off notes that are leaving, it
+   * waits for them (holdEmptyState).
+   * @returns {void}
+   */
+  followEmptyState() {
+    this.noteList.subscribe((change) => {
+      if (change.reason === 'commit' && !this._emptyStateHolds) this.updateEmptyState();
+    });
+  }
+
+  /**
+   * The empty state holds while panes move off notes that are leaving (leaveNotes). The write
+   * commits before a pane with no other note to show gets a new one, so following each commit
+   * would show the empty state and then take it away. Once the panes have moved, or gone back,
+   * and the lists have every commit, it follows the list once.
+   * @param {{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}} departure
+   * @returns {{arrive: (ids: Array<string>) => Promise<unknown>, restore: (ids: Array<string>) => Promise<unknown>}}
+   */
+  holdEmptyState(departure) {
+    this._emptyStateHolds = (this._emptyStateHolds || 0) + 1;
+    let held = true;
+    const release = async () => {
+      if (!held) return;
+      held = false;
+      this._emptyStateHolds -= 1;
+      if (this._emptyStateHolds > 0) return;
+      try {
+        await this.noteList.settled();
+      } catch {
+        // It follows what the lists have
+      }
+      if (!this._emptyStateHolds) this.updateEmptyState();
+    };
+    /** @param {(ids: Array<string>) => Promise<unknown>} move */
+    const thenRelease = (move) => async (ids) => {
+      try {
+        return await move(ids);
+      } finally {
+        await release();
+      }
+    };
+    return { arrive: thenRelease(departure.arrive), restore: thenRelease(departure.restore) };
+  }
+
+  /**
+   * A note opened from Settings' notes list, which reads storage fresh, so it may be one
+   * another tab made, once the lists have read again: the sidebar marks it, and the empty
+   * state goes, as App's refresh had them do
    * @returns {Promise<void>}
    */
-  async refreshNotesList({ listsOnly = false } = {}) {
-    await this.sidebarController.reloadLists();
-
-    if (!listsOnly) this.updateEmptyState();
-    if (this.shortcutsManager.isCommandPaletteOpen()) this.shortcutsManager.refreshCommandPaletteResults();
+  async showOpenedNote() {
+    await this.renderNotesList();
+    this.updateEmptyState();
   }
 
   /**
@@ -1243,8 +1262,9 @@ class App {
   editorNavigation() {
     return {
       titleChanged: (name) => this.updateCurrentTabName(name),
-      // The sidebar shows the save once the note list reads it from the commit feed
-      noteSaved: (note) => this.triggerIndexing(note.id),
+      // The sidebar shows the save once the note list reads it from the commit feed, and
+      // NotesManager indexes the note again after a pause (#22)
+      noteSaved: (note) => this.notesManager.triggerIndexing(note.id),
       // A backlink opens its note: 1.4.x called an App.openNote that never existed, so it threw
       openNote: (noteId) => this.openNoteById(noteId),
       openNoteByName: (name) => this.openNoteByName(name),
@@ -1259,20 +1279,6 @@ class App {
    */
   async renderNotesList() {
     await this.sidebarController.renderNotesList();
-  }
-
-  /**
-   * Save tabs to storage
-   */
-  async saveTabs() {
-    await this.tabController.saveTabs();
-  }
-
-  /**
-   * Render tabs in the header
-   */
-  renderTabs() {
-    this.tabController.renderTabs();
   }
 
   /**
@@ -1360,7 +1366,7 @@ class App {
    */
   async openNoteById(noteId) {
     // Check if note is already open in a tab
-    const existingTabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
+    const existingTabIndex = this.tabController.noteTabs.openNoteIds().indexOf(noteId);
     if (existingTabIndex !== -1) {
       await this.switchToTab(existingTabIndex);
     } else {
@@ -1410,33 +1416,10 @@ class App {
   }
 
   /**
-   * Setup auto-title feature
-   */
-  async setupAutoTitle() {
-    await this.notesManager.setupAutoTitle();
-  }
-
-  // ============ Insights Extraction ============
-
-  /**
-   * Setup insights extraction feature
-   */
-  async setupInsightsExtraction() {
-    await this.notesManager.setupInsightsExtraction();
-  }
-
-  /**
    * Get the editor instance for a side
    */
   getEditor(side = null) {
     return this.tabController.getEditor(side);
-  }
-
-  /**
-   * Rebuild the search index
-   */
-  async rebuildSearchIndex() {
-    await this.notesManager.rebuildSearchIndex();
   }
 
   /**
@@ -1451,17 +1434,15 @@ class App {
    */
   closeAllModals() {
     // Keyboard Shortcuts gives focus back where it was
-    if (this.settingsController) this.settingsController.toggleShortcutsModal(false);
+    this.settingsController.toggleShortcutsModal(false);
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     document.querySelectorAll('.context-menu').forEach(m => m.classList.add('hidden'));
 
     // Clean up focus traps
-    if (this.settingsController) {
-      if (this.settingsController._settingsFocusTrapCleanup) { this.settingsController._settingsFocusTrapCleanup(); this.settingsController._settingsFocusTrapCleanup = null; }
-      if (this.settingsController._shortcutsFocusTrapCleanup) { this.settingsController._shortcutsFocusTrapCleanup(); this.settingsController._shortcutsFocusTrapCleanup = null; }
-    }
-    if (this.themeBuilderController && this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
-    if (this.shortcutsManager && this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
+    if (this.settingsController._settingsFocusTrapCleanup) { this.settingsController._settingsFocusTrapCleanup(); this.settingsController._settingsFocusTrapCleanup = null; }
+    if (this.settingsController._shortcutsFocusTrapCleanup) { this.settingsController._shortcutsFocusTrapCleanup(); this.settingsController._shortcutsFocusTrapCleanup = null; }
+    if (this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
+    if (this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
 
     // The editors' menus, in both panes: an open one holds the keys pressed outside the note
     for (const editor of [this.editor, this.secondaryEditor]) {

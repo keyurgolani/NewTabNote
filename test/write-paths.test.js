@@ -308,63 +308,28 @@ describe('classifying', () => {
 });
 
 describe('statuses from the code', () => {
-  const app = (body) => `class App {
-  constructor() { this.sidebarController = null; }
+  it("classifies App's writes as any file's, since #12 slice 7 deleted its copies of controller paths", () => {
+    const { rows } = rowsOf({
+      'js/app.js': `class App {
   init() {
     this.sidebarController = new SidebarController();
     this.sidebarController.onToggleSidebar = () => this.toggleSidebar();
   }
-${body}
-}
-document.addEventListener('DOMContentLoaded', () => { const app = new App(); window.app = app; app.init(); });
-`;
-
-  it('marks only the writes an App method makes once its controller has returned as deleted in slice 7', () => {
-    const { rows } = rowsOf({
-      'js/app.js': app(`
   toggleSidebar() {
     Storage.setSetting('sidebarWidth', 1);
-    if (this.sidebarController) {
-      this.sidebarController.toggleSidebar();
-      return;
-    }
-    Storage.setSetting('sidebarOpen', false);
   }
   archiveNote(id) {
     return Storage.archiveNote(id);
-  }`),
-    });
-    assert.deepEqual(rows, [
-      "App.toggleSidebar | Storage.setSetting('sidebarWidth', …) | setPreferences | kernel command, slice 6",
-      "App.toggleSidebar | Storage.setSetting('sidebarOpen', …) | setPreferences | deleted in slice 7",
-      'App.archiveNote | Storage.archiveNote(…) | archiveNote | deleted in slice 7',
-    ]);
-  });
-
-  it("reaches App's methods from the new-tab root, which starts App in place of app.js's bootstrap", () => {
-    const { rows } = rowsOf({
-      'js/app.js': `class App {
-  constructor() { this.sidebarController = null; }
-  init() {
-    this.sidebarController = new SidebarController();
-    this.sidebarController.onToggleSidebar = () => this.toggleSidebar();
-  }
-  toggleSidebar() {
-    Storage.setSetting('sidebarWidth', 1);
   }
 }
 window.App = App;
 `,
-      'js/kernel/composition/newtab.js': `export function startNewTab() {
-  document.addEventListener('DOMContentLoaded', () => {
-    const app = new globalThis.App({});
-    globalThis.app = app;
-    return app.init();
-  });
-}
-`,
     });
-    assert.deepEqual(rows, ["App.toggleSidebar | Storage.setSetting('sidebarWidth', …) | setPreferences | kernel command, slice 6"]);
+    assert.deepEqual(rows, [
+      "App.toggleSidebar | Storage.setSetting('sidebarWidth', …) | setPreferences | kernel command, slice 6",
+      'App.archiveNote | Storage.archiveNote(…) | archiveNote | no live caller',
+    ]);
+    assert.ok(!STATUSES.some(([status]) => status === 'deleted in slice 7'));
   });
 
   it('marks a write in a method nothing calls as having no live caller', () => {

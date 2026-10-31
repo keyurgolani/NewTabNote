@@ -18,7 +18,6 @@ class ExportImportService {
 
     // App-level callbacks
     this.getEditor = null;
-    this.onRefreshNotesList = null;
     this.onOpenNoteInNewTab = null;
   }
 

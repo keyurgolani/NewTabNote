@@ -50,16 +50,35 @@ import { startIndexer } from './workers.js';
  */
 
 /**
- * The legacy App class app.js puts on window, and the instance the controllers still read as
- * window.app until #12 slice 7 removes it. `legacyStorage` is js/storage.js's, which the graph
- * view and the search index and vectors (#22), and sync (#19), still go through until their
- * issues move them.
+ * Some of js/storage.js's calls, the ones one holder makes that Storage defines, which Storage
+ * runs
+ * @typedef {Readonly<Record<string, (...args: any[]) => any>>} LegacyStore
+ */
+
+/**
+ * The calls what #22 and #19 own still make on js/storage.js, each holder's own, so App holds
+ * no whole Storage (#12 slice 7c): the search index and vectors NotesManager keeps, the notes
+ * and links GraphView draws, and sync's settings and data
+ * @typedef {Readonly<{searchIndex: LegacyStore, graph: LegacyStore, sync: LegacyStore}>} LegacyStores
+ */
+
+/**
+ * The legacy App class app.js puts on window. `searchIndexStore`, `graphStore` and
+ * `syncStore` are the LegacyStores NotesManager, GraphView and SyncService go through until
+ * #22 and #19 move them.
  * @typedef {object} NewTabPage
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
- *   recovery: Recovery, validateBackup: ValidateBackup, legacyStorage: unknown, startIndexer: () => Worker}) => NewTabApp} App
- * @property {unknown} [app]
+ *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
+ *   syncStore: LegacyStore, startIndexer: () => Worker}) => NewTabApp} App
  */
+
+/** Each LegacyStores handle's calls, as its holder makes them */
+const LEGACY_STORE_CALLS = Object.freeze({
+  searchIndex: ['hasStore', 'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'getAllVectors', 'saveVector'],
+  graph: ['getAllNotes', 'getStore'],
+  sync: ['getSetting', 'setSetting', 'getStore', 'exportAll', 'importAll', 'importNote', 'saveElement'],
+});
 
 /**
  * The new tab's kernel and its client. It opens the database versioned, as Storage.init did,
@@ -188,12 +207,43 @@ export function createNewTabBackupCheck(host) {
 }
 
 /**
+ * The narrow handles on `host`'s storage that App hands NotesManager, GraphView and SyncService.
+ * A call its holder makes that Storage doesn't define is left out, so a holder that checks for
+ * one finds none, as it found none on Storage.
+ * @param {LegacyHost} host
+ * @returns {LegacyStores}
+ */
+export function createNewTabLegacyStores(host) {
+  const storage = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (host.storage));
+  /**
+   * @param {readonly string[]} calls
+   * @returns {LegacyStore}
+   */
+  const only = calls => {
+    /** @type {Record<string, (...args: any[]) => any>} */
+    const handle = {};
+    for (const call of calls) {
+      if (typeof storage[call] !== 'function') continue;
+      // Storage's method as it is when called, on Storage
+      handle[call] = (...args) => /** @type {(...args: any[]) => any} */ (storage[call]).apply(storage, args);
+    }
+    return Object.freeze(handle);
+  };
+  return Object.freeze({
+    searchIndex: only(LEGACY_STORE_CALLS.searchIndex),
+    graph: only(LEGACY_STORE_CALLS.graph),
+    sync: only(LEGACY_STORE_CALLS.sync),
+  });
+}
+
+/**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
  * client, its document client, its settings client, its AI port, its note list, its failure
  * events, its removeNotes, its database's state and recovery, its import's backup check, the
- * legacy storage the graph view, the search index, and sync still go through, and the
- * indexer's starter (./workers.js), and becomes window.app before init runs. The listener
- * answers with init's promise, which a page ignores and a test can wait for.
+ * narrow legacy stores the search index, the graph view, and sync still go through, and the
+ * indexer's starter (./workers.js). Nothing puts it on the page: no code reads a global App
+ * instance (#12 slice 7c). The listener answers with init's promise, which a page ignores and
+ * a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -204,6 +254,7 @@ export function startNewTab() {
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;
+    const stores = createNewTabLegacyStores(host);
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
@@ -215,11 +266,12 @@ export function startNewTab() {
       storageState: createNewTabStorageState(host),
       recovery: createNewTabRecovery(host),
       validateBackup: createNewTabBackupCheck(host),
-      legacyStorage: host.storage,
+      searchIndexStore: stores.searchIndex,
+      graphStore: stores.graph,
+      syncStore: stores.sync,
       startIndexer,
     });
     built = app;
-    page.app = app;
     return app.init().catch(error => {
       console.error('App initialization failed:', error);
     });

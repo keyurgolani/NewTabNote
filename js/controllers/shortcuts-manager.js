@@ -36,7 +36,8 @@ class ShortcutsManager {
     this.onCycleTab = null;
     this.onCloseCurrentTab = null;
     this.getEditor = null;
-    this.getOpenTabs = null;
+    /** @type {any} TabController's noteTabs, set by App: the palette marks the notes open in tabs */
+    this.noteTabs = null;
     // The tab's note list (js/kernel/core/application/note-list.js), set by App: the palette
     // lists its notes, and shows a change to them while it's open
     /** @type {any} */
@@ -311,8 +312,7 @@ class ShortcutsManager {
   getCommandPaletteNotes() {
     const editor = this.getEditor ? this.getEditor() : null;
     const activeNoteId = editor?.noteId;
-    const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-    const openNoteIds = new Set(openTabs.map(tab => tab.noteId));
+    const openNoteIds = new Set(this.noteTabs ? this.noteTabs.openNoteIds() : []);
     const list = this._noteList;
     const notes = list ? list.view('active') : [];
     const archivedNotes = list ? list.view('archived') : [];

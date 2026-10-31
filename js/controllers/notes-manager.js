@@ -3,8 +3,9 @@
  * search index updates, embedding generation, and note export/import.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage - js/storage.js's, which the search index and vector
- *   calls go through until #22 moves them
+ * @param {DatabaseManager} deps.storage - the new tab root's handle on js/storage.js with the
+ *   search index and vector calls only (createNewTabLegacyStores), which they go through until
+ *   #22 moves them
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} deps.llm - The AI port (js/services/ai-port.mjs) the jobs call the provider through
@@ -12,6 +13,8 @@
  *   through (js/kernel/composition/document.js): each write names its note, and none takes a
  *   note record. The export, the search index, and the embeddings read notes and blocks
  *   through it, as stored.
+ * @param {Object} [deps.settings] - The page's settings port (js/kernel/composition/settings.js),
+ *   which tells NotesManager when a job's switch or interval changes, in this tab or another
  */
 /**
  * The error a job throws when the kernel didn't store its write: its kind and code, never the
@@ -45,7 +48,7 @@ function jobTimer(minutes, fallback) {
 }
 
 class NotesManager {
-  constructor({ storage, domRefs, logger, llm, documentClient = null, startIndexer = null }) {
+  constructor({ storage, domRefs, logger, llm, documentClient = null, settings = null, startIndexer = null }) {
     this.storage = storage;
     this.domRefs = domRefs;
     this.logger = logger;
@@ -53,6 +56,10 @@ class NotesManager {
     this.documentClient = documentClient;
     // Starts the search indexer's module worker (js/kernel/composition/workers.js), from App
     this.startIndexer = startIndexer;
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js) */
+    this.settings = settings;
+    /** @type {(() => void)|null} Stops followJobSettings */
+    this._stopFollowingJobSettings = null;
 
     // Auto-title state
     this.autoTitleIntervalId = null;
@@ -70,17 +77,13 @@ class NotesManager {
     this.noteList = null;
 
     // App-level callbacks (set by App after construction)
-    this.onRefreshNotesList = null;
-    this.onRenderNotesList = null;
     /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: archive, trash, and delete go through it */
     this.removal = null;
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
-    this.onUpdateEmptyState = null;
     this.getEditor = null;
-    this.getOpenTabs = null;
-    this.onRenderTabs = null;
-    this.onSaveTabs = null;
+    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    this.noteTabs = null;
 
     this.triggerIndexing = Utils.debounce((noteId) => {
       if (noteId) {
@@ -89,6 +92,17 @@ class NotesManager {
         this.rebuildSearchIndex();
       }
     }, 300);
+
+    /**
+     * What AI chat reaches of the search index and the embedding model (#22's), set by App: a
+     * note it wrote blocks into indexes every note again, after a pause shared with the
+     * editor's saves, as App's callback did, which dropped the note's id. Opening its sidebar
+     * loads the model.
+     */
+    this.indexing = Object.freeze({
+      noteChanged: () => this.triggerIndexing(),
+      loadEmbeddingsModel: () => this.loadEmbeddingsModel(),
+    });
   }
 
   /** Initialize: setup auto-title (critical for note management). */
@@ -106,8 +120,28 @@ class NotesManager {
     await this.initEmbeddings();
   }
 
+  /**
+   * From now on, set a job up again when its switch or interval changes, in this tab or
+   * another. The settings port tells this tab of its own writes too, so Settings saving a
+   * control sets its job up once. App calls this as it builds the controllers, so a switch
+   * flipped while the page starts reaches the job.
+   * @returns {void}
+   */
+  followJobSettings() {
+    if (!this.settings || this._stopFollowingJobSettings) return;
+    this._stopFollowingJobSettings = this.settings.onChanged(({ keys }) => {
+      const changed = new Set(keys);
+      if (changed.has('autoTitleEnabled') || changed.has('autoTitleInterval')) this.setupAutoTitle();
+      if (changed.has('insightsEnabled') || changed.has('insightsInterval')) this.setupInsightsExtraction();
+    });
+  }
+
   /** Tear down intervals and workers. */
   destroy() {
+    if (this._stopFollowingJobSettings) {
+      this._stopFollowingJobSettings();
+      this._stopFollowingJobSettings = null;
+    }
     this.stopAutoTitleInterval();
     this.stopInsightsInterval();
     if (this.indexerWorker) {
@@ -156,13 +190,13 @@ class NotesManager {
 
   /**
    * Unarchive a note by ID, with the kernel's unarchiveNote, which writes its placement fields
-   * and nothing else. The lists show it from the commit feed, with no refresh.
+   * and nothing else. The lists show it from the commit feed, with no refresh, and the empty
+   * state follows them (App.followEmptyState).
    */
   async unarchiveNote(noteId) {
     const outcome = await this.documentClient.unarchiveNote(noteId);
     if (!this._committed(outcome, 'Failed to restore note from archive')) return;
     await this._listed();
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     Utils.showToast('Note restored from archive', 'success');
   }
 
@@ -184,14 +218,13 @@ class NotesManager {
    * kind and code, never the note's content, and its toast says `action` failed and why
    * (Utils.writeFailureMessage, with `reasons` for a refusal's code). For a trash or a delete
    * (`removing`), a note another tab already deleted has left all the same, so it counts as
-   * done, as 1.4.x said. The empty state follows the lists either way.
+   * done, as 1.4.x said. The empty state follows the lists (App.followEmptyState).
    * @param {{kind: string, code?: string, reason?: string}} outcome
    * @param {string} action - such as "Failed to move note to trash"
    * @param {{removing?: boolean, reasons?: Object<string, string>}} [options]
    * @returns {boolean}
    */
   _removed(outcome, action, { removing = false, reasons } = {}) {
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     if (outcome.kind === 'committed') return true;
     if (removing && outcome.kind === 'rejected' && outcome.reason === 'not-found') return true;
     console.error(`${action}:`, outcome.kind, outcome.code);
@@ -432,7 +465,6 @@ class NotesManager {
     const outcome = await this.documentClient.createNote({ noteId, name, blocks });
     if (!this._committed(outcome, 'Failed to import note')) return;
     await this._listed();
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
     Utils.showToast('Note imported', 'success');
   }
@@ -641,8 +673,9 @@ class NotesManager {
 
   /**
    * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save), in the note's tab, and in the list. A title the
-   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * holds that note (display only, no save) and in the note's tab. The list shows it from the
+   * commit feed. A title the user typed there that no save has stored yet stays, and names
+   * the tab when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
@@ -652,16 +685,7 @@ class NotesManager {
     const shown = editor && typeof editor.showCommittedTitle === 'function'
       ? editor.showCommittedTitle(noteId, name)
       : 'not-open';
-    if (shown !== 'typed-title-pending') {
-      const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = name;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-    }
-    if (this.onRenderNotesList) this.onRenderNotesList();
+    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
   }
 
   /**
@@ -779,8 +803,9 @@ class NotesManager {
   // ─── Auto-Title ───
 
   /**
-   * Setup auto-title feature: as the page starts, and when another tab changes its switch or
-   * interval. Switched off, or with no provider, its timer stops.
+   * Setup auto-title feature: as the page starts, and when its switch or interval changes,
+   * here or in another tab (followJobSettings). Switched off, or with no provider, its timer
+   * stops.
    */
   async setupAutoTitle() {
     const { autoTitleEnabled: enabled = false, autoTitleInterval: interval = 15 } =
@@ -958,8 +983,9 @@ class NotesManager {
   // ─── Insights Extraction ───
 
   /**
-   * Setup insights extraction feature: as the page starts, and when another tab changes its
-   * switch or interval. Switched off, or with no provider, its timer stops.
+   * Setup insights extraction feature: as the page starts, and when its switch or interval
+   * changes, here or in another tab (followJobSettings). Switched off, or with no provider,
+   * its timer stops.
    */
   async setupInsightsExtraction() {
     const { insightsEnabled: enabled = false, insightsInterval: interval = 360 } =

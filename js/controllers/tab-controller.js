@@ -23,6 +23,15 @@ class TabController {
     // Tab state
     this.openTabs = []; // Array of { noteId, name }
     this.activeTabIndex = 0;
+    /**
+     * What AI chat, NotesManager, and the palette see of the tabs, in place of App's copy of
+     * them: the notes they show, in tab order, and a committed title naming its note's tab.
+     * None of them holds the tab array, which TabController replaces when it restores tabs.
+     */
+    this.noteTabs = Object.freeze({
+      openNoteIds: () => this.openTabs.map((tab) => tab.noteId),
+      showNoteName: (noteId, name) => this.showNoteName(noteId, name),
+    });
 
     // Split-view state
     this.splitViewEnabled = false;
@@ -40,11 +49,9 @@ class TabController {
 
     // App-level callbacks (set by App after construction)
     this.onCreateNote = null;       // () => Promise<Note>
-    this.onRefreshNotesList = null;  // () => Promise<void>
     this.onRenderNotesList = null;   // () => Promise<void>
     /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
     this.noteList = null;
-    this.onUpdateEmptyState = null;  // () => void
 
     /** @type {BroadcastChannel|null} Tells the other new tabs which notes left the active set, so they refresh their lists */
     this.channel = null;
@@ -557,12 +564,13 @@ class TabController {
   }
 
   /**
-   * Another new tab trashed, archived, or deleted notes. This one refreshes
-   * its lists and counts and nothing else: its panes, tabs, and saved
-   * workspace stay as they are, as in 1.4.0. A pane on one of those notes
-   * keeps it, its saves keep the note's trash and archive state, and one on a
-   * note deleted for good shows the notice when it saves (#33). Keeping the
-   * copies other tabs hold in step is #6's and #17's.
+   * Another new tab trashed, archived, or deleted notes. This one reads its
+   * lists again, through the note list's reload, and the lists and counts
+   * show what changed. Nothing else does: its panes, tabs, saved workspace,
+   * and empty state stay as they are, as in 1.4.0. A pane on one of those
+   * notes keeps it, its saves keep the note's trash and archive state, and one
+   * on a note deleted for good shows the notice when it saves (#33). Keeping
+   * the copies other tabs hold in step is #6's and #17's.
    * @returns {Promise<void>}
    */
   async _onNotesLeftElsewhere() {
@@ -570,9 +578,9 @@ class TabController {
       this._refreshPending = true;
       return;
     }
-    if (!this.onRefreshNotesList) return;
+    if (!this.noteList) return;
     try {
-      await this.onRefreshNotesList({ listsOnly: true });
+      await this.noteList.reload();
     } catch (error) {
       console.error('Refreshing the lists after another tab changed notes:', error);
     }
@@ -599,7 +607,8 @@ class TabController {
       this.activeTabIndex = this.openTabs.length - 1;
     }
     this.renderTabs();
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    // The list has the new note from its commit; the sidebar marks it, as a tab switch does
+    if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs({ lastOpenedNoteId: isActive ? note.id : null });
   }
 
@@ -859,14 +868,14 @@ class TabController {
 
   /**
    * Open a new tab with a new note. App makes it through the kernel, so the note list has it
-   * from the commit feed once it settles, with no refresh, and the empty state follows.
+   * from the commit feed once it settles, with no refresh, and the empty state has followed
+   * the list (App.followEmptyState).
    */
   async openNewTab() {
     if (this.onCreateNote) {
       const note = await this.onCreateNote();
       if (note) {
         if (this.noteList) await this.noteList.settled();
-        if (this.onUpdateEmptyState) this.onUpdateEmptyState();
         await this.openNoteInNewTab(note.id);
         document.getElementById('page-title').focus();
       }
@@ -974,6 +983,21 @@ class TabController {
       this.renderTabs();
       this.saveTabs();
     }
+  }
+
+  /**
+   * A title the kernel committed for `noteId`, from AI chat or NotesManager (noteTabs), names
+   * its note's tab, if it has one, and the tabs are saved
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async showNoteName(noteId, name) {
+    const tab = this.openTabs.find((open) => open.noteId === noteId);
+    if (!tab) return;
+    tab.name = name;
+    this.renderTabs();
+    await this.saveTabs();
   }
 
   // ─── Split view ───

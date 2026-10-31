@@ -24,7 +24,10 @@
  * hits: count 1, an adapter module that declares gaps as file, which has to exist, and the
  * issue that closes them as owner (DECLARED_GAP_OWNERS): #17 for the legacy adapter's, which
  * #17's adapter closes, and #18 for #17's adapter's one, the backup tasks #18's engine brings.
- * A module's gaps are told apart by verify; every other row is one per file and rule.
+ * A module's gaps are told apart by verify. A rule whose messages name what they found
+ * (NAMED_RULES: app-callback names the callback, legacy-store the handle) may have rows that
+ * each name one (`name`), which count that one's hits; the file and rule's row without a name
+ * counts the rest. Every other row is one per file and rule.
  *
  *   npm run check:boundaries                         compare with the ledger
  *   npm run check:boundaries -- --base origin/next   also compare with the ledger at a ref
@@ -39,12 +42,16 @@ const { execFileSync } = require('child_process');
 const ROOT_DIR = path.join(__dirname, '..');
 const LEDGER = 'docs/architecture/kernel-ledger.json';
 const FIELDS = ['file', 'rule', 'count', 'owner', 'removeWhen', 'verify'];
+// A row of a named rule may also name the hit it counts, in this order
+const ROW_FIELDS = ['file', 'rule', 'name', 'count', 'owner', 'removeWhen', 'verify'];
 const KERNEL_ISSUE = 12;
 const VERIFY = 'npm run check:boundaries';
 const ABOUT = 'Hits of the kernel boundary rules (#12, eslint.config.mjs) each legacy file may still have, '
   + 'per rule. `npm run check:boundaries` fails on a hit no row covers, a count that rises, and a count '
   + 'that falls without its row falling in the same PR. Only `--write-baseline` writes this file; a PR '
   + 'may add a row by hand for a rule #12 defines, with an owner other than #12, removeWhen, and verify. '
+  + 'A row of app-callback or legacy-store may name the callback or handle it counts (name), and the '
+  + 'file and rule\'s row without one counts the rest. '
   + 'The rules in shrinkOnly (#17\'s storage access) take no new row and no higher count, except a '
   + 'legacyBlindWrite count that rises by no more than the same file\'s getStore and objectStore counts fall.';
 
@@ -68,6 +75,7 @@ const RULES = {
   'trust-global': 'a browser API or legacy global in js/trust/core/',
   'trust-import': 'an import into js/trust/core/ from outside it, kernel core, the registry kit, and js/lib/valibot/',
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
+  'legacy-store': "a handle on js/storage.js the new-tab root gives App, or the whole of it as legacyStorage, outside js/kernel/",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is an adapter module that declares gaps)',
   // #17's storage-access rules (#17 slice 1): their rows are a shrink-only exemption list
@@ -89,6 +97,11 @@ const DECLARED_GAP_FILES = Object.keys(DECLARED_GAP_OWNERS);
 // The raw access a blind write may replace in the same file under a shrinkOnly rule: an
 // unconverted caller moves onto #17's adapter, which commits it, before it gets a command
 const CONVERTS_FROM = { legacyBlindWrite: ['getStore', 'objectStore'] };
+// The rules whose messages name what they found, after the rule, as `[app-callback]
+// sidebarController.onArchiveNote: ...`, so a row can count one name's hits (#12 slice 7c)
+const NAMED_RULES = ['app-callback', 'legacy-store'];
+// What a row's name may be: a property, or a controller and its property
+const NAME = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)?$/;
 
 /**
  * Who removes each kind of hit, for rows --write-baseline seeds: the first entry whose
@@ -111,7 +124,8 @@ const SEED_OWNERS = [
   { file: 'js/editor.js', rule: 'window.opener', owner: 12, removeWhen: "#12 slice 4: getLLM's lookups become the injected AI port, re-pointed to #11 if they stay here" },
   { file: 'js/editor.js', owner: 12, removeWhen: '#12 slice 4: BlockEditor, PiP included, gets a document client and a navigation port in place of Storage and getApp' },
   { file: 'js/app.js', rule: 'window.app', owner: 12, removeWhen: '#12 slice 7: the new-tab composition root replaces the bootstrap' },
-  { file: 'js/app.js', rule: 'app-callback', owner: 12, removeWhen: '#12 slice 7 replaces the domain callbacks with projections; UI-only ones left are re-pointed to #2 or #3' },
+  { file: 'js/app.js', rule: 'app-callback', owner: 3, removeWhen: "#3's workspace shell wires the editors, tabs, sidebars, palette, and modals itself, with no App between them" },
+  { rule: 'legacy-store', owner: 22, removeWhen: "#22's pipelines and #19's sync engine take what App still hands them of js/storage.js" },
   { file: 'js/app.js', owner: 12, removeWhen: "#12 slices 4 to 7 route App's reads and writes through kernel commands and queries; search index, vector, and sync calls left are re-pointed to #22 and #19" },
   { file: 'js/controllers/tab-controller.js', rule: 'chrome.storage', owner: 12, removeWhen: '#12 slice 6: TabController saves the workspace session with saveWorkspaceSession' },
   { file: 'js/theme-engine.js', owner: 12, removeWhen: '#12 slice 6: themes go through kernel commands and queries' },
@@ -129,12 +143,23 @@ function keyOf(file, rule) {
   return `${file}\0${rule}`;
 }
 
+/** The key of a named rule's row for `name` in `file` */
+function namedKey(file, rule, name) {
+  return `${keyOf(file, rule)}\0${name}`;
+}
+
 /**
- * A ledger row's key: its file and rule, and for a declared-gap row its verify too, since
- * the legacy adapter module declares one gap per row
+ * A ledger row's key: its file and rule, for a declared-gap row its verify too, since the
+ * legacy adapter module declares one gap per row, and for a named row its name
  */
 function rowKey(row) {
-  return row.rule === DECLARED_GAP ? `${keyOf(row.file, row.rule)}\0${row.verify}` : keyOf(row.file, row.rule);
+  if (row.rule === DECLARED_GAP) return `${keyOf(row.file, row.rule)}\0${row.verify}`;
+  return typeof row.name === 'string' ? namedKey(row.file, row.rule, row.name) : keyOf(row.file, row.rule);
+}
+
+/** A row's or a hit's label: its file and rule, and its name when it names one */
+function labelOf({ file, rule, name }) {
+  return name === undefined ? `${file} ${rule}` : `${file} ${rule} ${name}`;
 }
 
 function byFileThenRule(a, b) {
@@ -143,8 +168,14 @@ function byFileThenRule(a, b) {
   return 0;
 }
 
+/** By file and rule, then a rule's unnamed row before its named ones, by name */
+function byName(a, b) {
+  const [x, y] = [a.name === undefined ? '' : `\0${a.name}`, b.name === undefined ? '' : `\0${b.name}`];
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 function byRowKey(a, b) {
-  return byFileThenRule(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
+  return byFileThenRule(a, b) || byName(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
 }
 
 /** Where no-undef counts under registry-global or trust-global rather than core-global */
@@ -165,10 +196,17 @@ function ruleOf(message, file = '') {
   return tag && Object.hasOwn(RULES, tag[1]) && tag[1] !== DECLARED_GAP ? tag[1] : null;
 }
 
+/** What a named rule's message says it found, as `sidebarController.onArchiveNote`, or null */
+function nameOf(message) {
+  const found = /^\[[^\]\s]+\] ([^\s:]+):/.exec(message.message || '');
+  return found && NAME.test(found[1]) ? found[1] : null;
+}
+
 /**
  * Lint js/ under `root` with its eslint.config.mjs. Returns the hits by file and rule, as
- * { file, rule, count, at: ['line:col', ...] } in a Map by keyOf, and what isn't a hit:
- * files ESLint couldn't parse and messages from rules no ledger rule names.
+ * { file, rule, count, at: ['line:col', ...] } in a Map by keyOf, a named rule's with the
+ * same by name in `names`, and what isn't a hit: files ESLint couldn't parse, messages from
+ * rules no ledger rule names, and a named rule's message that names nothing.
  */
 async function lint(root) {
   const { ESLint } = require('eslint');
@@ -181,7 +219,8 @@ async function lint(root) {
     for (const message of result.messages) {
       const at = `${message.line}:${message.column}`;
       const rule = message.fatal ? null : ruleOf(message, file);
-      if (!rule) {
+      const name = rule && NAMED_RULES.includes(rule) ? nameOf(message) : undefined;
+      if (!rule || name === null) {
         errors.push(`${file}:${at} ${message.fatal ? "doesn't parse: " : `${message.ruleId || 'eslint'}: `}${message.message}`);
         continue;
       }
@@ -190,6 +229,13 @@ async function lint(root) {
       const hit = hits.get(key);
       hit.count++;
       hit.at.push(at);
+      if (name !== undefined) {
+        if (!hit.names) hit.names = new Map();
+        const named = hit.names.get(name) || { count: 0, at: [] };
+        named.count++;
+        named.at.push(at);
+        hit.names.set(name, named);
+      }
     }
   }
   return { hits, errors, files: results.length };
@@ -258,13 +304,14 @@ function parseLedger(text, root, name) {
     let label = row && typeof row.file === 'string' && typeof row.rule === 'string'
       ? `${row.file} ${row.rule}` : `row ${index + 1}`;
     if (row && row.rule === DECLARED_GAP && typeof row.verify === 'string') label += ` (${row.verify})`;
+    if (row && typeof row.name === 'string') label += ` ${row.name}`;
     const fail = why => problems.push(`${name}: ${label} ${why}`);
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
       fail('is not an object');
       return;
     }
     const missing = FIELDS.filter(field => !Object.hasOwn(row, field));
-    const extra = Object.keys(row).filter(field => !FIELDS.includes(field));
+    const extra = Object.keys(row).filter(field => !ROW_FIELDS.includes(field));
     if (missing.length > 0) fail(`is missing ${missing.join(', ')}`);
     if (extra.length > 0) fail(`has fields the ledger doesn't define: ${extra.join(', ')}`);
     if (missing.length > 0) return;
@@ -273,6 +320,10 @@ function parseLedger(text, root, name) {
       fail('needs a file under js/');
     }
     if (!Object.hasOwn(RULES, row.rule)) fail(`names a rule #12 doesn't define (${Object.keys(RULES).join(', ')})`);
+    if (Object.hasOwn(row, 'name')) {
+      if (!NAMED_RULES.includes(row.rule)) fail(`names a hit, which only a row of ${NAMED_RULES.join(' or ')} may`);
+      else if (typeof row.name !== 'string' || !NAME.test(row.name)) fail('needs a name its rule reports, as `syncStore` or `sidebarController.onArchiveNote`');
+    }
     if (!Number.isInteger(row.count) || row.count < 1) fail('needs a count of 1 or more');
     if (!Number.isInteger(row.owner) || row.owner < 1) fail('needs an owner issue number');
     for (const field of ['removeWhen', 'verify']) {
@@ -297,7 +348,8 @@ function parseLedger(text, root, name) {
 }
 
 function serializeLedger(rows, shrinkOnly = new Set()) {
-  const sorted = [...rows].sort(byRowKey).map(row => Object.fromEntries(FIELDS.map(field => [field, row[field]])));
+  const sorted = [...rows].sort(byRowKey).map(row =>
+    Object.fromEntries(ROW_FIELDS.filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]])));
   const ledger = shrinkOnly.size > 0
     ? { about: ABOUT, shrinkOnly: [...shrinkOnly].sort(), rows: sorted }
     : { about: ABOUT, rows: sorted };
@@ -319,31 +371,65 @@ function seedRow({ file, rule, count }) {
  */
 function compare(hits, rows) {
   const problems = [];
-  const keys = new Set([...hits.keys(), ...[...rows].filter(([, row]) => row.rule !== DECLARED_GAP).map(([key]) => key)]);
-  const ordered = [...keys].map(key => hits.get(key) || rows.get(key)).sort(byFileThenRule);
-  for (const { file, rule } of ordered) {
-    const key = keyOf(file, rule);
-    const hit = hits.get(key) || { count: 0, at: [] };
+  const units = unitsOf(hits, rows);
+  const keys = new Set([...units.keys(), ...[...rows].filter(([, row]) => row.rule !== DECLARED_GAP).map(([key]) => key)]);
+  const ordered = [...keys]
+    .map(key => [key, units.get(key) || rows.get(key)])
+    .sort(([, a], [, b]) => byFileThenRule(a, b) || byName(a, b));
+  for (const [key, { file, rule, name }] of ordered) {
+    const unit = units.get(key) || { count: 0, at: [] };
     const row = rows.get(key);
     const allowed = row ? row.count : 0;
-    if (hit.count > allowed) {
+    const counted = `${plural(unit.count, `${rule} hit`)}${name === undefined ? '' : ` for ${name}`}`;
+    if (unit.count > allowed) {
+      // Hits of names no row names, said by name
+      const found = unit.names && unit.names.length > 0 ? ` (${unit.names.join(', ')})` : '';
       problems.push({
         kind: 'over',
         message: row
-          ? `${file}: ${plural(hit.count, `${rule} hit`)}, ${allowed} allowed by the ledger`
-          : `${file}: ${plural(hit.count, `${rule} hit`)} no ledger row covers`,
-        at: hit.at,
+          ? `${file}: ${counted}, ${allowed} allowed by the ledger`
+          : `${file}: ${counted}${found} no ledger row covers`,
+        at: unit.at,
       });
-    } else if (hit.count < allowed) {
+    } else if (unit.count < allowed) {
       problems.push({
         kind: 'under',
-        message: `${file}: ${plural(hit.count, `${rule} hit`)}, below the ledger's ${allowed}: `
-          + (hit.count === 0 ? 'delete the row' : `lower its count to ${hit.count}`) + ' in this PR',
+        message: `${file}: ${counted}, below the ledger's ${allowed}: `
+          + (unit.count === 0 ? 'delete the row' : `lower its count to ${unit.count}`) + ' in this PR',
         at: [],
       });
     }
   }
   return problems;
+}
+
+/**
+ * The hits as the ledger's rows count them, in a Map by rowKey: by file and rule, and a named
+ * rule's hits of each name a row names by themselves, the rest with their file and rule, which
+ * keep their names in `names`
+ * @returns {Map<string, {file: string, rule: string, name?: string, count: number, at: string[], names?: string[]}>}
+ */
+function unitsOf(hits, rows) {
+  const units = new Map();
+  for (const [key, hit] of hits) {
+    if (!hit.names) {
+      units.set(key, hit);
+      continue;
+    }
+    const rest = { file: hit.file, rule: hit.rule, count: 0, at: [], names: [] };
+    for (const [name, named] of hit.names) {
+      const own = namedKey(hit.file, hit.rule, name);
+      if (rows.has(own)) {
+        units.set(own, { file: hit.file, rule: hit.rule, name, count: named.count, at: named.at });
+      } else {
+        rest.count += named.count;
+        rest.at.push(...named.at);
+        rest.names.push(name);
+      }
+    }
+    if (rest.count > 0) units.set(key, rest);
+  }
+  return units;
 }
 
 /**
@@ -378,9 +464,9 @@ function compareBase(rows, baseRows, ref, { shrinkOnly = new Set(), baseShrinkOn
       continue;
     }
     if (was && row.count > was.count) {
-      problems.push({ message: `${row.file} ${row.rule}: count ${was.count} at ${ref} rose to ${row.count}; fix the new hits instead`, at: [] });
+      problems.push({ message: `${labelOf(row)}: count ${was.count} at ${ref} rose to ${row.count}; fix the new hits instead`, at: [] });
     } else if (!was && row.owner === KERNEL_ISSUE) {
-      problems.push({ message: `${row.file} ${row.rule}: a row added since ${ref} names #12 as owner; a new row needs another issue as its owner`, at: [] });
+      problems.push({ message: `${labelOf(row)}: a row added since ${ref} names #12 as owner; a new row needs another issue as its owner`, at: [] });
     }
   }
   return problems;
@@ -447,8 +533,9 @@ async function main(argv = process.argv.slice(2), options = {}) {
         return fail(`--write-baseline only seeds the ledger or lowers its counts, so ${LEDGER} was not written. `
           + 'Fix these hits, or add their rows by hand with an owner other than #12', raised);
       }
-      rows = [...ledger.rows.values()]
-        .map(row => (row.rule === DECLARED_GAP ? row : { ...row, count: (hits.get(keyOf(row.file, row.rule)) || { count: 0 }).count }))
+      const units = unitsOf(hits, ledger.rows);
+      rows = [...ledger.rows]
+        .map(([key, row]) => (row.rule === DECLARED_GAP ? row : { ...row, count: (units.get(key) || { count: 0 }).count }))
         .filter(row => row.count > 0);
     }
     fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
@@ -498,4 +585,6 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, lint, ruleOf, parseLedger, serializeLedger, seedRow, compare, compareBase, RULES, SEED_OWNERS, LEDGER };
+module.exports = {
+  main, lint, ruleOf, nameOf, parseLedger, serializeLedger, seedRow, compare, compareBase, RULES, NAMED_RULES, SEED_OWNERS, LEDGER,
+};

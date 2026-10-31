@@ -36,6 +36,8 @@ class AIChatController {
 
     // Prompt templates
     this.aiPromptTemplates = [];
+    /** @type {boolean} Their read failed, so the ones shown are the defaults, not what's stored */
+    this.aiPromptTemplatesUnread = false;
     this.aiPromptTemplateEditingId = null;
 
     // Insert preview
@@ -57,19 +59,16 @@ class AIChatController {
     this.getEditor = null;           // () => BlockEditor
     this.onOpenNoteInNewTab = null;  // (noteId) => Promise<void>
     this.onOpenNoteById = null;      // (noteId) => Promise<void>
-    this.onRefreshNotesList = null;  // () => Promise<void>
-    this.onRenderNotesList = null;   // () => Promise<void>
     this.onEnsureDailyNote = null;   // () => Promise<{id: string}|null>, the Daily Note through the kernel
     this.onOpenNewTab = null;        // () => Promise<void>
     this.onOpenSettingsModal = null;  // () => Promise<void>
     this.onCloseAllModals = null;    // () => void
-    this.onGetOpenTabs = null;       // () => Array
-    this.onRenderTabs = null;        // () => void
-    this.onSaveTabs = null;          // () => Promise<void>
+    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    this.noteTabs = null;
     /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
     this.noteList = null;
-    this.onTriggerIndexing = null;   // () => void
-    this.onLoadEmbeddingsModel = null; // () => void
+    /** @type {any} NotesManager's indexing, set by App: the search index and the embedding model (#22) */
+    this.indexing = null;
   }
 
   /** Initialize AI chat: load templates, wire DOM listeners, load history. */
@@ -312,9 +311,7 @@ class AIChatController {
     if (this.aiActiveTab === 'smart') this.updateSmartSuggestions(true);
 
     // Lazy-load AI embedding model on first AI sidebar open (Req 27.3)
-    if (this.onLoadEmbeddingsModel) {
-      this.onLoadEmbeddingsModel();
-    }
+    if (this.indexing) this.indexing.loadEmbeddingsModel();
 
     setTimeout(() => {
       document.getElementById('ai-chat-input')?.focus();
@@ -1903,8 +1900,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   /**
    * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save), in the note's tab, and in the list. A title the
-   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * holds that note (display only, no save) and in the note's tab. The list shows it from the
+   * commit feed. A title the user typed there that no save has stored yet stays, and names
+   * the tab when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
@@ -1914,16 +1912,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const shown = editor && typeof editor.showCommittedTitle === 'function'
       ? editor.showCommittedTitle(noteId, name)
       : 'not-open';
-    if (shown !== 'typed-title-pending') {
-      const openTabs = this.onGetOpenTabs ? this.onGetOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = name;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-    }
-    if (this.onRenderNotesList) await this.onRenderNotesList();
+    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
   }
 
   clearAIChatHistory() {
@@ -2121,7 +2110,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // Its kind and code, never what the blocks hold
       if (outcome.kind !== 'committed') throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
     }
-    if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
+    if (this.indexing) this.indexing.noteChanged(noteId);
   }
 
   async appendAIResponseToNote(blocksOrContent) {
@@ -2162,8 +2151,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
           throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
         }
       }
-      if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+      if (this.indexing) this.indexing.noteChanged(noteId);
+      // The list shows the note's new preview from the commit feed
+      if (this.noteList) await this.noteList.settled();
 
       Utils.showToast(`Added ${parsedBlocks.length} AI block${parsedBlocks.length === 1 ? '' : 's'} to note`, 'success');
     } catch (error) {
@@ -2182,7 +2172,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       const created = await this.documentClient.createNote({ noteId, name: 'AI Generated' });
       if (created.kind !== 'committed') throw new Error(`Not stored: note (${created.kind}: ${created.code})`);
       await this.insertBlocksInto(noteId, parsedBlocks);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+      // The list has the note from the commit feed before its tab opens
+      if (this.noteList) await this.noteList.settled();
       if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
 
       Utils.showToast('New note created from AI response', 'success');
@@ -2455,11 +2446,31 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     return api.getAIPromptTemplatesForScope(this.aiPromptTemplates, scope);
   }
 
+  /**
+   * The prompt templates as stored, read through the settings port. A read that works and
+   * finds no list of them stored shows the defaults and saves them, as 1.4.x seeded them. A
+   * read that fails shows the defaults too, and writes nothing: 1.4.x saved them over the
+   * templates it couldn't read. The first save after that reads them again first
+   * (persistAIPromptTemplates).
+   * @returns {Promise<Array<Object>>}
+   */
   async loadAIPromptTemplates() {
-    const { aiPromptTemplates: savedTemplates } = await this.settings.workspaceDataOr({ aiPromptTemplates: null });
+    let stored;
+    try {
+      stored = await this.settings.workspaceData(['aiPromptTemplates']);
+    } catch (error) {
+      // As getSetting warned of a failed read
+      console.warn('Error getting setting:', error);
+      this.aiPromptTemplates = this.getDefaultAIPromptTemplates();
+      this.aiPromptTemplatesUnread = true;
+      this.renderAIPromptSuggestions();
+      return this.aiPromptTemplates;
+    }
+    const savedTemplates = stored.aiPromptTemplates;
     this.aiPromptTemplates = this.sanitizeAIPromptTemplates(savedTemplates);
+    this.aiPromptTemplatesUnread = false;
 
-    if (savedTemplates === null || !Array.isArray(savedTemplates)) {
+    if (!Array.isArray(savedTemplates)) {
       try {
         await this.settings.savePromptTemplates(this.aiPromptTemplates);
       } catch (error) {
@@ -2471,10 +2482,21 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     return this.aiPromptTemplates;
   }
 
+  /**
+   * Save `templates` as the prompt templates, from Settings' edit, reorder, delete or reset.
+   * After a read that failed, the ones shown are the defaults, not what's stored, so the first
+   * save reads them again first (readAIPromptTemplatesBeforeSave): it goes ahead only when no
+   * list is stored. A refused save takes the usual failure path, so none writes over a list it
+   * never read.
+   * @param {Array<Object>} templates
+   * @param {string} [successMessage]
+   * @returns {Promise<boolean>} whether they were saved
+   */
   async persistAIPromptTemplates(templates, successMessage = '') {
     const sanitized = this.sanitizeAIPromptTemplates(templates);
 
     try {
+      if (this.aiPromptTemplatesUnread) await this.readAIPromptTemplatesBeforeSave();
       await this.settings.savePromptTemplates(sanitized);
       this.aiPromptTemplates = sanitized;
       this.renderAIPromptSuggestions();
@@ -2488,6 +2510,24 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       Utils.showToast('Failed to save AI prompt templates', 'error');
       return false;
     }
+  }
+
+  /**
+   * The read the first save after a failed one makes first. It rejects when the read fails
+   * again, and when it finds a list stored, which then shows in place of the defaults, so
+   * that save is refused. With no list stored, the save goes ahead. A refused edit stays in
+   * Settings' editor, and submitted again it saves into the list now shown
+   * (submitAIPromptTemplateForm).
+   * @returns {Promise<void>}
+   */
+  async readAIPromptTemplatesBeforeSave() {
+    const { aiPromptTemplates: stored } = await this.settings.workspaceData(['aiPromptTemplates']);
+    this.aiPromptTemplatesUnread = false;
+    if (!Array.isArray(stored)) return;
+    this.aiPromptTemplates = this.sanitizeAIPromptTemplates(stored);
+    this.renderAIPromptSuggestions();
+    this.renderAIPromptTemplateSettings();
+    throw new Error('the stored prompt templates were read only now, so this save was refused');
   }
 
   createAIPromptSuggestionButton(template, variant = 'note') {
@@ -2775,12 +2815,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       behavior,
     };
 
-    if (editingId) {
-      const index = nextTemplates.findIndex(template => template.id === editingId);
-      if (index !== -1) {
-        nextTemplates[index] = nextTemplate;
-      }
+    const index = editingId ? nextTemplates.findIndex(template => template.id === editingId) : -1;
+    if (index !== -1) {
+      nextTemplates[index] = nextTemplate;
     } else {
+      // A new template, or an edit of one the list no longer has: a save refused after a failed
+      // read shows the stored list in place of the defaults the editor opened on
       nextTemplates.push(nextTemplate);
     }
 

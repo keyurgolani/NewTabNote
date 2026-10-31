@@ -375,6 +375,13 @@ describe('startup: version 8 without elements', () => {
     assert.deepEqual(guard.querySelectorAll('button').map((b) => b.textContent), ['Export', 'Reload']);
     assert.ok(app);
   });
+
+  it("the new tab's root puts no App on the page, which the boundary rules can't see in js/kernel/ (#12 slice 7c)", async () => {
+    const { env, app } = await startApp({ omit: ['elements'] });
+    assert.ok(app, 'it made one, and ran its init');
+    assert.equal(Object.hasOwn(env.global, 'app'), false);
+    assert.equal(env.global.app, undefined);
+  });
 });
 
 describe('a version-9 database (AC7)', () => {
@@ -682,7 +689,8 @@ async function storageStateOf(env) {
 /**
  * Start the new tab against a fixture with a stub #app element, after `beforeInit(env)`, as
  * js/main.js starts it: its composition root constructs App with the tab's kernel once the
- * DOM is ready, and runs App.init.
+ * DOM is ready, and runs App.init. `app` is the App it made, caught as init runs, since the
+ * root puts none on the page.
  */
 async function startApp(spec, beforeInit = () => {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
@@ -693,9 +701,16 @@ async function startApp(spec, beforeInit = () => {}) {
   const downloads = [];
   env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
   env.get('Utils').showToast = () => {};
+  let app = null;
+  const { prototype } = env.get('App');
+  const init = prototype.init;
+  prototype.init = function caughtInit(...args) {
+    app = this;
+    return init.apply(this, args);
+  };
   beforeInit(env);
   const { startNewTab } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
   startNewTab();
   await Promise.all(env.document.fire('DOMContentLoaded'));
-  return { env, app: env.global.app, before, downloads };
+  return { env, app, before, downloads };
 }

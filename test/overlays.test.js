@@ -68,6 +68,21 @@ function twoPanes() {
   return { env, doc, left, right, headerButton };
 }
 
+/**
+ * App as closeAllModals reads it: the panes' editors, and the controllers App always has
+ * built by then, Settings' as `settingsController` when given
+ */
+function appWith(env, { editor = null, secondaryEditor = null, getEditor = () => editor, settingsController } = {}) {
+  return {
+    editor,
+    secondaryEditor,
+    getEditor,
+    settingsController: settingsController || Object.create(env.get('SettingsController').prototype),
+    themeBuilderController: { _focusTrapCleanup: null },
+    shortcutsManager: { _commandPaletteFocusTrapCleanup: null },
+  };
+}
+
 /** Open an editor's slash, link, or template menu, as typing /, [[, or /template in a block does */
 function openMenu(editor, which) {
   const menu = { slash: editor.slashMenu, link: editor.wikiMenu, template: editor.templateMenu }[which];
@@ -85,7 +100,7 @@ describe('Escape (App.closeAllModals) closes every menu the editors opened', () 
       for (const editor of [left, right]) for (const which of ['slash', 'link', 'template']) menus.push(openMenu(editor, which));
       assert.equal(left._overlayOpen(), true);
 
-      const app = { editor: left, secondaryEditor: right, getEditor: () => editors[active] };
+      const app = appWith(env, { editor: left, secondaryEditor: right, getEditor: () => editors[active] });
       env.get('App').prototype.closeAllModals.call(app);
       assert.deepEqual(menus.filter((menu) => !menu.classList.contains('hidden')).map(which), [], `with the ${active} pane active`);
       assert.equal(left.slashMenuVisible || left.wikiMenuVisible || left.templateMenuVisible, false);
@@ -99,7 +114,7 @@ describe('Escape (App.closeAllModals) closes every menu the editors opened', () 
     for (const name of ['block-action-menu', 'turn-into-menu', 'table-context-menu']) add(doc.body, 'div', { class: name });
     assert.equal(left._overlayOpen(), true);
 
-    env.get('App').prototype.closeAllModals.call({ editor: left, secondaryEditor: right, getEditor: () => left });
+    env.get('App').prototype.closeAllModals.call(appWith(env, { editor: left, secondaryEditor: right }));
     assert.equal(doc.querySelectorAll('.block-action-menu, .turn-into-menu, .table-context-menu').length, 0);
     assert.equal(left._overlayOpen(), false);
   });
@@ -153,7 +168,7 @@ describe('Keyboard Shortcuts takes focus when it opens and gives it back when it
     const { env, doc, opener, modal, close, controller } = shortcuts();
     controller.toggleShortcutsModal(true);
     assert.equal(which(doc.activeElement), which(close));
-    env.get('App').prototype.closeAllModals.call({ settingsController: controller, editor: null, secondaryEditor: null, getEditor: () => null });
+    env.get('App').prototype.closeAllModals.call(appWith(env, { settingsController: controller }));
     assert.equal(modal.classList.contains('hidden'), true);
     assert.equal(which(doc.activeElement), which(opener));
   });
@@ -163,7 +178,7 @@ describe('Keyboard Shortcuts takes focus when it opens and gives it back when it
     const search = add(doc.getElementById('sidebar'), 'input', { id: 'sidebar-search' });
     controller.toggleShortcutsModal(true);
     search.focus();
-    env.get('App').prototype.closeAllModals.call({ settingsController: controller, editor: null, secondaryEditor: null, getEditor: () => null });
+    env.get('App').prototype.closeAllModals.call(appWith(env, { settingsController: controller }));
     assert.equal(which(doc.activeElement), which(search));
   });
 
