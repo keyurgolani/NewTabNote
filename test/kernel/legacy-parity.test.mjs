@@ -97,6 +97,22 @@ async function searchNames(context) {
   return Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, entry.name]));
 }
 
+/**
+ * A Daily Note as a profile holds it: its record, its search entry, and its blocks in order,
+ * with the ids each side gives the template's copies left out
+ * @param {LegacyContext} context
+ * @param {string} noteId
+ */
+async function dailyNoteMade(context, noteId) {
+  const found = await recordsIn(context, ['canvases', 'search_index', 'elements']);
+  const blocks = Object.values(found.elements)
+    .filter(block => block.canvasId === noteId)
+    .sort((a, b) => a.order - b.order)
+    .map(({ id, ...copy }) => copy);
+  const dailies = Object.values(found.canvases).filter(note => note.isDaily);
+  return { note: found.canvases[noteId], search: found.search_index[noteId], blocks, dailies: dailies.length };
+}
+
 /** @param {Outcome | BulkOutcome} outcome */
 function assertCommitted(outcome) {
   assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
@@ -324,20 +340,79 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
   });
 
-  it("setPinned leaves the note SidebarController's pin toggle leaves", async () => {
+  it("SidebarController's pin toggle, through setPinned, leaves the note 1.4.x's toggle left", async () => {
     const { viaStorage, viaKernel, kernel } = await twin({
       canvases: [legacyEnv.note('n1', { name: 'Plan' })],
       search_index: [{ noteId: 'n1', name: 'Plan', content: '', updatedAt: SEEDED_AT }],
     });
-    viaStorage.env.load('js/controllers/sidebar-controller.js');
-    viaStorage.env.get('Utils').showToast = () => {};
-    const sidebar = Object.assign(Object.create(viaStorage.env.get('SidebarController').prototype), {
-      storage: viaStorage.storage,
-      refreshNotesList: async () => {},
+    // 1.4.x's SidebarController.toggleNotePin: the stored note, its pin flipped, written whole
+    const stored = await viaStorage.storage.getNote('n1');
+    stored.pinned = !stored.pinned;
+    await viaStorage.storage.updateNote(stored);
+    // Today's, on the note list it shows, writing through the kernel
+    viaKernel.env.load('js/controllers/sidebar-controller.js');
+    viaKernel.env.get('Utils').showToast = () => {};
+    const noteList = createNoteList({ query: kernel.query, subscribe: kernel.subscribe, whenReady: kernel.whenReady });
+    await noteList.settled();
+    const sidebar = Object.assign(Object.create(viaKernel.env.get('SidebarController').prototype), {
+      documentClient: {
+        setPinned: (/** @type {string} */ noteId, /** @type {boolean} */ pinned) =>
+          kernel.execute({ type: 'setPinned', commandId: 'c1', noteId, pinned }),
+      },
+      _noteList: noteList,
     });
     await sidebar.toggleNotePin('n1');
-    assertCommitted(await kernel.execute({ type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true }));
     assert.deepEqual(await recordsIn(viaKernel, ['canvases']), await recordsIn(viaStorage, ['canvases']));
+    assert.equal(noteList.note('n1')?.pinned, true);
+  });
+
+  it('ensureDailyNote makes the note, search entry, and template blocks Storage.ensureDailyNote makes, and finds it after', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
+      elements: [
+        legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}: plan</p>'),
+        legacyEnv.block('t1-b', 't1', 1, '', {
+          type: 'table',
+          tableData: [
+            ['{{title}}', 'Done'],
+            ['', 'x'],
+          ],
+        }),
+      ],
+    });
+    for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
+    const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
+    const made = await kernel.execute({ type: 'ensureDailyNote', commandId: 'c1', noteId: daily.id });
+    assertCommitted(made);
+    assert.deepEqual(made.kind === 'committed' && made.changedIds, [daily.id]);
+    // Asked again, each finds the one it made
+    assert.equal(legacyEnv.plain(await viaStorage.storage.ensureDailyNote()).id, daily.id);
+    const found = await kernel.execute({ type: 'ensureDailyNote', commandId: 'c2', noteId: 'k-other' });
+    assert.deepEqual(found.kind === 'committed' && [found.code, found.changedIds], ['daily-note-exists', []]);
+    const read = await kernel.query({ type: 'findDailyNote', dateStr: daily.dateStr });
+    assert.equal(
+      read.kind === 'ready' && read.data.note.id,
+      daily.id,
+      'findDailyNote reads the one Storage would find',
+    );
+    assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id));
+  });
+
+  it('ensureDailyNote for a calendar day makes what Storage.ensureDailyNoteForDate makes: its name, dateStr, and template', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
+      elements: [legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}</p>')],
+    });
+    for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
+    // A day early in a month and one late in a year, as the calendar names them
+    for (const [index, dateStr] of ['2026-03-01', '2025-12-31'].entries()) {
+      const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNoteForDate(dateStr));
+      assertCommitted(
+        await kernel.execute({ type: 'ensureDailyNote', commandId: `c${index}`, noteId: daily.id, dateStr }),
+      );
+      assert.equal(daily.dateStr, dateStr);
+      assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id), dateStr);
+    }
   });
 
   it("renameNote leaves the title the editor's title edit leaves, and a generated one what NotesManager's leaves", async () => {

@@ -978,6 +978,10 @@ function testDocumentClient(client) {
     saveContent: (save) => client.saveContent(save),
     deleteBlocks: (noteId, blockIds) => client.deleteBlocks(noteId, blockIds),
     createNote: (fields) => client.createNote(fields),
+    ensureDailyNote: (dateStr) => client.ensureDailyNote(dateStr),
+    setPinned: (noteId, pinned) => client.setPinned(noteId, pinned),
+    archiveNote: (noteId) => client.archiveNote(noteId),
+    unarchiveNote: (noteId) => client.unarchiveNote(noteId),
     newId: () => client.newId(),
     deriveTitle: (...args) => client.deriveTitle(...args),
     renameNote: (...args) => client.renameNote(...args),
@@ -1006,16 +1010,19 @@ function testDocumentClient(client) {
  * starts reading. It takes test/helpers/page-module.js, so node runs with
  * --experimental-vm-modules (npm test passes it).
  * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {{onListQuery?: (query: Object) => void}} [options] - told of each query the note list makes
+ * @param {{onListQuery?: (query: Object) => void, kernelNow?: () => number, pageNow?: () => number}} [options]
+ *   told of each query the note list makes, and the kernel's and the document client's clocks
  * @returns {Promise<Object>} the client
  */
-async function startEditorClient(env, { onListQuery } = {}) {
+async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
   const { kernel, documentClient, noteList } = pageClientsFor({
     storage: env.get('Storage'),
     settings: env.chrome.api.storage.local,
     onListQuery,
+    kernelNow,
+    pageNow,
   });
   // The kernel client too, so a test can pin, trash, or rename the way another part of the page does
   env.kernel = kernel;
@@ -1142,15 +1149,18 @@ const NEW_TAB_FILES = [
  * gives a controller that takes notes out of the active set App's hooks for it, and the
  * note list. With `ready: false` the tab is still starting up: other tabs' messages
  * refresh nothing until `tabs.workspaceReady()`. `page.refreshes` counts the refreshes,
- * and `page.listsOnly` the ones that asked for lists only.
+ * and `page.listsOnly` the ones that asked for lists only. `onListQuery` is told of each
+ * query the note list makes.
  * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {{files?: Array<string>, ready?: boolean}} [options]
+ * @param {{files?: Array<string>, ready?: boolean, onListQuery?: (query: Object) => void,
+ *   kernelNow?: () => number, pageNow?: () => number}} [options] - `kernelNow` and `pageNow` are
+ *   the page kernel's and its document client's clocks
  */
-async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
+async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuery, kernelNow, pageNow } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
-  await startEditorClient(env);
+  await startEditorClient(env, { onListQuery, kernelNow, pageNow });
   const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',
@@ -1181,7 +1191,12 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
     listsOnly: 0,
   };
   tabs.noteList = noteList;
-  tabs.onCreateNote = () => Storage.createNote('Untitled');
+  // As App's createTabNote: an Untitled note through the kernel's createNote
+  tabs.onCreateNote = async () => {
+    const noteId = env.documentClient.newId();
+    const outcome = await env.documentClient.createNote({ noteId, name: 'Untitled' });
+    return outcome.kind === 'committed' ? { id: noteId, name: 'Untitled' } : null;
+  };
   tabs.onRefreshNotesList = async ({ listsOnly = false } = {}) => {
     await noteList.reload();
     page.refreshes += 1;
@@ -1193,6 +1208,8 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   if (ready) tabs.workspaceReady();
   const wire = (controller) => Object.assign(controller, {
     noteList,
+    // What App gives the controllers that write notes through the kernel
+    documentClient: env.documentClient,
     onNotesLeaving: (ids) => tabs.forgetNotes(ids),
     onNotesLeft: (ids) => tabs.announceNotesLeft(ids),
     onRefreshNotesList: tabs.onRefreshNotesList,

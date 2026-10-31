@@ -155,6 +155,7 @@ const folderTypesMatch = true;
  *   getJobRuns: typeof import('../../js/kernel/core/contracts/operations/get-job-runs.js').result,
  *   listSnapshots: typeof import('../../js/kernel/core/contracts/operations/list-snapshots.js').result,
  *   getSnapshot: typeof import('../../js/kernel/core/contracts/operations/get-snapshot.js').result,
+ *   findDailyNote: typeof import('../../js/kernel/core/contracts/operations/find-daily-note.js').result,
  * }} ResultSchemas
  */
 
@@ -181,6 +182,7 @@ const queryDataMatches = {
   getJobRuns: true,
   listSnapshots: true,
   getSnapshot: true,
+  findDailyNote: true,
 };
 
 /**

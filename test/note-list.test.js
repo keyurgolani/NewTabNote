@@ -92,7 +92,8 @@ async function openPage() {
   analytics.noteList = noteList;
   env.get('Analytics').connect({ noteList, getNoteBlocks: (noteId) => env.documentClient.blocksOf(noteId) });
   const app = Object.assign(Object.create(env.get('App').prototype), {
-    noteList, sidebarController: sidebar, shortcutsManager: palette, analyticsController: analytics,
+    noteList, documentClient: env.documentClient, sidebarController: sidebar, shortcutsManager: palette,
+    analyticsController: analytics,
   });
   app.updateEmptyState = () => {};
   queries.length = 0;
