@@ -159,12 +159,18 @@ export function flakyStore(store) {
     code: 'unreadable',
     /** Whether the next failure is a TypeError, as a programming error throws, not an UnavailableError */
     typeError: false,
+    /** How many runs go through before the failures start */
+    after: 0,
   };
   return {
     store: /** @type {TrustStore} */ ({
       open: () => store.open(),
       close: () => store.close(),
       run: (stores, mode, unit) => {
+        if (plan.after > 0) {
+          plan.after--;
+          return store.run(stores, mode, unit);
+        }
         if (plan.count > 0) {
           plan.count--;
           if (plan.typeError) return Promise.reject(new TypeError('a store that broke'));
@@ -173,11 +179,12 @@ export function flakyStore(store) {
         return store.run(stores, mode, unit);
       },
     }),
-    /** @param {number} count @param {string} [code] @param {{typeError?: boolean}} [options] */
-    failNext(count, code = 'unreadable', { typeError = false } = {}) {
+    /** @param {number} count @param {string} [code] @param {{typeError?: boolean, after?: number}} [options] */
+    failNext(count, code = 'unreadable', { typeError = false, after = 0 } = {}) {
       plan.count = count;
       plan.code = code;
       plan.typeError = typeError;
+      plan.after = after;
     },
   };
 }
