@@ -741,3 +741,145 @@ describe("App gives the tab's failure events to the controllers' logger and to E
     assert.equal(Embeddings.events, null);
   });
 });
+
+describe("#20's before-slice-4 follow-ups: success events at the sites, and the worker's reconcile", () => {
+  /** The trust events a page's or the worker's sites report into, over `host` */
+  const eventsOver = host => trust.createFailureEvents({ surface: 'newtab', host: () => host });
+
+  it("the indexer's first INDEX_COMPLETE is an indexer.started event, which resolves an earlier start failure", async () => {
+    const { env, Storage } = await page();
+    const host = trustHost();
+    const events = eventsOver(host);
+    const made = [];
+    env.global.Worker = class {
+      constructor() {
+        this.sent = [];
+        made.push(this);
+      }
+      postMessage(message) {
+        this.sent.push(message);
+      }
+      terminate() {}
+    };
+    const NotesManager = env.get('NotesManager');
+    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null });
+    notes.initIndexer();
+    made[0].onerror({ message: MESSAGE, error: canaryError('SyntaxError') });
+    await events.flush();
+    let seen = await inspect(host.indexedDB, host.settings.items);
+    assert.deepEqual(incidentsOf(seen.incidents), [['index', 'indexer-start-failed', null, 'degraded', 1]]);
+    // Another tab's indexer starts and answers: a later success at the same site
+    const later = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null });
+    later.initIndexer();
+    await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
+    await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
+    await events.flush();
+    seen = await inspect(host.indexedDB, host.settings.items);
+    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['index/indexer-start-failed/-', 'resolved']]);
+    assert.deepEqual(failures(seen.events), [
+      ['indexer.start-failed', { exception: 'SyntaxError', surface: 'newtab' }],
+      ['indexer.started', { surface: 'newtab' }],
+    ]);
+    assertNoCanary(seen.text, 'NewTabNoteTrust, the settings area, or the export');
+  });
+
+  it('a backup that saves after one that failed is a backup.auto-succeeded event, which resolves it', async () => {
+    const { env, Storage } = await page();
+    const host = trustHost();
+    const events = eventsOver(host);
+    await Storage.setSetting('autoBackupEnabled', true);
+    const SettingsController = env.get('SettingsController');
+    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: loggerWith(events) });
+    env.chrome.failNextSet(canaryError());
+    await settings.checkBackupStatus();
+    await events.flush();
+    await settings.checkBackupStatus();
+    await events.flush();
+    const seen = await inspect(host.indexedDB, host.settings.items);
+    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['backup/auto-backup-failed/-', 'resolved']]);
+    assert.deepEqual(failures(seen.events), [['backup.auto-failed', {}], ['backup.auto-succeeded', {}]]);
+  });
+
+  it('a capture that commits after one that failed is a capture.committed event, which resolves it', async () => {
+    let failing = true;
+    const worker = await loadBackground({
+      mutate: global => {
+        const transaction = global.Storage.transaction.bind(global.Storage);
+        global.Storage.transaction = (...args) => {
+          if (failing) throw canaryError();
+          return transaction(...args);
+        };
+      },
+    });
+    const tab = { id: 9, windowId: 1, url: URL_CANARY, title: TITLE };
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+    await worker.drain();
+    failing = false;
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+    await worker.drain();
+    const seen = await inspect(worker.indexedDB);
+    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['capture/capture-failed/-', 'resolved']]);
+    const codes = failures(seen.events).map(([code]) => code);
+    assert.deepEqual(codes, ['capture.failed', 'capture.committed']);
+    assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+  });
+
+  it('a worker start reconciles the held failures of a context whose NewTabNoteTrust would not open', async () => {
+    const worker = await loadBackground({
+      setup: async env => {
+        // An earlier context held NewTabNoteTrust's own incidents in chrome.storage.local
+        const settings = support.settingsArea();
+        const records = core.createTrustRecords({
+          store: core.createTrustDatabase({ indexedDB: support.brokenFactory }),
+          settings,
+          clock: { now: () => Date.now() - 60_000 },
+          ids: { next: () => crypto.randomUUID() },
+        });
+        await records.open();
+        env.chrome.local['trust.lastStorageIncident'] = settings.items.get('trust.lastStorageIncident');
+      },
+    });
+    await worker.drain();
+    const seen = await inspect(worker.indexedDB);
+    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [
+      ['storage/open-failed/NewTabNoteTrust', 'resolved'],
+    ]);
+    assert.equal(worker.env.chrome.local['trust.lastStorageIncident'], null);
+  });
+
+  it('a database that stays broken journals one storage.open-failed per open incident, whatever the worker starts', async () => {
+    const worker = await loadBackground({
+      opens: false,
+      setup: async env => {
+        await newerProfile(env);
+        // An earlier worker start already raised it
+        const settings = support.settingsArea();
+        const store = core.createTrustDatabase({ indexedDB: env.indexedDB, keyRange: IDBKeyRange });
+        const records = core.createTrustRecords({ store, settings, clock: { now: () => Date.now() - 60_000 }, ids: { next: () => crypto.randomUUID() } });
+        await records.open();
+        const journal = core.createDiagnosticJournal({ records, clock: { now: () => Date.now() - 60_000 } });
+        journal.event('storage.open-failed', { subjectId: 'CanvasTabDB', errorCode: 'version-too-new' });
+        await journal.flush();
+        store.close();
+      },
+    });
+    await worker.drain();
+    const seen = await inspect(worker.indexedDB);
+    assert.deepEqual(failures(seen.events).map(([code]) => code), ['storage.open-failed']);
+    assert.deepEqual(incidentsOf(seen.incidents), [['storage', 'open-failed', 'CanvasTabDB', 'capture-risk', 2]]);
+  });
+
+  it("App reconciles the tab's trust store when it attaches the failure events", () => {
+    const env = createLegacyEnv({ document: new FakeDocument() });
+    env.load(
+      'js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js',
+      'js/ui/export-notice.js', 'js/storage.js', 'js/search.js', 'js/embeddings.js', 'js/app.js',
+    );
+    const App = env.get('App');
+    let reconciled = 0;
+    const app = new App({ events: { event() {}, flush: async () => {}, reconcile: async () => { reconciled++; } } });
+    app.logger = env.get('createLogger')();
+    app.attachFailureEvents();
+    assert.equal(reconciled, 1);
+  });
+});
