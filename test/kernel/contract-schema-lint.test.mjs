@@ -383,6 +383,9 @@ describe('the contract schema lint (#13, AC5)', () => {
       // #22's search entries hold a note's name and text, and an embedding is made from them
       updateSearchIndex: ['entries.[]'],
       saveVector: ['vector'],
+      // Another profile's note, whole, and its blocks
+      applyRemoteChanges: ['changes.[].blocks.[]', 'changes.[].note'],
+      applyRemoteContent: ['blocks.[]', 'note'],
       // A whole block is content, since any of its fields can hold what the user wrote
       blockInput: ['(root)'],
       blockRecord: ['(root)'],

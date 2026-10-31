@@ -27,11 +27,12 @@ const outsideScope = () => new UnavailableError('adapter', 'write-outside-scope'
 
 /**
  * `value` as canonical JSON, keys sorted, or null when JSON can't write it out whole: a Map,
- * a Blob, or any object but a plain one or an array
+ * a Blob, or any object but a plain one or an array. A remote change compares blocks by it
+ * too (remote.js).
  * @param {unknown} value
  * @returns {string | null}
  */
-function canonical(value) {
+export function canonical(value) {
   /**
    * @param {string} _
    * @param {unknown} item
