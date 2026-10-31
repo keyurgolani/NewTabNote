@@ -23,24 +23,24 @@
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
-import { rejected, unavailableFrom } from '../contracts/outcomes.js';
-import { committed } from '../contracts/outcomes.js';
+import { committed, rejected, unavailableFrom } from '../contracts/outcomes.js';
 import { digestOf } from '../memory/fingerprint.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
-import { DEFAULT_WINDOWS, placeSignal } from './categories.js';
-import { CATEGORY_ORDER } from './categories.js';
+import { CATEGORY_ORDER, DEFAULT_WINDOWS, placeSignal } from './categories.js';
 import { idOfIdentity } from './identity.js';
 import {
   INVALIDATION_TABLE,
+  REGENERATION_CAUSES,
   invalidateSchema,
   invalidated,
   matches,
   noteChangeSchema,
   regenerationRequestsFor,
-  resumed,
   staled,
-  suspended,
   suspensionOf,
+  withAvailability,
+  withNoteState,
+  withoutNote,
 } from './invalidation.js';
 import {
   LIFECYCLE_ACTIONS,
@@ -51,8 +51,8 @@ import {
   sourceKey,
 } from './lifecycle.js';
 import { payload as commandSchema, signalConflict } from './operations.js';
-import { RECORD_VERSION, signalRefusal } from './records.js';
-import { isTimeZone, startOfLocalDay } from './time.js';
+import { REASON_MAX, RECORD_VERSION, plainTitle, redactText, signalRefusal } from './records.js';
+import { addLocalDays, isTimeZone, startOfLocalDay } from './time.js';
 
 /** @typedef {import('./records.js').IntelligenceSignal} IntelligenceSignal */
 /** @typedef {import('./records.js').SignalDecision} SignalDecision */
@@ -82,9 +82,9 @@ import { isTimeZone, startOfLocalDay } from './time.js';
 
 /**
  * What a producer offers for one signal: everything but what the domain sets itself, which
- * is the id (from the identity), the record version, the entity's revision, freshness, and
- * when it was generated
- * @typedef {Omit<IntelligenceSignal, 'recordVersion' | 'id' | 'revision' | 'freshness' | 'generatedAt'>} SignalDraft
+ * is the id (from the identity), the record version, the entity's revision, freshness, which
+ * of the notes it cites are unavailable, and when it was generated
+ * @typedef {Omit<IntelligenceSignal, 'recordVersion' | 'id' | 'revision' | 'freshness' | 'generatedAt' | 'unavailableNotes'>} SignalDraft
  */
 
 /**
@@ -161,13 +161,14 @@ const ACTION_OF = Object.freeze({
 });
 
 /**
- * The instant `signal` is due, or null when undated: a floating date's local midnight
+ * The instant `signal` is due, or null when undated: for a floating date, the end of that
+ * local day, which `endOfDay` answers
  * @param {IntelligenceSignal} signal
- * @param {(date: string) => number} midnight
+ * @param {(date: string) => number} endOfDay
  */
-const dueInstant = (signal, midnight) => {
+const dueInstant = (signal, endOfDay) => {
   if (signal.time?.dueAt !== undefined) return signal.time.dueAt;
-  if (signal.time?.dueDate !== undefined) return midnight(signal.time.dueDate);
+  if (signal.time?.dueDate !== undefined) return endOfDay(signal.time.dueDate);
   return null;
 };
 
@@ -259,7 +260,7 @@ export function createIntelligence({
         };
       case 'intelligence.snooze': {
         if (command.until <= now) return { refused: rejected('validation', 'snooze-not-future') };
-        const due = dueInstant(signal, date => startOfLocalDay(date, timeZone));
+        const due = dueInstant(signal, date => startOfLocalDay(addLocalDays(date, 1), timeZone));
         const pastDue = due !== null && due < command.until;
         return {
           change: { action: 'snooze', status: 'snoozed', snoozedUntil: command.until },
@@ -344,7 +345,9 @@ export function createIntelligence({
 
   /**
    * The first phase of a command, in one transaction: a retry's kept outcome, a refusal, a
-   * conflict, a committed decision, or an objective task's note command still to send
+   * conflict, a committed decision, or an objective task's note command still to send. Every
+   * answer but the last is kept under the command's key, refusals included, so the key can't
+   * be reused for another command whatever its first one got.
    * @param {IntelligenceCommand} command
    * @param {string} fingerprint
    * @param {number} now
@@ -363,27 +366,30 @@ export function createIntelligence({
             ? { outcome: kept.outcome }
             : { outcome: rejected('validation', 'idempotency-key-reuse') };
         }
+        /** @param {IntelligenceOutcome} outcome */
+        const answer = outcome => {
+          tx.keep(command.commandId, fingerprint, () => outcome);
+          return { outcome };
+        };
         const signal = tx.signal(command.signalId);
-        if (!signal) return { outcome: rejected('not-found', 'signal-not-found') };
+        if (!signal) return answer(rejected('not-found', 'signal-not-found'));
         const action = ACTION_OF[command.type];
         if (!LIFECYCLE_ACTIONS[signal.kind].includes(action)) {
-          return { outcome: rejected('validation', 'action-not-available') };
+          return answer(rejected('validation', 'action-not-available'));
         }
         if (signal.freshness.state === 'suspended' || signal.freshness.state === 'invalidated') {
-          return { outcome: rejected('validation', 'signal-not-actionable') };
+          return answer(rejected('validation', 'signal-not-actionable'));
         }
         const decision = tx.decision(signal.id);
         const current = decisionStateOf(signal, decision, now);
         if (command.expectedDecisionRevision !== current.decisionRevision) {
-          const outcome = signalConflict('signal-decision-conflict', current);
-          tx.keep(command.commandId, fingerprint, () => outcome);
-          return { outcome };
+          return answer(signalConflict('signal-decision-conflict', current));
         }
         if (isObjectiveTask(signal) && (action === 'complete' || (action === 'reopen' && signal.checked === true))) {
           return { note: { signal, checked: action === 'complete', current } };
         }
         const plan = planOf(command, tx, signal, decision, now);
-        if ('refused' in plan) return { outcome: plan.refused };
+        if ('refused' in plan) return answer(plan.refused);
         const next = nextDecision(decision, plan.change, {
           signalId: signal.id,
           identity: signal.identity,
@@ -409,9 +415,13 @@ export function createIntelligence({
   };
 
   /**
-   * The second phase of an objective task's complete or reopen: the note command has run, so
-   * the signal mirrors the `checked` that committed and the decision moves, if no other commit
-   * moved it first
+   * The second phase of an objective task's complete or reopen, once the note command
+   * committed. The block's `checked` is the completion authority and it has changed, so this
+   * phase never answers a conflict: the signal mirrors the committed `checked`, the decision
+   * goes on top of whatever another context committed meanwhile (#35's coordinator will run
+   * these one at a time; until then two contexts can interleave here), and the answer is
+   * `committed`. A duplicate of the command that got here first is answered from the outcome
+   * it kept.
    * @param {IntelligenceCommand} command
    * @param {string} fingerprint
    * @param {IntelligenceSignal} before
@@ -425,60 +435,93 @@ export function createIntelligence({
       result,
       commitSeq,
       events: made,
-    } = await repository.transact(tx => {
-      const signal = tx.signal(before.id);
-      if (!signal) return rejected('not-found', 'signal-not-found');
-      const anchor = signal.identity.anchorBlockId;
-      /** @type {IntelligenceSignal} */
-      const mirrored = {
-        ...signal,
-        checked,
-        checkedAt: now,
-        sourceRefs: signal.sourceRefs.map(source =>
-          source.kind === 'block' &&
-          source.blockId === anchor &&
-          noteOutcome.kind === 'committed' &&
-          noteOutcome.revision !== undefined
-            ? { ...source, revision: noteOutcome.revision }
+    } = await repository.transact(
+      /** @returns {IntelligenceOutcome | ((seq: number | null) => IntelligenceOutcome)} */ tx => {
+        const kept = tx.kept(command.commandId);
+        if (kept) {
+          return kept.fingerprint === fingerprint ? kept.outcome : rejected('validation', 'idempotency-key-reuse');
+        }
+        const signal = tx.signal(before.id);
+        if (!signal) return rejected('not-found', 'signal-not-found');
+        const anchor = signal.identity.anchorBlockId;
+        const revision = noteOutcome.kind === 'committed' ? noteOutcome.revision : undefined;
+        const sourceRefs = signal.sourceRefs.map(source =>
+          source.kind === 'block' && source.blockId === anchor && revision !== undefined
+            ? { ...source, revision }
             : source,
-        ),
-        revision: signal.revision + 1,
-      };
-      if (
-        signal.checked !== checked ||
-        mirrored.sourceRefs.some((source, index) => source !== signal.sourceRefs[index])
-      ) {
-        tx.putSignal(mirrored);
-      }
-      const decision = tx.decision(signal.id);
-      const current = decisionStateOf(mirrored, decision, now);
-      if (command.expectedDecisionRevision !== (decision?.decisionRevision ?? 0)) {
-        const outcome = signalConflict('signal-decision-conflict', current);
-        tx.keep(command.commandId, fingerprint, () => outcome);
-        return outcome;
-      }
-      const action = checked ? 'complete' : 'reopen';
-      // The decision never says completed for an objective task: the block's checked does
-      const next = nextDecision(
-        decision,
-        { action, status: 'active' },
-        {
-          signalId: signal.id,
-          identity: signal.identity,
-          now,
-          commandId: command.commandId,
-        },
-      );
-      tx.putDecision(next);
-      const code = checked ? 'signal-completed' : 'signal-reopened';
-      /** @param {number | null} seq */
-      const build = seq =>
-        committed(code, [signal.id], { revision: next.decisionRevision, ...(seq === null ? {} : { commitSeq: seq }) });
-      tx.keep(command.commandId, fingerprint, build);
-      return build;
-    });
+        );
+        if (signal.checked !== checked || sourceRefs.some((source, index) => source !== signal.sourceRefs[index])) {
+          tx.putSignal({ ...signal, checked, checkedAt: now, sourceRefs, revision: signal.revision + 1 });
+        }
+        // The decision never says completed for an objective task: the block's checked does
+        const next = nextDecision(
+          tx.decision(signal.id),
+          { action: checked ? 'complete' : 'reopen', status: 'active' },
+          { signalId: signal.id, identity: signal.identity, now, commandId: command.commandId },
+        );
+        tx.putDecision(next);
+        const code = checked ? 'signal-completed' : 'signal-reopened';
+        /** @param {number | null} seq */
+        const build = seq =>
+          committed(code, [signal.id], {
+            revision: next.decisionRevision,
+            ...(seq === null ? {} : { commitSeq: seq }),
+          });
+        tx.keep(command.commandId, fingerprint, build);
+        return build;
+      },
+    );
     publish(made);
     return typeof result === 'function' ? result(commitSeq) : result;
+  };
+
+  /**
+   * After a note revision conflict: re-derive the task through its producer, so the signal
+   * reads the revision that stands and the next try can commit, and answer with the state
+   * that stands then
+   * @param {IntelligenceSignal} signal
+   * @param {DecisionState} current
+   * @returns {Promise<IntelligenceOutcome>}
+   */
+  const afterNoteConflict = async (signal, current) => {
+    const drafts = await rederive([signal]);
+    const now = clock.now();
+    /** @type {string[]} */
+    const changed = [];
+    const { result, events: made } = await repository.transact(tx => {
+      if (drafts.get(signal.id)) applyRederived(tx, drafts, now, changed);
+      const latest = tx.signal(signal.id);
+      return latest ? decisionStateOf(latest, tx.decision(signal.id), now) : current;
+    });
+    publish(made);
+    return signalConflict('note-revision-conflict', result);
+  };
+
+  /** @type {Map<string, Promise<unknown>>} the last command running for each signal, here */
+  const running = new Map();
+
+  /**
+   * Runs `task` after every command this context started for `signalId` before it, so in one
+   * context a command never interleaves with another for the same signal: an objective task's
+   * phases run back to back, a concurrent command conflicts before any note write, and a
+   * duplicate waits for the first and gets its outcome
+   * @template T
+   * @param {string} signalId
+   * @param {() => Promise<T>} task
+   * @returns {Promise<T>}
+   */
+  const oneAtATime = (signalId, task) => {
+    const previous = running.get(signalId) ?? Promise.resolve();
+    const result = previous.then(task, task);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    running.set(signalId, settled);
+    settled.then(() => {
+      if (running.get(signalId) === settled) running.delete(signalId);
+    });
+    return result;
   };
 
   /**
@@ -492,32 +535,34 @@ export function createIntelligence({
     if (!parsed.success) return rejected('validation', 'invalid-command');
     const command = parsed.output;
     const fingerprint = digestOf(command);
-    try {
-      const now = clock.now();
-      const first = await decide(command, fingerprint, now);
-      if ('outcome' in first) return first.outcome;
-      const { signal, checked, current } = first.note;
-      const anchorBlockId = /** @type {string} */ (signal.identity.anchorBlockId);
-      const anchor = signal.sourceRefs.find(source => source.kind === 'block' && source.blockId === anchorBlockId);
-      let noteOutcome;
+    return oneAtATime(command.signalId, async () => {
       try {
-        noteOutcome = await noteCommands.setTodoChecked({
-          commandId: command.commandId,
-          noteId: signal.identity.noteId,
-          blockId: anchorBlockId,
-          checked,
-          expectedRevision: anchor?.revision ?? null,
-        });
+        const now = clock.now();
+        const first = await decide(command, fingerprint, now);
+        if ('outcome' in first) return first.outcome;
+        const { signal, checked, current } = first.note;
+        const anchorBlockId = /** @type {string} */ (signal.identity.anchorBlockId);
+        const anchor = signal.sourceRefs.find(source => source.kind === 'block' && source.blockId === anchorBlockId);
+        let noteOutcome;
+        try {
+          noteOutcome = await noteCommands.setTodoChecked({
+            commandId: command.commandId,
+            noteId: signal.identity.noteId,
+            blockId: anchorBlockId,
+            checked,
+            expectedRevision: anchor?.revision ?? null,
+          });
+        } catch (error) {
+          return unavailableFrom(error);
+        }
+        // The note changed since the signal read it: nothing of this command was written
+        if (noteOutcome.kind === 'conflict') return afterNoteConflict(signal, current);
+        if (noteOutcome.kind !== 'committed') return noteOutcome;
+        return await followNote(command, fingerprint, signal, checked, noteOutcome);
       } catch (error) {
         return unavailableFrom(error);
       }
-      // The note changed since the signal read it: nothing was written, and the signal stands
-      if (noteOutcome.kind === 'conflict') return signalConflict('note-revision-conflict', current);
-      if (noteOutcome.kind !== 'committed') return noteOutcome;
-      return await followNote(command, fingerprint, signal, checked, noteOutcome);
-    } catch (error) {
-      return unavailableFrom(error);
-    }
+    });
   }
 
   // ============ Reads ============
@@ -547,19 +592,32 @@ export function createIntelligence({
   // ============ The producer side ============
 
   /**
+   * What a producer offered, as a signal: its text redacted (records.js, redactText), current,
+   * one revision past what it replaces, and still unavailable where the notes it cites are
    * @param {SignalDraft} draft
    * @param {IntelligenceSignal | null} existing
    * @param {number} now
    * @returns {IntelligenceSignal}
    */
-  const signalFrom = (draft, existing, now) => ({
-    recordVersion: RECORD_VERSION,
-    id: idOfIdentity(draft.identity),
-    ...draft,
-    generatedAt: now,
-    freshness: { state: 'current', cause: null, since: null, invalidatedAt: null, resumeTo: null },
-    revision: (existing?.revision ?? 0) + 1,
-  });
+  const signalFrom = (draft, existing, now) => {
+    const cited = new Set([draft.identity.noteId, ...draft.sourceRefs.map(source => source.noteId)]);
+    /** @type {IntelligenceSignal} */
+    const signal = {
+      recordVersion: RECORD_VERSION,
+      id: idOfIdentity(draft.identity),
+      ...draft,
+      title: typeof draft.title === 'string' ? plainTitle(draft.title) : draft.title,
+      confidence:
+        draft.confidence && typeof draft.confidence.reason === 'string'
+          ? { ...draft.confidence, reason: redactText(draft.confidence.reason, REASON_MAX) }
+          : draft.confidence,
+      generatedAt: now,
+      freshness: { state: 'current', cause: null, since: null, invalidatedAt: null, resumeTo: null },
+      unavailableNotes: (existing?.unavailableNotes ?? []).filter(entry => cited.has(entry.noteId)),
+      revision: (existing?.revision ?? 0) + 1,
+    };
+    return withAvailability(signal, now);
+  };
 
   /**
    * Writes what a producer made: each draft becomes a current signal under its identity's id,
@@ -593,7 +651,13 @@ export function createIntelligence({
           continue;
         }
         const existing = tx.signal(id);
-        const signal = signalFrom(draft, existing, now);
+        let signal;
+        try {
+          signal = signalFrom(draft, existing, now);
+        } catch {
+          refused.push('invalid-signal');
+          continue;
+        }
         const problem = signalRefusal(signal);
         if (problem) {
           refused.push(problem);
@@ -631,8 +695,9 @@ export function createIntelligence({
   };
 
   /**
-   * Applies `outcomes` of re-derivation inside a transaction: each draft replaces its signal,
-   * and a missing one invalidates it
+   * Applies re-derived drafts inside a transaction: each draft replaces its signal, and a
+   * missing one invalidates it. A signal whose notes are unavailable stays suspended, with the
+   * new derivation to resume to.
    * @param {IntelligenceTx} tx
    * @param {Map<string, SignalDraft | null>} drafts
    * @param {number} now
@@ -642,26 +707,42 @@ export function createIntelligence({
     for (const [id, draft] of drafts) {
       const existing = tx.signal(id);
       if (!existing || existing.freshness.state === 'invalidated') continue;
-      const signal = draft ? signalFrom(draft, existing, now) : null;
-      if (signal && signalRefusal(signal) === null) {
-        // A suspended signal stays suspended, with the new version to resume to
-        tx.putSignal(
-          existing.freshness.state === 'suspended'
-            ? {
-                ...signal,
-                freshness: { ...existing.freshness, resumeTo: { state: 'current', cause: null, invalidatedAt: null } },
-              }
-            : signal,
-        );
-      } else {
-        tx.putSignal(invalidated(existing, 'not-reproduced', now));
+      let signal = null;
+      try {
+        signal = draft ? signalFrom(draft, existing, now) : null;
+      } catch {
+        signal = null;
       }
+      tx.putSignal(signal && signalRefusal(signal) === null ? signal : invalidated(existing, 'not-reproduced', now));
       changed.push(id);
     }
   };
 
   /**
-   * Stales each inferred signal, and answers the requests that regenerate them
+   * The regeneration requests for inferred signals that are stale now and weren't before, one
+   * per note, recipe, and cause
+   * @param {IntelligenceTx} tx
+   * @param {Array<{before: IntelligenceSignal, after: IntelligenceSignal}>} moves
+   * @param {number} now
+   * @returns {RegenerationRequest[]}
+   */
+  const requestsFor = (tx, moves, now) => {
+    /** @type {Map<RegenerationCause, Array<{signal: IntelligenceSignal, priority: number}>>} */
+    const byCause = new Map();
+    for (const { before, after } of moves) {
+      if (after.provenance !== 'inferred' || after.freshness.state !== 'stale' || before.freshness.state === 'stale') {
+        continue;
+      }
+      const cause = /** @type {RegenerationCause} */ (after.freshness.cause);
+      if (!REGENERATION_CAUSES.includes(cause)) continue;
+      byCause.set(cause, [...(byCause.get(cause) ?? []), { signal: after, priority: priorityOf(tx, after, now) }]);
+    }
+    return [...byCause].flatMap(([cause, signals]) => regenerationRequestsFor(signals, cause));
+  };
+
+  /**
+   * Stales each inferred signal, and answers the requests that regenerate them. A suspended one
+   * goes stale when it's restored, and its request goes then.
    * @param {IntelligenceTx} tx
    * @param {IntelligenceSignal[]} signals
    * @param {FreshnessCause & RegenerationCause} cause
@@ -670,20 +751,21 @@ export function createIntelligence({
    * @returns {RegenerationRequest[]}
    */
   const staleAll = (tx, signals, cause, now, changed) => {
-    /** @type {Array<{signal: IntelligenceSignal, priority: number}>} */
-    const staledSignals = [];
+    /** @type {Array<{before: IntelligenceSignal, after: IntelligenceSignal}>} */
+    const moves = [];
     for (const signal of signals) {
       const next = staled(signal, cause, now);
       if (next === signal) continue;
       tx.putSignal(next);
       changed.push(signal.id);
-      if (next.freshness.state === 'stale') staledSignals.push({ signal: next, priority: priorityOf(tx, next, now) });
+      moves.push({ before: signal, after: next });
     }
-    return regenerationRequestsFor(staledSignals, cause);
+    return requestsFor(tx, moves, now);
   };
 
   /**
-   * Applies a note-side change through the invalidation table
+   * Applies a note-side change through the invalidation table, to the note's own signals and
+   * to other notes' signals that cite it
    * @param {unknown} input
    * @returns {Promise<DomainResult>}
    */
@@ -698,10 +780,12 @@ export function createIntelligence({
     const removed = [];
 
     if (change.type === 'block-edited') {
-      const { result: anchored } = await repository.transact(tx =>
-        tx.signalsOfNote(change.noteId).filter(signal => signal.identity.anchorBlockId === change.blockId),
+      const { result: own } = await repository.transact(tx => tx.signalsOfNote(change.noteId));
+      // Until #17's block revisions, a block cites its note's revision, so every objective
+      // signal of the note is re-derived, and only the edited block's inferences go stale
+      const objective = own.filter(
+        signal => signal.provenance === 'objective' && signal.identity.anchorBlockId !== null,
       );
-      const objective = anchored.filter(signal => signal.provenance === 'objective');
       const drafts = await rederive(objective);
       const {
         result: requests,
@@ -716,8 +800,8 @@ export function createIntelligence({
             source =>
               source.kind === 'block' && source.blockId === change.blockId && source.revision === change.revision,
           );
-        const inferred = anchored
-          .filter(signal => signal.provenance === 'inferred')
+        const inferred = own
+          .filter(signal => signal.provenance === 'inferred' && signal.identity.anchorBlockId === change.blockId)
           .map(signal => tx.signal(signal.id))
           .filter(/** @returns {signal is IntelligenceSignal} */ signal => signal !== null && !sawEdit(signal));
         return staleAll(tx, inferred, 'source-edited', now, changed);
@@ -727,46 +811,58 @@ export function createIntelligence({
       return { commitSeq, changed, removed, regeneration: requests, refused: [] };
     }
 
-    const { commitSeq, events: made } = await repository.transact(tx => {
-      if (change.type === 'block-deleted') {
-        for (const signal of tx.signalsOfNote(change.noteId)) {
-          if (signal.identity.anchorBlockId !== change.blockId) continue;
-          const next = invalidated(signal, 'anchor-deleted', now);
-          if (next !== signal) {
+    const {
+      result: requests,
+      commitSeq,
+      events: made,
+    } = await repository.transact(
+      /** @returns {RegenerationRequest[]} */ tx => {
+        if (change.type === 'block-deleted') {
+          for (const signal of tx.signalsOfNote(change.noteId)) {
+            if (signal.identity.anchorBlockId !== change.blockId) continue;
+            const next = invalidated(signal, 'anchor-deleted', now);
+            if (next !== signal) {
+              tx.putSignal(next);
+              changed.push(signal.id);
+            }
+            const decision = tx.decision(signal.id);
+            if (
+              decision &&
+              decision.tombstone === null &&
+              INVALIDATION_TABLE['anchor-deleted'].decision === 'tombstone'
+            ) {
+              tx.putDecision(
+                nextDecision(
+                  decision,
+                  {
+                    action: 'tombstone',
+                    status: decision.status,
+                    snoozedUntil: decision.snoozedUntil,
+                    dismissReason: decision.dismissReason,
+                  },
+                  { signalId: signal.id, identity: signal.identity, now, commandId: null },
+                ),
+              );
+            }
+          }
+          return [];
+        }
+        if (change.type === 'note-state') {
+          const cause = suspensionOf(change);
+          /** @type {Array<{before: IntelligenceSignal, after: IntelligenceSignal}>} */
+          const moves = [];
+          for (const signal of [...tx.signalsOfNote(change.noteId), ...tx.signalsCiting(change.noteId)]) {
+            const next = withNoteState(signal, change.noteId, cause, now);
+            if (next === signal) continue;
             tx.putSignal(next);
             changed.push(signal.id);
+            moves.push({ before: signal, after: next });
           }
-          const decision = tx.decision(signal.id);
-          if (
-            decision &&
-            decision.tombstone === null &&
-            INVALIDATION_TABLE['anchor-deleted'].decision === 'tombstone'
-          ) {
-            tx.putDecision(
-              nextDecision(
-                decision,
-                {
-                  action: 'tombstone',
-                  status: decision.status,
-                  snoozedUntil: decision.snoozedUntil,
-                  dismissReason: decision.dismissReason,
-                },
-                { signalId: signal.id, identity: signal.identity, now, commandId: null },
-              ),
-            );
-          }
+          // An inference that went stale while suspended asks to be regenerated now
+          return requestsFor(tx, moves, now);
         }
-      } else if (change.type === 'note-state') {
-        const cause = suspensionOf(change);
-        for (const signal of tx.signalsOfNote(change.noteId)) {
-          const next = cause ? suspended(signal, cause, now) : resumed(signal, now);
-          if (next !== signal) {
-            tx.putSignal(next);
-            changed.push(signal.id);
-          }
-        }
-      } else {
-        // Deleted for good: signals, decisions, and corrections go in this one unit
+        // Deleted for good: its signals, decisions, and corrections go in this one unit, and
+        // other notes' signals stop citing it
         const ids = new Set([
           ...tx.signalsOfNote(change.noteId).map(signal => signal.id),
           ...tx.decisionsOfNote(change.noteId).map(decision => decision.signalId),
@@ -778,10 +874,16 @@ export function createIntelligence({
           tx.deleteCorrections(id);
           removed.push(id);
         }
-      }
-    });
+        for (const signal of tx.signalsCiting(change.noteId)) {
+          tx.putSignal(withoutNote(signal, change.noteId, now));
+          changed.push(signal.id);
+        }
+        return [];
+      },
+    );
     publish(made);
-    return { commitSeq, changed, removed, regeneration: [], refused: [] };
+    send(requests);
+    return { commitSeq, changed, removed, regeneration: requests, refused: [] };
   }
 
   /**

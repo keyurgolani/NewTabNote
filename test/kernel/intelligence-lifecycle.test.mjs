@@ -589,22 +589,21 @@ describe('the objective-task path under races (#71 review)', () => {
 
   it('across contexts, a note write that landed wins: the decision goes on top and the answer is committed', async () => {
     const { w, id } = await taskWorld();
-    /** @type {Promise<IntelligenceOutcome> | null} */
-    let dismissed = null;
+    const race = { dismissed: /** @type {Promise<IntelligenceOutcome> | null} */ (null) };
     const other = w.anotherContext();
     // The other context dismisses while this one's note command is in flight
     const racing = w.anotherContext({
       async setTodoChecked(command) {
         const outcome = await w.noteCommands.setTodoChecked(command);
-        dismissed = other.execute(w.command('dismiss', id, 0));
-        await dismissed;
+        race.dismissed = other.execute(w.command('dismiss', id, 0));
+        await race.dismissed;
         return outcome;
       },
     });
     const complete = w.command('complete', id, 0);
     const outcome = await racing.execute(complete);
     assertOutcome(outcome, 'committed', 'signal-completed');
-    assertOutcome(await /** @type {Promise<IntelligenceOutcome>} */ (dismissed), 'committed', 'signal-dismissed');
+    assertOutcome(await /** @type {Promise<IntelligenceOutcome>} */ (race.dismissed), 'committed', 'signal-dismissed');
     if (outcome.kind === 'committed') assert.equal(outcome.revision, 2);
     const read = await stateOf(w, id);
     assert.equal(read.state.status, 'completed');

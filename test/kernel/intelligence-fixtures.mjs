@@ -215,6 +215,7 @@ export const asSignal = (draft, fields = {}) => ({
   ...draft,
   generatedAt: NOW,
   freshness: { state: 'current', cause: null, since: null, invalidatedAt: null, resumeTo: null },
+  unavailableNotes: [],
   revision: 1,
   ...fields,
 });

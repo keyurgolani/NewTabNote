@@ -125,7 +125,8 @@ describe('the invalidation table (#7, "Data and migration")', () => {
     const before = await decisions(w, [ids.task, ids.inferred]);
     await w.editBlock('n1', todo('t1', 'Call the vendor back'));
     const edited = await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n1', blockId: 't1', revision: 2 });
-    assert.deepEqual(edited.changed, [ids.task]);
+    // Every task of the note is re-derived, since a block cites its note's revision for now
+    assert.deepEqual([...edited.changed].sort(), [ids.task, ids.task2].sort());
     const task = await read(w, ids.task);
     assert.equal(task.signal.title, 'Call the vendor back');
     assert.equal(task.signal.freshness.state, 'current');

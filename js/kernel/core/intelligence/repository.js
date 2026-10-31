@@ -29,6 +29,7 @@ export {};
  * @typedef {object} IntelligenceTx
  * @property {(signalId: string) => IntelligenceSignal | null} signal
  * @property {(noteId: string) => IntelligenceSignal[]} signalsOfNote
+ * @property {(noteId: string) => IntelligenceSignal[]} signalsCiting - another note's signals that cite this one
  * @property {() => IntelligenceSignal[]} everySignal - for the hook, which runs in the worker
  * @property {(signalId: string) => SignalDecision | null} decision
  * @property {(noteId: string) => SignalDecision[]} decisionsOfNote

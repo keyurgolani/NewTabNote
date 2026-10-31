@@ -277,7 +277,7 @@ describe('the records (#7, approved AC1)', () => {
   it('plainTitle drops URLs and control characters and clips to the bound without splitting a character', () => {
     assert.equal(
       plainTitle('Read  https://example.com/a?b=c\nand www.example.org/x  today'),
-      'Read (link) and (link) today',
+      'Read [link] and [link] today',
     );
     const long = plainTitle(`${'🗓'.repeat(100)}`);
     assert.ok(long.length <= TITLE_MAX);
@@ -366,7 +366,7 @@ describe('URLs, tokens, and free text in records (#71 review)', () => {
     'javascript:alert(1)',
     'mailto:ceo@corp.example',
     'data:text/html;base64,PHNjcmlwdD4=',
-    'see evil.example/reset?token=abc123',
+    'evil.example/reset?token=abc123',
     'https://example.com/private',
     'file:///etc/passwd',
     'blob:https://example.com/abc',
@@ -400,12 +400,18 @@ describe('URLs, tokens, and free text in records (#71 review)', () => {
     // Plain text with a colon stays as written
     assert.equal(plainTitle('Update data: Q3 numbers'), 'Update data: Q3 numbers');
     assert.equal(plainTitle('Note: call mom'), 'Note: call mom');
+    assert.equal(plainTitle('see evil.example/reset?token=abc123'), 'see [link]');
   });
 
   it('refuses a URL, a token, or free text in the id-like fields and the subject key', () => {
     const base = asSignal(inferredDraft());
     const model = /** @type {{id: string, version: string}} */ (base.model);
-    const bad = ['https://evil.example/collect', `sk-ant-api03-${'Ab9'.repeat(30)}`, 'Some Free Text', 'x'.repeat(65)];
+    const bad = [
+      'https://evil.example/collect',
+      `${['sk', 'ant', 'api03'].join('-')}-${'Ab9'.repeat(30)}`,
+      'Some Free Text',
+      'x'.repeat(65),
+    ];
     for (const value of bad) {
       for (const record of [
         { ...base, providerId: value },

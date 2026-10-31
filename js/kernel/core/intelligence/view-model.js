@@ -61,6 +61,7 @@ export const FRESHNESS_TEXT = Object.freeze({
   'route-changed': 'Model or route changed since this was generated',
   legacy: PROVENANCE_LABELS.unrecorded,
   'anchor-deleted': 'Its source was deleted',
+  'source-deleted': 'A note it linked was deleted',
   'not-reproduced': 'No longer found in the note',
   'scope-revoked': 'Access to its source was removed',
   'note-trashed': 'Its note is in the trash',
@@ -302,12 +303,17 @@ export function toSignalViewModel(signal, decision, corrections, now, prefs) {
     target,
   });
 
+  // Open reaches a stored source in a note that's there: a trashed, archived, or template note
+  // is left out, and a deleted one is gone from the sources already
+  const unavailable = new Set(signal.unavailableNotes.map(entry => entry.noteId));
   /** @type {OpenTarget[]} */
-  const targets = effective.sourceRefs.map(source =>
-    source.kind === 'block'
-      ? { kind: 'block', noteId: source.noteId, blockId: source.blockId }
-      : { kind: 'note', noteId: source.noteId },
-  );
+  const targets = effective.sourceRefs
+    .filter(source => !unavailable.has(source.noteId))
+    .map(source =>
+      source.kind === 'block'
+        ? { kind: /** @type {const} */ ('block'), noteId: source.noteId, blockId: source.blockId }
+        : { kind: /** @type {const} */ ('note'), noteId: source.noteId },
+    );
   const allowed = LIFECYCLE_ACTIONS[signal.kind];
   const done = status !== 'active';
   const gone = signal.freshness.state === 'invalidated' || signal.freshness.state === 'suspended';

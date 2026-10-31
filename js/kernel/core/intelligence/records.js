@@ -94,6 +94,7 @@ export const FRESHNESS_CAUSES = Object.freeze(
     'route-changed',
     'scope-revoked',
     'anchor-deleted',
+    'source-deleted',
     'not-reproduced',
     'note-trashed',
     'note-archived',
@@ -120,31 +121,65 @@ export const HISTORY_ACTIONS = Object.freeze(
   /** @type {const} */ (['complete', 'reopen', 'dismiss', 'snooze', 'correct', 'tombstone']),
 );
 
-/** Text that names a URL: a scheme and `//`, or a `www.` host */
-const URL_IN_TEXT = /(?:[a-z][a-z0-9+.-]*:\/\/|\bwww\.[a-z0-9-]+\.)/i;
+/** The schemes a link starts with when it has no `//` */
+const SCHEMES = 'javascript|data|mailto|file|blob|vbscript|chrome-extension|https?|ftp|wss?|tel|sms';
 
 /**
- * Whether `text` holds a control character other than a tab
+ * A link in text: anything with a scheme and `//`, one of SCHEMES and a colon with something
+ * after it (so "data: Q3" stays text), a `www.` host, or a bare `host.tld/path`
+ */
+const LINK = new RegExp(
+  `(?:[a-z][a-z0-9+.-]*:\\/\\/\\S*|\\b(?:${SCHEMES}):\\S+|\\bwww\\.\\S+|\\b[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}\\/\\S*)`,
+  'gi',
+);
+
+/** What a redacted link reads as */
+export const LINK_PLACEHOLDER = '[link]';
+
+const LINK_IN_TEXT = new RegExp(LINK.source, 'i');
+
+/** @param {string} text */
+const hasLink = text => LINK_IN_TEXT.test(text);
+
+/**
+ * Whether a UTF-16 unit can't sit in plain text: a control character other than a tab, the
+ * line and paragraph separators, and the bidi embeddings, overrides, and isolates, which can
+ * make a title read as something else
+ * @param {number} unit
+ */
+const isUnsafeUnit = unit =>
+  (unit < 0x20 && unit !== 0x09) ||
+  unit === 0x7f ||
+  (unit >= 0x2028 && unit <= 0x202e) ||
+  (unit >= 0x2066 && unit <= 0x2069);
+
+/**
  * @param {string} text
  */
 const hasControl = text => {
   for (let index = 0; index < text.length; index += 1) {
-    const unit = text.charCodeAt(index);
-    if ((unit < 0x20 && unit !== 0x09) || unit === 0x7f) return true;
+    if (isUnsafeUnit(text.charCodeAt(index))) return true;
   }
   return false;
 };
 
 /**
- * Plain text up to `max` characters, with no URL and no control character
+ * Plain text up to `max` characters, with no link and no unsafe character
  * @param {number} max
  */
 export const plainText = max =>
   v.pipe(
     v.string(),
     v.maxLength(max),
-    v.check(text => !URL_IN_TEXT.test(text) && !hasControl(text), 'plain text with no URL'),
+    v.check(text => !hasLink(text) && !hasControl(text), 'plain text with no URL'),
   );
+
+/**
+ * An id a producer, model, provider, scope, or location goes by: lowercase letters, digits,
+ * `.`, `-`, `_`, and `@` for a version, up to 64 characters, so no URL, token, or free text
+ * fits
+ */
+export const slug = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9._@-]{0,63}$/));
 
 /** `YYYY-MM-DD`, a real calendar date */
 export const localDate = v.pipe(
@@ -156,11 +191,11 @@ export const localDate = v.pipe(
 export const signalId = v.pipe(v.string(), v.regex(SIGNAL_ID));
 
 export const identitySchema = v.strictObject({
-  producerId: id,
+  producerId: slug,
   noteId: entityId('note'),
   anchorBlockId: v.nullable(entityId('block')),
-  // A recipe's subject key is normalized from what the user wrote
-  subjectKey: content(v.pipe(v.string(), v.minLength(1), v.maxLength(SUBJECT_KEY_MAX))),
+  // A recipe's subject key is normalized from what the user wrote, so plain text, no link
+  subjectKey: content(v.pipe(plainText(SUBJECT_KEY_MAX), v.minLength(1))),
 });
 
 /**
@@ -290,8 +325,22 @@ function signalProblem(s) {
   if ((s.kind === 'task') !== (s.checked !== null)) return 'checked-for-tasks';
   if (s.checked === null && s.checkedAt !== null) return 'checked-at-for-tasks';
   if (s.title === '' && s.freshness.cause !== 'scope-revoked') return 'title-cleared-only-on-revoke';
+  const cited = new Set([s.identity.noteId, ...s.sourceRefs.map(source => source.noteId)]);
+  if (s.unavailableNotes.some(entry => !cited.has(entry.noteId))) return 'unavailable-note-is-cited';
   return null;
 }
+
+/** The causes a note the signal cites is unavailable for: trashed, archived, or a template */
+export const UNAVAILABLE_CAUSES = Object.freeze(/** @type {const} */ (['note-trashed', 'note-archived', 'template']));
+
+/**
+ * A note the signal cites, its own included, that is trashed, archived, or a template. The
+ * domain keeps these, so restoring the note puts the signal back as it was (lifecycle.js).
+ */
+export const unavailableNoteSchema = v.strictObject({
+  noteId: entityId('note'),
+  cause: v.picklist(UNAVAILABLE_CAUSES),
+});
 
 const signalEntries = {
   recordVersion: v.literal(RECORD_VERSION),
@@ -300,7 +349,7 @@ const signalEntries = {
   kind: v.picklist(KINDS),
   provenance: v.picklist(PROVENANCES),
   executionClass: v.picklist(EXECUTION_CLASSES),
-  location: v.nullable(v.strictObject({ kind: v.picklist(LOCATION_KINDS), id })),
+  location: v.nullable(v.strictObject({ kind: v.picklist(LOCATION_KINDS), id: slug })),
   producerVersion: count,
   sourceRefs: v.pipe(v.array(sourceRefSchema), v.minLength(1), v.maxLength(SOURCES_MAX)),
   title: content(plainText(TITLE_MAX)),
@@ -311,12 +360,13 @@ const signalEntries = {
   checked: v.nullable(v.boolean()),
   checkedAt: v.nullable(timestamp),
   confidence: v.nullable(confidenceSchema),
-  derivationRef: v.nullable(id),
-  model: v.nullable(v.strictObject({ id, version: id })),
-  providerId: v.nullable(id),
-  scopeId: v.nullable(id),
+  derivationRef: v.nullable(slug),
+  model: v.nullable(v.strictObject({ id: slug, version: slug })),
+  providerId: v.nullable(slug),
+  scopeId: v.nullable(slug),
   generatedAt: timestamp,
   freshness: freshnessSchema,
+  unavailableNotes: v.pipe(v.array(unavailableNoteSchema), v.maxLength(SOURCES_MAX)),
   revision,
 };
 
@@ -416,25 +466,40 @@ export const isDecision = value => v.is(decisionRecord, value);
 /** @param {unknown} value */
 export const isCorrection = value => v.is(correctionRecord, value);
 
+/** The most of a source's text redaction reads, so a huge block can't make it slow */
+const MAX_SOURCE_TEXT = 4000;
+
 /**
- * `text` as a signal title: whitespace and control characters collapsed, each URL replaced by
- * `(link)`, and clipped to TITLE_MAX characters with an ellipsis, so a todo that holds a link still makes a signal and
- * the signal keeps no URL
+ * `text` as plain text up to `max` characters: each link replaced by LINK_PLACEHOLDER,
+ * control characters, separators, and bidi marks turned to spaces, whitespace collapsed, and
+ * clipped with an ellipsis. A note's own text, a todo with a link included, still makes a
+ * signal, and the signal keeps no URL. Text that only says something, like "password:
+ * hunter2", passes as written: this redacts links, it can't tell what a sentence means.
  * @param {string} text
+ * @param {number} max
  * @returns {string}
  */
-export function plainTitle(text) {
-  const plain = [...String(text).replace(/(?:[a-z][a-z0-9+.-]*:\/\/|\bwww\.)\S*/gi, '(link)')]
+export function redactText(text, max) {
+  const plain = [...String(text).slice(0, MAX_SOURCE_TEXT).replace(LINK, LINK_PLACEHOLDER)]
     .map(character => (hasControl(character) ? ' ' : character))
     .join('')
     .replace(/\s+/g, ' ')
     .trim();
-  if (plain.length <= TITLE_MAX) return plain;
+  if (plain.length <= max) return plain;
   // Clipped by UTF-16 length, as the schema counts, never inside a surrogate pair
   let clipped = '';
   for (const character of plain) {
-    if (clipped.length + character.length > TITLE_MAX - 1) break;
+    if (clipped.length + character.length > max - 1) break;
     clipped += character;
   }
   return `${clipped.trimEnd()}…`;
+}
+
+/**
+ * `text` as a signal title (redactText, up to TITLE_MAX)
+ * @param {string} text
+ * @returns {string}
+ */
+export function plainTitle(text) {
+  return redactText(text, TITLE_MAX);
 }
