@@ -633,12 +633,21 @@ describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
     assert.equal(copies.length, 1);
     assert.equal(/** @type {Row} */ (legacyEnv.plain(of.chrome.local)[copies[0]]).reason, 'pre-import-replace');
 
-    // The same command again answers what it answered, from its record, and imports nothing.
-    // Its recovery copy comes before the commit that finds the record, so it's saved again.
+    // The same command again, as a client sends it once the reply was lost, answers what it
+    // answered, from its ledger row, read before the copy: it imports nothing and saves no copy
     const listed = Object.keys(notes).length;
     assert.deepEqual(await kernel.execute(sent), outcome);
     assert.equal(Object.keys(legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'canvases')).length, listed);
-    assert.equal(backupKeys(of).filter(key => key.startsWith('recovery_backup_')).length, 2);
+    assert.equal(backupKeys(of).filter(key => key.startsWith('recovery_backup_')).length, 1);
+    // Another Replace all under its key is refused, with no copy either
+    const reused = await kernel.execute(
+      /** @type {any} */ ({ ...sent, backup: { ...file, canvases: [], elements: [] } }),
+    );
+    assert.deepEqual(reused.kind === 'rejected' && [reused.reason, reused.code], [
+      'validation',
+      'idempotency-key-reuse',
+    ]);
+    assert.equal(backupKeys(of).filter(key => key.startsWith('recovery_backup_')).length, 1);
     adapter.close();
   });
 

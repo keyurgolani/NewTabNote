@@ -247,6 +247,19 @@ const isCatalogCommand = work => {
 };
 
 /**
+ * The ledger row `work`'s commandId has, read in a readonly transaction of its own, or
+ * undefined: none for work that isn't a catalog command, or on a database below version 10
+ * @param {IDBDatabase} db
+ * @param {Work} work
+ * @returns {Promise<import('./ledger.js').LedgerRow | undefined>}
+ */
+async function keptRow(db, work) {
+  if (!isCatalogCommand(work) || !db.objectStoreNames.contains(OPERATIONS_STORE)) return undefined;
+  const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
+  return /** @type {import('./ledger.js').LedgerRow | undefined} */ (await result(store.get(work.commandId)));
+}
+
+/**
  * A unit's view of its command's transaction: only the stores it named, and no writes when
  * it only reads. A store the database lacks reads as empty, as DatabaseManager's reads of
  * auxiliary stores do. Notes come back as stored, versions included, and every note read or
@@ -763,12 +776,13 @@ export function createIndexedDbAdapter({
    * to chrome.storage.local, as Storage's did. The import commits as one unit of its command, in
    * one transaction with its ledger row, its notes' versions, and its changes, after Replace
    * all's recovery copy; its outcome names what it added and trashed. A resend of one that
-   * committed answers from its record and imports nothing, though Replace all's copy, which
-   * comes before that commit, is saved again. A refused backup, or a recovery copy that
-   * couldn't be saved, writes nothing to IndexedDB. A task that fails before any commit (the
-   * automatic backup, or an import's reads) names the storage exception it failed with, as the
-   * legacy adapter's did, so #20's `backup.auto-failed` keeps it; the import's commit answers
-   * as every command's does.
+   * committed answers from its ledger row and imports nothing: Replace all reads the row before
+   * its copy, so the lost-reply case saves no second copy of every note. Only a send that races
+   * the first, both reading no row, saves one more, and its commit then answers from the row the
+   * first wrote. A refused backup, or a recovery copy that couldn't be saved, writes nothing to
+   * IndexedDB. A task that fails before any commit (the automatic backup, or an import's reads)
+   * names the storage exception it failed with, as the legacy adapter's did, so #20's
+   * `backup.auto-failed` keeps it; the import's commit answers as every command's does.
    * @param {Work} work
    * @param {import('../../core/ports/repository.js').BackupTask} task
    * @returns {Promise<CommitResult>}
@@ -787,6 +801,10 @@ export function createIndexedDbAdapter({
       if (task.action === 'auto') {
         await createAutoBackup({ db, settings: backupStore, clock });
         return { outcome: work.done(), replayed: false };
+      }
+      if (task.mode === 'replace') {
+        const row = await keptRow(db, work);
+        if (row) return replayFrom(row, work.command);
       }
       const prepared = await prepareImport({ db, settings: backupStore, clock, backup: task.backup, mode: task.mode });
       if ('refused' in prepared) return { outcome: prepared.refused, replayed: false };
