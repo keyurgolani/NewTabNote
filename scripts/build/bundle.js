@@ -5,7 +5,8 @@
  * problems (#27 "Failure rules"). An error from the bundler is `build/bundle` (an import it
  * can't resolve, a file it can't parse), `build/css` from the stylesheet pipeline, or
  * `build/terser` from the minifier. Any warning Vite or the bundler prints is
- * `build/bundler-warning`: no warning is reviewed as allowed, so each one fails the build.
+ * `build/bundler-warning`: no warning is reviewed as allowed, so each one fails the build. A
+ * module the bundler wrapped as CommonJS is `build/commonjs` (scripts/build/commonjs.js).
  *
  * It reports what the passes wrote: build-info.json's chunks (each loader-addressable chunk's
  * name to its file), the module map for dist-report/modules.json (each source module to the
@@ -165,6 +166,19 @@ function chunkNames(report) {
 }
 
 /**
+ * A problem for each module the bundler wrapped as CommonJS, whatever made it wrap: a free
+ * exports or require, or a pass without the define that makes module undefined
+ * (scripts/build/commonjs.js has the rule, #99's review)
+ * @param {BundleReport} report
+ * @param {string} root
+ * @returns {Problem[]}
+ */
+function commonJsProblems(report, root) {
+  return report.chunks.flatMap((chunk) => (chunk.commonJs || []).map((id) => problem('build/commonjs', sourcePath(id, root) || id,
+    `the bundler wrapped it as CommonJS in ${chunk.fileName}, so it gets a module object and takes its Node branch, and a page would never get its global. It names exports or require, or the pass lacks the define that makes module undefined.`)));
+}
+
+/**
  * Each source module to the files that hold it, and the modules each pass bundled
  * @param {BundleReport} report
  * @param {string} root
@@ -229,7 +243,7 @@ async function bundle({ root, outDir, mode }) {
   if (!named.chunks.background || named.chunks.background !== BACKGROUND_ENTRY) {
     named.problems.push(problem('build/bundle', BACKGROUND_ENTRY, `the background pass wrote ${named.chunks.background || 'nothing'} instead`));
   }
-  return { problems: named.problems, chunks: named.chunks, modules, graphs };
+  return { problems: [...named.problems, ...commonJsProblems(report, root)], chunks: named.chunks, modules, graphs };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, chunkNames, moduleMap, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, sourcePath, keepingLogger };

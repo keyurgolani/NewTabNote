@@ -14,7 +14,7 @@
  *      static files copied
  *   4. the checks on what it wrote and on the modules the bundle holds: closure, each page's
  *      preloads and classic scripts, remote code, CSP, notices and source maps, vendored files,
- *      environment reads, and the background's own
+ *      environment reads, CommonJS, and the background's own
  *   5. the type gate (scripts/build/type-gate.js)
  *   6. asset-manifest.json, build-info.json with the bundle's chunks, dist-report/modules.json,
  *      and the rename to dist/
@@ -33,6 +33,7 @@ const { checkRemoteCode } = require('./remote-code.js');
 const { checkCsp } = require('./csp.js');
 const { checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, checkBundledVendor } = require('./notices.js');
 const { checkEnvironment, checkSourceEnvironment } = require('./environment.js');
+const { checkCommonJs } = require('./commonjs.js');
 const { checkBackgroundOutput, checkBackgroundSources } = require('./background.js');
 const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build-info.js');
 const { bundle } = require('./bundle.js');
@@ -195,6 +196,7 @@ function checkOutput(outDir, bundled, root) {
   const loadMode = Object.keys(CLASSIC_SCRIPTS).filter((file) => bundled.modules[file])
     .map((file) => problem('build/load-mode', file, `a page loads it as a classic script, and the bundle holds it as a module too, in ${bundled.modules[file].join(', ')}`));
   const modules = [...new Set([...bundled.graphs.pages, ...bundled.graphs.background])].sort();
+  const sources = firstParty(modules, root);
   return [
     ...loadMode,
     ...checkClosure(files).problems,
@@ -208,7 +210,8 @@ function checkOutput(outDir, bundled, root) {
     ...checkVendor(files),
     ...checkBundledVendor(modules, files, root),
     ...checkEnvironment(files),
-    ...checkSourceEnvironment(firstParty(modules, root)),
+    ...checkSourceEnvironment(sources),
+    ...checkCommonJs(sources),
     ...checkBackgroundOutput(files),
     ...checkBackgroundSources(firstParty(bundled.graphs.background, root)),
   ];
@@ -290,7 +293,7 @@ async function build(argv = process.argv.slice(2)) {
       fail(checked);
       return;
     }
-    console.log('  ✓ closure and preloads, remote code, CSP, notices and source maps, vendored files, environment, the background');
+    console.log('  ✓ closure and preloads, remote code, CSP, notices and source maps, vendored files, environment, CommonJS, the background');
 
     // 5. The type gate
     console.log('\n🔍 Running the type gate...');
