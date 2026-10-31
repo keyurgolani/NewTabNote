@@ -1,6 +1,6 @@
 # Privacy Policy for New Tab Note
 
-**Last Updated: October 20, 2026**
+**Last Updated: October 31, 2026**
 
 ## Overview
 
@@ -46,16 +46,17 @@ This extension requests the following permissions:
 - **activeTab**: To read the current tab's address and title, only when you capture it with the right-click menu or a keyboard shortcut
 - **sidePanel**: To show the Intelligence side panel when you click the toolbar icon
 
-Host permissions cover the AI providers you can choose in Settings: OpenAI (api.openai.com), Anthropic (api.anthropic.com), Google Gemini (generativelanguage.googleapis.com), OpenRouter (openrouter.ai), xAI (api.x.ai), DeepSeek (api.deepseek.com), Mistral (api.mistral.ai), Groq (api.groq.com), Qwen (dashscope-intl.aliyuncs.com and dashscope.aliyuncs.com), GLM (api.z.ai and open.bigmodel.cn), Kimi (api.moonshot.ai and api.moonshot.cn), and MiniMax (api.minimax.io and api.minimax.chat), plus `http://localhost` for Ollama running on your own computer. The extension only contacts the provider you select, and only when you use an AI feature.
+Host permissions cover the AI providers you can choose in Settings: OpenAI (api.openai.com), Anthropic (api.anthropic.com), Google Gemini (generativelanguage.googleapis.com), OpenRouter (openrouter.ai), xAI (api.x.ai), DeepSeek (api.deepseek.com), Mistral (api.mistral.ai), Groq (api.groq.com), Qwen (dashscope-intl.aliyuncs.com and dashscope.aliyuncs.com), GLM (api.z.ai and open.bigmodel.cn), Kimi (api.moonshot.ai and api.moonshot.cn), and MiniMax (api.minimax.io and api.minimax.chat), plus `http://localhost` for Ollama running on your own computer, which the extension can also reach at `127.0.0.1`. The extension only contacts the provider you select, and only when you use an AI feature.
 
 ## Network Requests
 
 New Tab Note has no server of its own. These are the requests it can make, and when:
 
-- **Your chosen AI provider**: When you use an AI feature, your prompt and the note text that feature works on go to the provider you selected, or to Ollama at `http://localhost`.
+- **Your chosen AI provider**: When you use an AI feature, your prompt and the note text that feature works on go to the provider you selected, or to Ollama on your own computer at `http://localhost` or `127.0.0.1`.
 - **Embedding model for semantic search**: The first time you open the AI sidebar or semantic search runs, your browser downloads the all-MiniLM-L6-v2 model from `huggingface.co` (its files may come from Hugging Face's `*.huggingface.co` and `*.hf.co` hosts) and the ONNX Runtime WebAssembly files from `cdn.jsdelivr.net`. Embeddings are computed on your device; your notes are not sent.
 - **Bookmark icons**: Bookmark blocks show the site's icon from Google's favicon service (`https://www.google.com/s2/favicons`), which receives the bookmarked site's domain name.
-- **Video blocks**: A video block with a YouTube or Vimeo link loads that service's player (`youtube.com` or `player.vimeo.com`) inside the note.
+- **Video blocks**: A video block with a YouTube or Vimeo link loads that service's player (`www.youtube.com` or `player.vimeo.com`) inside the note.
+- **WebDAV sync**: If you connect a WebDAV server, your notes go to that server, and only to it, with the user name and password you entered.
 - **Images from web addresses**: Image blocks that point to a web address, including images in Markdown you paste or import, load the image from that address.
 
 ## Data Export and Backup

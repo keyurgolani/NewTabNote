@@ -1,0 +1,85 @@
+{
+  "about": "Every permission, host permission and offscreen reason the manifest asks for, with the issue that owns it, whether it's required or optional, the install warning Chrome shows for it, where it's asked for, and why (#21 slice 1b, PR 3). npm run check:security-baseline holds the built manifest to it both ways: a permission the manifest has and this file lacks fails, and so does one this file lists and the manifest doesn't ask for. Optional permissions are asked for at their request point, never at install. Today every one is required, as in 1.4.0. externally_connectable stays absent: no web page or other extension may open a channel to this one.",
+  "version": 1,
+  "permissions": [
+    {
+      "name": "storage",
+      "issue": 17,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "Settings, preferences, recovery copies and the trust journal's settings copy live in chrome.storage.local."
+    },
+    {
+      "name": "unlimitedStorage",
+      "issue": 17,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "Notes, media and local backups outgrow Chrome's default quota, and a write that fails on quota loses work."
+    },
+    {
+      "name": "offscreen",
+      "issue": 9,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "The service worker sends requests to the user's Ollama server through an offscreen document, until #9 removes the proxy."
+    },
+    {
+      "name": "contextMenus",
+      "issue": 5,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "The right-click menu's captures to today's note."
+    },
+    {
+      "name": "notifications",
+      "issue": 5,
+      "required": true,
+      "installWarning": "Display notifications",
+      "requestedAt": "install",
+      "rationale": "A capture says whether it was saved."
+    },
+    {
+      "name": "activeTab",
+      "issue": 5,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "A capture reads the current tab's address, title and selection, only when the user captures it."
+    },
+    {
+      "name": "sidePanel",
+      "issue": 4,
+      "required": true,
+      "installWarning": null,
+      "requestedAt": "install",
+      "rationale": "The toolbar icon opens the side panel."
+    }
+  ],
+  "hosts": [
+    { "pattern": "https://api.openai.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.openai.com", "requestedAt": "install", "rationale": "OpenAI, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.anthropic.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.anthropic.com", "requestedAt": "install", "rationale": "Anthropic, an AI provider the user can choose in Settings." },
+    { "pattern": "https://generativelanguage.googleapis.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on generativelanguage.googleapis.com", "requestedAt": "install", "rationale": "Google Gemini, an AI provider the user can choose in Settings." },
+    { "pattern": "https://openrouter.ai/*", "issue": 11, "required": true, "installWarning": "Read and change your data on openrouter.ai", "requestedAt": "install", "rationale": "OpenRouter, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.x.ai/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.x.ai", "requestedAt": "install", "rationale": "xAI, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.deepseek.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.deepseek.com", "requestedAt": "install", "rationale": "DeepSeek, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.mistral.ai/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.mistral.ai", "requestedAt": "install", "rationale": "Mistral, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.groq.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.groq.com", "requestedAt": "install", "rationale": "Groq, an AI provider the user can choose in Settings." },
+    { "pattern": "https://dashscope-intl.aliyuncs.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on dashscope-intl.aliyuncs.com", "requestedAt": "install", "rationale": "Qwen's international endpoint, an AI provider the user can choose in Settings." },
+    { "pattern": "https://dashscope.aliyuncs.com/*", "issue": 11, "required": true, "installWarning": "Read and change your data on dashscope.aliyuncs.com", "requestedAt": "install", "rationale": "Qwen's China endpoint, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.z.ai/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.z.ai", "requestedAt": "install", "rationale": "GLM, an AI provider the user can choose in Settings, which the worker's proxy reaches." },
+    { "pattern": "https://open.bigmodel.cn/*", "issue": 11, "required": true, "installWarning": "Read and change your data on open.bigmodel.cn", "requestedAt": "install", "rationale": "GLM's China endpoint, which the worker's proxy reaches." },
+    { "pattern": "https://api.moonshot.ai/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.moonshot.ai", "requestedAt": "install", "rationale": "Kimi, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.moonshot.cn/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.moonshot.cn", "requestedAt": "install", "rationale": "Kimi's China endpoint." },
+    { "pattern": "https://api.minimax.io/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.minimax.io", "requestedAt": "install", "rationale": "MiniMax, an AI provider the user can choose in Settings." },
+    { "pattern": "https://api.minimax.chat/*", "issue": 11, "required": true, "installWarning": "Read and change your data on api.minimax.chat", "requestedAt": "install", "rationale": "MiniMax's China endpoint." },
+    { "pattern": "http://localhost/*", "issue": 9, "required": true, "installWarning": "Read and change your data on localhost", "requestedAt": "install", "rationale": "Ollama on the user's own computer, which the offscreen document reaches past CORS. 127.0.0.1 has no host permission: connect-src lets a page reach it, and Ollama answers with its own CORS headers." }
+  ],
+  "offscreenReasons": [
+    { "reason": "DOM_SCRAPING", "issue": 9, "rationale": "The reason the offscreen document that proxies Ollama requests was created with in 1.4.x. Chrome takes no reason that names a network proxy; #9 removes the document." }
+  ],
+  "externallyConnectable": false
+}

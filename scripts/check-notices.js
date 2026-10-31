@@ -58,15 +58,26 @@ const BUNDLED_CODE = Object.freeze([
 /** js/lib modules that ship as code in the bundle and not as files */
 const BUNDLED = new Set(BUNDLED_CODE.flatMap(({ module }) => (module === null ? [] : [module])));
 
+/**
+ * What the policy has to name for each destination registry row (security/destinations.json,
+ * #21 slice 1b), so a row can't be added without the policy saying where requests go: a remote
+ * row's host (an image row's with its path prefix), a loopback row's `http://localhost` or
+ * `127.0.0.1`, and a row of the stored WebDAV server's, WebDAV
+ * @param {Array<{origin: string, pathPrefix: string, location: string, reachedBy: string}>} rows
+ * @returns {string[]}
+ */
+function policyDestinations(rows) {
+  const names = rows.map((row) => {
+    if (row.location === 'stored') return 'WebDAV';
+    const host = row.origin.replace(/^https?:\/\//, '').replace(/:(\*|\d+)$/, '');
+    if (row.location === 'loopback') return host === 'localhost' ? 'http://localhost' : host;
+    return row.reachedBy === 'image' ? `${host}${row.pathPrefix}` : host;
+  });
+  return [...new Set(names)];
+}
+
 /** Network destinations the extension's code can contact, which the policy must name. */
-const REQUIRED_DESTINATIONS = [
-  'huggingface.co',
-  'cdn.jsdelivr.net',
-  'google.com/s2/favicons',
-  'youtube.com',
-  'player.vimeo.com',
-  'http://localhost',
-];
+const REQUIRED_DESTINATIONS = policyDestinations(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'security', 'destinations.json'), 'utf8')).destinations);
 
 /**
  * Library files under js/lib that ship, relative to it, subdirectories included (VENDOR_SKIP
@@ -337,7 +348,7 @@ function shippedFiles(root = ROOT) {
 }
 
 module.exports = {
-  REQUIRED_DESTINATIONS, BUNDLED, BUNDLED_CODE, vendoredFiles, shippedFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip, checkBundledNotices,
+  REQUIRED_DESTINATIONS, policyDestinations, BUNDLED, BUNDLED_CODE, vendoredFiles, shippedFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip, checkBundledNotices,
 };
 
 if (require.main === module) {

@@ -201,8 +201,13 @@ async function askOffscreen(message) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // A page's network guard refused a call (#21 slice 1b): journaled here, from this extension only
   if (request && request.type === REFUSAL_MESSAGE) {
-    const fields = isOwnSender(sender) ? refusalFields(request.report) : null;
-    if (fields) failureEvents.event('network.request-refused', fields);
+    // Its surface is the sending page's; one that comes before the journal is set up is dropped
+    try {
+      const fields = isOwnSender(sender) ? refusalFields(request.report, sender.url) : null;
+      if (fields && failureEvents && typeof failureEvents.event === 'function') failureEvents.event('network.request-refused', fields);
+    } catch {
+      // The journal is best effort
+    }
     return false;
   }
   if (request && request.type === 'API_REQUEST') {

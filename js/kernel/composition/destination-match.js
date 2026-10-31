@@ -139,7 +139,8 @@ function underPrefix(prefix, pathname) {
  * @param {readonly R[]} rows
  * @param {unknown} url
  * @param {{method?: string, loopback?: string | null, stored?: string | null, reachedBy?: string}} [options]
- *   `loopback` is the stored Ollama URL's origin and `stored` the stored WebDAV server's, or null
+ *   `loopback` is the stored Ollama URL's origin and `stored` the stored WebDAV server's, or null;
+ *   a stored server on a host a remote row takes counts as none
  * @returns {{ok: true, row: R, url: URL} | {ok: false, code: 'destination-refused' | 'invalid-method'}}
  */
 export function matchDestination(rows, url, { method = 'GET', loopback = null, stored = null, reachedBy = 'fetch' } = {}) {
@@ -148,9 +149,13 @@ export function matchDestination(rows, url, { method = 'GET', loopback = null, s
   // Before any prefix is matched: what `URL` resolves and what it keeps encoded alike
   if (encodedPathProblem(givenPath(String(url))) || encodedPathProblem(parsed.pathname)) return { ok: false, code: 'destination-refused' };
   const upper = typeof method === 'string' ? method.toUpperCase() : '';
+  // A stored server on a host a remote row takes would widen that row to the stored rows'
+  // methods, so it's none
+  const server = stored === null ? null : parse(stored);
+  const storedOrigin = server && !rows.some(row => row.location === 'remote' && originMatches(row, server, null, null)) ? stored : null;
   let methodRefused = false;
   for (const row of rows) {
-    if ((row.reachedBy || 'fetch') !== reachedBy || !originMatches(row, parsed, loopback, stored) || !underPrefix(row.pathPrefix, parsed.pathname)) continue;
+    if ((row.reachedBy || 'fetch') !== reachedBy || !originMatches(row, parsed, loopback, storedOrigin) || !underPrefix(row.pathPrefix, parsed.pathname)) continue;
     if (row.methods.includes(upper)) return { ok: true, row, url: parsed };
     methodRefused = true;
   }
