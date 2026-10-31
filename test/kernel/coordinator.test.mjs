@@ -249,7 +249,14 @@ describe("the coordinator's stand-in and instance id", () => {
     await standIn.start();
     await standIn.installed('install');
     const client = standIn.client();
-    assert.deepEqual(await client.execute({ type: 'captureToDailyNote', commandId: 'c1' }), UNAVAILABLE);
+    const capture = {
+      type: /** @type {const} */ ('captureToDailyNote'),
+      commandId: 'c1',
+      noteId: 'n1',
+      blockId: 'b1',
+      capture: { type: /** @type {const} */ ('bookmark'), url: 'https://example.test/', title: 'Example' },
+    };
+    assert.deepEqual(await client.execute(capture), UNAVAILABLE);
     assert.deepEqual(await client.whenReady(), UNAVAILABLE);
   });
 
