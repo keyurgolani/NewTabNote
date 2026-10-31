@@ -17,7 +17,7 @@ const { createLegacyEnv, createDatabase, note, block } = require('./helpers/lega
 const { loadBackground, startWorker } = require('./helpers/load-background');
 
 // This build's version, which the worker's run brings a profile to (js/storage.js's dbVersion)
-const THIS_VERSION = 10;
+const THIS_VERSION = 11;
 
 /** @type {any} */
 let core;
