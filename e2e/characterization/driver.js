@@ -452,8 +452,9 @@ async function seedNotes(extension, notes) {
  * Leave the profile as a 1.4.1 one whose update to this build stopped short of space (#17 PR
  * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and nothing in
  * them, no recovery point, and the worker's record of a run short of space that stands. The
- * worker made the database at 9 when the harness installed it, so this deletes both databases
- * first (test code only: nothing under js/ deletes a database). Seed notes after it.
+ * worker made the database at this build's version when the harness installed it, so this
+ * deletes both databases first (test code only: nothing under js/ deletes a database). Seed
+ * notes after it.
  */
 async function shortOfSpace(extension) {
   await workerStorageSettled(extension);

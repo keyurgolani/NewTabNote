@@ -360,7 +360,7 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
   add(
     fixture({
       id: 'v9.basic',
-      purpose: 'Already at structural version 9 with its receipt: a run finds nothing to do and writes nothing.',
+      purpose: "At structural version 9 with its receipt, as #17 PR 1b's builds left a dev profile: a run makes a point and runs step 10.",
       shape: 'v9',
       schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 },
       databases: [database('v9', records)],
