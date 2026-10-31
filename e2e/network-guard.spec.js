@@ -4,10 +4,12 @@
  * indexer, mark fetch, XMLHttpRequest, WebSocket, EventSource, and sendBeacon as theirs. In the
  * new tab a call through any of them to an origin no registry row takes fails as an offline one
  * does, no request is made, and the refusal is journaled once. What the registry takes still
- * goes: a library the loader puts in (transformers.js) reaching the model hosts and following
- * the Hub's redirect to its CDN host, the runtime host, a provider's model listing, and Ollama
- * at the stored URL's own port, where a call with a body follows no redirect. Routed responses
- * and stand-ins on 127.0.0.1 answer; nothing reaches the network.
+ * goes: a library the loader puts in (transformers.js) reaching the Hub, the Hub's CDN host,
+ * the runtime host, a provider's model listing, and Ollama at the stored URL's own port, where a
+ * call with a body follows no redirect. Routed responses and stand-ins on 127.0.0.1 answer;
+ * nothing reaches the network. A routed response is never a redirect to another host, since
+ * Playwright doesn't route the request that follows one: that the guard leaves an uncredentialed
+ * GET's redirect alone is test/network-guard.test.js's.
  */
 
 const http = require('http');
@@ -155,16 +157,14 @@ test('in the new tab, fetch, XHR, WebSocket, EventSource and sendBeacon to an un
   await expectNoUncaught(extension, page);
 });
 
-test('what the registry takes still goes: transformers.js reaching the Hub and its CDN host after a redirect, the runtime host, and a provider listing', async ({ extension }) => {
+test("what the registry takes still goes: transformers.js reaching the Hub, the Hub's CDN host, the runtime host, and a provider listing", async ({ extension }) => {
   const hub = [];
-  await extension.context.route('https://huggingface.co/**', route => {
-    hub.push(route.request().url());
-    return route.fulfill({ status: 302, headers: { Location: 'https://cas-bridge.xethub.hf.co/routed/config.json', 'Access-Control-Allow-Origin': '*' } });
-  });
-  await extension.context.route('https://cas-bridge.xethub.hf.co/**', route => {
-    hub.push(route.request().url());
-    return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '' });
-  });
+  for (const host of ['https://huggingface.co', 'https://cas-bridge.xethub.hf.co']) {
+    await extension.context.route(`${host}/**`, route => {
+      hub.push(route.request().url());
+      return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '' });
+    });
+  }
   await extension.context.route('https://cdn.jsdelivr.net/**', route => route.fulfill({ status: 200, headers: { 'Content-Type': 'application/wasm', 'Access-Control-Allow-Origin': '*' }, body: '' }));
   const listing = [];
   await extension.context.route('https://api.openai.com/v1/models', route => {
@@ -178,8 +178,9 @@ test('what the registry takes still goes: transformers.js reaching the Hub and i
   await page.evaluate(() => Embeddings.init());
   expect(await page.evaluate(() => typeof transformers)).toBe('object');
   expect((await marks(page)).fetch).toBe(true);
-  expect(hub.some(url => url.startsWith('https://huggingface.co/'))).toBe(true);
-  expect(hub.some(url => url.startsWith('https://cas-bridge.xethub.hf.co/routed/'))).toBe(true);
+  expect(hub.some(url => url.startsWith('https://huggingface.co/Xenova/'))).toBe(true);
+  expect(await page.evaluate(() => fetch('https://cas-bridge.xethub.hf.co/routed/config.json').then(response => response.status))).toBe(404);
+  expect(hub.filter(url => url.startsWith('https://cas-bridge.xethub.hf.co/'))).toEqual(['https://cas-bridge.xethub.hf.co/routed/config.json']);
 
   expect(await page.evaluate(() => fetch('https://cdn.jsdelivr.net/npm/@xenova/transformers/dist/ort-wasm-simd.wasm').then(response => response.status))).toBe(200);
   // A made-up key, never a real one
