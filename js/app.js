@@ -94,9 +94,6 @@ class App {
     this.legacyStorage = legacyStorage;
     this.editor = null;
     this.secondaryEditor = null;
-    // Whether the sidebar and the AI sidebar are open, as Stats, Graph, and the palette read it
-    this.sidebarOpen = true;
-    this.aiSidebarOpen = false;
     // Tab management
     this._openTabs = []; // Until TabController exists; see the openTabs accessor
     // Search Indexer
@@ -767,7 +764,7 @@ class App {
     // Settings sync callbacks
     this.settingsController.onSidebarStateChanged = (key, value) => {
       if (key === 'sidebarOpen') {
-        this.sidebarOpen = value;
+        // Another tab's open state isn't this sidebar's, which stays as it is, as in 1.4.x
         this.updateSidebarState();
       } else if (key === 'sidebarWidth') {
         this.applySidebarWidth();
@@ -784,7 +781,7 @@ class App {
         this.aiChatController.aiSidebarWidth = value;
       }
       const aiSidebar = document.getElementById('ai-sidebar');
-      if (aiSidebar && this.aiSidebarOpen) {
+      if (aiSidebar && this.aiChatController.aiSidebarOpen) {
         aiSidebar.style.width = value + 'px';
       }
     };
@@ -847,8 +844,9 @@ class App {
     };
     this.shortcutsManager.getEditor = () => this.getEditor();
     this.shortcutsManager.getOpenTabs = () => this.openTabs;
-    this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
-    this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
+    // The palette's Show and Hide labels say what the sidebars show
+    this.shortcutsManager.getSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.shortcutsManager.getAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
 
     this.exportImportService = new ExportImportService({
       domRefs: this.domRefs,
@@ -878,9 +876,9 @@ class App {
       logger: this.logger,
     });
 
-    // Wire callbacks so the controller can query App-level state
-    this.analyticsController.onGetSidebarOpen = () => this.sidebarOpen;
-    this.analyticsController.onGetAISidebarOpen = () => this.aiSidebarOpen;
+    // Closing Stats puts back the sidebars as they are, however they were opened or closed
+    this.analyticsController.onGetSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.analyticsController.onGetAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -890,8 +888,6 @@ class App {
     // The note list it renders, once per change
     this.sidebarController.noteList = this.noteList;
     await this.sidebarController.init();
-    // Whether the sidebar is open, which Stats, Graph, and the palette read
-    this.sidebarOpen = this.sidebarController.sidebarOpen;
   }
 
   /**
@@ -906,8 +902,6 @@ class App {
    */
   async initAIChatController() {
     await this.aiChatController.init();
-    // Whether the AI sidebar is open, which Stats, Graph, and the palette read
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -944,8 +938,9 @@ class App {
     });
 
     this.graphView.onOpenNote = (noteId) => this.openNoteInNewTab(noteId);
-    this.graphView.onGetSidebarOpen = () => this.sidebarOpen;
-    this.graphView.onGetAISidebarOpen = () => this.aiSidebarOpen;
+    // Closing Graph puts back the sidebars as they are, however they were opened or closed
+    this.graphView.onGetSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.graphView.onGetAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
 
     await this.graphView.init();
   }
@@ -1143,7 +1138,6 @@ class App {
    */
   async toggleSidebar(force) {
     await this.sidebarController.toggleSidebar(force);
-    this.sidebarOpen = this.sidebarController.sidebarOpen;
   }
 
   toggleFocusMode(force) {
@@ -1279,7 +1273,6 @@ class App {
    */
   toggleAISidebar() {
     this.aiChatController.toggleAISidebar();
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -1287,7 +1280,6 @@ class App {
    */
   closeAISidebar() {
     this.aiChatController.closeAISidebar();
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
