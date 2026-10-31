@@ -3,8 +3,9 @@
  * search index updates, embedding generation, and note export/import.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage - js/storage.js's, which the search index and vector
- *   calls go through until #22 moves them
+ * @param {DatabaseManager} deps.storage - the new tab root's handle on js/storage.js with the
+ *   search index and vector calls only (createNewTabLegacyStores), which they go through until
+ *   #22 moves them
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} deps.llm - The AI port (js/services/ai-port.mjs) the jobs call the provider through

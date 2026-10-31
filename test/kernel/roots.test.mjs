@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createWorkerClient } from '../../js/kernel/composition/background.js';
-import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
+import { createNewTabClient, createNewTabLegacyStores } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { closeAll, legacyContext } from './legacy-fixture.mjs';
@@ -121,5 +121,27 @@ describe('each composition root', () => {
     assert.deepEqual(handled(tab), [true, true]);
     assert.deepEqual(handled(worker), [true, true]);
     closeAll([tab, worker]);
+  });
+
+  it("hands NotesManager, GraphView and SyncService only their own calls on the new tab's Storage", async () => {
+    const tab = legacyContext();
+    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    const stores = createNewTabLegacyStores(hostOf(tab));
+    assert.deepEqual(Object.keys(stores.searchIndex).sort(), [
+      'getAllVectors', 'hasStore', 'removeSearchIndexEntry', 'saveVector', 'setSearchIndex', 'setSearchIndexEntry',
+    ]);
+    assert.deepEqual(Object.keys(stores.graph).sort(), ['getAllNotes', 'getStore']);
+    // Storage defines no importAll or importNote, so sync finds neither on its handle, as on Storage
+    assert.deepEqual(Object.keys(stores.sync).sort(), ['exportAll', 'getSetting', 'getStore', 'saveElement', 'setSetting']);
+    for (const store of Object.values(stores)) {
+      assert.ok(Object.isFrozen(store));
+      for (const name of ['db', 'transaction', 'createNote', 'updateNote', 'deleteNote', 'importData']) {
+        assert.equal(/** @type {Record<string, unknown>} */ (store)[name], undefined, name);
+      }
+    }
+    // Each call is Storage's own
+    assert.deepEqual(await stores.graph.getAllNotes(true), await tab.storage.getAllNotes(true));
+    assert.equal(stores.searchIndex.hasStore('vectors'), tab.storage.hasStore('vectors'));
+    closeAll([tab]);
   });
 });

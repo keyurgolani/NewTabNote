@@ -105,16 +105,19 @@ class App {
    * removeNotes (js/kernel/composition/removal.js). `storageState` is what the tab knows of its
    * database outside the kernel, whether it's open and which stores it lacks; `recovery` the
    * storage guard's raw export; `validateBackup` an import's check of a backup, which writes
-   * nothing; and `legacyStorage` js/storage.js's, which the graph view (#22), the search index
-   * and vectors (#22), and sync (#19) still go through until their issues move them.
+   * nothing. `searchIndexStore`, `graphStore` and `syncStore` are narrow handles on
+   * js/storage.js, with only the calls NotesManager's search index and vectors (#22), the
+   * graph view (#22), and sync (#19) still make until their issues move them.
    * `startIndexer` starts the search indexer's module worker (js/kernel/composition/workers.js);
    * without it nothing indexes.
    * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
-   *   storageState?: any, recovery?: any, validateBackup?: any, legacyStorage?: any, startIndexer?: any}} [options]
+   *   storageState?: any, recovery?: any, validateBackup?: any, searchIndexStore?: any, graphStore?: any,
+   *   syncStore?: any, startIndexer?: any}} [options]
    */
   constructor({
     kernel, documentClient, settings, ai, noteList, events = null, removal,
-    storageState, recovery, validateBackup, legacyStorage, startIndexer = null,
+    storageState, recovery, validateBackup, searchIndexStore, graphStore, syncStore,
+    startIndexer = null,
   } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
@@ -128,7 +131,9 @@ class App {
     this.storageState = storageState;
     this.recovery = recovery;
     this.validateBackup = validateBackup;
-    this.legacyStorage = legacyStorage;
+    this.searchIndexStore = searchIndexStore;
+    this.graphStore = graphStore;
+    this.syncStore = syncStore;
     this.startIndexer = startIndexer;
     this.editor = null;
     this.secondaryEditor = null;
@@ -808,7 +813,7 @@ class App {
 
     this.notesManager = new NotesManager({
       // The search index and vectors (#22)
-      storage: this.legacyStorage,
+      storage: this.searchIndexStore,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: this.ai,
@@ -945,7 +950,7 @@ class App {
 
     this.graphView = new GraphView({
       // The notes and links it draws (#22)
-      storage: this.legacyStorage,
+      storage: this.graphStore,
       logger: this.logger,
     });
 
@@ -965,7 +970,7 @@ class App {
 
     this.syncService = new SyncService({
       // Sync's settings and data (#19)
-      storage: this.legacyStorage,
+      storage: this.syncStore,
       logger: this.logger,
     });
 
