@@ -103,7 +103,8 @@ export const ERROR_CODES = Object.freeze([
   'count-mismatch',
   'id-set-mismatch',
   'content-mismatch',
-  // #17 PR 1b's migration run: a versioned open below 9, and why a run stopped or failed
+  // #17 PR 1b's migration run: a versioned open below this build's version, and why a run
+  // stopped or failed
   'migration-required',
   'space-short',
   'schema-mismatch',

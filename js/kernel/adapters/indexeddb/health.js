@@ -11,7 +11,7 @@
  *
  * - the migration reader: CanvasTabDB's version against the one this build upgrades to, and
  *   what the worker recorded of its last run (`setting_storageUpgrade`), for storage's check
- *   below 9.
+ *   below that version (9 at #17 PR 1b, 10 since PR 2a).
  *
  * A composition root makes them with the context's IndexedDB, and Web Crypto and IDBKeyRange
  * for verification. No shipped root does yet.

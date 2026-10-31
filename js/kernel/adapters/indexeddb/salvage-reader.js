@@ -4,8 +4,8 @@
  * changing anything, and never the secret-class legacy IndexedDB `settings` store.
  *
  * - CanvasTabDB, opened at whatever version is on disk without upgrading it (no database is
- *   "missing", never one made), each store its schema knows (version 8's, and #17's `meta`
- *   and `migrations`) but `settings`, one at a time in #17's bounded readonly batches
+ *   "missing", never one made), each store its schema knows (version 8's, #17's `meta` and
+ *   `migrations`, and step 10's four) but `settings`, one at a time in #17's bounded readonly batches
  *   (recovery-points.js's readBatch). A store that won't read answers its error code and no
  *   values, and the next store is still read. A store the schema doesn't know is never read:
  *   it's named with no values, so the file can say it was left out.
@@ -14,7 +14,7 @@
  *   holds is returned.
  * - #17's recovery points in NewTabNoteRecovery, each read back and verified again now, with
  *   its rows per store.
- * Every Blob becomes a data URL (recovery.js), so what this answers is plain JSON.
+ * Every Blob becomes a data URL (data-urls.js), so what this answers is plain JSON.
  *
  * Nothing shipped calls it: the remediation pipeline does, in-process, once slice 4's views
  * start a run.
@@ -31,16 +31,37 @@ import {
   readPointStore,
   verifyPoint,
 } from './recovery-points.js';
-import { META_STORE, MIGRATIONS_STORE } from './registry.js';
+import {
+  CHANGES_STORE,
+  CONFLICTS_STORE,
+  META_STORE,
+  MIGRATIONS_STORE,
+  OPERATIONS_STORE,
+  TOMBSTONES_STORE,
+} from './registry.js';
 import { DB_NAME, STORE_SCHEMAS } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
 /** @typedef {import('./records.js').Digester} Digester */
 /** @typedef {import('./recovery-points.js').Point} Point */
 
-/** The stores it reads: every one CanvasTabDB's schema knows, but the secret-class `settings` */
+/**
+ * The stores it reads: every one CanvasTabDB's schema knows, but the secret-class `settings`.
+ * That's step 10's four too (#17 PR 2a): the ledger, the change log, the conflict records,
+ * which hold the text a conflict kept, and the tombstones.
+ */
 export const READ_STORES = Object.freeze(
-  [...Object.keys(STORE_SCHEMAS), META_STORE, MIGRATIONS_STORE].filter(name => !EXCLUDED_STORES.includes(name)).sort(),
+  [
+    ...Object.keys(STORE_SCHEMAS),
+    META_STORE,
+    MIGRATIONS_STORE,
+    OPERATIONS_STORE,
+    CHANGES_STORE,
+    CONFLICTS_STORE,
+    TOMBSTONES_STORE,
+  ]
+    .filter(name => !EXCLUDED_STORES.includes(name))
+    .sort(),
 );
 
 /** A legacy copy's key: what 1.4.x's auto-backup and recovery copies are stored under */
