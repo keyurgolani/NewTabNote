@@ -1,9 +1,10 @@
 /**
  * Moving the last active note to trash, alone or in a bulk trash, opens a new Untitled note in
  * the editor and in its tab, and the sidebar marks that note's item active, as 1.4.x does.
- * Since #76 the item came up unmarked (the walkthrough's a11 and a12): the sidebar list draws
- * the new note from its commit before the editor has opened it, and App.leaveNotes no longer
- * draws it again after. Each test also fails on an uncaught exception that
+ * Since #76 a single trash left the item unmarked (the walkthrough's a11 and a12): the sidebar
+ * list draws the new note from its commit before the editor has opened it, and App.leaveNotes
+ * no longer draws it again after. A bulk trash draws the list again as it leaves selection
+ * mode, so its test guards the same rule. Each test also fails on an uncaught exception that
  * test/known-defects.json doesn't list.
  */
 

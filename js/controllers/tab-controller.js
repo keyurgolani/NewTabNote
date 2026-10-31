@@ -331,6 +331,8 @@ class TabController {
     this.openTabs = was.tabs;
     this.activeTabIndex = was.active;
     this.renderTabs();
+    // The sidebar marks the note the pane shows again, as a tab switch does
+    if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs();
     const shown = this.getEditor();
     if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
@@ -398,6 +400,9 @@ class TabController {
     }
     if (!changed) return;
     this.renderTabs();
+    // The sidebar marks the note now in view, as a tab switch does. The list may have drawn a
+    // new note from its commit before the pane opened it
+    if (this.onRenderNotesList) await this.onRenderNotesList();
     await this.saveTabs();
     if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
   }
