@@ -21,6 +21,17 @@ const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/sc
 
 const ADAPTER = 'js/kernel/adapters/indexeddb/adapter.js';
 const RUNNER = 'js/kernel/adapters/indexeddb/migrate.js';
+/**
+ * The worker's own modules, which no page may reach, with what a problem calls each: the
+ * migration runner, the transforms the worker runs after it, and the purge it runs once a delete
+ * wakes it (R88's read of #121)
+ */
+const WORKER_ONLY = Object.freeze({
+  [RUNNER]: 'the migration runner',
+  'js/kernel/adapters/indexeddb/transforms.js': "the worker's transforms",
+  'js/kernel/adapters/indexeddb/purge.js': "the worker's purge",
+});
+/** Deleted with #17 PR 4a, once every root opened #17's adapter */
 const LEGACY_ADAPTER = 'js/kernel/adapters/legacy/adapter.js';
 const PAGES = Object.freeze(['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html']);
 /**
@@ -56,17 +67,16 @@ function pageGraphs(readFile) {
 }
 
 /**
- * What a page's graph breaks of the roots rule: a page that reaches the migration runner or the
- * legacy adapter, Popup, Side Panel, or the new tab without #17's adapter, the offscreen document
- * with any adapter, and an import() no reading can follow but the loader's
+ * What a page's graph breaks of the roots rule: a page that reaches one of the worker's own
+ * modules, Popup, Side Panel, or the new tab without #17's adapter, the offscreen document with
+ * any adapter, and an import() no reading can follow but the loader's
  * @param {(file: string) => string} [readFile]
  * @returns {string[]}
  */
 function rootProblems(readFile) {
   const problems = [];
   for (const [page, { modules, computed }] of pageGraphs(readFile).pages) {
-    if (modules.has(RUNNER)) problems.push(`${page} reaches the migration runner`);
-    if (modules.has(LEGACY_ADAPTER)) problems.push(`${page} reaches the legacy adapter`);
+    for (const [file, what] of Object.entries(WORKER_ONLY)) if (modules.has(file)) problems.push(`${page} reaches ${what}`);
     if (page === 'offscreen.html') {
       for (const file of modules) if (file.startsWith('js/kernel/adapters/')) problems.push(`${page} reaches ${file}`);
     } else if (!modules.has(ADAPTER)) {
@@ -79,13 +89,13 @@ function rootProblems(readFile) {
   return problems;
 }
 
-it('every root loads the IndexedDB adapter, and none the legacy one; only the worker runs migrations', () => {
+it('every root loads the IndexedDB adapter, and the legacy one is gone; only the worker runs migrations, transforms, and the purge', () => {
   const { all, pages } = pageGraphs();
   assert.deepEqual(all.problems, []);
   // #17 PR 1b: the worker upgrades the database through the runner, then opens #17's adapter
   assert.ok(all.workerFiles.has(ADAPTER), 'the worker loads the adapter');
-  assert.ok(all.workerFiles.has(RUNNER), 'the worker loads the migration runner');
-  assert.ok(!all.workerFiles.has(LEGACY_ADAPTER), 'the worker is off the legacy adapter');
+  for (const [file, what] of Object.entries(WORKER_ONLY)) assert.ok(all.workerFiles.has(file), `the worker loads ${what}`);
+  assert.ok(!fs.existsSync(path.join(ROOT, LEGACY_ADAPTER)), 'the legacy adapter went with #17 PR 4a');
   // Popup and Side Panel open it as it is (Q3), and so does the new tab since #17 PR 4a, every
   // chunk each loads included, and none runs a migration; the offscreen document only makes
   // #21's API requests, and opens no storage
@@ -124,6 +134,22 @@ it("fails a page that reaches the runner through a chunk it loads with import(),
       'newtab.html has an import() no reading follows, in js/kernel/composition/lazy-failure-events.js',
     ),
   );
+});
+
+it("fails a page that reaches the worker's transforms or its purge, as one that reaches the runner (R88's read of #121)", () => {
+  // Planted through the boot root's chunk and Popup's root
+  const workspace = path.join(ROOT, 'js', 'workspace.js');
+  const popup = path.join(ROOT, 'js', 'kernel', 'composition', 'popup.js');
+  /** @param {string} file */
+  const reaching = file => {
+    const text = fs.readFileSync(file, 'utf8');
+    if (file === workspace) return `import './kernel/adapters/indexeddb/transforms.js';\n${text}`;
+    if (file === popup) return `import '../adapters/indexeddb/purge.js';\n${text}`;
+    return text;
+  };
+  const reached = rootProblems(reaching);
+  assert.ok(reached.includes("newtab.html reaches the worker's transforms"), JSON.stringify(reached));
+  assert.ok(reached.includes("popup.html reaches the worker's purge"), JSON.stringify(reached));
 });
 
 it('has every flag, so the ledger declares no gap for it: the backup tasks run on it since #17 PR 4a', () => {
