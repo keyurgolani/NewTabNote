@@ -1,7 +1,7 @@
 /**
  * One context's connection to CanvasTabDB (#17, "Transactions" and "Hosting"), opened one of
  * two ways:
- * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 9. The
+ * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 10. The
  *   worker opens it so only once the migration runner (migrate.js) has brought the database
  *   there after its verified recovery point, so this open finds nothing to upgrade. With no
  *   database it makes one through the registry's structural steps, which have nothing to keep.

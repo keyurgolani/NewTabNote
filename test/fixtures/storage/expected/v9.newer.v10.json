@@ -1,40 +1,31 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v2-idb-settings.v1.1.2.v9",
-    "purpose": "After the registry runs to 9 on v2-idb-settings.v1.1.2.",
+    "id": "v9.newer.v10",
+    "purpose": "After the registry runs to 10 on v9.newer.",
     "shape": "v9",
-    "releases": [
-      "v1.1.2"
-    ],
-    "provenance": "recorded",
+    "releases": [],
+    "provenance": "synthesized",
     "source": {
-      "recorder": "scripts/fixtures/record-release.mjs",
-      "tag": "v1.1.2",
-      "commit": "5fe472c4906e9d56151b25e3402699394186331f",
-      "tree": "f616c691564e1a4b636ae2b1f651dd499f518a8c",
-      "browser": "chromium 156.0.0.0",
-      "writePaths": [
-        "Storage.createNote",
-        "the editor save (Block.serialize, saveElement)",
-        "Storage.saveMedia",
-        "Storage.archiveNote",
-        "Storage.trashNote",
-        "Storage.setSetting"
-      ]
+      "generator": "scripts/fixtures/synthesize-storage.mjs",
+      "seed": 1
     },
     "schema": {
-      "idbVersion": 9,
-      "structuralVersion": 9,
-      "logicalVersion": 1
+      "idbVersion": 12,
+      "structuralVersion": 12,
+      "logicalVersion": 4
     },
-    "degraded": [],
+    "degraded": [
+      "idb-version:12",
+      "extra-store:future_store",
+      "meta-structural:12"
+    ],
     "privacy": "synthetic"
   },
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 9,
+      "version": 12,
       "stores": [
         {
           "name": "canvases",
@@ -56,18 +47,25 @@
           ],
           "records": [
             {
-              "key": "1793409045245-m5v222cjq",
+              "key": "1760000339472-0xrbt9xtl",
               "value": {
-                "id": "1793409045245-m5v222cjq",
-                "name": "Untitled",
-                "createdAt": 1793409045245,
-                "updatedAt": 1793409045245,
+                "id": "1760000339472-0xrbt9xtl",
+                "name": "Groceries",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
                 "insights": null,
                 "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": "1760000345390-mns5dnlle",
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -80,18 +78,25 @@
               }
             },
             {
-              "key": "1793409046748-8f9ubll43",
+              "key": "1760000341026-7p9awrkve",
               "value": {
-                "id": "1793409046748-8f9ubll43",
-                "name": "{{CANARY:note-1-title}}",
-                "createdAt": 1793409046748,
-                "updatedAt": 1793409046748,
+                "id": "1760000341026-7p9awrkve",
+                "name": "Reading list",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
                 "insights": null,
                 "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -104,42 +109,25 @@
               }
             },
             {
-              "key": "1793409046750-tor8et7ok",
+              "key": "1760000342044-mpf51c3cf",
               "value": {
-                "id": "1793409046750-tor8et7ok",
-                "name": "{{CANARY:note-2-title}}",
-                "createdAt": 1793409046750,
-                "updatedAt": 1793409046750,
-                "archived": false,
-                "archivedAt": null,
-                "titleManuallySet": false,
-                "lastAutoTitleAt": null,
-                "insights": null,
-                "lastInsightsExtractedAt": null,
-                "viewport": {
-                  "scale": 1,
-                  "offsetX": 0,
-                  "offsetY": 0
-                },
-                "settings": {
-                  "gridType": "dots",
-                  "backgroundColor": "#fafafa"
-                }
-              }
-            },
-            {
-              "key": "1793409046751-hwk89oqes",
-              "value": {
-                "id": "1793409046751-hwk89oqes",
-                "name": "{{CANARY:note-3-title}}",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046762,
+                "id": "1760000342044-mpf51c3cf",
+                "name": "Old plans",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
                 "archived": true,
-                "archivedAt": 1793409046761,
+                "archivedAt": 1760000005000,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
                 "insights": null,
                 "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -152,18 +140,25 @@
               }
             },
             {
-              "key": "1793409046751-rvu4yivww",
+              "key": "1760000343728-zyi4zum4j",
               "value": {
-                "id": "1793409046751-rvu4yivww",
-                "name": "{{CANARY:note-4-title}}",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046763,
+                "id": "1760000343728-zyi4zum4j",
+                "name": "Thrown away",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
                 "insights": null,
                 "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -174,7 +169,38 @@
                   "backgroundColor": "#fafafa"
                 },
                 "trashed": true,
-                "trashedAt": 1793409046763
+                "trashedAt": 1760000006000
+              }
+            },
+            {
+              "key": "1760000347322-lhez4l74z",
+              "value": {
+                "id": "1760000347322-lhez4l74z",
+                "name": "Meeting template",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": true,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
               }
             }
           ]
@@ -199,122 +225,82 @@
           ],
           "records": [
             {
-              "key": "1793409046751-6jxpl6xoy",
+              "key": "1760000348335-eu9jx2dzi",
               "value": {
-                "id": "1793409046751-6jxpl6xoy",
+                "id": "1760000348335-eu9jx2dzi",
+                "type": "text",
+                "content": "Milk and eggs",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000339472-0xrbt9xtl",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000350269-5px8fexg8",
+              "value": {
+                "id": "1760000350269-5px8fexg8",
                 "type": "todo",
-                "content": "{{CANARY:block-3}}",
+                "content": "Bread",
+                "indentLevel": 0,
                 "checked": true,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
-                "order": 2
-              }
-            },
-            {
-              "key": "1793409046751-cedws40pv",
-              "value": {
-                "id": "1793409046751-cedws40pv",
-                "type": "image",
-                "content": "",
-                "checked": false,
-                "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
-                "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
-                "order": 3
-              }
-            },
-            {
-              "key": "1793409046751-qhcfxfgeu",
-              "value": {
-                "id": "1793409046751-qhcfxfgeu",
-                "type": "h1",
-                "content": "{{CANARY:block-1}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
-                "order": 0
-              }
-            },
-            {
-              "key": "1793409046751-vt452xxq2",
-              "value": {
-                "id": "1793409046751-vt452xxq2",
-                "type": "text",
-                "content": "{{CANARY:block-2}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000339472-0xrbt9xtl",
                 "order": 1
               }
             },
             {
-              "key": "1793409046755-iaj4mlbmc",
+              "key": "1760000351525-3hb5f3qah",
               "value": {
-                "id": "1793409046755-iaj4mlbmc",
-                "type": "todo",
-                "content": "{{CANARY:block-5}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046755,
-                "updatedAt": 1793409046755,
-                "canvasId": "1793409046750-tor8et7ok",
-                "order": 1
-              }
-            },
-            {
-              "key": "1793409046755-say5963dm",
-              "value": {
-                "id": "1793409046755-say5963dm",
+                "id": "1760000351525-3hb5f3qah",
                 "type": "text",
-                "content": "{{CANARY:block-4}}",
+                "content": "A long book",
+                "indentLevel": 0,
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046755,
-                "updatedAt": 1793409046755,
-                "canvasId": "1793409046750-tor8et7ok",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000341026-7p9awrkve",
                 "order": 0
               }
             },
             {
-              "key": "1793409046756-9ebtrqbwx",
+              "key": "1760000353361-htzbdz7kg",
               "value": {
-                "id": "1793409046756-9ebtrqbwx",
+                "id": "1760000353361-htzbdz7kg",
                 "type": "text",
-                "content": "{{CANARY:block-7}}",
+                "content": "Ideas from last year",
+                "indentLevel": 0,
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046756,
-                "updatedAt": 1793409046756,
-                "canvasId": "1793409046751-rvu4yivww",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000342044-mpf51c3cf",
                 "order": 0
               }
             },
             {
-              "key": "1793409046756-k8jrdtsq3",
+              "key": "1760000354470-zntnsx856",
               "value": {
-                "id": "1793409046756-k8jrdtsq3",
+                "id": "1760000354470-zntnsx856",
                 "type": "text",
-                "content": "{{CANARY:block-6}}",
+                "content": "Not needed",
+                "indentLevel": 0,
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046756,
-                "updatedAt": 1793409046756,
-                "canvasId": "1793409046751-hwk89oqes",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000343728-zyi4zum4j",
                 "order": 0
               }
             }
@@ -339,6 +325,21 @@
             }
           ],
           "records": []
+        },
+        {
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "f1",
+              "value": {
+                "id": "f1",
+                "kind": "something new"
+              }
+            }
+          ],
+          "name": "future_store",
+          "keyPath": "id"
         },
         {
           "name": "links",
@@ -372,22 +373,7 @@
               "multiEntry": false
             }
           ],
-          "records": [
-            {
-              "key": "1793409046756-hb1ritwgw",
-              "value": {
-                "id": "1793409046756-hb1ritwgw",
-                "canvasId": "1793409046748-8f9ubll43",
-                "blob": {
-                  "$type": "Blob",
-                  "mime": "image/png",
-                  "base64": "iVBORw0KGgoAAAANAQIDBA=="
-                },
-                "type": "image/png",
-                "createdAt": 1793409046757
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "meta",
@@ -399,8 +385,8 @@
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 9,
-                "logicalVersion": 1
+                "structuralVersion": 12,
+                "logicalVersion": 4
               }
             }
           ]
@@ -413,24 +399,7 @@
           ],
           "autoIncrement": false,
           "indexes": [],
-          "records": [
-            {
-              "key": [
-                "structural-9",
-                "completed"
-              ],
-              "value": {
-                "id": "structural-9",
-                "from": 8,
-                "to": 9,
-                "status": "completed",
-                "startedAt": 1792497600000,
-                "completedAt": 1792497600000,
-                "recoveryPointId": "pre-migration-1792497600000",
-                "failure": null
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "search_index",
@@ -444,48 +413,7 @@
           "keyPath": "key",
           "autoIncrement": false,
           "indexes": [],
-          "records": [
-            {
-              "key": "activeTabIndex",
-              "value": {
-                "key": "activeTabIndex",
-                "value": 0
-              }
-            },
-            {
-              "key": "llmApiKey",
-              "value": {
-                "key": "llmApiKey",
-                "value": "{{CANARY:llm-api-key}}"
-              }
-            },
-            {
-              "key": "llmProvider",
-              "value": {
-                "key": "llmProvider",
-                "value": "openai"
-              }
-            },
-            {
-              "key": "openTabs",
-              "value": {
-                "key": "openTabs",
-                "value": [
-                  {
-                    "noteId": "1793409045245-m5v222cjq",
-                    "name": "Untitled"
-                  }
-                ]
-              }
-            },
-            {
-              "key": "theme",
-              "value": {
-                "key": "theme",
-                "value": "dark"
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "snapshots",
@@ -553,37 +481,112 @@
                 "kind": "pre-migration",
                 "pinned": true,
                 "status": "verified",
-                "sourceShape": "legacy",
-                "sourceVersion": 2,
+                "sourceShape": "newer",
+                "sourceVersion": 12,
                 "structuralVersion": null,
                 "logicalVersion": null,
-                "target": 9,
+                "target": null,
                 "stores": [
                   "canvases",
                   "elements",
-                  "media"
+                  "folders",
+                  "future_store",
+                  "links",
+                  "media",
+                  "meta",
+                  "migrations",
+                  "search_index",
+                  "snapshots",
+                  "themes",
+                  "vectors"
                 ],
                 "createdAt": 1792497600000,
                 "verifiedAt": 1792497600000,
                 "manifest": {
                   "canvases": {
                     "count": 5,
-                    "idSetHash": "bcf6a61691f772b3e59dda92075fae17d7e0fbedc39872e1c70c55c6d539a5f5",
-                    "contentHash": "379eda9def5e71e70d9104f4b64a53b5a5f165294e2910c303db63b0ae7c4ad4",
+                    "idSetHash": "bd588acd126b7eaba3e5b8eecfb5dd050d30c2f57ec1e8e60dfda4ef0d9da302",
+                    "contentHash": "ede60b9848844641f5c5a1fa27c371d3be116f2ebd658a16f50323c305c2bde7",
                     "keyPath": "id",
                     "purged": []
                   },
                   "elements": {
-                    "count": 8,
-                    "idSetHash": "30f847ba3926ff98d283a6630f474a2a25c953d80a5c3332f367c796c530e477",
-                    "contentHash": "c731e8124c127b959dcd3802499cbe32a24049429909c7c4c82c299f25d6d303",
+                    "count": 5,
+                    "idSetHash": "ce71deaaa52a4a8ab66df1533b329b541609b6c40e96950f26575242c80c29bb",
+                    "contentHash": "978b477a9b7282c4425f0f7c29db0a0aa2b8956d75a993c643bac7db09c8f448",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "folders": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "future_store": {
+                    "count": 1,
+                    "idSetHash": "4e319c63b3dafcef9b25b5549030f4301e5a745fd0fc561be773daeaa1b36f68",
+                    "contentHash": "b3051eeaa0d6f8900642d79685bf1cf5b77e555a6438082311dde7a9c88e02db",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "links": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
                     "keyPath": "id",
                     "purged": []
                   },
                   "media": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "meta": {
                     "count": 1,
-                    "idSetHash": "561c2ff52d479a8b873b8429011fe46313174d4b7528ae48ff126eb05e841160",
-                    "contentHash": "5ec691322eecbc08b672be5673782b2f7414837f1330627357dd1e4be94f20fa",
+                    "idSetHash": "a50dde9a71a786a7f314d0c04853ccdd8b67680fee3304e4a5a4f905e65e1714",
+                    "contentHash": "789c6f13347aacac88cd03a0b551d1d99d52aeef4249d2508de699467baac174",
+                    "keyPath": "key",
+                    "purged": []
+                  },
+                  "migrations": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": [
+                      "id",
+                      "status"
+                    ],
+                    "purged": []
+                  },
+                  "search_index": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "noteId",
+                    "purged": []
+                  },
+                  "snapshots": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "themes": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "vectors": {
+                    "count": 0,
+                    "idSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
                     "keyPath": "id",
                     "purged": []
                   }
@@ -613,23 +616,30 @@
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409045245-m5v222cjq"
+                "1760000339472-0xrbt9xtl"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409045245-m5v222cjq",
+                "key": "1760000339472-0xrbt9xtl",
                 "value": {
-                  "id": "1793409045245-m5v222cjq",
-                  "name": "Untitled",
-                  "createdAt": 1793409045245,
-                  "updatedAt": 1793409045245,
+                  "id": "1760000339472-0xrbt9xtl",
+                  "name": "Groceries",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
                   "insights": null,
                   "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": "1760000345390-mns5dnlle",
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -640,30 +650,37 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "c546958a68a4fd0789ef72f96fe2e2eb5e02513d82ea111adb5ea16c5921f925"
+                "sha256": "a1ef44cc4573028b1c41d8f74efdbd9b82278d67ba3a1d802b4f9855d3205152"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409046748-8f9ubll43"
+                "1760000341026-7p9awrkve"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409046748-8f9ubll43",
+                "key": "1760000341026-7p9awrkve",
                 "value": {
-                  "id": "1793409046748-8f9ubll43",
-                  "name": "{{CANARY:note-1-title}}",
-                  "createdAt": 1793409046748,
-                  "updatedAt": 1793409046748,
+                  "id": "1760000341026-7p9awrkve",
+                  "name": "Reading list",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
                   "insights": null,
                   "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -674,64 +691,37 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "4bc784e560e858ccf5a54d8caf0c9f2e70d4fc3c8eb5d0b12427297820f2e56b"
+                "sha256": "e6837d4497723e71556f1471b40a73d8f3e0bc25a6c42468bbbd6141ef8fdb9a"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409046750-tor8et7ok"
+                "1760000342044-mpf51c3cf"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409046750-tor8et7ok",
+                "key": "1760000342044-mpf51c3cf",
                 "value": {
-                  "id": "1793409046750-tor8et7ok",
-                  "name": "{{CANARY:note-2-title}}",
-                  "createdAt": 1793409046750,
-                  "updatedAt": 1793409046750,
-                  "archived": false,
-                  "archivedAt": null,
-                  "titleManuallySet": false,
-                  "lastAutoTitleAt": null,
-                  "insights": null,
-                  "lastInsightsExtractedAt": null,
-                  "viewport": {
-                    "scale": 1,
-                    "offsetX": 0,
-                    "offsetY": 0
-                  },
-                  "settings": {
-                    "gridType": "dots",
-                    "backgroundColor": "#fafafa"
-                  }
-                },
-                "sha256": "9d2aee3956e0d8b02922e4797c8854513b6dd8f27bdbbc5eec5685b65c8d0389"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "canvases",
-                "1793409046751-hwk89oqes"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "canvases",
-                "key": "1793409046751-hwk89oqes",
-                "value": {
-                  "id": "1793409046751-hwk89oqes",
-                  "name": "{{CANARY:note-3-title}}",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046762,
+                  "id": "1760000342044-mpf51c3cf",
+                  "name": "Old plans",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
                   "archived": true,
-                  "archivedAt": 1793409046761,
+                  "archivedAt": 1760000005000,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
                   "insights": null,
                   "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -742,30 +732,37 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "a64a84a821f73cb3c71701b1ee450b4859836ce613f042f851f066549bf2ac3a"
+                "sha256": "6d5226cbf0d69db2bdae8ddb22efcbc624b807795f54a33e299b87834694831a"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409046751-rvu4yivww"
+                "1760000343728-zyi4zum4j"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409046751-rvu4yivww",
+                "key": "1760000343728-zyi4zum4j",
                 "value": {
-                  "id": "1793409046751-rvu4yivww",
-                  "name": "{{CANARY:note-4-title}}",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046763,
+                  "id": "1760000343728-zyi4zum4j",
+                  "name": "Thrown away",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
                   "insights": null,
                   "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -776,233 +773,215 @@
                     "backgroundColor": "#fafafa"
                   },
                   "trashed": true,
-                  "trashedAt": 1793409046763
+                  "trashedAt": 1760000006000
                 },
-                "sha256": "c8345a6fc9140fd403a18865bf7ebcf4c50d526f90b6e5f675ec6c002133d522"
+                "sha256": "12102978faaec818c7ff1a8161b13333424c3dac9dd95bc9b6a53dc58ceab480"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000347322-lhez4l74z"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000347322-lhez4l74z",
+                "value": {
+                  "id": "1760000347322-lhez4l74z",
+                  "name": "Meeting template",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": true,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "84e507a67c9a8f9c0a32ca49551e49b353792654c0cde93168ccc80b7a8670a1"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046751-6jxpl6xoy"
+                "1760000348335-eu9jx2dzi"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046751-6jxpl6xoy",
+                "key": "1760000348335-eu9jx2dzi",
                 "value": {
-                  "id": "1793409046751-6jxpl6xoy",
+                  "id": "1760000348335-eu9jx2dzi",
+                  "type": "text",
+                  "content": "Milk and eggs",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000339472-0xrbt9xtl",
+                  "order": 0
+                },
+                "sha256": "abf661b121e04b78aacabfc0ca9e9e3ebc91289fdcc16dcb758a09a57505e824"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000350269-5px8fexg8"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000350269-5px8fexg8",
+                "value": {
+                  "id": "1760000350269-5px8fexg8",
                   "type": "todo",
-                  "content": "{{CANARY:block-3}}",
+                  "content": "Bread",
+                  "indentLevel": 0,
                   "checked": true,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "order": 2
-                },
-                "sha256": "ea6c1d1f158ebbf295242d9fe2e5ac1850e9147240d17bce8f61955be0712193"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046751-cedws40pv"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046751-cedws40pv",
-                "value": {
-                  "id": "1793409046751-cedws40pv",
-                  "type": "image",
-                  "content": "",
-                  "checked": false,
-                  "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "order": 3
-                },
-                "sha256": "5ac3f40e51b3db6ee338f1486ca5522169d364164fdec612b93a4747e13c0a3c"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046751-qhcfxfgeu"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046751-qhcfxfgeu",
-                "value": {
-                  "id": "1793409046751-qhcfxfgeu",
-                  "type": "h1",
-                  "content": "{{CANARY:block-1}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "order": 0
-                },
-                "sha256": "2baf56fa3a157b8217a2bb826714102b2b518e0042d8c7d9c49ce849c969696c"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046751-vt452xxq2"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046751-vt452xxq2",
-                "value": {
-                  "id": "1793409046751-vt452xxq2",
-                  "type": "text",
-                  "content": "{{CANARY:block-2}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000339472-0xrbt9xtl",
                   "order": 1
                 },
-                "sha256": "8f52af2f78da96f77d21dff15c1e203de26bdb1fa415c195dd35a94d459c5983"
+                "sha256": "10447adcca215843c4cb9d6875cfe34e6c7f6ab460fe327d5e07c31943f14559"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046755-iaj4mlbmc"
+                "1760000351525-3hb5f3qah"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046755-iaj4mlbmc",
+                "key": "1760000351525-3hb5f3qah",
                 "value": {
-                  "id": "1793409046755-iaj4mlbmc",
-                  "type": "todo",
-                  "content": "{{CANARY:block-5}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046755,
-                  "updatedAt": 1793409046755,
-                  "canvasId": "1793409046750-tor8et7ok",
-                  "order": 1
-                },
-                "sha256": "8f83202170e94457f7f23395392b38aa705ae1f838edf17ea129a352c53df6c7"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046755-say5963dm"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046755-say5963dm",
-                "value": {
-                  "id": "1793409046755-say5963dm",
+                  "id": "1760000351525-3hb5f3qah",
                   "type": "text",
-                  "content": "{{CANARY:block-4}}",
+                  "content": "A long book",
+                  "indentLevel": 0,
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046755,
-                  "updatedAt": 1793409046755,
-                  "canvasId": "1793409046750-tor8et7ok",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000341026-7p9awrkve",
                   "order": 0
                 },
-                "sha256": "30183e29c442948b17027ae442635c04406ebcd0e278caba4f6aca22c72c3fd6"
+                "sha256": "26eec0b7774278cfec3b9fafd6523c5e5225173aaf1657cbd45e8b27c4617a2f"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046756-9ebtrqbwx"
+                "1760000353361-htzbdz7kg"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046756-9ebtrqbwx",
+                "key": "1760000353361-htzbdz7kg",
                 "value": {
-                  "id": "1793409046756-9ebtrqbwx",
+                  "id": "1760000353361-htzbdz7kg",
                   "type": "text",
-                  "content": "{{CANARY:block-7}}",
+                  "content": "Ideas from last year",
+                  "indentLevel": 0,
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046756,
-                  "updatedAt": 1793409046756,
-                  "canvasId": "1793409046751-rvu4yivww",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000342044-mpf51c3cf",
                   "order": 0
                 },
-                "sha256": "e70e16cfd2fa6b7ef1308feaa5a85cff992f414bdc1103d6216fd8a6b02ec567"
+                "sha256": "2df235dd2fb2a8c08e517f1282bfd413619278f8159b2932c5f03b118f7bc8e4"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046756-k8jrdtsq3"
+                "1760000354470-zntnsx856"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046756-k8jrdtsq3",
+                "key": "1760000354470-zntnsx856",
                 "value": {
-                  "id": "1793409046756-k8jrdtsq3",
+                  "id": "1760000354470-zntnsx856",
                   "type": "text",
-                  "content": "{{CANARY:block-6}}",
+                  "content": "Not needed",
+                  "indentLevel": 0,
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046756,
-                  "updatedAt": 1793409046756,
-                  "canvasId": "1793409046751-hwk89oqes",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000343728-zyi4zum4j",
                   "order": 0
                 },
-                "sha256": "939b83c7ccd3a11ff3cbe11897b4f9fd3c497f045186ce68d672431b788dd146"
+                "sha256": "8e2a474c33a3d7e620892ac72c156ea5a80ae0556e314ee42ff3eb286aa8aa74"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
-                "media",
-                "1793409046756-hb1ritwgw"
+                "future_store",
+                "f1"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
-                "store": "media",
-                "key": "1793409046756-hb1ritwgw",
+                "store": "future_store",
+                "key": "f1",
                 "value": {
-                  "id": "1793409046756-hb1ritwgw",
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "blob": {
-                    "$type": "Blob",
-                    "mime": "image/png",
-                    "base64": "iVBORw0KGgoAAAANAQIDBA=="
-                  },
-                  "type": "image/png",
-                  "createdAt": 1793409046757
+                  "id": "f1",
+                  "kind": "something new"
                 },
-                "sha256": "9d9ecf1e66194f68e2186f200cfe1fb107fc22b21aec2958ed4c88b6104aea21"
+                "sha256": "d8dfb2d2084f6b16fc84fe5f445375ffd6f1702149bc4a33c9b60893b3c702d8"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "meta",
+                "schema"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "meta",
+                "key": "schema",
+                "value": {
+                  "key": "schema",
+                  "structuralVersion": 12,
+                  "logicalVersion": 4
+                },
+                "sha256": "8b9d29924490b886edcf952796a01cbfb012a8029f928cbe761950b330a8d036"
               }
             }
           ]

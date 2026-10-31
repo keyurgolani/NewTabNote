@@ -532,7 +532,7 @@
       "database": "CanvasTabDB",
       "idbVersion": 9,
       "releases": [],
-      "note": "#17 step 9: the ten version-8 stores, then meta and migrations. Not shipped: schema.js's DB_VERSION is still 8.",
+      "note": "#17 step 9: the ten version-8 stores, then meta and migrations. Shipped by #17 PR 1b; since #17 PR 2a a profile at 9 runs step 10.",
       "stores": [
         {
           "name": "canvases",
@@ -720,6 +720,275 @@
           ],
           "tag": "v1.3.0",
           "line": 178
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 185
+        }
+      ]
+    },
+    "v10": {
+      "database": "CanvasTabDB",
+      "idbVersion": 10,
+      "releases": [],
+      "note": "#17 step 10: version 9, then operations (the idempotency ledger), changes (the change log), conflicts, and tombstones. Since #17 PR 2a, schema.js's DB_VERSION.",
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 136
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 137
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 135
+        },
+        {
+          "name": "changes",
+          "keyPath": [
+            "seq",
+            "entityType",
+            "entityId"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "entity",
+              "keyPath": [
+                "entityType",
+                "entityId"
+              ],
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "conflicts",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 143
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 144
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 142
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 166
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 165
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 164
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 172
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 173
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 171
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 154
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 153
+        },
+        {
+          "name": "meta",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "migrations",
+          "keyPath": [
+            "id",
+            "status"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "operations",
+          "keyPath": "opId",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "at",
+              "keyPath": "at",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 159
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 149
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 191
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false,
+              "line": 192
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 190
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 179
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 180
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 178
+        },
+        {
+          "name": "tombstones",
+          "keyPath": [
+            "entityType",
+            "id"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "purge",
+              "keyPath": "purge",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
         },
         {
           "name": "vectors",
