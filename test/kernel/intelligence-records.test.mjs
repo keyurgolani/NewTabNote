@@ -360,3 +360,93 @@ describe('unshipped (#7 slice 1, R1)', () => {
     assert.deepEqual(importers, []);
   });
 });
+
+describe('URLs, tokens, and free text in records (#71 review)', () => {
+  const LINKY = [
+    'javascript:alert(1)',
+    'mailto:ceo@corp.example',
+    'data:text/html;base64,PHNjcmlwdD4=',
+    'see evil.example/reset?token=abc123',
+    'https://example.com/private',
+    'file:///etc/passwd',
+    'blob:https://example.com/abc',
+    'vbscript:msgbox',
+    'chrome-extension://abcdef/page.html',
+  ];
+
+  it('redacts every link form in a title or reason, so the signal is kept and no URL is stored', async () => {
+    const repository = createMemoryIntelligenceRepository();
+    const intelligence = createIntelligence({
+      repository,
+      noteCommands: { setTodoChecked: async () => assert.fail('no note command') },
+      timeZone: ZONE,
+      clock: testClock(),
+    });
+    for (const [index, link] of LINKY.entries()) {
+      assert.equal(plainTitle(`Call ${link} today`), 'Call [link] today', link);
+      const draft = inferredDraft({ blockId: `b${index}`, subject: `subject ${index}`, title: `Call ${link} today` });
+      const withReason = { ...draft, confidence: { band: /** @type {const} */ ('low'), reason: `Seen in ${link}` } };
+      const result = await intelligence.upsertSignals(RECIPE, [withReason]);
+      assert.deepEqual(result.refused, [], link);
+      const read = await intelligence.readSignal(idOf(draft));
+      assert.equal(read.kind, 'ready');
+      if (read.kind === 'ready') {
+        assert.equal(read.signal.title, 'Call [link] today');
+        assert.equal(read.signal.confidence?.reason, 'Seen in [link]');
+      }
+      // The schema refuses what slipped past redaction
+      assert.ok(!v.is(signalRecord, asSignal(inferredDraft(), { title: `Call ${link}` })), link);
+    }
+    // Plain text with a colon stays as written
+    assert.equal(plainTitle('Update data: Q3 numbers'), 'Update data: Q3 numbers');
+    assert.equal(plainTitle('Note: call mom'), 'Note: call mom');
+  });
+
+  it('refuses a URL, a token, or free text in the id-like fields and the subject key', () => {
+    const base = asSignal(inferredDraft());
+    const model = /** @type {{id: string, version: string}} */ (base.model);
+    const bad = ['https://evil.example/collect', `sk-ant-api03-${'Ab9'.repeat(30)}`, 'Some Free Text', 'x'.repeat(65)];
+    for (const value of bad) {
+      for (const record of [
+        { ...base, providerId: value },
+        { ...base, scopeId: value },
+        { ...base, derivationRef: value },
+        { ...base, model: { ...model, id: value } },
+        { ...base, model: { ...model, version: value } },
+        {
+          ...asSignal(inferredDraft({ executionClass: 'local-endpoint' })),
+          location: { kind: 'local-app', id: value },
+        },
+      ]) {
+        assert.ok(!v.is(signalRecord, record), value);
+      }
+    }
+    for (const fine of ['local-runtime', 'scope-notes', 'gemma-3n', 'actions.extract', 'model@2', 'a_b']) {
+      assert.ok(v.is(signalRecord, { ...base, providerId: fine }), fine);
+    }
+    for (const subject of ['https://bank.example/login?pw=hunter2', 'see bank.example/login', 'line\nbreak']) {
+      const draft = inferredDraft({ subject });
+      assert.equal(signalRefusal(asSignal(draft)), 'invalid-signal', subject);
+    }
+  });
+
+  it('refuses bidi overrides, isolates, and line and paragraph separators, which plainTitle removes', () => {
+    const signal = asSignal(taskDraft());
+    for (const mark of [
+      '\u202a',
+      '\u202b',
+      '\u202c',
+      '\u202d',
+      '\u202e',
+      '\u2066',
+      '\u2067',
+      '\u2068',
+      '\u2069',
+      '\u2028',
+      '\u2029',
+    ]) {
+      assert.ok(!v.is(signalRecord, { ...signal, title: `Call ${mark}vendor` }), mark.codePointAt(0)?.toString(16));
+      assert.equal(plainTitle(`Call ${mark}vendor`), 'Call vendor');
+    }
+  });
+});

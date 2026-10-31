@@ -444,3 +444,84 @@ describe('regeneration requests (#7, "Producers")', () => {
     assert.deepEqual(after.corrections, before.corrections);
   });
 });
+
+describe('suspension and cited notes (#71 review)', () => {
+  it('requests regeneration for an inference that went stale while its note was suspended, once it is restored', async () => {
+    const { w, ids } = await seeded();
+    await w.intelligence.noteChanged({
+      type: 'note-state',
+      noteId: 'n1',
+      trashed: true,
+      archived: false,
+      isTemplate: false,
+    });
+    await w.intelligence.invalidate({ cause: 'model-changed', match: { modelId: 'gemma-3n' } });
+    assert.deepEqual(w.requests, []);
+    const restored = await w.intelligence.noteChanged({
+      type: 'note-state',
+      noteId: 'n1',
+      trashed: false,
+      archived: false,
+      isTemplate: false,
+    });
+    assert.deepEqual(restored.regeneration, [
+      { noteId: 'n1', recipeId: RECIPE, signalIds: [ids.inferred], cause: 'model-changed', priority: 1 },
+    ]);
+    assert.deepEqual(w.requests, restored.regeneration);
+  });
+
+  it('suspends a connection when a cited note leaves it under two available sources, and restores it', async () => {
+    const { w, ids } = await seeded();
+    /** @param {string} noteId @param {boolean} trashed */
+    const state = (noteId, trashed) =>
+      w.intelligence.noteChanged({ type: 'note-state', noteId, trashed, archived: false, isTemplate: false });
+    const opens = async () => {
+      const current = await read(w, ids.connection);
+      return toSignalViewModel(current.signal, current.decision, current.corrections, NOW, { timeZone: ZONE })
+        .actions.filter(action => action.id === 'open')
+        .map(action => action.target?.noteId);
+    };
+    await state('n2', true);
+    assert.equal((await read(w, ids.connection)).signal.freshness.state, 'current');
+    assert.deepEqual(await opens(), ['n1', 'n3']);
+    await state('n3', true);
+    const suspended = (await read(w, ids.connection)).signal.freshness;
+    assert.equal(suspended.state, 'suspended');
+    assert.equal(suspended.cause, 'note-trashed');
+    await state('n3', false);
+    assert.equal((await read(w, ids.connection)).signal.freshness.state, 'current');
+    await state('n2', false);
+    assert.deepEqual(await opens(), ['n1', 'n2', 'n3']);
+    // The connection's own note still suspends it whatever the others do
+    await state('n1', true);
+    assert.equal((await read(w, ids.connection)).signal.freshness.state, 'suspended');
+    await state('n2', true);
+    await state('n1', false);
+    assert.equal((await read(w, ids.connection)).signal.freshness.state, 'current');
+  });
+
+  it('drops a deleted note from what a connection cites, and invalidates it when one source is left', async () => {
+    const { w, ids } = await seeded();
+    const before = await read(w, ids.connection);
+    await w.intelligence.noteChanged({ type: 'note-deleted', noteId: 'n2' });
+    const after = await read(w, ids.connection);
+    assert.deepEqual(
+      after.signal.sourceRefs.map(source => source.noteId),
+      ['n1', 'n3'],
+    );
+    assert.equal(after.signal.freshness.state, 'current');
+    assert.deepEqual(after.decision, before.decision);
+    await w.intelligence.noteChanged({ type: 'note-deleted', noteId: 'n3' });
+    const gone = await read(w, ids.connection);
+    assert.deepEqual(
+      gone.signal.sourceRefs.map(source => source.noteId),
+      ['n1'],
+    );
+    assert.equal(gone.signal.freshness.state, 'invalidated');
+    assert.equal(gone.signal.freshness.cause, 'source-deleted');
+    const targets = toSignalViewModel(gone.signal, gone.decision, gone.corrections, NOW, { timeZone: ZONE })
+      .actions.map(action => action.target?.noteId)
+      .filter(Boolean);
+    assert.ok(targets.every(noteId => noteId === 'n1'));
+  });
+});

@@ -381,3 +381,16 @@ describe('ranking (#7, "Ranking")', () => {
     assert.equal(Math.sign(compareRankKeys(keyOf(a), keyOf(b))), -Math.sign(compareRankKeys(keyOf(b), keyOf(a))));
   });
 });
+
+describe('a stored resurface time (#71 review)', () => {
+  it('reports the stored rule when a stored resurfaceAt placed the signal, not the last-edit rule', () => {
+    const lastEditAt = NOW - 20 * DAY;
+    const signal = asSignal(pinDraft({ context: { lastEditAt } }), { time: { resurfaceAt: NOW - DAY } });
+    const placed = placeSignal(signal, null, [], { now: NOW, timeZone: ZONE });
+    assert.equal(placed.category, 'resurface');
+    assert.deepEqual(placed.rule, { code: 'stored' });
+    // A stored time that hasn't come yet keeps it in Soon, whatever the last edit says
+    const later = asSignal(pinDraft({ context: { lastEditAt } }), { time: { resurfaceAt: NOW + DAY } });
+    assert.equal(placeSignal(later, null, [], { now: NOW, timeZone: ZONE }).category, 'soon');
+  });
+});

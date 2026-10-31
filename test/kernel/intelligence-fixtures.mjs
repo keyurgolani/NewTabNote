@@ -388,6 +388,22 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
     return { notes: await Promise.all(noteIds.map(readNote)), noteChanges };
   };
 
+  /**
+   * The domain as another context (a second tab) builds it, over the same repository and
+   * kernel, with its own note-command port when given one
+   * @param {NoteCommandPort} [port]
+   */
+  const anotherContext = (port = noteCommands) =>
+    createIntelligence({
+      repository,
+      noteCommands: port,
+      timeZone,
+      clock,
+      producers: [tasks, recipe, ...producers],
+      events: { publish: event => events.push(event) },
+      regeneration: { request: request => requests.push(request) },
+    });
+
   return {
     clock,
     ids,
@@ -396,6 +412,8 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
     kernel,
     repository,
     intelligence,
+    noteCommands,
+    anotherContext,
     tasks,
     recipe,
     events,
