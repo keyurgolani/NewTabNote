@@ -673,6 +673,162 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, ['folders']), await recordsIn(viaStorage, ['folders']));
   });
 
+  it("renameFolder and setFolderCollapsed write what the sidebar's rename and collapse wrote with updateFolder", async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({ folders: [folder('f1', null), folder('f2', 'f1')] });
+    // The sidebar wrote a copy of the listed folder with the one field changed
+    await viaStorage.storage.updateFolder({ ...folder('f1', null), name: 'Work' });
+    await viaStorage.storage.updateFolder({ ...folder('f2', 'f1'), collapsed: true });
+    assertCommitted(await kernel.execute({ type: 'renameFolder', commandId: 'c1', folderId: 'f1', name: 'Work' }));
+    assertCommitted(
+      await kernel.execute({ type: 'setFolderCollapsed', commandId: 'c2', folderId: 'f2', collapsed: true }),
+    );
+    assert.deepEqual(await recordsIn(viaKernel, ['folders']), await recordsIn(viaStorage, ['folders']));
+  });
+
+  it('deleteFolder deletes what Storage.deleteFolder deletes and files its notes at the root, and its trashed notes and templates too', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      folders: [folder('a', null), folder('b', 'a'), folder('c', 'b'), folder('other', null), folder('loop', 'loop')],
+      canvases: [
+        legacyEnv.note('inA', { folderId: 'a' }),
+        legacyEnv.note('inC', { folderId: 'c' }),
+        legacyEnv.note('archived', { folderId: 'b', archived: true, archivedAt: SEEDED_AT }),
+        legacyEnv.note('trashed', { folderId: 'c', trashed: true, trashedAt: SEEDED_AT }),
+        legacyEnv.note('template', { folderId: 'b', isTemplate: true }),
+        legacyEnv.note('elsewhere', { folderId: 'other' }),
+      ],
+    });
+    await viaStorage.storage.deleteFolder('a');
+    assertCommitted(await kernel.execute({ type: 'deleteFolder', commandId: 'c1', folderId: 'a' }));
+    await viaStorage.storage.deleteFolder('loop');
+    assertCommitted(await kernel.execute({ type: 'deleteFolder', commandId: 'c2', folderId: 'loop' }));
+    const stores = ['folders', 'canvases'];
+    const expected = await recordsIn(viaStorage, stores);
+    // The one rule #12 slice 5 changes on purpose: Storage left a trashed note and a template on
+    // the deleted folder, so once restored no list showed it. The kernel files them at the root too.
+    for (const noteId of ['trashed', 'template']) {
+      assert.equal(expected.canvases[noteId].folderId === null, false, `Storage kept ${noteId}'s folder`);
+      expected.canvases[noteId] = { ...expected.canvases[noteId], folderId: null, updatedAt: 'written' };
+    }
+    assert.deepEqual(await recordsIn(viaKernel, stores), expected);
+  });
+
+  it('moveNoteToFolder writes what Storage.moveNoteToFolder writes, into a folder and back to the root', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      folders: [folder('f1', null)],
+      canvases: [legacyEnv.note('n1', { name: 'Plan' }), legacyEnv.note('n2', { name: 'Filed', folderId: 'f1' })],
+      search_index: [
+        { noteId: 'n1', name: 'Plan', content: '', updatedAt: SEEDED_AT },
+        { noteId: 'n2', name: 'Filed', content: '', updatedAt: SEEDED_AT },
+      ],
+    });
+    await viaStorage.storage.moveNoteToFolder('n1', 'f1');
+    await viaStorage.storage.moveNoteToFolder('n2', null);
+    assertCommitted(await kernel.execute({ type: 'moveNoteToFolder', commandId: 'c1', noteId: 'n1', folderId: 'f1' }));
+    assertCommitted(await kernel.execute({ type: 'moveNoteToFolder', commandId: 'c2', noteId: 'n2', folderId: null }));
+    assert.deepEqual(await recordsIn(viaKernel, ['canvases']), await recordsIn(viaStorage, ['canvases']));
+    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+  });
+
+  it("convertNoteToTemplate and convertTemplateToNote write what NotesManager's conversions wrote with updateNote", async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      folders: [folder('f1', null)],
+      canvases: [legacyEnv.note('n1', { name: 'Plan', folderId: 'f1' }), legacyEnv.note('t1', { isTemplate: true })],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Milk')],
+    });
+    // NotesManager read the note, set isTemplate (and, into a template, folderId null), and wrote it
+    const note = await viaStorage.storage.getNote('n1');
+    await viaStorage.storage.updateNote({ ...note, isTemplate: true, folderId: null });
+    const template = await viaStorage.storage.getNote('t1');
+    await viaStorage.storage.updateNote({ ...template, isTemplate: false });
+    assertCommitted(await kernel.execute({ type: 'convertNoteToTemplate', commandId: 'c1', noteId: 'n1' }));
+    assertCommitted(await kernel.execute({ type: 'convertTemplateToNote', commandId: 'c2', noteId: 't1' }));
+    const stores = ['canvases', 'elements'];
+    assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+  });
+
+  it('deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes, and keep the same notes', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const recently = Date.now() - 2 * day;
+    const lastWeek = Date.now() - 8 * day;
+    const profile = () => ({
+      canvases: [
+        legacyEnv.note('old', { trashed: true, trashedAt: SEEDED_AT }),
+        legacyEnv.note('week', { trashed: true, trashedAt: lastWeek }),
+        legacyEnv.note('recent', { trashed: true, trashedAt: recently }),
+        legacyEnv.note('no-time', { trashed: true, trashedAt: null }),
+        legacyEnv.note('unindexed', { trashed: true, trashedAt: SEEDED_AT, updatedAt: undefined }),
+        legacyEnv.note('active', { name: 'Active' }),
+      ],
+      elements: ['old', 'week', 'recent', 'no-time', 'unindexed', 'active'].map(id =>
+        legacyEnv.block(`${id}-b`, id, 0, id),
+      ),
+      media: [
+        { id: 'm-old', canvasId: 'old' },
+        { id: 'm-active', canvasId: 'active' },
+      ],
+      vectors: [{ id: 'old' }, { id: 'recent' }, { id: 'active' }],
+      snapshots: [
+        { id: 's-old', noteId: 'old', timestamp: SEEDED_AT },
+        { id: 's-recent', noteId: 'recent', timestamp: SEEDED_AT },
+      ],
+      links: [{ id: 'l1', fromNoteId: 'old', toNoteId: 'active', createdAt: SEEDED_AT }],
+      search_index: [{ noteId: 'old', name: 'old', content: '', updatedAt: SEEDED_AT }],
+    });
+    const stores = ['canvases', 'elements', 'media', 'vectors', 'snapshots', 'links', 'search_index'];
+    /**
+     * @param {(storage: any) => Promise<unknown>} viaStorageRun
+     * @param {(kernel: Kernel) => Promise<Outcome | BulkOutcome>} viaKernelRun
+     * @param {string} name
+     * @returns {Promise<string[]>} the ids the kernel named
+     */
+    const both = async (viaStorageRun, viaKernelRun, name) => {
+      const { viaStorage, viaKernel, kernel } = await twin(profile());
+      await viaStorageRun(viaStorage.storage);
+      const outcome = await viaKernelRun(kernel);
+      assertCommitted(outcome);
+      assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores), name);
+      return outcome.kind === 'committed' ? [...outcome.changedIds].sort() : [];
+    };
+    assert.deepEqual(
+      await both(
+        storage => storage.permanentlyDeleteNote('old'),
+        kernel => kernel.execute({ type: 'deleteNotePermanently', commandId: 'c1', noteId: 'old' }),
+        'deleteNotePermanently',
+      ),
+      ['old'],
+    );
+    assert.deepEqual(
+      await both(
+        storage => storage.emptyTrash(),
+        kernel => kernel.execute({ type: 'emptyTrash', commandId: 'c1' }),
+        'emptyTrash',
+      ),
+      ['no-time', 'old', 'recent', 'week'],
+    );
+    // SidebarController.runTrashCleanup read trashRetention, 30 unless set, and passed it on
+    assert.deepEqual(
+      await both(
+        storage => storage.cleanupTrash(30),
+        kernel => kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' }),
+        'runTrashCleanup, 30 days',
+      ),
+      ['old'],
+    );
+    assert.deepEqual(
+      await both(
+        storage => storage.cleanupTrash(7),
+        async kernel => {
+          assertCommitted(
+            await kernel.execute({ type: 'setPreferences', commandId: 'p1', values: { trashRetention: 7 } }),
+          );
+          return kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' });
+        },
+        'runTrashCleanup, 7 days',
+      ),
+      ['old', 'week'],
+    );
+  });
+
   it('listNotes lists each view in the order Storage lists it', async () => {
     const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
     const { viaStorage, kernel } = await twin({

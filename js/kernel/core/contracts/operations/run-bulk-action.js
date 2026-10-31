@@ -9,7 +9,7 @@ import { commandPayload } from '../operation.js';
 import { bulkResultSchema } from '../outcome-schemas.js';
 
 export const payload = commandPayload('runBulkAction', {
-  action: v.picklist(['archive', 'unarchive', 'trash', 'restore']),
+  action: v.picklist(['archive', 'unarchive', 'trash', 'restore', 'delete']),
   noteIds: v.pipe(v.array(entityId('note')), v.minLength(1)),
 });
 

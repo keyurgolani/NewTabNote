@@ -1874,6 +1874,296 @@ export function runContractSuite(fixture) {
       );
     });
 
+    describe('filing, templates, and the trash (#12 slice 5)', () => {
+      /**
+       * @param {string} folderId
+       * @param {string | null} parentId
+       */
+      const folder = (folderId, parentId) => run(cmd('createFolder', { folderId, name: folderId, parentId }));
+
+      /** @returns {Promise<Record<string, FolderRecord>>} */
+      const foldersById = async () => {
+        const state = await kernel.query({ type: 'listFolders' });
+        return state.kind === 'ready' ? Object.fromEntries(state.data.map(f => [f.id, f])) : {};
+      };
+
+      /**
+       * A note with one block, in the trash since `trashedAt`
+       * @param {string} noteId
+       * @param {number} trashedAt
+       */
+      const trashedNote = async (noteId, trashedAt) => {
+        await createNote({ noteId, name: noteId, blocks: someBlocks(noteId, 1) });
+        await seed('notes', [{ ...(await noteOf(noteId)), id: noteId, trashed: true, trashedAt }]);
+      };
+
+      it('renameFolder and setFolderCollapsed write their field and updatedAt, and both land when sent at once', async () => {
+        await folder('f1', null);
+        ctx.clock.advance();
+        const [renamed, collapsed] = await Promise.all([
+          kernel.execute(cmd('renameFolder', { folderId: 'f1', name: 'Work' })),
+          kernel.execute(cmd('setFolderCollapsed', { folderId: 'f1', collapsed: true })),
+        ]);
+        assert.deepEqual(
+          [committedOf(renamed).code, committedOf(collapsed).code],
+          ['folder-renamed', 'folder-collapsed'],
+        );
+        assert.deepEqual((await foldersById()).f1, {
+          id: 'f1',
+          name: 'Work',
+          parentId: null,
+          createdAt: NOW,
+          updatedAt: NOW + 1000,
+          color: null,
+          collapsed: true,
+        });
+        assert.equal(
+          (await run(cmd('setFolderCollapsed', { folderId: 'f1', collapsed: false }))).code,
+          'folder-expanded',
+        );
+        for (const command of [
+          cmd('renameFolder', { folderId: 'gone', name: 'X' }),
+          cmd('setFolderCollapsed', { folderId: 'gone', collapsed: true }),
+          cmd('deleteFolder', { folderId: 'gone' }),
+        ]) {
+          assertRejected(await kernel.execute(command), 'not-found', 'folder-not-found');
+        }
+      });
+
+      it('deleteFolder deletes the folders inside it as committed and files every note in them at the root, trashed notes and templates included', async () => {
+        await folder('a', null);
+        await folder('b', 'a');
+        await folder('c', 'b');
+        await folder('other', null);
+        await createNote({ noteId: 'inA', name: 'In A', folderId: 'a' });
+        await createNote({ noteId: 'inC', name: 'In C', folderId: 'c' });
+        await createNote({ noteId: 'archived', name: 'Archived', folderId: 'b' });
+        await createNote({ noteId: 'trashed', name: 'Trashed', folderId: 'c' });
+        await createNote({ noteId: 'template', name: 'Template', folderId: 'b' });
+        await createNote({ noteId: 'elsewhere', name: 'Elsewhere', folderId: 'other' });
+        await run(cmd('archiveNote', { noteId: 'archived' }));
+        await run(cmd('trashNote', { noteId: 'trashed' }));
+        await seed('notes', [{ ...(await noteOf('template')), id: 'template', isTemplate: true }]);
+        ctx.clock.advance();
+        const outcome = await run(cmd('deleteFolder', { folderId: 'a' }));
+        assert.deepEqual(
+          [outcome.code, [...outcome.changedIds].sort()],
+          ['folder-deleted', ['a', 'archived', 'b', 'c', 'inA', 'inC', 'template', 'trashed']],
+        );
+        assert.deepEqual(Object.keys(await foldersById()), ['other']);
+        /** @type {Record<string, unknown>} */
+        const filed = {};
+        for (const noteId of ['inA', 'inC', 'archived', 'trashed', 'template', 'elsewhere']) {
+          const note = await noteOf(noteId);
+          filed[noteId] = [note?.folderId, note?.updatedAt === NOW + 1000];
+        }
+        // Storage.deleteFolder moved only what getAllNotes(true) lists, so a trashed note restored
+        // later pointed at a folder that was gone, and no list showed it. Every note moves now.
+        assert.deepEqual(filed, {
+          inA: [null, true],
+          inC: [null, true],
+          archived: [null, true],
+          trashed: [null, true],
+          template: [null, true],
+          elsewhere: ['other', false],
+        });
+        assert.equal((await noteOf('trashed'))?.trashed, true, 'and it stays in the trash');
+      });
+
+      it('moveNoteToFolder files a note and unfiles it, writing folderId and updatedAt, and refuses a folder that is gone', async () => {
+        await folder('f1', null);
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        const before = await noteOf('n1');
+        ctx.clock.advance();
+        const moved = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
+        assert.deepEqual([moved.code, moved.changedIds], ['note-moved', ['n1']]);
+        assert.deepEqual(await noteOf('n1'), { ...before, folderId: 'f1', updatedAt: NOW + 1000 });
+        // Already there: it commits naming nothing, and writes nothing
+        ctx.clock.advance();
+        const again = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
+        assert.deepEqual([again.code, again.changedIds], ['note-moved', []]);
+        assert.equal((await noteOf('n1'))?.updatedAt, NOW + 1000);
+        assertRejected(
+          await kernel.execute(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'gone' })),
+          'not-found',
+          'folder-not-found',
+        );
+        assertRejected(
+          await kernel.execute(cmd('moveNoteToFolder', { noteId: 'gone', folderId: 'f1' })),
+          'not-found',
+          'note-not-found',
+        );
+        assert.equal((await noteOf('n1'))?.folderId, 'f1');
+        await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: null }));
+        assert.equal((await noteOf('n1'))?.folderId, null);
+        assert.equal((await blocksOf('n1')).length, 2);
+      });
+
+      it("a folder move with the note open survives the editor's next save", async () => {
+        await folder('f1', null);
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        // The editor loaded the note before the move, and saves after it
+        await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2), preview: 'Line 0' }));
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.folderId, note?.preview, (await blocksOf('n1')).length], ['f1', 'Line 0', 2]);
+      });
+
+      it('convertNoteToTemplate and convertTemplateToNote change where the note is listed and never its content', async () => {
+        await folder('f1', null);
+        await createNote({ noteId: 'n1', name: 'Plan', folderId: 'f1', blocks: someBlocks('n1', 2) });
+        const before = await noteOf('n1');
+        const blocks = await blocksOf('n1');
+        ctx.clock.advance();
+        assert.equal((await run(cmd('convertNoteToTemplate', { noteId: 'n1' }))).code, 'note-made-template');
+        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: true, folderId: null, updatedAt: NOW + 1000 });
+        assert.deepEqual([await idsIn('active'), await idsIn('templates')], [[], ['n1']]);
+        ctx.clock.advance();
+        assert.equal((await run(cmd('convertTemplateToNote', { noteId: 'n1' }))).code, 'template-made-note');
+        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: false, folderId: null, updatedAt: NOW + 2000 });
+        assert.deepEqual([await idsIn('active'), await idsIn('templates')], [['n1'], []]);
+        assert.deepEqual(await blocksOf('n1'), blocks);
+        for (const type of /** @type {const} */ (['convertNoteToTemplate', 'convertTemplateToNote'])) {
+          assertRejected(await kernel.execute(cmd(type, { noteId: 'gone' })), 'not-found', 'note-not-found');
+        }
+      });
+
+      it("convert-to-template with the note open survives the editor's next save", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        await run(cmd('convertNoteToTemplate', { noteId: 'n1' }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 3), name: 'Plan v2' }));
+        const note = await noteOf('n1');
+        assert.deepEqual([note?.isTemplate, note?.name, (await blocksOf('n1')).length], [true, 'Plan v2', 3]);
+        assert.deepEqual(await idsIn('templates'), ['n1']);
+      });
+
+      it("deleteNotePermanently deletes a trashed note with what Storage.permanentlyDeleteNote deletes, and refuses one that isn't in the trash", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
+        await seed('media', [
+          { id: 'm1', canvasId: 'n1' },
+          { id: 'm-kept', canvasId: 'kept' },
+        ]);
+        await seed('vectors', [{ id: 'n1' }, { id: 'kept' }]);
+        await seed('snapshots', [
+          { id: 's1', noteId: 'n1', timestamp: NOW },
+          { id: 's-kept', noteId: 'kept', timestamp: NOW },
+        ]);
+        await seed('links', [{ id: 'l1', fromNoteId: 'n1', toNoteId: 'kept', createdAt: NOW }]);
+        // Not in the trash, as committed: a note restored since the trash view showed it stays
+        assertRejected(
+          await kernel.execute(cmd('deleteNotePermanently', { noteId: 'n1' })),
+          'validation',
+          'note-not-trashed',
+        );
+        assert.equal((await blocksOf('n1')).length, 2);
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        const deleted = await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+        assert.deepEqual([deleted.code, deleted.changedIds], ['note-deleted', ['n1']]);
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1')], [undefined, []]);
+        assert.deepEqual(
+          [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
+          [['m-kept'], ['kept'], ['s-kept']],
+        );
+        // Its links and search entry stay, as Storage.permanentlyDeleteNote leaves them, until #17's deletion
+        const links = await ctx.adapter.read(['links'], tx => tx.getAll('links'));
+        assert.deepEqual(
+          links.map(link => link.id),
+          ['l1'],
+        );
+        assert.ok(await searchEntryOf('n1'));
+        assertRejected(
+          await kernel.execute(cmd('deleteNotePermanently', { noteId: 'n1' })),
+          'not-found',
+          'note-not-found',
+        );
+      });
+
+      it('emptyTrash deletes every note in the trash as committed, blocks included, and names them', async () => {
+        await trashedNote('t1', NOW - 5000);
+        await trashedNote('t2', NOW - 1000);
+        await createNote({ noteId: 'active', name: 'Active', blocks: someBlocks('active', 1) });
+        await seed('media', [{ id: 'm1', canvasId: 't1' }]);
+        const emptied = await run(cmd('emptyTrash', {}));
+        assert.deepEqual([emptied.code, [...emptied.changedIds].sort()], ['trash-emptied', ['t1', 't2']]);
+        assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [[], ['active']]);
+        assert.deepEqual([await blocksOf('t1'), await blocksOf('t2'), await idsInStore('media')], [[], [], []]);
+        assert.equal((await blocksOf('active')).length, 1);
+        const again = await run(cmd('emptyTrash', {}));
+        assert.deepEqual([again.code, again.changedIds], ['trash-emptied', []]);
+      });
+
+      it('emptyTrash that fails to store deletes nothing, on every adapter', async () => {
+        await trashedNote('t1', NOW - 5000);
+        await trashedNote('t2', NOW - 1000);
+        ctx.failNextWrite('notes');
+        const outcome = await kernel.execute(cmd('emptyTrash', {}));
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual(await idsIn('trashed'), ['t2', 't1']);
+        assert.deepEqual([(await blocksOf('t1')).length, (await blocksOf('t2')).length], [1, 1]);
+      });
+
+      it('runTrashCleanup deletes the notes in the trash longer than trashRetention keeps them, 30 days unless set', async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        await trashedNote('old', NOW - 31 * DAY);
+        await trashedNote('week', NOW - 8 * DAY);
+        await trashedNote('new', NOW - DAY);
+        await createNote({ noteId: 'active', name: 'Active' });
+        const cleaned = await run(cmd('runTrashCleanup', {}));
+        assert.deepEqual([cleaned.code, cleaned.changedIds], ['trash-cleaned', ['old']]);
+        assert.deepEqual([await idsIn('trashed'), await blocksOf('old')], [['new', 'week'], []]);
+        await run(cmd('setPreferences', { values: { trashRetention: 7 } }));
+        assert.deepEqual((await run(cmd('runTrashCleanup', {}))).changedIds, ['week']);
+        // 0 keeps the trash for good
+        await run(cmd('setPreferences', { values: { trashRetention: 0 } }));
+        await trashedNote('ancient', NOW - 400 * DAY);
+        const kept = await run(cmd('runTrashCleanup', {}));
+        assert.deepEqual([kept.code, kept.changedIds], ['trash-kept', []]);
+        assert.deepEqual(await idsIn('trashed'), ['new', 'ancient']);
+        assert.deepEqual(await idsIn('active'), ['active']);
+      });
+
+      it('a bulk delete deletes each trashed note and refuses the ones that are not in the trash', async () => {
+        await trashedNote('t1', NOW - 1000);
+        await trashedNote('t2', NOW - 2000);
+        await createNote({ noteId: 'active', name: 'Active' });
+        const result = bulkOf(
+          await kernel.execute(cmd('runBulkAction', { action: 'delete', noteIds: ['t1', 'active', 't2'] })),
+        );
+        assert.deepEqual(
+          result.items.map(({ id, outcome }) => [id, outcome.kind, outcome.code]),
+          [
+            ['t1', 'committed', 'note-deleted'],
+            ['active', 'rejected', 'note-not-trashed'],
+            ['t2', 'committed', 'note-deleted'],
+          ],
+        );
+        assert.deepEqual([result.committedIds, result.messageKey], [['t1', 't2'], 'bulk.delete']);
+        assert.deepEqual([await idsIn('trashed'), await idsIn('active')], [[], ['active']]);
+      });
+
+      it('runs from the new tab only', async () => {
+        await trashedNote('t1', NOW - 1000);
+        for (const caller of [CALLERS.popup, CALLERS.sidepanel, CALLERS['worker-internal']]) {
+          const other = ctx.kernel(caller);
+          for (const command of [
+            cmd('moveNoteToFolder', { noteId: 't1', folderId: null }),
+            cmd('renameFolder', { folderId: 'f1', name: 'X' }),
+            cmd('setFolderCollapsed', { folderId: 'f1', collapsed: true }),
+            cmd('deleteFolder', { folderId: 'f1' }),
+            cmd('convertNoteToTemplate', { noteId: 't1' }),
+            cmd('convertTemplateToNote', { noteId: 't1' }),
+            cmd('deleteNotePermanently', { noteId: 't1' }),
+            cmd('emptyTrash', {}),
+            cmd('runTrashCleanup', {}),
+          ]) {
+            assertRejected(await other.execute(command), 'policy', 'not-on-surface');
+          }
+        }
+        assert.deepEqual(await idsIn('trashed'), ['t1']);
+      });
+    });
+
     describe('preferences, session, and startup maintenance', () => {
       it('setPreferences stores known preferences and refuses any other key', async () => {
         const outcome = await run(cmd('setPreferences', { values: { theme: 'dark', sidebarWidth: 300 } }));
@@ -2414,21 +2704,30 @@ export function runContractSuite(fixture) {
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
+          'convertNoteToTemplate',
+          'convertTemplateToNote',
           'createFolder',
           'createNote',
           'deleteBlocks',
+          'deleteFolder',
+          'deleteNotePermanently',
+          'emptyTrash',
           'ensureDailyNote',
           'insertBlocks',
           'moveFolder',
+          'moveNoteToFolder',
           'recordJobRun',
+          'renameFolder',
           'renameNote',
           'restoreNote',
           'restoreSnapshot',
           'runBulkAction',
           'runStartupMaintenance',
+          'runTrashCleanup',
           'saveNoteContent',
           'saveSnapshot',
           'saveWorkspaceSession',
+          'setFolderCollapsed',
           'setInsightsPending',
           'setPinned',
           'setPreferences',

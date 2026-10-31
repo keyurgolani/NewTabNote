@@ -86,7 +86,10 @@ async function openPage() {
   palette.getAISidebarOpen = () => false;
   palette.onCloseAllModals = () => {};
   const analytics = new (env.get('AnalyticsController'))(deps);
-  // As App wires them: a noteList field each, and analytics reads blocks through the document client
+  // As App wires them: a noteList field each, and analytics reads blocks through the document client.
+  // The sidebar files and removes notes through the document client and removeNotes, with no panes here.
+  sidebar.documentClient = env.documentClient;
+  sidebar.removal = env.removalFor({ leave: () => null, announce: () => {} });
   sidebar.noteList = noteList;
   palette.noteList = noteList;
   analytics.noteList = noteList;
@@ -302,7 +305,9 @@ describe('one note list per new tab', () => {
     const archived = sidebar.performBulkAction('archive');
     await confirmIn(env, 'Confirm');
     await archived;
-    assert.deepEqual(queries.map((query) => query.type), ['getNoteList'], 'the legacy bulk action, then one reload');
+    // One kernel command per note, which the list reads back by id, with no reload
+    assert.deepEqual(queries.map((query) => query.type), ['getNotesByIds', 'getNotesByIds']);
+    assert.deepEqual(queries.flatMap((query) => query.noteIds).sort(), ['A', 'C']);
 
     palette.toggleCommandPalette(true);
     assert.deepEqual(
@@ -374,7 +379,7 @@ describe('one note list per new tab', () => {
     app.updateBadgeCounts();
     const folder = env.document.getElementById('sidebar-notes-list').querySelector('.sidebar-folder');
     folder.querySelector('.sidebar-folder-header').click();
-    // The toggle writes a copy, and the lists read it again
+    // The toggle writes the one field, and the lists read the folders again
     await waitFor(() => noteList.folders()[0].collapsed === true, { message: 'the folder to read back collapsed' });
     await noteList.settled();
     assert.equal(records.find((record) => record.id === 'F').collapsed, false, 'the folder it listed is as it was');

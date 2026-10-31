@@ -17,6 +17,7 @@ import {
   dailyDateStr,
   dailyNoteName,
   dailyNoteNameFor,
+  expiredInTrash,
   findDailyNoteFor,
   inBlockOrder,
   insertLinkText,
@@ -29,6 +30,7 @@ import {
   newSearchEntry,
   noteSaveMetadata,
   notesInView,
+  trashRetentionDays,
   wikiLinkNames,
 } from '../domain/note.js';
 import { contentChanged, unitsWork } from './work.js';
@@ -56,7 +58,8 @@ import { contentChanged, unitsWork } from './work.js';
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
  *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'insertBlocks' | 'applyDerivedTitle' | 'attachInsights'
- *   | 'captureToDailyNote' | 'ensureDailyNote' | 'runBulkAction'} NoteCommandType
+ *   | 'captureToDailyNote' | 'ensureDailyNote' | 'runBulkAction' | 'moveNoteToFolder' | 'convertNoteToTemplate'
+ *   | 'convertTemplateToNote' | 'deleteNotePermanently' | 'emptyTrash' | 'runTrashCleanup'} NoteCommandType
  */
 
 /**
@@ -104,6 +107,48 @@ function changeNote(noteId, change) {
       if (next) tx.put('notes', next);
     },
   };
+}
+
+/** The stores a note deleted for good is deleted from: what Storage.permanentlyDeleteNote deletes */
+const DELETED_WITH_NOTE = /** @type {StoreName[]} */ (['notes', 'blocks', 'media', 'vectors', 'snapshots']);
+
+/**
+ * Delete a note for good in `tx`, with what Storage.permanentlyDeleteNote deletes: its blocks,
+ * media, vectors, and snapshots, then the note. Its links and search entry stay, as they
+ * always have, until #17's deletion takes them too. `tx` spans DELETED_WITH_NOTE.
+ * @param {Tx} tx
+ * @param {string} noteId
+ * @param {BlockRecord[]} [blocks] - its blocks, when the caller has read them
+ * @returns {Promise<void>}
+ */
+async function deleteNoteIn(tx, noteId, blocks) {
+  for (const block of blocks || (await tx.getAllByIndex('blocks', 'canvasId', noteId))) tx.delete('blocks', block.id);
+  for (const key of await tx.getKeysByIndex('media', 'canvasId', noteId)) tx.delete('media', key);
+  tx.delete('vectors', noteId);
+  for (const key of await tx.getKeysByIndex('snapshots', 'noteId', noteId)) tx.delete('snapshots', key);
+  tx.delete('notes', noteId);
+}
+
+/**
+ * Work that deletes, for good and in one transaction, the trashed notes `pick` chooses from
+ * every stored note, and commits naming them
+ * @param {import('../contracts/commands.js').Command} command
+ * @param {string} code
+ * @param {(notes: NoteRecord[]) => NoteRecord[]} pick
+ */
+function deleteTrashed(command, code, pick) {
+  /** @type {string[]} */
+  let deleted = [];
+  /** @type {Unit} */
+  const remove = {
+    stores: DELETED_WITH_NOTE,
+    async run(tx) {
+      // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+      deleted = pick(await tx.getAll('notes')).map(note => note.id);
+      for (const noteId of deleted) await deleteNoteIn(tx, noteId);
+    },
+  };
+  return unitsWork(command, [remove], () => committed(code, deleted), { scope: 'placement' });
 }
 
 /**
@@ -354,7 +399,7 @@ export const noteCommands = {
     // leave the decision stale on an adapter that commits each unit on its own
     /** @type {Unit} */
     const trash = {
-      stores: ['notes', 'blocks', 'media', 'vectors', 'snapshots'],
+      stores: DELETED_WITH_NOTE,
       async run(tx) {
         const note = await tx.get('notes', noteId);
         if (!note) return noteNotFound();
@@ -362,11 +407,7 @@ export const noteCommands = {
         // An untitled note with nothing in it is deleted, with what Storage.permanentlyDeleteNote deletes
         deleting = blocks !== null && isEmpty(blocks);
         if (deleting && blocks) {
-          for (const block of blocks) tx.delete('blocks', block.id);
-          for (const key of await tx.getKeysByIndex('media', 'canvasId', noteId)) tx.delete('media', key);
-          tx.delete('vectors', noteId);
-          for (const key of await tx.getKeysByIndex('snapshots', 'noteId', noteId)) tx.delete('snapshots', key);
-          tx.delete('notes', noteId);
+          await deleteNoteIn(tx, noteId, blocks);
           return;
         }
         tx.put('notes', { ...note, trashed: true, trashedAt: now, archived: false, archivedAt: null, updatedAt: now });
@@ -376,6 +417,82 @@ export const noteCommands = {
       primary: noteRecord(noteId),
       scope: 'placement',
     });
+  },
+
+  moveNoteToFolder(command, { clock }) {
+    const { noteId, folderId } = command;
+    if (!isId(noteId) || !isIdOrNull(folderId)) return invalid();
+    const now = clock.now();
+    let moved = false;
+    /** @type {Unit} */
+    const move = {
+      stores: ['notes', 'folders'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        moved = false;
+        const note = await tx.get('notes', noteId);
+        if (!note) return noteNotFound();
+        // A folder deleted since the view showed it is refused, so no note is filed out of sight
+        if (folderId !== null && !(await tx.get('folders', folderId))) return rejected('not-found', 'folder-not-found');
+        // Already there: nothing to write
+        if ((note.folderId ?? null) === folderId) return;
+        moved = true;
+        tx.put('notes', { ...note, folderId, updatedAt: now });
+      },
+    };
+    return unitsWork(command, [move], () => committed('note-moved', moved ? [noteId] : []), {
+      primary: noteRecord(noteId),
+      scope: 'placement',
+    });
+  },
+
+  convertNoteToTemplate(command, { clock }) {
+    const now = clock.now();
+    // Templates don't live in folders, as NotesManager.convertNoteToTemplate set it
+    return setFields(command, 'note-made-template', note => ({
+      ...note,
+      isTemplate: true,
+      folderId: null,
+      updatedAt: now,
+    }));
+  },
+
+  convertTemplateToNote(command, { clock }) {
+    const now = clock.now();
+    return setFields(command, 'template-made-note', note => ({ ...note, isTemplate: false, updatedAt: now }));
+  },
+
+  deleteNotePermanently(command) {
+    const { noteId } = command;
+    if (!isId(noteId)) return invalid();
+    /** @type {Unit} */
+    const remove = {
+      stores: DELETED_WITH_NOTE,
+      async run(tx) {
+        const note = await tx.get('notes', noteId);
+        if (!note) return noteNotFound();
+        // Only a note in the trash, as committed: one restored since the trash view showed it stays
+        if (!note.trashed) return rejected('validation', 'note-not-trashed');
+        await deleteNoteIn(tx, noteId);
+      },
+    };
+    return unitsWork(command, [remove], () => committed('note-deleted', [noteId]), {
+      primary: noteRecord(noteId),
+      scope: 'placement',
+    });
+  },
+
+  emptyTrash(command) {
+    return deleteTrashed(command, 'trash-emptied', notes => notesInView(notes, 'trashed'));
+  },
+
+  async runTrashCleanup(command, { adapter, clock }) {
+    // The retention setting lives outside the note stores, so it's read before any unit runs
+    const { trashRetention } = await adapter.readSettings('preferences', ['trashRetention']);
+    const days = trashRetentionDays(trashRetention);
+    if (days === null) return committed('trash-kept', []);
+    const now = clock.now();
+    return deleteTrashed(command, 'trash-cleaned', notes => expiredInTrash(notes, now, days));
   },
 
   saveNoteContent(command, { clock, ids }) {

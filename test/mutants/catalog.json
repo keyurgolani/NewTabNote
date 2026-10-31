@@ -654,10 +654,10 @@
     {
       "id": "leave-calls-not-serialized",
       "behavior": "#46 note-leave rules",
-      "protects": "forgetNotes calls run one at a time, in order.",
+      "protects": "forgetNotes and leaveNotes calls run one at a time, in order.",
       "file": "js/controllers/tab-controller.js",
-      "find": "    const done = this._forgetQueue.then(run, run);",
-      "replace": "    const done = run();",
+      "find": "    const done = this._forgetQueue.then(step, step);",
+      "replace": "    const done = step();",
       "test": "test/notes-leave.test.js",
       "name": "two notes leaving at once, one in each pane, are handled one after the other, so the panes end on two active notes"
     },

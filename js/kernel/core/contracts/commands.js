@@ -38,6 +38,15 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/run-bulk-action.js').RunBulkAction} RunBulkAction */
 /** @typedef {import('./operations/create-folder.js').CreateFolder} CreateFolder */
 /** @typedef {import('./operations/move-folder.js').MoveFolder} MoveFolder */
+/** @typedef {import('./operations/rename-folder.js').RenameFolder} RenameFolder */
+/** @typedef {import('./operations/set-folder-collapsed.js').SetFolderCollapsed} SetFolderCollapsed */
+/** @typedef {import('./operations/delete-folder.js').DeleteFolder} DeleteFolder */
+/** @typedef {import('./operations/move-note-to-folder.js').MoveNoteToFolder} MoveNoteToFolder */
+/** @typedef {import('./operations/convert-note-to-template.js').ConvertNoteToTemplate} ConvertNoteToTemplate */
+/** @typedef {import('./operations/convert-template-to-note.js').ConvertTemplateToNote} ConvertTemplateToNote */
+/** @typedef {import('./operations/delete-note-permanently.js').DeleteNotePermanently} DeleteNotePermanently */
+/** @typedef {import('./operations/empty-trash.js').EmptyTrash} EmptyTrash */
+/** @typedef {import('./operations/run-trash-cleanup.js').RunTrashCleanup} RunTrashCleanup */
 /** @typedef {import('./operations/set-preferences.js').SetPreferences} SetPreferences */
 /** @typedef {import('./operations/save-workspace-session.js').SaveWorkspaceSession} SaveWorkspaceSession */
 /** @typedef {import('./operations/run-startup-maintenance.js').RunStartupMaintenance} RunStartupMaintenance */
@@ -52,8 +61,10 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /**
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
  *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | EnsureDailyNote
- *   | RunBulkAction | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance
- *   | SetInsightsPending | RecordJobRun | SaveSnapshot | RestoreSnapshot | InsertBlocks} Command
+ *   | RunBulkAction | CreateFolder | MoveFolder | RenameFolder | SetFolderCollapsed | DeleteFolder | MoveNoteToFolder
+ *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
+ *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | SetInsightsPending | RecordJobRun
+ *   | SaveSnapshot | RestoreSnapshot | InsertBlocks} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -150,8 +161,18 @@ export const COMMANDS = Object.freeze({
   // The sidebar's Daily Note button and calendar, the palette, and AI chat's Alt+D, all in the new tab
   ensureDailyNote: entry('ensure-daily-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   runBulkAction: entry('run-bulk-action', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE, bulk: true }),
+  moveNoteToFolder: entry('move-note-to-folder', 'note', ['newtab'], { entityTypes: ['note', 'folder'] }),
+  convertNoteToTemplate: entry('convert-note-to-template', 'note', ['newtab'], { entityTypes: ['note'] }),
+  convertTemplateToNote: entry('convert-template-to-note', 'note', ['newtab'], { entityTypes: ['note'] }),
+  deleteNotePermanently: entry('delete-note-permanently', 'note', ['newtab'], { entityTypes: ['note'] }),
+  emptyTrash: entry('empty-trash', 'note', ['newtab'], { entityTypes: [] }),
+  runTrashCleanup: entry('run-trash-cleanup', 'note', ['newtab'], { entityTypes: [] }),
   createFolder: entry('create-folder', 'folder', ['newtab'], { entityTypes: ['folder'], maxBytes: LARGE }),
   moveFolder: entry('move-folder', 'folder', ['newtab'], { entityTypes: ['folder'] }),
+  renameFolder: entry('rename-folder', 'folder', ['newtab'], { entityTypes: ['folder'], maxBytes: LARGE }),
+  setFolderCollapsed: entry('set-folder-collapsed', 'folder', ['newtab'], { entityTypes: ['folder'] }),
+  // A folder commit names the folders it deleted and the notes it filed at the root
+  deleteFolder: entry('delete-folder', 'folder', ['newtab'], { entityTypes: ['folder'] }),
   setPreferences: entry('set-preferences', 'preferences', ['newtab'], { entityTypes: ['note'] }),
   saveWorkspaceSession: entry('save-workspace-session', 'session', ['newtab'], {
     entityTypes: ['note'],
@@ -179,12 +200,16 @@ export const COMMANDS = Object.freeze({
 /** @type {readonly CommandType[]} */
 export const COMMAND_TYPES = Object.freeze(/** @type {CommandType[]} */ (Object.keys(COMMANDS)));
 
-/** @type {Readonly<Record<BulkAction, 'archiveNote' | 'unarchiveNote' | 'trashNote' | 'restoreNote'>>} */
+/**
+ * @type {Readonly<Record<BulkAction,
+ *   'archiveNote' | 'unarchiveNote' | 'trashNote' | 'restoreNote' | 'deleteNotePermanently'>>}
+ */
 export const BULK_ACTIONS = Object.freeze({
   archive: 'archiveNote',
   unarchive: 'unarchiveNote',
   trash: 'trashNote',
   restore: 'restoreNote',
+  delete: 'deleteNotePermanently',
 });
 
 /**

@@ -246,17 +246,103 @@ class TabController {
    * @returns {Promise<void>}
    */
   forgetNotes(ids) {
-    const run = () => this._forgetNotes(ids);
-    const done = this._forgetQueue.then(run, run);
+    return this._inTurn(() => this._forgetNotes(ids));
+  }
+
+  /**
+   * Notes are about to leave the active set (removeNotes, js/kernel/composition/removal.js),
+   * before the write: as forgetNotes, except that a pane with no other active note to show
+   * waits on its note, so a write that fails leaves no new note behind. Answers what the
+   * rest of the sequence does: `restore` for notes that stayed (a write that didn't commit, a
+   * bulk item that failed), which puts the panes, tabs, and split view back as they were,
+   * unless something moved them since, and then `arrive` for the notes that left, which moves
+   * the panes still on them, to a new note when there's no other. PiP closed for a leaving note
+   * stays closed.
+   * @param {Array<string>} ids
+   * @returns {Promise<{arrive: (left: Array<string>) => Promise<void>, restore: (stayed: Array<string>) => Promise<void>}>}
+   */
+  async leaveNotes(ids) {
+    /** @type {any} */
+    let before = null;
+    /** @type {any} */
+    let after = null;
+    await this._inTurn(async () => {
+      before = this._viewState();
+      await this._forgetNotes(ids, { create: false });
+      after = this._viewState();
+    });
+    return {
+      arrive: (left) => this._inTurn(() => this._forgetNotes(left)),
+      restore: (stayed) => this._inTurn(() => this._restoreView(before, after, stayed)),
+    };
+  }
+
+  /**
+   * Run `step` once the forget and leave calls before it are done
+   * @param {() => Promise<void>} step
+   * @returns {Promise<void>}
+   */
+  _inTurn(step) {
+    const done = this._forgetQueue.then(step, step);
     this._forgetQueue = done.catch(() => {});
     return done;
   }
 
   /**
-   * @param {Array<string>} ids
+   * What a leave changes: the tabs, the active tab, split view and its active side, the note
+   * each pane shows, and PiP's
+   * @returns {string}
+   */
+  _viewState() {
+    return JSON.stringify({
+      tabs: this.openTabs.map((tab) => ({ noteId: tab.noteId, name: tab.name })),
+      active: this.activeTabIndex,
+      split: this.splitViewEnabled,
+      side: this.activeEditorSide,
+      left: this.editor ? this.editor.noteId : null,
+      right: this.secondaryEditor ? this.secondaryEditor.noteId : null,
+      pip: this.pipEditor ? this.pipEditor.noteId : null,
+    });
+  }
+
+  /**
+   * Put the view back as it was before a leave, for notes that didn't leave after all (a write
+   * that didn't commit, a bulk item that failed), when a tab or pane showed one of them and the
+   * view is still as the leave left it: each pane loads its note again (writing what it holds
+   * first), split view comes back with its side, and so do the tabs. The notes that did leave
+   * arrive from there (leaveNotes' arrive).
+   * @param {string|null} before - _viewState() before the leave
+   * @param {string|null} after - and after it
+   * @param {Array<string>} [stayed] - the notes that didn't leave; all of them when left out
    * @returns {Promise<void>}
    */
-  async _forgetNotes(ids) {
+  async _restoreView(before, after, stayed) {
+    if (!before || before === after || this._viewState() !== after) return;
+    const was = JSON.parse(before);
+    if (stayed) {
+      const shown = new Set([...was.tabs.map((tab) => tab.noteId), was.left, was.right, was.pip]);
+      if (!stayed.some((id) => shown.has(id))) return;
+    }
+    if (was.left && this.editor.noteId !== was.left) await this.editor.loadNote(was.left);
+    if (was.split && was.right && this.secondaryEditor.noteId !== was.right) {
+      if ((await this.secondaryEditor.loadNote(was.right)) && !this.splitViewEnabled) this._setSplitView(true);
+    }
+    if (this.splitViewEnabled) this.setActiveEditorSide(was.side);
+    this.openTabs = was.tabs;
+    this.activeTabIndex = was.active;
+    this.renderTabs();
+    await this.saveTabs();
+    const shown = this.getEditor();
+    if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
+  }
+
+  /**
+   * @param {Array<string>} ids
+   * @param {{create?: boolean}} [options] - Whether a pane with no other active note gets a
+   *   new one (it waits on its note otherwise)
+   * @returns {Promise<void>}
+   */
+  async _forgetNotes(ids, { create = true } = {}) {
     const gone = new Set((ids || []).filter((id) => typeof id === 'string' && id !== ''));
     if (gone.size === 0) return;
     /** @param {BlockEditor|null} editor */
@@ -266,6 +352,9 @@ class TabController {
 
     // Edits typed into a leaving note land in it, or show the pane that it's deleted.
     await Promise.all(this.getOpenEditors().filter(onGone).map((editor) => editor.flushSave()));
+    const notes = (await this.storage.getAllNotes()).filter((note) => !gone.has(note.id));
+    // Before the write, a pane with nowhere to go but a new note waits, and so does its tab
+    if (!create && notes.length === 0) return;
     /** @param {BlockEditor|null} editor */
     const stays = (editor) => onGone(editor) && editor.noteGone;
     /** @param {BlockEditor|null} editor */
@@ -287,15 +376,14 @@ class TabController {
     }
     const activeTabLeft = Boolean(activeTab) && !this.openTabs.includes(activeTab);
 
-    const notes = (await this.storage.getAllNotes()).filter((note) => !gone.has(note.id));
     const active = this.getEditor();
     const other = active === this.editor ? this.secondaryEditor : this.editor;
     if (moves(active)) {
-      await this._moveActivePane(active, this.splitViewEnabled ? other : null, notes, { activeTabLeft, staying });
+      await this._moveActivePane(active, this.splitViewEnabled ? other : null, notes, { activeTabLeft, staying, create });
       changed = true;
     }
     if (this.splitViewEnabled && !stays(other) && (moves(other) || !other.noteId || other.noteId === active.noteId)) {
-      await this._moveOtherPane(other, notes);
+      await this._moveOtherPane(other, notes, { create });
       changed = true;
     }
     // The hidden right pane lets go of a note that left, so turning split view on never brings it back
@@ -320,16 +408,17 @@ class TabController {
    * archived, or deleted it; a deleted one's tab goes); else the first active
    * note the other pane doesn't show, in a new tab when its own tab went; else
    * the other pane's note, with split view closed; else a new note in a new
-   * tab. A load the editor refuses, to keep unsaved edits of a deleted note on
-   * screen, ends it.
+   * tab, or, with `create` false, it stays. A load the editor refuses, to keep
+   * unsaved edits of a deleted note on screen, ends it.
    * @param {BlockEditor} active
    * @param {BlockEditor|null} other - The other pane, while split view is on
    * @param {Array<Object>} notes - Active notes, newest first, without the ones that left
-   * @param {{activeTabLeft: boolean, staying: Set<string>}} state - Whether the active tab went
-   *   with the notes, and the deleted notes that panes keep on screen
+   * @param {{activeTabLeft: boolean, staying: Set<string>, create?: boolean}} state - Whether the
+   *   active tab went with the notes, the deleted notes that panes keep on screen, and whether
+   *   a new note may be made
    * @returns {Promise<void>}
    */
-  async _moveActivePane(active, other, notes, { activeTabLeft, staying }) {
+  async _moveActivePane(active, other, notes, { activeTabLeft, staying, create = true }) {
     const otherId = other ? other.noteId : null;
     const tab = this.openTabs[this.activeTabIndex];
     let skipped = false;
@@ -355,7 +444,7 @@ class TabController {
       await this._closeSplitKeeping(other);
       return;
     }
-    const created = this.onCreateNote ? await this.onCreateNote() : null;
+    const created = create && this.onCreateNote ? await this.onCreateNote() : null;
     if (!created) return;
     if (await active.loadNote(created.id)) this._pushTab(created);
   }
@@ -378,19 +467,20 @@ class TabController {
   /**
    * The pane the tabs don't drive: an active note the active pane doesn't
    * show, else split view closes, else, when it stays for a deleted note's
-   * text, a new note. A load the editor refuses, to keep unsaved edits of a
-   * deleted note on screen, leaves the pane as it is.
+   * text, a new note, unless `create` is false. A load the editor refuses, to
+   * keep unsaved edits of a deleted note on screen, leaves the pane as it is.
    * @param {BlockEditor} other
    * @param {Array<Object>} notes - Active notes, newest first, without the ones that left
+   * @param {{create?: boolean}} [options]
    * @returns {Promise<void>}
    */
-  async _moveOtherPane(other, notes) {
+  async _moveOtherPane(other, notes, { create = true } = {}) {
     const shownId = (other === this.editor ? this.secondaryEditor : this.editor).noteId;
     const pick = notes.find((note) => note.id !== shownId);
     if (pick && ((await other.loadNote(pick.id)) || other.noteGone)) return;
     await this._closeSplitKeeping(this.getEditor());
     if (!this.splitViewEnabled) return;
-    const created = this.onCreateNote ? await this.onCreateNote() : null;
+    const created = create && this.onCreateNote ? await this.onCreateNote() : null;
     if (created) await other.loadNote(created.id);
   }
 
@@ -850,16 +940,6 @@ class TabController {
     if (!kept.includes(false)) return;
     this.activeTabIndex = TabController.keptActiveIndex(kept, this.activeTabIndex);
     this.openTabs = this.openTabs.filter((tab, index) => kept[index]);
-  }
-
-  /**
-   * Close tab for a specific note if open.
-   */
-  closeTabForNote(noteId) {
-    const tabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
-    if (tabIndex !== -1) {
-      this.closeTab(tabIndex);
-    }
   }
 
   /**

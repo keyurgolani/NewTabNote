@@ -290,21 +290,23 @@ describe("the sidebar's new notes and Daily Notes", () => {
 
 describe('archive and unarchive through the kernel', () => {
   it("archiving the open note keeps #46's order: its pane moves off and saves first, then the write, then the other tabs hear", async () => {
-    const { env, page, notes, toasts, reloads } = await openPage();
+    const { env, page, notes, toasts, reloads, Storage } = await openPage();
     await page.tabs.openNoteInNewTab('B');
     const order = [];
-    const leaving = notes.onNotesLeaving;
-    notes.onNotesLeaving = async (ids) => { order.push(['leaving', ...ids]); await leaving(ids); };
-    const archive = notes.documentClient.archiveNote;
-    notes.documentClient = {
-      ...notes.documentClient,
-      archiveNote: async (noteId) => { order.push(['write', noteId]); return archive(noteId); },
-    };
-    notes.onNotesLeft = (ids) => order.push(['left', ...ids]);
+    const archived = async (noteId) => Boolean((await Storage.getNote(noteId)).archived);
+    // removeNotes as App wires it, with each step recorded and whether the write had landed by then
+    notes.removal = env.removalFor({
+      leave: async (ids) => {
+        order.push(['leaving', ...ids, await archived(ids[0])]);
+        return page.tabs.leaveNotes(ids);
+      },
+      announce: async (ids) => { order.push(['left', ...ids, await archived(ids[0])]); },
+    });
     type(page.tabs.editor, 'typed before archiving');
     await runUntil(env, notes.archiveNote('B'));
+    order.push(['written', await archived('B')]);
 
-    assert.deepEqual(order, [['leaving', 'B'], ['write', 'B'], ['left', 'B']]);
+    assert.deepEqual(order, [['leaving', 'B', false], ['left', 'B', true], ['written', true]]);
     const { notes: records, elements } = await stored(env);
     assert.equal(records.B.archived, true);
     assert.equal(typeof records.B.archivedAt, 'number');
@@ -337,9 +339,9 @@ describe('archive and unarchive through the kernel', () => {
   });
 
   it("archive or unarchive of a note deleted in another tab says it was deleted, and the other tabs aren't told", async () => {
-    const { env, notes, toasts, Storage } = await openPage();
+    const { env, page, notes, toasts, Storage } = await openPage();
     const left = [];
-    notes.onNotesLeft = (ids) => left.push(ids);
+    notes.removal = env.removalFor({ leave: (ids) => page.tabs.leaveNotes(ids), announce: (ids) => left.push(ids) });
     env.global.console = { ...console, error: () => {} };
     // Deleted for good in another tab, which this one hasn't heard of yet
     await Storage.permanentlyDeleteNote('C');
@@ -355,7 +357,7 @@ describe('archive and unarchive through the kernel', () => {
 
   it('an archive that fails for another reason asks for another try', async () => {
     const { env, notes, toasts } = await openPage();
-    notes.documentClient = { ...notes.documentClient, archiveNote: async () => ({ kind: 'unavailable', cause: 'storage', code: 'quota-exceeded' }) };
+    notes.removal = { removeNotes: async () => ({ kind: 'unavailable', cause: 'storage', code: 'quota-exceeded' }) };
     env.global.console = { ...console, error: () => {} };
     await runUntil(env, notes.archiveNote('C'));
     assert.deepEqual(plain(toasts), [{ message: 'Failed to archive note. Please try again.', kind: 'error' }]);

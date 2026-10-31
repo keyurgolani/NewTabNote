@@ -982,6 +982,15 @@ function testDocumentClient(client) {
     setPinned: (noteId, pinned) => client.setPinned(noteId, pinned),
     archiveNote: (noteId) => client.archiveNote(noteId),
     unarchiveNote: (noteId) => client.unarchiveNote(noteId),
+    restoreNote: (noteId) => client.restoreNote(noteId),
+    convertNoteToTemplate: (noteId) => client.convertNoteToTemplate(noteId),
+    convertTemplateToNote: (noteId) => client.convertTemplateToNote(noteId),
+    moveNoteToFolder: (noteId, folderId) => client.moveNoteToFolder(noteId, folderId),
+    createFolder: (folderId, name, parentId) => client.createFolder(folderId, name, parentId),
+    renameFolder: (folderId, name) => client.renameFolder(folderId, name),
+    moveFolder: (folderId, parentId) => client.moveFolder(folderId, parentId),
+    setFolderCollapsed: (folderId, collapsed) => client.setFolderCollapsed(folderId, collapsed),
+    deleteFolder: (folderId) => client.deleteFolder(folderId),
     newId: () => client.newId(),
     deriveTitle: (...args) => client.deriveTitle(...args),
     renameNote: (...args) => client.renameNote(...args),
@@ -1017,7 +1026,7 @@ function testDocumentClient(client) {
 async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
-  const { kernel, documentClient, noteList } = pageClientsFor({
+  const { kernel, documentClient, noteList, removalFor } = pageClientsFor({
     storage: env.get('Storage'),
     settings: env.chrome.api.storage.local,
     onListQuery,
@@ -1028,6 +1037,8 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) 
   env.kernel = kernel;
   env.documentClient = testDocumentClient(documentClient);
   env.noteList = noteList;
+  // The page's removeNotes, over the pane moves a test's page gives it (bootNewTab)
+  env.removalFor = removalFor;
   return env.documentClient;
 }
 
@@ -1146,8 +1157,9 @@ const NEW_TAB_FILES = [
  * bar and split view touch, and a TabController with both panes, wired the way
  * App wires it. `page.noteList` is the page's note list, as App's, which
  * onRefreshNotesList reloads, and `page.notes` its active notes. `wire(controller)`
- * gives a controller that takes notes out of the active set App's hooks for it, and the
- * note list. With `ready: false` the tab is still starting up: other tabs' messages
+ * gives a controller that takes notes out of the active set App's hooks for it, removeNotes
+ * (js/kernel/composition/removal.js) over this page's tabs as App builds it, the page's
+ * document client, and the note list. `page.removal` is that removeNotes. With `ready: false` the tab is still starting up: other tabs' messages
  * refresh nothing until `tabs.workspaceReady()`. `page.refreshes` counts the refreshes,
  * and `page.listsOnly` the ones that asked for lists only. `onListQuery` is told of each
  * query the note list makes.
@@ -1206,8 +1218,15 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
   tabs.onUpdateEmptyState = () => {};
   await tabs.init();
   if (ready) tabs.workspaceReady();
+  // As App.leaveNotes
+  const removal = env.removalFor({
+    leave: (ids) => tabs.leaveNotes(ids),
+    announce: (ids) => tabs.announceNotesLeft(ids),
+  });
+  page.removal = removal;
   const wire = (controller) => Object.assign(controller, {
     noteList,
+    removal,
     // What App gives the controllers that write notes through the kernel
     documentClient: env.documentClient,
     onNotesLeaving: (ids) => tabs.forgetNotes(ids),

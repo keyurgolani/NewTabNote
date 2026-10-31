@@ -3,8 +3,12 @@
  * of the note lists App and its controllers kept. It loads every note, folder, and search
  * entry with one getNoteList read, then follows this tab's commit feed: the notes each
  * commit names are read again with getNotesByIds, and a folder commit reads the folders
- * again. Other contexts' changes reach it only through reload(), as 1.4.x's lists reached
+ * again, with any notes it names. Other contexts' changes reach it only through reload(), as 1.4.x's lists reached
  * them only through a refresh.
+ *
+ * A note filed in a folder that isn't stored is listed at the root: 1.4.x's deleteFolder left
+ * trashed notes and templates on the folders it deleted, so once restored no list showed them.
+ * The stored record keeps its folderId; the list hands out a copy with null.
  *
  * Reads run one at a time, in the order they were asked for, so an older reload never lands
  * over a newer change, and the note ids commits publish within one task are read together.
@@ -199,6 +203,8 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
 
   /** @type {Map<NoteView, readonly Readonly<NoteRecord>[]>} */
   let views = new Map();
+  /** @type {Map<string, Readonly<NoteRecord>> | null} The notes as listed, by id: filed at the root when their folder is gone */
+  let listed = null;
   /** @type {readonly Readonly<SearchEntry>[] | null} */
   let entryList = null;
 
@@ -248,6 +254,7 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
   const changed = (reason, ids) => {
     version += 1;
     views = new Map();
+    listed = null;
     entryList = null;
     /** @type {NoteListChange} */
     const change = Object.freeze({ version, reason, ids: Object.freeze([...ids]) });
@@ -487,6 +494,9 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
       if (changedNotes.size === 0) return;
     } else if (aggregate === 'folder') {
       foldersChanged = true;
+      // A folder commit can name notes too: deleteFolder names the notes it filed at the root.
+      // The lists hold every stored note, so an id they hold no note under is a folder's.
+      for (const id of ids) if (isId(id) && notes.has(id)) changedNotes.add(id);
     } else {
       // Snapshots, jobs, preferences, and the session aren't in the lists
       return;
@@ -504,6 +514,23 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
     await readAll();
   });
 
+  /**
+   * The notes as the lists show them: each as stored, except one whose folder isn't stored,
+   * which is listed at the root
+   * @returns {Map<string, Readonly<NoteRecord>>}
+   */
+  const shown = () => {
+    if (!listed) {
+      const filedIn = new Set(folders.map(folder => folder.id));
+      listed = new Map();
+      for (const [id, note] of notes) {
+        const lost = typeof note.folderId === 'string' && !filedIn.has(note.folderId);
+        listed.set(id, lost ? deepFreeze({ ...note, folderId: null }) : note);
+      }
+    }
+    return listed;
+  };
+
   /** @returns {NoteListState} */
   const state = () => {
     if (!loaded) return failure ? { ...failure } : LOADING;
@@ -518,15 +545,15 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
 
     view(name) {
       if (!NOTE_VIEWS.includes(name)) throw new TypeError(`No note view is called ${String(name)}`);
-      let listed = views.get(name);
-      if (!listed) {
-        listed = Object.freeze(notesInView([...notes.values()], name));
-        views.set(name, listed);
+      let inView = views.get(name);
+      if (!inView) {
+        inView = Object.freeze(notesInView([...shown().values()], name));
+        views.set(name, inView);
       }
-      return listed;
+      return inView;
     },
 
-    note: noteId => notes.get(noteId),
+    note: noteId => shown().get(noteId),
 
     folders: () => folders,
 

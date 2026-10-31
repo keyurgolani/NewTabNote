@@ -8,8 +8,9 @@
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} [deps.documentClient] - What the sidebar's note writes go through
- *   (js/kernel/composition/document.js): new notes, the Daily Note, pins, and a dropped block's
- *   append, as kernel commands. The note list shows each one from the commit feed, with no refresh.
+ *   (js/kernel/composition/document.js): new notes, the Daily Note, pins, a dropped block's
+ *   append, folders, and moving a note into one, as kernel commands. The note list shows each
+ *   one from the commit feed, with no refresh.
  */
 class SidebarController {
   constructor({ storage, domRefs, logger, documentClient = null }) {
@@ -71,10 +72,12 @@ class SidebarController {
     this.onConvertNoteToTemplate = null;
     this.onConvertTemplateToNote = null;
     this.onImportNote = null;
-    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
-    this.onNotesLeaving = null;
-    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
-    this.onNotesLeft = null;
+    /**
+     * removeNotes (js/kernel/composition/removal.js), set by App: Empty trash, trash retention,
+     * and bulk actions take notes out of the active set through it
+     * @type {any}
+     */
+    this.removal = null;
   }
 
   /**
@@ -249,8 +252,8 @@ class SidebarController {
       newFolderBtn.addEventListener('click', async () => {
         const name = await promptDialog({ title: 'New Folder', message: 'Folder name:', defaultValue: 'New Folder' });
         if (name) {
-          await this.storage.createFolder(name);
-          await this.refreshNotesList();
+          const outcome = await this.documentClient.createFolder(this.documentClient.newId(), name, null);
+          await this._filed(outcome, 'Failed to create folder');
         }
       });
     }
@@ -898,28 +901,97 @@ class SidebarController {
       return;
     }
     if (!await confirmDialog({ title: 'Empty Trash', message: `Permanently delete ${this.trashedNotes.length} note(s)? This cannot be undone.`, confirmText: 'Delete', danger: true })) return;
-    const ids = (await this.storage.getTrashedNotes()).map((note) => note.id);
-    if (this.onNotesLeaving) await this.onNotesLeaving(ids);
-    await this.storage.emptyTrash();
-    if (this.onNotesLeft) this.onNotesLeft(ids);
-    await this.refreshNotesList();
+    // The notes in the trash as this tab lists them leave first; the kernel deletes what's in
+    // the trash as committed, in one transaction
+    const noteIds = this.trashedNotes.map((note) => note.id);
+    const outcome = await this.removal.removeNotes({ type: 'emptyTrash', noteIds });
+    if (!this._done(outcome, 'Failed to empty trash')) return;
     Utils.showToast('Trash emptied', 'success');
   }
 
+  /**
+   * Trash retention, once this tab's workspace is ready (App.init): the kernel's
+   * runTrashCleanup deletes the notes in the trash longer than trashRetention keeps them, and
+   * names them, then panes on them move off, keeping any text they couldn't save with "Save as
+   * a new note", and the other new tabs hear of it (removeNotes).
+   * @returns {Promise<void>}
+   */
   async runTrashCleanup() {
-    // Cleanup strips blocks before media; skip it while any store is missing.
+    // Skipped while any store is missing, as it always was: nothing is deleted for good on a
+    // database an older build left damaged
     if (this.storage.missingStores && this.storage.missingStores.length > 0) return;
-    const retentionDays = await this.storage.getSetting('trashRetention', 30);
-    if (retentionDays > 0) {
-      const ids = await this.storage.cleanupTrash(retentionDays);
-      if (ids.length > 0) {
-        this.logger.info('SidebarController', `Auto-deleted ${ids.length} expired note(s) from trash`);
-        // After the delete, so a pane with unsaved text on one of them keeps it, with "Save as a new note"
-        if (this.onNotesLeaving) await this.onNotesLeaving(ids);
-        if (this.onNotesLeft) this.onNotesLeft(ids);
-        await this.refreshNotesList();
-      }
+    const outcome = await this.removal.removeNotes({ type: 'runTrashCleanup' });
+    if (outcome.kind !== 'committed') {
+      this.logger.warn('SidebarController', `Trash cleanup didn't run (${outcome.kind}: ${outcome.code})`);
+      return;
     }
+    if (outcome.changedIds.length > 0) {
+      this.logger.info('SidebarController', `Auto-deleted ${outcome.changedIds.length} expired note(s) from trash`);
+    }
+  }
+
+  /**
+   * Whether a kernel write committed. One that didn't is logged by its outcome's kind and
+   * code, never the note's content, and its toast says `action` failed and why
+   * (Utils.writeFailureMessage).
+   * @param {{kind: string, code?: string, reason?: string}} outcome
+   * @param {string} action - such as "Failed to empty trash"
+   * @param {{gone?: string, reasons?: Object<string, string>}} [why] - what a gone record and a
+   *   refusal's code read as
+   * @returns {boolean}
+   */
+  _done(outcome, action, { gone, reasons } = {}) {
+    if (outcome.kind === 'committed') return true;
+    console.error(`${action}:`, outcome.kind, outcome.code);
+    Utils.showToast(Utils.writeFailureMessage(action, outcome, gone, reasons), 'error');
+    return false;
+  }
+
+  /**
+   * After a filing write (folders, moving a note): once it committed, the note list has it,
+   * from the commit feed, and the sidebar has rendered it. One that didn't says `action`
+   * failed and why (_done). One refused because a folder or note it named is gone (another tab
+   * deleted it) reads the lists again, so the sidebar stops offering what isn't there.
+   * @param {{kind: string, code?: string, reason?: string}} outcome
+   * @param {string} action
+   * @param {{gone?: string, reasons?: Object<string, string>}} [why]
+   * @returns {Promise<boolean>} whether it committed
+   */
+  async _filed(outcome, action, why) {
+    if (this._noteList) await this._noteList.settled();
+    if (outcome.kind === 'rejected' && outcome.reason === 'not-found') await this.reloadLists();
+    return this._done(outcome, action, why);
+  }
+
+  /**
+   * File a note in a folder, or at the root with null, with the kernel's moveNoteToFolder,
+   * which writes its folderId and nothing else. A note the sidebar shows there already is left
+   * alone, and a folder deleted since the sidebar showed it is refused.
+   * @param {string} noteId
+   * @param {string|null} folderId
+   * @returns {Promise<void>}
+   */
+  async moveNoteToFolder(noteId, folderId) {
+    const shown = this._noteList ? this._noteList.note(noteId) : undefined;
+    if (shown && (shown.folderId || null) === folderId) return;
+    const outcome = await this.documentClient.moveNoteToFolder(noteId, folderId);
+    await this._filed(outcome, 'Failed to move note');
+  }
+
+  /**
+   * Put a folder inside another, or at the root with null, with the kernel's moveFolder, which
+   * refuses a move into the folder itself or a folder inside it as committed, whatever the
+   * sidebar showed
+   * @param {string} folderId
+   * @param {string|null} parentId
+   * @returns {Promise<void>}
+   */
+  async moveFolder(folderId, parentId) {
+    const outcome = await this.documentClient.moveFolder(folderId, parentId);
+    await this._filed(outcome, 'Failed to move folder', {
+      gone: 'that folder no longer exists',
+      reasons: { 'folder-into-itself': "it can't go inside itself" },
+    });
   }
 
   // ─── Badge counts ───
@@ -1094,12 +1166,16 @@ class SidebarController {
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();
-        // The listed folder is frozen, so the write takes a copy, and the lists read it again
-        const toggled = { ...folder };
-        toggled.collapsed = !folderEl.classList.contains('collapsed');
-        folderEl.classList.toggle('collapsed', toggled.collapsed);
-        await this.storage.updateFolder(toggled);
-        await this.refreshNotesList();
+        // Shown now, and written as that one field, so a rename made meanwhile stays
+        const collapsed = !folderEl.classList.contains('collapsed');
+        folderEl.classList.toggle('collapsed', collapsed);
+        const outcome = await this.documentClient.setFolderCollapsed(folder.id, collapsed);
+        if (this._noteList) await this._noteList.settled();
+        if (outcome.kind !== 'committed') {
+          // Shown as stored again, with the reason in the log and nothing of the folder's
+          console.error('Failed to collapse folder:', outcome.kind, outcome.code);
+          folderEl.classList.toggle('collapsed', !collapsed);
+        }
       });
 
       header.addEventListener('contextmenu', (e) => {
@@ -1115,17 +1191,11 @@ class SidebarController {
         const noteId = e.dataTransfer.getData('noteId');
         const draggedFolderId = e.dataTransfer.getData('folderId');
         if (noteId) {
-          await this.storage.moveNoteToFolder(noteId, folder.id);
-          await this.refreshNotesList();
+          await this.moveNoteToFolder(noteId, folder.id);
         } else if (draggedFolderId && draggedFolderId !== folder.id) {
-          if (!this.isChildFolder(draggedFolderId, folder.id)) {
-            const listed = this.folders.find(f => f.id === draggedFolderId);
-            if (listed) {
-              const draggedFolder = { ...listed };
-              draggedFolder.parentId = folder.id;
-              await this.storage.updateFolder(draggedFolder);
-              await this.refreshNotesList();
-            }
+          // The kernel checks the move against the folders as committed too
+          if (!this.isChildFolder(draggedFolderId, folder.id) && this.folders.some(f => f.id === draggedFolderId)) {
+            await this.moveFolder(draggedFolderId, folder.id);
           }
         }
       });
@@ -1181,6 +1251,8 @@ class SidebarController {
     if (note.archived || note.trashed) el.classList.add('archived');
     el.dataset.id = note.id;
     el.draggable = !this.selectionMode;
+    // What a folder's drop files; the folder's own dragstart doesn't take the drag over
+    el.addEventListener('dragstart', (e) => { e.stopPropagation(); e.dataTransfer.setData('noteId', note.id); });
 
     // Checkbox for multi-select
     const checkbox = document.createElement('div');
@@ -1321,16 +1393,16 @@ class SidebarController {
       { label: 'Rename', action: async () => {
         const newName = await promptDialog({ title: 'Rename Folder', message: 'New folder name:', defaultValue: folder.name });
         if (newName && newName !== folder.name) {
-          const renamed = { ...folder };
-          renamed.name = newName;
-          await this.storage.updateFolder(renamed);
-          await this.refreshNotesList();
+          await this._filed(await this.documentClient.renameFolder(folder.id, newName), 'Failed to rename folder', {
+            gone: 'that folder no longer exists',
+          });
         }
       }},
       { label: 'Delete Folder', action: async () => {
         if (await confirmDialog({ title: 'Delete Folder', message: `Are you sure you want to delete "${folder.name}"? Notes inside will be moved to root.`, confirmText: 'Delete', danger: true })) {
-          await this.storage.deleteFolder(folder.id);
-          await this.refreshNotesList();
+          await this._filed(await this.documentClient.deleteFolder(folder.id), 'Failed to delete folder', {
+            gone: 'that folder no longer exists',
+          });
         }
       }},
       { label: 'Add Note to Folder', action: async () => {
@@ -1339,10 +1411,7 @@ class SidebarController {
         if (noteId && this.onOpenNoteInNewTab) this.onOpenNoteInNewTab(noteId);
       }},
       { label: 'Move to Root', action: async () => {
-        const moved = { ...folder };
-        moved.parentId = null;
-        await this.storage.updateFolder(moved);
-        await this.refreshNotesList();
+        await this.moveFolder(folder.id, null);
       }}
     ];
 
@@ -1416,20 +1485,78 @@ class SidebarController {
     }
     if (confirmMsg && !await confirmDialog({ title: 'Confirm', message: confirmMsg, confirmText: action === 'delete' ? 'Delete' : 'OK', danger: action === 'delete' })) return;
 
-    // Trash, archive, and delete take the notes out of the active set
-    const leaving = ['trash', 'archive', 'delete'].includes(action);
-    try {
-      if (leaving && this.onNotesLeaving) await this.onNotesLeaving(ids);
-      await this.storage.bulkNoteAction(ids, action);
-      if (leaving && this.onNotesLeft) this.onNotesLeft(ids);
-      Utils.showToast(`${ids.length} notes ${action}ed`, 'success');
-      // The lists read again, so App, the palette, and every other reader of them see it
-      await this.refreshNotesList();
-      this.exitSelectionMode();
-    } catch (error) {
-      console.error('Bulk action failed:', error);
-      Utils.showToast('Bulk action failed', 'error');
+    // One kernel command per note, through removeNotes, which moves this tab's panes off the
+    // notes that trash, archive, and delete take out of the active set. Each note answers on
+    // its own, and only the ones that committed count.
+    const outcome = await this.removal.removeNotes({ type: 'runBulkAction', action, noteIds: ids });
+    const done = SidebarController.bulkDone(action, outcome);
+    const message = SidebarController.bulkMessage(action, outcome);
+    if (outcome.kind !== 'bulk') {
+      console.error('Bulk action failed:', outcome.kind, outcome.code);
+    } else if (done.length < outcome.items.length) {
+      // Codes and ids, never what the notes hold
+      const failed = outcome.items.filter((item) => !done.includes(item.id));
+      console.error('Bulk action left notes as they were:', failed.map((item) => [item.id, item.outcome.kind, item.outcome.code]));
     }
+    Utils.showToast(message.text, message.kind);
+    if (outcome.kind !== 'bulk') return;
+    // Only the notes it couldn't change stay selected, so the user can try them again
+    for (const id of done) this.selectedNoteIds.delete(id);
+    if (this.selectedNoteIds.size === 0) this.exitSelectionMode();
+    else this.updateSelectionUI();
+  }
+
+  /**
+   * The notes a bulk action is done with: the ones it committed, and, for a trash or a delete,
+   * the ones another tab already deleted, which are gone either way, as a single trash or delete
+   * counts them (NotesManager._removed). An archive, restore, or unarchive of a deleted note
+   * didn't happen, so it counts as one it couldn't change.
+   * @param {string} action
+   * @param {{kind: string, items?: Array<{id: string, outcome: {kind: string, reason?: string}}>}} outcome
+   * @returns {Array<string>}
+   */
+  static bulkDone(action, outcome) {
+    if (outcome.kind !== 'bulk') return [];
+    const goneIsDone = action === 'trash' || action === 'delete';
+    return outcome.items
+      .filter(({ outcome: item }) => item.kind === 'committed'
+        || (goneIsDone && item.kind === 'rejected' && item.reason === 'not-found'))
+      .map((item) => item.id);
+  }
+
+  /**
+   * What a bulk action's toast says, one pattern for every action: how many notes it changed,
+   * or how many of them it couldn't, which stay selected
+   * @param {string} action
+   * @param {{kind: string, items?: Array<Object>}} outcome
+   * @returns {{text: string, kind: 'success' | 'error'}}
+   */
+  static bulkMessage(action, outcome) {
+    if (outcome.kind !== 'bulk') {
+      return { text: Utils.writeFailureMessage(SidebarController.BULK_COPY[action].failed, outcome), kind: 'error' };
+    }
+    const total = outcome.items.length;
+    const failed = total - SidebarController.bulkDone(action, outcome).length;
+    const { done, undone } = SidebarController.BULK_COPY[action];
+    const notes = (n) => `${n} ${n === 1 ? 'note' : 'notes'}`;
+    if (failed === 0) return { text: `${notes(total)} ${done}`, kind: 'success' };
+    const still = failed === 1 ? "It's still selected." : "They're still selected.";
+    if (total === 1) return { text: `The note couldn't be ${undone}. ${still}`, kind: 'error' };
+    return { text: `${failed} of ${total} notes couldn't be ${undone}. ${still}`, kind: 'error' };
+  }
+
+  /**
+   * What each bulk action did to a note, what it couldn't, and what it says when it never ran
+   * @private
+   */
+  static get BULK_COPY() {
+    return {
+      archive: { done: 'archived', undone: 'archived', failed: 'Failed to archive notes' },
+      unarchive: { done: 'restored from Archive', undone: 'restored from Archive', failed: 'Failed to restore notes from Archive' },
+      trash: { done: 'moved to Trash', undone: 'moved to Trash', failed: 'Failed to move notes to Trash' },
+      restore: { done: 'restored from Trash', undone: 'restored from Trash', failed: 'Failed to restore notes from Trash' },
+      delete: { done: 'permanently deleted', undone: 'permanently deleted', failed: 'Failed to permanently delete notes' },
+    };
   }
 }
 

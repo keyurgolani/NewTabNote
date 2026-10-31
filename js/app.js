@@ -72,11 +72,15 @@ class App {
    * and the tab's note list (js/kernel/core/application/note-list.js), the one copy of the note
    * lists that App, the controllers, the palette, and analytics read. `events` are the tab's
    * failure events (js/kernel/composition/lazy-failure-events.js), which init gives the logger
-   * the controllers share, as its `event` method, and Embeddings.
-   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any}} [options]
+   * the controllers share, as its `event` method, and Embeddings. `removal` is the tab's
+   * removeNotes (js/kernel/composition/removal.js).
+   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any, removal?: any}} [options]
    */
-  constructor({ kernel, documentClient, ai, noteList, events = null } = {}) {
+  constructor({ kernel, documentClient, ai, noteList, events = null, removal } = {}) {
     this.kernel = kernel;
+    // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
+    // active set goes through it, and it moves this tab's panes around the write
+    this.removal = removal;
     this.documentClient = documentClient;
     this.ai = ai;
     this.noteList = noteList;
@@ -215,19 +219,22 @@ class App {
   }
 
   /**
-   * Notes are about to leave the active set (trash, archive, delete): panes on
-   * them write what they have pending and move to other notes
-   * (TabController.forgetNotes). A failure there is logged and never stops the
-   * trash, archive, or delete itself.
+   * removeNotes' leave (js/kernel/composition/removal.js): panes on the notes write what they
+   * have pending and move to other notes before the write, and its answer finishes the move or
+   * undoes it after (TabController.leaveNotes). A failure there is logged and never stops the
+   * write.
    * @param {Array<string>} ids
-   * @returns {Promise<void>}
+   * @returns {Promise<{arrive: Function, restore: Function}|null>}
    */
-  async notesLeaving(ids) {
-    if (!this.tabController) return;
+  async leaveNotes(ids) {
+    if (!this.tabController) return null;
     try {
-      await this.tabController.forgetNotes(ids);
+      // A new note a pane gets comes through the kernel (createTabNote), so the lists have it
+      // from the commit feed
+      return await this.tabController.leaveNotes(ids);
     } catch (error) {
       console.error('Moving panes off notes that are leaving failed:', error);
+      return null;
     }
   }
 
@@ -745,8 +752,8 @@ class App {
     this.sidebarController.onConvertNoteToTemplate = (noteId) => this.convertNoteToTemplate(noteId);
     this.sidebarController.onConvertTemplateToNote = (noteId) => this.convertTemplateToNote(noteId);
     this.sidebarController.onImportNote = (file) => this.importNote(file);
-    this.sidebarController.onNotesLeaving = (ids) => this.notesLeaving(ids);
-    this.sidebarController.onNotesLeft = (ids) => this.notesLeft(ids);
+    // Trash, Empty trash, bulk actions, and trash retention take notes out through removeNotes
+    this.sidebarController.removal = this.removal;
 
     await this.sidebarController.init();
 
@@ -860,8 +867,7 @@ class App {
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
     this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
     this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
-    this.settingsController.onNotesLeaving = (ids) => this.notesLeaving(ids);
-    this.settingsController.onNotesLeft = (ids) => this.notesLeft(ids);
+    this.settingsController.removal = this.removal;
     this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
     this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
@@ -1069,8 +1075,7 @@ class App {
     // Wire callbacks so the manager can trigger App-level actions
     this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
     this.notesManager.onRenderNotesList = () => this.renderNotesList();
-    this.notesManager.onNotesLeaving = (ids) => this.notesLeaving(ids);
-    this.notesManager.onNotesLeft = (ids) => this.notesLeft(ids);
+    this.notesManager.removal = this.removal;
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
     this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
@@ -1922,15 +1927,7 @@ class App {
    * Archive a note by ID
    */
   async archiveNote(noteId) {
-    if (this.notesManager) {
-      await this.notesManager.archiveNote(noteId);
-      return;
-    }
-    await Storage.archiveNote(noteId);
-    await this.closeTabForNote(noteId);
-    await this.refreshNotesList();
-    await this.handleNoteRemoved(noteId);
-    Utils.showToast('Note archived', 'success');
+    await this.notesManager.archiveNote(noteId);
   }
 
   /**
@@ -1950,20 +1947,7 @@ class App {
    * Move note to trash by ID
    */
   async trashNoteById(noteId) {
-    if (this.notesManager) {
-      await this.notesManager.trashNoteById(noteId);
-      return;
-    }
-    const result = await Storage.trashNote(noteId);
-    await this.closeTabForNote(noteId);
-    await this.refreshNotesList();
-    await this.handleNoteRemoved(noteId);
-
-    if (result && result.permanentlyDeleted) {
-      Utils.showToast('Empty note deleted', 'success');
-    } else {
-      Utils.showToast('Note moved to trash', 'success');
-    }
+    await this.notesManager.trashNoteById(noteId);
   }
 
   /**
@@ -1993,20 +1977,6 @@ class App {
 
     await Storage.permanentlyDeleteNote(noteId);
     Utils.showToast('Note permanently deleted', 'success');
-  }
-
-  /**
-   * Close tab for a specific note if open
-   */
-  closeTabForNote(noteId) {
-    if (this.tabController) {
-      this.tabController.closeTabForNote(noteId);
-      return;
-    }
-    const tabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
-    if (tabIndex !== -1) {
-      this.closeTab(tabIndex);
-    }
   }
 
   /**
@@ -2045,27 +2015,6 @@ class App {
   }
 
   /**
-   * Handle when a note is removed (archived/trashed) - create new note or load another
-   */
-  async handleNoteRemoved(noteId) {
-    if (this.notesManager) {
-      await this.notesManager.handleNoteRemoved(noteId);
-      return;
-    }
-    const notes = await Storage.getAllNotes();
-
-    if (notes.length === 0) {
-      // Create a new untitled note so user can start typing immediately
-      await this.createFirstNote();
-    } else if (this.openTabs.length === 0) {
-      // Load first available note if no tabs open
-      await this.openNoteInNewTab(notes[0].id);
-    }
-
-    this.updateEmptyState();
-  }
-
-  /**
    * Empty trash - permanently delete all trashed notes
    */
   async emptyTrash() {
@@ -2085,24 +2034,6 @@ class App {
     await Storage.emptyTrash();
     await this.refreshNotesList();
     Utils.showToast('Trash emptied', 'success');
-  }
-
-  /**
-   * Run trash cleanup based on retention setting
-   */
-  async runTrashCleanup() {
-    // Cleanup strips blocks before media; skip it while any store is missing.
-    if (appStorage().missingStores.length > 0) return;
-    const retentionDays = await Storage.getSetting('trashRetention', 30);
-    if (retentionDays > 0) {
-      const ids = await Storage.cleanupTrash(retentionDays);
-      if (ids.length > 0) {
-        this.logger.info('App', `Auto-deleted ${ids.length} expired note(s) from trash`);
-        if (this.notesLeaving) await this.notesLeaving(ids);
-        if (this.notesLeft) this.notesLeft(ids);
-        await this.refreshNotesList();
-      }
-    }
   }
 
   /**
