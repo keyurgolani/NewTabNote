@@ -80,7 +80,10 @@ test('a favicon image and a YouTube embed load, and a frame from anywhere else i
   expect(outcome.image).toBe(1);
   expect(outcome.video).toBe('load');
   expect(asked).toEqual(['favicon', 'youtube']);
-  expect(await violations(page)).toEqual(['frame-src https://example.test/frame']);
+  // Chromium may report a blocked frame by its origin alone, so the directive and the origin are
+  // what's compared
+  const byOrigin = (await violations(page)).map(entry => entry.replace(/^(\S+ https?:\/\/[^/]+).*$/, '$1'));
+  expect(byOrigin).toEqual(['frame-src https://example.test']);
   await expectNoUncaught(extension, page);
 });
 
