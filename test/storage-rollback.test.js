@@ -15,7 +15,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
-const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain, waitFor } = require('./helpers/legacy-env');
 const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -68,6 +68,18 @@ async function rollBack(worker, tag) {
   return { error: await runUntil(env, ended), Storage };
 }
 
+/**
+ * Captures a page through the worker's context menu, as a user does, which #17's adapter commits
+ * with its ledger row, its change, and the Daily Note's versions (#17 PR 2a)
+ */
+async function capture(worker) {
+  const count = worker.chrome.notifications.length;
+  const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
+  worker.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
+  await waitFor(() => worker.chrome.notifications.length === count + 1, { withinMs: 10000, message: 'the capture notification' });
+  assert.equal(worker.chrome.notifications[count].title, 'Captured to New Tab Note');
+}
+
 /** The v1.4.1 Storage on a fresh 1.4.1 profile, as a user who reinstalled 1.4.1 has it */
 async function release141() {
   const env = createLegacyEnv({ worker: false });
@@ -100,6 +112,26 @@ describe('a profile the shipped worker migrated to 10, opened by a 1.4.x build',
         for (const key of Object.keys(KEPT_KEYS)) assert.ok(Object.hasOwn(after.chromeStorageLocal, key), key);
       });
     }
+  }
+});
+
+describe('a profile the shipped worker migrated to 10 and captured into, opened by a 1.4.x build (#17 PR 2a)', () => {
+  for (const tag of ['v1.4.0', 'v1.4.1']) {
+    it(`v8.basic with a capture at 10, then ${tag}: refused, and nothing changed or deleted`, async () => {
+      const { worker, dump } = await migrated('v8.basic');
+      await capture(worker);
+      const before = await dump();
+      const canvas = before.databases.find((db) => db.name === 'CanvasTabDB');
+      for (const store of ['operations', 'changes']) {
+        assert.ok(canvas.stores.find((found) => found.name === store).records.length > 0, `the capture left ${store} rows`);
+      }
+      const { error } = await rollBack(worker, tag);
+      if (tag === 'v1.4.0') assert.equal(error && error.name, 'VersionError', String(error));
+      else assert.equal(error && error.code, 'NEWER_SCHEMA', String(error));
+      const after = await dump();
+      assert.deepStrictEqual(after.databases, before.databases);
+      assert.deepStrictEqual(after.chromeStorageLocal, before.chromeStorageLocal);
+    });
   }
 });
 
@@ -139,6 +171,25 @@ describe('going back to 1.4.1 with a file it imports', () => {
     const result = plain(await Storage.importData(file, 'merge'));
     assert.equal(result.notes, file.canvases.length);
     assert.equal(result.blocks, file.elements.length);
+    const imported = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases')).map((n) => n.name).sort();
+    assert.deepStrictEqual(imported, file.canvases.map((n) => n.name).sort());
+  });
+
+  it("this build's Export JSON, with a note #17's adapter gave versions, imports through the frozen v1.4.1 importData (#17 PR 2a)", async () => {
+    const { worker } = await migrated('v8.basic');
+    await capture(worker);
+    const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
+    page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
+    const Current = page.get('Storage');
+    await Current.init();
+    const file = JSON.parse(await (await Current.exportAllAsBlob()).text());
+    const daily = file.canvases.find((note) => note.isDaily);
+    assert.deepStrictEqual([daily.revision, daily.placementVersion, daily.sourceRevision], [1, 0, 0]);
+    const { env, Storage } = await release141();
+    const check = Storage.validateImport(file);
+    assert.equal(check.ok, true, check.reason);
+    const result = plain(await Storage.importData(file, 'merge'));
+    assert.equal(result.notes, file.canvases.length);
     const imported = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases')).map((n) => n.name).sort();
     assert.deepStrictEqual(imported, file.canvases.map((n) => n.name).sort());
   });
