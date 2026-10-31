@@ -51,15 +51,16 @@ const instanceId = coordinatorInstanceId();
  * the migration. The kernel it builds starts #17's migration run, which upgrades the notes
  * database after a verified recovery point, then opens the database and runs startup
  * maintenance, and a capture waits for all of it, except while an older build's open page
- * blocks the upgrade. Each run it makes goes to the journal as its own migration event (#20).
+ * blocks the upgrade. Each run it makes goes to the journal as its own migration event (#20),
+ * and so does a purge of the recovery points that stopped, and its end (#17 PR 2b).
  */
 let coordinator = unavailableCoordinator(instanceId);
 
 /**
  * The worker's failure events (#20, "Diagnostic journal"), set with the coordinator at the end
- * of this file: a failed open and a failed capture go to the diagnostic journal and raise their
- * incidents in NewTabNoteTrust, which opens only when the first one happens. Best effort:
- * nothing here changes what the worker does or logs.
+ * of this file: a failed open, a failed capture, and a stopped recovery-point purge go to the
+ * diagnostic journal and raise their incidents in NewTabNoteTrust, which opens only when the
+ * first one happens. Best effort: nothing here changes what the worker does or logs.
  * @type {{event(code: string, fields?: Record<string, unknown>, error?: unknown): void}}
  */
 let failureEvents = { event() {} };
@@ -395,7 +396,7 @@ installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: 
 try {
   coordinator = createCoordinator({
     instanceId,
-    makeKernel: () => createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event) }),
+    makeKernel: () => createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event), events: failureEvents }),
     events: failureEvents,
   });
 } catch (error) {

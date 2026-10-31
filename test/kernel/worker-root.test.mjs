@@ -21,7 +21,12 @@ import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import {
+  DEFAULT_LIMITS,
+  discardPoint,
+  listPoints,
+  openRecovery,
+} from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
@@ -675,6 +680,55 @@ describe('the worker purges what was deleted for good from the recovery points (
     assert.equal(await on.whenReady(), null);
     assert.equal((await on.purge.done)?.status, 'purged');
     assert.equal((await inPoint(of)).includes(noteId), false);
+  });
+
+  it('journals a stopped purge once, not the wakes it backs off on, and its end once the point goes (review R93)', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    /** @type {Array<[string, unknown, unknown]>} */
+    const journaled = [];
+    const events = {
+      event: (/** @type {string} */ code, /** @type {unknown} */ fields, /** @type {any} */ failure) =>
+        void journaled.push([code, fields, failure ? failure.code : null]),
+    };
+    const worker = createWorkerClient({ ...hostOf(of), events });
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.purge.done)?.status, 'nothing');
+    await deleteForGood(of);
+    // The pinned point no longer reads back as it was copied: a row of a note that stays changed
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    let pointId;
+    try {
+      pointId = (await listPoints(recovery))[0].id;
+      const tx = recovery.transaction('rows', 'readwrite');
+      const rows = tx.objectStore('rows');
+      const range = KeyRange.bound([pointId, 'folders'], [pointId, 'folders\u0000'], false, true);
+      const [row] = await new Promise((resolve, reject) => {
+        const request = rows.getAll(range);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      rows.put({ ...row, value: { ...row.value, name: 'Bit rot' } });
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      recovery.close();
+    }
+
+    assert.equal((await worker.purge.request())?.status, 'stopped');
+    assert.equal((await worker.purge.request())?.status, 'stopped');
+    assert.deepEqual(journaled, [['storage.purge-stopped', { subjectId: pointId }, 'record-mismatch']]);
+
+    const store = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    try {
+      await discardPoint(store, pointId, { keyRange: KeyRange, limits: DEFAULT_LIMITS });
+    } finally {
+      store.close();
+    }
+    assert.equal((await worker.purge.request())?.status, 'purged');
+    assert.deepEqual(journaled.slice(1), [['storage.purge-completed', { subjectId: pointId }, null]]);
+    assert.deepEqual(await pending(of), []);
   });
 
   it('on a database the run left below 10 it never purges', async () => {
