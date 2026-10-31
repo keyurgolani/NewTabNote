@@ -22,59 +22,8 @@
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
+import { withDataUrls } from './data-urls.js';
 import { DEFAULT_LIMITS, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
-
-/** How deep a value is searched for a Blob, as Storage searches it */
-const MAX_DEPTH = 32;
-
-/**
- * Whether `value` holds a Blob anywhere within MAX_DEPTH levels
- * @param {unknown} value
- * @param {number} depth
- * @returns {boolean}
- */
-function hasBlob(value, depth) {
-  if (value instanceof Blob) return true;
-  if (!value || typeof value !== 'object' || depth > MAX_DEPTH || ArrayBuffer.isView(value)) return false;
-  const items = Array.isArray(value) ? value : Object.values(value);
-  return items.some(item => hasBlob(item, depth + 1));
-}
-
-/**
- * A Blob as the data URL FileReader.readAsDataURL gives for it
- * @param {Blob} blob
- * @returns {Promise<string>}
- */
-async function dataUrl(blob) {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = '';
-  // In pieces, so a large image can't overflow the call stack
-  for (let start = 0; start < bytes.length; start += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
-  }
-  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`;
-}
-
-/**
- * A copy of a stored value with each Blob in it as a data URL
- * @param {unknown} value
- * @returns {Promise<unknown>}
- */
-async function withDataUrls(value) {
-  if (value instanceof Blob) return dataUrl(value);
-  if (!hasBlob(value, 0)) return value;
-  if (Array.isArray(value)) {
-    const out = [];
-    for (const item of value) out.push(await withDataUrls(item));
-    return out;
-  }
-  /** @type {Record<string, unknown>} */
-  const out = {};
-  for (const [key, item] of Object.entries(/** @type {Record<string, unknown>} */ (value))) {
-    out[key] = await withDataUrls(item);
-  }
-  return out;
-}
 
 /** @typedef {import('./recovery-points.js').Point} Point */
 /** @typedef {import('./records.js').Digester} Digester */

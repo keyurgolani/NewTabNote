@@ -60,10 +60,12 @@ function allRecords() {
  */
 /**
  * chrome.storage.local writes but the worker's record of its migration run (#17 PR 1b), the
- * one key it writes on a profile it leaves as it is
+ * one key it writes on a profile it leaves as it is, and #20's mark of the refused captures'
+ * open incident (`trust.openSites`), which its failure events keep once they reach the journal
  */
 function writesButUpgradeRecord(env) {
-  return env.chrome.writes().filter((w) => !(w.method === 'set' && w.keys.length === 1 && w.keys[0] === 'setting_storageUpgrade'));
+  return env.chrome.writes().filter((w) => !(w.method === 'set' && w.keys.length === 1
+    && (w.keys[0] === 'setting_storageUpgrade' || w.keys[0] === 'trust.openSites')));
 }
 
 function logged(env, level, first) {

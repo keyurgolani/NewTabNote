@@ -50,8 +50,9 @@ class PreUpdateCopySection {
   /**
    * @param {Object} deps
    * @param {PreUpdateCopyPort} deps.copy
-   * @param {() => Promise<*>} deps.readUpgrade - the worker's recorded run (Storage.readSetting('storageUpgrade'))
-   * @param {() => boolean} [deps.isUpgraded] - Storage.isUpgraded: whether the tab's database is at 9
+   * @param {() => Promise<*>} deps.readUpgrade - the worker's recorded run (`storageUpgrade`), which App
+   *   reads through the page's settings port
+   * @param {() => boolean} [deps.isUpgraded] - whether the tab's database is at this build's version
    */
   constructor({ copy, readUpgrade, isUpgraded = () => false }) {
     this.copy = copy;

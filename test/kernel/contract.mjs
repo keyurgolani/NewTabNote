@@ -3058,6 +3058,7 @@ export function runContractSuite(fixture) {
           'setInsightsPending',
           'setPinned',
           'setPreferences',
+          'snoozeSpaceNotice',
           'trashNote',
           'unarchiveNote',
         ]);
