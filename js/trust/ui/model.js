@@ -502,10 +502,12 @@ export function trustHeadline(summary, rows, { now, checking }) {
 }
 
 /**
- * The headline's attention line: "2 things need your attention: Saved keys and Permissions."
+ * The headline's attention line: "2 things need your attention: Saved keys and Permissions.",
+ * and past two, "Saved keys and 2 more need your attention."
  * @param {readonly {label: string}[]} rows
  */
 export function attentionText(rows) {
+  if (rows.length > 2) return fill(PAGE.attentionMore, { first: rows[0].label, count: rows.length - 1 });
   const names = joinList(rows.map(row => row.label));
   return rows.length === 1 ? fill(PAGE.attentionOne, { names }) : fill(PAGE.attention, { count: `${rows.length} things`, names });
 }
@@ -554,14 +556,20 @@ export function incidentTitle(incident, evidence = {}) {
 
 /**
  * The problems `incidents` make, worst first and then most recently seen. `next` is each open
- * incident's card action from recovery.incidents, so no view picks its own. `evidenceOf` is a
- * provider's latest receipt's evidence, which holds the counts a check's incidents don't.
+ * incident's card action from recovery.incidents, so no view picks its own. `providerOf` is a
+ * provider's row in trust.report: its latest receipt's evidence holds the counts a check's
+ * incidents don't, and its `stillWorks` is the one Still works list both views show (change 6).
  * @param {readonly Incident[]} incidents
  * @param {ReadonlyMap<string, {kind: string, remediationId?: string} | null>} [next]
- * @param {(providerId: string) => Record<string, unknown>} [evidenceOf]
+ * @param {(providerId: string) => ProviderEntry | null} [providerOf]
  * @returns {Problem[]}
  */
-export function problemsOf(incidents, next = new Map(), evidenceOf = () => ({})) {
+export function problemsOf(incidents, next = new Map(), providerOf = () => null) {
+  /** @param {string} providerId */
+  const evidenceOf = providerId => {
+    const entry = providerOf(providerId);
+    return /** @type {Record<string, unknown>} */ ((entry && entry.receipt && entry.receipt.evidence) || {});
+  };
   /** @type {Map<string, Incident[]>} */
   const byTitle = new Map();
   for (const incident of incidents) {
@@ -580,7 +588,11 @@ export function problemsOf(incidents, next = new Map(), evidenceOf = () => ({}))
     const key = `${first.providerId}/${first.faultCode}`;
     const severity = SEVERITY_ORDER.find(name => list.some(incident => incident.severity === name)) || first.severity;
     const affected = [...new Set(list.flatMap(incident => incident.affected))];
-    const preserved = [...new Set(list.flatMap(incident => incident.preserved))].filter(name => !affected.includes(name));
+    // The provider row's own list where the report has one, else what these incidents preserve
+    const entry = providerOf(first.providerId);
+    const preserved = (entry && Array.isArray(entry.stillWorks) ? [...entry.stillWorks] : [...new Set(list.flatMap(incident => incident.preserved))]).filter(
+      name => !affected.includes(name),
+    );
     const evidence = /** @type {Record<string, any>} */ ({ ...evidenceOf(first.providerId), ...(first.evidence || {}) });
     const action = list.map(incident => next.get(incident.id)).find(Boolean) || null;
     const repair = action && action.kind === 'remediation' && action.remediationId && RUNS_HERE.includes(action.remediationId) ? action.remediationId : null;

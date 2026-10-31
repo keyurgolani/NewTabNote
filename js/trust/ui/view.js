@@ -43,6 +43,7 @@ import {
   whenText,
 } from './model.js';
 import { UNCOVERED_EGRESS } from '../core/providers/egress.js';
+import { FINISHED_RUN_STATES } from '../core/vocabulary.js';
 
 /** @typedef {import('./model.js').Row} Row */
 /** @typedef {import('./model.js').Problem} Problem */
@@ -237,20 +238,16 @@ export function mountRecoveryPage({
   };
 
   /**
-   * A provider's latest receipt's evidence, which holds the counts its check's problems don't
+   * A provider's row in the report: its receipt's evidence and its Still works list
    * @param {string} providerId
-   * @returns {Record<string, unknown>}
    */
-  const evidenceOf = providerId => {
-    const entry = state.report ? state.report.providers.find(candidate => candidate.providerId === providerId) : null;
-    return entry && entry.receipt && entry.receipt.evidence ? { ...entry.receipt.evidence } : {};
-  };
+  const providerOf = providerId => (state.report ? state.report.providers.find(entry => entry.providerId === providerId) || null : null);
 
   /**
-   * The problems `incidents` make, with their cards' actions and their providers' evidence
+   * The problems `incidents` make, with their cards' actions and their providers' rows
    * @param {readonly Incident[]} incidents
    */
-  const problems = incidents => problemsOf(incidents, state.next, evidenceOf);
+  const problems = incidents => problemsOf(incidents, state.next, providerOf);
 
   /** The open problems that aren't dismissed, for the badge and the Recovery Center's headline */
   const openProblems = () =>
@@ -711,7 +708,11 @@ export function mountRecoveryPage({
     const times = report.providers.map(entry => (entry.receipt ? entry.receipt.verifiedAt : 0)).filter(at => at > 0);
     const model = recoveryHeadline(counted, summary, { now: now(), lastCheckedAt: times.length > 0 ? Math.max(...times) : null });
     const severity = /** @type {Record<string, string>} */ (SEVERITY);
-    const runs = [...report.runs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, RECENT_RUNS);
+    // Finished runs only: one waiting for its confirmation, or running, is its panel's
+    const runs = report.runs
+      .filter(run => FINISHED_RUN_STATES.includes(/** @type {any} */ (run.state)))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, RECENT_RUNS);
     return [
       headline({ tone: model.tone, title: model.title, proof: model.proof, view: PAGE.recovery }),
       fixed.length > 0
@@ -800,6 +801,18 @@ export function mountRecoveryPage({
     }
     if (failure.cause === 'newer-schema' || failure.code === 'newer-schema' || failure.code === 'version-too-new') {
       return [headline({ tone: 'action', title: PAGE.newerSchema, proof: PAGE.newerSchemaBody })];
+    }
+    if (failure.cause === 'quota' || failure.code === 'quota') {
+      // The Recovery Center's words for the same condition (change 7)
+      return [
+        headline({
+          tone: 'failed',
+          title: PAGE.outOfSpace,
+          proof: PAGE.outOfSpaceBody,
+          lines: [h('p', { class: 'trust-proof' }, PAGE.reloadKeeps)],
+          actions: [button(PAGE.reload, reload, { primary: true, id: 'trust-reload' })],
+        }),
+      ];
     }
     return [
       headline({

@@ -51,6 +51,9 @@ html {
 :focus-visible {
   outline: var(--focus-width) solid var(--focus-ring);
   outline-offset: var(--focus-offset);
+  /* Quiet Atlas's inner ring fills the offset, which carries the 3:1 where Focus Blue can't: on
+     every dark surface */
+  box-shadow: 0 0 0 var(--focus-offset) var(--focus-ring-inner);
 }
 
 /* ───────── The header ───────── */
@@ -123,9 +126,10 @@ html {
 }
 
 .trust-count[data-tone="failed"] {
+  /* Red as the marker, not the digits: dark's danger red is under 4.5:1 as text (Quiet Atlas's legacyDark) */
   border-color: var(--state-danger);
   background: var(--surface-paper);
-  color: var(--state-danger);
+  color: var(--text-primary);
 }
 
 /* ───────── The page ───────── */
@@ -341,8 +345,9 @@ html {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-compact) var(--space-region);
-  /* Its status ends where a one-line row's time does, before that row's chevron */
-  padding-right: 1.75rem;
+  /* Its status ends where a one-line row's time does, 28px in from the card's edge, before
+     that row's chevron (change 14): the row's own padding, then the rest */
+  padding-right: calc(1.75rem - var(--space-region));
 }
 
 .trust-row-status,
@@ -381,6 +386,10 @@ html {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-compact) var(--space-region);
+}
+
+.trust-incident-actions {
+  margin-top: var(--space-control);
 }
 
 .trust-row--line {
@@ -430,9 +439,30 @@ html {
 .trust-evidence > summary {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-compact);
   min-height: var(--target-min);
   color: var(--text-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
   cursor: pointer;
+}
+
+.trust-evidence > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure's chevron, as the one-line rows draw theirs */
+.trust-evidence > summary::after {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translateY(-20%) rotate(45deg);
+}
+
+.trust-evidence[open] > summary::after {
+  transform: translateY(20%) rotate(225deg);
 }
 
 .trust-evidence-body {
@@ -469,6 +499,12 @@ html {
 
 .trust-sub + .trust-sub {
   margin-top: var(--space-control);
+}
+
+.trust-sub h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-compact);
 }
 
 .trust-dest {
@@ -561,6 +597,10 @@ html {
 
 .trust-warning p {
   margin: 0;
+}
+
+.trust-warning .trust-glyph {
+  margin-top: 0.2rem;
 }
 
 .trust-steps {

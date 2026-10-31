@@ -17,7 +17,9 @@ import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { INCIDENT, PAGE, REBUILD, RESOLVED } from '../../js/trust/ui/copy.js';
+import { attentionText, durationText, fill } from '../../js/trust/ui/model.js';
 import { mountRecoveryPage } from '../../js/trust/ui/view.js';
+import { searchEntryOf } from '../../js/trust/core/remediation/catalog.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { KeyRange } from './migration-support.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
@@ -87,24 +89,31 @@ function pageDocument() {
 }
 
 /**
- * The page on `root`, whose trust calls are recorded by type, in order
+ * The page on `root`, whose trust calls are recorded by type, in order. `answers` gives a
+ * type's calls, in order, an answer in place of the root's, where the page can't be made to
+ * meet one for real: a run that failed, or a check that couldn't run. An undefined entry is
+ * the root's own answer.
  * @param {RecoveryRoot} root
- * @param {{hash?: string}} [options]
+ * @param {{hash?: string, answers?: Record<string, unknown[]>}} [options]
  */
-function openPage(root, { hash = '' } = {}) {
+function openPage(root, { hash = '', answers = {} } = {}) {
   /** @type {string[]} */
   const calls = [];
+  /**
+   * @param {string} type
+   * @param {() => Promise<any>} call
+   */
+  const answer = (type, call) => {
+    const index = calls.filter(made => made === type).length;
+    calls.push(type);
+    const given = answers[type] ? answers[type][index] : undefined;
+    return given === undefined ? call() : Promise.resolve(given);
+  };
   const trust = {
     /** @param {any} query */
-    query: query => {
-      calls.push(query.type);
-      return root.trust.query(query);
-    },
+    query: query => answer(query.type, () => root.trust.query(query)),
     /** @param {any} command */
-    execute: command => {
-      calls.push(command.type);
-      return root.trust.execute(command);
-    },
+    execute: command => answer(command.type, () => root.trust.execute(command)),
   };
   const doc = pageDocument();
   let reloads = 0;
@@ -126,6 +135,9 @@ const text = element => (element ? String(element.textContent).replace(/\s+/g, '
 
 /** @param {any} doc */
 const headline = doc => text(doc.getElementById('trust-h1'));
+
+/** `words` as a pattern that matches them as they are */
+const escape = (/** @type {string} */ words) => words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * The button or link labelled `label`
@@ -317,7 +329,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
     try {
       await page.ready;
       assert.equal(headline(page.doc), PAGE.noDatabase);
-      assert.match(text(page.doc.getElementById('trust-main')), new RegExp(PAGE.noDatabaseBody.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(text(page.doc.getElementById('trust-main')), new RegExp(escape(PAGE.noDatabaseBody)));
       assert.deepEqual(page.calls, []);
       assert.deepEqual(await context.env.indexedDB.databases(), []);
       // No views to switch between, and the theme falls back to the system's
@@ -352,6 +364,29 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.equal(page.reloads(), 1);
       assert.deepEqual(page.calls, []);
       assert.equal(await trustDatabaseMade(context), false);
+    } finally {
+      root.close();
+      closeAll([context]);
+    }
+  });
+
+  it('says the device is out of space, in the Recovery Center\'s words, when that stopped the open, and runs no row', async () => {
+    const context = legacyContext();
+    const legacy = createLegacyAdapter({ storage: context.storage, settings: context.env.chrome.api.storage.local, mode: 'existing' });
+    const adapter = Object.freeze({
+      ...legacy,
+      open: async () => {
+        throw new UnavailableError('quota', 'quota', false);
+      },
+    });
+    const root = createRecoveryRoot({ host: hostOf(context, { adapter: /** @type {any} */ (adapter) }) });
+    const page = openPage(root);
+    try {
+      await page.ready;
+      assert.equal(headline(page.doc), PAGE.outOfSpace);
+      assert.equal(text(page.doc.getElementById('trust-main')), `${PAGE.outOfSpace}${PAGE.outOfSpaceBody}${PAGE.reloadKeeps}${PAGE.reload}`);
+      assert.equal(page.doc.activeElement, page.doc.getElementById('trust-reload'));
+      assert.deepEqual(page.calls, []);
     } finally {
       root.close();
       closeAll([context]);
@@ -445,10 +480,157 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
       control(page.doc, REBUILD.confirm, panel()).click();
       await until(() => panel() && panel().getAttribute('data-state') === 'still-there', 'the check after it');
-      assert.match(text(panel()), new RegExp(REBUILD.stillThere.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(text(panel()), new RegExp(escape(REBUILD.stillThere)));
       assert.equal(page.doc.querySelectorAll('li.trust-incident').filter((/** @type {any} */ li) => li.getAttribute('data-state') === 'resolved').length, 0);
       // The rebuild itself wrote every entry: it's the pipeline that never caught up
       assert.deepEqual(await counts(tab.env.indexedDB), { notes: 2, entries: 2 });
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it("says so when the check after the rebuild couldn't run, and Check again runs it", async () => {
+    const tab = await profileWithStaleIndex(2);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    // The first check after the rebuild couldn't decide, as a check that timed out answers
+    const page = openPage(root, { hash: '#recovery', answers: { 'recovery.check': [{ kind: 'checked', result: 'not-checked', retryable: true }] } });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.doc, REBUILD.confirm, panel()).click();
+      await until(() => panel() && panel().getAttribute('data-state') === 'not-checked', 'the check that couldn\'t run');
+      assert.match(text(panel()), new RegExp(escape(REBUILD.notChecked)));
+      control(page.doc, REBUILD.checkAgain, panel()).click();
+      await until(() => page.doc.getElementById('h-fixed'), 'Fixed just now');
+      assert.equal(page.calls.filter(type => type === 'recovery.check').length, 2);
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it('says what stopped a failed rebuild and that the notes are unchanged, and Try again starts over at the preview', async () => {
+    const tab = await profileWithStaleIndex(2);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    const failed = {
+      kind: 'remediation', runId: '00000000-0000-4000-8000-0000000000f1', remediationId: 'rebuild-index', class: 'regenerable',
+      state: 'failed', step: 'apply', outcome: 'apply-failed', needs: [], impact: null, previewDigest: null,
+      unreadable: [], unreadableCount: 0, fileMayBeEmpty: false,
+    };
+    // The preview is the root's, and the confirmed run's answer the failure
+    const page = openPage(root, { hash: '#recovery', answers: { 'recovery.run': [undefined, failed] } });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.doc, REBUILD.confirm, panel()).click();
+      await until(() => panel() && panel().getAttribute('data-state') === 'failed', 'the failure');
+      assert.match(text(panel()), /^Rebuild the search index\s*Failed to rebuild the search index: it stopped before it finished\. Tried at /);
+      assert.match(text(panel()), new RegExp(escape(REBUILD.unchanged)));
+      // The run the failure stood in for still waits for its confirmation, so it isn't listed
+      assert.equal(page.doc.querySelector('table.trust-runs'), null);
+      // The steps say where it stopped, in words as well as shapes
+      assert.deepEqual(panel().querySelector('ol.trust-steps').querySelectorAll('li').map((/** @type {any} */ li) => li.getAttribute('data-step')), ['done', 'failed', 'todo']);
+      control(page.doc, REBUILD.tryAgain, panel()).click();
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview again');
+      assert.deepEqual(page.calls.filter(type => type === 'recovery.run').length, 3);
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it('shows new numbers, and says why, when the notes changed between the preview and the rebuild', async () => {
+    const tab = await profileWithStaleIndex(2);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    const page = openPage(root, { hash: '#recovery' });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      assert.match(text(panel()), /writes 2 new search entries/);
+      // A note made on the new tab after the preview, its entry lost with the others
+      const newtab = createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local });
+      assert.equal(await newtab.whenReady(), null);
+      assert.equal((await newtab.execute({ type: 'createNote', commandId: newtab.ids.next(), noteId: newtab.ids.next(), name: 'Later' })).kind, 'committed');
+      await withDatabase(tab.env.indexedDB, async db => {
+        const tx = db.transaction('search_index', 'readwrite');
+        tx.objectStore('search_index').clear();
+        await new Promise(resolve => {
+          tx.oncomplete = resolve;
+        });
+      });
+      control(page.doc, REBUILD.confirm, panel()).click();
+      await until(() => panel() && panel().querySelector('.trust-warning'), 'the changed preview');
+      assert.equal(panel().getAttribute('data-state'), 'awaiting');
+      assert.match(text(panel()), new RegExp(escape(REBUILD.previewChanged)));
+      assert.match(text(panel()), /writes 3 new search entries/);
+      assert.deepEqual(await counts(tab.env.indexedDB), { notes: 3, entries: 0 });
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it('has nothing to write when the index is whole, and says so', async () => {
+    const tab = await profileWithStaleIndex(2);
+    // Every entry as the new tab's indexer writes it (js/workers/indexer.js), tags included
+    await withDatabase(tab.env.indexedDB, async db => {
+      const tx = db.transaction(['canvases', 'elements', 'search_index'], 'readwrite');
+      const notes = await result(tx.objectStore('canvases').getAll());
+      for (const note of notes) {
+        const blocks = await result(tx.objectStore('elements').index('canvasId').getAll(note.id));
+        tx.objectStore('search_index').put(searchEntryOf(note, blocks));
+      }
+      await new Promise(resolve => {
+        tx.oncomplete = resolve;
+      });
+    });
+    const context = legacyContext(tab.env);
+    // The index is whole, and the pipeline still reads behind
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB, { stuck: true })) });
+    const page = openPage(root, { hash: '#recovery' });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'nothing-to-do', 'nothing to do');
+      assert.match(text(panel()), new RegExp(escape(REBUILD.nothingToDo)));
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it("says it can't confirm the notes are saving when its health records can't be read, with Reload", async () => {
+    const tab = legacyContext();
+    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context) });
+    const page = openPage(root, { answers: { 'trust.summary': [{ kind: 'failed', cause: 'storage', code: 'transaction-failed' }] } });
+    try {
+      await page.ready;
+      assert.equal(headline(page.doc), PAGE.cantConfirm);
+      assert.match(text(page.doc.getElementById('trust-main')), new RegExp(escape(PAGE.readFailed)));
+      assert.ok(page.doc.getElementById('trust-reload'));
+      // It stopped at the failed read: no check ran
+      assert.equal(page.calls.includes('trust.verify'), false);
     } finally {
       root.close();
       closeAll([tab, context]);
@@ -476,5 +658,21 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       root.close();
       closeAll([tab, context]);
     }
+  });
+});
+
+describe("the views' words (#20 slice 4b)", () => {
+  it('names the one or two rows that need attention, and past two the first and how many more (answer 7)', () => {
+    const rows = ['Saved keys', 'Permissions', 'Search'].map((label, n) => ({ id: `row-${n}`, label }));
+    assert.equal(attentionText(rows.slice(0, 1)), '1 thing needs your attention: Saved keys.');
+    assert.equal(attentionText(rows.slice(0, 2)), '2 things need your attention: Saved keys and Permissions.');
+    assert.equal(attentionText(rows), 'Saved keys and 2 more need your attention.');
+  });
+
+  it('reads a duration of a second or more in seconds (change 14), and fills only the values it has', () => {
+    assert.equal(durationText(120), '120 ms');
+    assert.equal(durationText(1000), '1 second');
+    assert.equal(durationText(1840), '1.8 seconds');
+    assert.equal(fill('{a}, {b}, {c}', { a: '', b: 0, c: null }), ', 0, {c}');
   });
 });

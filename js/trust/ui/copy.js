@@ -337,6 +337,8 @@ export const PAGE = Object.freeze({
   partOfDatabase: 'Part of your notes database needs a look.',
   attention: '{count} need your attention: {names}.',
   attentionOne: '1 thing needs your attention: {names}.',
+  // Past two, the first row and how many more (the design review's answer 7)
+  attentionMore: '{first} and {count} more need your attention.',
   openRecovery: 'Open Recovery Center',
   seeInRecovery: 'See it in Recovery Center',
   seeInTrust: 'See {label} in Trust Center',
@@ -412,6 +414,8 @@ export const PAGE = Object.freeze({
   noDatabaseBody: "NewTabNote didn't create one, so nothing here was overwritten.",
   newerSchema: 'Your notes database is from a newer NewTabNote',
   newerSchemaBody: "This version won't write to it, so nothing here changes it. Update NewTabNote to keep working.",
+  outOfSpace: 'This device is out of space for NewTabNote',
+  outOfSpaceBody: 'Free up some space on this device, then reload.',
   fixed: ', fixed',
   problemsCount: ', {count}',
 });
