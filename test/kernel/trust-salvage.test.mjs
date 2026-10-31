@@ -606,8 +606,8 @@ describe('the save picker (js/kernel/adapters/files/save-picker.js)', () => {
   });
 });
 
-describe('what ships (R1: no visible change)', () => {
-  it('only the trust core reaches the pipeline, and no shipped page loads it, the save picker, the salvage reader, or the repair points', () => {
+describe('what ships', () => {
+  it("only the trust core and recovery.html's root reach the pipeline, and no other shipped page loads it, the save picker, the salvage reader, or the repair points", () => {
     const root = path.join(import.meta.dirname, '..', '..');
     const targets = new Set([
       ...fs.readdirSync(path.join(root, 'js/trust/core/remediation')).map(name => `js/trust/core/remediation/${name}`),
@@ -635,13 +635,15 @@ describe('what ships (R1: no visible change)', () => {
       }
     };
     walk('js');
-    // recovery.run's schema reads the preview's, and the one next-action picker the repair
-    // table (data only); nothing else outside them reaches any of them
+    // recovery.run's schema reads the preview's, the one next-action picker the repair table
+    // (data only), and recovery.html's root builds the pipeline it runs rebuild-index through
+    // (#20 slice 4b); nothing else outside them reaches any of them
     assert.deepEqual([...importers].sort(), [
+      'js/kernel/composition/recovery.js',
       'js/trust/core/next-action.js',
       'js/trust/core/operations/recovery-run.js',
     ]);
-    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'manifest.json']) {
+    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'recovery.html', 'manifest.json']) {
       const text = fs.readFileSync(path.join(root, page), 'utf8');
       assert.equal(/remediation|save-picker|salvage-reader|repair-points/.test(text), false, page);
     }

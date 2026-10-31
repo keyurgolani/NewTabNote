@@ -90,7 +90,7 @@ The build runs only on the Node version in `.nvmrc` (24.18.0), with npm 11.16.0,
 # and the release do
 npm ci --ignore-scripts
 
-# Build for production. Vite bundles the four pages, their module workers, and the service
+# Build for production. Vite bundles the five pages, their module workers, and the service
 # worker (scripts/build/vite-config.js); terser minifies the JavaScript and lightningcss the
 # CSS. Any problem (a bundler error or warning, a type, CSS, terser, or manifest error, a
 # missing input, a file the package names but lacks, remote or inline code) fails it with a

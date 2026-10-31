@@ -1,19 +1,25 @@
 // What each composition root builds (#12, "Where the kernel runs"): one kernel on the legacy
 // adapter, over the storage its context loaded, with its surface as the caller the policy
 // checks. The new tab's and the worker's open the database versioned and maintain it first,
-// Popup's and Side Panel's open it as it is, and in slice 4a only the worker's watches its
-// connection. The worker's maintenance leaves out the integrity check, which it runs when
-// asked (#35 slice 1). Each root takes the storage and settings it would read from its
-// context's globals, here production js/storage.js in test/helpers/legacy-env.js.
+// Popup's, Side Panel's, and recovery.html's open it as it is, and in slice 4a only the
+// worker's watches its connection. The worker's maintenance leaves out the integrity check,
+// which it runs when asked (#35 slice 1). Each root takes the storage and settings it would read
+// from its context's globals, here production js/storage.js in test/helpers/legacy-env.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { webcrypto } from 'node:crypto';
+
 import { createWorkerClient } from '../../js/kernel/composition/background.js';
 import { createNewTabClient, createNewTabLegacyStores } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
+import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { KeyRange } from './migration-support.mjs';
+import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
+import { realTimers } from './trust-support.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
@@ -27,6 +33,33 @@ const hostOf = context => ({ storage: context.storage, settings: context.env.chr
 
 /** @param {Outcome} outcome */
 const policyRefusal = outcome => outcome.kind === 'rejected' && [outcome.reason, outcome.code];
+
+/**
+ * What recovery.html's root reads from its page's globals: the legacy host, IndexedDB, and
+ * chrome.storage.local, chrome.permissions, and the manifest
+ * @param {LegacyContext} context
+ */
+const recoveryHostOf = context => {
+  const local = context.env.chrome.api.storage.local;
+  return {
+    legacy: hostOf(context),
+    indexedDB: context.env.indexedDB,
+    keyRange: /** @type {any} */ (KeyRange),
+    settings: {
+      /** @param {string[]} keys */
+      get: keys => local.get(keys),
+      /** @param {Record<string, unknown>} items */
+      set: items => local.set(items),
+      getKeys: async () => Object.keys(context.env.chrome.local),
+    },
+    secretSettings: local,
+    locks: null,
+    crypto: /** @type {any} */ (webcrypto),
+    permissions: grantedAsDeclared(),
+    manifest: MANIFEST,
+    timers: realTimers,
+  };
+};
 
 describe('each composition root', () => {
   it('builds a kernel whose caller is its surface', async () => {
@@ -105,6 +138,38 @@ describe('each composition root', () => {
     assert.equal(await createWorkerClient(hostOf(workerProfile)).whenReady(), null);
     assert.equal(workerProfile.env.chrome.local.setting_storageInitialized, true);
     closeAll([fresh, ...panes, workerProfile]);
+  });
+
+  it("recovery.html's opens the database as it is, and reads its theme and nothing else", async () => {
+    const tab = legacyContext();
+    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    await tab.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
+    const page = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: recoveryHostOf(page) });
+    assert.equal(await root.kernel.whenReady(), null);
+    assert.deepEqual(await root.settings.preferencesOr({ theme: 'system' }), { theme: 'dark' });
+    const created = await root.kernel.execute({ type: 'createNote', commandId: root.kernel.ids.next(), noteId: root.kernel.ids.next() });
+    assert.deepEqual(policyRefusal(created), ['policy', 'not-on-surface']);
+    assert.deepEqual(await root.kernel.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'policy',
+      code: 'not-on-surface',
+    });
+    root.close();
+    closeAll([tab, page]);
+  });
+
+  it("recovery.html's makes no database on a profile with none, and its theme falls back to the system's", async () => {
+    const page = legacyContext();
+    await page.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
+    const root = createRecoveryRoot({ host: recoveryHostOf(page) });
+    const failure = await root.kernel.whenReady();
+    assert.deepEqual(failure && [failure.cause, failure.code], ['storage', 'no-database']);
+    // The open failed, so the settings port answers the defaults rather than a partial read
+    assert.deepEqual(await root.settings.preferencesOr({ theme: 'system' }), { theme: 'system' });
+    assert.deepEqual(await page.env.indexedDB.databases(), []);
+    root.close();
+    closeAll([page]);
   });
 
   it("watches the new tab's and the worker's versioned connections", async () => {

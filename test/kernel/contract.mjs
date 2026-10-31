@@ -2872,7 +2872,7 @@ export function runContractSuite(fixture) {
         });
       });
 
-      it('lets the offscreen document and the recovery page run nothing until #13 and #35 add their entries', async () => {
+      it('lets the offscreen document run nothing until #13 and #35 add its entries, and the recovery page only read preferences', async () => {
         for (const caller of [CALLERS.offscreen, CALLERS.recovery]) {
           const other = ctx.kernel(caller);
           assertRejected(await other.execute(cmd('createNote', { noteId: 'n1' })), 'policy', 'not-on-surface');
@@ -2883,6 +2883,14 @@ export function runContractSuite(fixture) {
           });
         }
         assert.equal(await noteOf('n1'), undefined);
+        // recovery.html reads its theme through the settings port (#20 slice 4b)
+        const theme = await ctx.kernel(CALLERS.recovery).query({ type: 'getPreferences', keys: ['theme'] });
+        assert.ok(theme.kind !== 'failed' || theme.cause !== 'policy', JSON.stringify(theme));
+        assert.deepEqual(await ctx.kernel(CALLERS.offscreen).query({ type: 'getPreferences', keys: ['theme'] }), {
+          kind: 'failed',
+          cause: 'policy',
+          code: 'not-on-surface',
+        });
       });
 
       it('rejects a command the catalog lacks, and a caller that is no surface', async () => {

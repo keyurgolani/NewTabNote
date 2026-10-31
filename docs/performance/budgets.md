@@ -17,8 +17,8 @@
 - **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 541.4. Counting the root alone, the 700 KiB row would check nothing. So every chunk the page's own start loads with `import()` has to be named in its row: in `startChunks` when it loads at boot, or in `lazyChunks` when it loads later. A chunk named in neither fails the build with `budget/entry`, and so does a name the build has no loader chunk for, or one nothing on the page's start loads. Emptying `startChunks`, or dropping a renamed chunk's name from it, fails rather than shrinking the row to the root. Taking the workspace out of start takes a reviewed row change that names it in `lazyChunks`, and `test/budgets.test.js` pins today's `startChunks: ["workspace"]`.
 - `npm run perf:probe`'s byte mode files every chunk behind an `import()` as lazy, the workspace too, so its start number for the new tab is the root's. The build's number, and `dist-report/chunk-graph.json`, are the start the row holds.
 - Bytes are raw and gzip at level 9, the way `npm run perf:probe` measures them.
-- Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, the offscreen document, and the service worker. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
-- The new tab's CSS is 126 bytes under its row, after #112 took back what #102 added. The row was sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger. Whatever adds CSS to the start path needs the owner's call on the row first.
+- Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, the offscreen document, `recovery.html` (#20 slice 4b), and the service worker. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
+- The new tab's CSS is 11 bytes under its row. It was 126 under after #112 took back what #102 added, and #20 slice 4b's Settings section takes 115 of them. The row was sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger. Whatever adds CSS to the start path needs the owner's call on the row first.
 
 ## The forbidden list
 
@@ -26,6 +26,7 @@
 
 - **New tab**: the four libraries and the trust code. That's `chart-library` (Chart.js), `search-library` (Fuse.js), `zip-library` (JSZip), `model-runtime` (transformers.js), and `trust` (`js/trust/**`). Slice 3 made all five lazy, so this is what today's new tab can be held to.
 - **Popup and Side Panel**: the full list. Both pass it today.
+- **`recovery.html`**: every category but `trust`, which is the page's own code. That's what its start held when its row was added, so anything that joins it later is a reviewed change. Its providers' checks load after it opens, so its row names their six chunks in `lazyChunks`.
 - **Moment** (`planned`): the full list. It switches on the day #2 builds a `moment` chunk: a built planned row fails until its numbers are set and `planned` is false, and from then on the full list holds on its start (`test/budgets.test.js`).
 
 Today's new tab still imports these modules of the full list at its start, through the workspace chunk:
@@ -55,6 +56,7 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | --- | --- |
 | New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the trust chunk) |
 | Service worker | `valibot` |
+| `recovery.html` | `valibot` |
 | Popup, Side Panel, offscreen, Moment | none |
 
 ## How each gate runs

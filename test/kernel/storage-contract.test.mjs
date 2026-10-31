@@ -15,7 +15,7 @@ import { indexedDbFixture } from './storage-fixture.mjs';
 runContractSuite(indexedDbFixture);
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
-/** @type {{readScriptGraph: (root: string, options: {pages: string[]}) => {modules: Set<string>, workerFiles: Set<string>, problems: unknown[]}}} */
+/** @type {{readScriptGraph: (root: string, options: {pages: string[]}) => {modules: Set<string>, workerFiles: Set<string>, pageModules: Map<string, Array<{file: string}>>, problems: unknown[]}}} */
 const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/script-graph.js');
 
 it("no page or the service worker loads the IndexedDB adapter yet, only the helpers the legacy adapter shares with it, and the worker's NewTabNoteTrust", () => {
@@ -37,6 +37,35 @@ it("no page or the service worker loads the IndexedDB adapter yet, only the help
     'js/kernel/adapters/indexeddb/settings.js',
     'js/kernel/adapters/indexeddb/trust.js',
   ]);
+});
+
+it("recovery.html loads NewTabNoteTrust and the readers its checks run through, and still not CanvasTabDB's adapter (#20 slice 4b)", () => {
+  const graph = readScriptGraph(ROOT, { pages: ['recovery.html'] });
+  assert.deepEqual(graph.problems, []);
+  // The page's own modules, which the manifest's pages and the worker don't share
+  const page = graph.pageModules.get('recovery.html');
+  assert.ok(page, 'the graph reads recovery.html');
+  const loaded = page
+    .map(({ file }) => file)
+    .filter(file => file.startsWith('js/kernel/adapters/indexeddb/'))
+    .sort();
+  // Its root opens NewTabNoteTrust (trust.js, records.js, registry.js) and builds the readers
+  // the health checks use (health.js, legacy-secrets.js, recovery-points.js, shapes.js); the
+  // notes database it reaches through the legacy adapter, as Side Panel does
+  assert.deepEqual(loaded, [
+    'js/kernel/adapters/indexeddb/failures.js',
+    'js/kernel/adapters/indexeddb/health.js',
+    'js/kernel/adapters/indexeddb/legacy-secrets.js',
+    'js/kernel/adapters/indexeddb/records.js',
+    'js/kernel/adapters/indexeddb/recovery-points.js',
+    'js/kernel/adapters/indexeddb/registry.js',
+    'js/kernel/adapters/indexeddb/requests.js',
+    'js/kernel/adapters/indexeddb/schema.js',
+    'js/kernel/adapters/indexeddb/settings.js',
+    'js/kernel/adapters/indexeddb/shapes.js',
+    'js/kernel/adapters/indexeddb/trust.js',
+  ]);
+  assert.ok(!loaded.includes('js/kernel/adapters/indexeddb/adapter.js'));
 });
 
 it("lacks only the backups flag the ledger declares, as a gap #18's backup engine closes", () => {

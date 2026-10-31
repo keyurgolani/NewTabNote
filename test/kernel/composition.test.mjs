@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const BROWSER_GLOBALS = ['chrome', 'self', 'window', 'document', 'indexedDB'];
-const ROOTS = ['background', 'newtab', 'popup', 'sidepanel'];
+const ROOTS = ['background', 'newtab', 'popup', 'sidepanel', 'recovery'];
 
 test('each composition root loads with no browser globals and adds none', async () => {
   const present = BROWSER_GLOBALS.filter(name => name in globalThis);

@@ -3,7 +3,7 @@
 /**
  * The bundler's configuration (#27 slice 2: "Toolchain" and "Entries"). Vite runs in build
  * mode only, never as a dev server, in two passes into the same staging directory:
- *   pages       the four pages, each an HTML entry. Their module scripts and stylesheets become
+ *   pages       the five pages, each an HTML entry. Their module scripts and stylesheets become
  *               content-hashed chunks and CSS under assets/, and a module worker one of them
  *               starts with `new Worker(new URL('…', import.meta.url), {type: 'module'})` becomes
  *               an entry of its own.
@@ -48,6 +48,7 @@ const PAGES = Object.freeze({
   popup: 'popup.html',
   sidepanel: 'sidepanel.html',
   offscreen: 'offscreen.html',
+  recovery: 'recovery.html',
 });
 
 /** The service worker's entry, which ships at the same path */

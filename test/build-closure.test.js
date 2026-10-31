@@ -27,7 +27,9 @@ describe('the closure check on the sources the bundler reads', () => {
     const { problems, referenced } = checkClosure(sourcePackage());
     assert.deepEqual(named(problems), []);
     for (const file of ['js/workers/indexer.js', 'js/kernel/composition/workers.js', 'offscreen.html', 'js/offscreen.js', 'popup.html',
-      'css/popup.css', 'css/sidepanel.css', 'icons/icon48.png', 'css/editor.css', 'js/lib/fuse.js', 'js/insights-summary.js']) {
+      'css/popup.css', 'css/sidepanel.css', 'icons/icon48.png', 'css/editor.css', 'js/lib/fuse.js', 'js/insights-summary.js',
+      // recovery.html, through Settings' link to it, and what it loads (#20 slice 4b)
+      'recovery.html', 'js/recovery.js', 'css/recovery.css', 'css/design-tokens.css', 'js/trust/ui/view.js']) {
       assert.ok(referenced.has(file), `${file} isn't named`);
     }
   });

@@ -84,3 +84,11 @@ export const SETTINGS_KEYS = Object.freeze({
   installId: 'trust.installId',
   openSites: 'trust.openSites',
 });
+
+/**
+ * The chrome.storage.local keys 1.4.x keeps a legacy copy under (js/storage.js), which the
+ * Trust Center reads and never writes. Here, not in the recovery readiness check that counts
+ * them, so the use cases that list them don't import a check the catalog loads with import()
+ * (#20 slice 4b: a page bundles both)
+ */
+export const LEGACY_COPY_KEY = /^(?:auto|recovery)_backup_[0-9]{10,16}$/;

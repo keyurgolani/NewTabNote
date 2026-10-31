@@ -1597,6 +1597,20 @@ body.focus-mode .block:focus-within {
   line-height: 1.4;
 }
 
+/* A section's lead sentence, in the labels' gray rather than the hint's (the Trust Center's entry).
+   Its line height is the page's: the new tab's start CSS sits at its budget (build/budgets.json) */
+.setting-lead {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+/* A link to another page that reads as Settings' own button. It's a flex item of its row, so
+   it's already a block, and its one line needs no centering */
+a.setting-link {
+  text-decoration: none;
+}
+
 /* API Key Security (Req 38) */
 .api-key-input-group {
   display: flex;

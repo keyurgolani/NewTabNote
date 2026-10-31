@@ -314,6 +314,37 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.equal(entries.moment.planned, true);
     assert.equal(entries.moment.chunk, 'moment');
   });
+
+  it("holds recovery.html's row as the build reported it, with no number the owner hasn't set (#20 slice 4b)", () => {
+    const { recovery } = BUDGETS.entries;
+    assert.equal(recovery.page, 'recovery.html');
+    assert.equal(recovery.planned, undefined);
+    assert.deepEqual(recovery.start, { js: null, css: null, html: null, fonts: null });
+    // The trust code is the page's own; every other category stays off its start
+    assert.deepEqual(recovery.forbidden, [
+      'chart-library',
+      'search-library',
+      'zip-library',
+      'model-runtime',
+      'charting-analytics',
+      'graph-view',
+      'search-indexing',
+      'import-export',
+      'archive-trash',
+      'settings',
+      'sync',
+      'remote-ai',
+      'recipes',
+      'embeddings',
+      'ai-policy',
+      'onboarding-walkthrough',
+      'workspace',
+    ]);
+    assert.deepEqual(recovery.dependencies, ['valibot']);
+    // The providers' checks load after the page opens, from the catalog's import()s
+    assert.equal(recovery.startChunks, undefined);
+    assert.deepEqual(recovery.lazyChunks, ['index-lag', 'legacy', 'permissions', 'platform', 'probe', 'recovery-readiness']);
+  });
 });
 
 describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
