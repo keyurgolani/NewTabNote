@@ -14,9 +14,11 @@
  * records stay, since 1.3.0 and 1.4.0 delete the whole database when one is missing. Transform
  * steps (`kind: 'transform'`, logical versions, #17 PR 3) run in batches outside the upgrade.
  *
- * This build defines steps 9 and 10, and #17 PR 3 adds 11. Since #17 PR 1b the service worker
- * runs them at start, through migrate.js, and schema.js's DB_VERSION is the newest one's: 10
- * since #17 PR 2a. A profile at 8 runs both in its one `versionchange`.
+ * This build defines structural steps 9 and 10 and transform step logical 2 (#17 PR 3a), and
+ * #17 PR 3b adds 11. Since #17 PR 1b the service worker runs the structural steps at start,
+ * through migrate.js, and schema.js's DB_VERSION is the newest one's: 10 since #17 PR 2a. A
+ * profile at 8 runs both in its one `versionchange`. The worker runs the transform steps after
+ * that, through transforms.js.
  */
 
 import { STORE_SCHEMAS } from './schema.js';

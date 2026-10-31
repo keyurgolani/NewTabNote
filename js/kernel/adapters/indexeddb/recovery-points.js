@@ -40,10 +40,11 @@
  * Before a run reuses a verified point, matchesSource reads the live stores the same way and
  * compares them with the manifest, so a point older than the data it stands for is remade.
  *
- * Only migrate.js and the purge (purge.js) write points, both under Web Lock `storage.migrate`
- * held exclusive, so each point is changed by one writer at a time and its record is kept in
- * memory between batches. A reader across transactions (the pre-update export) takes the lock
- * shared, so it never reads a point between two batches.
+ * Only migrate.js, the transforms (transforms.js, #17 PR 3a), and the purge (purge.js) write
+ * points, all under Web Lock `storage.migrate` held exclusive, so each point is changed by one
+ * writer at a time and its record is kept in memory between batches. A reader across
+ * transactions (the pre-update export) takes the lock shared, so it never reads a point between
+ * two batches.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -67,8 +68,8 @@ export const RECOVERY_DB_NAME = 'NewTabNoteRecovery';
 
 /**
  * The Web Lock every writer of points holds exclusive, the migration runner (migrate.js's
- * MIGRATE_LOCK) and the purge (purge.js), and a reader across transactions holds shared
- * (legacy-export.js)
+ * MIGRATE_LOCK), the transforms (transforms.js), and the purge (purge.js), and a reader across
+ * transactions holds shared (legacy-export.js)
  */
 export const POINTS_LOCK = 'storage.migrate';
 export const RECOVERY_DB_VERSION = 1;
