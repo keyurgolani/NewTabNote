@@ -521,11 +521,14 @@ describe('the graphs in the sources, as the bundler folds them', () => {
   const pages = graphFrom(PAGE_ENTRIES);
   const all = graphFrom([...PAGE_ENTRIES, config.BACKGROUND_ENTRY], { vendored: true });
 
-  it("reaches the kernel from the service worker, on the legacy adapter, and passes the background's checks", () => {
+  it("reaches the kernel from the service worker, on #17's adapter and its migration runner, and passes the background's checks", () => {
     for (const file of ['js/background.js', 'js/utils.js', 'js/storage.js', 'js/kernel/composition/background.js',
-      'js/kernel/adapters/legacy/adapter.js', 'js/kernel/core/application/kernel.js']) {
+      'js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/indexeddb/migrate.js',
+      'js/kernel/core/application/kernel.js']) {
       assert.ok(background.includes(file), file);
     }
+    // #17 PR 1b: the worker upgrades the database and opens it on #17's adapter, not the legacy one
+    assert.ok(!background.includes('js/kernel/adapters/legacy/adapter.js'));
     // js/utils.js's trapFocus reads document behind its typeof check (#27 slice 2)
     assert.deepEqual(checkBackgroundSources(background.map((file) => ({ file, text: read(file) }))), []);
   });

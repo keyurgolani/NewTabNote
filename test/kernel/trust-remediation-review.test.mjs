@@ -25,7 +25,7 @@ import { REMEDIATIONS } from '../../js/trust/core/remediation/catalog.js';
 import { buildSalvage } from '../../js/trust/core/remediation/salvage-file.js';
 import { serialize } from '../../js/trust/core/remediation/saved-file.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
-import { KeyRange, legacyEnv, profileWith, synthesized } from './migration-support.mjs';
+import { KeyRange, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
 import { memoryFiles, remediationCenter, runLocks, runOf } from './trust-remediation-support.mjs';
 import { NOW } from './support.mjs';
 
@@ -562,6 +562,9 @@ describe('#82 review 9: a regenerable run changes only derived stores', () => {
 describe('#82 review 11: rebuild-index indexes what the app indexes, and verifies what it planned', () => {
   it('leaves trashed and archived notes and templates out, and passes beside a note made mid-run', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.orphans')));
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
+    // before #17's adapter opens it versioned
+    assert.equal((await run(of)).status, 'migrated');
     const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
     await adapter.open();
     const before = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'search_index');

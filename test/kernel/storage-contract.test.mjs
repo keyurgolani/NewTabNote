@@ -42,8 +42,9 @@ it('only these roots load the IndexedDB adapter: the service worker, Popup, and 
   assert.ok(!newtab.has(ADAPTER), 'the new tab is on the legacy adapter');
   assert.ok(!newtab.has(RUNNER), 'the new tab never loads the runner');
   assert.ok(newtab.has('js/kernel/adapters/indexeddb/legacy-export.js'), 'the new tab exports the pre-update copy');
+  // The offscreen document only makes #21's API requests, and opens no storage
   assert.deepEqual(
-    [...modulesOf('offscreen.html')].filter(file => file.startsWith('js/kernel/')),
+    [...modulesOf('offscreen.html')].filter(file => file.startsWith('js/kernel/adapters/')),
     [],
   );
 });
