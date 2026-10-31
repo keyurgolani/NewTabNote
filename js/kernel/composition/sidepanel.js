@@ -3,20 +3,21 @@
  * the notes it summarizes through this client.
  */
 
-import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
-import { kernelClient, legacyHost } from './host.js';
+import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
+import { kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').Client} Client */
-/** @typedef {import('./host.js').LegacyHost} LegacyHost */
+/** @typedef {import('./host.js').PageHost} PageHost */
 
 /**
- * Side Panel's kernel and its client. It opens the database as it is, with no repair,
- * upgrade, or maintenance, and makes none on a profile without one. A database a newer build
- * upgraded is refused as `newer-schema`.
- * @param {LegacyHost} [host]
+ * Side Panel's kernel and its client, on #17's IndexedDB adapter (#17 PR 1b, Q3), opened as
+ * Popup's is: as it is, with no repair, upgrade, or maintenance, after waiting up to 5
+ * seconds on the worker's migration run when there's no database or an older one (Q12). A
+ * database a newer build upgraded is refused as `newer-schema`.
+ * @param {PageHost} [host]
  * @returns {Client}
  */
-export function createSidePanelClient(host = legacyHost()) {
-  const adapter = createLegacyAdapter({ ...host, mode: 'existing' });
+export function createSidePanelClient(host = pageHost()) {
+  const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
   return kernelClient({ adapter, surface: 'sidepanel' });
 }

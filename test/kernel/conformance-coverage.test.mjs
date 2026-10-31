@@ -64,21 +64,21 @@ describe('conformance coverage', () => {
 });
 
 describe('conformance coverage finds an implementation', () => {
-  it("under js/kernel/adapters/, as #17's durable ledger may be, and passes once a suite runs against it", () => {
-    const ledger = 'js/kernel/adapters/indexeddb/ledger.js';
-    const planted = { [ledger]: 'export function createIndexedDbLedger() { return { read: async () => ({ status: "absent" }) }; }\n' };
+  it("under js/kernel/adapters/, as a second durable ledger beside #17's would be, and passes once a suite runs against it", () => {
+    const ledger = 'js/kernel/adapters/indexeddb/second-ledger.js';
+    const planted = { [ledger]: 'export function createSecondLedger() { return { read: async () => ({ status: "absent" }) }; }\n' };
     const problems = problemsWith(planted);
-    assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/ledger\.js is an implementation module with no conformance run/);
-    assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/ledger\.js exports createIndexedDbLedger, which is a IdempotencyLedger/);
+    assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/second-ledger\.js is an implementation module with no conformance run/);
+    assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/second-ledger\.js exports createSecondLedger, which is a IdempotencyLedger/);
 
-    const run = 'test/kernel/indexeddb-ledger.test.mjs';
+    const run = 'test/kernel/second-ledger.test.mjs';
     const bound = problemsWith(
       {
         ...planted,
         [run]: text([
-          "import { createIndexedDbLedger } from '../../js/kernel/adapters/indexeddb/ledger.js';",
+          "import { createSecondLedger } from '../../js/kernel/adapters/indexeddb/second-ledger.js';",
           "import { describeIdempotencyLedger } from './idempotency-ledger-suite.mjs';",
-          "describeIdempotencyLedger({ name: 'indexeddb', start: async () => ({ ledger: createIndexedDbLedger() }) });",
+          "describeIdempotencyLedger({ name: 'second', start: async () => ({ ledger: createSecondLedger() }) });",
         ]),
       },
       {
@@ -171,10 +171,14 @@ describe('conformance coverage finds a suite or a port', () => {
 
   it('a suite whose runner has any name, once a port lists it', () => {
     const suite = 'test/kernel/commit-log-suite.mjs';
-    const run = 'test/kernel/commit-log.test.mjs';
+    // Every run of the port's suite: the in-memory log's, and #17's durable one's
+    const runs = inventory.PORTS['commit-log'].implementations.map(implementation => implementation.run);
+    assert.ok(runs.includes('test/kernel/commit-log.test.mjs'));
     const renamed = {
       [suite]: (tree.read(suite) ?? '').replace('export function describeCommitLog(', 'export function conformanceOf('),
-      [run]: (tree.read(run) ?? '').replaceAll('describeCommitLog', 'conformanceOf'),
+      ...Object.fromEntries(
+        runs.map(run => [run, (tree.read(run) ?? '').replaceAll('describeCommitLog', 'conformanceOf')]),
+      ),
     };
     assert.deepEqual(problemsWith(renamed, { PORTS: portsWith('commit-log', { suite: { module: suite, runner: 'conformanceOf' } }) }), []);
   });

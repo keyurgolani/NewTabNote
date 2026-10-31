@@ -114,12 +114,17 @@ const COMMAND_SAMPLES = {
   saveWorkspaceSession: { session: { openTabs: [{ noteId: 'n1', title: 'Plan' }], activeTabIndex: 0 } },
   setInsightsPending: { noteId: 'n1', pending: true },
   recordJobRun: { job: 'insights' },
-  saveChatHistory: { chat: 'note', history: [{ role: 'user', content: 'Hi' }], messages: [{ type: 'user', content: 'Hi' }] },
+  saveChatHistory: {
+    chat: 'note',
+    history: [{ role: 'user', content: 'Hi' }],
+    messages: [{ type: 'user', content: 'Hi' }],
+  },
   savePromptTemplates: { templates: [{ id: 't1', label: 'Sum', prompt: 'Summarize' }] },
   saveTheme: { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } },
   completeOnboarding: {},
   recordBackup: { fullExport: true, backup: true },
   recordExportNotice: { version: 1, outcome: 'exported' },
+  snoozeSpaceNotice: {},
   createAutoBackup: {},
   importBackup: {
     mode: 'merge',

@@ -7,8 +7,10 @@
  */
 
 import { createAIPort } from '../../services/ai-port.mjs';
+import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
 import { createNoteList } from '../core/application/note-list.js';
+import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
 import { kernelClient, legacyHost } from './host.js';
@@ -34,8 +36,9 @@ import { startIndexer } from './workers.js';
 
 /**
  * What the page knows of its database outside the kernel (#12 slice 7): whether it's open,
- * and which stores it lacks, as js/storage.js keeps them, read when asked
- * @typedef {Readonly<{openState: string, missingStores: readonly string[]}>} StorageState
+ * which stores it lacks, as js/storage.js keeps them, read when asked, and whether it's at
+ * this build's version, which since #17 PR 1b only the worker's run brings it to
+ * @typedef {Readonly<{openState: string, missingStores: readonly string[], upgraded: () => boolean}>} StorageState
  */
 
 /**
@@ -70,21 +73,60 @@ import { startIndexer } from './workers.js';
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
  *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
- *   syncStore: LegacyStore, startIndexer: () => Worker, loader: unknown}) => NewTabApp} App
+ *   syncStore: LegacyStore, startIndexer: () => Worker, loader: unknown, preUpdateCopy: PreUpdateCopy}) => NewTabApp} App
  */
 
 /** Each LegacyStores handle's calls, as its holder makes them */
 const LEGACY_STORE_CALLS = Object.freeze({
-  searchIndex: ['hasStore', 'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'getAllVectors', 'saveVector'],
+  searchIndex: [
+    'hasStore',
+    'setSearchIndex',
+    'setSearchIndexEntry',
+    'removeSearchIndexEntry',
+    'getAllVectors',
+    'saveVector',
+  ],
   graph: ['getAllNotes', 'getStore'],
   sync: ['getSetting', 'setSetting', 'getStore', 'exportAll', 'importAll', 'importNote', 'saveElement'],
 });
 
 /**
- * The new tab's kernel and its client. It opens the database versioned, as Storage.init did,
- * and runs startup maintenance before any command. Its connection closes when another
- * context upgrades the database, so that upgrade never waits on this tab, and from then on
- * every command answers `reload-required`: the editor keeps its text and asks for a reload.
+ * The pinned pre-migration copy, for Settings > Data & Backup's Export Pre-Update Copy (#17
+ * PR 1b, Q8): `find` names the copy to export, with when it was made, and `export` hands it
+ * over as 1.4.1's import file, once it reads back verified. Both only read, and make no
+ * recovery database on a profile without one.
+ * @typedef {object} PreUpdateCopy
+ * @property {() => Promise<{id: string, createdAt: number} | null>} find
+ * @property {(id: string) => Promise<object>} export
+ */
+
+/**
+ * The new tab's pre-update copy, over the page's IndexedDB
+ * @param {{indexedDB?: IDBFactory, keyRange?: typeof IDBKeyRange, crypto?: import('../adapters/indexeddb/records.js').Digester}} [host]
+ * @returns {PreUpdateCopy}
+ */
+export function createPreUpdateCopy({
+  indexedDB = globalThis.indexedDB,
+  keyRange = globalThis.IDBKeyRange,
+  crypto = /** @type {any} */ (globalThis.crypto),
+} = {}) {
+  return Object.freeze({
+    async find() {
+      const point = await exportablePointRecord({ indexedDB });
+      return point ? { id: point.id, createdAt: point.createdAt } : null;
+    },
+    export: (/** @type {string} */ pointId) =>
+      exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId }),
+  });
+}
+
+/**
+ * The new tab's kernel and its client. It opens the database as it is on disk (since #17 PR
+ * 1b only the service worker upgrades it), waiting first on the worker's migration run when it
+ * finds none or an older one, and runs startup maintenance before any command. Its connection
+ * closes when the worker upgrades the database, so that upgrade never waits on this tab, and
+ * from then on every command answers `reload-required`: the editor keeps its text and asks for
+ * a reload.
  * @param {LegacyHost} [host]
  * @returns {Client}
  */
@@ -172,8 +214,9 @@ export function createNewTabSettingsClient(kernel, host) {
 }
 
 /**
- * Whether the tab's database is open, and which stores it lacks, read from `host`'s storage
- * when asked, as App, the sidebar, and the export notice read them
+ * Whether the tab's database is open, which stores it lacks, and whether it's at this build's
+ * version, read from `host`'s storage when asked, as App, the sidebar, the export notice, the
+ * space notice, and the pre-update copy's section read them
  * @param {LegacyHost} host
  * @returns {StorageState}
  */
@@ -185,6 +228,7 @@ export function createNewTabStorageState(host) {
     get missingStores() {
       return host.storage.missingStores;
     },
+    upgraded: () => host.storage.isUpgraded(),
   });
 }
 
@@ -275,6 +319,7 @@ export function startNewTab({ loader = null } = {}) {
       syncStore: stores.sync,
       startIndexer,
       loader,
+      preUpdateCopy: createPreUpdateCopy(),
     });
     built = app;
     return app.init().catch(error => {

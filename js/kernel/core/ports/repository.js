@@ -65,6 +65,17 @@ export const STORES = Object.freeze({
  *   The record's committed content revision, or undefined from an adapter without revisions.
  *   Ask only after a `get` of the same key in the same transaction: an adapter that keeps the
  *   revision in the record (#17) answers from the record that get read.
+ * @property {(store: StoreName, key: string) => Versions | undefined} versions
+ *   The note's three committed versions (#17, "Versions"), each 0 for a record that has none
+ *   yet, or undefined from an adapter without revisions or for a record the get found nothing
+ *   for. Ask only after a `get` of the same key in the same transaction, as with `revision`.
+ */
+
+/**
+ * A note's versions, one per write scope (WriteScope): `revision` moves with its title and
+ * blocks, `placementVersion` with where it sits and how it's kept, and `sourceRevision` is the
+ * content revision its derived fields (insights) were last made from
+ * @typedef {{revision: number, placementVersion: number, sourceRevision: number}} Versions
  */
 
 /**
@@ -96,10 +107,11 @@ export const STORES = Object.freeze({
  * Where a settings effect writes, under the keys 1.4.x's Storage.setSetting wrote: the
  * preferences, the workspace session, `jobs` (the bookkeeping the auto-title and insights jobs
  * keep: when each last ran, and which note's insights are being extracted), `chat` (AI chat's
- * histories and prompt templates), `onboarding` (whether the first run finished), or `backup`
+ * histories and prompt templates), `onboarding` (whether the first run finished), `backup`
  * (when the last backup and full export were made, and the pre-migration export notice's
- * outcome)
- * @typedef {'preferences' | 'session' | 'jobs' | 'chat' | 'onboarding' | 'backup'} SettingsArea
+ * outcome), or `upgrade` (#17 PR 1b: the worker's record of its last migration run, and when
+ * the space notice was last put off)
+ * @typedef {'preferences' | 'session' | 'jobs' | 'chat' | 'onboarding' | 'backup' | 'upgrade'} SettingsArea
  */
 
 /**
@@ -149,6 +161,18 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  * Only content moves a record's content revision, on an adapter with revisions. A derived
  * command's units are held to the derived fields of notes they read (application/scopes.js),
  * so it can't change a note's name, placement, or lifecycle.
+ *
+ * Each scope has its own version on a note, on an adapter with revisions (#17, "Versions"):
+ * - `revision` moves by one when a content command changes the primary note's title or blocks
+ *   (Work.revised). A command expecting another `expectedRevision` is a `revision-conflict`.
+ * - `placementVersion` moves by one on every note a placement command puts, so a commit that
+ *   files several (deleteFolder's notes going to the root) moves each. A command expecting
+ *   another `expectedPlacementVersion` is a `placement-conflict`, whose `currentRevision`
+ *   holds the placement version, since #13's Conflict outcome is closed.
+ * - `sourceRevision` is what a derived command's Work.sourceRevision says, once it puts the
+ *   note. A derived command made from a revision older than the stored one writes nothing.
+ * A unit checks the version it expects before it writes anything, so a conflict commits only
+ * its own record.
  * @typedef {'content' | 'placement' | 'derived'} WriteScope
  */
 
@@ -170,6 +194,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   on by one, for a content command only. Placement and derived writes (pin, archive, trash,
  *   restore, a folder move, insights) leave it where it was, so they never turn a save into a
  *   conflict.
+ * @property {number} [sourceRevision]
+ *   For a derived command, the content revision it was made from, which an adapter with
+ *   revisions keeps as the primary note's `sourceRevision` when the command puts the note
  * @property {(receipt?: ImportReceipt) => Committed} done
  *   The outcome once everything committed. A backup import's adapter hands it the receipt.
  */
@@ -196,7 +223,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   same command sent again runs again. A bulk command keeps only its fingerprint, from its
  *   first recall: the same commandId with another selection is key reuse, even when both are
  *   sent at once, and a resend runs again, so each item that committed or conflicted answers
- *   from its own record and each other item runs again.
+ *   from its own record and each other item runs again. Work that isn't a catalog command,
+ *   such as #20's storage probe, keeps no record, so every run of it runs.
  * @property {boolean} backups
  *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
  *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery

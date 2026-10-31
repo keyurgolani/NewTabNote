@@ -123,9 +123,11 @@ const LEGACY_KEYS = Object.freeze(['canvases', 'elements', 'media', 'folders']);
 
 /**
  * The other CanvasTabDB stores a legacy copy can hold under their own names (#33's
- * missing-stores copy holds every readable store)
+ * missing-stores copy holds every readable store): every known one but the legacy shape's
  */
-const OTHER_STORES = Object.freeze(['search_index', 'links', 'themes', 'vectors', 'snapshots', 'meta', 'migrations']);
+const OTHER_STORES = Object.freeze(
+  /** @type {readonly string[]} */ (SALVAGE_STORES).filter(store => !LEGACY_KEYS.includes(store)),
+);
 
 /** How deep a value is searched for a secret field */
 const MAX_DEPTH = 32;

@@ -51,7 +51,10 @@ import { failureEvidence, portOf } from './context.js';
  */
 export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
 
-/** The commandId a probe's work carries: neither adapter keeps one (idempotency: false), and a probe isn't a command */
+/**
+ * The commandId a probe's work carries. A probe isn't a catalog command, so no adapter keeps a
+ * record under it: #17's ledger keeps only catalog commands' (#17 PR 2a), and every run runs
+ */
 const PROBE_COMMAND_ID = 'trust-probe';
 
 /**
@@ -64,6 +67,55 @@ const PROBE_COMMAND_ID = 'trust-probe';
  */
 const lookedAll = (also = []) =>
   ['quota', 'version-too-new', 'probe-failed', ...also].map(faultCode => ({ faultCode, subjectId: 'CanvasTabDB' }));
+
+/** The faults a migration below the latest version stands for, which storage's check looks at whenever it read the state */
+const MIGRATION_FAULTS = Object.freeze(['migration-pending', 'migration-failed', 'migration-blocked']);
+
+/** @returns {NonNullable<CheckResult['looked']>} */
+const lookedMigration = () => MIGRATION_FAULTS.map(faultCode => ({ faultCode, subjectId: 'CanvasTabDB' }));
+
+/**
+ * The migration fault CanvasTabDB's state stands for, or null when it's at the latest version
+ * (or there's none, which the probe reports). Throws on an answer it can't read, so storage
+ * verifies nothing then.
+ * @param {unknown} state
+ * @returns {'migration-pending' | 'migration-failed' | 'migration-blocked' | null}
+ */
+function migrationFaultOf(state) {
+  if (state === null || typeof state !== 'object') throw new TypeError('not a migration state');
+  const { version, latest, status, blocked } = /** @type {Record<string, unknown>} */ (state);
+  if (!Number.isSafeInteger(version) || !Number.isSafeInteger(latest) || (status !== null && typeof status !== 'string')) {
+    throw new TypeError('not a migration state');
+  }
+  if (/** @type {number} */ (version) === 0 || /** @type {number} */ (version) >= /** @type {number} */ (latest)) return null;
+  // The worker's marker: its run's upgrade waits on another connection now
+  if (blocked === true || status === 'space-blocked') return 'migration-blocked';
+  if (status === 'failed' || status === 'refused') return 'migration-failed';
+  // No run recorded yet, one in progress or waiting on an open page, or a record from before
+  // the database was replaced at an older version
+  return 'migration-pending';
+}
+
+/**
+ * Storage's answer while CanvasTabDB waits below the latest version: `degraded`, with the
+ * migration fault, and capture safe only when the probe committed on capture's path
+ * @param {'migration-pending' | 'migration-failed' | 'migration-blocked'} faultCode
+ * @param {boolean} committed
+ * @returns {CheckResult}
+ */
+function migrationResult(faultCode, committed) {
+  /** @type {CheckResult} */
+  const result = {
+    status: 'degraded',
+    evidence: { subjectId: 'CanvasTabDB' },
+    consequenceKey: `storage.${faultCode}`,
+    preserved: ['capture', 'editing', 'reading'],
+    faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'degraded', preserved: ['capture', 'editing', 'reading'] }],
+    looked: committed ? [...lookedAll(['open-failed']), ...lookedMigration()] : lookedMigration(),
+  };
+  if (committed) result.capture = 'safe';
+  return result;
+}
 
 /** Open failures, which Storage reports as slice 1b's worker does: `open-failed` on CanvasTabDB */
 const OPEN_CODES = Object.freeze(['open-failed', 'missing-core-stores', 'no-database']);
@@ -80,7 +132,7 @@ const isProbe = (/** @type {unknown} */ record) =>
 /**
  * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction. It
  * changes no entity (`changedIds` is empty), so a commit log that appends one entry per changed
- * entity, as #17's PR 2 will, gets none. A commit that answers without running the unit, or
+ * entity, as #17's has since its PR 2a, gets none. A commit that answers without running the unit, or
  * replays an earlier answer, didn't verify anything, and answers `unknown`.
  * @param {KernelAdapter} adapter
  * @param {StoreName[]} stores
@@ -92,8 +144,8 @@ export async function probeCommit(adapter, stores) {
   /** @type {Work} */
   const work = {
     commandId: PROBE_COMMAND_ID,
-    // A probe isn't a catalog command: nothing reads this beyond an adapter with idempotency,
-    // and neither adapter has it
+    // A probe isn't a catalog command: an adapter with idempotency keeps no record of it, so
+    // nothing reads this
     command: /** @type {any} */ ({ type: 'trust.probe', commandId: PROBE_COMMAND_ID }),
     effect: {
       kind: 'units',
@@ -133,6 +185,10 @@ function failureOf(outcome) {
   if (outcome.kind === 'unavailable') {
     const evidence = failureEvidence(outcome);
     if (ACTION_CODES.includes(outcome.code)) return { kind: 'action', evidence, code: outcome.code };
+    // A versioned open below the latest version isn't the path capture uses there: it probed
+    // nothing, so it's never a failed probe (the connection answers it unretryable once the
+    // open was refused)
+    if (outcome.code === 'migration-required') return { kind: 'unverified', evidence, code: outcome.code };
     return { kind: outcome.retryable ? 'unverified' : 'failed', evidence, code: outcome.code };
   }
   // Rejected (a record under the probe's key), a conflict, or unknown: nothing was verified
@@ -223,6 +279,20 @@ export const storage = Object.freeze({
    */
   async check(context) {
     const adapter = portOf(context, 'storage');
+    const reader = portOf(context, 'migration');
+    // Below the latest version capture works on the database as it is, so a migration that
+    // hasn't happened is storage's own state, never a failed probe. A state it can't read is
+    // unknown: it probes anyway, so a database that won't open still fails, and it looks at
+    // no migration fault
+    /** @type {ReturnType<typeof migrationFaultOf>} */
+    let migration = null;
+    let known = true;
+    try {
+      migration = migrationFaultOf(await reader.current());
+    } catch {
+      known = false;
+    }
+    const lookedKnown = () => (known ? lookedMigration() : []);
     /** @type {Outcome} */
     let outcome;
     try {
@@ -230,7 +300,13 @@ export const storage = Object.freeze({
     } catch (error) {
       outcome = unavailableFrom(error);
     }
+    // A versioned open below the latest version: the adapter isn't capture's path, so it
+    // probed nothing capture uses
+    if (outcome.kind === 'unavailable' && outcome.code === 'migration-required') {
+      return migrationResult(migration || 'migration-pending', false);
+    }
     const failure = failureOf(outcome);
+    if (!failure && migration) return migrationResult(migration, true);
     if (!failure) {
       // NewTabNoteTrust is storage too: while it won't take writes, the records layer holds
       // its `storage/open-failed/NewTabNoteTrust` incident, and this check says so rather than
@@ -243,10 +319,11 @@ export const storage = Object.freeze({
           evidence: { subjectId: 'NewTabNoteTrust' },
           consequenceKey: 'storage.trust-records-unavailable',
           preserved: ['capture', 'editing', 'reading'],
-          looked: lookedAll(['open-failed']),
+          looked: [...lookedAll(['open-failed']), ...lookedKnown()],
         };
       }
-      return { status: 'verified', capture: 'safe', looked: lookedAll(['open-failed']) };
+      // At the latest version: a migration that stood before is done, so its fault is looked at and gone
+      return { status: 'verified', capture: 'safe', looked: [...lookedAll(['open-failed']), ...lookedKnown()] };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     const risk = riskTo(['capture', 'editing'], await readsStill(adapter, context));

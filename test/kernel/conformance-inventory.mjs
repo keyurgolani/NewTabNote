@@ -34,18 +34,24 @@ export const PORTS = Object.freeze({
       { module: 'js/kernel/adapters/indexeddb/adapter.js', run: 'test/kernel/storage-contract.test.mjs' },
     ],
   },
-  // #13 slice 3's port suites, which #17's durable ledger and log run when they land
+  // #13 slice 3's port suites, on the in-memory ledger and log and on #17's durable ones (#17 PR 2a)
   'idempotency-ledger': {
     contract: 'js/kernel/core/ports/idempotency-ledger.js',
     types: ['IdempotencyLedger'],
     suite: { module: 'test/kernel/idempotency-ledger-suite.mjs', runner: 'describeIdempotencyLedger' },
-    implementations: [{ module: 'js/kernel/core/memory/ledger.js', run: 'test/kernel/idempotency-ledger.test.mjs' }],
+    implementations: [
+      { module: 'js/kernel/core/memory/ledger.js', run: 'test/kernel/idempotency-ledger.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/ledger.js', run: 'test/kernel/storage-ledger.test.mjs' },
+    ],
   },
   'commit-log': {
     contract: 'js/kernel/core/ports/commit-log.js',
     types: ['CommitLog'],
     suite: { module: 'test/kernel/commit-log-suite.mjs', runner: 'describeCommitLog' },
-    implementations: [{ module: 'js/kernel/core/memory/commit-log.js', run: 'test/kernel/commit-log.test.mjs' }],
+    implementations: [
+      { module: 'js/kernel/core/memory/commit-log.js', run: 'test/kernel/commit-log.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/changes.js', run: 'test/kernel/storage-ledger.test.mjs' },
+    ],
   },
   // #13's messaging conformance on each transport (approved AC2: runtime and message)
   'messaging-transport': {
@@ -109,7 +115,7 @@ export const WITHOUT_SUITE = Object.freeze({
   'js/kernel/core/ports/policy.js': {
     types: ['PolicyPort'],
     implementations: { 'js/kernel/core/ports/policy.js': 'test/kernel/policy.test.mjs' },
-    reason: "the baseline policy is the only one until #21 replaces it behind the same port",
+    reason: 'the baseline policy is the only one until #21 replaces it behind the same port',
   },
   'js/kernel/core/ports/runtime.js': {
     types: [],
@@ -141,13 +147,36 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const HELPERS = Object.freeze({
+  // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
+  'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/recovery.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/requests.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/core/memory/fingerprint.js': ['js/kernel/core/memory/adapter.js', 'js/kernel/core/memory/ledger.js'],
+  'js/kernel/adapters/indexeddb/failures.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/changes.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
+  ],
+  'js/kernel/adapters/indexeddb/requests.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/changes.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/schema.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/settings.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/versions.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // The digest #17's ledger keeps too, so a command is the same command on every adapter
+  'js/kernel/core/memory/fingerprint.js': [
+    'js/kernel/core/memory/adapter.js',
+    'js/kernel/core/memory/ledger.js',
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
+  ],
 });
 
 /**
@@ -190,8 +219,9 @@ export const UNSHARED = Object.freeze({
     implements: 'IntelligenceRepository (js/kernel/core/intelligence/repository.js), in memory',
     tests: 'test/kernel/intelligence-records.test.mjs',
   },
-  // #17 PR 1a's migration framework, which no shipped root loads until PR 1b; one runner, one
-  // recovery database, one registry, so nothing to share a suite with
+  // #17 PR 1a's migration framework, which the service worker's root runs since PR 1b (and the
+  // new tab's reads, for its pre-update copy); one runner, one recovery database, one registry,
+  // so nothing to share a suite with
   'js/kernel/adapters/indexeddb/migrate.js': {
     implements: "#17's migration runner (startMigrations, runMigrations), under Web Lock storage.migrate",
     tests: 'test/kernel/storage-migrate.test.mjs',
@@ -230,6 +260,11 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
+  // #17 PR 1b took #33's copy back to js/storage.js, and with it the module these lived in
+  'js/kernel/adapters/indexeddb/data-urls.js': {
+    implements: "Blobs as data URLs, in the pre-update copy's export and #20's salvage file",
+    tests: 'test/kernel/storage-legacy-export.test.mjs',
+  },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
   // the one implementation of its port, which no shipped root makes until slice 4
   'js/kernel/adapters/indexeddb/salvage-reader.js': {
@@ -258,7 +293,8 @@ export const EXEMPT = Object.freeze({
     port: 'chrome-storage-local',
     within: 'chrome_mock_',
     owner: '#17',
-    reason: 'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged '
-      + "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
+    reason:
+      'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged ' +
+      "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
   },
 });

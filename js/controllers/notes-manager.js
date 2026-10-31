@@ -1272,7 +1272,10 @@ class NotesManager {
     if (!this.indexerWorker) return;
     const blocksByNote = {};
     for (const note of this.notes) {
-      blocksByNote[note.id] = await this.documentClient.blocksAsStored(note.id);
+      // The indexer joins a note's blocks in the order it gets them, and search matches best
+      // near the start of that text. So they go in the order they were made, as 1.4.x's id
+      // order had them.
+      blocksByNote[note.id] = Utils.inCreationOrder(await this.documentClient.blocksAsStored(note.id));
     }
     this.indexerWorker.postMessage({
       type: 'INDEX_NOTES',
@@ -1289,7 +1292,8 @@ class NotesManager {
     // The note as stored, so the index never takes an older name than the note has
     const note = await this.documentClient.readNote(noteId);
     if (!note || note.trashed || note.archived || note.isTemplate) return;
-    const blocks = await this.documentClient.blocksAsStored(noteId);
+    // In the order they were made, as rebuildSearchIndex sends them
+    const blocks = Utils.inCreationOrder(await this.documentClient.blocksAsStored(noteId));
     this.indexerWorker.postMessage({
       type: 'UPDATE_NOTE',
       data: { note, blocks }
@@ -1352,7 +1356,8 @@ class NotesManager {
 
     for (let i = 0; i < notesToEmbed.length; i++) {
       const note = notesToEmbed[i];
-      const elements = await this.documentClient.blocksAsStored(note.id);
+      // In the order they were made, as 1.4.x's id order had them
+      const elements = Utils.inCreationOrder(await this.documentClient.blocksAsStored(note.id));
       const content = elements
         .filter(el => el.type === 'text')
         .map(el => el.content)
