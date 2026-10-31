@@ -29,9 +29,17 @@
  *   read. Nothing else a failed write carried is kept: a provider's incidents come back on its
  *   next check, and the write-failed incident says how many writes failed.
  * - Every later write tries the store again (a store that never opened is tried at most every
- *   30 seconds, and a connection Chrome closed is reopened at once). Every write that succeeds
- *   replays the held storage incidents first, in its transaction, in fallback or not, so a
- *   healthy context also writes what a context that died held.
+ *   30 seconds, and a connection Chrome closed, or one the adapter answered `open-pending` for
+ *   because it's still connecting, is tried at once). Every write that succeeds replays the held
+ *   storage incidents first, in its transaction, in fallback or not, so a healthy context also
+ *   writes what a context that died held.
+ * - `storage/open-failed/NewTabNoteTrust` is the records' own: an open() that fails (not one
+ *   still connecting) holds it, and the first write after the store opens in this context
+ *   resolves it, in the same transaction that replays it. A storage provider's check doesn't
+ *   need to.
+ * - A read of the settings copy that fails, or doesn't answer within COPY_READ_MS when the host
+ *   passes timers, leaves `copyRead()` false until one answers, so the summary doesn't call
+ *   anything safe that a context may be holding.
  * - The settings copy holds one entry per key, which a context adds its occurrences to under
  *   Web Lock `trust.lastStorageIncident`; every write takes the same lock, replays the copy, and
  *   then removes only the entries it replayed. Each entry keeps the lineage of its first
@@ -39,8 +47,9 @@
  *   so an entry replayed twice (because removing it failed, or a context died between the
  *   commit and the trim) adds only what's new. A copy this build can't read is left as it is,
  *   and counted as a failed write. Every extension context in Chrome has Web Locks; a host
- *   without them (`locks: null`, as some tests run) has no exclusion around the copy, and
- *   relies on the lineages alone.
+ *   without them (`locks: null`, as some tests run) gets a lock inside this context only, so
+ *   writes in one context still take turns, and across contexts relies on the lineages, which
+ *   cover the copy's entries but not what one context's memory holds.
  *
  * A random `trust.installId` is written to the settings area once, under a Web Lock when the
  * host has them, and stamps every receipt.
@@ -73,6 +82,7 @@ import { FINISHED_RUN_STATES, SEVERITIES, STORAGE_PROVIDERS } from './vocabulary
 /** @typedef {import('./ports.js').Locks} Locks */
 /** @typedef {import('./ports.js').Clock} Clock */
 /** @typedef {import('./ports.js').Ids} Ids */
+/** @typedef {import('./ports.js').Timers} Timers */
 /** @typedef {import('./records.js').HealthReceipt} HealthReceipt */
 /** @typedef {import('./records.js').Incident} Incident */
 /** @typedef {import('./records.js').RemediationRun} RemediationRun */
@@ -86,6 +96,9 @@ export const HELD_KEYS = 8;
 
 /** How many entries the settings copy keeps */
 export const COPY_ENTRIES = 16;
+
+/** How long a read of the settings copy may take before it counts as unread, given timers */
+export const COPY_READ_MS = 2_000;
 
 /** The storage incident every failed write counts in */
 export const WRITE_FAILED_KEY = incidentKey('storage', 'write-failed', null);
@@ -167,6 +180,12 @@ const byTime =
  */
 const errorOf = result => /** @type {{error?: unknown}} */ (result).error;
 
+/**
+ * Whether `error` is the adapter's answer for a connection still being made
+ * @param {unknown} error
+ */
+const stillOpening = error => error instanceof UnavailableError && error.code === 'open-pending';
+
 /** @param {string} provider */
 const isStorageProvider = provider => /** @type {readonly string[]} */ (STORAGE_PROVIDERS).includes(provider);
 
@@ -177,9 +196,11 @@ const isStorageProvider = provider => /** @type {readonly string[]} */ (STORAGE_
  *   clock: Clock,
  *   ids: Ids,
  *   locks?: Locks | null,
- * }} options
+ *   timers?: Timers | null,
+ * }} options - `timers` bound the settings copy's reads; without them a read waits as long as
+ *   the settings area does
  */
-export function createTrustRecords({ store, settings, clock, ids, locks = null }) {
+export function createTrustRecords({ store, settings, clock, ids, locks = null, timers = null }) {
   /** @type {RecordsState} */
   let state = 'closed';
   /** Whether the store is open in this context */
@@ -197,6 +218,13 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
   const holding = new Map();
   /** @type {Promise<string> | null} */
   let installing = null;
+  /** Whether the last read of the settings copy answered */
+  let copyRead = true;
+  /** Set once the store opens in this context: the next write resolves the records' open-failed */
+  let resolveOpenFailed = false;
+  /** The copy lock inside this context, for a host without Web Locks */
+  /** @type {Promise<unknown>} */
+  let localTurn = Promise.resolve();
 
   // ============ Held storage incidents ============
 
@@ -206,7 +234,35 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @param {() => Promise<T>} run
    * @returns {Promise<T>}
    */
-  const underCopyLock = run => (locks ? locks.request(COPY_LOCK, run) : run());
+  const underCopyLock = run => {
+    if (locks) return locks.request(COPY_LOCK, run);
+    const turn = localTurn.then(run);
+    localTurn = turn.catch(() => {});
+    return turn;
+  };
+
+  /**
+   * The settings area's answer for the copy, or an UnavailableError once COPY_READ_MS pass
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const getCopy = () => {
+    const got = settings.get([SETTINGS_KEYS.lastStorageIncident]);
+    if (!timers) return got;
+    const bound = timers;
+    return new Promise((resolve, reject) => {
+      const handle = bound.set(() => reject(new UnavailableError('storage', 'timed-out', true)), COPY_READ_MS);
+      got.then(
+        value => {
+          bound.clear(handle);
+          resolve(value);
+        },
+        error => {
+          bound.clear(handle);
+          reject(error);
+        },
+      );
+    });
+  };
 
   /**
    * The settings copy's entries. Rejects when the settings area can't be read, or holds a copy
@@ -214,7 +270,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @returns {Promise<RaiseOp[]>}
    */
   const readCopy = async () => {
-    const stored = (await settings.get([SETTINGS_KEYS.lastStorageIncident]))[SETTINGS_KEYS.lastStorageIncident];
+    const stored = (await getCopy())[SETTINGS_KEYS.lastStorageIncident];
     if (stored === undefined || stored === null) return [];
     if (!v.is(storageCopySchema, stored)) throw new UnavailableError('storage', 'unreadable', false);
     return [.../** @type {StorageCopy} */ (stored).entries];
@@ -267,9 +323,10 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
    * @param {string} key
    * @param {Sighting} sighting
    * @param {number} at
+   * @param {{counted?: boolean}} [options] - the operation already counted its failed write
    * @returns {Promise<Held | null>}
    */
-  const holdSighting = async (key, sighting, at) => {
+  const holdSighting = async (key, sighting, at, { counted = false } = {}) => {
     holding.set(key, (holding.get(key) || 0) + 1);
     try {
       const stored = await run(['incidents'], 'readonly', async tx => (await tx.getAllByIndex('incidents', 'key', key))[0]);
@@ -286,8 +343,8 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
       }
       const added = await addToCopy(entry);
       if (!added.ok) entry.remainder += 1;
-      // A copy this build can't read is a failed write too
-      if (added.unreadable && key !== WRITE_FAILED_KEY) {
+      // A copy this build can't read is a failed write too, unless the operation counted one
+      if (added.unreadable && key !== WRITE_FAILED_KEY && !counted) {
         const failed = held.get(WRITE_FAILED_KEY);
         if (failed) failed.remainder += 1;
         else held.set(WRITE_FAILED_KEY, { ...writeFailedEntry(when, 'unreadable'), remainder: 1 });
@@ -354,6 +411,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     } catch {
       read = false;
     }
+    copyRead = read;
     /** @type {RaiseOp[]} */
     const remainders = [...held.values()]
       .filter(entry => entry.remainder > 0)
@@ -425,10 +483,14 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     try {
       await store.open();
       opened = true;
+      resolveOpenFailed = true;
       return { ok: true };
     } catch (error) {
       if (state !== 'fallback') failureCode = codeOf(error);
       state = 'fallback';
+      // Still connecting: the next write asks again at once, and the adapter answers as soon as
+      // the connection is up
+      if (stillOpening(error)) triedOpenAt = Number.NEGATIVE_INFINITY;
       return { ok: false, error };
     }
   };
@@ -477,20 +539,45 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
   const write = async (stores, unit) => {
     const go = async () => {
       const { ops, copied, tracked, read } = await heldOps();
+      const ending = resolveOpenFailed;
       const names = /** @type {TrustStoreName[]} */ ([
-        ...new Set([...stores, ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['incidents', 'journal']) : [])]),
+        ...new Set([
+          ...stores,
+          ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['incidents', 'journal']) : []),
+          ...(ending ? /** @type {TrustStoreName[]} */ (['incidents']) : []),
+        ]),
       ]);
       const done = await run(names, 'readwrite', async tx => {
         if (ops.length > 0) await replay(tx, ops, tracked);
+        if (ending) await resolveOwnOpenFailed(tx);
         return unit(tx);
       });
       if (!done.ok) return done;
+      if (ending) resolveOpenFailed = false;
       state = 'open';
       failureCode = null;
       await settle(ops, copied, read);
       return done;
     };
     return underCopyLock(go);
+  };
+
+  /**
+   * Resolves `storage/open-failed/NewTabNoteTrust`, which the records raise themselves, once the
+   * store has opened in this context: after the replay, so a held sighting of it is counted
+   * first
+   * @param {TrustTx} tx
+   */
+  const resolveOwnOpenFailed = async tx => {
+    const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', OPEN_FAILED_KEY));
+    if (!existing || existing.state === 'resolved') return;
+    const next = applyResolve(existing, {
+      opId: ids.next(),
+      kind: 'resolve',
+      at: directAt(existing, 'resolve', clock.now()),
+      key: OPEN_FAILED_KEY,
+    });
+    if (next && next.state === 'resolved') tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
   };
 
   /**
@@ -630,7 +717,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     await failedWrite(errorOf(stored));
     if (!isStorageProvider(sighting.providerId)) return { recorded: false, held: false, incident: null, created: false };
     const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
-    const entry = await holdSighting(key, sighting, now);
+    const entry = await holdSighting(key, sighting, now, { counted: true });
     const shown = entry ? (await incidents()).find(item => item.key === key) || null : null;
     return { recorded: false, held: entry !== null, incident: shown, created: false };
   };
@@ -794,6 +881,9 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     triedOpenAt = Number.NEGATIVE_INFINITY;
     const can = await reachable();
     if (!can.ok) {
+      // Still connecting (the adapter answered within its 5 s, and keeps connecting): nothing
+      // is held, and the next write tries again at once
+      if (stillOpening(errorOf(can))) return { ok: false, code: 'open-pending' };
       // The scope's own case: NewTabNoteTrust won't open, so its storage incident is held
       const errorCode = codeOf(errorOf(can));
       await holdSighting(
@@ -898,6 +988,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null }
     events,
     /** @returns {RecordsState} */
     state: () => state,
+    /**
+     * Whether the last read of the settings copy answered. When it didn't, what other contexts
+     * hold is unknown, so nothing should be called safe.
+     * @returns {boolean}
+     */
+    copyRead: () => copyRead,
     /** @returns {string | null} why NewTabNoteTrust isn't taking writes, as a code */
     failureCode: () => failureCode,
   });

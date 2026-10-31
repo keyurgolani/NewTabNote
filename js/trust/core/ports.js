@@ -38,6 +38,10 @@
  */
 
 /**
+ * Every promise a TrustStore answers settles: the adapter's open() answers within 5 seconds
+ * (`open-pending` while it keeps connecting), and a transaction always completes or aborts.
+ * The records hold the settings copy's lock across a write, so a store whose run never settled
+ * would hold every context's writes behind it.
  * @typedef {object} TrustStore
  * @property {() => Promise<void>} open
  *   Opens the database at version 1. Rejects with an UnavailableError when it won't open.
@@ -49,7 +53,9 @@
  */
 
 /**
- * chrome.storage.local, or anything with its promise-returning get and set
+ * chrome.storage.local, or anything with its promise-returning get and set. A set settles
+ * (chrome.storage.local answers or fails); the records bound their reads of the settings copy
+ * themselves when given timers, since a read is safe to give up on.
  * @typedef {object} SettingsPort
  * @property {(keys: string[]) => Promise<Record<string, unknown>>} get
  * @property {(items: Record<string, unknown>) => Promise<void>} set
