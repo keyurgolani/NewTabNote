@@ -9,27 +9,24 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { networkCalls, scanSource } = require('./helpers/network-scan');
+const { networkCalls, scanSource, ledgerProblems } = require('./helpers/network-scan');
 
 const ROOT = path.join(__dirname, '..');
 const read = (file) => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
 const CREDENTIALS = ['none', 'bearer', 'x-api-key', 'x-goog-api-key', 'basic', 'caller'];
 
 describe('the credentialed-call ledger (security/network-ledger.json)', () => {
-  it('covers every network call outside the client, each count as it is, and no call that is gone', () => {
+  it('covers every network call, the client files included, each count as it is, and no call that is gone', () => {
+    assert.deepEqual(ledgerProblems(networkCalls(), read('security/network-ledger.json')), []);
+  });
+
+  it('fails on a new raw network call in either client file', () => {
     const ledger = read('security/network-ledger.json');
-    const found = networkCalls();
-    const client = new Set(ledger.client);
-    const unledgered = [];
-    for (const [key, call] of found) {
-      if (client.has(call.file)) continue;
-      const row = ledger.calls.find((entry) => entry.file === call.file && entry.function === call.function);
-      if (!row) unledgered.push(`${key} (${call.count}, lines ${call.lines.join(', ')})`);
-      else assert.equal(row.count, call.count, `${key}: ${call.count} calls, the ledger says ${row.count}`);
+    for (const file of ['js/kernel/composition/api-request.js', 'js/kernel/composition/destinations.js']) {
+      const text = `${fs.readFileSync(path.join(ROOT, file), 'utf8')}\nexport function added() { return fetch('/x'); }\n`;
+      const problems = ledgerProblems(networkCalls({ texts: { [file]: text } }), ledger);
+      assert.deepEqual(problems.map((problem) => problem.split(':')[0]), [`${file}#added`], file);
     }
-    assert.deepEqual(unledgered, [], 'network calls no ledger row covers');
-    const gone = ledger.calls.filter((entry) => !found.has(`${entry.file}#${entry.function}`)).map((entry) => `${entry.file}#${entry.function}`);
-    assert.deepEqual(gone, [], 'ledger rows whose call is gone');
   });
 
   it('gives each row a known credential, registry rows that exist, an owner, and what removes it', () => {
@@ -47,7 +44,6 @@ describe('the credentialed-call ledger (security/network-ledger.json)', () => {
       assert.ok(handler.includes(`'${proxy.message}'`), `${proxy.handler} handles ${proxy.message}`);
       assert.ok(Number.isSafeInteger(proxy.owner), proxy.message);
     }
-    for (const file of ledger.client) assert.ok(fs.existsSync(path.join(ROOT, file)), file);
   });
 
   it('finds each kind of network call, in the function it is in, and never one in a comment or a string', () => {

@@ -36,16 +36,8 @@ const within = (promise, ms) => Promise.race([promise, new Promise((resolve) => 
 const page = (file = 'newtab.html') => ({ id: 'test-extension', url: `${OWN}/${file}`, origin: OWN });
 
 describe('the packaged destinations (js/kernel/composition/api-request.js)', () => {
-  it("holds every provider origin today's code reaches, and the legacy model hosts", () => {
-    const llm = fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8');
-    const origins = new Set([...llm.matchAll(/https:\/\/[a-z0-9.-]+\.[a-z]{2,}/g)].map(([url]) => new URL(url).origin));
-    const listed = new Set(policy.DESTINATIONS.map((row) => row.origin));
-    assert.deepEqual([...origins].filter((origin) => !listed.has(origin)).sort(), []);
-    const legacy = policy.DESTINATIONS.filter((row) => row.kind === 'legacy');
-    assert.deepEqual(legacy.map((row) => [row.origin, row.methods.join()]).sort(), [
-      ['https://cdn.jsdelivr.net', 'GET'],
-      ['https://huggingface.co', 'GET'],
-    ]);
+  it('reaches only the remote rows its callers use: the GLM endpoints, whose model listing goes through it', () => {
+    assert.deepEqual(policy.DESTINATIONS.map((row) => row.id).sort(), ['glm-china', 'glm-coding', 'glm-general']);
     for (const row of policy.DESTINATIONS) {
       assert.equal(new URL(row.origin).origin, row.origin, `${row.origin} isn't an origin`);
       assert.equal(new URL(row.origin).protocol, 'https:');
@@ -55,14 +47,15 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
   it('refuses another origin, a look-alike, userinfo, a scheme other than https, and loopback unless it is the Ollama URL', () => {
     const loopback = policy.loopbackOrigin('http://localhost:11434');
     const check = (url, options = { method: 'POST', body: '{}' }) => policy.checkRequest({ type: 'API_REQUEST', url, options }, { loopback }).ok;
-    assert.equal(check('https://api.openai.com/v1/chat/completions'), true);
+    assert.equal(check('https://api.z.ai/api/paas/v4/chat/completions'), true);
     for (const url of [
       'https://evil.example/v1',
-      'https://api.openai.com.evil.example/v1',
-      'https://evil.example/?u=https://api.openai.com',
-      'https://user:pass@api.openai.com/v1',
-      'https://user@api.openai.com/v1',
-      'http://api.openai.com/v1',
+      'https://api.z.ai.evil.example/api/paas/v4/models',
+      'https://evil.example/?u=https://api.z.ai',
+      'https://user:pass@api.z.ai/api/paas/v4/models',
+      'https://user@api.z.ai/api/paas/v4/models',
+      'http://api.z.ai/api/paas/v4/models',
+      'https://api.openai.com/v1/chat/completions',
       'http://localhost.evil.example/api/tags',
       'http://evil.example/localhost',
       'http://localhost:9999/api/tags',
@@ -76,19 +69,18 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
       assert.equal(check(url), false, `${url} was allowed`);
     }
     assert.equal(check('http://localhost:11434/api/chat'), true);
-    // GET only on the legacy model hosts
-    assert.equal(check('https://huggingface.co/Xenova/model', { method: 'GET' }), true);
-    assert.equal(check('https://huggingface.co/Xenova/model', { method: 'POST', body: '{}' }), false);
+    // The model downloads never use the proxy
+    assert.equal(check('https://huggingface.co/Xenova/model', { method: 'GET' }), false);
   });
 
   it("refuses a path outside its row's prefix, and a registry row the proxy may not reach", () => {
     const check = (url, method = 'GET') => policy.checkRequest({ type: 'API_REQUEST', url, options: { method } }, { loopback: null }).ok;
-    assert.equal(check('https://api.openai.com/v1/models'), true);
-    assert.equal(check('https://api.groq.com/openai/v1/models'), true);
+    assert.equal(check('https://api.z.ai/api/paas/v4/models'), true);
+    assert.equal(check('https://api.z.ai/api/coding/paas/v4/models'), true);
     for (const url of [
-      'https://api.openai.com/v2/models',
-      'https://api.openai.com/models',
-      'https://api.groq.com/v1/models',
+      'https://api.z.ai/api/paas/v5/models',
+      'https://api.z.ai/models',
+      'https://open.bigmodel.cn/v1/models',
       'https://api.z.ai/api/other/v4/models',
       'https://cdn-lfs.huggingface.co/repos/x',
       'https://www.google.com/s2/favicons?domain=example.test',
@@ -96,6 +88,31 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     ]) {
       assert.equal(check(url), false, `${url} was allowed`);
     }
+  });
+
+  it('refuses encoded path separators and encoded dots, in any case', () => {
+    const check = (url) => policy.checkRequest({ type: 'API_REQUEST', url, options: { method: 'GET' } }, { loopback: 'http://localhost:11434' }).ok;
+    for (const url of [
+      'https://api.z.ai/api/paas/v4%2fmodels',
+      'https://api.z.ai/api/paas/v4%2Fmodels',
+      'https://api.z.ai/api/paas/v4/%5cmodels',
+      'https://api.z.ai/api/paas/v4/%5Cmodels',
+      'https://api.z.ai/api/paas/v4/%2e%2e/models',
+      'https://api.z.ai/api/paas/v4/.%2E/models',
+      'http://localhost:11434/api%2ftags',
+    ]) {
+      assert.equal(check(url), false, `${url} was allowed`);
+    }
+    assert.equal(check('https://api.z.ai/api/paas/v4/models'), true);
+  });
+
+  it('refuses a credential in the query, on a provider row and on the Ollama rows', () => {
+    const check = (url) => policy.checkRequest({ type: 'API_REQUEST', url, options: { method: 'GET' } }, { loopback: 'http://localhost:11434' }).ok;
+    for (const name of ['key', 'api_key', 'Api-Key', 'apikey', 'x-api-key', 'X-Goog-Api-Key', 'token', 'access_token', 'AUTH']) {
+      assert.equal(check(`https://api.z.ai/api/paas/v4/models?${name}=test`), false, name);
+      assert.equal(check(`http://localhost:11434/api/tags?${name}=test`), false, name);
+    }
+    assert.equal(check('https://api.z.ai/api/paas/v4/models?page=2'), true);
   });
 
   it('takes the Ollama URL only on loopback http, any port, without userinfo', () => {
@@ -116,7 +133,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
   });
 
   it('refuses a method outside the list, a body that is not a string or is too large, and any option but method and body', () => {
-    const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options }, { loopback: null }).ok;
+    const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options }, { loopback: null }).ok;
     assert.equal(check({ method: 'GET' }), true);
     assert.equal(check({}), true);
     assert.equal(check({ method: 'DELETE' }), false);
@@ -127,7 +144,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
   });
 
   it('builds the request with Content-Type only, no cookies, and no redirect followed', () => {
-    const post = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/chat/completions', options: { method: 'POST', body: '{}' } }, { loopback: null });
+    const post = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/chat/completions', options: { method: 'POST', body: '{}' } }, { loopback: null });
     assert.deepEqual(policy.fetchInit(post), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -135,19 +152,19 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
       credentials: 'omit',
       redirect: 'error',
     });
-    const get = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: {} }, { loopback: null });
+    const get = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options: {} }, { loopback: null });
     assert.deepEqual(policy.fetchInit(get), { method: 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'omit', redirect: 'error' });
   });
 
   it("measures a body's size in UTF-8 bytes", () => {
-    const check = (body) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/chat/completions', options: { method: 'POST', body } }, { loopback: null }).ok;
+    const check = (body) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/chat/completions', options: { method: 'POST', body } }, { loopback: null }).ok;
     assert.equal(check('x'.repeat(policy.MAX_BODY_BYTES)), true);
     // Three bytes each in UTF-8, one unit each in UTF-16
     assert.equal(check('\u20ac'.repeat(Math.floor(policy.MAX_BODY_BYTES / 3) + 1)), false);
   });
 
   it('refuses a GET with a body', () => {
-    const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options }, { loopback: null }).ok;
+    const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options }, { loopback: null }).ok;
     assert.equal(check({ method: 'GET', body: '{}' }), false);
     assert.equal(check({ body: '{}' }), false);
     assert.equal(check({ method: 'POST', body: '{}' }), true);
@@ -283,7 +300,7 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
 
   it('a GET goes with no redirect followed', async () => {
     const { fetches, ask } = await worker();
-    assert.equal((await ask({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: { method: 'GET' } }, page())).ok, true);
+    assert.equal((await ask({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options: { method: 'GET' } }, page())).ok, true);
     assert.deepEqual(fetches.map(({ init }) => init), [{ method: 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'omit', redirect: 'error' }]);
   });
 
@@ -312,16 +329,19 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
     }
   });
 
-  it('every provider endpoint, as llm.js names it, still goes, with Content-Type only', async () => {
+  it('each provider endpoint its callers proxy, as llm.js names it, still goes with Content-Type only, and the others never go', async () => {
     const { fetches, ask } = await worker();
     const llm = fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8');
     const bases = [...new Set([...llm.matchAll(/baseUrl: '(https:\/\/[^']+)'/g)].map(([, base]) => base))];
     assert.ok(bases.length >= 15, `${bases.length} endpoints`);
+    const proxied = bases.filter((base) => base.startsWith('https://api.z.ai/') || base.startsWith('https://open.bigmodel.cn/'));
+    assert.equal(proxied.length, 3);
     for (const base of bases) {
       const answer = await ask({ type: 'API_REQUEST', url: `${base}/chat/completions`, options: { method: 'POST', body: '{"model":"m"}' } }, page());
-      assert.equal(answer && answer.ok, true, base);
+      if (proxied.includes(base)) assert.equal(answer && answer.ok, true, base);
+      else assert.deepEqual(answer, { error: 'request-refused' }, base);
     }
-    assert.equal(fetches.length, bases.length);
+    assert.equal(fetches.length, proxied.length);
     for (const { init } of fetches) {
       assert.deepEqual(init, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"model":"m"}', credentials: 'omit', redirect: 'error' });
     }

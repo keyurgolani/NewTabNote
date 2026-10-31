@@ -81,15 +81,30 @@ describe('the destination registry (security/destinations.json)', () => {
       row({ headers: ['X-Bad\r\nInjected'] }),
       row({ pathPrefix: 'v1/' }),
       row({ location: 'loopback' }),
+      row({ credential: 'none', headers: ['Authorization', 'Content-Type'] }),
+      row({ credential: 'none', headers: ['x-api-key'] }),
+      row({ credential: 'none', headers: ['Cookie'] }),
+      row({ credential: 'none', headers: ['Proxy-Authorization'] }),
+      row({ origin: 'https://api.example.test:443' }),
+      row({ kind: 'legacy', removeWhen: 9, location: 'loopback', origin: 'http://localhost:80', credential: 'none', headers: [] }),
+      row({ pathPrefix: '/v1/../' }),
+      row({ pathPrefix: '/v1%2f' }),
+      row({ reachedBy: 'image', credential: 'none', headers: [], proxy: true }),
+      row({ reachedBy: 'frame', credential: 'none', headers: [], proxy: true }),
     ];
     for (const entry of cases) {
       assert.notDeepEqual(client.destinationProblems([entry]), [], JSON.stringify(entry));
     }
     assert.notDeepEqual(client.destinationProblems([row(), row()]), []);
     assert.deepEqual(client.destinationProblems([row()]), []);
+    // Exactly one row for a request: rows of one origin whose prefixes nest and whose methods meet overlap
+    assert.notDeepEqual(client.destinationProblems([row(), row({ id: 'nested', pathPrefix: '/v1/models/' })]), []);
+    assert.notDeepEqual(client.destinationProblems([row(), row({ id: 'root', pathPrefix: '/' })]), []);
+    assert.deepEqual(client.destinationProblems([row(), row({ id: 'beside', pathPrefix: '/v2/' })]), []);
+    assert.deepEqual(client.destinationProblems([row({ methods: ['GET'] }), row({ id: 'posts', pathPrefix: '/', methods: ['POST'] })]), []);
   });
 
-  it('has a row for every provider endpoint js/llm.js names, the proxy allowed', () => {
+  it('has a row for every provider endpoint js/llm.js names', () => {
     const llm = fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8');
     const bases = [...new Set([...llm.matchAll(/baseUrl: '(https?:\/\/[^']+)'/g)].map(([, base]) => base))];
     assert.ok(bases.length >= 17, `${bases.length} endpoints`);
@@ -97,7 +112,6 @@ describe('the destination registry (security/destinations.json)', () => {
     for (const base of bases) {
       const found = client.destinationFor(`${base}/models`, { method: 'GET', loopback });
       assert.equal(found.ok, true, base);
-      assert.equal(found.row.proxy, true, base);
     }
   });
 
@@ -111,6 +125,27 @@ describe('the destination registry (security/destinations.json)', () => {
       const probe = bases.has(url) || new URL(url).pathname === '/' ? `${url.replace(/\/$/, '')}/models` : url;
       assert.equal(client.destinationFor(probe, { method: 'GET', loopback: null }).ok, true, url);
     }
+  });
+
+  it('a row stays as the load checked it: its fields, lists and all, are frozen', () => {
+    const [first] = client.DESTINATIONS;
+    assert.throws(() => { first.methods.push('DELETE'); });
+    assert.throws(() => { first.headers.push('Cookie'); });
+    assert.throws(() => { first.origin = 'https://example.test'; });
+    assert.deepEqual(client.destinationProblems(client.DESTINATIONS), []);
+  });
+
+  it("pins the proxied rows to the callers that proxy: fetchViaBackground's", () => {
+    const { networkCalls } = require('./helpers/network-scan');
+    const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'security/network-ledger.json'), 'utf8'));
+    const proxied = registry.destinations.filter((entry) => entry.proxy).map((entry) => entry.id).sort();
+    const viaBackground = ledger.calls.find((entry) => entry.function === 'fetchViaBackground');
+    assert.deepEqual([...viaBackground.destinations].sort(), proxied);
+    // Its callers, and the rows they reach
+    const llm = fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8');
+    const callers = [...llm.matchAll(/this\.fetchViaBackground\(`\$\{([a-zA-Z.]+)\}/g)].map(([, base]) => base);
+    assert.deepEqual([...new Set(callers)].sort(), ['baseUrl', 'this.ollamaUrl']);
+    assert.ok(networkCalls().has('js/llm.js#fetchViaBackground'));
   });
 
   it("holds #20's uncovered egress to the registry: one list", () => {
@@ -138,6 +173,21 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
     assert.equal(take('https://api.z.ai/api/coding/paas/v4/chat/completions', { method: 'POST' }).row.id, 'glm-coding');
     assert.equal(take('https://api.deepseek.com/chat/completions', { method: 'POST' }).row.id, 'deepseek');
     assert.equal(take('https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/config.json').row.id, 'embedding-model');
+  });
+
+  it('refuses encoded path separators and encoded dots, in any case', () => {
+    for (const url of [
+      'https://api.openai.com/v1%2fmodels',
+      'https://api.openai.com/v1%2Fmodels',
+      'https://api.openai.com/v1/%5cmodels',
+      'https://api.openai.com/v1/%5Cx',
+      'https://api.openai.com/v1/%2e%2e/models',
+      'https://api.openai.com/v1/%2E./models',
+      'https://api.openai.com/v1/.%2e/models',
+    ]) {
+      assert.equal(take(url).ok, false, url);
+    }
+    assert.equal(take('https://api.openai.com/v1/models').ok, true);
   });
 
   it('refuses another origin, a look-alike, userinfo, http off loopback, a path outside the prefix, a method the row lacks, and a row reached another way', () => {
@@ -184,20 +234,38 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
     const model = take('https://huggingface.co/x').row;
     assert.notDeepEqual(client.headerProblems(model, { Authorization: 'Bearer test' }, 'https://huggingface.co/x'), []);
     const gemini = take('https://generativelanguage.googleapis.com/v1beta/models').row;
-    for (const url of ['https://generativelanguage.googleapis.com/v1beta/models?key=test', 'https://api.openai.com/v1/models?api_key=test']) {
+    for (const name of ['key', 'api_key', 'api-key', 'API-KEY', 'apikey', 'x-api-key', 'x-goog-api-key', 'X-Goog-Api-Key', 'token', 'access_token', 'auth', 'Auth']) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models?${name}=test`;
       assert.notDeepEqual(client.headerProblems(gemini, {}, url), [], url);
+    }
+    assert.deepEqual(client.headerProblems(gemini, {}, 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=10'), []);
+  });
+
+  it('reads every header form: a Headers instance, a list of pairs, and a record', () => {
+    const openai = take('https://api.openai.com/v1/models').row;
+    const url = 'https://api.openai.com/v1/models';
+    for (const headers of [new Headers({ 'X-Other': '1' }), [['X-Other', '1']], { 'X-Other': '1' }]) {
+      assert.notDeepEqual(client.headerProblems(openai, headers, url), [], String(headers.constructor.name));
+    }
+    for (const headers of [new Headers({ Authorization: 'Bearer test' }), [['Authorization', 'Bearer test']], { Authorization: 'Bearer test' }]) {
+      assert.deepEqual(client.headerProblems(openai, headers, url), [], String(headers.constructor.name));
+    }
+    const model = take('https://huggingface.co/x').row;
+    for (const headers of [new Headers({ Authorization: 'Bearer test' }), [['Authorization', 'Bearer test']], { Authorization: 'Bearer test' }]) {
+      assert.notDeepEqual(client.headerProblems(model, headers, 'https://huggingface.co/x'), [], String(headers.constructor.name));
+      // A credential in the headers sent is a credentialed request, whatever the row says
+      assert.equal(client.requestInit(model, { method: 'GET', headers }).redirect, 'error', String(headers.constructor.name));
     }
   });
 
-  it('every header js/llm.js sends is on some provider row', () => {
-    const llm = fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8');
-    const sent = new Set();
-    for (const [, block] of llm.matchAll(/headers:\s*\{([^}]*)\}/g)) {
-      for (const [, name] of block.matchAll(/'([A-Za-z-]+)'\s*:/g)) sent.add(name.toLowerCase());
+  it("lists for each provider row exactly the headers js/llm.js sends that provider", () => {
+    const { sentHeaders } = require('./helpers/network-scan');
+    const sent = sentHeaders();
+    const providers = registry.destinations.filter((entry) => entry.kind === 'packaged' && entry.reachedBy === 'fetch');
+    for (const entry of providers) {
+      const expected = [...(sent.get(entry.id) || [])].sort();
+      assert.deepEqual(entry.headers.map((name) => name.toLowerCase()).sort(), expected, entry.id);
     }
-    const allowed = new Set(registry.destinations.flatMap((entry) => entry.headers.map((name) => name.toLowerCase())));
-    assert.ok(sent.size >= 5);
-    assert.deepEqual([...sent].filter((name) => !allowed.has(name)), []);
   });
 
   it('a request with a credential or a body goes with no cookies and no redirect followed, and a model download as before', () => {
