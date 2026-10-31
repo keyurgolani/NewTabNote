@@ -14,11 +14,13 @@
  *   below that version (9 at #17 PR 1b, 10 since PR 2a).
  *
  * A composition root makes them with the context's IndexedDB, and Web Crypto and IDBKeyRange
- * for verification. No shipped root does yet.
+ * for verification, and its Web Locks: a verification reads a point across many transactions,
+ * so it holds `storage.migrate` shared, and the worker's purge (#17 PR 2b), which holds it
+ * exclusive, never changes the point under it. No shipped root does yet.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
-import { DEFAULT_LIMITS, listPoints, openRecovery, verifyPoint } from './recovery-points.js';
+import { DEFAULT_LIMITS, POINTS_LOCK, listPoints, openRecovery, verifyPoint } from './recovery-points.js';
 import { LATEST_STRUCTURAL } from './registry.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
@@ -45,10 +47,18 @@ async function withRecovery(indexedDB, none, body) {
 }
 
 /**
- * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester}} options
+ * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester, locks?: import('./legacy-export.js').SharedLocks | null}} options
  */
-export function createRecoveryReader({ indexedDB, keyRange, crypto }) {
+export function createRecoveryReader({ indexedDB, keyRange, crypto, locks = null }) {
   const io = { keyRange, crypto, limits: DEFAULT_LIMITS };
+  /**
+   * `read`, under the points lock shared when there are locks
+   * @template T
+   * @param {() => Promise<T>} read
+   * @returns {Promise<T>}
+   */
+  const shared = read =>
+    locks && typeof locks.request === 'function' ? locks.request(POINTS_LOCK, { mode: 'shared' }, read) : read();
   return Object.freeze({
     /** @returns {Promise<PointSummary[]>} every point, as kind, status, and times */
     points: () =>
@@ -67,16 +77,18 @@ export function createRecoveryReader({ indexedDB, keyRange, crypto }) {
      * @returns {Promise<{ok: true} | {ok: false, code: string}>}
      */
     verify: pointId =>
-      withRecovery(
-        indexedDB,
-        /** @type {{ok: true} | {ok: false, code: string}} */ ({ ok: false, code: 'point-discarded' }),
-        async db => {
-          const point = (await listPoints(db)).find(candidate => candidate.id === pointId);
-          // Discarded since it was listed, by #17's migration run or keepVerified replacing an
-          // older pre-repair point
-          if (!point) return { ok: false, code: 'point-discarded' };
-          return verifyPoint({ recovery: db, point, io });
-        },
+      shared(() =>
+        withRecovery(
+          indexedDB,
+          /** @type {{ok: true} | {ok: false, code: string}} */ ({ ok: false, code: 'point-discarded' }),
+          async db => {
+            const point = (await listPoints(db)).find(candidate => candidate.id === pointId);
+            // Discarded since it was listed, by #17's migration run or keepVerified replacing an
+            // older pre-repair point
+            if (!point) return { ok: false, code: 'point-discarded' };
+            return verifyPoint({ recovery: db, point, io });
+          },
+        ),
       ),
   });
 }
