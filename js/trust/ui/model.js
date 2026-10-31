@@ -539,12 +539,14 @@ export function attentionText(rows) {
  */
 
 /**
- * An incident's title
+ * An incident's title. A check's incident carries no evidence of its own (checks.js), so its
+ * counts come from `evidence`, its provider's latest receipt's.
  * @param {Incident} incident
+ * @param {Record<string, unknown>} [evidence]
  */
-export function incidentTitle(incident) {
+export function incidentTitle(incident, evidence = {}) {
   const titles = /** @type {Record<string, string>} */ (INCIDENT);
-  const evidence = /** @type {Record<string, any>} */ (incident.evidence || {});
+  evidence = /** @type {Record<string, any>} */ ({ ...evidence, ...(incident.evidence || {}) });
   const long = `${incident.providerId}/${incident.faultCode}/${incident.subjectId}`;
   const short = `${incident.providerId}/${incident.faultCode}`;
   return fill(titles[long] || titles[short] || 'Part of NewTabNote needs a look', { count: evidence.count });
@@ -552,16 +554,18 @@ export function incidentTitle(incident) {
 
 /**
  * The problems `incidents` make, worst first and then most recently seen. `next` is each open
- * incident's card action from recovery.incidents, so no view picks its own.
+ * incident's card action from recovery.incidents, so no view picks its own. `evidenceOf` is a
+ * provider's latest receipt's evidence, which holds the counts a check's incidents don't.
  * @param {readonly Incident[]} incidents
  * @param {ReadonlyMap<string, {kind: string, remediationId?: string} | null>} [next]
+ * @param {(providerId: string) => Record<string, unknown>} [evidenceOf]
  * @returns {Problem[]}
  */
-export function problemsOf(incidents, next = new Map()) {
+export function problemsOf(incidents, next = new Map(), evidenceOf = () => ({})) {
   /** @type {Map<string, Incident[]>} */
   const byTitle = new Map();
   for (const incident of incidents) {
-    const title = incidentTitle(incident);
+    const title = incidentTitle(incident, evidenceOf(incident.providerId));
     const list = byTitle.get(title) || [];
     list.push(incident);
     byTitle.set(title, list);
@@ -577,7 +581,7 @@ export function problemsOf(incidents, next = new Map()) {
     const severity = SEVERITY_ORDER.find(name => list.some(incident => incident.severity === name)) || first.severity;
     const affected = [...new Set(list.flatMap(incident => incident.affected))];
     const preserved = [...new Set(list.flatMap(incident => incident.preserved))].filter(name => !affected.includes(name));
-    const evidence = /** @type {Record<string, any>} */ (first.evidence || {});
+    const evidence = /** @type {Record<string, any>} */ ({ ...evidenceOf(first.providerId), ...(first.evidence || {}) });
     const action = list.map(incident => next.get(incident.id)).find(Boolean) || null;
     const repair = action && action.kind === 'remediation' && action.remediationId && RUNS_HERE.includes(action.remediationId) ? action.remediationId : null;
     const resolved = list.every(incident => incident.state === 'resolved');
@@ -595,8 +599,9 @@ export function problemsOf(incidents, next = new Map()) {
       firstSeenAt: Math.min(...list.map(incident => incident.firstSeenAt)),
       lastSeenAt: Math.max(...list.map(incident => incident.lastSeenAt)),
       occurrences: Math.max(...list.map(incident => incident.occurrences)),
-      text: key === 'index/lagging'
-        ? fill(CONSEQUENCE['indexing.lagging'], { lag: evidence.lag || 'many' })
+      // How far behind search is when its receipt says, and otherwise what that means
+      text: key === 'index/lagging' && typeof evidence.lag === 'number' && evidence.lag > 0
+        ? fill(CONSEQUENCE['indexing.lagging'], { lag: evidence.lag })
         : fill(texts[key] || '', { count: list.length }),
       places: key === 'credentials/legacy-secret' ? list.map(incident => capitalize(places[String(incident.subjectId)] || String(incident.subjectId))) : [],
       stillWorks: preserved,

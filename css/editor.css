@@ -1597,6 +1597,21 @@ body.focus-mode .block:focus-within {
   line-height: 1.4;
 }
 
+/* A section's lead sentence, in the labels' gray rather than the hint's (the Trust Center's entry) */
+.setting-lead {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+/* A link to another page that reads as Settings' own button */
+a.setting-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 /* API Key Security (Req 38) */
 .api-key-input-group {
   display: flex;

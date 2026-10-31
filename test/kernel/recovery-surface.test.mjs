@@ -33,7 +33,7 @@ import { KeyRange } from './migration-support.mjs';
 import { adapterOn } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
 import { MANIFEST, freshProfile, grantedAsDeclared, settingsOf } from './trust-provider-support.mjs';
-import { realTimers } from './trust-support.mjs';
+import { realTimers, webLocks } from './trust-support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/surfaces.js').Surface} Surface */
 
@@ -250,46 +250,6 @@ describe("#15's recovery host (#20 slice 4b)", () => {
     assert.equal(resolution.list('remediation').length, REMEDIATIONS.length);
   });
 });
-
-/**
- * Web Locks as a profile shares them: request(name, callback) waits its turn, and
- * request(name, {ifAvailable: true}, callback) gets null while another holds the name
- */
-function webLocks() {
-  /** @type {Set<string>} */
-  const held = new Set();
-  /** @type {Map<string, Promise<unknown>>} */
-  const queues = new Map();
-  return {
-    /**
-     * @param {string} name
-     * @param {...any} rest - the options, then the callback, or the callback alone
-     */
-    request(name, ...rest) {
-      const [options, callback] = rest.length === 1 ? [{}, rest[0]] : rest;
-      if (options && options.ifAvailable) {
-        if (held.has(name)) return Promise.resolve(callback(null));
-        held.add(name);
-        return Promise.resolve()
-          .then(() => callback({ name }))
-          .finally(() => held.delete(name));
-      }
-      const turn = (queues.get(name) || Promise.resolve()).then(async () => {
-        held.add(name);
-        try {
-          return await callback({ name });
-        } finally {
-          held.delete(name);
-        }
-      });
-      queues.set(
-        name,
-        turn.catch(() => {}),
-      );
-      return turn;
-    },
-  };
-}
 
 /**
  * recovery.html's root on a fresh profile, with #17's adapter for its notes database

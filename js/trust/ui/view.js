@@ -236,9 +236,25 @@ export function mountRecoveryPage({
     );
   };
 
+  /**
+   * A provider's latest receipt's evidence, which holds the counts its check's problems don't
+   * @param {string} providerId
+   * @returns {Record<string, unknown>}
+   */
+  const evidenceOf = providerId => {
+    const entry = state.report ? state.report.providers.find(candidate => candidate.providerId === providerId) : null;
+    return entry && entry.receipt && entry.receipt.evidence ? { ...entry.receipt.evidence } : {};
+  };
+
+  /**
+   * The problems `incidents` make, with their cards' actions and their providers' evidence
+   * @param {readonly Incident[]} incidents
+   */
+  const problems = incidents => problemsOf(incidents, state.next, evidenceOf);
+
   /** The open problems that aren't dismissed, for the badge and the Recovery Center's headline */
   const openProblems = () =>
-    problemsOf(state.incidents.filter(incident => incident.state !== 'resolved'), state.next).filter(problem => !problem.dismissed);
+    problems(state.incidents.filter(incident => incident.state !== 'resolved')).filter(problem => !problem.dismissed);
 
   /** The header: the brand, the two views, the open problems' badge, and the way back */
   function drawHeader() {
@@ -324,7 +340,7 @@ export function mountRecoveryPage({
    * @param {string | null} incidentId
    */
   const problemWith = incidentId =>
-    problemsOf(state.incidents, state.next).find(problem => problem.incidents.some(incident => incident.id === incidentId)) || null;
+    problems(state.incidents).find(problem => problem.incidents.some(incident => incident.id === incidentId)) || null;
 
   /** @param {Row} row */
   function evidenceBody(row) {
@@ -687,7 +703,7 @@ export function mountRecoveryPage({
   function recoveryView() {
     const summary = /** @type {TrustSummary} */ (state.summary);
     const report = /** @type {TrustReport} */ (state.report);
-    const all = problemsOf(state.incidents, state.next);
+    const all = problems(state.incidents);
     const open = all.filter(problem => !problem.resolved && (!problem.dismissed || state.dismissedHere.has(problem.key)));
     const counted = open.filter(problem => !problem.dismissed);
     const fixed = all.filter(problem => problem.resolved && problem.resolvedAt !== null && now() - problem.resolvedAt < FIXED_FOR_MS);

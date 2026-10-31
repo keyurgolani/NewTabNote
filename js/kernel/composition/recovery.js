@@ -65,6 +65,8 @@ import { createSettingsClient } from './settings.js';
 /** @typedef {import('../../trust/core/providers/context.js').PermissionsReader} PermissionsReader */
 /** @typedef {import('../../trust/core/providers/context.js').ManifestPermissions} ManifestPermissions */
 /** @typedef {import('../../trust/core/providers/context.js').ProviderContext} ProviderContext */
+/** @typedef {import('../../trust/core/providers/context.js').Pipeline} Pipeline */
+/** @typedef {import('../core/ports/commit-log.js').CommitLog} CommitLog */
 
 /**
  * What recovery.html's root runs on: the browser's (browserRecoveryHost), or a test's
@@ -82,6 +84,11 @@ import { createSettingsClient } from './settings.js';
  * @property {PermissionsReader} permissions
  * @property {ManifestPermissions & {version: string}} manifest
  * @property {unknown} [runtime] - chrome.runtime, which the messaging check reaches the worker through
+ * @property {readonly Pipeline[]} [pipelines]
+ *   The pipelines over #17's commit feed, which index lag reads with `commitLog`. The browser's
+ *   host has none until #22 registers its projections, so index lag reads `not-configured`
+ *   there; a test passes its own, with the commit log they follow.
+ * @property {CommitLog} [commitLog]
  * @property {Clock} [clock]
  * @property {Ids} [ids]
  * @property {Timers} [timers]
@@ -138,6 +145,22 @@ export function browserRecoveryHost() {
     permissions: chrome.permissions,
     manifest: /** @type {ManifestPermissions & {version: string}} */ (chrome.runtime.getManifest()),
     runtime: chrome.runtime,
+  };
+}
+
+/**
+ * Where recovery.html's links lead outside it: the new tab, which its way back opens, and
+ * Chrome's extensions page, where NewTabNote's Details hold its site access. Its own details
+ * page needs the extension's id in the URL, a path built at run time, which the closure check
+ * refuses (scripts/build/closure.js), so Review site access opens the page before it.
+ * @returns {{newTabUrl: string, openSiteAccess: () => void}}
+ */
+export function browserRecoveryLinks() {
+  return {
+    newTabUrl: chrome.runtime.getURL('newtab.html'),
+    openSiteAccess: () => {
+      chrome.tabs.create({ url: 'chrome://extensions/' });
+    },
   };
 }
 
@@ -216,8 +239,9 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
     vectors: createVectorsReader({ indexedDB: host.indexedDB }),
     permissions: host.permissions,
     manifest: host.manifest,
-    // No pipeline consumes #17's commit feed yet (#22 registers them), so the list is empty
-    pipelines: [],
+    // No pipeline consumes #17's commit feed yet (#22 registers them), so the browser's list is empty
+    pipelines: host.pipelines || [],
+    ...(host.commitLog ? { commitLog: host.commitLog } : {}),
     messaging,
     resolutions: () => [resolution],
     trust: records,

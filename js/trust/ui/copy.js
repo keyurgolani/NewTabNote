@@ -185,6 +185,8 @@ export const RESOLVED = Object.freeze({
 
 /** A problem's own sentence, under its title, by provider/fault */
 export const INCIDENT_TEXT = Object.freeze({
+  // When the receipt doesn't say how far behind: the second half of 'indexing.lagging'
+  'index/lagging': 'Recent changes may not show up in search.',
   'index/stalled': 'It has to start over, so recent notes may not show up in search until it does.',
   'index/indexer-start-failed': 'Search may miss notes you changed until indexing starts again.',
   'credentials/legacy-secret':

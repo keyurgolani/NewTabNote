@@ -131,10 +131,11 @@ function prefixOnly(sheets) {
 }
 
 describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
-  it("builds the four pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
+  it("builds the five pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
     const pages = config.pagesConfig(passOptions());
     assert.deepEqual(pages.build.rolldownOptions.input, {
       newtab: '/repo/newtab.html', popup: '/repo/popup.html', sidepanel: '/repo/sidepanel.html', offscreen: '/repo/offscreen.html',
+      recovery: '/repo/recovery.html',
     });
     const background = config.backgroundConfig(passOptions());
     assert.deepEqual(background.build.rolldownOptions.input, { background: '/repo/js/background.js' });
@@ -267,7 +268,10 @@ describe('the pages as the bundler reads them', () => {
 
   it("load their own code as module scripts, offscreen.html's included, so what each imports resolves in the pages pass as the worker's does in its own", () => {
     const modules = Object.fromEntries(PAGES.map((page) => [page, scripts(page).filter(isModule).map((tag) => tag.attributes.get('src'))]));
-    assert.deepEqual(modules, { 'newtab.html': ['js/main.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'] });
+    assert.deepEqual(modules, {
+      'newtab.html': ['js/main.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'],
+      'recovery.html': ['js/recovery.js'],
+    });
     for (const page of PAGES) for (const tag of scripts(page).filter(isModule)) assert.equal(tag.attributes.has('vite-ignore'), false, page);
     assert.equal(Object.hasOwn(config.CLASSIC_SCRIPTS, 'js/offscreen.js'), false);
   });
@@ -284,12 +288,14 @@ describe('the pages as the bundler reads them', () => {
     }
   });
 
-  it("link stylesheets lightningcss reads with no warning at the build's targets, popup's and the side panel's in files of their own", () => {
+  it("link stylesheets lightningcss reads with no warning at the build's targets, popup's, the side panel's, and recovery.html's in files of their own", () => {
     const { transform } = require('lightningcss');
     const sheets = PAGES.flatMap((page) => htmlTags(read(page))
       .filter((tag) => tag.name === 'link' && tag.attributes.get('rel') === 'stylesheet')
       .map((tag) => tag.attributes.get('href')));
-    assert.deepEqual(sheets.sort(), ['css/editor.css', 'css/popup.css', 'css/premium-chat.css', 'css/sidepanel.css', 'css/stats.css']);
+    assert.deepEqual(sheets.sort(), [
+      'css/design-tokens.css', 'css/editor.css', 'css/popup.css', 'css/premium-chat.css', 'css/recovery.css', 'css/sidepanel.css', 'css/stats.css',
+    ]);
     for (const sheet of sheets) {
       const result = transform({ filename: sheet, code: Buffer.from(read(sheet)), minify: true, targets: config.lightningcssTargets() });
       assert.deepEqual(result.warnings, [], sheet);

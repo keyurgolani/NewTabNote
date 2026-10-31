@@ -6,8 +6,9 @@
  */
 
 html {
-  /* The sticky header never covers what focus moves to: its height, measured by the page, plus 16px */
-  scroll-padding-top: calc(var(--trust-header-height, 4.5rem) + 1rem);
+  /* The sticky header never covers what focus moves to: its one row's height plus 16px. Below
+     720px, where it wraps, it scrolls away instead (the media query at the end). */
+  scroll-padding-top: calc(var(--target-min) + 2 * var(--space-control) + 1px + 1rem);
 }
 
 .trust-page {
@@ -618,7 +619,12 @@ html {
 }
 
 @media (max-width: 720px) {
+  html {
+    scroll-padding-top: 1rem;
+  }
+
   .trust-header {
+    position: static;
     padding: var(--space-compact) var(--space-region);
   }
 

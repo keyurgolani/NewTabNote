@@ -643,7 +643,7 @@ describe('what ships', () => {
       'js/trust/core/next-action.js',
       'js/trust/core/operations/recovery-run.js',
     ]);
-    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'manifest.json']) {
+    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'recovery.html', 'manifest.json']) {
       const text = fs.readFileSync(path.join(root, page), 'utf8');
       assert.equal(/remediation|save-picker|salvage-reader|repair-points/.test(text), false, page);
     }
