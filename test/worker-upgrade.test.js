@@ -1,7 +1,7 @@
 'use strict';
 
 // #17 PR 1b in the shipped service worker (js/background.js): it upgrades a version-8 profile
-// to this build's version (10 since #17 PR 2a) at start, answers a page's storage.migrate once its run has finished (Q12), and while an
+// to this build's version (11 since #17 PR 3b) at start, answers a page's storage.migrate once its run has finished (Q12), and while an
 // older build's open page blocks the upgrade, a capture says "Not captured" with why, at once,
 // rather than wait or claim it saved.
 
@@ -11,7 +11,7 @@ const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, requestToPromi
 const { startWorker } = require('./helpers/load-background');
 
 // This build's version, which the worker's run brings a profile to (js/storage.js's dbVersion)
-const THIS_VERSION = 10;
+const THIS_VERSION = 11;
 
 const TAB = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
 

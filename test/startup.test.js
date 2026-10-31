@@ -20,8 +20,8 @@ const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
 const TEST_KEY = 'test-only-api-key';
-// One past this build's version (js/storage.js's dbVersion, 10 since #17 PR 2a), as a newer build upgrades to
-const NEWER_VERSION = 11;
+// One past this build's version (js/storage.js's dbVersion, 11 since #17 PR 3b), as a newer build upgrades to
+const NEWER_VERSION = 12;
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const APP_FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js',
