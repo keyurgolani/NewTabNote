@@ -67,7 +67,8 @@ export function createRecoveryReader({ indexedDB, keyRange, crypto }) {
         /** @type {{ok: true} | {ok: false, code: string}} */ ({ ok: false, code: 'point-discarded' }),
         async db => {
           const point = (await listPoints(db)).find(candidate => candidate.id === pointId);
-          // Discarded since it was listed: only #17's run discards one, after its own verification
+          // Discarded since it was listed, by #17's migration run or keepVerified replacing an
+          // older pre-repair point
           if (!point) return { ok: false, code: 'point-discarded' };
           return verifyPoint({ recovery: db, point, io });
         },
