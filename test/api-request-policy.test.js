@@ -203,7 +203,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     assert.equal(await policy.workerScriptUrl({ getURL, getManifest: () => ({}) }), null);
   });
 
-  it('every file that asks the proxy for a request names only listed origins', () => {
+  it('every file that asks the proxy for a request names only origins the registry lists', () => {
     const files = [];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
@@ -217,7 +217,9 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     const proxy = new Set(['js/background.js', 'js/offscreen.js', 'js/kernel/composition/api-request.js']);
     const callers = files.filter((file) => !proxy.has(file) && /API_REQUEST|fetchViaBackground\(/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
     assert.ok(callers.includes('js/llm.js'), callers.join());
-    const listed = new Set(policy.DESTINATIONS.map((row) => row.origin));
+    // The registry's rows, which the proxy narrows to the ones its callers use
+    const registry = JSON.parse(fs.readFileSync(path.join(ROOT, 'security/destinations.json'), 'utf8'));
+    const listed = new Set(registry.destinations.map((row) => row.origin));
     for (const file of callers) {
       const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
       const origins = new Set([...text.matchAll(/https:\/\/[a-z0-9.-]+\.[a-z]{2,}/g)].map(([url]) => new URL(url).origin));

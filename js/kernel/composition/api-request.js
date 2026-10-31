@@ -23,7 +23,7 @@
  * touches no browser API.
  */
 
-import { DESTINATIONS as REGISTRY, destinationFor } from './destinations.js';
+import { DESTINATIONS as REGISTRY, destinationFor, queryProblems } from './destinations.js';
 
 /**
  * A remote destination the proxy may reach, as the registry has it
@@ -176,6 +176,8 @@ export function checkRequest(request, { loopback }) {
   const found = destinationFor(raw, { method: upper, loopback, reachedBy: 'fetch' });
   if (!found.ok) return { ok: false, code: found.code };
   if (!found.row.proxy) return { ok: false, code: 'destination-refused' };
+  // The proxy sends no header of the caller's, so a credential could only ride in the query
+  if (queryProblems(found.url.href).length > 0) return { ok: false, code: 'destination-refused' };
   return withBody({ ok: true, url: found.url.href, method: upper, loopback: found.row.location === 'loopback' }, body);
 }
 

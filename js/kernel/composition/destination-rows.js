@@ -4,8 +4,22 @@
  * js/kernel/composition/destinations.js checks the rows as it loads.
  */
 
+/**
+ * `value`, frozen with everything in it
+ * @template T
+ * @param {T} value
+ * @returns {T}
+ */
+function freeze(value) {
+  if (value !== null && typeof value === 'object') {
+    Object.values(value).forEach(freeze);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 /** @type {readonly unknown[]} */
-export const DESTINATION_ROWS = Object.freeze([
+export const DESTINATION_ROWS = freeze([
   {
     "id": "openai",
     "kind": "packaged",
@@ -22,7 +36,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -43,7 +57,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -62,7 +76,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -83,7 +97,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -102,7 +116,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -121,7 +135,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -140,7 +154,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -159,7 +173,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -178,7 +192,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -197,7 +211,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -273,7 +287,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -292,7 +306,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -311,7 +325,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -330,7 +344,7 @@ export const DESTINATION_ROWS = Object.freeze([
     ],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 11
   },
   {
@@ -385,7 +399,7 @@ export const DESTINATION_ROWS = Object.freeze([
     "headers": [],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 9,
     "removeWhen": 9,
     "egress": "embedding-model"
@@ -436,7 +450,7 @@ export const DESTINATION_ROWS = Object.freeze([
     "headers": [],
     "location": "remote",
     "reachedBy": "fetch",
-    "proxy": true,
+    "proxy": false,
     "owner": 9,
     "removeWhen": 9,
     "egress": "model-runtime"

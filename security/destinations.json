@@ -18,7 +18,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -39,7 +39,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -58,7 +58,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -79,7 +79,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -98,7 +98,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -117,7 +117,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -136,7 +136,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -155,7 +155,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -174,7 +174,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -193,7 +193,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -269,7 +269,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -288,7 +288,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -307,7 +307,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -326,7 +326,7 @@
       ],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 11
     },
     {
@@ -381,7 +381,7 @@
       "headers": [],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 9,
       "removeWhen": 9,
       "egress": "embedding-model"
@@ -432,7 +432,7 @@
       "headers": [],
       "location": "remote",
       "reachedBy": "fetch",
-      "proxy": true,
+      "proxy": false,
       "owner": 9,
       "removeWhen": 9,
       "egress": "model-runtime"

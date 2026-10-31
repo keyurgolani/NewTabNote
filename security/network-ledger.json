@@ -1,22 +1,44 @@
 {
-  "about": "Every network call first-party code makes outside the destination client (#21 slice 1b): each file and function with its count, the credential it carries, the registry rows it reaches, and the issue that removes it. test/network-ledger.test.js fails on a call no row covers, a count that changed, or a row whose call is gone. js/lib/ is vendored and left out; the guard covers it.",
+  "about": "Every network call first-party code makes, the destination client's included (#21 slice 1b): each file and function with its count, the credential it carries, the registry rows it reaches, and the issue that removes it. test/network-ledger.test.js fails on a call no row covers, a count that changed, or a row whose call is gone. js/lib/ is vendored and left out; the guard covers it.",
   "version": 1,
-  "client": [
-    "js/kernel/composition/api-request.js",
-    "js/kernel/composition/destinations.js"
-  ],
   "calls": [
+    {
+      "file": "js/kernel/composition/api-request.js",
+      "function": "send",
+      "count": 1,
+      "credential": "none",
+      "destinations": [
+        "glm-china",
+        "glm-coding",
+        "glm-general",
+        "ollama-127",
+        "ollama-localhost"
+      ],
+      "owner": 11,
+      "removeWhen": "#11 moves the provider request proxy into its AI adapter",
+      "note": "Both proxies send through this one call, with the request the policy checked"
+    },
+    {
+      "file": "js/kernel/composition/api-request.js",
+      "function": "workerScriptUrl",
+      "count": 1,
+      "credential": "none",
+      "destinations": [],
+      "owner": 21,
+      "removeWhen": "Stays: it reads this extension's own manifest.json, which no destination row needs",
+      "note": "The offscreen document finds the worker's script URL, since its runtime has no getManifest"
+    },
     {
       "file": "js/llm.js",
       "function": "fetchViaBackground",
       "count": 1,
       "credential": "caller",
       "destinations": [
-        "glm-general",
-        "glm-coding",
         "glm-china",
-        "ollama-localhost",
-        "ollama-127"
+        "glm-coding",
+        "glm-general",
+        "ollama-127",
+        "ollama-localhost"
       ],
       "owner": 11,
       "removeWhen": "#11's slice 2 moves provider calls behind the coordinator",
