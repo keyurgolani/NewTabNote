@@ -116,7 +116,13 @@ const CASES = Object.freeze({
     group: { placement: { kind: 'collection', folderId: null }, kind: 'note', lifecycle: 'active' },
   },
   'x-both': {
-    note: legacyNote('x-both', { name: 'Both', trashed: true, trashedAt: NOW - 100, archived: true, archivedAt: NOW - 200 }),
+    note: legacyNote('x-both', {
+      name: 'Both',
+      trashed: true,
+      trashedAt: NOW - 100,
+      archived: true,
+      archivedAt: NOW - 200,
+    }),
     group: { placement: { kind: 'collection', folderId: null }, kind: 'note', lifecycle: 'trashed' },
   },
   'x-template': {
@@ -142,7 +148,15 @@ const CASES = Object.freeze({
 
 /** The blocks of x-blocks, whose newest time its updatedAt takes */
 const BLOCKS = [
-  { id: 'xb1', canvasId: 'x-blocks', type: 'text', content: 'One', order: 0, createdAt: NOW - 4000, updatedAt: NOW - 3000 },
+  {
+    id: 'xb1',
+    canvasId: 'x-blocks',
+    type: 'text',
+    content: 'One',
+    order: 0,
+    createdAt: NOW - 4000,
+    updatedAt: NOW - 3000,
+  },
   { id: 'xb2', canvasId: 'x-blocks', type: 'text', content: 'Two', order: 1, createdAt: NOW - 3500 },
 ];
 
@@ -275,11 +289,7 @@ describe('logical 2 (#17 PR 3a)', () => {
     // No other store moves, blocks included, and no change entry or version
     const dumped = await dump(of);
     for (const store of [...UNTOUCHED, 'changes', 'operations', 'conflicts', 'tombstones']) {
-      assert.deepEqual(
-        recordsIn(dumped, 'CanvasTabDB', store),
-        recordsIn(before, 'CanvasTabDB', store),
-        store,
-      );
+      assert.deepEqual(recordsIn(dumped, 'CanvasTabDB', store), recordsIn(before, 'CanvasTabDB', store), store);
     }
   });
 
@@ -505,13 +515,22 @@ describe('cut off, and run again', () => {
       assert.equal(second.status, cut.reached.labels.at(-1) === 'step-done' ? 'current' : 'transformed', label);
       assert.deepEqual(await ended(of), target, label);
       const points = await pointsIn(of);
-      assert.ok(points.every(point => point.status === 'verified' && point.verifies), label);
+      assert.ok(
+        points.every(point => point.status === 'verified' && point.verifies),
+        label,
+      );
       const own = points.filter(point => point.logicalTarget === 2);
       assert.equal(own.length, 1, label);
       const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-2');
       assert.equal(receipt.recoveryPointId, own[0].id, label);
       // The point holds the notes as the transform found them: the renamed one, without a group
-      const file = await exportPoint({ indexedDB: of.real, keyRange: KeyRange, crypto, clock: later, pointId: own[0].id });
+      const file = await exportPoint({
+        indexedDB: of.real,
+        keyRange: KeyRange,
+        crypto,
+        clock: later,
+        pointId: own[0].id,
+      });
       const held = /** @type {any[]} */ (file.canvases);
       assert.equal(held.find(note => note.id === 'x-inbox')?.name, 'Untitled 2', label);
     }
@@ -541,7 +560,14 @@ describe('its recovery point (Q9)', () => {
     assert.equal(outcome.status, 'transformed');
     const points = await pointsIn(of);
     assert.deepEqual(
-      points.map(point => [point.id, point.pinned, point.target, point.logicalTarget ?? null, point.status, point.verifies]),
+      points.map(point => [
+        point.id,
+        point.pinned,
+        point.target,
+        point.logicalTarget ?? null,
+        point.status,
+        point.verifies,
+      ]),
       [
         [pinned.id, true, 10, null, 'verified', true],
         [outcome.recoveryPointId, false, null, 2, 'verified', true],
@@ -564,7 +590,10 @@ describe('its recovery point (Q9)', () => {
     await withCommands(of, send => send({ type: 'setPinned', noteId: 'x-daily', pinned: true }));
     const notes = await notesIn(of);
     const blocked = await transform(of, { clock: later, estimate: SHORT });
-    assert.deepEqual([blocked.status, blocked.failure, blocked.backedOff], ['space-blocked', { code: 'space-short' }, false]);
+    assert.deepEqual(
+      [blocked.status, blocked.failure, blocked.backedOff],
+      ['space-blocked', { code: 'space-short' }, false],
+    );
     assert.deepEqual(await notesIn(of), notes, 'nothing filled');
     assert.equal((await pointsIn(of)).length, 1, 'no point');
     const meta = await metaIn(of);
@@ -628,7 +657,10 @@ describe('its recovery point (Q9)', () => {
       ['transformed', ['logical-2'], 0, null],
     );
     const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-2');
-    assert.deepEqual([receipt.recoveryPointId, receipt.counts], [null, { read: 2, filled: 0, staleFolder: 0, dailyWithoutDate: 0 }]);
+    assert.deepEqual(
+      [receipt.recoveryPointId, receipt.counts],
+      [null, { read: 2, filled: 0, staleFolder: 0, dailyWithoutDate: 0 }],
+    );
     assert.equal((await metaIn(of)).schema.logicalVersion, 2);
     const names = (await dump(of)).databases.map(db => db.name);
     assert.equal(names.includes(RECOVERY_DB_NAME), false);
