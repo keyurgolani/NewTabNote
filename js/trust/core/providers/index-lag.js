@@ -1,0 +1,53 @@
+/**
+ * Index and derived data (#20, "Providers"): for each pipeline that consumes #17's commit
+ * feed, its lag, the feed's head `seq` minus the checkpoint the pipeline has applied up to,
+ * read now from both. It's `degraded` once a pipeline is further behind than its declared
+ * window, with one `lagging` incident, and `not-configured` while no pipeline is registered,
+ * which is every profile until #22 registers its projections and #17's PR 2 makes the feed
+ * durable. #22's per-projection providers then report the pipelines they own, and this one
+ * keeps the rest.
+ */
+
+import { portOf } from './context.js';
+
+/** @typedef {import('../checks.js').CheckResult} CheckResult */
+
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
+const position = value => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new TypeError('not a commit position');
+  return value;
+};
+
+export const indexLag = Object.freeze({
+  /**
+   * @param {Readonly<Record<string, unknown>>} context
+   * @returns {Promise<CheckResult>}
+   */
+  async check(context) {
+    // A root with no pipelines passes an empty list; one that passes none can't say
+    const pipelines = portOf(context, 'pipelines');
+    if (pipelines.length === 0) return { status: 'not-configured', evidence: { records: 0 } };
+    const head = position(await portOf(context, 'commitLog').head());
+    let lag = 0;
+    let lagging = 0;
+    for (const pipeline of pipelines) {
+      const behind = Math.max(0, head - position(await pipeline.checkpoint()));
+      lag = Math.max(lag, behind);
+      if (behind > pipeline.windowSeq) lagging += 1;
+    }
+    const evidence = { records: pipelines.length, lag, ...(head > 0 ? { seq: head } : {}) };
+    if (lagging === 0) return { status: 'verified', evidence };
+    return {
+      status: 'degraded',
+      evidence: { ...evidence, count: lagging },
+      consequenceKey: 'indexing.lagging',
+      preserved: ['capture', 'editing', 'reading'],
+      faults: [
+        { faultCode: 'lagging', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },
+      ],
+    };
+  },
+});
