@@ -12,6 +12,8 @@
  *   through (js/kernel/composition/document.js): each write names its note, and none takes a
  *   note record. The export, the search index, and the embeddings read notes and blocks
  *   through it, as stored.
+ * @param {Object} [deps.settings] - The page's settings port (js/kernel/composition/settings.js),
+ *   which tells NotesManager when a job's switch or interval changes, in this tab or another
  */
 /**
  * The error a job throws when the kernel didn't store its write: its kind and code, never the
@@ -45,7 +47,7 @@ function jobTimer(minutes, fallback) {
 }
 
 class NotesManager {
-  constructor({ storage, domRefs, logger, llm, documentClient = null, startIndexer = null }) {
+  constructor({ storage, domRefs, logger, llm, documentClient = null, settings = null, startIndexer = null }) {
     this.storage = storage;
     this.domRefs = domRefs;
     this.logger = logger;
@@ -53,6 +55,10 @@ class NotesManager {
     this.documentClient = documentClient;
     // Starts the search indexer's module worker (js/kernel/composition/workers.js), from App
     this.startIndexer = startIndexer;
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js) */
+    this.settings = settings;
+    /** @type {(() => void)|null} Stops followJobSettings */
+    this._stopFollowingJobSettings = null;
 
     // Auto-title state
     this.autoTitleIntervalId = null;
@@ -106,8 +112,28 @@ class NotesManager {
     await this.initEmbeddings();
   }
 
+  /**
+   * From now on, set a job up again when its switch or interval changes, in this tab or
+   * another. The settings port tells this tab of its own writes too, so Settings saving a
+   * control sets its job up once. App calls this as it builds the controllers, so a switch
+   * flipped while the page starts reaches the job.
+   * @returns {void}
+   */
+  followJobSettings() {
+    if (!this.settings || this._stopFollowingJobSettings) return;
+    this._stopFollowingJobSettings = this.settings.onChanged(({ keys }) => {
+      const changed = new Set(keys);
+      if (changed.has('autoTitleEnabled') || changed.has('autoTitleInterval')) this.setupAutoTitle();
+      if (changed.has('insightsEnabled') || changed.has('insightsInterval')) this.setupInsightsExtraction();
+    });
+  }
+
   /** Tear down intervals and workers. */
   destroy() {
+    if (this._stopFollowingJobSettings) {
+      this._stopFollowingJobSettings();
+      this._stopFollowingJobSettings = null;
+    }
     this.stopAutoTitleInterval();
     this.stopInsightsInterval();
     if (this.indexerWorker) {
@@ -779,8 +805,9 @@ class NotesManager {
   // ─── Auto-Title ───
 
   /**
-   * Setup auto-title feature: as the page starts, and when another tab changes its switch or
-   * interval. Switched off, or with no provider, its timer stops.
+   * Setup auto-title feature: as the page starts, and when its switch or interval changes,
+   * here or in another tab (followJobSettings). Switched off, or with no provider, its timer
+   * stops.
    */
   async setupAutoTitle() {
     const { autoTitleEnabled: enabled = false, autoTitleInterval: interval = 15 } =
@@ -958,8 +985,9 @@ class NotesManager {
   // ─── Insights Extraction ───
 
   /**
-   * Setup insights extraction feature: as the page starts, and when another tab changes its
-   * switch or interval. Switched off, or with no provider, its timer stops.
+   * Setup insights extraction feature: as the page starts, and when its switch or interval
+   * changes, here or in another tab (followJobSettings). Switched off, or with no provider,
+   * its timer stops.
    */
   async setupInsightsExtraction() {
     const { insightsEnabled: enabled = false, insightsInterval: interval = 360 } =

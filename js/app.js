@@ -800,8 +800,6 @@ class App {
     this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
     this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
     this.settingsController.removal = this.removal;
-    this.settingsController.onSetupAutoTitle = () => this.setupAutoTitle();
-    this.settingsController.onSetupInsightsExtraction = () => this.setupInsightsExtraction();
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
       this.aiChatController.renderAIPromptTemplateSettings();
     };
@@ -847,8 +845,12 @@ class App {
       logger: this.logger,
       llm: this.ai,
       documentClient: this.documentClient,
+      settings: this.settings,
       startIndexer: this.startIndexer,
     });
+    // Its jobs follow their switches and intervals through the settings port from now on, so
+    // one flipped while the later controllers start sets its job up, once
+    this.notesManager.followJobSettings();
 
     // The note list it reads, and tells when the indexer wrote search entries
     this.notesManager.noteList = this.noteList;
@@ -1407,22 +1409,6 @@ class App {
     btn.addEventListener('click', () => location.reload());
     wrapper.appendChild(btn);
     appEl.appendChild(wrapper);
-  }
-
-  /**
-   * Setup auto-title feature
-   */
-  async setupAutoTitle() {
-    await this.notesManager.setupAutoTitle();
-  }
-
-  // ============ Insights Extraction ============
-
-  /**
-   * Setup insights extraction feature
-   */
-  async setupInsightsExtraction() {
-    await this.notesManager.setupInsightsExtraction();
   }
 
   /**

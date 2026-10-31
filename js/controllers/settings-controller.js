@@ -37,8 +37,6 @@ class SettingsController {
     this.onReloadEditors = null;
     /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: Trash Note goes through it */
     this.removal = null;
-    this.onSetupAutoTitle = null;
-    this.onSetupInsightsExtraction = null;
     this.onUpdateAISidebarState = null;
     this.onRenderNotesList = null;
     this.onUpdateSmartSuggestions = null;
@@ -247,12 +245,12 @@ class SettingsController {
 
   /**
    * The auto-title and insights switches and their intervals. A change saves the control that
-   * changed, in one write through the settings port, then sets that job up again at once
-   * (onSetupAutoTitle, onSetupInsightsExtraction: NotesManager starts its timer with the new
-   * interval, or stops it). Switched off, no more note text goes to the provider: a run already
-   * going checks the stored switch before each note's call, in this tab and in the others,
-   * which set their jobs up again when they hear of the change. A control whose save fails
-   * goes back to what's stored, with a toast. #8 (recipes) rebuilds these controls.
+   * changed, in one write through the settings port. NotesManager hears of the write through
+   * the port, in this tab as in the others, and sets the job up once (followJobSettings): it
+   * starts its timer with the new interval, or stops it. Switched off, no more note text goes
+   * to the provider: a run already going checks the stored switch before each note's call, in
+   * this tab and in the others. A control whose save fails goes back to what's stored, with a
+   * toast. #8 (recipes) rebuilds these controls.
    * @returns {void}
    */
   setupJobSettings() {
@@ -264,7 +262,6 @@ class SettingsController {
         enabledKey: 'autoTitleEnabled',
         intervalKey: 'autoTitleInterval',
         defaultInterval: 15,
-        setUp: () => this.onSetupAutoTitle,
       },
       {
         enabledId: 'insights-enabled',
@@ -273,7 +270,6 @@ class SettingsController {
         enabledKey: 'insightsEnabled',
         intervalKey: 'insightsInterval',
         defaultInterval: 360,
-        setUp: () => this.onSetupInsightsExtraction,
       },
     ];
     for (const job of jobs) {
@@ -297,10 +293,7 @@ class SettingsController {
           console.error(`Could not save ${key}:`, error && error.message);
           await this._restoreJobControl(job, control, enabled, interval);
           Utils.showToast('Failed to save the setting. Please try again.', 'error');
-          return;
         }
-        const setUp = job.setUp();
-        if (setUp) await setUp();
       };
       enabled.addEventListener('change', async () => {
         this._showIntervalRow(job.intervalRow, enabled.checked);
@@ -1206,16 +1199,7 @@ class SettingsController {
           await reread('aiPromptTemplates', workspaceData, (value) => this.onAIPromptTemplatesChanged(value));
         }
       }
-
-      // Update auto-title settings
-      if (changed.has('autoTitleEnabled') || changed.has('autoTitleInterval')) {
-        if (this.onSetupAutoTitle) this.onSetupAutoTitle();
-      }
-
-      // Update insights settings
-      if (changed.has('insightsEnabled') || changed.has('insightsInterval')) {
-        if (this.onSetupInsightsExtraction) this.onSetupInsightsExtraction();
-      }
+      // A job's switch or interval reaches NotesManager through the same port (followJobSettings)
     });
   }
 
