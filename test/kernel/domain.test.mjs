@@ -11,9 +11,11 @@ import {
   dailyDateStr,
   dailyNoteName,
   findDailyNote,
+  filledUpdatedAt,
   inBlockOrder,
   isEmpty,
   isUntitled,
+  listTimeOf,
   notesInView,
 } from '../../js/kernel/core/domain/note.js';
 import { sessionIssue } from '../../js/kernel/core/domain/session.js';
@@ -70,7 +72,7 @@ describe('notes', () => {
     }
   });
 
-  it('notesInView lists each view in the order Storage reads it, without notes lacking updatedAt', () => {
+  it('notesInView lists each view in the order Storage reads it, and a note without an updatedAt an index holds by its createdAt, else last (#17 PR 3a, KD-011)', () => {
     const notes = [
       note('b', { updatedAt: NOW }),
       note('a', { updatedAt: NOW }),
@@ -80,16 +82,30 @@ describe('notes', () => {
       note('trashed', { updatedAt: NOW, trashed: true, trashedAt: NOW + 1 }),
       note('template', { updatedAt: NOW + 9, isTemplate: true }),
       note('noTime', { updatedAt: undefined }),
+      // Storage's updatedAt index leaves out each of these, and the kernel lists them by createdAt
+      note('createdOnly', { updatedAt: undefined, createdAt: NOW + 1 }),
+      note('notANumber', { updatedAt: NaN, createdAt: NOW - 1 }),
+      note('templateNoTime', { updatedAt: undefined, createdAt: NOW + 10, isTemplate: true }),
+      note('trashedNoTime', { updatedAt: undefined, trashed: true, trashedAt: NOW + 2 }),
     ];
     const ids = /** @param {NoteRecord[]} list */ list => list.map(n => n.id);
-    assert.deepEqual(ids(notesInView(notes, 'active')), ['newest', 'b', 'a']);
-    assert.deepEqual(ids(notesInView(notes, 'withArchived')), ['archivedEarlier', 'newest', 'archived', 'b', 'a']);
+    assert.deepEqual(ids(notesInView(notes, 'active')), ['newest', 'createdOnly', 'b', 'a', 'notANumber', 'noTime']);
+    assert.deepEqual(ids(notesInView(notes, 'withArchived')), [
+      'archivedEarlier',
+      'newest',
+      'createdOnly',
+      'archived',
+      'b',
+      'a',
+      'notANumber',
+      'noTime',
+    ]);
     assert.deepEqual(ids(notesInView(notes, 'archived')), ['archived', 'archivedEarlier']);
-    assert.deepEqual(ids(notesInView(notes, 'trashed')), ['trashed']);
-    assert.deepEqual(ids(notesInView(notes, 'templates')), ['template']);
+    assert.deepEqual(ids(notesInView(notes, 'trashed')), ['trashedNoTime', 'trashed']);
+    assert.deepEqual(ids(notesInView(notes, 'templates')), ['templateNoTime', 'template']);
   });
 
-  it('notesInView lists what Popup and Side Panel have always read: no archivedAt or trashedAt, and every indexed note', () => {
+  it('notesInView lists what Popup and Side Panel have always read: no archivedAt or trashedAt, and every note, one without an indexed updatedAt last (#17 PR 3a, KD-011)', () => {
     const notes = [
       note('flags', { updatedAt: NOW + 4, archived: true, trashed: true }),
       note('archived', { updatedAt: NOW + 3, archived: true, archivedAt: NOW + 3 }),
@@ -100,8 +116,39 @@ describe('notes', () => {
       note('noTime', { updatedAt: undefined }),
     ];
     const ids = /** @param {NoteRecord[]} list */ list => list.map(n => n.id);
-    assert.deepEqual(ids(notesInView(notes, 'popup')), ['flags', 'template', 'b', 'a']);
-    assert.deepEqual(ids(notesInView(notes, 'sidePanel')), ['flags', 'archived', 'template', 'trashed', 'b', 'a']);
+    assert.deepEqual(ids(notesInView(notes, 'popup')), ['flags', 'template', 'b', 'a', 'noTime']);
+    assert.deepEqual(ids(notesInView(notes, 'sidePanel')), [
+      'flags',
+      'archived',
+      'template',
+      'trashed',
+      'b',
+      'a',
+      'noTime',
+    ]);
+  });
+
+  it("listTimeOf and filledUpdatedAt: the time a note lists by, and the one #17's transform gives it (#17 PR 3a)", () => {
+    // An updatedAt an index holds is the time, whatever its type, as Storage's index orders it
+    for (const updatedAt of [NOW, 0, -5, '2024-01-01', new Date(NOW)]) {
+      assert.equal(listTimeOf(note('n', /** @type {any} */ ({ updatedAt, createdAt: NOW + 1 }))), updatedAt);
+    }
+    // Else createdAt, else 0
+    for (const updatedAt of [undefined, null, NaN, {}, true]) {
+      assert.equal(listTimeOf(note('n', /** @type {any} */ ({ updatedAt, createdAt: NOW + 1 }))), NOW + 1);
+      assert.equal(listTimeOf(note('n', /** @type {any} */ ({ updatedAt }))), 0, String(updatedAt));
+    }
+    assert.equal(listTimeOf(note('n', { updatedAt: undefined, createdAt: Infinity })), 0);
+    // The transform's fill: createdAt, else the newest of the blocks' times, else the run's start
+    const blocks = [
+      block({ updatedAt: NOW + 3, createdAt: NOW }),
+      block({ createdAt: NOW + 7 }),
+      block({ updatedAt: 'later', createdAt: NaN }),
+    ];
+    assert.equal(filledUpdatedAt(note('n', { createdAt: NOW - 1 }), blocks, NOW + 99), NOW - 1);
+    assert.equal(filledUpdatedAt(note('n', { createdAt: undefined }), blocks, NOW + 99), NOW + 7);
+    assert.equal(filledUpdatedAt(note('n', { createdAt: /** @type {any} */ ('2024') }), [], NOW + 99), NOW + 99);
+    assert.equal(filledUpdatedAt(note('n', { createdAt: undefined }), [block({ order: 1 })], NOW + 99), NOW + 99);
   });
 
   it('inBlockOrder sorts by order, then id', () => {

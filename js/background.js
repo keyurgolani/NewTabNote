@@ -82,6 +82,8 @@ const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
 /** The latest migration attempt's outcome, for #34's harness, which seeds a profile only once it's in */
 Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => kernel.migration.done, configurable: true });
+/** The latest data transforms' outcome (#17 PR 3a), for #34's harness */
+Object.defineProperty(workerGlobal, 'storageTransforms', { get: () => kernel.transforms.done, configurable: true });
 /** The latest recovery-point purge's outcome (#17 PR 2b), for #34's harness */
 Object.defineProperty(workerGlobal, 'storagePurge', { get: () => kernel.purge.done, configurable: true });
 

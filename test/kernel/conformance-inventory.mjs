@@ -287,6 +287,11 @@ export const UNSHARED = Object.freeze({
     implements: "#17's recovery-point purge (purgeRecoveryPoints), under Web Lock storage.migrate",
     tests: 'test/kernel/storage-purge.test.mjs',
   },
+  // #17 PR 3a: the one runner of the one database's logical versions
+  'js/kernel/adapters/indexeddb/transforms.js': {
+    implements: "#17's data transforms (runTransforms), in batches under Web Lock storage.migrate",
+    tests: 'test/kernel/storage-transforms.test.mjs',
+  },
 });
 
 /**
