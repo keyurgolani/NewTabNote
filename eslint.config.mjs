@@ -72,10 +72,9 @@ const LEGACY_SYNTAX = [
   },
 ];
 
-const APP_CALLBACK = {
-  selector: `AssignmentExpression[operator='='][left.type='MemberExpression'][left.computed=false][left.property.name=/^(on|get)[A-Z]/][left.object.type='MemberExpression'][left.object.object.type='ThisExpression'][left.object.property.name=/^(${CONTROLLERS.join('|')})$/]`,
-  message: '[app-callback] A controller callback into App; #12 replaces the domain ones with projections, and the UI-only rest go to #2 or #3.',
-};
+// The handles on js/storage.js the new-tab root gives App (#12 slice 7c), each counted under
+// its owner, and the whole of it under the name App held it by before
+const LEGACY_STORES = ['legacyStorage', 'searchIndexStore', 'graphStore', 'syncStore', 'recovery'];
 
 /**
  * The package root as a URL. Chrome registers chrome-extension: as a standard scheme, so its
@@ -380,8 +379,80 @@ const storageLocalRule = {
   },
 };
 
+/**
+ * App's callbacks (#12, "Boundaries and the ledger"): each assignment to a controller's on* or
+ * get* property in js/app.js, `this.<controller>.<onX or getX> = ...`, reported with the
+ * controller and the property it sets, as `sidebarController.onArchiveNote`, so the ledger
+ * can count one on its own
+ */
+const appCallbackRule = {
+  meta: { type: 'problem', schema: ACCESS_SCHEMA },
+  create(context) {
+    const { rule, message } = context.options[0];
+    return {
+      AssignmentExpression(node) {
+        const { left } = node;
+        if (node.operator !== '=' || left.type !== 'MemberExpression' || left.computed) return;
+        if (left.property.type !== 'Identifier' || !/^(on|get)[A-Z]/.test(left.property.name)) return;
+        const holder = left.object;
+        if (holder.type !== 'MemberExpression' || holder.object.type !== 'ThisExpression') return;
+        const controller = propertyName(holder);
+        if (!CONTROLLERS.includes(controller)) return;
+        context.report({ node, message: `[${rule}] ${controller}.${left.property.name}: ${message}` });
+      },
+    };
+  },
+};
+
+/**
+ * A read or write of one of `names` on `this`, or one taken apart from it, as in
+ * `const { syncStore } = this`, reported with the name, as `syncStore`, so the ledger counts
+ * each under its own owner
+ */
+const thisMemberRule = {
+  meta: {
+    type: 'problem',
+    schema: [
+      {
+        type: 'object',
+        properties: {
+          rule: { type: 'string' },
+          message: { type: 'string' },
+          names: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['rule', 'message', 'names'],
+        additionalProperties: false,
+      },
+    ],
+  },
+  create(context) {
+    const { rule, message, names } = context.options[0];
+    const report = (node, name) => {
+      if (name !== null && names.includes(name)) context.report({ node, message: `[${rule}] ${name}: ${message}` });
+    };
+    const takenApart = (pattern) => {
+      for (const property of pattern.properties) {
+        if (property.type === 'Property') report(property, keyName(property));
+      }
+    };
+    return {
+      MemberExpression(node) {
+        if (node.object.type === 'ThisExpression') report(node, propertyName(node));
+      },
+      VariableDeclarator(node) {
+        if (node.id.type === 'ObjectPattern' && node.init && node.init.type === 'ThisExpression') takenApart(node.id);
+      },
+      AssignmentExpression(node) {
+        if (node.left.type === 'ObjectPattern' && node.right.type === 'ThisExpression') takenApart(node.left);
+      },
+    };
+  },
+};
+
 const kernel = {
   rules: {
+    'app-callback': appCallbackRule,
+    'this-member': thisMemberRule,
     imports: importsRule,
     'object-store': accessRule('objectStore'),
     'get-store': accessRule('getStore'),
@@ -416,11 +487,22 @@ export default [
         message: 'Only js/kernel/ imports from js/kernel/adapters/; take a client from your composition root.',
         deny: ['js/kernel/adapters/'],
       }],
+      'kernel/this-member': ['error', {
+        rule: 'legacy-store',
+        message: "A handle on js/storage.js the new tab's root gives App, ledgered to the issue that moves its holder off Storage.",
+        names: LEGACY_STORES,
+      }],
     },
   },
   {
     files: ['js/app.js'],
-    rules: { 'no-restricted-syntax': ['error', ...LEGACY_SYNTAX, APP_CALLBACK] },
+    plugins: { kernel },
+    rules: {
+      'kernel/app-callback': ['error', {
+        rule: 'app-callback',
+        message: 'A controller callback into App, which may only be UI glue (#12): each that routes a command has its own ledger row, and #2 or #3 owns the rest.',
+      }],
+    },
   },
   {
     files: ['js/kernel/core/**/*.js', 'js/kernel/core/**/*.mjs'],
