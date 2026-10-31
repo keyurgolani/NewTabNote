@@ -10,9 +10,10 @@
  * - `normalize(input)`: rich text from outside (an import, a drop, an AI insert) as a field
  *   holds it
  * - `escapePlainText(text)`: plain text as rich text that shows exactly that text
+ * - `escapeAttributeText(text)`: the same, read as that text inside a quoted attribute too
  * - `isLinkHref(href)`: whether a link may point there (the inline schema's rule)
  *
- * The last two are the model layer's (js/kernel/core/blocks/rich-text.js), DOM-free, so the
+ * The last three are the model layer's (js/kernel/core/blocks/rich-text.js), DOM-free, so the
  * worker runs the same rules without the port.
  */
 
@@ -21,6 +22,7 @@
  * @property {(el: {innerHTML: string}, richText: string) => void} render
  * @property {(input: string) => string} normalize
  * @property {(text: unknown) => string} escapePlainText
+ * @property {(text: unknown) => string} escapeAttributeText
  * @property {(href: unknown) => boolean} isLinkHref
  */
 

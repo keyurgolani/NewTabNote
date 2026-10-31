@@ -2,14 +2,21 @@
 
 /**
  * Finds every raw markup sink in block code (#14 slice 2, the rendering boundary), read from
- * the syntax tree, so a comment or a string never counts: an assignment to `innerHTML` or
- * `outerHTML` (`=` or `+=`) or `srcdoc`, and a call to `insertAdjacentHTML`,
- * `setHTMLUnsafe`, `createContextualFragment`, `document.write`, `document.writeln`, or
- * `execCommand('insertHTML', ...)`. Each comes with the function it's in and what it puts in:
+ * the syntax tree, so a comment or a string never counts. A member is named as `el.name`,
+ * `el['name']` or either in parentheses, and the sinks are:
+ * - an assignment to `innerHTML`, `outerHTML` or `srcdoc`, by `=`, `+=`, `||=`, `??=` or
+ *   `&&=`, or through `Object.assign` with an object literal or `Reflect.set`;
+ * - a call to `insertAdjacentHTML`, `setHTMLUnsafe` or `createContextualFragment`;
+ * - a document's `write` or `writeln`, on any receiver whose name has "doc" in it;
+ * - `execCommand('insertHTML', ...)`, and `execCommand` with a command that isn't a literal;
+ * - markup parsed into nodes, which the page can adopt: `parseFromString` (DOMParser's) and
+ *   `parseHTMLUnsafe` (Document's). The scan can't follow the nodes, so the parse counts.
+ * Each comes with the function it's in and what it puts in:
  * - `static`: a string or a template with no substitutions, which is packaged markup;
  * - `dynamic`: anything else.
- * Assigning the empty string puts nothing in, so it isn't a sink. security/render-sinks.json
- * lists the files that are block code, and the sinks each may have.
+ * A sink given the empty string, or an `execCommand` given no value, puts nothing in, so it
+ * isn't one. A key or a source object that isn't a literal can't be read, and isn't counted.
+ * security/render-sinks.json lists the files that are block code, and the sinks each may have.
  */
 
 const fs = require('node:fs');
@@ -20,6 +27,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const ASSIGNED = new Set(['innerHTML', 'outerHTML', 'srcdoc']);
 const CALLED = new Set(['insertAdjacentHTML', 'setHTMLUnsafe', 'createContextualFragment']);
 const WRITES = new Set(['write', 'writeln']);
+const PARSED = new Set(['parseFromString', 'parseHTMLUnsafe']);
 
 /**
  * The name of the function `node` is in: a method, a function, or the binding an arrow or
@@ -45,30 +53,108 @@ function enclosingName(node) {
 /** @param {ts.Node} node */
 const isStaticText = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 
+/** @param {ts.Node | undefined} node */
+const isEmptyText = node => node !== undefined && isStaticText(node) && /** @type {ts.StringLiteral} */ (node).text === '';
+
+/** The assignments that can put markup into a member */
+const ASSIGNING = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+]);
+
 /**
- * The sink `node` is, with the markup it puts in, or null
+ * `node` without the parentheses around it
  * @param {ts.Node} node
- * @returns {{sink: string, value: ts.Node | undefined} | null}
+ * @returns {ts.Node}
  */
-function sinkOf(node) {
-  if (ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && ASSIGNED.has(node.left.name.text)) {
-    const op = node.operatorToken.kind;
-    if (op === ts.SyntaxKind.EqualsToken || op === ts.SyntaxKind.PlusEqualsToken) {
-      // Nothing to put in
-      if (op === ts.SyntaxKind.EqualsToken && isStaticText(node.right) && /** @type {ts.StringLiteral} */ (node.right).text === '') return null;
-      return { sink: node.left.name.text, value: node.right };
-    }
-  }
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-    const name = node.expression.name.text;
-    if (CALLED.has(name)) return { sink: name, value: node.arguments[name === 'insertAdjacentHTML' ? 1 : 0] };
-    if (WRITES.has(name) && /document$/i.test(node.expression.expression.getText())) return { sink: `document.${name}`, value: node.arguments[0] };
-    if (name === 'execCommand' && node.arguments[0] && isStaticText(node.arguments[0])) {
-      const command = /** @type {ts.StringLiteral} */ (node.arguments[0]).text.toLowerCase();
-      if (command === 'inserthtml') return { sink: 'execCommand insertHTML', value: node.arguments[2] };
-    }
+function unwrap(node) {
+  let current = node;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
+/**
+ * The member `node` reads, `el.name` or `el['name']`, as its name and receiver, or null
+ * @param {ts.Node} node
+ * @returns {{name: string, receiver: ts.Expression} | null}
+ */
+function memberOf(node) {
+  const target = unwrap(node);
+  if (ts.isPropertyAccessExpression(target)) return { name: target.name.text, receiver: target.expression };
+  if (ts.isElementAccessExpression(target) && isStaticText(target.argumentExpression)) {
+    return { name: /** @type {ts.StringLiteral} */ (target.argumentExpression).text, receiver: target.expression };
   }
   return null;
+}
+
+/**
+ * The name `node` ends in: an identifier's, or a member's
+ * @param {ts.Node} node
+ * @returns {string}
+ */
+function lastName(node) {
+  const target = unwrap(node);
+  if (ts.isIdentifier(target)) return target.text;
+  return memberOf(target)?.name ?? '';
+}
+
+/**
+ * A property's name in an object literal, when it's written out
+ * @param {ts.ObjectLiteralElementLike} property
+ * @returns {string | null}
+ */
+function propertyName(property) {
+  if (ts.isShorthandPropertyAssignment(property)) return property.name.text;
+  if (ts.isPropertyAssignment(property) && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) return property.name.text;
+  return null;
+}
+
+/**
+ * The sinks `node` is, each with the markup it puts in
+ * @param {ts.Node} node
+ * @returns {Array<{sink: string, value: ts.Node | undefined}>}
+ */
+function sinksOf(node) {
+  if (ts.isBinaryExpression(node) && ASSIGNING.has(node.operatorToken.kind)) {
+    const member = memberOf(node.left);
+    if (member && ASSIGNED.has(member.name) && !isEmptyText(node.right)) return [{ sink: member.name, value: node.right }];
+    return [];
+  }
+  if (!ts.isCallExpression(node)) return [];
+  const member = memberOf(node.expression);
+  if (!member) return [];
+  const { name, receiver } = member;
+  const args = node.arguments;
+  if (name === 'assign' && lastName(receiver) === 'Object') {
+    return args.slice(1).filter(ts.isObjectLiteralExpression).flatMap(source => source.properties.flatMap(property => {
+      const key = propertyName(property);
+      if (key === null || !ASSIGNED.has(key)) return [];
+      const value = ts.isShorthandPropertyAssignment(property) ? property.name : /** @type {ts.PropertyAssignment} */ (property).initializer;
+      return isEmptyText(value) ? [] : [{ sink: `Object.assign ${key}`, value }];
+    }));
+  }
+  if (name === 'set' && lastName(receiver) === 'Reflect') {
+    const key = args[1] && isStaticText(args[1]) ? /** @type {ts.StringLiteral} */ (args[1]).text : null;
+    return key !== null && ASSIGNED.has(key) && !isEmptyText(args[2]) ? [{ sink: `Reflect.set ${key}`, value: args[2] }] : [];
+  }
+  if (CALLED.has(name)) return [{ sink: name, value: args[name === 'insertAdjacentHTML' ? 1 : 0] }];
+  if (PARSED.has(name)) return [{ sink: name, value: args[0] }];
+  if (WRITES.has(name) && /doc/i.test(lastName(receiver))) return [{ sink: `document.${name}`, value: args[0] }];
+  if (name === 'execCommand' && args[0]) {
+    if (isStaticText(args[0])) {
+      const command = /** @type {ts.StringLiteral} */ (args[0]).text.toLowerCase();
+      return command === 'inserthtml' ? [{ sink: 'execCommand insertHTML', value: args[2] }] : [];
+    }
+    // A command that isn't a literal may be insertHTML; given no value, it puts nothing in
+    const value = args[2];
+    const none = value === undefined || isEmptyText(value) || value.kind === ts.SyntaxKind.NullKeyword
+      || (ts.isIdentifier(value) && value.text === 'undefined');
+    return none ? [] : [{ sink: 'execCommand', value }];
+  }
+  return [];
 }
 
 /**
@@ -82,8 +168,7 @@ function scanSource(source, fileName = 'source.js') {
   /** @type {Array<{sink: string, kind: 'static' | 'dynamic', function: string, line: number}>} */
   const found = [];
   const visit = (/** @type {ts.Node} */ node) => {
-    const site = sinkOf(node);
-    if (site) {
+    for (const site of sinksOf(node)) {
       found.push({
         sink: site.sink,
         kind: site.value && isStaticText(site.value) ? 'static' : 'dynamic',

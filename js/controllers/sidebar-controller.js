@@ -457,8 +457,8 @@ class SidebarController {
   }
 
   /**
-   * Refuse a dropped block that doesn't decode as a known block (#14 slice 2): a drag can come
-   * from outside the extension, with any type. The drop's failure path takes it from there.
+   * Refuse a dropped block that doesn't decode as a known block (#14 slice 2): a dropped block
+   * is stored only when it decodes as a known block. The drop's failure path takes it from there.
    * @param {Object} blockData
    * @returns {void}
    */

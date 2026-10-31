@@ -1998,9 +1998,10 @@ class BlockEditor {
       // Clone block data and generate new ID
       const newData = { ...blockData, id: Utils.generateId(), canvasId: this.noteId };
 
-      // Variable replacement: the values are plain text, escaped into rich content (#14 slice 2)
+      // Variable replacement: the values are plain text, escaped into rich content, for its text
+      // and its attributes alike (#14 slice 2)
       if (newData.content) {
-        newData.content = this.processTemplateVariables(newData.content, globalThis.BlockRendering.escapePlainText);
+        newData.content = this.processTemplateVariables(newData.content, globalThis.BlockRendering.escapeAttributeText);
       }
       if (newData.tableData) {
         newData.tableData = newData.tableData.map(row =>
@@ -3368,7 +3369,11 @@ class BlockEditor {
         ? AIResponseUtils.markdownToBlocks(trimmed)
         : null;
       // Blocks made from pasted text are written only when each decodes as a known block (#14)
-      if (parsedBlocks && Utils.blockRefusal(parsedBlocks, this.logger)) return;
+      // A refused paste says so, as a refused import, AI insert or drop does
+      if (parsedBlocks && Utils.blockRefusal(parsedBlocks, this.logger)) {
+        Utils.showToast('Failed to paste content', 'error');
+        return;
+      }
 
       if (parsedBlocks && parsedBlocks.length > 0) {
         let afterId = currentBlock ? currentBlock.id : null;

@@ -6,7 +6,7 @@
  */
 
 import { previewText } from '../blocks/previews.js';
-import { escapePlainText } from '../blocks/rich-text.js';
+import { escapeAttributeText, escapePlainText } from '../blocks/rich-text.js';
 
 /**
  * @typedef {object} NoteFields
@@ -447,7 +447,8 @@ export function newDailyNoteRecord({ id, name, dateStr, now }) {
 /**
  * Copies of a template's blocks for a new note, with {{date}}, {{time}}, {{title}}, and
  * {{datetime}} filled in, as Storage.applyTemplateToNote makes them. The values are plain text:
- * escaped into rich `content` (#14 slice 2), and as they are in a table's plain-text cells.
+ * escaped into rich `content`, for its text and its attributes alike (#14 slice 2), and as they
+ * are in a table's plain-text cells.
  * @param {BlockRecord[]} templateBlocks
  * @param {{noteId: string, title: unknown, now: number, nextId: () => string}} target
  * @returns {BlockRecord[]}
@@ -472,7 +473,7 @@ export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId 
   return templateBlocks.map(block => {
     /** @type {BlockRecord} */
     const copy = { ...block, id: nextId(), canvasId: noteId, createdAt: now, updatedAt: now };
-    if (copy.content) copy.content = fill(copy.content, escapePlainText);
+    if (copy.content) copy.content = fill(copy.content, escapeAttributeText);
     if (Array.isArray(copy.tableData)) {
       copy.tableData = copy.tableData.map(row => (Array.isArray(row) ? row.map(cell => fill(cell, asText)) : row));
     }

@@ -5,7 +5,7 @@
  * the inline schema's sanitizer (js/kernel/composition/rendering.js picks the implementation).
  */
 
-import { escapePlainText, isLinkHref } from '../../core/blocks/rich-text.js';
+import { escapeAttributeText, escapePlainText, isLinkHref } from '../../core/blocks/rich-text.js';
 
 /** @typedef {import('../../core/ports/rendering.js').RenderingPort} RenderingPort */
 
@@ -17,6 +17,7 @@ export function legacyRendering() {
     },
     normalize: input => input,
     escapePlainText,
+    escapeAttributeText,
     isLinkHref,
   });
 }
