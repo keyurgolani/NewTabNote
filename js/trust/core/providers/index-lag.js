@@ -2,7 +2,8 @@
  * Index and derived data (#20, "Providers"): for each pipeline that consumes #17's commit
  * feed, its lag, the feed's head `seq` minus the checkpoint the pipeline has applied up to,
  * read now from both. It's `degraded` once a pipeline is further behind than its declared
- * window, with one `lagging` incident, and `not-configured` while no pipeline is registered,
+ * window, with one `lagging` incident, `degraded` and `stalled` once a checkpoint is past the
+ * head (the log was replaced, so it must resync), and `not-configured` while no pipeline is registered,
  * which is every profile until #22 registers its projections and #17's PR 2 makes the feed
  * durable. #22's per-projection providers then report the pipelines they own, and this one
  * keeps the rest.
@@ -33,12 +34,31 @@ export const indexLag = Object.freeze({
     const head = position(await portOf(context, 'commitLog').head());
     let lag = 0;
     let lagging = 0;
+    let ahead = 0;
     for (const pipeline of pipelines) {
-      const behind = Math.max(0, head - position(await pipeline.checkpoint()));
+      const checkpoint = position(await pipeline.checkpoint());
+      // Past the head, as when the log was replaced under it: the pipeline has to resync
+      // (ports/commit-log.js's `resync-required`), so it's applying nothing now
+      if (checkpoint > head) {
+        ahead += 1;
+        continue;
+      }
+      const behind = head - checkpoint;
       lag = Math.max(lag, behind);
       if (behind > pipeline.windowSeq) lagging += 1;
     }
     const evidence = { records: pipelines.length, lag, ...(head > 0 ? { seq: head } : {}) };
+    if (ahead > 0) {
+      return {
+        status: 'degraded',
+        evidence: { ...evidence, count: ahead },
+        consequenceKey: 'indexing.resync-required',
+        preserved: ['capture', 'editing', 'reading'],
+        faults: [
+          { faultCode: 'stalled', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },
+        ],
+      };
+    }
     if (lagging === 0) return { status: 'verified', evidence };
     return {
       status: 'degraded',

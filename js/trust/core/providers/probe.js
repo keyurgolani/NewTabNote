@@ -14,19 +14,20 @@
  * - Storage probes the `notes` store. `action-required` on `quota` or `version-too-new`,
  *   `failed` on any other failure that isn't retryable, such as CanvasTabDB not opening, and
  *   `degraded` (capture still safe) when the probe commits while NewTabNoteTrust takes no
- *   writes, so a CanvasTabDB probe never resolves the records' own
- *   `storage/open-failed/NewTabNoteTrust` incident. The integrity scan's findings and open
- *   conflicts that would also make it `degraded` come with #17's later PRs, which add them.
+ *   writes. The integrity scan's findings and open conflicts that would also make it
+ *   `degraded` come with #17's later PRs, which add them.
  *
- * Both are core, so a verified one resolves its provider's open incidents, slice 1b's
- * `capture.failed` and `storage.open-failed` ones included: the write path works now.
+ * Each observes the faults it reports (`quota`, `version-too-new`, `probe-failed`), so a later
+ * answer that no longer reports one resolves it. Neither observes `open-failed`: that's the
+ * records' own and slice 1b's failure site's, and resolves through them.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
  * nothing either way, so it's `unverified` with its code. A record already under the probe's
- * key is never touched: the probe stops, writes nothing, and reports `unverified`.
+ * key is never touched: the probe stops, writes nothing, and reports `unverified`, and so does a
+ * read-back that differs (`probe-readback-mismatch`).
  */
 
-import { committed, rejected, unavailableFrom } from '../../../kernel/core/contracts/outcomes.js';
+import { committed, rejected, unavailableFrom, unknown } from '../../../kernel/core/contracts/outcomes.js';
 import { failureEvidence, portOf } from './context.js';
 
 /** @typedef {import('../../../kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -35,22 +36,36 @@ import { failureEvidence, portOf } from './context.js';
 /** @typedef {import('../../../kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../checks.js').CheckResult} CheckResult */
 
-/** The key a probe writes under, which no note, block, or folder id can be */
-export const PROBE_KEY = 'trust-probe';
+/**
+ * The key a probe writes under: an array, which no note, block, or folder key can be, since
+ * every release and the kernel (isId) key them by strings, so an imported record can't take it
+ */
+export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
 
-/** The commandId a probe's work carries: no adapter keeps one (idempotency: false), and a probe isn't a command */
+/** The commandId a probe's work carries: neither adapter keeps one (idempotency: false), and a probe isn't a command */
 const PROBE_COMMAND_ID = 'trust-probe';
 
 /** The failures that need the user, not a retry: a full disk, or a newer build's database */
 const ACTION_CODES = Object.freeze(['quota', 'version-too-new']);
 
+/** Whether `record` is the probe's own */
+const isProbe = (/** @type {unknown} */ record) =>
+  record !== null &&
+  typeof record === 'object' &&
+  JSON.stringify(/** @type {{id?: unknown}} */ (record).id) === JSON.stringify(PROBE_KEY);
+
 /**
- * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction
+ * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction. It
+ * changes no entity (`changedIds` is empty), so a commit log that appends one entry per changed
+ * entity, as #17's PR 2 will, gets none. A commit that answers without running the unit, or
+ * replays an earlier answer, didn't verify anything, and answers `unknown`.
  * @param {KernelAdapter} adapter
  * @param {StoreName[]} stores
  * @returns {Promise<Outcome>}
  */
 export async function probeCommit(adapter, stores) {
+  const key = /** @type {string} */ (/** @type {unknown} */ ([...PROBE_KEY]));
+  let ran = false;
   /** @type {Work} */
   const work = {
     commandId: PROBE_COMMAND_ID,
@@ -63,15 +78,16 @@ export async function probeCommit(adapter, stores) {
         {
           stores,
           async run(tx) {
+            ran = false;
             for (const store of stores) {
-              if ((await tx.get(store, PROBE_KEY)) !== undefined) return rejected('validation', 'probe-record-present');
+              if ((await tx.get(store, key)) !== undefined) return rejected('validation', 'probe-record-present');
             }
-            for (const store of stores) tx.put(store, /** @type {any} */ ({ id: PROBE_KEY }));
+            for (const store of stores) tx.put(store, /** @type {any} */ ({ id: [...PROBE_KEY] }));
             for (const store of stores) {
-              const back = /** @type {{id?: unknown} | undefined} */ (await tx.get(store, PROBE_KEY));
-              if (!back || back.id !== PROBE_KEY) return rejected('validation', 'probe-record-present');
+              if (!isProbe(await tx.get(store, key))) return rejected('validation', 'probe-readback-mismatch');
             }
-            for (const store of stores) tx.delete(store, PROBE_KEY);
+            for (const store of stores) tx.delete(store, key);
+            ran = true;
             return undefined;
           },
         },
@@ -79,7 +95,8 @@ export async function probeCommit(adapter, stores) {
     },
     done: () => committed('trust-probe', [], { severity: 'info' }),
   };
-  const { outcome } = await adapter.commit(work);
+  const { outcome, replayed } = await adapter.commit(work);
+  if (outcome.kind === 'committed' && (replayed || !ran)) return unknown('probe-not-run', PROBE_COMMAND_ID);
   return outcome;
 }
 
@@ -182,7 +199,8 @@ export const storage = Object.freeze({
       consequenceKey: 'storage.unavailable',
       faults: [
         {
-          faultCode: failure.code === 'open-failed' ? 'open-failed' : 'probe-failed',
+          // `open-failed` is the records' own and slice 1b's, which no check may observe
+          faultCode: 'probe-failed',
           subjectId: 'CanvasTabDB',
           severity: 'capture-risk',
           affected: ['capture', 'editing', 'reading'],

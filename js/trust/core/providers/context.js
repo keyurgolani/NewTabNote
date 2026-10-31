@@ -65,9 +65,10 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  */
 
 /**
- * The trust records a provider may read: the open incidents slice 1b's failure sites raise,
- * and whether NewTabNoteTrust takes writes (`fallback` while it doesn't)
- * @typedef {{incidents(): Promise<readonly import('../records.js').Incident[]>, state?: () => string}} IncidentReader
+ * The trust records a provider may read: the journal's events, which slice 1b's failure sites
+ * write, and whether NewTabNoteTrust takes writes (`fallback` while it doesn't). No provider
+ * reads incidents: a check decides from evidence, never from what an earlier check raised.
+ * @typedef {{events(): Promise<readonly import('../records.js').JournalEvent[]>, state?: () => string}} TrustReader
  */
 
 /**
@@ -78,14 +79,15 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  * @property {SettingsPort} [settings] - chrome.storage.local, for the legacy facts legacy.js lists
  * @property {SecretReader} [secrets]
  * @property {RecoveryReader} [recovery]
- * @property {{stored(): Promise<boolean>}} [vectors] - whether CanvasTabDB's `vectors` store holds a record
+ * @property {{latest(): Promise<{stored: boolean, at: number | null}>}} [vectors]
+ *   Whether CanvasTabDB's `vectors` store holds a record, and the newest one's `updatedAt`
  * @property {PermissionsReader} [permissions]
  * @property {ManifestPermissions} [manifest]
  * @property {CommitLog} [commitLog]
  * @property {readonly Pipeline[]} [pipelines]
  * @property {MessagingClient} [messaging]
  * @property {() => readonly Resolution[]} [resolutions] - each registry root's resolution, or its runtime's snapshot
- * @property {IncidentReader} [trust]
+ * @property {TrustReader} [trust]
  */
 
 /**

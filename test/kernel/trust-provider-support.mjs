@@ -82,13 +82,14 @@ export function settingsOf(of) {
 
 /**
  * The registry context for slice 2's providers over `of`, every port working, and the adapter
- * it opened. `incidents` is what the trust records answer.
+ * it opened. `events` is what the trust records' journal answers.
  * @param {Profile} [of]
- * @param {{incidents?: () => Promise<any[]>}} [options]
+ * @param {{events?: () => Promise<any[]>}} [options]
  */
-export async function providerContext(of = freshProfile(), { incidents = async () => [] } = {}) {
+export async function providerContext(of = freshProfile(), { events = async () => [] } = {}) {
   const adapter = adapterOn(of);
-  await adapter.open();
+  // A profile the adapter refuses (a newer schema, say) still gets a context, whose probes say so
+  await adapter.open().catch(() => {});
   const root = createRegistryRoot({ host: 'workspace' });
   root.register(health, PROVIDERS);
   const resolution = root.resolve();
@@ -105,7 +106,7 @@ export async function providerContext(of = freshProfile(), { incidents = async (
     pipelines: [],
     messaging: messagingClient(),
     resolutions: () => [resolution],
-    trust: { incidents },
+    trust: { events },
   };
   return { of, adapter, context, resolution };
 }

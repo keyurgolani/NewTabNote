@@ -55,6 +55,9 @@ export function newestVerified(points) {
   return [...newest.values()];
 }
 
+/** What the recovery reader answers for a point that's no longer there */
+const DISCARDED = 'point-discarded';
+
 export const recoveryReadiness = Object.freeze({
   /**
    * @param {Readonly<Record<string, unknown>>} context
@@ -64,19 +67,25 @@ export const recoveryReadiness = Object.freeze({
     const recovery = portOf(context, 'recovery');
     const legacyCopies = context.settings ? await countLegacyCopies(context.settings) : null;
     const legacy = legacyCopies === null ? {} : { records: legacyCopies };
-    const points = newestVerified(await recovery.points());
-    if (points.length === 0) {
-      return { status: 'unverified', evidence: { count: 0, ...legacy }, consequenceKey: 'recovery.no-verified-point' };
-    }
+    const listed = /** @type {unknown} */ (await recovery.points());
+    if (!Array.isArray(listed)) throw new TypeError('not a list of points');
+    /** @type {PointSummary[]} */
+    const points = [];
     /** @type {string | null} */
     let failedCode = null;
     let failed = 0;
-    for (const point of points) {
+    for (const point of newestVerified(listed)) {
       const verdict = /** @type {{ok: boolean, code?: string}} */ (await recovery.verify(point.id));
+      // Discarded since it was listed, by #17's run after its own verification: it's gone, not failed
+      if (!verdict.ok && verdict.code === DISCARDED) continue;
+      points.push(point);
       if (!verdict.ok) {
         failed += 1;
         if (failedCode === null && typeof verdict.code === 'string') failedCode = verdict.code;
       }
+    }
+    if (points.length === 0) {
+      return { status: 'unverified', evidence: { count: 0, ...legacy }, consequenceKey: 'recovery.no-verified-point' };
     }
     const newestAt = Math.max(...points.map(point => /** @type {number} */ (point.verifiedAt)));
     if (failed > 0) {

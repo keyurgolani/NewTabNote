@@ -38,10 +38,17 @@ const AFFECTS = Object.freeze({
 });
 
 /**
+ * `value` as a list of names, or a throw, so an answer that isn't one verifies nothing rather
+ * than read as every grant missing or nothing declared. An optional field may be left out.
  * @param {unknown} value
+ * @param {boolean} [optional]
  * @returns {string[]}
  */
-const strings = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : []);
+const strings = (value, optional = false) => {
+  if (value === undefined && optional) return [];
+  if (!Array.isArray(value) || !value.every(item => typeof item === 'string')) throw new TypeError('not a list of names');
+  return value;
+};
 
 /**
  * The permission's name as an incident's subject, when codes.js lists it
@@ -69,17 +76,20 @@ function impliedBy(manifest) {
 }
 
 /**
- * Compares Chrome's grants with the manifest
- * @param {{permissions?: unknown, origins?: unknown}} granted
+ * Compares Chrome's grants with the manifest. Throws when getAll's answer lacks either list,
+ * or the manifest its `permissions` list, as chrome.permissions and getManifest always give them.
+ * @param {{permissions?: unknown, origins?: unknown} | null} granted
  * @param {{permissions?: unknown, optional_permissions?: unknown, host_permissions?: unknown, optional_host_permissions?: unknown, chrome_url_overrides?: unknown}} manifest
  */
 export function comparePermissions(granted, manifest) {
+  if (granted === null || typeof granted !== 'object') throw new TypeError('not a grant');
+  if (manifest === null || typeof manifest !== 'object') throw new TypeError('not a manifest');
   const grantedApis = new Set(strings(granted.permissions));
   const grantedOrigins = new Set(strings(granted.origins));
   const declaredApis = strings(manifest.permissions);
-  const declaredOrigins = strings(manifest.host_permissions);
-  const allowedApis = new Set([...declaredApis, ...strings(manifest.optional_permissions), ...impliedBy(manifest)]);
-  const allowedOrigins = new Set([...declaredOrigins, ...strings(manifest.optional_host_permissions)]);
+  const declaredOrigins = strings(manifest.host_permissions, true);
+  const allowedApis = new Set([...declaredApis, ...strings(manifest.optional_permissions, true), ...impliedBy(manifest)]);
+  const allowedOrigins = new Set([...declaredOrigins, ...strings(manifest.optional_host_permissions, true)]);
   return {
     missingApis: declaredApis.filter(name => !grantedApis.has(name)),
     missingOrigins: declaredOrigins.filter(origin => !grantedOrigins.has(origin)),
