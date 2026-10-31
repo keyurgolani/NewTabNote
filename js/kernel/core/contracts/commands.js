@@ -62,6 +62,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/complete-onboarding.js').CompleteOnboarding} CompleteOnboarding */
 /** @typedef {import('./operations/record-backup.js').RecordBackup} RecordBackup */
 /** @typedef {import('./operations/record-export-notice.js').RecordExportNotice} RecordExportNotice */
+/** @typedef {import('./operations/snooze-space-notice.js').SnoozeSpaceNotice} SnoozeSpaceNotice */
 /** @typedef {import('./operations/create-auto-backup.js').CreateAutoBackup} CreateAutoBackup */
 /** @typedef {import('./operations/import-backup.js').ImportBackup} ImportBackup */
 
@@ -74,7 +75,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
  *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | RunIntegrityCheck | SetInsightsPending | RecordJobRun
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
- *   | CompleteOnboarding | RecordBackup | RecordExportNotice | CreateAutoBackup | ImportBackup} Command
+ *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -220,6 +221,8 @@ export const COMMANDS = Object.freeze({
   completeOnboarding: entry('complete-onboarding', 'onboarding', ['newtab'], { entityTypes: [] }),
   recordBackup: entry('record-backup', 'backup', ['newtab'], { entityTypes: [] }),
   recordExportNotice: entry('record-export-notice', 'backup', ['newtab'], { entityTypes: [] }),
+  // The space notice's put-off (#17 PR 1b), beside the export notice's outcome
+  snoozeSpaceNotice: entry('snooze-space-notice', 'backup', ['newtab'], { entityTypes: [] }),
   // The legacy backup tasks, until #18's engine
   createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], { entityTypes: [] }),
   importBackup: entry('import-backup', 'note', ['newtab'], { entityTypes: [], maxBytes: LARGE }),

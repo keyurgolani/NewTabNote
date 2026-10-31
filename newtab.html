@@ -1029,6 +1029,19 @@
                 <!-- Filled from js/ui/export-notice.js, which says the same in the export notice -->
                 <p class="setting-hint" id="export-contents-hint"></p>
               </div>
+              <!-- The copy the update saved before it changed how notes are stored (#17 PR 1b).
+                   js/ui/pre-update-copy.js fills it each time Settings opens; the status line is
+                   a live region from the start. -->
+              <div class="settings-section pre-update-copy" id="pre-update-copy" data-state="none"
+                data-setting-label="copy from before the update"
+                data-setting-desc="export pre-update copy go back earlier version 1.4.1 restore backup">
+                <h3>Copy From Before the Update</h3>
+                <div class="setting-row pre-update-copy-row" hidden>
+                  <button id="export-pre-update-btn" class="secondary-btn pre-update-copy-btn" type="button">Export Pre-Update Copy</button>
+                </div>
+                <p class="pre-update-copy-guidance"></p>
+                <p class="pre-update-copy-status" role="status" aria-live="polite"></p>
+              </div>
               <div class="settings-section" data-setting-label="auto backup" data-setting-desc="automatic backup reminders frequency">
                 <h3>Auto Backup</h3>
                 <div class="setting-row">

@@ -124,15 +124,16 @@ class App {
    * boot root hands the composition root (#27 slice 3): the vendored libraries load through it
    * at their first use, its reload guard writes what the open editors have pending, and it gives
    * the PiP editor the stylesheets a chunk adds. Without it, as in the unit tests, each library
-   * is the global its script defined, as before.
+   * is the global its script defined, as before. `preUpdateCopy` is the pinned copy from before
+   * #17's storage upgrade, which Settings > Data & Backup exports (#17 PR 1b).
    * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
    *   storageState?: any, recovery?: any, validateBackup?: any, searchIndexStore?: any, graphStore?: any,
-   *   syncStore?: any, startIndexer?: any, loader?: any}} [options]
+   *   syncStore?: any, startIndexer?: any, loader?: any, preUpdateCopy?: any}} [options]
    */
   constructor({
     kernel, documentClient, settings, ai, noteList, events = null, removal,
     storageState, recovery, validateBackup, searchIndexStore, graphStore, syncStore,
-    startIndexer = null, loader = null,
+    startIndexer = null, loader = null, preUpdateCopy,
   } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
@@ -151,6 +152,7 @@ class App {
     this.syncStore = syncStore;
     this.startIndexer = startIndexer;
     this.loader = loader;
+    this.preUpdateCopy = preUpdateCopy;
     this.editor = null;
     this.secondaryEditor = null;
     // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
@@ -330,18 +332,23 @@ class App {
       Themes.connect({ settings: this.settings });
 
       // The export notice decides now, before any note renders and before a first note exists
-      this.exportNotice = new ExportNotice({
+      const noticeDeps = {
         storageState: this.storageState,
         settings: this.settings,
         onExport: () => this.settingsController.exportAll(),
         onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
+      };
+      this.exportNotice = new ExportNotice(noticeDeps);
+      // #17 PR 1b: while the upgrade waits for free space, its notice takes the region instead
+      this.spaceNotice = new SpaceNotice(noticeDeps);
+      /** @param {any} notice */
+      const decide = (notice) => notice.isDue().catch((error) => {
+        console.error('Export notice: could not decide whether to show it', error);
+        return false;
       });
       const startupReads = Promise.all([
         Onboarding.hasCompleted(this.settings),
-        this.exportNotice.isDue().catch((error) => {
-          console.error('Export notice: could not decide whether to show it', error);
-          return false;
-        }),
+        decide(this.spaceNotice).then((spaceDue) => (spaceDue ? this.spaceNotice : decide(this.exportNotice).then((due) => (due ? this.exportNotice : null)))),
       ]);
 
       // Populate DOM cache after document is ready
@@ -425,10 +432,10 @@ class App {
       await this.initThemeBuilderController();
 
       // Check if we have notes to display
-      const [hasCompletedOnboarding, exportNoticeDue] = await startupReads;
+      const [hasCompletedOnboarding, dueNotice] = await startupReads;
       const runsOnboarding = this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding;
       // Before a note loads, so the note lays out once
-      if (exportNoticeDue && !runsOnboarding) this.showExportNotice();
+      if (dueNotice && !runsOnboarding) this.showExportNotice(dueNotice);
       if (runsOnboarding) {
         // First-run: show onboarding walkthrough
         await this.runOnboarding();
@@ -488,13 +495,15 @@ class App {
 
   /**
    * Show the one-time notice to export a copy before the next update changes
-   * how notes are stored (js/ui/export-notice.js), in #export-notice between
-   * the note's title and its blocks. Nothing here stops the new tab from starting.
+   * how notes are stored, or its space-blocked variant (js/ui/export-notice.js),
+   * in #export-notice between the note's title and its blocks. Nothing here
+   * stops the new tab from starting.
+   * @param {any} [notice] - the ExportNotice or SpaceNotice that's due
    * @returns {void}
    */
-  showExportNotice() {
+  showExportNotice(notice = this.exportNotice) {
     try {
-      this.exportNotice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
+      notice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
     } catch (error) {
       console.error('Export notice failed to show:', error);
     }
@@ -855,6 +864,19 @@ class App {
       loadLibrary: this.libraryLoader(),
       partReload: this.partReload(),
     });
+
+    // Settings > Data & Backup's copy from before the update (#17 PR 1b) reads its state each
+    // time Settings opens
+    const preUpdateSection = document.getElementById('pre-update-copy');
+    if (preUpdateSection && this.preUpdateCopy) {
+      this.preUpdateCopySection = new PreUpdateCopySection({
+        // The worker's record of its last run, read through the page's settings port
+        storage: { readSetting: async (key) => (await this.settings.workspaceData([key]))[key] },
+        copy: this.preUpdateCopy,
+      });
+      this.preUpdateCopySection.mount(preUpdateSection);
+      this.settingsController.onSettingsOpened = () => this.preUpdateCopySection.refresh();
+    }
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();

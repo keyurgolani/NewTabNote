@@ -1,8 +1,8 @@
 /**
  * A pre-migration recovery point as the file 1.4.1's Import reads (#17, "Recovery points"), so
  * a user can always go back to 1.4.1: `{version: 1, exportedAt, canvases, elements, media,
- * folders}`, the shape 1.4.1's exportAll writes and its Storage.importData takes. #17 PR 1b
- * puts it behind Settings > Data & Backup (Q8); nothing calls it yet.
+ * folders}`, the shape 1.4.1's exportAll writes and its Storage.importData takes. Settings >
+ * Data & Backup's Export Pre-Update Copy runs it (Q8), through the new tab's composition root.
  *
  * - `canvases`: every note 1.4.1's own export holds, which is every note outside trash,
  *   archived notes and templates included, with every field as the point copied it
@@ -102,6 +102,18 @@ export async function exportPoint({ indexedDB, keyRange, crypto, clock, pointId 
  * @returns {Promise<string | null>}
  */
 export async function exportablePoint({ indexedDB }) {
+  const point = await exportablePointRecord({ indexedDB });
+  return point ? point.id : null;
+}
+
+/**
+ * The newest verified pre-migration point, the pinned one first, as its record (ids, versions,
+ * times, and hashes, never content), or null. Settings > Data & Backup shows its `createdAt`.
+ * Makes no recovery database on a profile without one.
+ * @param {{indexedDB: IDBFactory}} options
+ * @returns {Promise<Point | null>}
+ */
+export async function exportablePointRecord({ indexedDB }) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) return null;
   try {
@@ -109,7 +121,7 @@ export async function exportablePoint({ indexedDB }) {
       point => point.kind === 'pre-migration' && point.status === 'verified',
     );
     const pinned = points.filter(point => point.pinned).pop();
-    return (pinned || points.pop() || { id: null }).id;
+    return pinned || points.pop() || null;
   } finally {
     recovery.close();
   }
