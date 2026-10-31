@@ -155,6 +155,8 @@ export const FAULT_CODES = Object.freeze([
   'legacy-secret',
   // Recovery readiness, messaging, and the registry's resolution report (slice 2's providers)
   'point-unverified',
+  // #17's recovery-point purge, stopped at a point that didn't verify (event-codes.js)
+  'purge-stopped',
   'unreachable',
   'contribution-unavailable',
   // A migration to the latest version not done yet, failed, or blocked, with version 8 still

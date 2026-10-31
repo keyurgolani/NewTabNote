@@ -27,11 +27,13 @@ import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/
 const openStartedAt = Date.now();
 
 /**
- * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
- * go to the diagnostic journal and raise their incidents in NewTabNoteTrust, which opens only
- * when the first one happens. Best effort: nothing here changes what the worker does or logs.
+ * The worker's failure events (#20, "Diagnostic journal"): a failed open, a failed capture, and
+ * a stopped recovery-point purge go to the diagnostic journal and raise their incidents in
+ * NewTabNoteTrust, which opens only when the first one happens. Best effort: nothing here
+ * changes what the worker does or logs.
  */
 const failureEvents = createFailureEvents({ surface: 'worker-internal' });
+
 
 // Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
 // reconcile now, not only at the next failure; with none held this reads one key and opens
@@ -42,9 +44,10 @@ failureEvents.reconcile();
  * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
  * after a verified recovery point, then opens the database and runs startup maintenance, and a
  * capture waits for all of it, except while an older build's open page blocks the upgrade.
- * Each run it makes goes to the journal as its own migration event (#20).
+ * Each run it makes goes to the journal as its own migration event (#20), and so does a purge
+ * of the recovery points that stopped, and its end (#17 PR 2b).
  */
-const kernel = createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event) });
+const kernel = createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event), events: failureEvents });
 
 // The worker's storage init: an open that failed is a storage incident now, not only when a
 // capture finds it

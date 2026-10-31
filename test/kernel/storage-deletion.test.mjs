@@ -25,6 +25,7 @@ import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js'
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
+  DELETED_AT,
   KeyRange,
   dump,
   legacyEnv,
@@ -42,6 +43,8 @@ import { CALLERS, NOW } from './support.mjs';
 const crypto = /** @type {any} */ (webcrypto);
 const FIXTURES = synthesized();
 const clock = { now: () => NOW };
+/** A minute after the run's point: when the note and the folder are deleted, and the sweep runs */
+const later = { now: () => DELETED_AT };
 
 /** One canary per place a note or a folder leaves its text */
 const CANARIES = Object.freeze({
@@ -143,7 +146,7 @@ async function onIndexedDb(of) {
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
-    clock,
+    clock: later,
   });
   await adapter.open();
   open.push(adapter);
@@ -168,7 +171,7 @@ async function onLegacy(of) {
 function kernelFor(adapter) {
   let count = 0;
   const ids = { next: () => `deletion-${(count += 1)}` };
-  return createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+  return createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
 }
 
 /**
@@ -219,7 +222,7 @@ const purge = of =>
     keyRange: KeyRange,
     locks: legacyEnv.createLockManager(),
     crypto,
-    clock,
+    clock: later,
     logger: { warn: (event, detail) => of.logs.push({ event, detail }) },
   });
 
@@ -312,7 +315,7 @@ describe('a note and a folder deleted for good leave nothing behind once the pur
       assert.deepEqual(otherRows(after), otherRows(deleted));
       for (const tombstone of recordsIn(after, 'CanvasTabDB', 'tombstones').map(record => record.value)) {
         assert.equal('purge' in tombstone, false, JSON.stringify(tombstone));
-        assert.equal(tombstone.purgedAt, NOW);
+        assert.equal(tombstone.purgedAt, DELETED_AT);
       }
 
       const { point, verdict, file } = await pinnedAndExport(of);

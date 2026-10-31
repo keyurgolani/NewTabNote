@@ -33,6 +33,9 @@ import { EVIDENCE_FIELDS } from './evidence.js';
 /** @typedef {import('./vocabulary.js').Severity} Severity */
 
 /**
+ * A success names the failure code whose incident it resolves (`resolves`), and a site that
+ * repeats while nothing changes is journaled once while its incident is open
+ * (`quietWhileOpen`), as `next`'s journal reads them (#20 slice 4's prerequisites)
  * @typedef {Readonly<{
  *   fields: readonly string[],
  *   incident?: Readonly<{providerId: string, faultCode: string, severity: Severity, affected?: readonly string[], preserved?: readonly string[]}>,
@@ -111,6 +114,18 @@ export const EVENT_CODES = Object.freeze({
   }),
   'diagnostics.rejected': Object.freeze({ fields: Object.freeze(['reason', 'count']) }),
   'diagnostics.exported': Object.freeze({ fields: Object.freeze(['records', 'bytes']) }),
+  // #17's recovery-point purge (purge.js): a sweep that stopped at a point that didn't verify,
+  // keyed by the point, which later sweeps back off on until the points change, and its end,
+  // once a later sweep finishes that point or the point goes
+  'storage.purge-stopped': Object.freeze({
+    fields: Object.freeze(['errorCode', 'subjectId', 'surface']),
+    incident: Object.freeze({ providerId: 'recovery-readiness', faultCode: 'purge-stopped', severity: 'degraded' }),
+    quietWhileOpen: true,
+  }),
+  'storage.purge-completed': Object.freeze({
+    fields: Object.freeze(['subjectId']),
+    resolves: 'storage.purge-stopped',
+  }),
 });
 
 /** Every registered code, sorted */
