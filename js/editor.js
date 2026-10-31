@@ -2782,6 +2782,8 @@ class BlockEditor {
   /**
    * Record a content-change undo entry with debouncing.
    * Groups rapid keystrokes into a single undo entry per block.
+   * A note loaded since empties the map with the undo history, so a group's timer that finds
+   * its group gone from the map does nothing, even on the same note opened again.
    * @param {string} blockId
    * @param {Object} beforeSnapshot - Snapshot taken before the first keystroke in this group
    */
@@ -2796,13 +2798,15 @@ class BlockEditor {
       this._contentUndoPending[blockId] = { timer: null, before: beforeSnapshot };
     }
 
-    this._contentUndoPending[blockId].timer = setTimeout(() => {
+    const group = this._contentUndoPending[blockId];
+    group.timer = setTimeout(() => {
+      if (this._contentUndoPending[blockId] !== group) return;
       const block = this.getBlockById(blockId);
       if (block) {
         this.pushUndo({
           type: 'content',
           blockId,
-          before: this._contentUndoPending[blockId].before,
+          before: group.before,
           after: this.snapshotBlock(block),
         });
       }
