@@ -11,8 +11,8 @@
  * Every provider is owned by #20, which builds it; the interim ones name, in INTERIM, the
  * issue whose real provider replaces each. Each lists in `observes` the faults its check can
  * see, so an answer that no longer reports one resolves its incident; a provider that only
- * reads settings observes none, and none observes `open-failed` or `write-failed`, which are
- * the records' and the failure sites' own.
+ * reads settings observes none, and none observes `write-failed`, the records' own. Storage
+ * observes `open-failed` for CanvasTabDB only.
  */
 
 /** @typedef {import('../../../kernel/registry/validate.js').Descriptor} Descriptor */
@@ -90,7 +90,7 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'Storage',
     operation: 'storage.probe-readwrite',
-    observes: ['quota', 'version-too-new', 'probe-failed'],
+    observes: ['quota', 'version-too-new', 'probe-failed', 'open-failed'],
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open', 'save-salvage-file'],

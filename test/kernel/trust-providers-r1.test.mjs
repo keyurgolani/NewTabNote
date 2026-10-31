@@ -141,7 +141,7 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
     const observed = Object.fromEntries(PROVIDERS.map(descriptor => [descriptor.id, descriptor.observes]));
     assert.deepEqual(observed, {
       capture: ['quota', 'version-too-new', 'probe-failed'],
-      storage: ['quota', 'version-too-new', 'probe-failed'],
+      storage: ['quota', 'version-too-new', 'probe-failed', 'open-failed'],
       'recovery-readiness': ['point-unverified'],
       backup: [],
       sync: [],
@@ -233,6 +233,7 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
       { faultCode: 'quota', subjectId: 'CanvasTabDB' },
       { faultCode: 'version-too-new', subjectId: 'CanvasTabDB' },
       { faultCode: 'probe-failed', subjectId: 'CanvasTabDB' },
+      { faultCode: 'open-failed', subjectId: 'CanvasTabDB' },
     ]);
     // A probe the disk refused looked only at what it reports
     of.faults.abortAfterNextWrite('canvases', 'QuotaExceededError');
@@ -250,6 +251,19 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
         `${descriptor.id} looked at ${JSON.stringify(run.looked)}`,
       );
     }
+  });
+
+  it("storage: a probe that opened CanvasTabDB resolves 1b's open-failed for it, and never the records' own for NewTabNoteTrust", async () => {
+    const of = freshProfile();
+    const { journal, records, clock, verify, stateOf } = await trustOn(of);
+    // The worker's storage init failed, as 1b journals it
+    journal.event('storage.open-failed', { subjectId: 'CanvasTabDB', errorCode: 'open-failed' });
+    await journal.flush();
+    await records.raise({ providerId: 'storage', faultCode: 'open-failed', subjectId: 'NewTabNoteTrust', severity: 'data-risk' });
+    clock.advance(1000);
+    await verify(['storage']);
+    assert.equal(await stateOf('storage/open-failed/CanvasTabDB'), 'resolved');
+    assert.equal(await stateOf('storage/open-failed/NewTabNoteTrust'), 'open');
   });
 
   it('credentials: the legacy-secret incident resolves once the key is cleared', async () => {

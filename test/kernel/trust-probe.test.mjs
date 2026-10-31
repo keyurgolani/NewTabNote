@@ -29,7 +29,7 @@ function run(id, context) {
     {
       id,
       operation: `${id}.probe`,
-      observes: ['quota', 'version-too-new', 'probe-failed'],
+      observes: id === 'storage' ? ['quota', 'version-too-new', 'probe-failed', 'open-failed'] : ['quota', 'version-too-new', 'probe-failed'],
       costClass: 'local-cheap',
       timeoutMs: 5000,
       freshnessMs: 60_000,
