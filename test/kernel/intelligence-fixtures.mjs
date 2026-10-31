@@ -336,6 +336,9 @@ export async function intelligenceWorld({
       }),
     );
 
+  /** @type {Map<string, Outcome>} what the port answered each commandId it committed or conflicted */
+  const portOutcomes = new Map();
+
   /** A test can hold every note command at this gate */
   const noteGate = { hold: /** @type {Promise<unknown> | null} */ (null) };
 
@@ -346,6 +349,11 @@ export async function intelligenceWorld({
     async setTodoChecked(command) {
       noteCalls.push({ ...command });
       if (noteGate.hold) await noteGate.hold;
+      // A commandId the port has answered gets that answer again, as #14's todo commands, keyed
+      // by their own small payload, will; the kernel's saveNoteContent fingerprints the whole
+      // block, which a later edit changes
+      const kept = portOutcomes.get(command.commandId);
+      if (kept) return kept;
       const read = await readNote(command.noteId);
       const block = read?.blocks.find(candidate => candidate.id === command.blockId);
       if (!read || !block)
@@ -356,13 +364,15 @@ export async function intelligenceWorld({
           messageKey: 'rejected.block-not-found',
           severity: 'warning',
         };
-      return kernel.execute({
+      const outcome = await kernel.execute({
         type: 'saveNoteContent',
         commandId: command.commandId,
         noteId: command.noteId,
         blocks: [{ ...block, checked: command.checked }],
         ...(command.expectedRevision === null ? {} : { expectedRevision: command.expectedRevision }),
       });
+      if (outcome.kind === 'committed' || outcome.kind === 'conflict') portOutcomes.set(command.commandId, outcome);
+      return outcome;
     },
   };
 

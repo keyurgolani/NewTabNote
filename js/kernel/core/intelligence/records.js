@@ -122,21 +122,28 @@ export const HISTORY_ACTIONS = Object.freeze(
 );
 
 /**
- * The top-level domains a bare `host.tld/path` counts as a link under, in lowercase, so a
- * file name such as `README.md/CHANGELOG.md` or `ASP.NET/Core` stays text: the common generic
- * and country ones, the ones link shorteners use, the reserved test ones, punycode, and any
- * non-ASCII one. A host with a port, a query, or a fragment is a link whatever its TLD.
+ * The top-level domains a bare `host.tld/path` counts as a link under, so a file name such as
+ * `README.md/CHANGELOG.md` stays text: the common generic and country ones, the ones link
+ * shorteners use, the reserved test ones, punycode, and any non-ASCII one. They match in any
+ * case, so `ASP.NET/Core` is redacted too: over-redacting is the safe side. A host path with
+ * a query or a fragment in it, and a host with a port, a query, or a fragment, are links
+ * whatever the TLD.
  */
 const TLDS =
   'com|net|org|edu|gov|mil|int|io|co|ai|app|dev|info|biz|me|us|uk|de|fr|es|it|nl|ru|cn|jp|in|br|au|ca|ch|se|no|fi|' +
   'dk|pl|cz|at|be|ie|nz|za|kr|tw|hk|sg|mx|ar|tr|ua|il|eu|xyz|online|site|tech|store|cloud|page|link|live|news|blog|' +
   'shop|ly|to|gg|gl|gd|sh|cc|tv|fm|so|ws|vc|ms|lc|li|lu|im|is|la|ga|cf|tk|ml|zip|top|click|mov|su|ir|vn|id|my|ph|' +
-  'th|pk|ng|ke|eg|sa|ae|example|test|invalid|local|localdomain|internal|onion';
+  'th|pk|ng|ke|eg|sa|ae|ro|pw|pt|gr|hu|sk|si|hr|rs|bg|lt|lv|ee|by|kz|uz|ge|az|cl|pe|ve|uy|ec|bo|py|cr|do|gt|' +
+  'pa|hn|sv|ni|cu|jm|tt|bd|lk|np|mm|kh|qa|kw|om|bh|jo|lb|ma|dz|tn|gh|tz|ug|zw|zm|et|cm|ci|sn|re|nc|pf|fj|ws|' +
+  'ac|ax|bz|cx|gs|io|nu|tl|cat|asia|mobi|name|pro|tel|travel|jobs|aero|coop|museum|' +
+  'example|test|invalid|local|localdomain|internal|onion';
 
 const LABEL = '[\\p{L}\\p{N}-]+';
 const TLD = `(?:${TLDS}|xn--[a-z0-9-]+|(?:(?![\\x00-\\x7f])\\p{L}){2,})`;
 const KNOWN_HOST = `(?:${LABEL}\\.)+${TLD}`;
 const ANY_HOST = `(?:${LABEL}\\.)+${LABEL}`;
+// A host whose last label is letters only, so `v1.2#3` and `3.14:15` stay text
+const NAMED_HOST = `(?:${LABEL}\\.)+\\p{L}{2,}`;
 const IPV4 = '\\d{1,3}(?:\\.\\d{1,3}){3}';
 const IPV6 = '\\[[0-9a-fA-F]*:[0-9a-fA-F:.]*\\]';
 const PORT = ':\\d{1,5}';
@@ -147,23 +154,25 @@ const BARE_START = '(?<![\\p{L}\\p{N}.-])';
 const SCHEME_START = '(?<![\\p{L}\\p{N}:._-])';
 
 /**
- * The patterns a link matches, each with its own flags. Schemes match in any case. Bare hosts
- * match case-sensitively, so a TLD has to be written in lowercase to count.
+ * The patterns a link matches, in any case:
  * - any `word:` followed by `//` or `\\` (`https://`, `chrome-extension://`), and a web scheme
- *   with one slash or backslash (`https:/x`)
+ *   with one slash or backslash (`https:/x`) or straight before a host (`https:evil.example`)
  * - a scheme that needs neither: `javascript:`, `vbscript:`, `mailto:`, `data:` with a media
  *   type, `file:/`, `blob:`, `magnet:?`, the browser's own `about:` pages, `tel:` and `sms:`
  *   with a number, `skype:`, `callto:`, `facetime:` and `irc:` with a target
  * - a `www.` host
  * - userinfo with a password before a host (`user:pw@host`), and a bracketed IPv6 host
- * - a bare host, IPv4 address, or `localhost` with a port, a query, or a fragment; or a known
- *   TLD, an IPv4 address, or `localhost` with a path; with any userinfo before it
+ * - any host (IPv4 of two to four parts included) whose path holds a query or a fragment
+ * - a named host, IPv4 address, or `localhost` with a port, a query, or a fragment
+ * - a known TLD, an IPv4 address, or `localhost` with a path
+ * each with any userinfo before it. Every quantifier that could run on is bounded by a
+ * character its neighbour can't take, so a check stays linear in the text's length.
  */
 const LINK_PATTERNS = Object.freeze([
   new RegExp(
     [
       `${SCHEME_START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\\\\\\\)\\S*`,
-      `${SCHEME_START}(?:https?|ftps?|wss?):[\\/\\\\]\\S+`,
+      `${SCHEME_START}(?:https?|ftps?|wss?):(?:[\\/\\\\]\\S+|${ANY_HOST}\\S*)`,
       `${SCHEME_START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
         'magnet:\\?\\S+|about:(?:blank|config|newtab|home|preferences|settings|debugging|addons|srcdoc)\\b\\S*|' +
         '(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|skype:[a-z0-9._-]+\\S*|callto:\\S+|facetime:[+\\d]\\S*|irc:\\S+)',
@@ -173,20 +182,24 @@ const LINK_PATTERNS = Object.freeze([
   ),
   new RegExp(
     [
-      `${BARE_START}${USER}:[^\\s@/]*@(?:${ANY_HOST}|${IPV4}|${IPV6}|localhost)(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
+      `${BARE_START}${USER}:[^\\s@/:]*@(?:${ANY_HOST}|${IPV4}|${IPV6}|localhost)(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
       `${BARE_START}${IPV6}(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
-      `${BARE_START}(?:${USER}@)?(?:${ANY_HOST}|${IPV4}|localhost)(?:${PORT}(?:[/?#\\\\]\\S*)?|[?#]\\S+)`,
+      `${BARE_START}(?:${USER}@)?${ANY_HOST}[/\\\\][^\\s?#]*[?#]\\S+`,
+      `${BARE_START}(?:${USER}@)?(?:${NAMED_HOST}|${IPV4}|localhost)(?:${PORT}(?:[/?#\\\\]\\S*)?|[?#]\\S+)`,
       `${BARE_START}(?:${USER}@)?(?:${KNOWN_HOST}|${IPV4}|localhost)[/\\\\]\\S*`,
     ].join('|'),
-    'gu',
+    'giu',
   ),
 ]);
 
 /** What a redacted link reads as */
 export const LINK_PLACEHOLDER = '[link]';
 
-/** Dots other scripts write, which a host can use in place of `.` */
-const OTHER_DOTS = /[。．｡]/g;
+/** Dots other scripts write (ideographic, fullwidth, halfwidth, one-dot leader, small), read as `.` */
+const OTHER_DOTS = /[。．｡․﹒]/g;
+
+/** Slashes other scripts write (fullwidth, division, fraction), read as `/` */
+const OTHER_SLASHES = /[／∕⁄]/g;
 
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 const IGNORABLES = /\p{Default_Ignorable_Code_Point}/gu;
@@ -194,10 +207,10 @@ const IGNORABLES = /\p{Default_Ignorable_Code_Point}/gu;
 /**
  * `text` as link matching reads it: every default-ignorable code point (zero-width
  * characters, joiners, bidi marks, variation selectors, tag characters, fillers) removed, and
- * the ideographic and fullwidth dots read as `.`
+ * other scripts' dots and slashes read as `.` and `/`
  * @param {string} text
  */
-const forMatching = text => text.replace(IGNORABLES, '').replace(OTHER_DOTS, '.');
+const forMatching = text => text.replace(IGNORABLES, '').replace(OTHER_DOTS, '.').replace(OTHER_SLASHES, '/');
 
 /** @param {string} text */
 const hasLink = text => {
@@ -256,7 +269,8 @@ export const plainText = max =>
   v.pipe(
     v.string(),
     v.maxLength(max),
-    v.check(text => !hasLink(text) && !hasControl(text), 'plain text with no URL'),
+    // Length first, so a text past the bound is never matched against the link patterns
+    v.check(text => text.length <= max && !hasLink(text) && !hasControl(text), 'plain text with no URL'),
   );
 
 /**
@@ -558,7 +572,7 @@ export const isDecision = value => v.is(decisionRecord, value);
 export const isCorrection = value => v.is(correctionRecord, value);
 
 /** The most of a source's text redaction reads, so a huge block can't make it slow */
-const MAX_SOURCE_TEXT = 4000;
+const MAX_SOURCE_TEXT = 1024;
 
 /**
  * `text` as plain text up to `max` characters: invisible characters removed and other dots
