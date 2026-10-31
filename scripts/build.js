@@ -49,6 +49,9 @@ const JS_FILES = [
   'js/lib/fuse.js',
   'js/lib/jszip.min.js',
   'js/search.js',
+  // The search indexer, which NotesManager.initIndexer starts with
+  // new Worker('js/workers/indexer.js'). Without it a packaged build never indexes a note's text.
+  'js/workers/indexer.js',
   'js/image-compression.js',
   'js/blocks.js',
   'js/editor.js',

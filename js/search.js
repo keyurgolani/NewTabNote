@@ -48,6 +48,8 @@ class SearchEngine {
         if (this.fuse) {
             keywordResults = this.fuse.search(query).map(result => ({
                 ...result.item,
+                // Search entries name their note as noteId, as the indexer writes them
+                id: result.item.noteId ?? result.item.id,
                 keywordScore: 1 - result.score, // Convert 0 (perfect) to 1 (perfect)
                 matches: result.matches
             }));
@@ -110,8 +112,9 @@ class SearchEngine {
      */
     getItemDataById(id) {
         if (!this.fuse) return { id };
-        const item = this.fuse._docs.find(doc => doc.id === id);
-        return item || { id };
+        // Its entry, which names the note as noteId, as a keyword match does
+        const item = this.fuse._docs.find(doc => (doc.noteId ?? doc.id) === id);
+        return item ? { ...item, id } : { id };
     }
 
     /**
