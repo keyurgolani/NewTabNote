@@ -82,7 +82,7 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
       assert.equal(entry.incident, undefined, `${code} raises an incident`);
       assert.ok(entry.fields.includes('schemaVersion'));
     }
-    for (const code of ['migration-required', 'space-short', 'schema-mismatch', 'recovery-point-unverified', 'point-missing', 'locks-unavailable']) {
+    for (const code of ['migration-required', 'space-short', 'schema-mismatch', 'recovery-point-unverified', 'point-missing', 'locks-unavailable', 'unknown-shape']) {
       assert.ok(ERROR_CODES.includes(code), `${code} isn't a registered error code`);
     }
     for (const fault of MIGRATION_FAULTS) assert.ok(FAULT_CODES.includes(fault));
@@ -396,4 +396,33 @@ describe("the migration state storage reads, and the worker's blocked marker (#2
       process.off('unhandledRejection', listen);
     }
   });
+
+  it('a storage area that throws as the attempt writes its marker, or reads the record after a run that never started, leaves the runner as without the throw', async () => {
+    const of = await profileAt8();
+    of.chrome.local[UPGRADE_BLOCKED_KEY] = { at: 1 };
+    const area = of.chrome.api.storage.local;
+    const throwing = {
+      get: (/** @type {string[]} */ keys) => area.get(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => {
+        if (UPGRADE_BLOCKED_KEY in items) throw new Error('storage gone');
+        return area.set(items);
+      },
+    };
+    assert.equal((await createWorkerClient(hostOf(of, { settings: throwing })).migration.done).status, 'migrated');
+
+    const locked = await profileAt8();
+    const locks = { request: () => { throw new DOMException('no locks', 'InvalidStateError'); } };
+    let reads = 0;
+    const reading = {
+      get: (/** @type {string[]} */ keys) => {
+        reads += 1;
+        if (reads > 1) throw new Error('storage gone');
+        return locked.chrome.api.storage.local.get(keys);
+      },
+      set: (/** @type {Record<string, unknown>} */ items) => locked.chrome.api.storage.local.set(items),
+    };
+    const ended = await createWorkerClient(hostOf(locked, { locks, settings: reading, version: '1.5.0' })).migration.done;
+    assert.equal(ended.status, 'failed');
+  });
 });
+
