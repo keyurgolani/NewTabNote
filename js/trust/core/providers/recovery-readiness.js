@@ -72,10 +72,10 @@ export const recoveryReadiness = Object.freeze({
     let failedCode = null;
     let failed = 0;
     for (const point of points) {
-      const verdict = await recovery.verify(point.id);
+      const verdict = /** @type {{ok: boolean, code?: string}} */ (await recovery.verify(point.id));
       if (!verdict.ok) {
         failed += 1;
-        if (failedCode === null) failedCode = verdict.code;
+        if (failedCode === null && typeof verdict.code === 'string') failedCode = verdict.code;
       }
     }
     const newestAt = Math.max(...points.map(point => /** @type {number} */ (point.verifiedAt)));
