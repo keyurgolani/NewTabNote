@@ -605,6 +605,30 @@ export async function keepVerified({ recovery, point, clock, io }) {
 }
 
 /**
+ * A run reuses verified `point`: any other verified point of its kind made before the same
+ * target is an older copy of what it holds, left by a run cut off after keepVerified saved the
+ * newer one and before it dropped the older (review B6 carry-over 1). Those go, as keepVerified
+ * would have dropped them, and when one of them was pinned the pin moves to `point` first, so a
+ * run cut off in between never leaves fewer pinned points.
+ * @param {{recovery: IDBDatabase, point: Point, io: Pick<Io, 'keyRange' | 'limits'>}} options
+ * @returns {Promise<Point>} `point`, pinned when it took a pin over
+ */
+export async function dropOlderCopies({ recovery, point, io }) {
+  const older = (await listPoints(recovery)).filter(
+    other =>
+      other.id !== point.id && other.kind === point.kind && other.status === 'verified' && other.target === point.target,
+  );
+  if (older.length === 0) return point;
+  let kept = point;
+  if (!point.pinned && older.some(other => other.pinned)) {
+    kept = { ...point, pinned: true };
+    await savePoint(recovery, kept, null);
+  }
+  for (const other of older) await discardPoint(recovery, other.id, io);
+  return kept;
+}
+
+/**
  * Whether `error` is the disk refusing a write
  * @param {unknown} error
  */

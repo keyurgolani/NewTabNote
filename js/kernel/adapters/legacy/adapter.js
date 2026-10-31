@@ -25,7 +25,13 @@
  * resend fixes: the page reloads to open it again.
  */
 
-import { STORAGE_EXCEPTIONS, UnavailableError, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import {
+  STORAGE_EXCEPTIONS,
+  UnavailableError,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../../core/contracts/outcomes.js';
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
@@ -61,6 +67,8 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {() => Promise<void>} createAutoBackup - 1.4.x's automatic backup, keeping the newest three
  * @property {(extra?: Record<string, unknown>) => Promise<Blob>} exportAllAsBlob - 1.4.x's export file, with `extra` fields
  * @property {string[]} missingStores - the stores the open database lacks
+ * @property {() => boolean} isUpgraded - whether the open database is at this build's version,
+ *   which since #17 PR 1b only the worker's run brings it to
  * @property {() => Promise<Record<string, unknown>>} exportRawStores - every store but settings, read as it is
  * @property {(data: unknown) => unknown} validateImport - a parsed backup's check, which writes nothing
  * @property {(listener: (notice: Readonly<{type: 'settings.changed', keys: readonly string[]}>) => void) => () => void} onSettingsChange
@@ -388,7 +396,10 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
     if (code === 'RECOVERY_COPY_FAILED') return unavailable('storage', 'recovery-copy-failed', true);
     const outcome = unavailableFrom(databaseError(error));
     // The storage exception's name, and never its message, so a diagnostic tells them apart
-    const name = typeof (/** @type {{name?: unknown}} */ (error || {}).name) === 'string' ? String(/** @type {any} */ (error).name) : '';
+    const name =
+      typeof (/** @type {{name?: unknown}} */ (error || {}).name) === 'string'
+        ? String(/** @type {any} */ (error).name)
+        : '';
     if (STORAGE_EXCEPTIONS.includes(name)) outcome.exception = name;
     return outcome;
   };

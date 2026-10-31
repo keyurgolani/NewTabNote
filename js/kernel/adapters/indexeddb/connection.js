@@ -1,35 +1,45 @@
 /**
  * One context's connection to CanvasTabDB (#17, "Transactions" and "Hosting"), opened one of
- * two ways, as #12's legacy adapter opens it:
- * - `versioned` (the new tab and the service worker): at this build's version, upgrading an
- *   older database by creating the stores it lacks, as Storage.open does. A version-8 database
- *   missing stores keeps them missing, and in a page the open first saves #33's recovery copy
- *   of it (recovery.js). A database without `canvases` or `elements` is refused then,
- *   `missing-core-stores`.
- * - `existing` (Popup and Side Panel): at whatever version is on disk, with no upgrade or
- *   repair. On a profile with no database it makes none, `no-database`.
+ * two ways:
+ * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 9. The
+ *   worker opens it so only once the migration runner (migrate.js) has brought the database
+ *   there after its verified recovery point, so this open finds nothing to upgrade. One that
+ *   does (a database made or replaced since the run) runs the registry's pending structural
+ *   steps in its `versionchange`, which only add, as the runner's would. A database without
+ *   `canvases` or `elements` is refused, `missing-core-stores`. In a page the open first saves
+ *   #33's recovery copy of a database missing stores (recovery.js), though no page opens it
+ *   this way since #17 PR 1b.
+ * - `existing` (Popup, Side Panel, and the worker when its run left the database as it was):
+ *   at whatever version is on disk, up to this build's, with no upgrade or repair. On a
+ *   profile with no database it makes none, `no-database`. With `requireCore` it refuses a
+ *   database without `canvases` or `elements` too, as the worker's captures need. With
+ *   `awaitUpgrade`, a page that finds no database, or one below this build's version, first
+ *   waits on it (#17, Q12): it wakes the worker and waits up to 5 seconds for its run, and the
+ *   open then goes ahead on what's there.
  * A database a newer build upgraded is refused either way, `newer-schema` `version-too-new`,
  * and left as it was.
  *
  * Opening never leaves its caller waiting: an open that hasn't finished within `openWithinMs`
- * (5 seconds), because another connection blocks its upgrade or for any other reason, lets
- * open() resolve and keeps waiting. Until it finishes, every call answers `blocked-upgrade`,
- * or `open-pending` for an open nothing reported blocked, both retryable, and once it opens,
- * calls go through. An open that fails, before open() answered or after, fails every call from
- * then on with its cause and code, not retryable, since nothing opens it again.
+ * (5 seconds, counted once any `awaitUpgrade` wait is over), because another connection blocks
+ * its upgrade or for any other reason, lets open() resolve and keeps waiting. Until it
+ * finishes, every call answers `blocked-upgrade`, or `open-pending` for an open nothing
+ * reported blocked, both retryable, and once it opens, calls go through. An open that fails,
+ * before open() answered or after, fails every call from then on with its cause and code, not
+ * retryable, since nothing opens it again.
  *
  * On versionchange the connection closes, so it never blocks another context's upgrade, and a
  * connection Chrome closes itself (the database deleted, or its storage failing) is gone too.
  * After either, and after close(), every call answers `reload-required`, which no resend
  * fixes: pages reload to open the database again (#17: "Pages ask for a reload"). #17 slice
- * 2 adds the journal that keeps what a closing connection couldn't commit, and the service
- * worker's reopen after its own upgrade.
+ * 2 adds the journal that keeps what a closing connection couldn't commit.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { openFailureOf } from './failures.js';
 import { writeMissingStoresCopy } from './recovery.js';
-import { CORE_STORES, DB_NAME, DB_VERSION, STORE_SCHEMAS, createMissingStores } from './schema.js';
+import { pendingStructural } from './registry.js';
+import { CORE_STORES, DB_NAME, DB_VERSION, LEGACY_VERSION, STORE_SCHEMAS } from './schema.js';
+import { openWithoutUpgrade } from './shapes.js';
 
 /** @typedef {'versioned' | 'existing'} OpenMode */
 /** @typedef {import('./adapter.js').SettingsStore} SettingsStore */
@@ -64,14 +74,57 @@ import { CORE_STORES, DB_NAME, DB_VERSION, STORE_SCHEMAS, createMissingStores } 
  * @property {() => ConnectionState} state
  */
 
+/**
+ * @typedef {object} ConnectionOptions
+ * @property {IDBFactory} indexedDB
+ * @property {OpenMode} mode
+ * @property {number} [openWithinMs]
+ * @property {Recovery | null} [recovery]
+ * @property {boolean} [requireCore] - an `existing` open refuses a database without `canvases` or `elements`
+ * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
+ *   What an `existing` open waits on first when it finds no database, or one below this
+ *   build's version. It never rejects: a page passes its wait on the worker's run.
+ */
+
 /** How long open() waits before it answers for an open that hasn't finished (#17: "within 5 seconds") */
 export const OPEN_WITHIN_MS = 5000;
 
 /**
- * @param {{indexedDB: IDBFactory, mode: OpenMode, openWithinMs?: number, recovery?: Recovery | null}} options
+ * Runs the registry's pending structural steps in an upgrade's `versionchange`, synchronously,
+ * from 8 for no database and every legacy shape, since step 9 adds whatever legacy store is
+ * missing. Anything a step throws aborts the upgrade.
+ * @param {IDBOpenDBRequest} request
+ * @param {number} oldVersion
+ */
+function upgradeThroughRegistry(request, oldVersion) {
+  const db = request.result;
+  const tx = /** @type {IDBTransaction} */ (request.transaction);
+  try {
+    for (const step of pendingStructural(Math.max(LEGACY_VERSION, oldVersion), DB_VERSION)) {
+      step.apply(db, tx, { logicalVersion: null });
+    }
+  } catch (error) {
+    try {
+      tx.abort();
+    } catch {
+      // Already aborted
+    }
+    throw error;
+  }
+}
+
+/**
+ * @param {ConnectionOptions} options
  * @returns {Connection}
  */
-export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_MS, recovery = null }) {
+export function createConnection({
+  indexedDB,
+  mode,
+  openWithinMs = OPEN_WITHIN_MS,
+  recovery = null,
+  requireCore = false,
+  awaitUpgrade = null,
+}) {
   /** @type {ConnectionState} */
   let state = 'closed';
   /** @type {IDBDatabase | null} */
@@ -126,14 +179,14 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
       }
       // An older database gets the stores it lacks from the upgrade, and so needs no copy
       let upgraded = false;
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = event => {
         // An existing open makes no database, and changes none
         if (mode === 'existing') {
           if (request.transaction) request.transaction.abort();
           return;
         }
         upgraded = true;
-        createMissingStores(request.result);
+        upgradeThroughRegistry(request, event.oldVersion);
       };
       request.onblocked = () => {
         if (state === 'opening') state = 'blocked';
@@ -150,7 +203,10 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
           reject(new UnavailableError('storage', 'reload-required', false));
           return;
         }
-        if (mode === 'versioned' && CORE_STORES.some(name => !database.objectStoreNames.contains(name))) {
+        if (
+          (mode === 'versioned' || requireCore) &&
+          CORE_STORES.some(name => !database.objectStoreNames.contains(name))
+        ) {
           database.close();
           fail(new UnavailableError('storage', 'missing-core-stores', false));
           return;
@@ -170,8 +226,8 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
           fail(new UnavailableError('newer-schema', 'version-too-new', false));
           return;
         }
-        // A version-8 database missing stores keeps them missing, as Storage.open keeps them,
-        // and a page saves a copy of it first, even of one it then refuses (recovery.js)
+        // A database missing stores keeps them missing, and a page's versioned open saves a copy
+        // of it first, even of one it then refuses (recovery.js)
         const missing =
           recovery && !upgraded
             ? Object.keys(STORE_SCHEMAS).filter(name => !database.objectStoreNames.contains(name))
@@ -203,6 +259,47 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
       };
     });
 
+  /**
+   * connect(), answering within openWithinMs
+   * @returns {Promise<void>}
+   */
+  const connectWithin = () => {
+    const connected = connect();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, openWithinMs);
+      connected.then(
+        () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        },
+        error => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  };
+
+  /**
+   * An `existing` open with `awaitUpgrade` waits on it first when there's no database or one
+   * below this build's version. A failed look goes straight on to the open, which says why.
+   * @param {() => Promise<unknown>} wait
+   * @returns {Promise<void>}
+   */
+  const waitForUpgrade = async wait => {
+    let version = 0;
+    try {
+      const found = await openWithoutUpgrade(indexedDB, DB_NAME);
+      if (found) {
+        version = found.version;
+        found.close();
+      }
+    } catch {
+      return;
+    }
+    if (version < DB_VERSION) await wait();
+  };
+
   return Object.freeze({
     open() {
       if (opening) return opening;
@@ -213,20 +310,16 @@ export function createConnection({ indexedDB, mode, openWithinMs = OPEN_WITHIN_M
         return opening;
       }
       state = 'opening';
-      const connected = connect();
-      opening = new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, openWithinMs);
-        connected.then(
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          error => {
-            clearTimeout(timer);
-            reject(error);
-          },
-        );
-      });
+      opening =
+        mode === 'existing' && awaitUpgrade
+          ? waitForUpgrade(awaitUpgrade).then(() => {
+              // close() while it waited: it opens nothing
+              if (/** @type {ConnectionState} */ (state) === 'gone') {
+                throw new UnavailableError('storage', 'reload-required', false);
+              }
+              return connectWithin();
+            })
+          : connectWithin();
       // Once open() has answered, a later failure is answered by database()
       opening.catch(() => {});
       return opening;
