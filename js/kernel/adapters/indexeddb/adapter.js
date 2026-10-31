@@ -47,13 +47,13 @@
  * - atomicMultiStore: true, since a command is one transaction.
  * - revisions: true. Each note has a content revision, a placement version, and a source
  *   revision (versions.js), and a command that expects another is a conflict.
- * - idempotency: true, on a database at version 10, for commands made of units: their outcome
- *   is kept in the ledger in the commit's own transaction. Settings commands and startup
- *   maintenance write to chrome.storage.local, outside any IndexedDB transaction, so they keep
- *   none, and a resend writes the same values again. A bulk command's key is reserved in
- *   memory, in this adapter, from its first recall, since recall is synchronous: another
- *   context, or this one after the worker restarts, doesn't see the reservation, though each
- *   of the bulk command's items still answers from its own ledger row.
+ * - idempotency: true, on a database at version 10, for catalog commands made of units: their
+ *   outcome is kept in the ledger in the commit's own transaction. Settings commands and
+ *   startup maintenance write to chrome.storage.local, outside any IndexedDB transaction, so
+ *   they keep none, and a resend writes the same values again. A bulk command's key is
+ *   reserved in memory, in this adapter, from its first recall, since recall is synchronous:
+ *   another context, or this one after the worker restarts, doesn't see the reservation,
+ *   though each of the bulk command's items still answers from its own ledger row.
  *
  * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
  * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
