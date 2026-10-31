@@ -1,0 +1,15 @@
+{
+  "rule": "build/budgets.json doesn't parse",
+  "expect": [
+    "budget/file"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "append": "\n}\n"
+    }
+  ]
+}

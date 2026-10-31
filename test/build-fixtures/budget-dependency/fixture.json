@@ -1,0 +1,16 @@
+{
+  "rule": "the new tab's row stops allowing a package its graph holds (#27 AC3)",
+  "expect": [
+    "budget/dependency"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"dependencies\": [\"@xenova/transformers\", \"chart.js\", \"fuse.js\", \"jszip\", \"valibot\"]",
+      "with": "\"dependencies\": [\"@xenova/transformers\", \"chart.js\", \"fuse.js\", \"jszip\"]"
+    }
+  ]
+}
