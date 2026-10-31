@@ -1,10 +1,11 @@
 /**
  * CanvasTabDB's ten legacy stores, as 1.4.x has stored them since version 8 (#17, "Data and
- * migration"), and the version this build opens it at. Since #17 PR 1b that's structural
- * version 9 (registry.js's step 9: every legacy store, then `meta` and `migrations`), which
- * only the service worker upgrades to, through the migration runner (migrate.js) after a
- * verified recovery point. Every legacy store, index, and record stays as it was, since 1.3.0
- * and 1.4.0 delete the whole database when one is missing.
+ * migration"), and the version this build opens it at: structural version 10 since #17 PR 2a
+ * (registry.js's step 9: every legacy store, then `meta` and `migrations`; step 10: the
+ * `operations`, `changes`, `conflicts`, and `tombstones` stores), which only the service worker
+ * upgrades to, through the migration runner (migrate.js) after a verified recovery point.
+ * Every legacy store, index, and record stays as it was, since 1.3.0 and 1.4.0 delete the
+ * whole database when one is missing.
  */
 
 /** @typedef {import('../../core/ports/repository.js').StoreName} StoreName */
@@ -16,7 +17,7 @@ export const DB_NAME = 'CanvasTabDB';
  * LATEST_STRUCTURAL and js/storage.js's dbVersion (test/kernel/storage-open.test.mjs keeps the
  * three equal). A database at a later one was upgraded by a newer build and is refused.
  */
-export const DB_VERSION = 9;
+export const DB_VERSION = 10;
 
 /** The last version before `meta`, which every release from 1.3.0 to 1.4.1 opens at */
 export const LEGACY_VERSION = 8;

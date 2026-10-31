@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
 import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import { faultyFactory } from './storage-faults.mjs';
 import { NOW } from './support.mjs';
@@ -46,12 +47,13 @@ export function synthesized() {
 }
 
 /**
- * The expected file for fixture `id` after the registry runs to 9
+ * The expected file for fixture `id` after the registry runs to this build's newest structural
+ * version (10 since #17 PR 2a)
  * @param {string} id
  * @returns {Fixture}
  */
 export function expectedFor(id) {
-  return JSON.parse(fs.readFileSync(path.join(FIXTURES, 'expected', `${id}.v9.json`), 'utf8'));
+  return JSON.parse(fs.readFileSync(path.join(FIXTURES, 'expected', `${id}.v${LATEST_STRUCTURAL}.json`), 'utf8'));
 }
 
 /**

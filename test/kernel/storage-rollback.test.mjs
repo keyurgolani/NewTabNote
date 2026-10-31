@@ -41,7 +41,7 @@ async function rollBack(of, tag) {
   return { error: await legacyEnv.runUntil(env, ended), Storage };
 }
 
-describe('a profile migrated to 9, opened by a 1.4.x build', () => {
+describe('a profile migrated to 10, opened by a 1.4.x build', () => {
   for (const id of CASES) {
     for (const tag of ['v1.4.0', 'v1.4.1']) {
       it(`${id}, then ${tag}: refused, and nothing changed or deleted`, async () => {
@@ -96,7 +96,7 @@ async function refusedUnchanged(of, tag) {
   return keys;
 }
 
-describe('a profile with backups, migrated to 9, opened by a 1.4.x build', async () => {
+describe('a profile with backups, migrated to 10, opened by a 1.4.x build', async () => {
   const maximal = maximalFixture(await productionInputs()).fixture;
   const cases = [...WITH_BACKUPS, maximal];
   it('has a fixture recorded from v1.3.0 and one from v1.4.0', () => {

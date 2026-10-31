@@ -61,8 +61,8 @@ describeRegistryConformance('remediation catalog (#20 slice 3)', {
 async function profileCenter(id, { prepare, hooks } = {}) {
   const of = await profileWith(/** @type {any} */ (FIXTURES.get(id)));
   if (prepare) await prepare(of);
-  // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
-  // before #17's adapter opens it versioned
+  // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+  // build's version before #17's adapter opens it versioned
   assert.equal((await run(of)).status, 'migrated');
   const clock = manualClock();
   const locks = runLocks();
@@ -265,8 +265,8 @@ describe('recover-orphans: "Recover N blocks into a new Inbox note" (#20, refine
 
   it('short of space for the point, it changes nothing and says why', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.orphans')));
-    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
-    // before #17's adapter opens it versioned
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+    // build's version before #17's adapter opens it versioned
     assert.equal((await run(of)).status, 'migrated');
     const before = await legacyEnv.dumpDatabase(of.real);
     const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });

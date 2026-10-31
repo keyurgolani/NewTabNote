@@ -1,9 +1,9 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v9.basic.v9",
-    "purpose": "After the registry runs to 9 on v9.basic.",
-    "shape": "v9",
+    "id": "v10.basic.v10",
+    "purpose": "After the registry runs to 10 on v10.basic.",
+    "shape": "v10",
     "releases": [],
     "provenance": "synthesized",
     "source": {
@@ -11,8 +11,8 @@
       "seed": 1
     },
     "schema": {
-      "idbVersion": 9,
-      "structuralVersion": 9,
+      "idbVersion": 10,
+      "structuralVersion": 10,
       "logicalVersion": 1
     },
     "degraded": [],
@@ -21,7 +21,7 @@
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 9,
+      "version": 10,
       "stores": [
         {
           "name": "canvases",
@@ -43,9 +43,9 @@
           ],
           "records": [
             {
-              "key": "1760000319589-g3svn33vh",
+              "key": "1760000357297-1uesyo3ar",
               "value": {
-                "id": "1760000319589-g3svn33vh",
+                "id": "1760000357297-1uesyo3ar",
                 "name": "Groceries",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -61,7 +61,7 @@
                 "isDaily": false,
                 "dateStr": null,
                 "isTemplate": false,
-                "folderId": "1760000325367-jqpd1uuk3",
+                "folderId": "1760000362332-semporsn8",
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -70,13 +70,16 @@
                 "settings": {
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
-                }
+                },
+                "revision": 3,
+                "placementVersion": 1,
+                "sourceRevision": 2
               }
             },
             {
-              "key": "1760000321467-7knwzpqfj",
+              "key": "1760000358419-zqjyo9c6r",
               "value": {
-                "id": "1760000321467-7knwzpqfj",
+                "id": "1760000358419-zqjyo9c6r",
                 "name": "Reading list",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -101,13 +104,16 @@
                 "settings": {
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
-                }
+                },
+                "revision": 1,
+                "placementVersion": 0,
+                "sourceRevision": 0
               }
             },
             {
-              "key": "1760000322967-g6bh258cl",
+              "key": "1760000359881-j60k7q8k8",
               "value": {
-                "id": "1760000322967-g6bh258cl",
+                "id": "1760000359881-j60k7q8k8",
                 "name": "Old plans",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -136,9 +142,9 @@
               }
             },
             {
-              "key": "1760000324202-8f6u70xkb",
+              "key": "1760000361210-umiouxtkd",
               "value": {
-                "id": "1760000324202-8f6u70xkb",
+                "id": "1760000361210-umiouxtkd",
                 "name": "Thrown away",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -169,9 +175,9 @@
               }
             },
             {
-              "key": "1760000326726-rmn5p8wab",
+              "key": "1760000363357-1bbf26lvk",
               "value": {
-                "id": "1760000326726-rmn5p8wab",
+                "id": "1760000363357-1bbf26lvk",
                 "name": "Meeting template",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -202,6 +208,120 @@
           ]
         },
         {
+          "name": "changes",
+          "keyPath": [
+            "seq",
+            "entityType",
+            "entityId"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "entity",
+              "keyPath": [
+                "entityType",
+                "entityId"
+              ],
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": [
+                1,
+                "note",
+                "1760000358419-zqjyo9c6r"
+              ],
+              "value": {
+                "seq": 1,
+                "entityType": "note",
+                "entityId": "1760000358419-zqjyo9c6r",
+                "revision": 1,
+                "opId": "1760000373584-ghd9fsr5j",
+                "ops": []
+              }
+            },
+            {
+              "key": [
+                2,
+                "note",
+                "1760000357297-1uesyo3ar"
+              ],
+              "value": {
+                "seq": 2,
+                "entityType": "note",
+                "entityId": "1760000357297-1uesyo3ar",
+                "revision": 2,
+                "opId": "1760000383900-e7r7ki2ug",
+                "ops": []
+              }
+            },
+            {
+              "key": [
+                3,
+                "note",
+                "1760000357297-1uesyo3ar"
+              ],
+              "value": {
+                "seq": 3,
+                "entityType": "note",
+                "entityId": "1760000357297-1uesyo3ar",
+                "revision": 3,
+                "opId": "1760000375237-3k04c9ln7",
+                "ops": []
+              }
+            }
+          ]
+        },
+        {
+          "name": "conflicts",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000376673-v9jvn1ktb",
+              "value": {
+                "id": "1760000376673-v9jvn1ktb",
+                "noteId": "1760000357297-1uesyo3ar",
+                "scope": "content",
+                "expected": 2,
+                "current": 3,
+                "at": 1760000004000,
+                "command": {
+                  "type": "saveNoteContent",
+                  "commandId": "1760000376673-v9jvn1ktb",
+                  "noteId": "1760000357297-1uesyo3ar",
+                  "blocks": [
+                    {
+                      "id": "stale-b1",
+                      "type": "text",
+                      "content": "A stale draft",
+                      "indentLevel": 0,
+                      "checked": false,
+                      "imageUrl": null,
+                      "calloutIcon": "💡",
+                      "createdAt": 1760000000000,
+                      "updatedAt": 1760000000000,
+                      "canvasId": "1760000357297-1uesyo3ar",
+                      "order": 0
+                    }
+                  ],
+                  "expectedRevision": 2
+                }
+              }
+            }
+          ]
+        },
+        {
           "name": "elements",
           "keyPath": "id",
           "autoIncrement": false,
@@ -221,9 +341,9 @@
           ],
           "records": [
             {
-              "key": "1760000327903-8azj4gnj9",
+              "key": "1760000364590-wcddf5dlb",
               "value": {
-                "id": "1760000327903-8azj4gnj9",
+                "id": "1760000364590-wcddf5dlb",
                 "type": "text",
                 "content": "Milk and eggs",
                 "indentLevel": 0,
@@ -232,14 +352,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000319589-g3svn33vh",
+                "canvasId": "1760000357297-1uesyo3ar",
                 "order": 0
               }
             },
             {
-              "key": "1760000329053-klxin69gg",
+              "key": "1760000365961-ss233kbyh",
               "value": {
-                "id": "1760000329053-klxin69gg",
+                "id": "1760000365961-ss233kbyh",
                 "type": "todo",
                 "content": "Bread",
                 "indentLevel": 0,
@@ -248,14 +368,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000319589-g3svn33vh",
+                "canvasId": "1760000357297-1uesyo3ar",
                 "order": 1
               }
             },
             {
-              "key": "1760000330132-1225rjlz1",
+              "key": "1760000367516-q2de42d3u",
               "value": {
-                "id": "1760000330132-1225rjlz1",
+                "id": "1760000367516-q2de42d3u",
                 "type": "text",
                 "content": "A long book",
                 "indentLevel": 0,
@@ -264,14 +384,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000321467-7knwzpqfj",
+                "canvasId": "1760000358419-zqjyo9c6r",
                 "order": 0
               }
             },
             {
-              "key": "1760000331647-vyvycs4go",
+              "key": "1760000368640-7yrnuzpon",
               "value": {
-                "id": "1760000331647-vyvycs4go",
+                "id": "1760000368640-7yrnuzpon",
                 "type": "text",
                 "content": "Ideas from last year",
                 "indentLevel": 0,
@@ -280,14 +400,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000322967-g6bh258cl",
+                "canvasId": "1760000359881-j60k7q8k8",
                 "order": 0
               }
             },
             {
-              "key": "1760000332804-8cjnz1kcs",
+              "key": "1760000370579-m8u2vqasc",
               "value": {
-                "id": "1760000332804-8cjnz1kcs",
+                "id": "1760000370579-m8u2vqasc",
                 "type": "text",
                 "content": "Not needed",
                 "indentLevel": 0,
@@ -296,7 +416,7 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000324202-8f6u70xkb",
+                "canvasId": "1760000361210-umiouxtkd",
                 "order": 0
               }
             }
@@ -322,9 +442,9 @@
           ],
           "records": [
             {
-              "key": "1760000325367-jqpd1uuk3",
+              "key": "1760000362332-semporsn8",
               "value": {
-                "id": "1760000325367-jqpd1uuk3",
+                "id": "1760000362332-semporsn8",
                 "name": "Home",
                 "parentId": null,
                 "createdAt": 1760000000000,
@@ -355,11 +475,11 @@
           ],
           "records": [
             {
-              "key": "1760000335551-yi6hdx1lo",
+              "key": "1760000379709-fow66ua61",
               "value": {
-                "id": "1760000335551-yi6hdx1lo",
-                "fromNoteId": "1760000319589-g3svn33vh",
-                "toNoteId": "1760000321467-7knwzpqfj",
+                "id": "1760000379709-fow66ua61",
+                "fromNoteId": "1760000357297-1uesyo3ar",
+                "toNoteId": "1760000358419-zqjyo9c6r",
                 "createdAt": 1760000000000
               }
             }
@@ -379,10 +499,10 @@
           ],
           "records": [
             {
-              "key": "1760000334428-99cdqq6l1",
+              "key": "1760000372038-mm07pfopv",
               "value": {
-                "id": "1760000334428-99cdqq6l1",
-                "canvasId": "1760000319589-g3svn33vh",
+                "id": "1760000372038-mm07pfopv",
+                "canvasId": "1760000357297-1uesyo3ar",
                 "blob": {
                   "$type": "Blob",
                   "mime": "image/png",
@@ -401,10 +521,18 @@
           "indexes": [],
           "records": [
             {
+              "key": "changes",
+              "value": {
+                "key": "changes",
+                "head": 3,
+                "floor": 0
+              }
+            },
+            {
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 9,
+                "structuralVersion": 10,
                 "logicalVersion": 1
               }
             }
@@ -419,6 +547,22 @@
           "autoIncrement": false,
           "indexes": [],
           "records": [
+            {
+              "key": [
+                "structural-10",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-10",
+                "from": 9,
+                "to": 10,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
             {
               "key": [
                 "structural-9",
@@ -438,51 +582,119 @@
           ]
         },
         {
+          "name": "operations",
+          "keyPath": "opId",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "at",
+              "keyPath": "at",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000373584-ghd9fsr5j",
+              "value": {
+                "opId": "1760000373584-ghd9fsr5j",
+                "digest": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "outcome": {
+                  "kind": "committed",
+                  "code": "note-created",
+                  "changedIds": [
+                    "1760000358419-zqjyo9c6r"
+                  ],
+                  "revision": 1,
+                  "commitSeq": 1,
+                  "messageKey": "committed.note-created",
+                  "severity": "success"
+                },
+                "at": 1760000001000
+              }
+            },
+            {
+              "key": "1760000375237-3k04c9ln7",
+              "value": {
+                "opId": "1760000375237-3k04c9ln7",
+                "digest": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+                "outcome": {
+                  "kind": "committed",
+                  "code": "content-saved",
+                  "changedIds": [
+                    "1760000357297-1uesyo3ar"
+                  ],
+                  "revision": 3,
+                  "commitSeq": 3,
+                  "messageKey": "committed.content-saved",
+                  "severity": "success"
+                },
+                "at": 1760000003000
+              }
+            },
+            {
+              "key": "1760000376673-v9jvn1ktb",
+              "value": {
+                "opId": "1760000376673-v9jvn1ktb",
+                "digest": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+                "outcome": {
+                  "kind": "conflict",
+                  "code": "revision-conflict",
+                  "currentRevision": 3,
+                  "messageKey": "conflict.revision-conflict",
+                  "severity": "warning"
+                },
+                "at": 1760000004000
+              }
+            }
+          ]
+        },
+        {
           "name": "search_index",
           "keyPath": "noteId",
           "autoIncrement": false,
           "indexes": [],
           "records": [
             {
-              "key": "1760000319589-g3svn33vh",
+              "key": "1760000357297-1uesyo3ar",
               "value": {
-                "noteId": "1760000319589-g3svn33vh",
+                "noteId": "1760000357297-1uesyo3ar",
                 "name": "Groceries",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000321467-7knwzpqfj",
+              "key": "1760000358419-zqjyo9c6r",
               "value": {
-                "noteId": "1760000321467-7knwzpqfj",
+                "noteId": "1760000358419-zqjyo9c6r",
                 "name": "Reading list",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000322967-g6bh258cl",
+              "key": "1760000359881-j60k7q8k8",
               "value": {
-                "noteId": "1760000322967-g6bh258cl",
+                "noteId": "1760000359881-j60k7q8k8",
                 "name": "Old plans",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000324202-8f6u70xkb",
+              "key": "1760000361210-umiouxtkd",
               "value": {
-                "noteId": "1760000324202-8f6u70xkb",
+                "noteId": "1760000361210-umiouxtkd",
                 "name": "Thrown away",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000326726-rmn5p8wab",
+              "key": "1760000363357-1bbf26lvk",
               "value": {
-                "noteId": "1760000326726-rmn5p8wab",
+                "noteId": "1760000363357-1bbf26lvk",
                 "name": "Meeting template",
                 "content": "",
                 "updatedAt": 1760000000000
@@ -517,10 +729,10 @@
           ],
           "records": [
             {
-              "key": "1760000338444-uoedi8wl2",
+              "key": "1760000382187-8i9wv81ck",
               "value": {
-                "id": "1760000338444-uoedi8wl2",
-                "noteId": "1760000319589-g3svn33vh",
+                "id": "1760000382187-8i9wv81ck",
+                "noteId": "1760000357297-1uesyo3ar",
                 "timestamp": 1760000300000,
                 "blocks": [
                   {
@@ -533,7 +745,7 @@
                     "calloutIcon": "💡",
                     "createdAt": 1760000000000,
                     "updatedAt": 1760000000000,
-                    "canvasId": "1760000319589-g3svn33vh",
+                    "canvasId": "1760000357297-1uesyo3ar",
                     "order": 0
                   }
                 ],
@@ -562,9 +774,9 @@
           ],
           "records": [
             {
-              "key": "1760000336838-ipg4entci",
+              "key": "1760000381089-4tnw1jqer",
               "value": {
-                "id": "1760000336838-ipg4entci",
+                "id": "1760000381089-4tnw1jqer",
                 "name": "Dusk",
                 "properties": {
                   "--bg-primary": "#101820",
@@ -576,16 +788,48 @@
           ]
         },
         {
+          "name": "tombstones",
+          "keyPath": [
+            "entityType",
+            "id"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "purge",
+              "keyPath": "purge",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": [
+                "note",
+                "1760000377808-2k5trwxxk"
+              ],
+              "value": {
+                "entityType": "note",
+                "id": "1760000377808-2k5trwxxk",
+                "deletedAt": 1760000002000,
+                "lastRevision": 2,
+                "seq": null,
+                "reason": "deleted"
+              }
+            }
+          ]
+        },
+        {
           "name": "vectors",
           "keyPath": "id",
           "autoIncrement": false,
           "indexes": [],
           "records": [
             {
-              "key": "1760000319589-g3svn33vh",
+              "key": "1760000357297-1uesyo3ar",
               "value": {
-                "id": "1760000319589-g3svn33vh",
-                "noteId": "1760000319589-g3svn33vh",
+                "id": "1760000357297-1uesyo3ar",
+                "noteId": "1760000357297-1uesyo3ar",
                 "vector": [
                   0.125,
                   -0.5,

@@ -55,8 +55,8 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
     const of = freshProfile();
     await legacyEnv.createDatabase(of.real, { records: { canvases: [NOTE], elements: [BLOCK] } });
     of.chrome.local.setting_dailyNoteTemplate = null;
-    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
-    // before #17's adapter opens it versioned
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+    // build's version before #17's adapter opens it versioned
     assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
@@ -73,8 +73,8 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
     const of = freshProfile();
     const squatter = { id: PROBE_KEY, name: 'Mine' };
     await legacyEnv.createDatabase(of.real, { records: { canvases: [squatter] } });
-    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
-    // before #17's adapter opens it versioned
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+    // build's version before #17's adapter opens it versioned
     assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
