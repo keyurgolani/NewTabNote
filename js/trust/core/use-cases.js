@@ -188,8 +188,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     const recorded = await records.record(run.receipt);
     let complete = recorded.recorded;
     for (const fault of run.faults) {
+      // Held isn't stored: the check answers not recorded until a write stores it
       const raised = await records.raise(fault);
-      if (!raised.recorded && !raised.held) complete = false;
+      if (!raised.recorded) complete = false;
     }
     if (!recorded.recorded) return { receipt: null, complete: false };
     const { receipt } = recorded;
@@ -215,6 +216,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       try {
         const all = await statuses(now);
         const open = (await records.incidents()).filter(incident => incident.state !== 'resolved');
+        // Writes failing, or a settings copy that couldn't be read: another context may hold
+        // something, so nothing is called safe and something needs action
+        const blind = records.state() === 'fallback' || !records.copyRead();
         const needsAction = open.filter(incident => !incident.dismissed);
         const core = all.filter(({ provider }) => provider.core);
         const fresh = core.filter(({ status }) => status !== 'stale');
@@ -223,7 +227,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
           open.some(incident => incident.severity === 'capture-risk');
         const safe = fresh.some(({ receipt }) => receipt && receipt.capture === 'safe');
         const storageDown =
-          records.state() === 'fallback' ||
+          blind ||
           all.some(({ provider, status }) => provider.id === 'storage' && status === 'failed') ||
           open.some(incident => incident.providerId === 'storage' && incident.faultCode === 'open-failed');
         const groups = HEALTH_GROUPS.map(group => {
@@ -240,9 +244,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         const summary = {
           worstCore: worstStatus(core.map(({ status }) => status)),
           // While writes fail, nothing proves capture safe
-          capture: atRisk ? 'at-risk' : safe && records.state() !== 'fallback' ? 'safe' : 'unknown',
-          // While writes fail, something always needs action, whatever the timestamps say
-          actionRequired: Math.max(needsAction.length, records.state() === 'fallback' ? 1 : 0),
+          capture: atRisk ? 'at-risk' : safe && !blind ? 'safe' : 'unknown',
+          // While writes fail, or the copy can't be read, something always needs action
+          actionRequired: Math.max(needsAction.length, blind ? 1 : 0),
           route: atRisk || storageDown ? 'recovery' : 'trust',
           records: records.state(),
           groups,

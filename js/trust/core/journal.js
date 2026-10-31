@@ -124,7 +124,9 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
         return refuse(refused.reason, refused.field);
       }
       const at = clock.now();
-      track(records.append({ at, code, fields: checked.value }));
+      // An event that raises an incident is one operation: the raise counts its failed write,
+      // so the event's own append doesn't count a second
+      track(records.append({ at, code, fields: checked.value }, { internal: Boolean(entry.incident) }));
       if (entry.incident) {
         const subjectId = checked.value.subjectId;
         track(

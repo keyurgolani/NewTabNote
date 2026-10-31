@@ -164,7 +164,9 @@ export function applyRaise(record, op, { track = false } = {}) {
     if (added === 0) return record;
   }
   const newest = at >= record.lastSeenAt;
-  const reopens = record.state === 'resolved' && added > 0 && at >= (record.resolvedAt ?? 0);
+  // A copy entry's unseen count reopens whatever the clocks say: a resolve replays the copy
+  // first, under its lock, so what it hadn't seen was added after it
+  const reopens = record.state === 'resolved' && added > 0 && (track || at >= (record.resolvedAt ?? 0));
   const staysResolved = record.state === 'resolved' && !reopens;
   const undismisses = record.dismissed && added > 0 && at >= (record.dismissChangedAt ?? 0);
   return {
