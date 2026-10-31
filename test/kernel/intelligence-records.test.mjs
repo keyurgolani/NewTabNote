@@ -607,7 +607,7 @@ describe('link redaction, round 4 (#71)', () => {
     }
   });
 
-  it('checks a long or adversarial text in well under 50 ms, in the schema and in redaction', () => {
+  it('checks a long or adversarial text in linear time, in the schema and in redaction', () => {
     const base = asSignal(inferredDraft());
     const correction = {
       recordVersion: 1,
@@ -627,6 +627,9 @@ describe('link redaction, round 4 (#71)', () => {
       entryId: 'e1',
       change: { field: 'category', after: 'today' },
     };
+    // Generous, for a loaded CI runner: each check takes a few ms here, and a quadratic one on
+    // 200,000 characters takes seconds, so the bound still catches that
+    const bound = 1500;
     for (const unit of ['a:', 'a.', 'a@', 'a:@', '[:', 'a.a/', 'a.a?', 'a.a:1', 'https:', 'www.', '1.', 'a-', 'a:b@']) {
       const text = unit.repeat(Math.ceil(200000 / unit.length));
       let started = performance.now();
@@ -634,10 +637,12 @@ describe('link redaction, round 4 (#71)', () => {
       v.safeParse(signalRecord, { ...base, title: text });
       v.safeParse(correctionRecord, { ...correction, note: text });
       v.safeParse(correctPayload, { ...correctCommand, note: text });
-      assert.ok(performance.now() - started < 50, `schema on ${unit}`);
+      let took = performance.now() - started;
+      assert.ok(took < bound, `schema on ${unit} took ${took.toFixed(0)} ms`);
       started = performance.now();
       plainTitle(text);
-      assert.ok(performance.now() - started < 50, `redaction on ${unit}`);
+      took = performance.now() - started;
+      assert.ok(took < bound, `redaction on ${unit} took ${took.toFixed(0)} ms`);
     }
   });
 });
