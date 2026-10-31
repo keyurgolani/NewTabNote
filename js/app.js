@@ -201,7 +201,7 @@ class App {
    * @returns {void}
    */
   notesLeft(ids) {
-    if (this.tabController) this.tabController.announceNotesLeft(ids);
+    this.tabController.announceNotesLeft(ids);
   }
 
   /**
@@ -375,9 +375,7 @@ class App {
         await this.initAnalyticsController();
         await this.initGraphView();
         await this.initSyncService();
-        if (this.notesManager) {
-          await this.notesManager.deferredInit();
-        }
+        await this.notesManager.deferredInit();
       };
 
       if (typeof requestIdleCallback === 'function') {
@@ -792,9 +790,7 @@ class App {
       }
     };
     this.settingsController.onAISidebarWidthChanged = (value) => {
-      if (this.aiChatController) {
-        this.aiChatController.aiSidebarWidth = value;
-      }
+      this.aiChatController.aiSidebarWidth = value;
       const aiSidebar = document.getElementById('ai-sidebar');
       if (aiSidebar && this.aiChatController.aiSidebarOpen) {
         aiSidebar.style.width = value + 'px';
@@ -855,11 +851,9 @@ class App {
     // The note list and the empty state show the Daily Note once it's there, with no refresh
     this.shortcutsManager.onEnsureDailyNote = () => this.ensureDailyNote();
     this.shortcutsManager.onCycleTab = (dir) => {
-      if (this.tabController) this.tabController.cycleTab(dir);
+      this.tabController.cycleTab(dir);
     };
-    this.shortcutsManager.onCloseCurrentTab = () => {
-      if (this.tabController) return this.tabController.closeCurrentTab();
-    };
+    this.shortcutsManager.onCloseCurrentTab = () => this.tabController.closeCurrentTab();
     this.shortcutsManager.getEditor = () => this.getEditor();
     // The palette marks the notes open in tabs, as TabController has them
     this.shortcutsManager.noteTabs = this.tabController.noteTabs;
@@ -1396,17 +1390,15 @@ class App {
    */
   closeAllModals() {
     // Keyboard Shortcuts gives focus back where it was
-    if (this.settingsController) this.settingsController.toggleShortcutsModal(false);
+    this.settingsController.toggleShortcutsModal(false);
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     document.querySelectorAll('.context-menu').forEach(m => m.classList.add('hidden'));
 
     // Clean up focus traps
-    if (this.settingsController) {
-      if (this.settingsController._settingsFocusTrapCleanup) { this.settingsController._settingsFocusTrapCleanup(); this.settingsController._settingsFocusTrapCleanup = null; }
-      if (this.settingsController._shortcutsFocusTrapCleanup) { this.settingsController._shortcutsFocusTrapCleanup(); this.settingsController._shortcutsFocusTrapCleanup = null; }
-    }
-    if (this.themeBuilderController && this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
-    if (this.shortcutsManager && this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
+    if (this.settingsController._settingsFocusTrapCleanup) { this.settingsController._settingsFocusTrapCleanup(); this.settingsController._settingsFocusTrapCleanup = null; }
+    if (this.settingsController._shortcutsFocusTrapCleanup) { this.settingsController._shortcutsFocusTrapCleanup(); this.settingsController._shortcutsFocusTrapCleanup = null; }
+    if (this.themeBuilderController._focusTrapCleanup) { this.themeBuilderController._focusTrapCleanup(); this.themeBuilderController._focusTrapCleanup = null; }
+    if (this.shortcutsManager._commandPaletteFocusTrapCleanup) { this.shortcutsManager._commandPaletteFocusTrapCleanup(); this.shortcutsManager._commandPaletteFocusTrapCleanup = null; }
 
     // The editors' menus, in both panes: an open one holds the keys pressed outside the note
     for (const editor of [this.editor, this.secondaryEditor]) {
