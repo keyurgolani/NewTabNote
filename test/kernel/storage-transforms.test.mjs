@@ -244,15 +244,16 @@ async function pointsIn(of) {
 }
 
 /**
- * Runs `body` with commands on #17's adapter over `of`, as a page sends them, and the kernel
- * for its queries
+ * Runs `body` with commands on #17's adapter over `of`, as a page sends them, or `caller`, and
+ * the kernel for its queries
  * @template T
  * @param {Profile} of
  * @param {(send: (fields: Record<string, unknown>) => Promise<any>, kernel: import('../../js/kernel/core/application/kernel.js').Kernel) => Promise<T>} body
  * @param {{now: () => number}} [clock]
+ * @param {typeof CALLERS.newtab} [caller]
  * @returns {Promise<T>}
  */
-async function withCommands(of, body, clock = later) {
+async function withCommands(of, body, clock = later, caller = CALLERS.newtab) {
   const adapter = createIndexedDbAdapter({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
@@ -263,7 +264,7 @@ async function withCommands(of, body, clock = later) {
   try {
     // Ids no other call's commands took, so the ledger never answers one with an earlier outcome
     const ids = { next: () => `t-${(commandCount += 1)}` };
-    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller, ids, clock });
     return await body(async fields => {
       const outcome = await kernel.execute(/** @type {any} */ ({ commandId: ids.next(), ...fields }));
       assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
@@ -472,17 +473,19 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
   const ONE = { records: 1, bytes: DEFAULT_LIMITS.bytes };
 
   /**
-   * v8.basic with `made`'s Daily Notes as 1.4.x kept them, each with what was written in it, at 8,
-   * migrated to 11 by the run
+   * v8.basic with `made`'s Daily Notes as 1.4.x kept them, each with what was written in it and
+   * the `fields` it names for it, at 8, migrated to 11 by the run
    * @param {readonly Made[]} made
+   * @param {Record<string, Record<string, unknown>>} [fields]
    */
-  const withDaily = async made => {
+  const withDaily = async (made, fields = {}) => {
     const of = await profileWith(BASIC);
     const db = await done(of.real.open('CanvasTabDB'));
     const tx = db.transaction(['canvases', 'elements'], 'readwrite');
     for (const [id, day, dateStr, createdAt] of made) {
       const name = `Daily Note - ${day}, 2025`;
-      tx.objectStore('canvases').put(legacyNote(id, { name, isDaily: true, dateStr, createdAt, updatedAt: createdAt }));
+      const note = legacyNote(id, { name, isDaily: true, dateStr, createdAt, updatedAt: createdAt, ...fields[id] });
+      tx.objectStore('canvases').put(note);
       // What its evening wrote, and the next morning, when 1.4.x opened it again
       for (const [order, content] of ['Evening', 'Next morning'].entries()) {
         tx.objectStore('elements').put({ id: `${id}-${order}`, canvasId: id, type: 'text', content, order, createdAt });
@@ -845,6 +848,74 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
     assert.equal(index['2025-10-29'], 'chain-oct-29-evening');
     assert.deepEqual(keys['chain-oct-29-evening'], ['2025-10-29', '2025-10-29', null]);
     assert.deepEqual(keys['chain-oct-28-evening'], ['2025-10-29', '2025-10-29', 'chain-oct-29-evening']);
+  });
+
+  it('a note a lookup opens while the run goes, as one restored from the trash then, keeps what a page saved and a capture added into it, still listed under its name, as a duplicate once the run is done', async () => {
+    // Oct 28's own Daily Note, made that morning, in the trash when the run read the notes
+    /** @type {Made} */
+    const morning = ['chain-oct-28-morning', 'Oct 28', '2025-10-28', Date.UTC(2025, 9, 28, 16)];
+    const of = await withDaily([...CHAIN, morning], {
+      'chain-oct-28-morning': { trashed: true, trashedAt: Date.UTC(2025, 9, 29, 16) },
+    });
+    // Oct 28 at 1 PM in Los Angeles, for the page and the worker
+    const onOct28 = { now: () => Date.UTC(2025, 9, 28, 20), zone: () => 'America/Los_Angeles' };
+    const seen = { opened: /** @type {string | null} */ (null) };
+    const outcome = await transform(of, {
+      clock: inLA,
+      limits: ONE,
+      hooks: {
+        between: async label => {
+          if (label !== 'daily-assigned') return;
+          // Restored from the trash after the run weighed the notes, before any of its batches,
+          // so Oct 28 opens it for now, where the run's answer gives the date to the evening note
+          // named for it (the case #17 PR 4's lookup that follows the answer closes)
+          await withCommands(of, send => send({ type: 'restoreNote', noteId: morning[0] }), onOct28);
+          seen.opened = (await openDays(of, onOct28, [{ dateStr: '2025-10-28' }]))['2025-10-28'];
+          // What a page types into the note that opened
+          const blocks = ['Evening', 'Next morning', 'Typed while the run went'].map((content, order) => ({
+            id: order < 2 ? `${morning[0]}-${order}` : 'typed-during-run',
+            type: 'text',
+            content,
+            canvasId: morning[0],
+            order,
+          }));
+          await withCommands(of, send => send({ type: 'saveNoteContent', noteId: morning[0], blocks }), onOct28);
+          // And what a capture adds to today's
+          await withCommands(
+            of,
+            send =>
+              send({
+                type: 'captureToDailyNote',
+                noteId: 'capture-made-during-run',
+                blockId: 'captured-during-run',
+                capture: { type: 'text', content: 'Captured while the run went' },
+              }),
+            onOct28,
+            CALLERS['worker-internal'],
+          );
+        },
+      },
+    });
+    assert.equal(outcome.status, 'transformed');
+    assert.equal(seen.opened, morning[0]);
+    const kept = (await notesIn(of))[morning[0]];
+    assert.deepEqual(
+      [Boolean(kept.trashed), Boolean(kept.archived), Boolean(kept.isTemplate), kept.name],
+      [false, false, false, 'Daily Note - Oct 28, 2025'],
+    );
+    const contents = recordsIn(await dump(of), 'CanvasTabDB', 'elements')
+      .map(({ value }) => value)
+      .filter(block => block.canvasId === morning[0])
+      .map(block => block.content)
+      .sort();
+    assert.deepEqual(contents, ['Captured while the run went', 'Evening', 'Next morning', 'Typed while the run went']);
+    // Still listed, and once the run is done, the duplicate of the note the run gives the date
+    await withCommands(of, async (_, kernel) => {
+      const listed = await kernel.query({ type: 'listNotes', view: 'active' });
+      assert.ok(listed.kind === 'ready' && listed.data.some(note => note.id === morning[0]));
+    });
+    assert.equal((await indexIn(of))['2025-10-28'], 'chain-oct-28-evening');
+    assert.equal(kept.dailyDuplicateOf, 'chain-oct-28-evening');
   });
 
   it('takes a date back from a Daily Note a page made during the run after the one that holds it, whose entry the index had, which becomes its duplicate', async () => {
