@@ -21,6 +21,7 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { failureOf } from '../adapters/indexeddb/failures.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
+import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
@@ -65,6 +66,15 @@ import { hostTimers, randomIds } from './messaging.js';
  *   Chrome stops an extension worker that goes 30 seconds without an event or an extension
  *   API call, and IndexedDB work counts as neither
  * @property {KeepaliveTimers} [timers]
+ * @property {(report: MigrationReport) => void} [report]
+ *   Told of each run the worker makes (#20, the diagnostic journal): when its upgrade turns out
+ *   blocked, and when it ends, never for a record it keeps without running. Best effort: a
+ *   report that throws changes nothing the run does.
+ */
+
+/**
+ * What the worker reports of a run
+ * @typedef {{kind: 'blocked'} | {kind: 'ended', outcome: MigrationOutcome}} MigrationReport
  */
 
 /**
@@ -243,6 +253,18 @@ export function createWorkerClient(host = workerHost()) {
   const onBlock = new Set();
 
   /**
+   * Tells the host's report of a run, never letting it in the run's way
+   * @param {MigrationReport} report
+   */
+  const tell = report => {
+    try {
+      if (typeof host.report === 'function') host.report(report);
+    } catch {
+      // A report that fails has nowhere to go, and the run goes on
+    }
+  };
+
+  /**
    * Calls an extension API every KEEPALIVE_MS until `ending` settles
    * @param {Promise<unknown>} ending
    */
@@ -307,6 +329,7 @@ export function createWorkerClient(host = workerHost()) {
             // migrate.js marks the run blocked before it calls this
             for (const stop of [...onBlock]) stop();
             onBlock.clear();
+            tell({ kind: 'blocked' });
           },
         });
         return run.done.then(async ended => {
@@ -318,6 +341,7 @@ export function createWorkerClient(host = workerHost()) {
             version,
             (readStores || ended.recoveryPointId !== null) && ended.shape !== 'none',
           );
+          tell({ kind: 'ended', outcome: ended });
           return ended;
         });
       })
@@ -328,6 +352,7 @@ export function createWorkerClient(host = workerHost()) {
         const failed = { status: 'failed', shape: null, to: null, steps: [], recoveryPointId: null, failure: { code } };
         // It read nothing, so the next request runs again at once
         await record(host.settings, failed, null, systemClock.now(), version, false);
+        tell({ kind: 'ended', outcome: failed });
         return failed;
       });
     keepAliveUntil(outcome);
@@ -486,6 +511,48 @@ export function createWorkerClient(host = workerHost()) {
       running: () => settled < attempts,
     }),
   });
+}
+
+/**
+ * The worker's migration reports as diagnostic journal events (#20, slice 4 prerequisites):
+ * a blocked upgrade or a run short of space is `storage.migration-blocked` with why, a run
+ * that failed is `storage.migration-failed` with its code, and a run that upgraded a 1.4.x
+ * database (not a fresh profile's, which only makes it) is `storage.migration-completed`.
+ * Each holds the version the run upgrades to and codes only. The same event is journaled
+ * once until a run completes, however often a page's request runs it again.
+ * @param {(code: string, fields?: Record<string, unknown>, failure?: unknown) => void} event
+ *   the context's failure events (composition/trust.js), which never throw
+ * @returns {(report: MigrationReport) => void}
+ */
+export function migrationEvents(event) {
+  /** @type {Set<string>} */
+  const journaled = new Set();
+  /**
+   * @param {string} code
+   * @param {Record<string, unknown>} fields
+   * @param {unknown} [failure]
+   */
+  const once = (code, fields, failure) => {
+    const key = `${code}/${String(fields.errorCode ?? (failure && /** @type {any} */ (failure).code) ?? '')}`;
+    if (journaled.has(key)) return;
+    journaled.add(key);
+    event(code, { schemaVersion: LATEST_STRUCTURAL, ...fields }, failure);
+  };
+  return report => {
+    if (report.kind === 'blocked') {
+      once('storage.migration-blocked', { errorCode: 'blocked-upgrade' });
+      return;
+    }
+    const { outcome } = report;
+    if (outcome.status === 'migrated' && outcome.shape !== 'none' && outcome.shape !== null) {
+      journaled.clear();
+      event('storage.migration-completed', { schemaVersion: outcome.to ?? LATEST_STRUCTURAL });
+    } else if (outcome.status === 'space-blocked') {
+      once('storage.migration-blocked', outcome.failure ? { errorCode: outcome.failure.code } : {});
+    } else if (outcome.status === 'failed') {
+      once('storage.migration-failed', {}, outcome.failure);
+    }
+  };
 }
 
 /**
