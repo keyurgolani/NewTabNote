@@ -13,21 +13,25 @@
 /** The message a context's guard sends the worker with a refusal report */
 export const REFUSAL_MESSAGE = 'NETWORK_REFUSED';
 
-/** The surfaces that send one: the pages */
-const SURFACES = Object.freeze(['newtab', 'popup', 'sidepanel', 'offscreen']);
+/** The pages that send one, by the file the sender's URL names */
+const PAGE = /^chrome-extension:\/\/[^/]+\/(newtab|popup|sidepanel|offscreen)\.html$/;
 
 /** The error codes a report carries (network-guard.js's RefusalCode) */
 const CODES = Object.freeze(['destination-refused', 'headers-refused', 'redirect-refused', 'registry-unreadable']);
 
 /**
- * A page's refusal report as `network.request-refused`'s fields, or null for anything else
+ * A page's refusal report as `network.request-refused`'s fields, or null for anything else.
+ * The surface is the page the sender's URL names, whatever the report says.
  * @param {unknown} report
+ * @param {unknown} senderUrl - the message sender's URL
  * @returns {{surface: string, errorCode: string, count: number} | null}
  */
-export function refusalFields(report) {
-  if (report === null || typeof report !== 'object') return null;
-  const { surface, errorCode, count } = /** @type {Record<string, unknown>} */ (report);
-  if (typeof surface !== 'string' || !SURFACES.includes(surface) || typeof errorCode !== 'string' || !CODES.includes(errorCode)) return null;
+export function refusalFields(report, senderUrl) {
+  if (report === null || typeof report !== 'object' || typeof senderUrl !== 'string') return null;
+  const page = PAGE.exec(senderUrl.split(/[?#]/)[0]);
+  if (!page) return null;
+  const { errorCode, count } = /** @type {Record<string, unknown>} */ (report);
+  if (typeof errorCode !== 'string' || !CODES.includes(errorCode)) return null;
   if (!Number.isSafeInteger(count) || /** @type {number} */ (count) < 0) return null;
-  return { surface, errorCode, count: /** @type {number} */ (count) };
+  return { surface: page[1], errorCode, count: /** @type {number} */ (count) };
 }

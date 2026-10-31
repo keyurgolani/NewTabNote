@@ -27,6 +27,7 @@
     "verify:reproducible": "node scripts/build/verify-reproducible.js",
     "check:write-paths": "node scripts/write-paths.js",
     "check:destinations": "node scripts/check-destinations.js",
+    "check:security-baseline": "node scripts/check-security-baseline.js",
     "design-tokens": "node scripts/build-design-tokens.js",
     "design-token-scan": "node scripts/design-token-scan.js"
   },
