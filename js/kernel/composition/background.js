@@ -97,9 +97,6 @@ function recordedOf(stored) {
 }
 
 /**
- */
-
-/**
  * The run's outcome as the worker records it, under chrome.storage.local
  * `setting_storageUpgrade`: a status, a failure code, when, the build that ran it, and whether
  * the run read the stores (`costly`), never content
@@ -300,7 +297,10 @@ export function createWorkerClient(host = workerHost()) {
    * clears it as it starts.
    * @param {{at: number} | null} value
    */
-  const mark = value => host.settings.set({ [UPGRADE_BLOCKED_KEY]: value }).catch(() => {});
+  const mark = value =>
+    Promise.resolve()
+      .then(() => host.settings.set({ [UPGRADE_BLOCKED_KEY]: value }))
+      .catch(() => {});
 
   /**
    * Calls an extension API every KEEPALIVE_MS until `ending` settles
@@ -404,7 +404,9 @@ export function createWorkerClient(host = workerHost()) {
         /** @type {MigrationOutcome} */
         const failed = { status: 'failed', shape: null, to: null, steps: [], recoveryPointId: null, failure: { code } };
         // It read nothing, so the next request runs again at once
-        const stored = await Promise.resolve(host.settings.get([UPGRADE_RECORD_KEY])).catch(() => ({}));
+        const stored = await Promise.resolve()
+          .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
+          .catch(() => ({}));
         const previous = recordedOf(/** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY]);
         await record(host.settings, failed, null, systemClock.now(), version, false);
         tell({ kind: 'ended', outcome: failed, previous });

@@ -110,6 +110,8 @@ export const ERROR_CODES = Object.freeze([
   'recovery-point-unverified',
   'point-missing',
   'locks-unavailable',
+  // A database whose shape no step knows, which the run refuses (migrate.js)
+  'unknown-shape',
   // #13's answers that didn't come (contracts/transport-codes.js)
   'unavailable',
   'deadline-exceeded',
