@@ -671,7 +671,8 @@ function exportNoticeButtonSizes(page) {
  * Click the export notice's button labeled `label`
  */
 async function chooseInExportNotice(page, label) {
-  await page.locator('#export-notice').getByRole('button', { name: label, exact: true }).click();
+  // Bounded, so a notice that never shows fails the step rather than the whole test's time
+  await page.locator('#export-notice').getByRole('button', { name: label, exact: true }).click({ timeout: SETTLE_TIMEOUT_MS });
 }
 
 /**
