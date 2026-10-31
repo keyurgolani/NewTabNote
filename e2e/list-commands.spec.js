@@ -126,10 +126,10 @@ test('new notes from the sidebar, the header, the palette, and a folder show in 
 test("the calendar's Daily Note and today's, each clicked twice at once, make one note each, and open it", async ({ extension }) => {
   const page = await startOn(extension, [{ name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] }]);
   await countReloads(page);
-  const { local, utc } = await page.evaluate(() => {
+  const { local } = await page.evaluate(() => {
     const now = new Date();
     const pad = value => String(value).padStart(2, '0');
-    return { local: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`, utc: now.toISOString().split('T')[0] };
+    return { local: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` };
   });
   const daily = async dateStr => (await storedNotes(page)).filter(note => note.dateStr === dateStr);
 
@@ -142,10 +142,10 @@ test("the calendar's Daily Note and today's, each clicked twice at once, make on
 
   before = fromCalendar;
   await page.getByRole('button', { name: "Today's Daily Note" }).click({ clickCount: 2 });
-  await expect.poll(async () => (await daily(utc)).length).toBe(1);
-  // Today's is keyed by the UTC date, as 1.4.x's, so it's the calendar's note unless the two dates differ
-  const today = (await daily(utc))[0].id;
-  if (today !== fromCalendar) await openedAfter(page, before);
+  // Today's is keyed by the local date since #17 PR 3b, as the calendar's day is, so it's the same note
+  await expect.poll(async () => (await daily(local)).length).toBe(1);
+  const today = (await daily(local))[0].id;
+  expect(today).toBe(fromCalendar);
   expect(await lastOpened(page)).toBe(today);
   await expect(sidebarItem(page, (await storedNotes(page)).find(note => note.id === today).name)).toHaveCount(1);
   expect(await reloads(page)).toBe(0);
