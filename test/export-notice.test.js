@@ -432,9 +432,10 @@ describe('the notice', () => {
     delete env.global.chrome;
     env.load(...FILES);
     assert.equal(typeof env.get('chrome.storage.onChanged.addListener'), 'function', 'storage.js put its stand-in in place');
-    // The settings port hears of changes through the page's Storage, as the new tab's root builds it
-    const { createNewTabSettingsClient } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-    const settings = createNewTabSettingsClient(null, { storage: env.get('Storage') });
+    // The settings port hears of changes through chrome.storage.onChanged, the stand-in's here,
+    // as the new tab's root builds it
+    const { createNewTabSettingsClient, newTabHost } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+    const settings = createNewTabSettingsClient(null, newTabHost());
     const { notice, card } = showNotice(env, { settings });
     notice.close();
     assert.equal(shown(card), false);

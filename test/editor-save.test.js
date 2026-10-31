@@ -76,6 +76,22 @@ function spyTransactions(storage) {
 
 const writesOf = (opened) => opened.filter((t) => t.mode === 'readwrite');
 
+/**
+ * Every transaction any fake-indexeddb connection opens from now on, as #17's adapter opens the
+ * new tab's since #17 PR 4a, in place of Storage's, until `restore`
+ * @returns {{opened: {stores: string[], mode: string}[], restore: () => void}}
+ */
+function spyAllTransactions() {
+  const { IDBDatabase } = require('fake-indexeddb');
+  const original = IDBDatabase.prototype.transaction;
+  const opened = [];
+  IDBDatabase.prototype.transaction = function spied(stores, mode, options) {
+    opened.push({ stores: [].concat(stores), mode: mode || 'readonly' });
+    return original.call(this, stores, mode, options);
+  };
+  return { opened, restore: () => { IDBDatabase.prototype.transaction = original; } };
+}
+
 async function setup() {
   const env = createLegacyEnv();
   await createDatabase(env.indexedDB, {
@@ -1459,7 +1475,7 @@ describe('BlockEditor "Save as a new note" (#12)', () => {
 });
 
 describe('BlockEditor when the page has to reload (#12)', () => {
-  /** A new tab started by its own root, on A, with its editor */
+  /** A new tab started by its own root, on #17's adapter since #17 PR 4a, on A, with its editor */
   async function newTabOnA() {
     const env = createLegacyEnv();
     await createDatabase(env.indexedDB, {
@@ -1490,12 +1506,18 @@ describe('BlockEditor when the page has to reload (#12)', () => {
 
   it('an edit still in the debounce when another context upgrades is written before the connection closes', async () => {
     const { env, Storage, editor, feedback } = await newTabOnA();
-    const opened = spyTransactions(Storage);
+    const spy = spyAllTransactions();
     type(editor, 'typed just before the upgrade');
     assert.notEqual(editor.saveTimeout, null, 'pending');
-    await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed', 'the connection closed');
-    assert.deepEqual(writesOf(opened)[0], { stores: ['canvases', 'elements'], mode: 'readwrite' },
+    try {
+      await upgradeElsewhere(env);
+    } finally {
+      spy.restore();
+    }
+    assert.equal(env.adapter.openState(), 'version-changed', 'the connection closed');
+    assert.equal(Storage.openState, 'version-changed', "and the holders' Storage's");
+    // #17's adapter commits the save's units in one transaction, its links with its blocks
+    assert.deepEqual(writesOf(spy.opened)[0], { stores: ['canvases', 'elements', 'links'], mode: 'readwrite' },
       'its transaction opened before the close');
     await runUntil(env, editor.flushSave());
 
@@ -1537,7 +1559,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     env.frames();
     await runUntil(env, editor.flushSave());
     await upgraded;
-    assert.equal(Storage.openState, 'version-changed');
+    assert.equal(env.adapter.openState(), 'version-changed');
 
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
     assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
@@ -1562,17 +1584,22 @@ describe('BlockEditor when the page has to reload (#12)', () => {
   });
 
   it('with nothing pending, the upgrade writes nothing before the connection closes', async () => {
-    const { env, Storage } = await newTabOnA();
-    const opened = spyTransactions(Storage);
-    await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed');
-    assert.deepEqual(writesOf(opened), []);
+    const { env } = await newTabOnA();
+    const spy = spyAllTransactions();
+    try {
+      await upgradeElsewhere(env);
+    } finally {
+      spy.restore();
+    }
+    assert.equal(env.adapter.openState(), 'version-changed');
+    // The newer build's own upgrade transaction is a versionchange one, not a write
+    assert.deepEqual(writesOf(spy.opened), []);
   });
 
   it('a save after another context upgraded the database keeps the text and shows the reload notice', async () => {
-    const { env, Storage, navigation, editor, feedback } = await newTabOnA();
+    const { env, navigation, editor, feedback } = await newTabOnA();
     await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed');
+    assert.equal(env.adapter.openState(), 'version-changed');
 
     type(editor, 'typed after the upgrade');
     await runUntil(env, editor.flushSave());
