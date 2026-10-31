@@ -472,6 +472,23 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     assert.equal(page.sidebar.selectionMode, false);
   });
 
+  it('a bulk archive counts a note another tab already deleted as one it couldn\'t archive, and keeps it selected', async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { open: ['A'] });
+    await page.Storage.permanentlyDeleteNote('C');
+    page.sidebar.selectionMode = true;
+    page.sidebar.selectedNoteIds = new Set(['B', 'C']);
+
+    const archived = page.sidebar.performBulkAction('archive');
+    await confirmIn(env, 'Confirm');
+    await runUntil(env, archived);
+
+    assert.equal((await stored(env)).notes.B.archived, true);
+    assert.deepEqual(page.toasts, [{ message: "1 of 2 notes couldn't be archived. It's still selected.", kind: 'error' }]);
+    assert.deepEqual(plain([...page.sidebar.selectedNoteIds]), ['C']);
+  });
+
   it('Empty trash puts back a pane on a note another tab restored first, and deletes the rest', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);

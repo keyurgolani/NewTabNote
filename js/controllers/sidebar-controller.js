@@ -1489,7 +1489,7 @@ class SidebarController {
     // notes that trash, archive, and delete take out of the active set. Each note answers on
     // its own, and only the ones that committed count.
     const outcome = await this.removal.removeNotes({ type: 'runBulkAction', action, noteIds: ids });
-    const done = SidebarController.bulkDone(outcome);
+    const done = SidebarController.bulkDone(action, outcome);
     const message = SidebarController.bulkMessage(action, outcome);
     if (outcome.kind !== 'bulk') {
       console.error('Bulk action failed:', outcome.kind, outcome.code);
@@ -1507,15 +1507,20 @@ class SidebarController {
   }
 
   /**
-   * The notes a bulk action is done with: the ones it committed, and the ones another tab
-   * already deleted, which are gone either way (removeNotes counts them as left too)
+   * The notes a bulk action is done with: the ones it committed, and, for a trash or a delete,
+   * the ones another tab already deleted, which are gone either way, as a single trash or delete
+   * counts them (NotesManager._removed). An archive, restore, or unarchive of a deleted note
+   * didn't happen, so it counts as one it couldn't change.
+   * @param {string} action
    * @param {{kind: string, items?: Array<{id: string, outcome: {kind: string, reason?: string}}>}} outcome
    * @returns {Array<string>}
    */
-  static bulkDone(outcome) {
+  static bulkDone(action, outcome) {
     if (outcome.kind !== 'bulk') return [];
+    const goneIsDone = action === 'trash' || action === 'delete';
     return outcome.items
-      .filter(({ outcome: item }) => item.kind === 'committed' || (item.kind === 'rejected' && item.reason === 'not-found'))
+      .filter(({ outcome: item }) => item.kind === 'committed'
+        || (goneIsDone && item.kind === 'rejected' && item.reason === 'not-found'))
       .map((item) => item.id);
   }
 
@@ -1531,7 +1536,7 @@ class SidebarController {
       return { text: Utils.writeFailureMessage(SidebarController.BULK_COPY[action].failed, outcome), kind: 'error' };
     }
     const total = outcome.items.length;
-    const failed = total - SidebarController.bulkDone(outcome).length;
+    const failed = total - SidebarController.bulkDone(action, outcome).length;
     const { done, undone } = SidebarController.BULK_COPY[action];
     const notes = (n) => `${n} ${n === 1 ? 'note' : 'notes'}`;
     if (failed === 0) return { text: `${notes(total)} ${done}`, kind: 'success' };
@@ -1550,7 +1555,7 @@ class SidebarController {
       unarchive: { done: 'restored from Archive', undone: 'restored from Archive', failed: 'Failed to restore notes from Archive' },
       trash: { done: 'moved to Trash', undone: 'moved to Trash', failed: 'Failed to move notes to Trash' },
       restore: { done: 'restored from Trash', undone: 'restored from Trash', failed: 'Failed to restore notes from Trash' },
-      delete: { done: 'permanently deleted', undone: 'deleted', failed: 'Failed to delete notes' },
+      delete: { done: 'permanently deleted', undone: 'permanently deleted', failed: 'Failed to permanently delete notes' },
     };
   }
 }

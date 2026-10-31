@@ -300,13 +300,13 @@ describe('archive and unarchive through the kernel', () => {
         order.push(['leaving', ...ids, await archived(ids[0])]);
         return page.tabs.leaveNotes(ids);
       },
-      announce: (ids) => order.push(['left', ...ids]),
+      announce: async (ids) => { order.push(['left', ...ids, await archived(ids[0])]); },
     });
     type(page.tabs.editor, 'typed before archiving');
     await runUntil(env, notes.archiveNote('B'));
     order.push(['written', await archived('B')]);
 
-    assert.deepEqual(order, [['leaving', 'B', false], ['left', 'B'], ['written', true]]);
+    assert.deepEqual(order, [['leaving', 'B', false], ['left', 'B', true], ['written', true]]);
     const { notes: records, elements } = await stored(env);
     assert.equal(records.B.archived, true);
     assert.equal(typeof records.B.archivedAt, 'number');
