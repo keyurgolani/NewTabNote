@@ -1775,15 +1775,13 @@ class BlockEditor {
     this.wikiMenuVisible = true;
     this.wikiMenuIndex = 0;
     this.wikiFilter = '';
-    this.wikiMenu.classList.remove('hidden');
+    // It opens under the caret when it fits there, then stays on the side it's on (renderWikiMenu)
+    this.wikiMenuAbove = false;
 
-    // Position menu
+    // It opens from the caret, or from its block when the caret has no box of its own
     const selection = this.doc.defaultView.getSelection();
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-
-    this.wikiMenu.style.left = `${rect.left}px`;
-    this.wikiMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
+    const caret = selection.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+    this.wikiMenuAnchor = caret && (caret.width || caret.height) ? caret : blockEl.getBoundingClientRect();
 
     this.renderWikiMenu();
   }
@@ -1797,7 +1795,7 @@ class BlockEditor {
   }
 
   /**
-   * Render wikilink menu items
+   * Render wikilink menu items, then place the menu again, since its size follows the filter
    */
   renderWikiMenu() {
     if (!this.wikiMenuItems) return;
@@ -1812,7 +1810,6 @@ class BlockEditor {
       empty.className = 'slash-menu-item empty';
       empty.textContent = 'No matching notes';
       this.wikiMenuItems.appendChild(empty);
-      return;
     }
 
     filtered.forEach((name, index) => {
@@ -1820,6 +1817,16 @@ class BlockEditor {
       item.addEventListener('click', () => this.selectWikiMenuItem(name));
       this.wikiMenuItems.appendChild(item);
     });
+
+    // Under the caret, or above it near the bottom, measured first (Utils.placeMenuBeside). It
+    // stays on the side it's on while it fits there, so the list changing as you type doesn't
+    // move it across the caret, and the highlighted name stays in view as the arrow keys move it
+    if (this.wikiMenuVisible && this.wikiMenuAnchor) {
+      const { top } = Utils.placeMenuBeside(this.wikiMenu, this.wikiMenuAnchor, { gap: 0, above: this.wikiMenuAbove });
+      this.wikiMenuAbove = top < this.wikiMenuAnchor.top;
+      const active = this.wikiMenuItems.querySelector('.slash-menu-item.active');
+      if (active) active.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /**
@@ -1932,11 +1939,9 @@ class BlockEditor {
     this.templateMenuVisible = true;
     this.templateMenuIndex = 0;
     this.templateFilter = '';
-    this.templateMenu.classList.remove('hidden');
-
-    const rect = blockEl.getBoundingClientRect();
-    this.templateMenu.style.left = `${rect.left}px`;
-    this.templateMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
+    // It opens under the block when it fits there, then stays on the side it's on (renderTemplateMenu)
+    this.templateMenuAbove = false;
+    this.templateMenuAnchor = blockEl.getBoundingClientRect();
 
     this.renderTemplateMenu();
   }
@@ -1950,7 +1955,7 @@ class BlockEditor {
   }
 
   /**
-   * Render template menu items
+   * Render template menu items, then place the menu again, since its size follows the filter
    */
   renderTemplateMenu() {
     if (!this.templateMenuItems) return;
@@ -1965,7 +1970,6 @@ class BlockEditor {
       empty.className = 'slash-menu-item empty';
       empty.textContent = 'No templates found';
       this.templateMenuItems.appendChild(empty);
-      return;
     }
 
     filtered.forEach((template, index) => {
@@ -1973,6 +1977,16 @@ class BlockEditor {
       item.addEventListener('click', () => this.selectTemplateItem(template.id));
       this.templateMenuItems.appendChild(item);
     });
+
+    // Under the block, or above it near the bottom, measured first (Utils.placeMenuBeside). Like
+    // the link menu, it stays on the side it's on while it fits there, and keeps the highlighted
+    // template in view
+    if (this.templateMenuVisible && this.templateMenuAnchor) {
+      const { top } = Utils.placeMenuBeside(this.templateMenu, this.templateMenuAnchor, { gap: 0, above: this.templateMenuAbove });
+      this.templateMenuAbove = top < this.templateMenuAnchor.top;
+      const active = this.templateMenuItems.querySelector('.slash-menu-item.active');
+      if (active) active.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /**
@@ -3021,10 +3035,8 @@ class BlockEditor {
    * Show slash menu
    */
   showSlashMenu(blockEl) {
-    const rect = blockEl.getBoundingClientRect();
-    this.slashMenu.style.left = rect.left + 'px';
-    this.slashMenu.style.top = rect.bottom + 4 + 'px';
-    this.slashMenu.classList.remove('hidden');
+    // Under the block, or above it near the bottom, measured first (Utils.placeMenuBeside)
+    Utils.placeMenuBeside(this.slashMenu, blockEl.getBoundingClientRect(), { gap: 4 });
     this.slashMenuVisible = true;
     this.slashMenuIndex = 0;
     this.updateSlashMenuSelection();
@@ -4935,14 +4947,10 @@ class BlockEditor {
       submenu.appendChild(item);
     });
 
-    // Position above the button
-    const rect = anchorBtn.getBoundingClientRect();
     submenu.style.position = 'fixed';
-    submenu.style.left = `${rect.left}px`;
-    submenu.style.top = `${rect.top - 8}px`;
-    submenu.style.transform = 'translateY(-100%)';
-
     this.doc.body.appendChild(submenu);
+    // Above the button, measured first, so its top stays in the window (Utils.placeMenuBeside)
+    Utils.placeMenuBeside(submenu, anchorBtn.getBoundingClientRect(), { above: true, gap: 8 });
 
     // Close on outside click
     const closeHandler = (e) => {
@@ -5097,20 +5105,9 @@ class BlockEditor {
     });
 
     menu.style.position = 'fixed';
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
     this.doc.body.appendChild(menu);
-
-    // Adjust if menu goes off-screen
-    requestAnimationFrame(() => {
-      const rect = menu.getBoundingClientRect();
-      if (rect.right > window.innerWidth) {
-        menu.style.left = `${window.innerWidth - rect.width - 8}px`;
-      }
-      if (rect.bottom > window.innerHeight) {
-        menu.style.top = `${window.innerHeight - rect.height - 8}px`;
-      }
-    });
+    // At the pointer, or above it near the bottom, measured first, as the note menu is (Utils.placeMenu)
+    Utils.placeMenu(menu, x, y);
 
     // Close on outside click
     this._tableContextMenuCloseHandler = (e) => {
@@ -5263,13 +5260,10 @@ class BlockEditor {
       });
     }
 
-    // Position menu below the handle
-    const rect = anchorEl.getBoundingClientRect();
     menu.style.position = 'fixed';
-    menu.style.left = `${rect.left}px`;
-    menu.style.top = `${rect.bottom + 4}px`;
-
     this.doc.body.appendChild(menu);
+    // Under the handle, or above it near the bottom, measured first (Utils.placeMenuBeside)
+    Utils.placeMenuBeside(menu, anchorEl.getBoundingClientRect(), { gap: 4 });
 
     // Close on outside click (deferred so this click doesn't close it)
     requestAnimationFrame(() => {
@@ -5412,24 +5406,11 @@ class BlockEditor {
       submenu.appendChild(item);
     });
 
-    // Position to the right of the anchor item
-    const rect = anchorItem.getBoundingClientRect();
     submenu.style.position = 'fixed';
-    submenu.style.left = `${rect.right + 4}px`;
-    submenu.style.top = `${rect.top}px`;
-
     this.doc.body.appendChild(submenu);
-
-    // Adjust if submenu goes off-screen to the right
-    requestAnimationFrame(() => {
-      const subRect = submenu.getBoundingClientRect();
-      if (subRect.right > window.innerWidth) {
-        submenu.style.left = `${rect.left - subRect.width - 4}px`;
-      }
-      if (subRect.bottom > window.innerHeight) {
-        submenu.style.top = `${window.innerHeight - subRect.height - 8}px`;
-      }
-    });
+    // Right of the item, or left of it near the right edge, moved up near the bottom, measured
+    // first, so it shows where it stays (Utils.placeSubmenu)
+    Utils.placeSubmenu(submenu, anchorItem.getBoundingClientRect(), { gap: 4 });
   }
 
   // ============ Version History / Snapshots (Req 31) ============
