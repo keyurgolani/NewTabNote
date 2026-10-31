@@ -1,13 +1,19 @@
 /**
  * convertNoteToTemplate, catalog version 1: makes a note a template, out of its folder, as
  * NotesManager.convertNoteToTemplate did. It writes those two fields and never the content.
+ * `expectedPlacementVersion`, the placement version the caller last read (getNote), makes it a
+ * `placement-conflict` on an adapter with revisions when the note's has moved since.
  */
 
-import { entityId } from '../fields.js';
+import * as v from '../../../../lib/valibot/index.mjs';
+import { entityId, revision } from '../fields.js';
 import { commandPayload } from '../operation.js';
 import { outcomeSchema } from '../outcome-schemas.js';
 
-export const payload = commandPayload('convertNoteToTemplate', { noteId: entityId('note') });
+export const payload = commandPayload('convertNoteToTemplate', {
+  noteId: entityId('note'),
+  expectedPlacementVersion: v.optional(revision),
+});
 
 export const result = outcomeSchema;
 

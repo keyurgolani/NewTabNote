@@ -52,8 +52,17 @@ function spyTx(log, records) {
       log.push(`revision ${store} ${key}`);
       return undefined;
     },
+    versions: (store, key) => {
+      log.push(`versions ${store} ${key}`);
+      return undefined;
+    },
+    has: store => {
+      log.push(`has ${store}`);
+      return true;
+    },
     put: (store, record) => {
-      log.push(`put ${store} ${record.id ?? record.noteId}`);
+      const { id, noteId, dailyKey } = /** @type {{id?: unknown, noteId?: unknown, dailyKey?: unknown}} */ (record);
+      log.push(`put ${store} ${id ?? (store === 'dailyIndex' ? dailyKey : noteId)}`);
     },
     delete: (store, key) => {
       log.push(`delete ${store} ${key}`);
@@ -112,7 +121,31 @@ describe('saveNoteContent', () => {
     // Nothing is awaited before the puts: they're in the log as soon as the unit starts
     assert.deepEqual(log, ['put blocks b1', 'put blocks b2', 'get notes n1']);
     await running;
-    assert.deepEqual(log.slice(3), ['revision notes n1', 'put notes n1']);
+    assert.deepEqual(log.slice(3), ['put notes n1']);
+  });
+
+  it('with an expected revision, reads the note and checks its versions before it puts anything (#17 PR 2a)', async () => {
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('saveNoteContent runs no other command'),
+    };
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'saveNoteContent'>} */
+    const command = {
+      type: 'saveNoteContent',
+      commandId: 'c1',
+      noteId: 'n1',
+      blocks: [{ id: 'b1' }, { id: 'b2' }],
+      expectedRevision: 4,
+    };
+    const work = /** @type {Work} */ (noteCommands.saveNoteContent(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    /** @type {string[]} */
+    const log = [];
+    await unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
+    assert.deepEqual(log, ['get notes n1', 'versions notes n1', 'put blocks b1', 'put blocks b2', 'put notes n1']);
   });
 });
 
@@ -212,9 +245,19 @@ describe('units an adapter runs again', () => {
     // The first run makes the Daily Note and fails to commit. Before the run that commits,
     // another context made today's.
     await runUnits(work, { notes: {} });
-    const today = { id: 'their-daily', name: 'Daily Note', isDaily: true, dateStr: dailyDateStr(NOW), updatedAt: NOW };
+    // A clock without a zone is UTC's (ports/runtime.js)
+    const day = dailyDateStr(NOW, 'UTC');
+    const today = { id: 'their-daily', name: 'Daily Note', isDaily: true, dateStr: day, updatedAt: NOW };
     const { log } = await runUnits(work, { notes: { 'their-daily': today } });
-    assert.deepEqual(log, ['getAll notes', 'put blocks k1']);
+    // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b)
+    assert.deepEqual(log, [
+      `get dailyIndex ${day}`,
+      'getAll notes',
+      'has dailyIndex',
+      'put notes their-daily',
+      `put dailyIndex ${day}`,
+      'put blocks k1',
+    ]);
     assert.deepEqual(work.done().changedIds, ['their-daily']);
     assert.deepEqual(work.primary && work.primary(), { store: 'notes', key: 'their-daily' });
   });

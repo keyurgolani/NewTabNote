@@ -33,7 +33,8 @@ const WORKER_TIMEOUT_MS = 10_000;
 const ACTIVATION_TIMEOUT_MS = 10_000;
 const WORKER_READ_TIMEOUT_MS = 5_000;
 const LOCALE = 'en-US';
-const TIME_ZONE = 'UTC';
+// UTC, unless a run names another zone, as a pass on the local Daily Note key does (#17 PR 3b)
+const TIME_ZONE = process.env.NTN_E2E_TIME_ZONE || 'UTC';
 // worker-hooks.js logs each report as a console error that starts with this
 const WORKER_UNCAUGHT_TAG = '[ntn-harness:uncaught]';
 // Written next to the worker script, so its relative imports resolve as before. Chrome
@@ -157,6 +158,9 @@ function activationState(worker) {
   return withTimeout(settled, ACTIVATION_TIMEOUT_MS + WORKER_READ_TIMEOUT_MS, 'The service worker stopped answering while it started');
 }
 
+/** The sessions launched and not yet closed, which harnessFor looks through */
+const OPEN_SESSIONS = new Set();
+
 class ExtensionSession {
   constructor(context, { dist, root, extensionDir, network = 'route' }) {
     this.context = context;
@@ -172,6 +176,7 @@ class ExtensionSession {
     this._blocked = new WeakSet();
     this._workers = new WeakSet();
     this._worker = null;
+    OPEN_SESSIONS.add(this);
     // The about:blank page a persistent context opens with, reused for the first surface
     this._blankPage = context.pages().find(page => page.url() === 'about:blank') || null;
     this._surfaceOpened = false;
@@ -245,6 +250,7 @@ class ExtensionSession {
   }
 
   async close() {
+    OPEN_SESSIONS.delete(this);
     try {
       await this.context.unrouteAll({ behavior: 'ignoreErrors' });
       await this.context.close();
@@ -493,4 +499,14 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
   return session;
 }
 
-module.exports = { launchExtension, resolveDist, SURFACES, VIEWPORT };
+/**
+ * The open session whose service worker `worker` is, or was before an update, or null: for
+ * fixture-host.js, which a spec hands only the worker
+ * @param {unknown} worker
+ */
+function harnessFor(worker) {
+  for (const session of OPEN_SESSIONS) if (session.worker === worker || session._workers.has(worker)) return session;
+  return null;
+}
+
+module.exports = { launchExtension, resolveDist, harnessFor, SURFACES, VIEWPORT, TIME_ZONE };

@@ -150,13 +150,14 @@ async function loadBackground({ mutate, setup, opens = true } = {}) {
 
   if (setup) await setup(env);
   await startWorker(env);
-  // background.js's kernel opens the database and runs startup maintenance as the worker
-  // starts, and captures wait for it. A module's top-level bindings aren't globals, so wait
-  // until the worker is idle, when that has settled, and check it opened the database.
+  // background.js's kernel runs #17's migration run, then opens the database and runs startup
+  // maintenance, as the worker starts, and captures wait for it. A module's top-level bindings
+  // aren't globals, so wait until the worker is idle, when that has settled, and check its run
+  // made the database (#17 PR 1b: the worker publishes the run as storageUpgrade).
   await drain();
-  const { openState } = env.global.Storage;
-  if (opens && openState !== 'open') {
-    throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
+  const upgrade = await env.global.storageUpgrade;
+  if (opens && (!upgrade || upgrade.status !== 'migrated')) {
+    throw new Error(`The worker's migration run answered ${JSON.stringify(upgrade && upgrade.status)} on an empty profile`);
   }
   if (mutate) mutate(env.global);
 
@@ -196,7 +197,10 @@ async function loadBackground({ mutate, setup, opens = true } = {}) {
 async function readTodaysDailyNote(worker) {
   await drain();
   const dump = await dumpDatabase(worker.indexedDB);
-  const today = new Date().toISOString().slice(0, 10);
+  // The host's local date, which the worker's kernel keys today's Daily Note by (#17 PR 3b)
+  const now = new Date();
+  const pad = (/** @type {number} */ value) => String(value).padStart(2, '0');
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const notes = Object.values(recordsOf(dump, 'canvases')).filter(note => note.isDaily && note.dateStr === today && !note.trashed);
   if (notes.length === 0) return null;
   if (notes.length > 1) throw new Error(`${notes.length} Daily Notes for ${today}`);

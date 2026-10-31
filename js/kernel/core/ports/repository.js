@@ -22,7 +22,14 @@
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').Conflict} Conflict */
 
-/** Each store and the field that keys its records */
+/**
+ * Each store and the field, or fields, that key its records. `conflicts` and `tombstones` are
+ * #17's (#17 PR 2b): deleting a note drops its conflict records and puts its tombstone, in the
+ * delete's own unit. A database below version 10 has neither, and an adapter skips writes to
+ * them there (LATER_STORES). `dailyIndex` is #17 PR 3b's: `{dailyKey, noteId}` for each local
+ * date, naming the Daily Note that holds it (domain/daily.js), which a database below version
+ * 11 lacks.
+ */
 export const STORES = Object.freeze({
   notes: Object.freeze({ keyPath: 'id' }),
   blocks: Object.freeze({ keyPath: 'id' }),
@@ -33,9 +40,21 @@ export const STORES = Object.freeze({
   snapshots: Object.freeze({ keyPath: 'id' }),
   links: Object.freeze({ keyPath: 'id' }),
   themes: Object.freeze({ keyPath: 'id' }),
+  conflicts: Object.freeze({ keyPath: 'id' }),
+  tombstones: Object.freeze({ keyPath: Object.freeze(['entityType', 'id']) }),
+  dailyIndex: Object.freeze({ keyPath: 'dailyKey' }),
 });
 
 /** @typedef {keyof typeof STORES} StoreName */
+
+/**
+ * The stores a database below their version lacks, whose writes an adapter skips there, as
+ * commands committed before the step that made them: below 10 no conflict record and no
+ * tombstone, so a note deleted there stays in its recovery point (#17 PR 2b's declared gap), and
+ * below 11 no daily index entry, so each Daily Note lookup there scans (#17 PR 3b)
+ * @type {readonly StoreName[]}
+ */
+export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflicts', 'tombstones', 'dailyIndex']));
 
 /**
  * @typedef {object} StoreRecords
@@ -48,6 +67,9 @@ export const STORES = Object.freeze({
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
  * @property {import('../domain/note.js').LinkRecord} links
  * @property {import('../domain/theme.js').ThemeRecord} themes
+ * @property {{id: string, noteId?: unknown} & Record<string, unknown>} conflicts
+ * @property {import('../domain/tombstone.js').TombstoneRecord} tombstones
+ * @property {{dailyKey: string, noteId?: unknown} & Record<string, unknown>} dailyIndex
  */
 
 /**
@@ -65,6 +87,20 @@ export const STORES = Object.freeze({
  *   The record's committed content revision, or undefined from an adapter without revisions.
  *   Ask only after a `get` of the same key in the same transaction: an adapter that keeps the
  *   revision in the record (#17) answers from the record that get read.
+ * @property {(store: StoreName, key: string) => Versions | undefined} versions
+ *   The note's three committed versions (#17, "Versions"), each 0 for a record that has none
+ *   yet, or undefined from an adapter without revisions or for a record the get found nothing
+ *   for. Ask only after a `get` of the same key in the same transaction, as with `revision`.
+ * @property {(store: StoreName) => boolean} has
+ *   Whether the database has `store`, so a write to it lands: false for a LATER_STORES store a
+ *   database below its version lacks, or for a store a damaged one lacks
+ */
+
+/**
+ * A note's versions, one per write scope (WriteScope): `revision` moves with its title and
+ * blocks, `placementVersion` with where it sits and how it's kept, and `sourceRevision` is the
+ * content revision its derived fields (insights) were last made from
+ * @typedef {{revision: number, placementVersion: number, sourceRevision: number}} Versions
  */
 
 /**
@@ -96,10 +132,11 @@ export const STORES = Object.freeze({
  * Where a settings effect writes, under the keys 1.4.x's Storage.setSetting wrote: the
  * preferences, the workspace session, `jobs` (the bookkeeping the auto-title and insights jobs
  * keep: when each last ran, and which note's insights are being extracted), `chat` (AI chat's
- * histories and prompt templates), `onboarding` (whether the first run finished), or `backup`
+ * histories and prompt templates), `onboarding` (whether the first run finished), `backup`
  * (when the last backup and full export were made, and the pre-migration export notice's
- * outcome)
- * @typedef {'preferences' | 'session' | 'jobs' | 'chat' | 'onboarding' | 'backup'} SettingsArea
+ * outcome), or `upgrade` (#17 PR 1b: the worker's record of its last migration run, and when
+ * the space notice was last put off)
+ * @typedef {'preferences' | 'session' | 'jobs' | 'chat' | 'onboarding' | 'backup' | 'upgrade'} SettingsArea
  */
 
 /**
@@ -149,6 +186,18 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  * Only content moves a record's content revision, on an adapter with revisions. A derived
  * command's units are held to the derived fields of notes they read (application/scopes.js),
  * so it can't change a note's name, placement, or lifecycle.
+ *
+ * Each scope has its own version on a note, on an adapter with revisions (#17, "Versions"):
+ * - `revision` moves by one when a content command changes the primary note's title or blocks
+ *   (Work.revised). A command expecting another `expectedRevision` is a `revision-conflict`.
+ * - `placementVersion` moves by one on every note a placement command puts, so a commit that
+ *   files several (deleteFolder's notes going to the root) moves each. A command expecting
+ *   another `expectedPlacementVersion` is a `placement-conflict`, whose `currentRevision`
+ *   holds the placement version, since #13's Conflict outcome is closed.
+ * - `sourceRevision` is what a derived command's Work.sourceRevision says, once it puts the
+ *   note. A derived command made from a revision older than the stored one writes nothing.
+ * A unit checks the version it expects before it writes anything, so a conflict commits only
+ * its own record.
  * @typedef {'content' | 'placement' | 'derived'} WriteScope
  */
 
@@ -170,6 +219,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   on by one, for a content command only. Placement and derived writes (pin, archive, trash,
  *   restore, a folder move, insights) leave it where it was, so they never turn a save into a
  *   conflict.
+ * @property {number} [sourceRevision]
+ *   For a derived command, the content revision it was made from, which an adapter with
+ *   revisions keeps as the primary note's `sourceRevision` when the command puts the note
  * @property {(receipt?: ImportReceipt) => Committed} done
  *   The outcome once everything committed. A backup import's adapter hands it the receipt.
  */
@@ -188,7 +240,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
  *   Notes have content revisions: committed outcomes report them, only title and block
- *   changes move them, and a stale `expectedRevision` is a conflict
+ *   changes move them, and a stale `expectedRevision` is a conflict. A tombstone a unit puts
+ *   gets its note's last content revision and the commit's change-log seq, in the same
+ *   transaction (#17 PR 2b), so a note made again under its id carries on past it.
  * @property {boolean} idempotency
  *   A commandId sent again with the same command gets its committed or conflict outcome
  *   again, and nothing runs. Sent with another command it's rejected as
@@ -196,7 +250,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   same command sent again runs again. A bulk command keeps only its fingerprint, from its
  *   first recall: the same commandId with another selection is key reuse, even when both are
  *   sent at once, and a resend runs again, so each item that committed or conflicted answers
- *   from its own record and each other item runs again.
+ *   from its own record and each other item runs again. Work that isn't a catalog command,
+ *   such as #20's storage probe, keeps no record, so every run of it runs.
  * @property {boolean} backups
  *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
  *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery

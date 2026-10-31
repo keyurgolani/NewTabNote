@@ -23,8 +23,9 @@ import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 const requireCommonJs = createRequire(import.meta.url);
 /** @type {any} */
 export const legacyEnv = requireCommonJs('../helpers/legacy-env.js');
-/** @type {{IDBFactory: new () => IDBFactory}} */
-const { IDBFactory } = requireCommonJs('fake-indexeddb');
+/** @type {{IDBFactory: new () => IDBFactory, IDBKeyRange: typeof IDBKeyRange}} */
+const { IDBFactory, IDBKeyRange: KeyRange } = requireCommonJs('fake-indexeddb');
+export { KeyRange };
 
 /**
  * @typedef {object} Profile
@@ -50,10 +51,42 @@ export function adapterOn(of, options = {}) {
   const adapter = createIndexedDbAdapter({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
+    keyRange: KeyRange,
     ...options,
   });
   of.adapters.push(adapter);
   return adapter;
+}
+
+/**
+ * Every record of `store` in the profile's CanvasTabDB, read on a connection of its own, as
+ * the adapter keeps them: none when the database lacks the store
+ * @param {{real: IDBFactory}} of - a profile, from here or migration-support.mjs
+ * @param {string} store
+ * @returns {Promise<any[]>}
+ */
+export function recordsOf(of, store) {
+  return new Promise((resolve, reject) => {
+    const request = of.real.open('CanvasTabDB');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(store)) {
+        db.close();
+        resolve([]);
+        return;
+      }
+      const read = db.transaction(store, 'readonly').objectStore(store).getAll();
+      read.onsuccess = () => {
+        db.close();
+        resolve(read.result);
+      };
+      read.onerror = () => {
+        db.close();
+        reject(read.error);
+      };
+    };
+  });
 }
 
 /**
@@ -72,27 +105,32 @@ export function closeAll(of) {
 }
 
 /**
- * A contract-suite context over a fresh profile, or over a version-8 database without
- * `missing`'s stores.
+ * A contract-suite context over a fresh profile, opened `versioned` as the service worker
+ * opens it once its run has made the database, or over a version-8 database without
+ * `missing`'s stores, opened as it is, as the worker does when its run left the database as
+ * it was, and as Popup does (#17 PR 1b: a versioned open would give it the stores it lacks).
  * @param {StoreName[]} missing
  * @returns {ReturnType<ContractFixture['start']>}
  */
 async function startIndexedDb(missing) {
   const first = profile();
-  if (missing.length > 0) {
-    await legacyEnv.createDatabase(first.real, { omit: missing.map(store => IDB_STORES[store]) });
-  }
-  const adapter = adapterOn(first);
-  await adapter.open();
   const clock = testClock();
   const ids = testIds();
+  /** @type {Partial<IndexedDbOptions>} */
+  const options = { clock };
+  if (missing.length > 0) {
+    await legacyEnv.createDatabase(first.real, { omit: missing.map(store => IDB_STORES[store]) });
+    options.mode = 'existing';
+  }
+  const adapter = adapterOn(first, options);
+  await adapter.open();
   return {
     adapter,
     clock,
     ids,
     kernel: (caller = CALLERS.newtab) => kernelOn(adapter, { ids, clock }, caller),
     async secondContext() {
-      const second = adapterOn(first);
+      const second = adapterOn(first, options);
       await second.open();
       return {
         kernel: (caller = CALLERS.newtab) =>
@@ -104,6 +142,8 @@ async function startIndexedDb(missing) {
       if (isSettingsArea(target)) first.chrome.failNextSet();
       else first.faults.abortAfterNextWrite(IDB_STORES[target], 'QuotaExceededError');
     },
+    // The conflict records step 10's `conflicts` store keeps, by the commandId that lost
+    conflicts: async () => (await recordsOf(first, 'conflicts')).map(record => ({ ...record, commandId: record.id })),
     close: async () => closeAll(first),
   };
 }
@@ -111,7 +151,7 @@ async function startIndexedDb(missing) {
 /** @type {ContractFixture} */
 export const indexedDbFixture = {
   name: 'indexeddb',
-  flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false, backups: false }),
+  flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
   start: () => startIndexedDb([]),
   startWithout: startIndexedDb,
 };

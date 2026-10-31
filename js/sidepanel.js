@@ -3,8 +3,6 @@
  * through the client its composition root hands it.
  */
 
-// storage.js puts Storage on window, where Side Panel's root finds it
-import './storage.js';
 import { createSidePanelClient } from './kernel/composition/sidepanel.js';
 
 /** @typedef {import('./kernel/composition/host.js').Client} Client */

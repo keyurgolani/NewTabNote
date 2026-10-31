@@ -3,17 +3,23 @@
 // controller that applies the rule, in one profile, and the kernel over the legacy adapter
 // in another. Each pair has to leave the same records. Two rules the kernel changes on
 // purpose are left out, as #12 has them: attachInsights writes only insight fields, and
-// applyDerivedTitle drops its title once the user set one.
+// applyDerivedTitle drops its title once the user set one. Two more since #17 PR 3a, each
+// checked as the difference it is: the kernel writes placement, kind, and lifecycle beside the
+// flags on a note it makes (domain/placement.js), which the comparisons take off and check
+// apart, and it lists a note without an updatedAt the index holds (KD-011), which Storage lists
+// once #17's transform has filled the field.
 
 import { createRequire } from 'node:module';
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+import { filledByLogical2 } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
+import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
 import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { testIds } from './support.mjs';
 
@@ -77,14 +83,74 @@ async function twin(records = {}) {
 }
 
 /**
- * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written'
+ * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written',
+ * and each note without the group the kernel writes beside its flags (groupsIn reads that)
  * @param {LegacyContext} context
  * @param {string[]} names
  * @returns {Promise<any>}
  */
 async function recordsIn(context, names) {
   const dump = await legacyEnv.dumpDatabase(context.env.indexedDB);
-  return stamped(Object.fromEntries(names.map(name => [name, legacyEnv.recordsOf(dump, name)])));
+  return stamped(
+    Object.fromEntries(
+      names.map(name => {
+        const records = legacyEnv.recordsOf(dump, name);
+        if (name !== 'canvases') return [name, records];
+        return [name, Object.fromEntries(Object.entries(records).map(([key, note]) => [key, withoutPlacement(note)]))];
+      }),
+    ),
+  );
+}
+
+/**
+ * Each note's placement, kind, and lifecycle, by id, for the notes that have them (#17 PR 3a)
+ * @param {LegacyContext} context
+ * @returns {Promise<Record<string, Record<string, unknown>>>}
+ */
+async function groupsIn(context) {
+  const dump = await legacyEnv.dumpDatabase(context.env.indexedDB);
+  /** @type {Record<string, Record<string, unknown>>} */
+  const groups = {};
+  for (const [key, note] of Object.entries(legacyEnv.recordsOf(dump, 'canvases'))) {
+    const group = Object.fromEntries(
+      PLACEMENT_FIELDS.filter(field => field in note).map(field => [field, note[field]]),
+    );
+    if (Object.keys(group).length > 0) groups[key] = group;
+  }
+  return groups;
+}
+
+/**
+ * What #17's transform writes on a profile's notes (logical 2, transforms.js), put straight into
+ * its database, since a profile at version 8 has no `meta` for a run to read. The run starts
+ * now, as the parity kernels' clocks read, which a trashed note's time in the trash takes.
+ * @param {LegacyContext} context
+ */
+async function filledAsTheTransformFills(context) {
+  /** @type {IDBDatabase} */
+  const db = await new Promise((resolve, reject) => {
+    const request = context.env.indexedDB.open('CanvasTabDB');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(['canvases', 'folders'], 'readwrite');
+      const notes = tx.objectStore('canvases').getAll();
+      const folders = tx.objectStore('folders').getAllKeys();
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+      folders.onsuccess = () => {
+        const liveFolderIds = new Set(/** @type {string[]} */ (folders.result));
+        for (const note of notes.result) {
+          const next = filledByLogical2(note, { liveFolderIds, blocks: [], runStart: Date.now() });
+          if (next) tx.objectStore('canvases').put(next);
+        }
+      };
+    });
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -136,12 +202,16 @@ const folder = (id, parentId) => ({
 });
 
 describe("the kernel's copies of production rules, run both ways", () => {
-  it('createNote writes the note and the search entry Storage.createNote writes', async () => {
+  it('createNote writes the note and the search entry Storage.createNote writes, and on this version-8 database no group (#17 PR 3a, review R88)', async () => {
     const { viaStorage, viaKernel, kernel } = await twin();
     const made = legacyEnv.plain(await viaStorage.storage.createNote('Plan'));
     assertCommitted(await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: made.id, name: 'Plan' }));
     const stores = ['canvases', 'search_index'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    // 1.4.1 still opens version 8, so the group waits for the run and the transform; the contract
+    // suite checks the one the kernel writes at 10
+    assert.deepEqual(await groupsIn(viaKernel), {});
+    assert.deepEqual(await groupsIn(viaStorage), {});
   });
 
   it('createNote with a pin, a folder, and a hand-set title, then a save, leave what Storage did for a note saved as a new one', async () => {
@@ -178,6 +248,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
     assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+    // No group at version 8 (review R88)
+    assert.deepEqual(await groupsIn(viaKernel), {});
   });
 
   it('createFolder writes the folder Storage.createFolder writes', async () => {
@@ -226,6 +298,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
       return { notes: found.canvases, search: found.search_index, copies };
     };
     assert.deepEqual(await made(viaKernel), await made(viaStorage));
+    // At version 8 the new Daily Note waits for the transform for its group too (review R88)
+    assert.deepEqual(await groupsIn(viaKernel), {});
   });
 
   it(
@@ -263,7 +337,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
         );
       }
       // Each side gives its blocks its own ids and orders them by the time they landed, which
-      // two captures in one millisecond share, so they line up by type
+      // two captures in one millisecond share, so they line up by type. Since #17 PR 2a that
+      // time is each block's createdAt and updatedAt too, read as 'written' on both sides.
       /** @param {any[]} list */
       const blocks = list =>
         list
@@ -271,7 +346,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           .sort((a, b) => (a.type < b.type ? -1 : 1));
       const { elements } = await recordsIn(viaKernel, ['elements']);
       assert.equal(day && day.blocks.length, 2);
-      assert.deepEqual(blocks(Object.values(elements)), blocks(legacyEnv.plain(day.blocks)));
+      assert.deepEqual(blocks(Object.values(elements)), blocks(stamped(legacyEnv.plain(day.blocks))));
     },
   );
 
@@ -306,10 +381,12 @@ describe("the kernel's copies of production rules, run both ways", () => {
       const stores = ['canvases', 'elements'];
       assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores), type);
       assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage), type);
+      // A 1.4.x note stays without its group, which the transform fills from the flags then
+      assert.deepEqual(await groupsIn(viaKernel), {}, type);
     }
   });
 
-  it('trashNote deletes an untitled empty note with what Storage.trashNote deletes, and trashes the others', async () => {
+  it('trashNote deletes an untitled empty note with what Storage.trashNote deletes and its search entry, and trashes the others', async () => {
     const notes = ['u-empty', 'u-markup', 'u-divider', 'kept'].map(id =>
       legacyEnv.note(id, { name: id === 'kept' ? 'Kept' : 'Untitled' }),
     );
@@ -339,7 +416,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
     }
     const stores = ['canvases', 'elements', 'media', 'vectors', 'snapshots'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
-    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+    // Since #17 PR 2b the kernel's deletion takes the note's search entry too, which Storage left
+    const { 'u-empty': leftByStorage, ...kept } = await searchNames(viaStorage);
+    assert.equal(leftByStorage, 'Untitled');
+    assert.deepEqual(await searchNames(viaKernel), kept);
   });
 
   it("SidebarController's pin toggle, through setPinned, leaves the note 1.4.x's toggle left", async () => {
@@ -398,6 +478,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
       'findDailyNote reads the one Storage would find',
     );
     assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id));
+    // No group at version 8 (review R88)
+    assert.equal((await groupsIn(viaKernel))[daily.id], undefined);
   });
 
   it('ensureDailyNote for a calendar day makes what Storage.ensureDailyNoteForDate makes: its name, dateStr, and template', async () => {
@@ -414,6 +496,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       );
       assert.equal(daily.dateStr, dateStr);
       assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id), dateStr);
+      assert.equal((await groupsIn(viaKernel))[daily.id], undefined, dateStr);
     }
   });
 
@@ -748,7 +831,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
-  it('deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes, and keep the same notes', async () => {
+  it("deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes and the notes' search entries and links too, and keep the same notes; a trashed note without an indexed updatedAt goes with Empty trash, and retention waits for the transform's time in the trash (#17 PR 3a, KD-011)", async () => {
     const day = 24 * 60 * 60 * 1000;
     const recently = Date.now() - 2 * day;
     const lastWeek = Date.now() - 8 * day;
@@ -781,57 +864,87 @@ describe("the kernel's copies of production rules, run both ways", () => {
      * @param {(storage: any) => Promise<unknown>} viaStorageRun
      * @param {(kernel: Kernel) => Promise<Outcome | BulkOutcome>} viaKernelRun
      * @param {string} name
+     * @param {boolean} filled - whether both profiles hold what #17's transform fills, first
      * @returns {Promise<string[]>} the ids the kernel named
      */
-    const both = async (viaStorageRun, viaKernelRun, name) => {
+    const both = async (viaStorageRun, viaKernelRun, name, filled) => {
       const { viaStorage, viaKernel, kernel } = await twin(profile());
+      if (filled) for (const context of [viaStorage, viaKernel]) await filledAsTheTransformFills(context);
       await viaStorageRun(viaStorage.storage);
       const outcome = await viaKernelRun(kernel);
       assertCommitted(outcome);
-      assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores), name);
-      return outcome.kind === 'committed' ? [...outcome.changedIds].sort() : [];
+      const deleted = new Set(outcome.kind === 'committed' ? outcome.changedIds : []);
+      // Since #17 PR 3a the kernel lists a trashed note without an updatedAt the index holds
+      // (KD-011), so Empty trash takes that one too, which Storage's index reaches once the
+      // transform has filled the field. Retention doesn't take it until then: the transform
+      // starts its time in the trash, now, so it's in Trash for a whole window first.
+      const onlyKernel = new Set(filled ? [] : ['unindexed'].filter(id => deleted.has(id)));
+      // Since #17 PR 2b the kernel's deletion also takes each note's search entry and its links
+      // both ways, which Storage left
+      const left = await recordsIn(viaStorage, stores);
+      const expected = {
+        ...left,
+        canvases: Object.fromEntries(Object.entries(left.canvases).filter(([key]) => !onlyKernel.has(key))),
+        elements: Object.fromEntries(
+          Object.entries(left.elements).filter(([, /** @type {any} */ block]) => !onlyKernel.has(block.canvasId)),
+        ),
+        search_index: Object.fromEntries(Object.entries(left.search_index).filter(([key]) => !deleted.has(key))),
+        links: Object.fromEntries(
+          Object.entries(left.links).filter(
+            ([, /** @type {any} */ link]) => !deleted.has(link.fromNoteId) && !deleted.has(link.toNoteId),
+          ),
+        ),
+      };
+      assert.deepEqual(await recordsIn(viaKernel, stores), expected, `${name}${filled ? ', filled' : ''}`);
+      return [...deleted].sort();
     };
-    assert.deepEqual(
-      await both(
-        storage => storage.permanentlyDeleteNote('old'),
-        kernel => kernel.execute({ type: 'deleteNotePermanently', commandId: 'c1', noteId: 'old' }),
-        'deleteNotePermanently',
-      ),
-      ['old'],
-    );
-    assert.deepEqual(
-      await both(
-        storage => storage.emptyTrash(),
-        kernel => kernel.execute({ type: 'emptyTrash', commandId: 'c1' }),
-        'emptyTrash',
-      ),
-      ['no-time', 'old', 'recent', 'week'],
-    );
-    // SidebarController.runTrashCleanup read trashRetention, 30 unless set, and passed it on
-    assert.deepEqual(
-      await both(
-        storage => storage.cleanupTrash(30),
-        kernel => kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' }),
-        'runTrashCleanup, 30 days',
-      ),
-      ['old'],
-    );
-    assert.deepEqual(
-      await both(
-        storage => storage.cleanupTrash(7),
-        async kernel => {
-          assertCommitted(
-            await kernel.execute({ type: 'setPreferences', commandId: 'p1', values: { trashRetention: 7 } }),
-          );
-          return kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' });
-        },
-        'runTrashCleanup, 7 days',
-      ),
-      ['old', 'week'],
-    );
+    for (const filled of [false, true]) {
+      assert.deepEqual(
+        await both(
+          storage => storage.permanentlyDeleteNote('old'),
+          kernel => kernel.execute({ type: 'deleteNotePermanently', commandId: 'c1', noteId: 'old' }),
+          'deleteNotePermanently',
+          filled,
+        ),
+        ['old'],
+      );
+      assert.deepEqual(
+        await both(
+          storage => storage.emptyTrash(),
+          kernel => kernel.execute({ type: 'emptyTrash', commandId: 'c1' }),
+          'emptyTrash',
+          filled,
+        ),
+        ['no-time', 'old', 'recent', 'unindexed', 'week'],
+      );
+      // SidebarController.runTrashCleanup read trashRetention, 30 unless set, and passed it on
+      assert.deepEqual(
+        await both(
+          storage => storage.cleanupTrash(30),
+          kernel => kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' }),
+          'runTrashCleanup, 30 days',
+          filled,
+        ),
+        ['old'],
+      );
+      assert.deepEqual(
+        await both(
+          storage => storage.cleanupTrash(7),
+          async kernel => {
+            assertCommitted(
+              await kernel.execute({ type: 'setPreferences', commandId: 'p1', values: { trashRetention: 7 } }),
+            );
+            return kernel.execute({ type: 'runTrashCleanup', commandId: 'c1' });
+          },
+          'runTrashCleanup, 7 days',
+          filled,
+        ),
+        ['old', 'week'],
+      );
+    }
   });
 
-  it('listNotes lists each view in the order Storage lists it', async () => {
+  it("listNotes lists each view in the order Storage lists it, and a note without an indexed updatedAt where Storage lists it once the transform's fill is in (#17 PR 3a, KD-011)", async () => {
     const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
     const { viaStorage, kernel } = await twin({
       canvases: [
@@ -858,18 +971,24 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ['trashed', () => storage.getTrashedNotes()],
       ['templates', () => storage.getTemplates()],
     ];
-    for (const [view, read] of views) {
-      const state = await kernel.query({ type: 'listNotes', view });
-      const ids = state.kind === 'ready' ? state.data.map(note => note.id) : [];
-      assert.deepEqual(
-        ids,
-        legacyEnv.plain(await read()).map((/** @type {{id: string}} */ note) => note.id),
-        view,
-      );
-    }
+    /** @param {boolean} filled */
+    const sameAsStorage = async filled => {
+      for (const [view, read] of views) {
+        const state = await kernel.query({ type: 'listNotes', view });
+        const ids = state.kind === 'ready' ? state.data.map(note => note.id) : [];
+        const storageIds = legacyEnv.plain(await read()).map((/** @type {{id: string}} */ note) => note.id);
+        // The kernel lists the note without an indexed updatedAt last, by its createdAt, the
+        // oldest time here (KD-011), and Storage once the transform has filled the field
+        const expected = !filled && ['active', 'withArchived'].includes(view) ? [...storageIds, 'no-time'] : storageIds;
+        assert.deepEqual(ids, expected, `${view}${filled ? ', filled' : ''}`);
+      }
+    };
+    await sameAsStorage(false);
+    await filledAsTheTransformFills(viaStorage);
+    await sameAsStorage(true);
   });
 
-  it("the note list's views list what Storage lists, in its order, at load and after each commit", async () => {
+  it("the note list's views list what Storage lists, in its order, at load and after each commit, and the note without an indexed updatedAt last (#17 PR 3a, KD-011)", async () => {
     const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
     const context = legacyContext();
     opened.push(context);
@@ -911,7 +1030,14 @@ describe("the kernel's copies of production rules, run both ways", () => {
     const sameAsStorage = async (/** @type {string} */ when) => {
       await list.settled();
       for (const [view, read] of views) {
-        assert.deepEqual(legacyEnv.plain(list.view(view)), legacyEnv.plain(await read()), `${view} ${when}`);
+        const listed = legacyEnv.plain(list.view(view));
+        // Storage's index leaves out the note without an updatedAt, which the kernel lists by its
+        // createdAt, older than every other note here (KD-011)
+        if (view === 'active' || view === 'withArchived') {
+          assert.equal(listed.at(-1)?.id, 'no-time', `${view} ${when}`);
+          listed.pop();
+        }
+        assert.deepEqual(listed, legacyEnv.plain(await read()), `${view} ${when}`);
       }
       assert.deepEqual(
         legacyEnv.plain(list.folders()),

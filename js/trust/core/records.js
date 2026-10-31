@@ -147,8 +147,10 @@ export const incidentSchema = v.strictObject({
 export const SALVAGE_ORIGINS = Object.freeze(/** @type {const} */ (['CanvasTabDB', 'legacyCopies', 'recoveryPoints']));
 
 /**
- * The CanvasTabDB stores a salvage file holds: version 8's, but the secret `settings`, and
- * #17's `meta` and `migrations`. Any other store is left out, since nothing says what it holds.
+ * The CanvasTabDB stores a salvage file holds: version 8's, but the secret `settings`, #17's
+ * `meta` and `migrations`, the four step 10 adds (#17 PR 2a): the ledger, the change log, the
+ * conflict records, which keep the text of a save that lost, and the tombstones, and step 11's
+ * daily index (#17 PR 3b). Any other store is left out, since nothing says what it holds.
  */
 export const SALVAGE_STORES = Object.freeze(
   /** @type {const} */ ([
@@ -163,6 +165,11 @@ export const SALVAGE_STORES = Object.freeze(
     'snapshots',
     'meta',
     'migrations',
+    'operations',
+    'changes',
+    'conflicts',
+    'tombstones',
+    'daily_index',
   ]),
 );
 

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { isEmpty, isUntitled } from '../../js/kernel/core/domain/note.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -220,13 +221,11 @@ describe('the legacy adapter', () => {
         records: { canvases: [legacyEnv.note('n1', { name: 'Kept' })] },
       });
       await adapterFor(panel, 'existing').open();
-      // A new tab upgrading to this build's version, or a newer build's tab past it
-      const upgrade =
-        version === 7
-          ? adapterFor(context(panel.env)).open()
-          : legacyEnv
-              .requestToPromise(panel.env.indexedDB.open('CanvasTabDB', 9))
-              .then((/** @type {IDBDatabase} */ db) => db.close());
+      // The service worker upgrading to this build's version (#17 PR 1b: no page does), or a
+      // newer build past it
+      const upgrade = legacyEnv
+        .requestToPromise(panel.env.indexedDB.open('CanvasTabDB', version === 7 ? 9 : 10))
+        .then((/** @type {IDBDatabase} */ db) => db.close());
       assert.equal(await settleUpgrade(upgrade, panel), 'opened', `version ${version}`);
       assert.equal(panel.storage.openState, 'version-changed', `version ${version}`);
     }
@@ -234,7 +233,7 @@ describe('the legacy adapter', () => {
 
   it('once another context upgrades the database, Popup and Side Panel answer reload-required, not retryable', async () => {
     const panel = context();
-    // A profile from before folders, which the upgrade adds
+    // A profile from before folders, which the worker's upgrade adds
     await legacyEnv.createDatabase(panel.env.indexedDB, {
       version: 7,
       omit: ['folders'],
@@ -253,7 +252,10 @@ describe('the legacy adapter', () => {
     // The kernel settles a turn after the open does
     await ready.then(() => new Promise(resolve => setImmediate(resolve)));
     assert.equal((await popup.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
-    assert.equal(await settleUpgrade(adapterFor(context(panel.env)).open(), panel), 'opened');
+    const upgrade = legacyEnv
+      .requestToPromise(panel.env.indexedDB.open('CanvasTabDB', 9))
+      .then((/** @type {IDBDatabase} */ db) => db.close());
+    assert.equal(await settleUpgrade(upgrade, panel), 'opened');
     for (let attempt = 0; attempt < 2; attempt++) {
       const quickNote = await popup.execute({ type: 'createNote', commandId: `c${attempt}`, noteId: 'n2' });
       assert.deepEqual(
@@ -396,7 +398,7 @@ describe('the legacy adapter', () => {
     assert.equal(worker.storage.openState, 'closed-by-browser');
     assertKind(await capture('third'), 'committed');
     // A newer build's upgrade: the connection closes for it, and the reopen finds the newer version
-    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 9));
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
     /** @type {IDBDatabase} */ (upgraded).close();
     const refused = await capture('fourth');
     assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
@@ -444,7 +446,7 @@ describe('the legacy adapter', () => {
       'b-third',
     ]);
     // A newer build's upgrade refuses the reopen, and the next capture tries again and is refused the same way
-    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 9));
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
     /** @type {IDBDatabase} */ (upgraded).close();
     for (const id of ['fourth', 'fifth']) {
       const refused = await capture(id);
@@ -515,7 +517,7 @@ describe('the legacy adapter', () => {
     for (const mode of /** @type {const} */ (['existing', 'versioned'])) {
       const page = context();
       await legacyEnv.createDatabase(page.env.indexedDB, {
-        version: 9,
+        version: DB_VERSION + 1,
         extraStores: { meta: { keyPath: 'key' } },
         records: { canvases: [legacyEnv.note('n1')] },
       });

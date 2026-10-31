@@ -1,41 +1,77 @@
-// What each composition root builds (#12, "Where the kernel runs"): one kernel on the legacy
-// adapter, over the storage its context loaded, with its surface as the caller the policy
-// checks. The new tab's and the worker's open the database versioned and maintain it first,
-// Popup's and Side Panel's open it as it is, and in slice 4a only the worker's watches its
-// connection. Each root takes the storage and settings it would read from its context's
-// globals, here production js/storage.js in test/helpers/legacy-env.js.
+// What each composition root builds (#12, "Where the kernel runs"; #17 PR 1b): one kernel per
+// context, with its surface as the caller the policy checks. The new tab's is on the legacy
+// adapter over production js/storage.js in test/helpers/legacy-env.js, and opens the database
+// as it is once the worker's run has had its 5 seconds. The worker's runs #17's migration run
+// first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { webcrypto } from 'node:crypto';
 
-import { createWorkerClient } from '../../js/kernel/composition/background.js';
-import { createNewTabClient, createNewTabLegacyStores } from '../../js/kernel/composition/newtab.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
+import { PURGE_MESSAGE, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
+import { createNewTabClient, createNewTabLegacyStores, withPurgeWake } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
-import { closeAll, legacyContext } from './legacy-fixture.mjs';
+import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 
+/** @type {{IDBKeyRange: typeof globalThis.IDBKeyRange}} */
+const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
+
 /**
- * What a root reads from its context's globals: the Storage global and chrome.storage.local
+ * What the new tab's root reads from its context's globals: the Storage global and chrome.storage.local
  * @param {LegacyContext} context
  */
 const hostOf = context => ({ storage: context.storage, settings: context.env.chrome.api.storage.local });
 
+/**
+ * What Popup's and Side Panel's roots read from a page's globals, `waits` counting their waits
+ * on the worker
+ * @param {LegacyContext} context
+ * @param {{count: number}} [waits]
+ */
+const pageHostOf = (context, waits = { count: 0 }) => ({
+  indexedDB: context.env.indexedDB,
+  settings: context.env.chrome.api.storage.local,
+  awaitUpgrade: async () => {
+    waits.count++;
+  },
+});
+
+/**
+ * What the worker's root reads from its globals
+ * @param {LegacyContext} context
+ */
+const workerHostOf = context => ({
+  indexedDB: context.env.indexedDB,
+  keyRange: KeyRange,
+  settings: context.env.chrome.api.storage.local,
+  locks: legacyEnv.createLockManager(),
+  estimate: null,
+  crypto: /** @type {any} */ (webcrypto),
+});
+
 /** @param {Outcome} outcome */
 const policyRefusal = outcome => outcome.kind === 'rejected' && [outcome.reason, outcome.code];
+
+/** @param {IDBFactory} factory */
+const databases = async factory =>
+  (await factory.databases()).map((/** @type {IDBDatabaseInfo} */ db) => [db.name, db.version]).sort();
 
 describe('each composition root', () => {
   it('builds a kernel whose caller is its surface', async () => {
     const tab = legacyContext();
-    const others = [legacyContext(tab.env), legacyContext(tab.env), legacyContext(tab.env)];
     const newtab = createNewTabClient(hostOf(tab));
     assert.equal(await newtab.whenReady(), null);
-    const [popup, panel, worker] = [createPopupClient, createSidePanelClient, createWorkerClient].map((create, i) =>
-      create(hostOf(others[i])),
-    );
+    const popup = createPopupClient(pageHostOf(tab));
+    const panel = createSidePanelClient(pageHostOf(tab));
+    const worker = createWorkerClient(workerHostOf(tab));
     /** @param {Client} client */
     const ids = client => ({ commandId: client.ids.next(), noteId: client.ids.next() });
 
@@ -77,50 +113,75 @@ describe('each composition root', () => {
       cause: 'policy',
       code: 'not-on-surface',
     });
-    closeAll([tab, ...others]);
+    closeAll([tab]);
   });
 
-  it("opens the new tab's and the worker's versioned and maintains them first, and Popup's and Side Panel's as they are", async () => {
-    const fresh = legacyContext();
-    const panes = [legacyContext(fresh.env), legacyContext(fresh.env)];
-    // On a profile with no database, Popup and Side Panel make none and change nothing
-    for (const [i, create] of [createPopupClient, createSidePanelClient].entries()) {
-      const failure = await create(hostOf(panes[i])).whenReady();
+  it("on a fresh profile only the worker makes the database, at this build's version; Popup and Side Panel wait on it, then make none", async () => {
+    const fresh = legacyContext(undefined, { worker: false });
+    // On a profile with no database, Popup and Side Panel wait on the worker first, then make none
+    const waits = { count: 0 };
+    for (const create of [createPopupClient, createSidePanelClient]) {
+      const failure = await create(pageHostOf(fresh, waits)).whenReady();
       assert.deepEqual(failure && [failure.cause, failure.code], ['storage', 'no-database']);
     }
+    assert.equal(waits.count, 2);
     assert.deepEqual(await fresh.env.indexedDB.databases(), []);
     assert.deepEqual(fresh.env.chrome.writes(), []);
-    // The new tab makes it at this build's version, with startup maintenance before anything else
-    assert.equal(await createNewTabClient(hostOf(fresh)).whenReady(), null);
-    const databases = await fresh.env.indexedDB.databases();
-    assert.deepEqual(
-      databases.map((/** @type {IDBDatabaseInfo} */ db) => [db.name, db.version]),
-      [['CanvasTabDB', 8]],
-    );
-    assert.equal(fresh.env.chrome.local.setting_storageInitialized, true);
+    // So does the new tab, whose wake reaches no worker here (worker: false): it opens what's
+    // there, which is nothing, so it refuses, and makes nothing
+    const refused = await createNewTabClient(hostOf(fresh)).whenReady();
+    assert.deepEqual(refused && [refused.cause, refused.code], ['storage', 'no-database']);
+    assert.deepEqual(await fresh.env.indexedDB.databases(), []);
 
-    // And so does the worker, on a profile of its own
-    const workerProfile = legacyContext();
-    assert.equal(await createWorkerClient(hostOf(workerProfile)).whenReady(), null);
-    assert.equal(workerProfile.env.chrome.local.setting_storageInitialized, true);
-    closeAll([fresh, ...panes, workerProfile]);
+    // The worker's run makes it at this build's version, then the worker maintains it, and records the run
+    const worker = createWorkerClient(workerHostOf(fresh));
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.migration.done).status, 'migrated');
+    assert.deepEqual(await databases(fresh.env.indexedDB), [['CanvasTabDB', DB_VERSION]]);
+    assert.equal(fresh.env.chrome.local.setting_storageInitialized, true);
+    assert.deepEqual(
+      { .../** @type {any} */ (fresh.env.chrome.local[UPGRADE_RECORD_KEY]), at: 0 },
+      // A fresh profile's run read no store, so it never holds back another (costly: false)
+      { status: 'migrated', code: null, at: 0, version: null, costly: false },
+    );
+    // And a new tab that wakes it then opens the database as it is, and maintains it
+    const next = legacyContext(fresh.env);
+    assert.equal(await createNewTabClient(hostOf(next)).whenReady(), null);
+    assert.equal(next.storage.db.version, DB_VERSION);
+    closeAll([fresh, next]);
   });
 
-  it("watches the new tab's and the worker's versioned connections", async () => {
-    // Another context's upgrade never waits on either: the worker opens again on its next
-    // capture, and the new tab's editor keeps its text while it asks for a reload
+  it("watches the new tab's connection, and the worker's opens again once a newer build's upgrade closes it", async () => {
+    // Another context's upgrade never waits on either: the new tab's editor keeps its text while
+    // it asks for a reload, and the worker's next command opens the database again
     const tab = legacyContext();
     assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
-    const worker = legacyContext();
-    assert.equal(await createWorkerClient(hostOf(worker)).whenReady(), null);
-    /** @param {LegacyContext} context */
-    const handled = context => {
-      const db = /** @type {IDBDatabase} */ (context.storage.db);
-      return [db.onversionchange, db.onclose].map(handler => typeof handler === 'function');
-    };
-    assert.deepEqual(handled(tab), [true, true]);
-    assert.deepEqual(handled(worker), [true, true]);
-    closeAll([tab, worker]);
+    const db = /** @type {IDBDatabase} */ (tab.storage.db);
+    assert.deepEqual(
+      [db.onversionchange, db.onclose].map(handler => typeof handler === 'function'),
+      [true, true],
+    );
+    const worker = createWorkerClient(workerHostOf(tab));
+    assert.equal(await worker.whenReady(), null);
+    const capture = (/** @type {string} */ id) =>
+      worker.execute({
+        type: 'captureToDailyNote',
+        commandId: `c-${id}`,
+        noteId: `d-${id}`,
+        blockId: `b-${id}`,
+        capture: { type: 'text', content: id },
+      });
+    assert.equal((await capture('first')).kind, 'committed');
+    // A newer build's upgrade: nothing blocks it, and the worker's next open finds it too new
+    const upgraded = await legacyEnv.requestToPromise(tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
+    /** @type {IDBDatabase} */ (upgraded).close();
+    assert.equal(tab.storage.openState, 'version-changed');
+    const refused = await capture('second');
+    assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
+      'newer-schema',
+      'version-too-new',
+    ]);
+    closeAll([tab]);
   });
 
   it("hands NotesManager, GraphView and SyncService only their own calls on the new tab's Storage", async () => {
@@ -143,5 +204,87 @@ describe('each composition root', () => {
     assert.deepEqual(await stores.graph.getAllNotes(true), await tab.storage.getAllNotes(true));
     assert.equal(stores.searchIndex.hasStore('vectors'), tab.storage.hasStore('vectors'));
     closeAll([tab]);
+  });
+});
+
+describe("the new tab's wake of the worker's purge (#17 PR 2b)", () => {
+  it('wakes the worker after each command that deleted something for good, and after nothing else', async () => {
+    const tab = legacyContext();
+    /** @type {string[]} */
+    const wakes = [];
+    const newtab = withPurgeWake(createNewTabClient(hostOf(tab)), () => wakes.push('wake'));
+    assert.equal(await newtab.whenReady(), null);
+    /**
+     * @param {Record<string, unknown>} fields
+     * @returns {Promise<any>}
+     */
+    const send = fields => newtab.execute(/** @type {any} */ ({ commandId: newtab.ids.next(), ...fields }));
+    /** @param {Record<string, unknown>} [fields] */
+    const make = async (fields = {}) => {
+      const noteId = newtab.ids.next();
+      assert.equal((await send({ type: 'createNote', noteId, ...fields })).kind, 'committed');
+      return noteId;
+    };
+    const kept = await make({
+      name: 'Kept',
+      blocks: [{ id: newtab.ids.next(), type: 'text', content: 'Milk', order: 0 }],
+    });
+    const deleted = await make({
+      name: 'Deleted',
+      blocks: [{ id: newtab.ids.next(), type: 'text', content: 'Eggs', order: 0 }],
+    });
+    const empty = await make();
+    const steps = [
+      // A trash, an archive, a rename, and a refused delete delete nothing
+      [{ type: 'trashNote', noteId: deleted }, 0],
+      [{ type: 'archiveNote', noteId: kept }, 0],
+      [{ type: 'renameNote', noteId: kept, name: 'Still kept' }, 0],
+      [{ type: 'deleteNotePermanently', noteId: kept }, 0],
+      // A permanent delete, and a trash of an empty untitled note, which deletes it
+      [{ type: 'deleteNotePermanently', noteId: deleted }, 1],
+      [{ type: 'trashNote', noteId: empty }, 1],
+      // Empty trash and trash retention with nothing to delete, then a folder's delete
+      [{ type: 'emptyTrash' }, 0],
+      [{ type: 'runTrashCleanup' }, 0],
+      [{ type: 'createFolder', folderId: 'f1', name: 'Folder', parentId: null }, 0],
+      [{ type: 'deleteFolder', folderId: 'f1' }, 1],
+    ];
+    for (const [fields, wanted] of steps) {
+      const before = wakes.length;
+      await send(/** @type {Record<string, unknown>} */ (fields));
+      assert.equal(wakes.length - before, wanted, JSON.stringify(fields));
+    }
+    // A bulk delete wakes it once, when any item deleted
+    await send({ type: 'unarchiveNote', noteId: kept });
+    await send({ type: 'trashNote', noteId: kept });
+    const before = wakes.length;
+    const bulk = await send({ type: 'runBulkAction', action: 'delete', noteIds: [kept] });
+    assert.equal(bulk.kind, 'bulk');
+    assert.equal(wakes.length - before, 1);
+    closeAll([tab]);
+  });
+
+  it("sends storage.purge and nothing else, and a worker that can't be reached changes nothing", async () => {
+    /** @type {unknown[]} */
+    const sent = [];
+    wakeWorkerToPurge({
+      runtime: {
+        sendMessage: async message => {
+          sent.push(message);
+          throw new Error('no worker');
+        },
+      },
+    });
+    wakeWorkerToPurge({ runtime: undefined });
+    wakeWorkerToPurge({
+      runtime: {
+        sendMessage: () => {
+          throw new Error('not now');
+        },
+      },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sent, [{ type: PURGE_MESSAGE }]);
+    assert.equal(PURGE_MESSAGE, 'storage.purge');
   });
 });

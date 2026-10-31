@@ -30,6 +30,7 @@ import {
   subtractHashes,
   taggedJson,
 } from '../../js/kernel/adapters/indexeddb/records.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { KeyRange, Killed, legacyEnv, newProfile, profileWith, run, synthesized } from './migration-support.mjs';
 import { NOW } from './support.mjs';
@@ -332,6 +333,7 @@ describe('a copy cut off', () => {
     let written = 0;
     const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.faults.factory, 'CanvasTabDB'));
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.faults.factory, { create: true }));
+    // The point a run of this build makes before its steps, for the newest version they reach
     const { point, progress } = await startPoint(recovery, {
       id: 'p1',
       kind: 'pre-migration',
@@ -339,7 +341,7 @@ describe('a copy cut off', () => {
       sourceVersion: 8,
       structuralVersion: null,
       logicalVersion: null,
-      target: 9,
+      target: LATEST_STRUCTURAL,
       stores: storesToCopy(source),
       createdAt: NOW,
     });

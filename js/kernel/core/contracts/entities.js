@@ -18,6 +18,13 @@ const dateStr = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/));
 
 const nullableTime = v.nullable(timestamp);
 
+/** #1's Placement (js/product/placement.js), which #17 PR 3a writes beside a note's flags */
+const placement = v.variant('kind', [
+  v.looseObject({ kind: v.literal('inbox') }),
+  v.looseObject({ kind: v.literal('collection'), folderId: v.nullable(entityId('folder')) }),
+  v.looseObject({ kind: v.literal('daily'), dateKey: dateStr }),
+]);
+
 /** A note, as IndexedDB's `canvases` store holds it */
 export const noteRecord = v.looseObject({
   id: entityId('note'),
@@ -43,6 +50,14 @@ export const noteRecord = v.looseObject({
   folderId: v.optional(v.nullable(entityId('folder'))),
   viewport: v.optional(v.looseObject({ scale: v.number(), offsetX: v.number(), offsetY: v.number() })),
   settings: v.optional(v.looseObject({ gridType: v.string(), backgroundColor: v.string() })),
+  // #17 PR 3a's, which follow the flags (domain/placement.js)
+  placement: v.optional(placement),
+  kind: v.optional(v.picklist(['note', 'template'])),
+  lifecycle: v.optional(v.picklist(['active', 'archived', 'trashed'])),
+  // #17 PR 3b's, a Daily Note's local date beside its dateStr (domain/daily.js)
+  dailyKey: v.optional(dateStr),
+  dailyTimeZone: v.optional(v.nullable(v.string())),
+  dailyDuplicateOf: v.optional(v.nullable(entityId('note'))),
 });
 
 /**

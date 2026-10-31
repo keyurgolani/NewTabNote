@@ -16,9 +16,11 @@
  * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
  *   (js/runtime/lazy.js), which JSZip loads through at the first Markdown export (#27 slice 3).
  *   Without it, JSZip is the global its script defined, as before.
+ * @param {(() => Promise<void>)|null} [deps.onOpened] - Runs each time Settings opens, for sections
+ *   that read their state then (#17 PR 1b)
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null }) {
+  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, onOpened = null }) {
     this.settings = settings;
     this.loadLibrary = loadLibrary;
     /** @type {any} */
@@ -26,6 +28,8 @@ class SettingsController {
     this.validateBackup = validateBackup;
     this.domRefs = domRefs;
     this.logger = logger;
+    /** @type {(() => Promise<void>)|null} */
+    this.onSettingsOpened = onOpened;
 
     // App-level callbacks (set by App after construction)
     this.onApplyTheme = null;
@@ -522,6 +526,9 @@ class SettingsController {
     this.switchSettingsCategory('general');
 
     await this.updateSettingsUI();
+    if (this.onSettingsOpened) {
+      await this.onSettingsOpened().catch((error) => console.warn('A settings section could not read its state:', error));
+    }
   }
 
   async updateSettingsUI() {
@@ -828,6 +835,21 @@ class SettingsController {
     throw new Error(`JSZip didn't load (${loaded.reason})`);
   }
 
+  /**
+   * A note as every export writes it: without the fields #17 PR 3 writes beside its flags,
+   * js/kernel/core/domain/placement.js's NEW_NOTE_FIELDS (test/import.test.js holds Export
+   * Current Note to that list), which 1.4.1's single-note import ignores (#17 PR 3b, Q8)
+   * @param {Record<string, any>} note
+   * @returns {Record<string, any>}
+   */
+  static exportedNote(note) {
+    const copy = { ...note };
+    for (const field of ['placement', 'kind', 'lifecycle', 'dailyKey', 'dailyTimeZone', 'dailyDuplicateOf']) {
+      delete copy[field];
+    }
+    return copy;
+  }
+
   async exportCurrentNote() {
     try {
       const editor = this.getEditor ? this.getEditor() : null;
@@ -836,7 +858,8 @@ class SettingsController {
         return;
       }
 
-      const note = await this.documentClient.readNote(editor.noteId);
+      const stored = await this.documentClient.readNote(editor.noteId);
+      const note = stored && SettingsController.exportedNote(stored);
       const blocks = await this.documentClient.blocksAsStored(editor.noteId);
 
       const data = {

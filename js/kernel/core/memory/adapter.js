@@ -1,10 +1,13 @@
 /**
  * The in-memory adapter (#12, "Layout"), with three of the four flags:
  * - atomicMultiStore: a command's units commit together, or nothing does
- * - revisions: a note has a content revision, which only a content command's change to its
- *   title or blocks moves (Work.scope, Work.revised). Committed outcomes report it, and a
- *   stale `expectedRevision` is a conflict, after which the adapter keeps the command. A note
- *   deleted and made again under its id carries on past the revision it had.
+ * - revisions: a note has the three versions #17 keeps (ports/repository.js, WriteScope), each
+ *   0 until something moves it. Its content revision moves only when a content command
+ *   changes its title or blocks (Work.scope, Work.revised), its placement version on every
+ *   put of a placement command, and its source revision takes a derived command's
+ *   Work.sourceRevision. Committed outcomes report the content revision, and a stale expected
+ *   version is a conflict, after which the adapter keeps the command. A note deleted and made
+ *   again under its id carries on past the revision it had.
  * - idempotency: a commandId sent again with the same command gets its committed or conflict
  *   outcome again, and nothing runs; sent with another command it's `idempotency-key-reuse`.
  *   Rejections and `unavailable` outcomes aren't kept, so sending the command again runs it.
@@ -21,12 +24,16 @@
  * transactions over the same stores. Everything goes in and out as a copy.
  *
  * The contract suite runs against it, and `beforeWrite` lets a test make a write fail. #17
- * persists what it keeps: revisions, outcomes, and conflicts.
+ * persists what it keeps: revisions, outcomes, and conflicts. A conflict is kept as a record in
+ * its `conflicts` store, and a tombstone a unit puts gets its note's last content revision and
+ * the commit's seq, as on #17's adapter, so deleting a note drops its conflict records (#17
+ * PR 2b).
  *
  * Given #13's in-memory ledger and commit log (memory/ledger.js, memory/commit-log.js), it
  * writes them in the task that commits, as #17 writes its idempotency record and change-log
  * entry in the commit's transaction: a commit that changes notes or folders appends one change
- * per entity, with its revision, and its committed outcome carries that commitSeq. Then the
+ * per entity, typed by the store it wrote and with its revision, and its committed outcome
+ * carries that commitSeq. Then the
  * ledger keeps each committed or conflict outcome under its commandId. A resend appends and
  * records nothing again, and a bulk command's reservation stays the adapter's own, so its key
  * reads as absent there and each item's reads under its own.
@@ -56,8 +63,8 @@ import { digestOf } from './fingerprint.js';
 /** @typedef {import('./ledger.js').MemoryLedger} MemoryLedger */
 
 /**
- * A conflict the adapter kept: the command that lost, and the revision it lost to. The
- * record that won is still in its store.
+ * A conflict the adapter kept, as `conflicts()` reads it from its `conflicts` store: the
+ * command that lost, and the revision it lost to. The record that won is still in its store.
  * @typedef {object} KeptConflict
  * @property {string} commandId
  * @property {Command} command
@@ -82,6 +89,39 @@ import { digestOf } from './fingerprint.js';
 const isKey = key => typeof key === 'string' && key !== '';
 
 /**
+ * A record's key as the one string its store's map holds it under: the id, or for a store
+ * keyed by several fields (tombstones), their values as JSON. Undefined when a part isn't an id.
+ * @param {StoreName} store
+ * @param {unknown} key - a string, or for such a store the array of its parts
+ * @returns {string | undefined}
+ */
+const keyString = (store, key) => {
+  if (!Array.isArray(STORES[store].keyPath)) return isKey(key) ? key : undefined;
+  return Array.isArray(key) && key.length === STORES[store].keyPath.length && key.every(isKey)
+    ? JSON.stringify(key)
+    : undefined;
+};
+
+/**
+ * The key `record` is stored under in `store`, as keyString makes it
+ * @param {StoreName} store
+ * @param {Record<string, unknown>} record
+ * @returns {string | undefined}
+ */
+const keyOf = (store, record) => {
+  const { keyPath } = /** @type {{keyPath: string | readonly string[]}} */ (STORES[store]);
+  return keyString(store, typeof keyPath === 'string' ? record[keyPath] : keyPath.map(field => record[field]));
+};
+
+/**
+ * A key as a store's records give it: the id, or the array a keyString holds
+ * @param {StoreName} store
+ * @param {string} key
+ * @returns {string}
+ */
+const keyFrom = (store, key) => (Array.isArray(STORES[store].keyPath) ? JSON.parse(key) : key);
+
+/**
  * @param {string} a
  * @param {string} b
  */
@@ -98,10 +138,15 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   const stores = new Map(/** @type {StoreName[]} */ (Object.keys(STORES)).map(name => [name, new Map()]));
   /** @type {Map<string, number>} */
   const revisions = new Map();
+  /**
+   * Each note's placement version and source revision, by revisionKey, as revisions are
+   * @type {Map<string, number>}
+   */
+  const placements = new Map();
+  /** @type {Map<string, number>} */
+  const sources = new Map();
   /** @type {Map<string, KeptOutcome>} */
   const outcomes = new Map();
-  /** @type {KeptConflict[]} */
-  const conflicts = [];
   /** @type {Record<ReadableSettingsArea, Map<string, unknown>>} */
   const settings = {
     preferences: new Map(),
@@ -110,6 +155,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     chat: new Map(),
     onboarding: new Map(),
     backup: new Map(),
+    upgrade: new Map(),
     idbSettings: new Map(),
   };
   /** @type {Promise<unknown>} */
@@ -147,12 +193,32 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   };
 
   /**
+   * A committed note's content revision, 0 until something moves it. Folders carry no versions
+   * (#17 PR 2a's rule, as on #17's adapter), so a folder has none.
    * @param {StoreName} store
    * @param {string} key
    * @returns {number | undefined}
    */
-  const committedRevision = (store, key) =>
-    storeOf(store).has(key) ? revisions.get(revisionKey(store, key)) : undefined;
+  const committedRevision = (store, key) => {
+    if (store !== 'notes' || !storeOf(store).has(key)) return undefined;
+    return revisions.get(revisionKey(store, key)) ?? 0;
+  };
+
+  /**
+   * A committed note's three versions, or undefined for a key the notes store doesn't hold
+   * @param {StoreName} store
+   * @param {string} key
+   * @returns {import('../ports/repository.js').Versions | undefined}
+   */
+  const committedVersions = (store, key) => {
+    if (store !== 'notes' || !storeOf(store).has(key)) return undefined;
+    const id = revisionKey(store, key);
+    return {
+      revision: revisions.get(id) ?? 0,
+      placementVersion: placements.get(id) ?? 0,
+      sourceRevision: sources.get(id) ?? 0,
+    };
+  };
 
   /**
    * A transaction over `scope`'s committed records and the writes `pending` holds. As in
@@ -219,28 +285,78 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     };
     return /** @type {Tx} */ ({
       get: async (store, key) => {
-        const record = clone(current(store, key));
+        scoped(store);
+        const stored = keyString(store, key);
+        const record = stored === undefined ? undefined : clone(current(store, stored));
         got.add(revisionKey(store, key));
         return record;
       },
       getAll: async store => clone(records(store)),
       getAllByIndex: async (store, index, value) => clone(byIndex(store, index, value)),
       getKeysByIndex: async (store, index, value) =>
-        byIndex(store, index, value).map(record => /** @type {string} */ (record[STORES[store].keyPath])),
+        byIndex(store, index, value).map(record => keyFrom(store, /** @type {string} */ (keyOf(store, record)))),
       revision: (store, key) => {
         scoped(store);
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
         return committedRevision(store, key);
       },
-      put: (store, record) => write(store, /** @type {string} */ (record[STORES[store].keyPath]), record),
-      delete: (store, key) => write(store, key, undefined),
+      versions: (store, key) => {
+        scoped(store);
+        if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
+        return committedVersions(store, key);
+      },
+      // Every store is here, as on a database at this build's version
+      has: store => {
+        scoped(store);
+        return true;
+      },
+      put: (store, record) =>
+        write(store, /** @type {string} */ (keyOf(store, /** @type {Record<string, unknown>} */ (record))), record),
+      delete: (store, key) => write(store, /** @type {string} */ (keyString(store, key)), undefined),
     });
   };
 
   /**
-   * The committed outcome, with the primary record's revision: one more than before when a
-   * content command changed its content, and where it was otherwise. A placement or derived
-   * command never moves it (ports/repository.js, WriteScope).
+   * A commit's writes, by revisionKey: each record as it'll be stored, or undefined for a delete
+   * @typedef {Map<string, {store: StoreName, key: string, record: Record<string, unknown> | undefined}>} Pending
+   */
+
+  /**
+   * Moves the versions a commit moves, once its writes are in (ports/repository.js,
+   * WriteScope): the primary note's content revision by one when a content command changed
+   * its content, the placement version of every note a placement command put, and the primary
+   * note's source revision to the Work.sourceRevision a derived command that put it carries. A
+   * deleted note keeps only its content revision, as #17's tombstone keeps `lastRevision`.
+   * Folders carry none, so a folder command moves nothing.
+   * @param {Work} work
+   * @param {Pending} pending
+   * @returns {{store: StoreName, key: string} | null} the primary record, when its content revision moved
+   */
+  const moveVersions = (work, pending) => {
+    const scope = work.scope || 'content';
+    for (const { store, key, record } of pending.values()) {
+      if (store !== 'notes') continue;
+      const id = revisionKey(store, key);
+      if (record === undefined) {
+        placements.delete(id);
+        sources.delete(id);
+      } else if (scope === 'placement') {
+        placements.set(id, (placements.get(id) ?? 0) + 1);
+      }
+    }
+    const primary = work.primary && work.primary();
+    if (!primary || !storeOf(primary.store).has(primary.key)) return null;
+    const id = revisionKey(primary.store, primary.key);
+    if (scope === 'derived' && work.sourceRevision !== undefined && pending.get(id)?.record !== undefined) {
+      sources.set(id, work.sourceRevision);
+    }
+    if (primary.store !== 'notes' || scope !== 'content' || !work.revised || !work.revised()) return null;
+    revisions.set(id, (revisions.get(id) || 0) + 1);
+    return primary;
+  };
+
+  /**
+   * The committed outcome, with the primary record's content revision
    * @param {Work} work
    * @returns {Outcome}
    */
@@ -248,18 +364,57 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     const outcome = work.done();
     const primary = work.primary && work.primary();
     if (!primary) return outcome;
-    const content = (work.scope || 'content') === 'content';
-    if (content && work.revised && work.revised() && storeOf(primary.store).has(primary.key)) {
-      const id = revisionKey(primary.store, primary.key);
-      revisions.set(id, (revisions.get(id) || 0) + 1);
-    }
     const revision = committedRevision(primary.store, primary.key);
     return revision === undefined ? outcome : { ...outcome, revision };
   };
 
   /**
+   * The entities a commit changed, for the commit log, typed by the store it wrote: each note
+   * and folder it put or deleted, and the primary record when only its revision moved, as when
+   * blocks were deleted from a note. So deleteFolder's notes, filed at the root, go in as notes.
+   * @param {Pending} pending
+   * @param {{store: StoreName, key: string} | null} moved
+   * @returns {Array<{store: 'notes' | 'folders', key: string}>}
+   */
+  const changedEntities = (pending, moved) => {
+    /** @type {Map<string, {store: 'notes' | 'folders', key: string}>} */
+    const changed = new Map();
+    for (const { store, key } of [...pending.values(), ...(moved ? [moved] : [])]) {
+      if (store === 'notes' || store === 'folders') changed.set(revisionKey(store, key), { store, key });
+    }
+    return [...changed.values()];
+  };
+
+  /**
+   * What a command's commit did: its outcome, the notes and folders it changed, and the keys of
+   * the tombstones it put, which take the commit's seq once the log has it
+   * @typedef {{outcome: Outcome, changed: Array<{store: 'notes' | 'folders', key: string}>, tombstones: string[]}} Applied
+   */
+
+  /**
+   * The conflict record a command that lost is kept as, under its commandId in `conflicts`,
+   * as #17's adapter keeps it (adapters/indexeddb/conflicts.js), so deleting the note drops it
    * @param {Work} work
-   * @returns {Promise<Outcome>}
+   * @param {import('../contracts/outcomes.js').Conflict} conflict
+   * @returns {Record<string, unknown>}
+   */
+  const conflictRecord = (work, conflict) => {
+    const primary = work.primary && work.primary();
+    const fields = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (work.command));
+    const expected = conflict.code === 'placement-conflict' ? fields.expectedPlacementVersion : fields.expectedRevision;
+    return {
+      id: work.commandId,
+      noteId: primary && primary.store === 'notes' ? primary.key : null,
+      scope: work.scope || 'content',
+      expected: typeof expected === 'number' ? expected : null,
+      current: conflict.currentRevision,
+      command: clone(work.command),
+    };
+  };
+
+  /**
+   * @param {Work} work
+   * @returns {Promise<Applied>}
    */
   const apply = async work => {
     const { effect } = work;
@@ -267,10 +422,12 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       const entries = Object.entries(effect.values);
       for (const [key] of entries) beforeWrite(effect.area, key);
       for (const [key, value] of entries) settings[effect.area].set(key, clone(value));
-      return finish(work);
+      return { outcome: finish(work), changed: [], tombstones: [] };
     }
     // The legacy backup tasks run only on 1.4.x's Storage (the `backups` flag)
-    if (effect.kind === 'backup') return unavailable('adapter', 'backups-need-legacy-storage', false);
+    if (effect.kind === 'backup') {
+      return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), changed: [], tombstones: [] };
+    }
     if (effect.kind === 'maintenance') {
       /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
       const defaults = [
@@ -282,22 +439,16 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
           if (!settings[area].has(key)) settings[area].set(key, clone(value));
         }
       }
-      return finish(work);
+      return { outcome: finish(work), changed: [], tombstones: [] };
     }
-    /** @type {Map<string, {store: StoreName, key: string, record: Record<string, unknown> | undefined}>} */
+    /** @type {Pending} */
     const pending = new Map();
     for (const unit of effect.units) {
       if (unit.when && !unit.when()) continue;
       const stop = await unit.run(transaction(pending, unit.mode || 'readwrite', unit.stores));
       if (stop) {
-        if (stop.kind === 'conflict') {
-          conflicts.push({
-            commandId: work.commandId,
-            command: clone(work.command),
-            currentRevision: stop.currentRevision,
-          });
-        }
-        return stop;
+        if (stop.kind === 'conflict') storeOf('conflicts').set(work.commandId, conflictRecord(work, stop));
+        return { outcome: stop, changed: [], tombstones: [] };
       }
     }
     // A deleted record's revision stays, as #17's tombstone keeps `lastRevision`, so a record
@@ -307,40 +458,58 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       if (record === undefined) storeOf(store).delete(key);
       else storeOf(store).set(key, record);
     }
-    return finish(work);
+    const moved = moveVersions(work, pending);
+    // A note's tombstone gets the content revision it had, as #17's adapter fills it in
+    /** @type {string[]} */
+    const tombstones = [];
+    for (const { store, key, record } of pending.values()) {
+      if (store !== 'tombstones' || !record) continue;
+      /** @type {Record<string, unknown>} */
+      const filled = { ...record, seq: null };
+      if (record.entityType === 'note')
+        filled.lastRevision = revisions.get(revisionKey('notes', String(record.id))) ?? 0;
+      storeOf('tombstones').set(key, filled);
+      tombstones.push(key);
+    }
+    return { outcome: finish(work), changed: changedEntities(pending, moved), tombstones };
   };
 
   /**
-   * The entities a committed command changed, for the commit log: notes and folders, each at
-   * its revision, or 0 for one that has none. Settings and maintenance change no entity.
-   * @param {Work} work
-   * @param {Outcome} outcome
+   * The changes a committed command appends to the commit log: each entity it changed, at its
+   * revision, or 0 for one that has none, which every folder is. Settings and maintenance
+   * change no entity.
+   * @param {Applied} applied
    * @returns {Change[]}
    */
-  const changesOf = (work, outcome) => {
+  const changesOf = ({ outcome, changed }) => {
     if (outcome.kind !== 'committed') return [];
-    const { aggregate } = COMMANDS[work.command.type];
-    if (aggregate !== 'note' && aggregate !== 'folder') return [];
-    /** @type {StoreName} */
-    const store = aggregate === 'note' ? 'notes' : 'folders';
-    return outcome.changedIds.map(entityId => ({
-      entityType: aggregate,
-      entityId,
-      revision: revisions.get(revisionKey(store, entityId)) ?? 0,
+    return changed.map(({ store, key }) => ({
+      entityType: store === 'notes' ? 'note' : 'folder',
+      entityId: key,
+      revision: store === 'notes' ? (revisions.get(revisionKey(store, key)) ?? 0) : 0,
     }));
   };
 
   /**
-   * Writes the commit log and the ledger for an outcome the adapter keeps, and answers it with
+   * Writes the commit log, and the ledger for a catalog command's outcome, and answers it with
    * its commitSeq when the log took a change
    * @param {Work} work
-   * @param {Outcome} outcome
+   * @param {Applied} applied
+   * @param {boolean} keyed - whether the work is a catalog command, which the ledger keeps
    * @returns {Outcome}
    */
-  const log = (work, outcome) => {
-    const changes = commitLog ? changesOf(work, outcome) : [];
+  const log = (work, applied, keyed) => {
+    const { outcome } = applied;
+    const changes = commitLog ? changesOf(applied) : [];
     const kept = changes.length > 0 ? { ...outcome, commitSeq: commitLog?.append(changes) } : outcome;
-    if (kept.kind === 'committed' || kept.kind === 'conflict') ledger?.record(work.command, kept);
+    // The commit's tombstones carry its seq, as on #17's adapter
+    if ('commitSeq' in kept) {
+      for (const key of applied.tombstones) {
+        const tombstone = storeOf('tombstones').get(key);
+        if (tombstone) storeOf('tombstones').set(key, { ...tombstone, seq: kept.commitSeq });
+      }
+    }
+    if (keyed && (kept.kind === 'committed' || kept.kind === 'conflict')) ledger?.record(work.command, kept);
     return kept;
   };
 
@@ -377,19 +546,23 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
     commit(work) {
       return serial(async () => {
+        // Only a catalog command has a key to keep: other work, such as #20's storage probe,
+        // runs each time and keeps no record, as on #17's adapter
+        const keyed = Object.hasOwn(COMMANDS, work.command.type);
         // A send of the same command that committed while this one waited its turn
-        const kept = keptFor(work.commandId, work.command);
+        const kept = keyed ? keptFor(work.commandId, work.command) : undefined;
         if (kept) return { outcome: kept, replayed: kept.kind !== 'rejected' };
-        /** @type {Outcome} */
-        let outcome;
+        /** @type {Applied} */
+        let applied;
         try {
-          outcome = await apply(work);
+          applied = await apply(work);
         } catch (error) {
           return { outcome: unavailableFrom(error), replayed: false };
         }
+        let { outcome } = applied;
         if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
-          outcome = log(work, outcome);
-          outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
+          outcome = log(work, applied, keyed);
+          if (keyed) outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };
       });
@@ -417,6 +590,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     // The export file is 1.4.x's Storage code (the `backups` flag)
     exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
 
-    conflicts: () => clone(conflicts),
+    conflicts: () =>
+      [...storeOf('conflicts').values()].map(record => ({
+        commandId: /** @type {string} */ (record.id),
+        command: /** @type {Command} */ (clone(record.command)),
+        currentRevision: /** @type {number} */ (record.current),
+      })),
   });
 }

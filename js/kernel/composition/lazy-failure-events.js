@@ -25,6 +25,8 @@ export const SUCCESS_SITES = Object.freeze({
   'capture.committed': 'capture.failed',
   'backup.auto-succeeded': 'backup.auto-failed',
   'indexer.started': 'indexer.start-failed',
+  // The worker's (#17 PR 2b), which no page sends, listed so the copy stays whole
+  'storage.purge-completed': 'storage.purge-stopped',
 });
 
 /** js/trust/core/ports.js's SETTINGS_KEYS.openSites and .lastStorageIncident */

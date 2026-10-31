@@ -53,8 +53,8 @@ const UNDEFINED = { $type: 'undefined' };
 /** A note as each tag's Storage.createNote writes it */
 function note(shape, id, name, fields = {}) {
   const base = { id, name, createdAt: T0, updatedAt: T0, archived: false, archivedAt: null, titleManuallySet: false, lastAutoTitleAt: null };
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9';
-  const v8Fields = shape === 'v8' || shape === 'v9';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
+  const v8Fields = shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
   return {
     ...base,
     // v1.1.0's createNote added insights, so every shape but v1.0.0's own notes has them (#28 slice 3's recordings)
@@ -135,7 +135,7 @@ const nextId = idMaker(SEED);
 
 /** The notes, blocks, and media every richer fixture starts from */
 function profile(shape) {
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
   const [a, b, c, d] = [nextId(), nextId(), nextId(), nextId()];
   const f1 = nextId();
   const notes = [
@@ -166,7 +166,7 @@ function auxiliary(shape, base) {
     themes: [{ id: nextId(), name: 'Dusk', properties: { '--bg-primary': '#101820', '--text-primary': '#f2f2f2' }, updatedAt: T0 }],
     vectors: [{ id: first.id, noteId: first.id, vector: [0.125, -0.5, 0.25, 1], updatedAt: T0 }],
   };
-  if (shape === 'v8' || shape === 'v9') {
+  if (shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11') {
     out.snapshots = [{ id: nextId(), noteId: first.id, timestamp: T0 + 300000, blocks: [block('snap-b1', first.id, 0, 'Milk')], title: first.name }];
   }
   return out;
@@ -360,7 +360,7 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
   add(
     fixture({
       id: 'v9.basic',
-      purpose: 'Already at structural version 9 with its receipt: a run finds nothing to do and writes nothing.',
+      purpose: "At structural version 9 with its receipt, as #17 PR 1b's builds left a dev profile: a run makes a point and runs steps 10 and 11.",
       shape: 'v9',
       schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 },
       databases: [database('v9', records)],
@@ -389,6 +389,198 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
     }),
   );
 }
+
+// After every other fixture, so the ids the seed gives them stay the same
+{
+  const base = profile('v10');
+  const [groceries, reading] = base.notes;
+  // What #17 PR 2a's adapter keeps beside the notes: versions on two of them (the rest read as
+  // 0), a ledger row per commit and one for a conflict, the change log, the conflict's record
+  // with the save that lost, and a deleted note's content-free tombstone
+  const notes = base.notes.map(note => {
+    if (note.id === groceries.id) return { ...note, revision: 3, placementVersion: 1, sourceRevision: 2 };
+    if (note.id === reading.id) return { ...note, revision: 1, placementVersion: 0, sourceRevision: 0 };
+    return note;
+  });
+  const [created, saved, lost] = [nextId(), nextId(), nextId()];
+  const deleted = nextId();
+  /**
+   * A committed outcome as the adapter keeps it
+   * @param {string} code
+   * @param {string} noteId
+   * @param {number} revision
+   * @param {number} commitSeq
+   */
+  const committedRow = (code, noteId, revision, commitSeq) => ({
+    kind: 'committed',
+    code,
+    changedIds: [noteId],
+    revision,
+    commitSeq,
+    messageKey: `committed.${code}`,
+    severity: 'success',
+  });
+  const receipt = (id, from, to) => ({
+    id,
+    from,
+    to,
+    status: 'completed',
+    startedAt: T0,
+    completedAt: T0,
+    recoveryPointId: null,
+    failure: null,
+  });
+  const records = {
+    canvases: notes,
+    elements: base.elements,
+    media: base.media,
+    folders: base.folders,
+    ...auxiliary('v10', base),
+    meta: [
+      { key: 'changes', head: 3, floor: 0 },
+      { key: 'schema', structuralVersion: 10, logicalVersion: 1 },
+    ],
+    migrations: [receipt('structural-10', 9, 10), receipt('structural-9', 8, 9)],
+    // The digest is the SHA-256 of the command's canonical JSON; these stand in for real ones
+    operations: [
+      { opId: created, digest: 'a1'.repeat(32), outcome: committedRow('note-created', reading.id, 1, 1), at: T0 + 1000 },
+      { opId: saved, digest: 'b2'.repeat(32), outcome: committedRow('content-saved', groceries.id, 3, 3), at: T0 + 3000 },
+      {
+        opId: lost,
+        digest: 'c3'.repeat(32),
+        outcome: {
+          kind: 'conflict',
+          code: 'revision-conflict',
+          currentRevision: 3,
+          messageKey: 'conflict.revision-conflict',
+          severity: 'warning',
+        },
+        at: T0 + 4000,
+      },
+    ],
+    changes: [
+      { seq: 1, entityType: 'note', entityId: reading.id, revision: 1, opId: created, ops: [] },
+      { seq: 2, entityType: 'note', entityId: groceries.id, revision: 2, opId: nextId(), ops: [] },
+      { seq: 3, entityType: 'note', entityId: groceries.id, revision: 3, opId: saved, ops: [] },
+    ],
+    conflicts: [
+      {
+        id: lost,
+        noteId: groceries.id,
+        scope: 'content',
+        expected: 2,
+        current: 3,
+        at: T0 + 4000,
+        command: {
+          type: 'saveNoteContent',
+          commandId: lost,
+          noteId: groceries.id,
+          blocks: [block('stale-b1', groceries.id, 0, 'A stale draft')],
+          expectedRevision: 2,
+        },
+      },
+    ],
+    tombstones: [
+      { entityType: 'note', id: deleted, deletedAt: T0 + 2000, lastRevision: 2, seq: null, reason: 'deleted' },
+    ],
+  };
+  add(
+    fixture({
+      id: 'v10.basic',
+      purpose:
+        "At structural version 10 with its receipts, as #17 PR 2a's to 3a's builds left a dev profile, holding a ledger, a change log, a conflict, and a tombstone: a run makes a point and runs step 11.",
+      shape: 'v10',
+      schema: { idbVersion: 10, structuralVersion: 10, logicalVersion: 1 },
+      databases: [database('v10', records)],
+    }),
+  );
+}
+
+// After every other fixture, so the ids the seed gives them stay the same
+{
+  const base = profile('v11');
+  const [groceries] = base.notes;
+  // #17 PR 3b's daily index, and a Daily Note each key names, as logical 3 leaves them
+  const daily = note('v11', nextId(), 'Daily Note - Oct 9, 2025', {
+    isDaily: true,
+    dateStr: '2025-10-09',
+    dailyKey: '2025-10-09',
+    dailyTimeZone: null,
+    dailyDuplicateOf: null,
+  });
+  const receipt = (id, from, to) => ({
+    id,
+    from,
+    to,
+    status: 'completed',
+    startedAt: T0,
+    completedAt: T0,
+    recoveryPointId: null,
+    failure: null,
+  });
+  const records = {
+    canvases: [...base.notes.map(n => (n.id === groceries.id ? { ...n, revision: 2, placementVersion: 0, sourceRevision: 0 } : n)), daily],
+    elements: [...base.elements, block(nextId(), daily.id, 0, 'Morning pages')],
+    media: base.media,
+    folders: base.folders,
+    ...auxiliary('v11', base),
+    meta: [
+      { key: 'changes', head: 0, floor: 0 },
+      { key: 'schema', structuralVersion: 11, logicalVersion: 3 },
+    ],
+    migrations: [
+      receipt('logical-2', 1, 2),
+      receipt('logical-3', 2, 3),
+      receipt('structural-10', 9, 10),
+      receipt('structural-11', 10, 11),
+      receipt('structural-9', 8, 9),
+    ],
+    daily_index: [{ dailyKey: '2025-10-09', noteId: daily.id }],
+  };
+  add(
+    fixture({
+      id: 'v11.basic',
+      purpose:
+        'Already at structural version 11 and logical 3 with their receipts, holding a keyed Daily Note and its daily index entry: a run finds nothing to do and writes nothing.',
+      shape: 'v11',
+      schema: { idbVersion: 11, structuralVersion: 11, logicalVersion: 3 },
+      databases: [database('v11', records)],
+    }),
+  );
+}
+
+// After every other fixture, so the ids the seed gives them stay the same (#17 PR 3b)
+v8(
+  'v8.evening-daily-notes',
+  "Daily Notes 1.4.x made in Los Angeles: two its ensureDailyNote made in the evening, keyed by the next day's UTC date, a third whose own date two notes a race made at once hold, and one the calendar made ahead of its day.",
+  r => {
+    /**
+     * A Daily Note as 1.4.x's ensureDailyNote or ensureDailyNoteForDate wrote it
+     * @param {string} id
+     * @param {string} day - the local date its name gives, `Mon D`
+     * @param {string} dateStr
+     * @param {number} createdAt
+     */
+    const daily = (id, day, dateStr, createdAt) =>
+      note('v8', id, `Daily Note - ${day}, 2025`, { isDaily: true, dateStr, createdAt, updatedAt: createdAt });
+    const notes = [
+      // 19:00 and 20:00 in Los Angeles, the next day in UTC, which 1.4.x took for today
+      daily('daily-oct-7-evening', 'Oct 7', '2025-10-08', Date.UTC(2025, 9, 8, 2)),
+      daily('daily-oct-8-evening', 'Oct 8', '2025-10-09', Date.UTC(2025, 9, 9, 3)),
+      // Two tabs at once on Oct 10's morning, and that evening's note, keyed by Oct 11
+      daily('daily-oct-10-a', 'Oct 10', '2025-10-10', Date.UTC(2025, 9, 10, 17)),
+      daily('daily-oct-10-b', 'Oct 10', '2025-10-10', Date.UTC(2025, 9, 10, 17, 0, 1)),
+      daily('daily-oct-10-evening', 'Oct 10', '2025-10-11', Date.UTC(2025, 9, 11, 3)),
+      // The calendar's Oct 12, opened on Oct 5
+      daily('daily-oct-12-planned', 'Oct 12', '2025-10-12', Date.UTC(2025, 9, 5, 19)),
+    ];
+    return {
+      ...r,
+      canvases: [...r.canvases, ...notes],
+      elements: [...r.elements, ...notes.map((n, i) => block(`${n.id}-b1`, n.id, 0, `Written on ${n.name}`, { createdAt: n.createdAt + i }))],
+    };
+  },
+);
 
 fs.mkdirSync(OUT, { recursive: true });
 for (const value of fixtures) {
