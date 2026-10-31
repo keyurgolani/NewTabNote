@@ -323,7 +323,7 @@ describe("#75's follow-ups (part 2)", () => {
     assert.deepEqual([stored?.state, stored?.occurrences], ['resolved', 2]);
   });
 
-  it('P4b: a later failing write undismisses write-failed after a clock step back', async () => {
+  it('P4b: a later failing write with another cause undismisses write-failed after a clock step back', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const up = databaseOn(profile);
@@ -338,9 +338,38 @@ describe("#75's follow-ups (part 2)", () => {
     clock.advance(10_000);
     await rb.records.dismiss(incident.id, true);
     clock.advance(-60_000);
+    // The same failure again keeps it dismissed (#20 slice 4a: a dismissal holds until the problem changes)
     await ra.records.append(event(1));
+    assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, true);
+    // Another cause brings it back, whatever the clocks say
+    fa.failNext(1000, 'quota');
+    await ra.records.append(event(2));
     assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, false);
     assert.ok((await summaryOf(rb.records, clock)).actionRequired >= 1);
+  });
+
+  it('P4c: a held cause change survives a later sighting with the first cause before the replay', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const up = databaseOn(profile);
+    opened.push(up);
+    const rb = await recordsOn(up, profile, { clock, prefix: 'bbbb' });
+    const fa = flaky(profile);
+    const ra = await recordsOn(fa.store, profile, { clock, prefix: 'aaaa' });
+    fa.failNext(1000);
+    await ra.records.append(event(0));
+    await rb.records.append(event(0));
+    const incident = await storedAt(up, WRITE_FAILED);
+    clock.advance(10_000);
+    await rb.records.dismiss(incident.id, true);
+    clock.advance(1000);
+    // Another cause, then the first again, both held before anything replays them
+    fa.failNext(1000, 'quota');
+    await ra.records.append(event(1));
+    clock.advance(1000);
+    fa.failNext(1000);
+    await ra.records.append(event(2));
+    assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, false);
   });
 
   it('N6: an incident event whose append fails while its raise lands still counts the failed write', async () => {
@@ -763,8 +792,8 @@ describe("#80's review round", () => {
     const { records, clock } = await recordsOn(f.store, profile);
     const { trust } = await useCases(records, clock);
     assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, true);
-    // trust.report reads receipts, runs, then incidents
-    f.failNext(1, 'retries-exhausted', { after: 2 });
+    // trust.report reads receipts, then incidents, then runs
+    f.failNext(1, 'retries-exhausted', { after: 1 });
     assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, false);
     f.failNext(1, 'retries-exhausted');
     assert.equal(/** @type {any} */ (await trust.incidents()).data.recordsRead, false);

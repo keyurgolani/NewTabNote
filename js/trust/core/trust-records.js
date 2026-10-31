@@ -64,12 +64,13 @@
  *   doesn't) and whether its read of NewTabNoteTrust did, so the summary doesn't call anything
  *   safe that it couldn't read.
  * - A held sighting is unseen by definition: a copy entry's new count, or an occurrence only
- *   this context's memory holds, reopens a resolved incident and undismisses a dismissed one
- *   whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
+ *   this context's memory holds, reopens a resolved incident, and undismisses a dismissed one
+ *   whose problem it changed (incidents.js), whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
  *   a false alarm, never a false all clear.
  * - Known limit: `storage/write-failed` sighted by more than one context stays open, a false
- *   alarm, until a later slice's verify path or a dismissal, even after every one of them
- *   recovered. So does one whose context ended before a write landed there: a closed tab, or
+ *   alarm, until the user dismisses it (recovery.dismiss, which holds while the failures keep
+ *   their cause and severity), even after every one of them recovered: no check observes it,
+ *   so recovery.check answers `not-checked` for it. So does one whose context ended before a write landed there: a closed tab, or
  *   an MV3 service worker that Chrome stopped (after about 30 s idle, the common case).
  * - Known limit, wider since the failure events reconcile at every worker start and tab: a
  *   stuck context's `open-failed` reads resolved after any other context opens the store while
@@ -107,13 +108,24 @@ import {
   applyOp,
   applyRaise,
   applyResolve,
+  causesOf,
   directAt,
+  MAX_CAUSES,
   inOrder,
   raiseOp,
   raiseOpSchema,
 } from './incidents.js';
 import { SETTINGS_KEYS } from './ports.js';
-import { BOUNDS, incidentKey, incidentSchema, journalEventSchema, parseRecord, receiptSchema, runSchema } from './records.js';
+import {
+  BOUNDS,
+  incidentKey,
+  incidentSchema,
+  journalEventSchema,
+  parseRecord,
+  receiptSchema,
+  runSchema,
+  worseSeverity,
+} from './records.js';
 import { FINISHED_RUN_STATES, SEVERITIES, STORAGE_PROVIDERS } from './vocabulary.js';
 
 /** @typedef {import('./ports.js').TrustStore} TrustStore */
@@ -189,6 +201,7 @@ export const storageCopySchema = v.strictObject({
  * @property {readonly string[]} [affected]
  * @property {readonly string[]} [preserved]
  * @property {Readonly<Record<string, unknown>>} [evidence]
+ * @property {'check'} [from] - a check found it, rather than a failure event (incidents.js)
  */
 
 /**
@@ -390,10 +403,35 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     }).catch(() => ({ ok: false, unreadable: false }));
 
   /**
+   * What a held entry's sighting says once `next` joins `held`: the newer one's evidence and
+   * capabilities, the worse severity, every cause either named, and a check's mark only when
+   * both were a check's
+   * @param {Sighting} held
+   * @param {Sighting} next
+   * @param {boolean} newer - `next` is at or after what the entry holds
+   * @returns {Sighting}
+   */
+  const mergedSighting = (held, next, newer) => {
+    const base = { ...(newer ? next : held) };
+    delete base.from;
+    delete base.causes;
+    const named = [...new Set([...causesOf(held), ...causesOf(next)])].slice(0, MAX_CAUSES);
+    return {
+      ...base,
+      severity: worseSeverity(held.severity, next.severity),
+      ...(named.length > 1 ? { causes: /** @type {any} */ (named) } : {}),
+      ...(held.from === 'check' && next.from === 'check' ? { from: /** @type {const} */ ('check') } : {}),
+    };
+  };
+
+  /**
    * Holds one sighting of storage incident `key`: in the copy, or counted in memory when the
    * copy can't take it. Its time is no earlier than what the store's record holds, when the
-   * store can be read, so a clock that stepped back can't file it behind a resolution. Answers
-   * null when this context already holds HELD_KEYS other keys, besides the records' own.
+   * store can be read, so a clock that stepped back can't file it behind a resolution. The
+   * entry keeps what every sighting it holds says, whatever order they came in, so a dismissal
+   * sees any change: the newest one's evidence, the worst severity, every cause any of them
+   * named (`causes`), and a check's mark only when every one was a check's. Answers null when
+   * this context already holds HELD_KEYS other keys, besides the records' own.
    * @param {string} key
    * @param {Sighting} sighting
    * @param {number} at
@@ -404,21 +442,26 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     holding.set(key, (holding.get(key) || 0) + 1);
     try {
       // A store that isn't open here isn't asked again just to time the sighting
+      const risk = sighting.severity === 'capture-risk';
       const stored = opened
-        ? await run(['incidents'], 'readonly', async tx => (await tx.getAllByIndex('incidents', 'key', key))[0])
+        ? await run(risk ? ['incidents', 'receipts'] : ['incidents'], 'readonly', async tx => ({
+            incident: (await tx.getAllByIndex('incidents', 'key', key))[0],
+            floor: risk ? await afterCoreReceipts(tx) : 0,
+          }))
         : { ok: false };
-      const when = stored.ok
-        ? directAt(/** @type {Incident | undefined} */ (/** @type {{value: unknown}} */ (stored).value), 'raise', at)
-        : at;
+      const read = stored.ok
+        ? /** @type {{value: {incident: Incident | undefined, floor: number}}} */ (/** @type {unknown} */ (stored)).value
+        : null;
+      const when = read ? Math.max(directAt(read.incident, 'raise', at), read.floor) : at;
       let entry = held.get(key);
       if (!entry) {
         const others = [...held.keys()].filter(item => !OWN_KEYS.has(item)).length;
         if (!OWN_KEYS.has(key) && others >= HELD_KEYS) return null;
         entry = { key, incidentId: ids.next(), at: when, sighting, copied: null, remainder: 0, remainderId: ids.next() };
         held.set(key, entry);
-      } else if (when >= entry.at) {
-        entry.at = when;
-        entry.sighting = sighting;
+      } else {
+        entry.sighting = mergedSighting(entry.sighting, sighting, when >= entry.at);
+        entry.at = Math.max(entry.at, when);
       }
       const added = await addToCopy(entry);
       if (!added.ok) entry.remainder += 1;
@@ -858,7 +901,25 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       affected: [...(input.affected || [])],
       preserved: [...(input.preserved || [])],
       evidence: evidence.value,
+      ...(input.from === 'check' ? { from: 'check' } : {}),
     });
+  };
+
+  /**
+   * The earliest time a capture-risk sighting is recorded at: just after the newest receipt of
+   * a core provider (capture, storage), so a probe that passed before the failure never reads
+   * as after it, however the clock stepped (use-cases.js calls capture safe only on a receipt
+   * newer than every capture-risk sighting). Like directAt after a resolution.
+   * @param {TrustTx} tx
+   */
+  const afterCoreReceipts = async tx => {
+    let newest = -1;
+    for (const provider of STORAGE_PROVIDERS) {
+      for (const receipt of /** @type {HealthReceipt[]} */ (await tx.getAllByIndex('receipts', 'providerId', provider))) {
+        newest = Math.max(newest, receipt.verifiedAt);
+      }
+    }
+    return newest + 1;
   };
 
   /**
@@ -870,10 +931,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   const raise = async input => {
     const sighting = sightingOf(input);
     const now = clock.now();
-    const stored = await write(['incidents'], async tx => {
+    const risk = sighting.severity === 'capture-risk';
+    const stored = await write(risk ? ['incidents', 'receipts'] : ['incidents'], async tx => {
       const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
       const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', key));
-      const op = raiseOp(ids, sighting, directAt(existing, 'raise', now), [contextId]);
+      const at = Math.max(directAt(existing, 'raise', now), risk ? await afterCoreReceipts(tx) : 0);
+      const op = raiseOp(ids, sighting, at, [contextId]);
       const incident = parseRecord(incidentSchema, applyRaise(existing, op), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
@@ -951,17 +1014,23 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
-   * Sets or clears an open incident's dismissed flag. Answers the incident, or null when it's
-   * resolved, missing, or the store won't take the write.
+   * Sets or clears an open incident's dismissed flag, in one write. With `seen`, the
+   * occurrences the user saw, a capture-risk incident sighted since isn't dismissed: it answers
+   * `changed` with the incident as it is, since the dismissal would cover a failure they never
+   * saw. `missing` for one that's resolved or gone, `failed` when the store won't take it.
    * @param {string} id
    * @param {boolean} dismissed
-   * @returns {Promise<Incident | null>}
+   * @param {number} [seen]
+   * @returns {Promise<{status: 'done' | 'changed', incident: Incident} | {status: 'missing' | 'failed'}>}
    */
-  const dismiss = async (id, dismissed) => {
+  const dismissSeen = async (id, dismissed, seen) => {
     const now = clock.now();
     const stored = await write(['incidents'], async tx => {
       const incident = /** @type {Incident | undefined} */ (await tx.get('incidents', id));
-      if (!incident) return null;
+      if (!incident) return /** @type {const} */ ({ status: 'missing' });
+      if (dismissed && seen !== undefined && incident.severity === 'capture-risk' && incident.occurrences !== seen) {
+        return /** @type {const} */ ({ status: 'changed', incident });
+      }
       const next = applyDismiss(incident, {
         opId: ids.next(),
         kind: 'dismiss',
@@ -969,13 +1038,25 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         key: incident.key,
         dismissed,
       });
-      if (!next || next === incident) return null;
+      if (!next || next === incident) return /** @type {const} */ ({ status: 'missing' });
       tx.put('incidents', next);
-      return next;
+      return /** @type {const} */ ({ status: 'done', incident: next });
     });
     if (stored.ok) return stored.value;
     await failedWrite(errorOf(stored));
-    return null;
+    return { status: 'failed' };
+  };
+
+  /**
+   * Sets or clears an open incident's dismissed flag. Answers the incident, or null when it's
+   * resolved, missing, or the store won't take the write.
+   * @param {string} id
+   * @param {boolean} dismissed
+   * @returns {Promise<Incident | null>}
+   */
+  const dismiss = async (id, dismissed) => {
+    const done = await dismissSeen(id, dismissed);
+    return done.status === 'done' ? done.incident : null;
   };
 
   // ============ Receipts, runs, and the journal ============
@@ -1207,6 +1288,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     raise,
     resolve,
     dismiss,
+    dismissSeen,
     putRun,
     append,
     receipts,

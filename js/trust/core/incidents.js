@@ -15,8 +15,19 @@
  *   (a tie goes to the sighting); an older one leaves it resolved. One at or after the latest
  *   sighting brings its capabilities and evidence; an older one doesn't. While the incident is
  *   open its severity is the worse of the two, since a milder sighting doesn't make an open
- *   fault milder; a reopened one takes the sighting's. One at or after the last dismiss change
- *   clears a dismissal. A remediating incident stays remediating.
+ *   fault milder; a reopened one takes the sighting's. A remediating incident stays
+ *   remediating.
+ * - A dismissal holds until the problem changes: a sighting at or after the last dismiss
+ *   change clears it only when it's worse than the incident's severity, or names a cause
+ *   (`evidence.errorCode`) other than the one it was dismissed with (`dismissedCause`). The
+ *   same fault, subject, cause and severity sighted again keeps it, and so does a sighting
+ *   that names no cause (a check's), so a check on every Trust Center open never undoes it. A
+ *   resolution clears it, so a fault that's fixed and comes back is a problem to see again.
+ *   Capture risk is the exception: any new sighting of a capture-risk incident from a failure
+ *   event (a failed capture, a failed open) ends its dismissal, since each one may be a note
+ *   that wasn't saved. Only a check's re-sighting of the same standing fault (`from: 'check'`)
+ *   keeps it. A sighting held from several (trust-records.js) lists every cause it saw
+ *   (`causes`), and any one other than the dismissed one counts as a change.
  * - A resolution applies only if it's later than every sighting.
  * - A dismissal or undismissal applies only if it's later than every sighting and than the
  *   last dismiss change (`dismissChangedAt`), so an older one replayed late changes nothing.
@@ -29,7 +40,7 @@
 
 import * as v from '../../lib/valibot/index.mjs';
 import { count, timestamp } from '../../kernel/core/contracts/fields.js';
-import { evidenceSchema, faultCode, providerId, recordId, subjectId } from './evidence.js';
+import { errorCode, evidenceSchema, faultCode, providerId, recordId, subjectId } from './evidence.js';
 import { capabilities, incidentKey, incidentKeySchema, refOf, worseSeverity } from './records.js';
 import { SEVERITIES } from './vocabulary.js';
 
@@ -51,9 +62,16 @@ export const sightingSchema = v.strictObject({
   affected: capabilities,
   preserved: capabilities,
   evidence: evidenceSchema,
+  // A check's sighting, which never ends a capture-risk dismissal; absent for a failure event's
+  from: v.optional(v.literal('check')),
+  // Every cause the sightings held together named, when there was more than one
+  causes: v.optional(v.pipe(v.array(errorCode), v.maxLength(8))),
 });
 
 /** @typedef {v.InferOutput<typeof sightingSchema>} Sighting */
+
+/** How many causes a held sighting remembers */
+export const MAX_CAUSES = 8;
 
 /**
  * A sighting as an operation: `count` occurrences, the latest at `at`. `incidentId` is the id
@@ -190,15 +208,19 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
     if (added === 0) return record;
   }
   const newest = at >= record.lastSeenAt;
-  // A held sighting's new count reopens and undismisses whatever the clocks say: a resolve or
-  // a dismiss replays what's held first, under the copy's lock, so what it hadn't counted came
-  // after it. Memory clears what it replayed once the write commits.
+  // A held sighting's new count reopens, and undismisses a problem that changed, whatever the
+  // clocks say: a resolve or a dismiss replays what's held first, under the copy's lock, so
+  // what it hadn't counted came after it. Memory clears what it replayed once the write commits.
   const late = track || unseen;
   const reopens = record.state === 'resolved' && added > 0 && (late || at >= (record.resolvedAt ?? 0));
   const staysResolved = record.state === 'resolved' && !reopens;
-  const undismisses = record.dismissed && added > 0 && (late || at >= (record.dismissChangedAt ?? 0));
+  const undismisses =
+    record.dismissed &&
+    added > 0 &&
+    (late || at >= (record.dismissChangedAt ?? 0)) &&
+    (changesProblem(record, sighting) || newCaptureRisk(record, sighting));
   return {
-    ...record,
+    ...(undismisses ? withoutCause(record) : record),
     severity: reopens ? sighting.severity : staysResolved ? record.severity : worseSeverity(record.severity, sighting.severity),
     state: reopens ? 'open' : record.state,
     resolvedAt: reopens ? null : record.resolvedAt,
@@ -225,13 +247,66 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
 }
 
 /**
+ * The cause an incident's evidence names: its error code, or null
+ * @param {{evidence: Record<string, unknown>}} held
+ * @returns {string | null}
+ */
+const causeOf = held => (typeof held.evidence.errorCode === 'string' ? held.evidence.errorCode : null);
+
+/**
+ * Whether `sighting` is a changed problem for a dismissed `record`: a worse severity, or a
+ * cause other than the one it was dismissed with. A sighting that names no cause says nothing
+ * about it. A record an older build dismissed has no `dismissedCause`; its evidence stands in.
+ * @param {Incident} record
+ * @param {Sighting} sighting
+ */
+export function changesProblem(record, sighting) {
+  if (SEVERITIES.indexOf(sighting.severity) < SEVERITIES.indexOf(record.severity)) return true;
+  const causes = causesOf(sighting);
+  if (causes.length === 0) return false;
+  const dismissedWith = record.dismissedCause !== undefined ? record.dismissedCause : causeOf(record);
+  return causes.some(cause => cause !== dismissedWith);
+}
+
+/**
+ * Every cause a sighting names: those a held one gathered, or its evidence's
+ * @param {Sighting} sighting
+ * @returns {string[]}
+ */
+export function causesOf(sighting) {
+  if (sighting.causes && sighting.causes.length > 0) return [...sighting.causes];
+  const cause = causeOf(sighting);
+  return cause === null ? [] : [cause];
+}
+
+/**
+ * Whether `sighting` is a failure event's new sighting of a capture-risk incident, which ends
+ * its dismissal whatever its cause
+ * @param {Incident} record
+ * @param {Sighting} sighting
+ */
+const newCaptureRisk = (record, sighting) =>
+  sighting.from !== 'check' && (record.severity === 'capture-risk' || sighting.severity === 'capture-risk');
+
+/**
+ * `record` without `dismissedCause`, which only a dismissed incident holds
+ * @param {Incident} record
+ * @returns {Incident}
+ */
+function withoutCause(record) {
+  const rest = { ...record };
+  delete rest.dismissedCause;
+  return rest;
+}
+
+/**
  * @param {Incident | undefined} record
  * @param {ResolveOp} op
  * @returns {Incident | undefined}
  */
 export function applyResolve(record, op) {
   if (!record || record.state === 'resolved' || op.at <= record.lastSeenAt) return record;
-  return { ...record, state: 'resolved', resolvedAt: op.at, dismissed: false, sightedBy: [] };
+  return { ...withoutCause(record), state: 'resolved', resolvedAt: op.at, dismissed: false, sightedBy: [] };
 }
 
 /**
@@ -242,7 +317,8 @@ export function applyResolve(record, op) {
 export function applyDismiss(record, op) {
   if (!record || record.state === 'resolved' || op.at <= record.lastSeenAt) return record;
   if (record.dismissChangedAt !== null && op.at <= record.dismissChangedAt) return record;
-  return { ...record, dismissed: op.dismissed, dismissChangedAt: op.at };
+  if (!op.dismissed) return { ...withoutCause(record), dismissed: false, dismissChangedAt: op.at };
+  return { ...record, dismissed: true, dismissChangedAt: op.at, dismissedCause: causeOf(record) };
 }
 
 /**

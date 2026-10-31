@@ -124,6 +124,8 @@ function contributions(w) {
         preview: { changes: [{ target: 'canvases', creates: 0, updates: 0, deletes: 1 }] },
         plan: 'n2',
       }),
+      // What it destroys, whose rows the recovery file must hold (#20 slice 4a)
+      destroys: (/** @type {unknown} */ _context, /** @type {string} */ plan) => plan,
       apply: async (/** @type {unknown} */ _context, /** @type {string} */ plan) => {
         w.log.push('mutate');
         w.notes.delete(plan);
@@ -161,10 +163,10 @@ function points(w) {
   return port;
 }
 
-/** A salvage port over an empty profile */
+/** A salvage port over a profile holding the one note the irreversible fixture deletes */
 const emptySalvage = {
   collect: async () => ({
-    database: { status: /** @type {const} */ ('open'), stores: [] },
+    database: { status: /** @type {const} */ ('open'), stores: [{ store: 'canvases', values: [{ id: 'n2' }] }] },
     legacyCopies: { status: /** @type {const} */ ('read'), copies: [] },
     recoveryPoints: { status: /** @type {const} */ ('missing'), points: [] },
   }),
@@ -351,6 +353,7 @@ describe("each class's gate refuses without its precondition (#20, approved AC4)
       regenerable: ['confirmation'],
       reversible: ['confirmation', 'recovery-point'],
       irreversible: ['confirmation', 'recovery-file', 'typed-phrase'],
+      'secret-removal': ['confirmation'],
     });
     assert.deepEqual(checkConsent('regenerable', {}, undefined), { ok: false, code: 'not-confirmed' });
     assert.deepEqual(checkConsent('irreversible', { decision: 'confirm' }, 'Delete it'), {
@@ -488,7 +491,7 @@ describe("each class's gate refuses without its precondition (#20, approved AC4)
     assert.equal(cancelled.outcome, 'file-not-saved');
 
     // A file that reads back different from what was written is not saved
-    files.alter = text => text.replace('"canvases":[]', '"canvases":[{"id":"x"}]');
+    files.alter = text => text.replace('"trashedCanvases":[]', '"trashedCanvases":[{"id":"x"}]');
     const altered = asRun(await confirm({ typedPhrase: 'delete restore point' }));
     assert.equal(altered.state, 'failed');
     assert.equal(altered.outcome, 'file-mismatch');

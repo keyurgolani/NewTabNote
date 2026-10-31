@@ -106,7 +106,8 @@ export async function runCheck(provider, { context = {}, clock, timers }) {
   try {
     answer = await Promise.race([
       Promise.resolve()
-        .then(() => provider.check(context))
+        // The check's timers, so a step inside it can bound itself; a root's own wins
+        .then(() => provider.check(context.timers ? context : { ...context, timers }))
         .then(
           value => /** @type {const} */ ({ kind: 'answered', value }),
           error => ({ kind: /** @type {const} */ ('threw'), exception: exceptionOf(error) }),

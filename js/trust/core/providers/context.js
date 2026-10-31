@@ -94,6 +94,7 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  *   Each registry root's resolution, or its runtime's snapshot. A root that couldn't resolve
  *   must throw from it, never answer `[]`: contributions can't tell none from failed.
  * @property {TrustReader} [trust]
+ * @property {import('../ports.js').Timers} [timers] - the check's timers, which checks.js passes
  */
 
 /**

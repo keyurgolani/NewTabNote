@@ -220,6 +220,8 @@ export const REMEDIATION_CODES = Object.freeze([
   'phrase-mismatch',
   'preview-changed',
   'deletes-user-records',
+  // An irreversible run or a secret removal whose destroys step names nothing to check against
+  'destroys-unnamed',
   // The steps
   'preview-failed',
   'preview-invalid',

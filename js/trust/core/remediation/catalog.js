@@ -19,17 +19,31 @@
  *   it (js/product/placement.js's placementOf), after a verified `pre-repair` point that holds
  *   each of them. Only their `canvasId` changes; nothing is deleted.
  * - `save-recovery-file` (non-destructive): Save as file for a restore point, a legacy copy or
- *   a verified #17 point, by its id.
+ *   a verified #17 point, the `pre-repair` points a repair makes included, by its id.
  * - `save-salvage-file` (non-destructive): the salvage file (salvage-file.js).
- * Both save through the picker, and verify by reading the file back (saved-file.js).
+ * - `export-diagnostics` (non-destructive, slice 4a): the diagnostic report the user
+ *   previewed (diagnostics.export's answer, which the view holds), never built again, so the
+ *   file is exactly what they read. With no previewed report it doesn't run.
+ * All three save through the picker and verify by reading the file back (saved-file.js), and
+ * answer how much they saved.
+ * - `remove-saved-key` (secret-removal, slice 4a): "Remove saved keys". Its preview lists each
+ *   place a legacy plaintext secret is kept and what stops working without it, it waits for
+ *   the confirmation of that preview, and it removes only the entries it lists (the AI key,
+ *   the WebDAV password, the 1.1 `settings` row), never a note or a row the user made. No
+ *   typed phrase and no recovery file: a secret never goes into a file. It verifies by asking
+ *   the reader again.
  *
  * Nothing shipped registers these: no root has a `recovery.run` handler until slice 4.
  */
 
 import { UnavailableError, committed, rejected } from '../../../kernel/core/contracts/outcomes.js';
 import { newNoteRecord, newSearchEntry } from '../../../kernel/core/domain/note.js';
+import * as v from '../../../lib/valibot/index.mjs';
+import { reportSchema } from '../diagnostics.js';
+import { PROVIDERS } from '../providers/catalog.js';
+import { SECRET_PLACES, SECRET_STOPS } from './preview.js';
 import { buildRestorePointFile, buildSalvage } from './salvage-file.js';
-import { readBack, writeFile } from './saved-file.js';
+import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
 
 /** @typedef {import('./ports.js').RemediationPorts} RemediationPorts */
 /** @typedef {import('./preview.js').Preview} Preview */
@@ -68,14 +82,19 @@ import { readBack, writeFile } from './saved-file.js';
  * @property {string} [phrase]
  * @property {boolean} [recordOptional] - a non-destructive run that changes no stored record goes on when its run record won't write
  * @property {boolean} [takesSubject] - it acts on one subject the payload names, which keys its lock; no other remediation takes one
- * @property {(context: RemediationContext, plan: any) => string | null} [destroys] - for an irreversible one: what it destroys (a legacy copy's key, a point's id, a record's id), which its recovery file must hold
+ * @property {(context: RemediationContext, plan: any) => string | readonly string[] | null} [destroys]
+ *   What it destroys, which the pipeline holds it to: for an irreversible one, the legacy
+ *   copy's key, the point's id, or the record's id, whose rows its recovery file must hold;
+ *   for a secret removal, the saved-key places it removes, which its preview must list
  */
 
 /**
  * What verify answers: passed, passed short of everything (`saved-partial`, naming what
- * couldn't be read), or failed with its code
- * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[]}
- *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean}} Verdict
+ * couldn't be read), or failed with its code. A pass may say how much a saved file holds
+ * (`saved`), and name the note the run made (`noteId`).
+ * A secret removal names the places it removed and kept, either way.
+ * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[], saved?: import('../records.js').Saved, noteId?: string, removed?: string[], kept?: string[], unknown?: string[]}
+ *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean, removed?: string[], kept?: string[], unknown?: string[]}} Verdict
  */
 
 /** What an apply answers when the user closed the picker: not a failure, and nothing changed */
@@ -384,7 +403,7 @@ const recoverOrphans = {
         const block = await tx.get('blocks', blockId);
         if (!block || block.canvasId !== noteId) return { ok: false, code: 'not-verified' };
       }
-      return { ok: true };
+      return { ok: true, noteId };
     });
   },
 };
@@ -445,10 +464,29 @@ const saving = (kind, build) => ({
     if (unreadable.length > 0 && held === 0) {
       return { ok: false, code: 'nothing-readable', unreadable, fileMayBeEmpty: true };
     }
-    if (unreadable.length > 0) return { ok: true, outcome: 'saved-partial', unreadable };
-    return { ok: true };
+    const saved = savedOf(read.counts, read.characters);
+    if (unreadable.length > 0) return { ok: true, outcome: 'saved-partial', unreadable, saved };
+    return { ok: true, saved };
   },
 });
+
+/**
+ * How much a saved file holds, from its counts as it read back
+ * @param {import('./salvage-file.js').FileCounts} counts
+ * @param {number} characters
+ * @returns {import('../records.js').Saved}
+ */
+export function savedOf(counts, characters) {
+  return {
+    notes: counts.canvases || 0,
+    blocks: counts.elements || 0,
+    media: counts.media || 0,
+    folders: counts.folders || 0,
+    legacyCopies: counts.legacyCopies || 0,
+    recoveryPoints: counts.recoveryPoints || 0,
+    characters,
+  };
+}
 
 /** @type {RemediationSteps} */
 const saveRecoveryFile = {
@@ -480,6 +518,122 @@ const saveSalvageFile = {
     return { preview: { changes: [{ target: 'file', creates: 1, updates: 0, deletes: 0 }] }, plan: null };
   },
   ...saving('salvage', async context => buildSalvage(await port(context, 'salvage').collect(), { now: context.clock.now() })),
+};
+
+// ============ export-diagnostics ============
+
+/**
+ * The diagnostic report's suggested name, as diagnostics.export names it, from the time alone,
+ * since the picker opens before the report is built
+ * @param {number} now
+ */
+const diagnosticsName = now => `newtabnote-diagnostics-${new Date(now).toISOString().slice(0, 10)}.json`;
+
+/** @type {RemediationSteps} */
+const exportDiagnostics = {
+  recordOptional: true,
+  // The previewed report, taken once here and carried to apply, so nothing built later reaches the file
+  async preview(context) {
+    const exported = /** @type {{kind?: unknown, serialized?: unknown} | null} */ (
+      await port(context, 'diagnostics')()
+    );
+    if (!exported || exported.kind !== 'diagnostics' || typeof exported.serialized !== 'string') {
+      throw new UnavailableError('adapter', 'not-applicable', false);
+    }
+    // Only a diagnostic report goes in this file: one that parses, holding its schema's fields
+    // and nothing else
+    /** @type {unknown} */
+    let parsed;
+    try {
+      parsed = JSON.parse(exported.serialized);
+    } catch {
+      parsed = null;
+    }
+    if (!v.is(reportSchema, parsed)) throw new UnavailableError('adapter', 'preview-invalid', false);
+    return {
+      preview: { changes: [{ target: 'file', creates: 1, updates: 0, deletes: 0 }] },
+      plan: exported.serialized,
+    };
+  },
+  async apply(context, plan) {
+    const text = /** @type {string} */ (plan);
+    const written = await writeText({
+      files: context.ports.files,
+      suggestedName: diagnosticsName(context.clock.now()),
+      build: async () => text,
+    });
+    if (written.status === 'cancelled') return CANCELLED_BY_USER;
+    if (written.status === 'failed') {
+      if (written.picked) return failedAfterPick(written.code);
+      throw new UnavailableError('storage', written.code, true);
+    }
+    return written;
+  },
+  async verify(context, written) {
+    const read = await readBackText({ files: context.ports.files, written });
+    if (read.status !== 'saved') return { ok: false, code: read.code, fileMayBeEmpty: true };
+    return { ok: true, saved: { characters: read.characters } };
+  },
+};
+
+// ============ remove-saved-key ============
+
+/**
+ * The places the reader answers, each a known one once, in SECRET_PLACES order, or a throw:
+ * anything else verified nothing
+ * @param {unknown} answer
+ * @returns {import('./preview.js').SecretPlace[]}
+ */
+const placesOf = answer => {
+  if (!Array.isArray(answer) || !answer.every(place => /** @type {readonly unknown[]} */ (SECRET_PLACES).includes(place))) {
+    throw new UnavailableError('storage', 'unreadable', true);
+  }
+  return SECRET_PLACES.filter(place => answer.includes(place));
+};
+
+/** @type {RemediationSteps} */
+const removeSavedKey = {
+  async preview(context) {
+    const places = placesOf(await port(context, 'secrets').present());
+    return {
+      preview: {
+        changes: [{ target: 'saved-keys', creates: 0, updates: 0, deletes: places.length }],
+        places: places.map(place => ({ place, stops: [...SECRET_STOPS[place]] })),
+      },
+      plan: places,
+      nothingToDo: places.length === 0,
+    };
+  },
+  destroys: (_context, plan) => [.../** @type {string[]} */ (plan)],
+  // A removal that fails partway still goes to verify, which reads the places again and names
+  // what went and what's still there, never a value
+  async apply(context, plan) {
+    const places = /** @type {string[]} */ (plan);
+    /** @type {string | null} */
+    let code = null;
+    try {
+      await port(context, 'secrets').remove(places);
+    } catch (error) {
+      const given = error && typeof error === 'object' ? /** @type {{code?: unknown}} */ (error).code : undefined;
+      code = typeof given === 'string' ? given : 'apply-failed';
+    }
+    return { places, code };
+  },
+  async verify(context, applied) {
+    const { places, code } = /** @type {{places: string[], code: string | null}} */ (applied);
+    /** @type {readonly string[]} */
+    let left;
+    try {
+      left = placesOf(await port(context, 'secrets').present());
+    } catch {
+      // The re-read failed: whether each place went is unknown, and says so
+      return { ok: false, code: code || 'verify-failed', removed: [], kept: [], unknown: [...places] };
+    }
+    const removed = places.filter(place => !left.includes(place));
+    const kept = places.filter(place => left.includes(place));
+    if (kept.length > 0) return { ok: false, code: code || 'not-verified', removed, kept };
+    return { ok: true, removed, kept };
+  },
 };
 
 /**
@@ -532,4 +686,14 @@ export const REMEDIATIONS = Object.freeze([
     ['storage', 'capture', 'recovery-readiness'],
     saveSalvageFile,
   ),
+  contribution(
+    'export-diagnostics',
+    'export',
+    30,
+    'Save the diagnostic report',
+    'non-destructive',
+    PROVIDERS.map(descriptor => /** @type {string} */ (descriptor.id)),
+    exportDiagnostics,
+  ),
+  contribution('remove-saved-key', 'repair', 30, 'Remove saved keys', 'secret-removal', ['credentials'], removeSavedKey),
 ]);

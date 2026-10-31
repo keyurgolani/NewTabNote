@@ -159,13 +159,27 @@ export const REMEDIATION_GROUPS = Object.freeze(
 /**
  * A remediation's class, which sets the protection it needs before apply (#20, "Remediation
  * pipeline"): nothing, a preview and confirmation, those and a verified recovery point, or
- * those and a recovery file saved in this run with a typed confirmation
+ * those and a recovery file saved in this run with a typed confirmation. `secret-removal`
+ * (slice 4a, Remove saved keys) is outside the four's record rules: a preview and
+ * confirmation, for a removal that touches only the saved-key entries it names, since a
+ * secret never goes into a file and so no file can be the way back.
  */
 export const REMEDIATION_CLASSES = Object.freeze(
-  /** @type {const} */ (['non-destructive', 'regenerable', 'reversible', 'irreversible']),
+  /** @type {const} */ (['non-destructive', 'regenerable', 'reversible', 'irreversible', 'secret-removal']),
 );
 
 /** @typedef {(typeof REMEDIATION_CLASSES)[number]} RemediationClass */
+
+/**
+ * Where 1.4.x and releases up to 1.1.2 kept a plaintext secret (the legacy secret reader's
+ * places): the AI key (with its owner setting) and the WebDAV password in
+ * chrome.storage.local, and the AI key 1.1 left in CanvasTabDB's `settings` store
+ */
+export const SECRET_PLACES = Object.freeze(
+  /** @type {const} */ (['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings']),
+);
+
+/** @typedef {(typeof SECRET_PLACES)[number]} SecretPlace */
 
 /**
  * The providers whose incidents count as storage incidents: the one kind that survives in

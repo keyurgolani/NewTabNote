@@ -183,6 +183,7 @@ export const PROVIDERS = Object.freeze([
     observes: ['load-failed'],
     costClass: 'local-expensive',
     freshnessMs: DAY,
+    remediations: ['safe-disable'],
     load: async () => (await import('./legacy.js')).localInference,
   }),
   provider({

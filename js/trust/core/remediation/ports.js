@@ -45,6 +45,21 @@
  */
 
 /**
+ * The legacy plaintext secrets' places (js/kernel/adapters/indexeddb/legacy-secrets.js's
+ * remover): which hold one, never the value, and the removal of exactly the entries named
+ * @typedef {object} SecretPort
+ * @property {() => Promise<readonly string[]>} present
+ * @property {(places: readonly string[]) => Promise<void>} remove
+ */
+
+/**
+ * The diagnostic report the user previewed: diagnostics.export's answer, which the view holds
+ * in the same page while it shows the preview, or null when there's none. Never built again
+ * here, so what's saved is exactly what the user read.
+ * @typedef {() => unknown} DiagnosticsPort
+ */
+
+/**
  * Runs the named providers' checks now and answers each one's status as its receipt reads
  * after: trust.verify with `verify-now`, over the records (pipeline.js's providerChecks)
  * @typedef {(providerIds: readonly string[]) => Promise<Record<string, ProviderStatus>>} ProviderChecks
@@ -58,6 +73,8 @@
  * @property {SalvagePort} [salvage]
  * @property {StoragePort} [storage]
  * @property {ProviderChecks} [checks]
+ * @property {SecretPort} [secrets]
+ * @property {DiagnosticsPort} [diagnostics]
  */
 
 export {};

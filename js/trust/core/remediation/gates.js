@@ -8,6 +8,9 @@
  *   and a verified #17 recovery point taken in the run.
  * - irreversible (delete a recovery point or a legacy copy, reset): its preview, a recovery
  *   file saved in this run and read back verified, and the action's name typed out.
+ * - secret-removal (Remove saved keys): its preview, which lists each place and what stops
+ *   working, and the confirmation of that preview's digest. No typed phrase and no recovery
+ *   file: a secret never goes into a file. The pipeline holds it to the places it names.
  * The confirmation and the typed words arrive in recovery.run's payload, which slice 4's
  * views fill from a click, and neither is ever stored.
  */
@@ -21,6 +24,7 @@ export const CLASS_PROTECTIONS = Object.freeze({
   regenerable: Object.freeze(/** @type {Protection[]} */ (['confirmation'])),
   reversible: Object.freeze(/** @type {Protection[]} */ (['confirmation', 'recovery-point'])),
   irreversible: Object.freeze(/** @type {Protection[]} */ (['confirmation', 'recovery-file', 'typed-phrase'])),
+  'secret-removal': Object.freeze(/** @type {Protection[]} */ (['confirmation'])),
 });
 
 /**

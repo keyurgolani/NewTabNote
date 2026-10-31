@@ -9,8 +9,9 @@
  *   `open-failed` (a probe that opened CanvasTabDB can resolve 1b's incident for it), but no
  *   check resolves `open-failed` for NewTabNoteTrust, which the records raise and resolve
  *   themselves. A check resolves only what it says it looked at (`looked`, checks.js). An
- *   incident for a fault no check looks at (a failure event's) resolves through a
- *   remediation's verify step or a later success event from the same site.
+ *   incident for a fault no check looks at (a failure event's) resolves through a later
+ *   success event from the same site, or leaves Needs action when the user dismisses it. A
+ *   remediation's run never resolves one: only its provider's check does (recovery.check).
  * - `remediation`: a RemediationCommand, `{id, owner, class, appliesTo, preview(), apply(),
  *   verify()}`, whose implementation holds the three steps. Slice 3 runs them through the
  *   pipeline its class sets.

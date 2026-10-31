@@ -442,7 +442,8 @@ describe('"saved" means written, closed, read back, parsed, and counted', () => 
       status: 'saved',
       counts: file.counts,
       characters: JSON.stringify(file).length,
-      read: { unreadable: [], held: 1, holdsSubject: true, readCanvas: true },
+      // No subject named is never held (#20 slice 4a)
+      read: { unreadable: [], held: 1, holdsSubject: false, readCanvas: true },
     });
   });
 
@@ -634,8 +635,12 @@ describe('what ships (R1: no visible change)', () => {
       }
     };
     walk('js');
-    // recovery.run's schema reads the preview's; nothing else outside them reaches any of them
-    assert.deepEqual([...importers], ['js/trust/core/operations/recovery-run.js']);
+    // recovery.run's schema reads the preview's, and the one next-action picker the repair
+    // table (data only); nothing else outside them reaches any of them
+    assert.deepEqual([...importers].sort(), [
+      'js/trust/core/next-action.js',
+      'js/trust/core/operations/recovery-run.js',
+    ]);
     for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'manifest.json']) {
       const text = fs.readFileSync(path.join(root, page), 'utf8');
       assert.equal(/remediation|save-picker|salvage-reader|repair-points/.test(text), false, page);

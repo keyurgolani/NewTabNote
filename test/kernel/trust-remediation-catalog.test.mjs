@@ -172,6 +172,8 @@ describe('recover-orphans: "Recover N blocks into a new Inbox note" (#20, refine
     const moved = blocks[/** @type {string} */ (orphanId)];
     const note = notes[moved.canvasId];
     assert.ok(note, 'its new note exists');
+    // The answer names it, so the view can open it (#20 slice 4a)
+    assert.equal(done.noteId, moved.canvasId);
     const folders = Object.keys(legacyEnv.recordsOf(dump, 'folders'));
     assert.deepEqual(placementOf(note, folders).placement, { kind: 'inbox' });
     assert.deepEqual({ ...moved, canvasId: 'note-gone' }, beforeBlocks[/** @type {string} */ (orphanId)]);

@@ -163,6 +163,7 @@ describe('#82 review 1: a salvage file that read nothing never says it saved eve
             preview: { changes: [{ target: 'canvases', creates: 0, updates: 0, deletes: 1 }] },
             plan: 1,
           }),
+          destroys: () => 'auto_backup_1793413294673',
           apply: async () => {
             log.push('mutate');
           },
@@ -357,6 +358,7 @@ describe('#82 review 5: the picker opens before anything slow', () => {
             preview: { changes: [{ target: 'canvases', creates: 0, updates: 0, deletes: 1 }] },
             plan: 1,
           }),
+          destroys: () => 'a',
           apply: async () => {
             log.push('mutate');
           },

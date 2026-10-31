@@ -16,7 +16,12 @@
  * records, and `failed` with `nothing-readable` when it holds none while any source didn't
  * read. `unreadable` carries the first 64, and `unreadableCount` how many there were.
  * `fileMayBeEmpty` says a file was picked and the save didn't verify, so the file the user
- * chose may be empty or short, and a good file they picked over may be gone.
+ * chose may be empty or short, and a good file they picked over may be gone. `saved` says how
+ * much a file it saved and read back holds (so "Saved and checked" can say how much), and
+ * `noteId` is the note a run made (recover-orphans' new Inbox note), for the view to open. A
+ * secret removal names the places it removed (`removed`) and the ones still holding a secret
+ * after it (`kept`), so one that failed partway says which, by place name only, and the ones
+ * it couldn't tell either way when the read after it failed (`unknown`).
  *
  * It answers a `remediation` outcome for every run it started, whatever state the run is in,
  * so nothing reads a run that didn't verify as committed: `succeeded` only once its verify
@@ -36,7 +41,7 @@ import {
 import { RUN_OUTCOMES } from '../codes.js';
 import { recordId, recoveryPointId, remediationId, subjectId } from '../evidence.js';
 import { previewSchema } from '../remediation/preview.js';
-import { MAX_UNREADABLE, unreadableSchema } from '../records.js';
+import { MAX_UNREADABLE, placesSchema, savedSchema, unreadableSchema } from '../records.js';
 import { PROTECTIONS, REMEDIATION_CLASSES, RUN_STATES, RUN_STEPS } from '../vocabulary.js';
 
 /** A preview's digest (pipeline.js's digestOf): what a confirmation names the preview it confirms by */
@@ -68,6 +73,11 @@ export const remediationSchema = v.strictObject({
   unreadable: v.pipe(v.array(unreadableSchema), v.maxLength(MAX_UNREADABLE)),
   unreadableCount: count,
   fileMayBeEmpty: v.boolean(),
+  saved: v.optional(savedSchema),
+  noteId: v.optional(recordId),
+  removed: v.optional(placesSchema),
+  kept: v.optional(placesSchema),
+  unknown: v.optional(placesSchema),
   recoveryPointId: v.optional(recoveryPointId),
   recorded: v.boolean(),
   messageKey: v.pipe(v.string(), v.regex(/^remediation\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/), v.maxLength(80)),

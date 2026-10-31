@@ -13,6 +13,7 @@ import { RUN_OUTCOMES } from './codes.js';
 import { EVENT_CODE_NAMES } from './event-codes.js';
 import {
   capability,
+  errorCode,
   evidenceSchema,
   faultCode,
   pointId,
@@ -29,6 +30,7 @@ import {
   RECEIPT_STATUSES,
   RUN_STATES,
   RUN_STEPS,
+  SECRET_PLACES,
   SEVERITIES,
 } from './vocabulary.js';
 
@@ -106,7 +108,8 @@ export const receiptSchema = v.strictObject({
  * An Incident. `key` (provider, fault, subject) makes a repeat update this record, and `ref`
  * is the first 6 characters of `id`, uppercased, for support. `resolvedAt` is set once
  * re-verification passes, and cleared if the fault comes back after it. `dismissChangedAt` is
- * when it was last dismissed or undismissed. incidents.js holds the rules.
+ * when it was last dismissed or undismissed, and `dismissedCause` the error code it held when
+ * it was dismissed, while it is. incidents.js holds the rules.
  */
 export const incidentSchema = v.strictObject({
   id: recordId,
@@ -119,6 +122,9 @@ export const incidentSchema = v.strictObject({
   state: v.picklist(INCIDENT_STATES),
   dismissed: v.boolean(),
   dismissChangedAt: v.nullable(timestamp),
+  // The cause (`evidence.errorCode`) it was dismissed with, null for none: a later sighting
+  // naming another brings it back (incidents.js). Absent while it isn't dismissed.
+  dismissedCause: v.optional(v.nullable(errorCode)),
   firstSeenAt: timestamp,
   lastSeenAt: timestamp,
   resolvedAt: v.nullable(timestamp),
@@ -175,6 +181,26 @@ export const unreadableSchema = v.strictObject({
 });
 
 /**
+ * How much a file a run saved holds, as it read back: notes (trashed and unimportable ones
+ * included), blocks, media, folders, legacy copies, and recovery points, and its length in
+ * characters. A file that isn't a notes file (the diagnostic report) has only its length.
+ */
+export const savedSchema = v.strictObject({
+  notes: v.optional(count),
+  blocks: v.optional(count),
+  media: v.optional(count),
+  folders: v.optional(count),
+  legacyCopies: v.optional(count),
+  recoveryPoints: v.optional(count),
+  characters: count,
+});
+
+/** @typedef {v.InferOutput<typeof savedSchema>} Saved */
+
+/** The saved-key places a secret removal names, by name, never a value */
+export const placesSchema = v.pipe(v.array(v.picklist(SECRET_PLACES)), v.maxLength(SECRET_PLACES.length));
+
+/**
  * A RemediationRun: one remediation's run, written before its first mutation (slice 3's
  * pipeline). `commandId` is the remediation's id. `step` is the step it's on or stopped at,
  * written before that step starts, and `subjectId` what it acts on when it isn't the whole
@@ -195,6 +221,15 @@ export const runSchema = v.strictObject({
   unreadable: v.optional(v.pipe(v.array(unreadableSchema), v.maxLength(MAX_UNREADABLE))),
   unreadableCount: v.optional(count),
   fileMayBeEmpty: v.optional(v.boolean()),
+  // How much the file it saved holds, and the note it made (recover-orphans'), so a resend
+  // answers as it finished
+  saved: v.optional(savedSchema),
+  noteId: v.optional(recordId),
+  // What a secret removal took out, and what it found still there after
+  removed: v.optional(placesSchema),
+  kept: v.optional(placesSchema),
+  // What it couldn't tell went or stayed, when the read after it failed
+  unknown: v.optional(placesSchema),
   outcome: v.nullable(v.picklist(RUN_OUTCOMES)),
   startedAt: timestamp,
   updatedAt: timestamp,
