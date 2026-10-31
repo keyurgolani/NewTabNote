@@ -286,10 +286,13 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
   });
 
   it("names the same success codes and settings keys as the trust code, which it can't import", async () => {
-    const { SUCCESS_SITES, OPEN_SITES_KEY, COPY_KEY } =
-      await import('../../js/kernel/composition/lazy-failure-events.js');
+    const lazy = await import('../../js/kernel/composition/lazy-failure-events.js');
+    const { SUCCESS_SITES, OPEN_SITES_KEY, COPY_KEY } = lazy;
     assert.equal(OPEN_SITES_KEY, SETTINGS_KEYS.openSites);
     assert.equal(COPY_KEY, SETTINGS_KEYS.lastStorageIncident);
+    const records = await import('../../js/trust/core/trust-records.js');
+    assert.equal(lazy.OPEN_FAILED_KEY, records.OPEN_FAILED_KEY);
+    assert.equal(lazy.RETRY_OPEN_MS, records.RETRY_OPEN_MS);
     const registered = Object.fromEntries(
       Object.entries(EVENT_CODES)
         .filter(([, entry]) => /** @type {any} */ (entry).resolves)
@@ -310,7 +313,8 @@ describe("#87's review: a success counts only what was sighted at its own moment
    * @param {Profile} profile
    */
   const gatedHost = profile => {
-    const gate = { armed: 0, /** @type {(() => void)[]} */ waiting: [] };
+    /** @type {{armed: number, waiting: (() => void)[]}} */
+    const gate = { armed: 0, waiting: [] };
     const settings = {
       /** @param {string[]} keys */
       get: async keys => {

@@ -46,9 +46,11 @@ export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
 
 /**
  * @typedef {object} DiagnosticJournal
- * @property {(code: string, fields?: Record<string, unknown>) => boolean} event
+ * @property {(code: string, fields?: Record<string, unknown>, options?: {seen?: Readonly<Record<string, number>>}) => boolean} event
  *   Records an event and answers true, or refuses it: throws when strict, and otherwise
- *   answers false after counting it in memory
+ *   answers false after counting it in memory. A success may pass `seen`, its site's open
+ *   incidents' occurrences as read at its own moment, which it resolves only while they hold;
+ *   without it the records' snapshot is taken now.
  * @property {() => Readonly<Record<RejectionReason, number>>} rejected - refusals so far, by reason
  * @property {() => Promise<void>} flush - resolves once every write so far has settled
  * @property {(code: string) => Promise<boolean | null>} siteOpen
@@ -57,10 +59,16 @@ export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
  */
 
 /**
- * @param {{records: TrustRecords, clock: Clock, strict?: boolean}} options - `strict` in tests only
+ * @param {{
+ *   records: TrustRecords,
+ *   clock: Clock,
+ *   strict?: boolean,
+ *   onRaised?: (code: string, incident: import('./records.js').Incident) => unknown,
+ * }} options - `strict` in tests only; `onRaised` hears each failure event's incident once its
+ *   raise lands (or is held), and flush() waits for it
  * @returns {DiagnosticJournal}
  */
-export function createDiagnosticJournal({ records, clock, strict = false }) {
+export function createDiagnosticJournal({ records, clock, strict = false, onRaised }) {
   /** @type {Record<RejectionReason, number>} */
   const counts = { 'unregistered-code': 0, 'field-not-allowed': 0, 'value-not-allowed': 0, 'not-an-object': 0, 'write-failed': 0 };
   /** @type {Partial<Record<RejectionReason, number>>} */
@@ -134,13 +142,20 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
    * when it resolved one. A read that fails resolves nothing.
    * @param {string} failureCode
    * @param {Omit<import('./records.js').JournalEvent, 'seq'>} appended
+   * @param {Readonly<Record<string, number>> | undefined} given - the counts read at the success's moment
    * @returns {Promise<{recorded: boolean}>}
    */
-  const succeeded = async (failureCode, appended) => {
+  const succeeded = async (failureCode, appended, given) => {
     const site = /** @type {{providerId: string, faultCode: string}} */ (siteOf(failureCode));
-    const seen = await records.occurrencesOf(site.providerId);
-    if (!seen.ok) return { recorded: true };
-    const { counts } = /** @type {{counts: Record<string, number>}} */ (seen);
+    /** @type {Readonly<Record<string, number>>} */
+    let counts;
+    if (given) {
+      counts = given;
+    } else {
+      const seen = await records.occurrencesOf(site.providerId);
+      if (!seen.ok) return { recorded: true };
+      counts = /** @type {{counts: Record<string, number>}} */ (seen).counts;
+    }
     if (!Object.keys(counts).some(key => key.split('/')[1] === site.faultCode)) return { recorded: true };
     const done = await records.resolve(site.providerId, [], { looked: [{ faultCode: site.faultCode }], seen: counts });
     if (!done.recorded) return { recorded: false };
@@ -149,7 +164,7 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
   };
 
   return Object.freeze({
-    event(code, fields) {
+    event(code, fields, { seen } = {}) {
       if (!isEventCode(code)) return refuse('unregistered-code', null);
       const entry = EVENT_CODES[code];
       const checked = checkEvidence(fields, entry.fields);
@@ -160,7 +175,7 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       const at = clock.now();
       const appended = { at, code, fields: checked.value };
       if (entry.resolves !== undefined) {
-        track(succeeded(entry.resolves, appended));
+        track(succeeded(entry.resolves, appended, seen));
         return true;
       }
       if (!entry.incident) {
@@ -178,11 +193,16 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       track(raised);
       track(
         raised.then(
-          result =>
-            // A site that repeats while nothing changes journals once per open incident
-            entry.quietWhileOpen && result.recorded && result.wasOpen
+          result => {
+            if (onRaised && result.incident) {
+              const incident = result.incident;
+              track(Promise.resolve(onRaised(code, incident)).then(() => ({ recorded: true })));
+            }
+            // A site that repeats while nothing changes journals once per open incident and cause
+            return entry.quietWhileOpen && result.recorded && result.repeat
               ? { recorded: true }
-              : records.append(appended, { internal: !result.recorded }),
+              : records.append(appended, { internal: !result.recorded });
+          },
           () => records.append(appended),
         ),
       );

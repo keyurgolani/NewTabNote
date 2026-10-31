@@ -9,9 +9,12 @@
  * drops the event, and the site does what it did before. The failed import is kept, so every
  * later event on that page is dropped too until the page reloads.
  *
- * A success at a site (SUCCESS_SITES) imports the trust code only while chrome.storage.local's
- * `trust.openSites` lists its site's failure, and `reconcile()` only while the settings copy
- * holds sightings, so a tab with nothing to resolve still loads no trust code. This module
+ * The page's events run one at a time. A success at a site (SUCCESS_SITES) reads
+ * chrome.storage.local's `trust.openSites` at its own moment, imports the trust code only
+ * when its site has an entry, and passes that count on, so a failure that lands while the code
+ * loads stays open. `reconcile()` imports it only while the settings copy holds sightings and
+ * no failed open of NewTabNoteTrust from the last RETRY_OPEN_MS, so a tab with nothing to
+ * resolve still loads no trust code. This module
  * names those codes and keys itself, since importing them would load the trust code;
  * test/kernel/trust-before-s4.test.mjs holds them equal to js/trust/core/'s.
  */
@@ -26,6 +29,10 @@ export const SUCCESS_SITES = Object.freeze({
 /** js/trust/core/ports.js's SETTINGS_KEYS.openSites and .lastStorageIncident */
 export const OPEN_SITES_KEY = 'trust.openSites';
 export const COPY_KEY = 'trust.lastStorageIncident';
+
+/** js/trust/core/trust-records.js's OPEN_FAILED_KEY and RETRY_OPEN_MS */
+export const OPEN_FAILED_KEY = 'storage/open-failed/NewTabNoteTrust';
+export const RETRY_OPEN_MS = 30_000;
 
 /**
  * chrome.storage.local's answer for `keys`, or none when there's no chrome.storage
@@ -58,6 +65,9 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
   let events = null;
   /** @type {Set<Promise<void>>} */
   const pending = new Set();
+  /** The page's events, one at a time */
+  /** @type {Promise<unknown>} */
+  let queue = Promise.resolve();
 
   const ready = () => {
     if (!events)
@@ -68,14 +78,15 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
   };
 
   /**
-   * Tracks `work` until it settles
-   * @param {Promise<unknown>} work
+   * Runs `work` after every event before it on this page, and tracks it until it settles
+   * @param {() => Promise<unknown>} work
    */
   const track = work => {
-    const done = work.then(
+    const done = queue.then(work).then(
       () => {},
       () => {},
     );
+    queue = done;
     pending.add(done);
     done.then(() => pending.delete(done));
     return done;
@@ -99,31 +110,39 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
         const site = Object.prototype.hasOwnProperty.call(SUCCESS_SITES, code)
           ? SUCCESS_SITES[/** @type {keyof typeof SUCCESS_SITES} */ (code)]
           : null;
-        const pass = () =>
+        /** @param {Record<string, number>} [seen] */
+        const pass = seen =>
           ready().then(loaded => {
-            loaded.event(code, fields, failure);
+            loaded.event(code, fields, failure, seen ? { seen } : {});
             return loaded.flush();
           });
-        track(
-          site === null
-            ? pass()
-            : readKey(OPEN_SITES_KEY).then(sites =>
-                Array.isArray(sites) && sites.includes(site) ? pass() : undefined,
-              ),
-        );
+        track(async () => {
+          if (site === null) return pass();
+          // The count at the success's own moment, which the trust code resolves against
+          const sites = await readKey(OPEN_SITES_KEY);
+          const seen = sites && typeof sites === 'object' ? /** @type {Record<string, unknown>} */ (sites)[site] : null;
+          if (!seen || typeof seen !== 'object' || Object.keys(seen).length === 0) return undefined;
+          return pass(/** @type {Record<string, number>} */ (seen));
+        });
       } catch {
         // Best effort: a failure site never hears of the journal's
       }
     },
 
     reconcile() {
-      return track(
-        readKey(COPY_KEY).then(copy => {
-          const entries = copy && typeof copy === 'object' ? /** @type {{entries?: unknown}} */ (copy).entries : null;
-          if (!Array.isArray(entries) || entries.length === 0) return undefined;
-          return ready().then(loaded => loaded.reconcile());
-        }),
-      );
+      return track(async () => {
+        const copy = await readKey(COPY_KEY);
+        const entries = copy && typeof copy === 'object' ? /** @type {{entries?: unknown}} */ (copy).entries : null;
+        if (!Array.isArray(entries) || entries.length === 0) return undefined;
+        // A context failed to open NewTabNoteTrust just now: likely still broken
+        const now = Date.now();
+        const recent = entries.some(
+          entry =>
+            entry && entry.key === OPEN_FAILED_KEY && typeof entry.at === 'number' && now - entry.at < RETRY_OPEN_MS,
+        );
+        if (recent) return undefined;
+        return ready().then(loaded => loaded.reconcile());
+      });
     },
 
     async flush() {

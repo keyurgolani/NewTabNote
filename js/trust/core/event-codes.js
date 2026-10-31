@@ -18,8 +18,8 @@
  * runs in the service worker, on the same profile.
  *
  * `quietWhileOpen`: a code whose site repeats while nothing changes (the worker's storage open,
- * at every start) is journaled only when its incident isn't open already; each sighting still
- * counts in the incident.
+ * at every start) is journaled only when its incident isn't open already with the same error
+ * code; each sighting still counts in the incident.
  *
  * Adding a code is a PR that adds its entry here, with its fields from the allowlist.
  */
