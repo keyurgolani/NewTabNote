@@ -21,11 +21,15 @@
  * Lock `storage.migrate` shared while it does (#17 PR 2b): the worker's purge and migration
  * runner hold it exclusive, so the export never reads a point between two of their batches,
  * and a note deleted for good is either all there, before its purge, or not there at all.
- * #17 PR 3 writes placement, `kind`, `lifecycle`, and `dailyKey` back as the legacy fields
- * here, once points can hold them.
+ *
+ * Each note goes as 1.4.1 stores one: without #17 PR 3's fields beside its flags (placement,
+ * `kind`, and `lifecycle`; domain/placement.js), which a point taken after the transform holds.
+ * The flags already say what those do, and 1.4.1 keeps a field it doesn't know while it
+ * changes the flags, so one left in would come back stale on the next upgrade (#17 PR 3, Q8).
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
 import { withDataUrls } from './data-urls.js';
 import {
   DEFAULT_LIMITS,
@@ -104,7 +108,7 @@ async function exportUnlocked({ indexedDB, keyRange, crypto, clock, pointId }) {
     const verdict = await verifyPoint({ recovery, point, io });
     if (!verdict.ok) throw new UnavailableError('storage', 'recovery-point-unverified', false);
 
-    const notes = await valuesOf(recovery, point, 'canvases', io);
+    const notes = (await valuesOf(recovery, point, 'canvases', io)).map(withoutPlacement);
     const canvases = notes.filter(note => !note.trashed);
     const trashedCanvases = notes.filter(note => note.trashed);
     const exported = new Set(canvases.map(note => note.id));

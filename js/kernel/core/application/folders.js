@@ -7,6 +7,7 @@
 import { isId, isIdOrNull } from '../contracts/checks.js';
 import { committed, empty, ready, rejected } from '../contracts/outcomes.js';
 import { createsCycle, folderSubtree, newFolderRecord } from '../domain/folder.js';
+import { withPlacementGroup } from '../domain/placement.js';
 import { newTombstone } from '../domain/tombstone.js';
 import { contentChanged, unitsWork } from './work.js';
 
@@ -163,7 +164,10 @@ export const folderCommands = {
           tx.delete('folders', id);
           tx.put('tombstones', newTombstone('folder', id, 'deleted', now));
         }
-        for (const note of notes) tx.put('notes', { ...note, folderId: null, updatedAt: now });
+        // Each to Unfiled, or a Daily Note to its date, its placement following (#17 PR 3a)
+        for (const note of notes) {
+          tx.put('notes', withPlacementGroup(note, { ...note, folderId: null, updatedAt: now }));
+        }
       },
     };
     // The commit names the folders and the notes, so a note list reads both again
