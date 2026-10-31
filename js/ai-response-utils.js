@@ -14,6 +14,73 @@
   }
 
   /**
+   * The first index of `char` at or after a position, for positions that never go back: the
+   * last answer is reused while it's still ahead, so a pass over the text scans it once
+   * @param {string} text
+   * @param {string} char
+   * @returns {(from: number) => number}
+   */
+  function nextOf(text, char) {
+    let from = Infinity;
+    let found = -1;
+    return at => {
+      if (at >= from && (found === -1 || found >= at)) return found;
+      from = at;
+      found = text.indexOf(char, at);
+      return found;
+    };
+  }
+
+  /**
+   * `/\[([^\]]+)\]\(([^)]+)\)/g` replaced by `<a href="$2">$1</a>`, in one pass: from a `[`,
+   * the text runs to the first `]`, which `(` must follow, and the address to the first `)`
+   * @param {string} text
+   * @returns {string}
+   */
+  function replaceMarkdownLinks(text) {
+    const nextClose = nextOf(text, ']');
+    const nextParen = nextOf(text, ')');
+    let out = '';
+    let from = 0;
+    for (let at = text.indexOf('['); at !== -1; at = text.indexOf('[', at + 1)) {
+      if (at < from) continue;
+      const close = nextClose(at + 1);
+      if (close === -1) break;
+      if (close === at + 1 || text[close + 1] !== '(') continue;
+      const paren = nextParen(close + 2);
+      if (paren === -1) break;
+      if (paren === close + 2) continue;
+      out += `${text.slice(from, at)}<a href="${text.slice(close + 2, paren)}">${text.slice(at + 1, close)}</a>`;
+      from = paren + 1;
+      at = paren;
+    }
+    return out + text.slice(from);
+  }
+
+  /**
+   * `/\[\[([^\]]+)\]\]/g` replaced by a wiki link, in one pass: from a `[[`, the name runs to
+   * the first `]`, which another `]` must follow
+   * @param {string} text
+   * @returns {string}
+   */
+  function replaceWikiLinks(text) {
+    const nextClose = nextOf(text, ']');
+    let out = '';
+    let from = 0;
+    for (let at = text.indexOf('[['); at !== -1; at = text.indexOf('[[', at + 1)) {
+      if (at < from) continue;
+      const close = nextClose(at + 2);
+      if (close === -1) break;
+      if (close === at + 2 || text[close + 1] !== ']') continue;
+      const name = text.slice(at + 2, close);
+      out += `${text.slice(from, at)}<a href="#" class="wiki-link" data-note-name="${name}">${name}</a>`;
+      from = close + 2;
+      at = close + 1;
+    }
+    return out + text.slice(from);
+  }
+
+  /**
    * Convert inline markdown formatting to HTML.
    * @param {string} text - Markdown text
    * @returns {string} HTML string
@@ -27,8 +94,8 @@
     result = result.replace(/(?<![_\w])_([^_]+)_(?![_\w])/g, '<em>$1</em>');
     result = result.replace(/~~([^~]+)~~/g, '<del>$1</del>');
     result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-    result = result.replace(/\[\[([^\]]+)\]\]/g, '<a href="#" class="wiki-link" data-note-name="$1">$1</a>');
+    result = replaceMarkdownLinks(result);
+    result = replaceWikiLinks(result);
     result = result.replace(/\n/g, '<br>');
 
     return result;
