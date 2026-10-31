@@ -9,6 +9,10 @@
  * or none do. A commit that writes anything takes one commitSeq in #17's change log, with one
  * change per signal it touched, and answers the typed events it made (events.js). A record
  * that fails its schema on read is quarantined and counted, and reads as absent.
+ *
+ * The in-memory repository answers `signalsOfNote`, `signalsCiting`, and `everySignal` by
+ * scanning. Slice 2's IndexedDB stores need indexes for them instead: one on the signal's own
+ * note id, and a multi-entry one on every note id its sources cite.
  */
 
 export {};

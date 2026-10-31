@@ -148,8 +148,12 @@ export function staled(signal, cause, now) {
   const { freshness } = signal;
   if (freshness.state === 'invalidated') return signal;
   if (freshness.state === 'suspended') {
-    if (freshness.resumeTo?.state === 'invalidated') return signal;
-    return withFreshness(signal, { ...freshness, resumeTo: { state: 'stale', cause, invalidatedAt: null } });
+    // Already stale before it was suspended, or gone: its request went, or none is due
+    if (freshness.resumeTo?.state !== 'current') return signal;
+    return withFreshness(signal, {
+      ...freshness,
+      resumeTo: { state: 'stale', cause, invalidatedAt: null, regenerationSent: false },
+    });
   }
   return withFreshness(signal, { state: 'stale', cause, since: now, invalidatedAt: null, resumeTo: null });
 }
@@ -190,6 +194,8 @@ export function suspended(signal, cause, now) {
     state: /** @type {'current' | 'stale' | 'invalidated'} */ (freshness.state),
     cause: freshness.cause,
     invalidatedAt: freshness.invalidatedAt,
+    // A signal stale before it was suspended has had its regeneration request
+    regenerationSent: freshness.state === 'stale',
   };
   return withFreshness(signal, { state: 'suspended', cause, since: now, invalidatedAt: null, resumeTo });
 }
@@ -315,15 +321,19 @@ const minimumNotes = signal => (signal.kind === 'connection' ? 2 : 1);
 /**
  * Why `signal` is suspended by the notes it cites, or null when it isn't: its own note's
  * cause when that note is trashed, archived, or a template, and otherwise the first cited
- * note's when what's left available is under its minimum
+ * note's when what's left available is under its minimum. `removed` are the notes a
+ * correction took out of its sources, which count as unavailable too.
  * @param {IntelligenceSignal} signal
+ * @param {ReadonlySet<string>} [removed]
  * @returns {FreshnessCause | null}
  */
-export function suspensionCauseOf(signal) {
+export function suspensionCauseOf(signal, removed = new Set()) {
   const own = signal.unavailableNotes.find(entry => entry.noteId === signal.identity.noteId);
   if (own) return own.cause;
   const unavailable = new Set(signal.unavailableNotes.map(entry => entry.noteId));
-  const available = new Set(signal.sourceRefs.map(source => source.noteId).filter(noteId => !unavailable.has(noteId)));
+  const available = new Set(
+    signal.sourceRefs.map(source => source.noteId).filter(noteId => !unavailable.has(noteId) && !removed.has(noteId)),
+  );
   if (available.size < minimumNotes(signal)) return signal.unavailableNotes[0]?.cause ?? null;
   return null;
 }
@@ -332,10 +342,11 @@ export function suspensionCauseOf(signal) {
  * `signal` suspended or resumed as the notes it cites now allow
  * @param {IntelligenceSignal} signal
  * @param {number} now
+ * @param {ReadonlySet<string>} [removed] - notes a correction took out of its sources
  * @returns {IntelligenceSignal}
  */
-export function withAvailability(signal, now) {
-  const cause = suspensionCauseOf(signal);
+export function withAvailability(signal, now, removed) {
+  const cause = suspensionCauseOf(signal, removed);
   return cause ? suspended(signal, cause, now) : resumed(signal, now);
 }
 
@@ -346,32 +357,39 @@ export function withAvailability(signal, now) {
  * @param {string} noteId
  * @param {import('./records.js').IntelligenceSignal['unavailableNotes'][number]['cause'] | null} cause
  * @param {number} now
+ * @param {ReadonlySet<string>} [removed] - notes a correction took out of its sources
  * @returns {IntelligenceSignal}
  */
-export function withNoteState(signal, noteId, cause, now) {
+export function withNoteState(signal, noteId, cause, now, removed) {
   const others = signal.unavailableNotes.filter(entry => entry.noteId !== noteId);
   const unavailableNotes = cause ? [...others, { noteId, cause }] : others;
   const same = JSON.stringify(unavailableNotes) === JSON.stringify(signal.unavailableNotes);
   const next = same ? signal : { ...signal, unavailableNotes, revision: signal.revision + 1 };
-  return withAvailability(next, now);
+  return withAvailability(next, now, removed);
 }
 
 /**
- * `signal` after a note it cites, not its own, was deleted for good: the note's sources go,
- * and with fewer notes left than it needs the signal is invalidated as `source-deleted`
+ * `signal` after a source it cites, not its own note or anchor, was deleted for good: a note
+ * deleted for good (`blockId` null) or a block deleted from another note. Those sources go,
+ * and with fewer notes left than it needs the signal is invalidated as `source-deleted`.
  * @param {IntelligenceSignal} signal
  * @param {string} noteId
  * @param {number} now
+ * @param {string | null} [blockId]
  * @returns {IntelligenceSignal}
  */
-export function withoutNote(signal, noteId, now) {
+export function withoutNote(signal, noteId, now, blockId = null) {
+  const gone = (/** @type {import('./records.js').SourceRef} */ source) =>
+    source.noteId === noteId && (blockId === null || (source.kind === 'block' && source.blockId === blockId));
+  const sourceRefs = signal.sourceRefs.filter(source => !gone(source));
+  if (sourceRefs.length === signal.sourceRefs.length) return signal;
+  const left = new Set(sourceRefs.map(source => source.noteId));
   const next = {
     ...signal,
-    sourceRefs: signal.sourceRefs.filter(source => source.noteId !== noteId),
-    unavailableNotes: signal.unavailableNotes.filter(entry => entry.noteId !== noteId),
+    sourceRefs,
+    unavailableNotes: signal.unavailableNotes.filter(entry => left.has(entry.noteId)),
     revision: signal.revision + 1,
   };
-  const left = new Set(next.sourceRefs.map(source => source.noteId));
   if (left.size < minimumNotes(signal)) return invalidated(next, 'source-deleted', now);
   return withAvailability(next, now);
 }

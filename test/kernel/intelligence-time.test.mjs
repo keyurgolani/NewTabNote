@@ -308,7 +308,12 @@ describe('categories (#7, "Categories and time")', () => {
         cause: /** @type {const} */ ('note-trashed'),
         since: NOW,
         invalidatedAt: null,
-        resumeTo: { state: /** @type {const} */ ('current'), cause: null, invalidatedAt: null },
+        resumeTo: {
+          state: /** @type {const} */ ('current'),
+          cause: null,
+          invalidatedAt: null,
+          regenerationSent: false,
+        },
       },
       {
         state: /** @type {const} */ ('invalidated'),

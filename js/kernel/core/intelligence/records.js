@@ -121,37 +121,97 @@ export const HISTORY_ACTIONS = Object.freeze(
   /** @type {const} */ (['complete', 'reopen', 'dismiss', 'snooze', 'correct', 'tombstone']),
 );
 
-/** The schemes a link starts with when it has no `//` */
-const SCHEMES = 'javascript|data|mailto|file|blob|vbscript|chrome-extension|https?|ftp|wss?|tel|sms';
+/**
+ * The top-level domains a bare `host.tld` counts as a link under, so a file name such as
+ * `README.md/CHANGELOG.md` stays text: the common generic and country ones, the reserved test
+ * ones, punycode, and any non-ASCII one
+ */
+const TLDS =
+  'com|net|org|edu|gov|mil|int|io|co|ai|app|dev|info|biz|me|us|uk|de|fr|es|it|nl|ru|cn|jp|in|br|au|ca|ch|se|no|fi|' +
+  'dk|pl|cz|at|be|ie|nz|za|kr|tw|hk|sg|mx|ar|tr|ua|il|eu|xyz|online|site|tech|store|cloud|page|link|live|news|blog|' +
+  'shop|example|test|invalid|local|localdomain|internal|onion';
+
+const LABEL = '[\\p{L}\\p{N}-]+';
+const TLD = `(?:${TLDS}|xn--[a-z0-9-]+|(?:(?![\\x00-\\x7f])\\p{L}){2,})`;
+const HOST = `(?:${LABEL}\\.)+${TLD}`;
+const IPV4 = '\\d{1,3}(?:\\.\\d{1,3}){3}';
+const USERINFO = '(?:[\\p{L}\\p{N}._~%+-]+(?::[^\\s@/]*)?@)';
+// A bare host is a link only with a port, a path, a query, or a fragment after it, so a plain
+// email or a word with a dot stays text
+const AFTER_HOST = '(?::\\d{1,5}(?:[/?#]\\S*)?|[/?#]\\S*)';
+// Not right after a letter, digit, colon, dot, or hyphen, so `re:sms:send` and `a.b` stay text
+const START = '(?<![\\p{L}\\p{N}:._@-])';
 
 /**
- * A link in text: anything with a scheme and `//`, one of SCHEMES and a colon with something
- * after it (so "data: Q3" stays text), a `www.` host, or a bare `host.tld/path`
+ * A link in text:
+ * - any `word:` followed by `//` or `?` (`https://`, `chrome-extension://`, `magnet:?`)
+ * - a scheme that needs neither: `javascript:`, `vbscript:`, `mailto:`, `data:` with a media
+ *   type, `file:/`, `blob:`, `about:`, `tel:` and `sms:` with a number, `skype:`, `callto:`,
+ *   `facetime:`, `irc:`, `sip:`
+ * - a `www.` host, or a bare host, IPv4 address, or `localhost` with a port, path, query, or
+ *   fragment after it, and any userinfo before it
  */
 const LINK = new RegExp(
-  `(?:[a-z][a-z0-9+.-]*:\\/\\/\\S*|\\b(?:${SCHEMES}):\\S+|\\bwww\\.\\S+|\\b[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}\\/\\S*)`,
-  'gi',
+  [
+    `${START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\?)\\S*`,
+    `${START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
+      'about:[a-z]\\S*|(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|(?:skype|callto|facetime|irc|sip):\\S+)',
+    `${START}www\\.\\S+`,
+    `${START}${USERINFO}?(?:${HOST}|${IPV4}|localhost)${AFTER_HOST}`,
+  ].join('|'),
+  'giu',
 );
 
 /** What a redacted link reads as */
 export const LINK_PLACEHOLDER = '[link]';
 
-const LINK_IN_TEXT = new RegExp(LINK.source, 'i');
+const LINK_IN_TEXT = new RegExp(LINK.source, 'iu');
 
 /** @param {string} text */
 const hasLink = text => LINK_IN_TEXT.test(text);
 
 /**
+ * A link's match without the punctuation that ends the sentence around it: a final `.`, `,`,
+ * `;`, `:`, `!`, `?`, or quote, and a closing bracket the link didn't open
+ * @param {string} match
+ * @returns {[string, string]} the link and what follows it
+ */
+const splitTrailing = match => {
+  let link = match;
+  for (;;) {
+    const last = link[link.length - 1];
+    if (/[.,;:!?'"]/.test(last)) link = link.slice(0, -1);
+    else if (last === ')' && link.split(')').length > link.split('(').length) link = link.slice(0, -1);
+    else if (last === ']' && link.split(']').length > link.split('[').length) link = link.slice(0, -1);
+    else break;
+  }
+  return [link, match.slice(link.length)];
+};
+
+/**
+ * Invisible characters that change how text reads without showing: the soft hyphen, the
+ * Arabic letter mark, zero-width spaces and joiners, the left-to-right and right-to-left
+ * marks, the bidi embeddings, overrides, and isolates, the invisible operators, and the
+ * byte-order mark
+ * @param {number} unit
+ */
+const isInvisibleUnit = unit =>
+  unit === 0x00ad ||
+  unit === 0x061c ||
+  unit === 0x180e ||
+  (unit >= 0x200b && unit <= 0x200f) ||
+  (unit >= 0x202a && unit <= 0x202e) ||
+  (unit >= 0x2060 && unit <= 0x2064) ||
+  (unit >= 0x2066 && unit <= 0x2069) ||
+  unit === 0xfeff;
+
+/**
  * Whether a UTF-16 unit can't sit in plain text: a control character other than a tab, the
- * line and paragraph separators, and the bidi embeddings, overrides, and isolates, which can
- * make a title read as something else
+ * line and paragraph separators, and the invisible characters above
  * @param {number} unit
  */
 const isUnsafeUnit = unit =>
-  (unit < 0x20 && unit !== 0x09) ||
-  unit === 0x7f ||
-  (unit >= 0x2028 && unit <= 0x202e) ||
-  (unit >= 0x2066 && unit <= 0x2069);
+  (unit < 0x20 && unit !== 0x09) || unit === 0x7f || unit === 0x2028 || unit === 0x2029 || isInvisibleUnit(unit);
 
 /**
  * @param {string} text
@@ -237,10 +297,16 @@ export const confidenceSchema = v.strictObject({
   reason: content(plainText(REASON_MAX)),
 });
 
+/**
+ * What a suspended signal goes back to. `regenerationSent` says whether its stale state has
+ * had its regeneration request already, so restoring it sends one only for a signal that went
+ * stale while it was suspended.
+ */
 const resumeSchema = v.strictObject({
   state: v.picklist(['current', 'stale', 'invalidated']),
   cause: v.nullable(v.picklist(FRESHNESS_CAUSES)),
   invalidatedAt: v.nullable(timestamp),
+  regenerationSent: v.boolean(),
 });
 
 /**
@@ -470,17 +536,25 @@ export const isCorrection = value => v.is(correctionRecord, value);
 const MAX_SOURCE_TEXT = 4000;
 
 /**
- * `text` as plain text up to `max` characters: each link replaced by LINK_PLACEHOLDER,
- * control characters, separators, and bidi marks turned to spaces, whitespace collapsed, and
- * clipped with an ellipsis. A note's own text, a todo with a link included, still makes a
+ * `text` as plain text up to `max` characters: invisible characters removed, each link
+ * replaced by LINK_PLACEHOLDER (the punctuation after it kept), control characters and line
+ * separators turned to spaces, whitespace collapsed, and clipped with an ellipsis. A note's own text, a todo with a link included, still makes a
  * signal, and the signal keeps no URL. Text that only says something, like "password:
- * hunter2", passes as written: this redacts links, it can't tell what a sentence means.
+ * hunter2", passes as written, and so does a plain email address, the user's own text: this
+ * redacts links, it can't tell what a sentence means.
  * @param {string} text
  * @param {number} max
  * @returns {string}
  */
 export function redactText(text, max) {
-  const plain = [...String(text).slice(0, MAX_SOURCE_TEXT).replace(LINK, LINK_PLACEHOLDER)]
+  const visible = [...String(text).slice(0, MAX_SOURCE_TEXT)]
+    .filter(character => !isInvisibleUnit(character.charCodeAt(0)))
+    .join('');
+  const redacted = visible.replace(LINK, match => {
+    const [, after] = splitTrailing(match);
+    return `${LINK_PLACEHOLDER}${after}`;
+  });
+  const plain = [...redacted]
     .map(character => (hasControl(character) ? ' ' : character))
     .join('')
     .replace(/\s+/g, ' ')
