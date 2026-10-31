@@ -339,17 +339,15 @@ class AIChatController {
   // ─── Chat history persistence ───
 
   async loadChatHistory() {
-    // Each as stored, or empty where nothing is or the read fails
-    const chats = await this.settings.workspaceDataOr({
-      aiChatHistory: [],
-      noteChatMessages: [],
-      globalChatHistory: [],
-      globalChatMessages: [],
-    });
-    this.aiChatHistory = chats.aiChatHistory;
-    this.noteChatMessages = chats.noteChatMessages;
-    this.globalChatHistory = chats.globalChatHistory;
-    this.globalChatMessages = chats.globalChatMessages;
+    // Each conversation in its own read, as stored, or empty where nothing is or its read
+    // fails. So a read that fails empties that conversation alone, as 1.4.x's reads did, and
+    // the other one, which loaded, is never saved over as empty the next time it's used.
+    const noteChat = await this.settings.workspaceDataOr({ aiChatHistory: [], noteChatMessages: [] });
+    const globalChat = await this.settings.workspaceDataOr({ globalChatHistory: [], globalChatMessages: [] });
+    this.aiChatHistory = noteChat.aiChatHistory;
+    this.noteChatMessages = noteChat.noteChatMessages;
+    this.globalChatHistory = globalChat.globalChatHistory;
+    this.globalChatMessages = globalChat.globalChatMessages;
 
     // The avatar's initial in addChatMessage. No version has ever saved a display name, so the
     // setting 1.4.x read here was always its default.

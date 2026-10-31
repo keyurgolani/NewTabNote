@@ -646,6 +646,8 @@ function createChromeStub() {
     failNextSet(error = new Error('Resource::kQuotaBytes quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
+    /** Let the next chrome.storage.local.get through, so a failNextGet after this fails the one after it. */
+    passNextGet() { getFailures.push(null); },
     /** set and remove calls, which are the writes. */
     writes() { return calls.filter((c) => c.method === 'set' || c.method === 'remove'); },
   };
