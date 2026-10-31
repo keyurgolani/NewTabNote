@@ -14,7 +14,9 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
-const { createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient, watchTransactions,
+} = require('./helpers/legacy-env');
 const { loadBackground } = require('./helpers/load-background');
 
 const TITLE = 'Canary title: plans for the divorce lawyer';
@@ -583,8 +585,10 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
     await failedBackup(working);
     const seen = await inspect(host.indexedDB, host.settings.items);
     // chrome.runtime.lastError holds only a message; the createAutoBackup outcome the event
-    // reads it through carries its cause and whether a retry can work, and nothing of the message
-    assert.deepEqual(failures(seen.events), [['backup.auto-failed', { cause: 'storage', errorCode: 'transaction-failed', retryable: true }]]);
+    // reads it through carries its cause and whether a retry can work, and nothing of the
+    // message. #17's adapter, the page's since #17 PR 4a, names the chrome.storage write that
+    // failed, where the legacy adapter answered transaction-failed
+    assert.deepEqual(failures(seen.events), [['backup.auto-failed', { cause: 'storage', errorCode: 'settings-write-failed', retryable: true }]]);
     assert.deepEqual(incidentsOf(seen.incidents), [['backup', 'auto-backup-failed', null, 'data-risk', 1]]);
     assertNoCanary(seen.text, 'NewTabNoteTrust, the settings area, or the export');
   });
@@ -592,12 +596,23 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
   it("an IndexedDB failure keeps the exception's name, so an UnknownError and an AbortError stay apart", async () => {
     const seenFor = async (name) => {
       const { host, working } = variants();
-      await failedBackup(working, ({ Storage }) => {
-        // The export reads every store first, so a failing database fails it there
-        Storage.exportAll = async () => {
-          throw new DOMException(`${MESSAGE}: ${TITLE} at ${URL_CANARY} with ${CREDENTIAL}`, name);
-        };
-      });
+      let unwatch = () => {};
+      try {
+        await failedBackup(working, () => {
+          // The export reads every store first, so a failing database fails it there: in the
+          // readonly transaction #17's adapter reads it in since #17 PR 4a
+          let failed = false;
+          unwatch = watchTransactions(({ stores, mode, name: database, open }) => {
+            if (!failed && database === 'CanvasTabDB' && mode === 'readonly' && stores.includes('canvases') && stores.includes('elements')) {
+              failed = true;
+              throw new DOMException(`${MESSAGE}: ${TITLE} at ${URL_CANARY} with ${CREDENTIAL}`, name);
+            }
+            return open();
+          });
+        });
+      } finally {
+        unwatch();
+      }
       const seen = await inspect(host.indexedDB, host.settings.items);
       assertNoCanary(seen.text, `NewTabNoteTrust, the settings area, or the export, after ${name}`);
       return failures(seen.events);

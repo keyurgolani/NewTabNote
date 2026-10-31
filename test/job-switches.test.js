@@ -247,6 +247,9 @@ describe('the auto-title and insights switches stop provider calls at once (priv
       await toggle(env, controls[enabledId], true);
       assert.equal(setUps, 1, 'switched on: set up once, by the settings change');
       assert.equal(runsRecorded() - before, 1, 'one run, so one run recorded');
+      // A run reads each note through #17's adapter since #17 PR 4a, which takes more turns than
+      // Storage's reads did, and a run still going skips the next one, so this one ends first
+      await waitFor(() => !manager.insightsRunning && !manager.autoTitleRunning, { message: 'the run ended' });
 
       controls[intervalId].value = intervalTo;
       controls[intervalId].dispatchEvent({ type: 'change' });

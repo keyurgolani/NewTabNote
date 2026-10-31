@@ -8,10 +8,11 @@
 // writes first so a pane's unsaved text survives; a bulk action counts only what committed;
 // and filing and template conversion with the note open survive the editor's next save.
 
-const { describe, it } = require('node:test');
+const { describe, it, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, runUntil, bootNewTab,
+  watchTransactions,
 } = require('./helpers/legacy-env');
 
 const NAMES = { A: 'Alpha', B: 'Beta', C: 'Gamma', D: 'Delta' };
@@ -62,15 +63,21 @@ async function openPage(env, { open = ['A'], split = false } = {}) {
   return page;
 }
 
+/** What takes off the watches failNextWrite set, once each test ends */
+const unwatch = [];
+afterEach(() => {
+  while (unwatch.length) unwatch.pop()();
+});
+
 /**
  * Make the next write to IndexedDB store `name` that `matches` fail, as a full disk or a
- * broken database does, once
+ * broken database does, once, on whatever connection makes it: the page's kernel writes through
+ * #17's adapter's own since #17 PR 4a
  */
-function failNextWrite(Storage, name, matches = () => true) {
-  const transaction = Storage.transaction.bind(Storage);
+function failNextWrite(name, matches = () => true) {
   let armed = true;
-  Storage.transaction = (names, mode) => {
-    const tx = transaction(names, mode);
+  unwatch.push(watchTransactions(({ open }) => {
+    const tx = open();
     const objectStore = tx.objectStore.bind(tx);
     tx.objectStore = (storeName) => {
       const store = objectStore(storeName);
@@ -91,7 +98,7 @@ function failNextWrite(Storage, name, matches = () => true) {
       });
     };
     return tx;
-  };
+  }));
 }
 
 const confirmIn = async (env, title) => {
@@ -150,7 +157,7 @@ describe('removeNotes, when the write fails', () => {
     const before = view(page.tabs);
     assert.deepEqual([before.left, before.right], ['A', 'B']);
     type(page.tabs.secondaryEditor, 'typed before the trash');
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.trashed === true);
+    failNextWrite('canvases', (record) => record && record.trashed === true);
 
     await runUntil(env, page.notes.trashNoteById('B'));
 
@@ -167,7 +174,7 @@ describe('removeNotes, when the write fails', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB, ['A']);
     const page = await openPage(env, { open: ['A'] });
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.trashed === true);
+    failNextWrite('canvases', (record) => record && record.trashed === true);
 
     await runUntil(env, page.notes.trashNoteById('A'));
 
@@ -196,7 +203,7 @@ describe('removeNotes, when the write fails', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A', 'TR'] }); // opened from the Trash view
     const before = view(page.tabs);
-    failNextWrite(page.Storage, 'canvases');
+    failNextWrite('canvases');
 
     const emptied = page.sidebar.emptyTrash();
     await confirmIn(env, 'Empty Trash');
@@ -215,7 +222,7 @@ describe('removeNotes, when the write fails', () => {
     const page = await openPage(env, { open: ['A'] });
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C']);
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.id === 'A' && record.trashed === true);
+    failNextWrite('canvases', (record) => record && record.id === 'A' && record.trashed === true);
 
     const trashed = page.sidebar.performBulkAction('trash');
     await confirmIn(env, 'Confirm');
@@ -429,7 +436,7 @@ describe('archive through removeNotes', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
     const before = view(page.tabs);
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.archived === true);
+    failNextWrite('canvases', (record) => record && record.archived === true);
 
     await runUntil(env, page.notes.archiveNote('A'));
     assert.notEqual((await stored(env)).notes.A.archived, true);
@@ -470,7 +477,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const before = view(page.tabs);
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['A', 'B']);
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.id === 'A' && record.trashed === true);
+    failNextWrite('canvases', (record) => record && record.id === 'A' && record.trashed === true);
 
     const trashed = page.sidebar.performBulkAction('trash');
     await confirmIn(env, 'Confirm');
@@ -528,7 +535,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     await page.Storage.permanentlyDeleteNote('C');
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C', 'D']);
-    failNextWrite(page.Storage, 'canvases', (record) => record && record.id === 'B' && record.archived === true);
+    failNextWrite('canvases', (record) => record && record.id === 'B' && record.archived === true);
 
     const archived = page.sidebar.performBulkAction('archive');
     await confirmIn(env, 'Confirm');

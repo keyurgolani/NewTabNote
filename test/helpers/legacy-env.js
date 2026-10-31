@@ -19,7 +19,7 @@
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
-const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
+const { IDBDatabase, IDBFactory, IDBKeyRange } = require('fake-indexeddb');
 
 const ROOT = path.join(__dirname, '..', '..');
 const DB_NAME = 'CanvasTabDB';
@@ -934,6 +934,31 @@ function recordsOf(dump, storeName) {
   return store ? Object.fromEntries(store.records.map((r) => [String(r.key), r.value])) : {};
 }
 
+/**
+ * Watch every transaction a connection opens from now on, until the function it answers is
+ * called: `each` gets each one's stores and mode, its database's name, and `open`, which opens
+ * it, and answers the transaction to use, or throws in its place, as a failing database does.
+ * Every fake-indexeddb connection in the process is watched, the test's Storage's and #17's
+ * adapter's both: the page's kernel writes through the adapter's own connection since #17 PR 4a,
+ * where the legacy adapter wrote through Storage's.
+ * @param {(opening: {stores: string[], mode: string, name: string, open: () => any}) => any} each
+ * @returns {() => void} what takes the watch off
+ */
+function watchTransactions(each) {
+  const transaction = IDBDatabase.prototype.transaction;
+  IDBDatabase.prototype.transaction = function watched(stores, mode, options) {
+    return each({
+      stores: [].concat(stores),
+      mode: mode || 'readonly',
+      name: this.name,
+      open: () => transaction.call(this, stores, mode, options),
+    });
+  };
+  return () => {
+    IDBDatabase.prototype.transaction = transaction;
+  };
+}
+
 /** Let fake-indexeddb and the chrome stub run queued work. */
 async function settle(rounds = 20) {
   for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve));
@@ -1089,8 +1114,9 @@ function testDocumentClient(client) {
 
 /**
  * Make the document client the page's editors read and write through
- * (test/helpers/editor-client.mjs): a new tab's kernel over the page's Storage, which has
- * to have started. Each editor makeEditor makes for the page gets it. The page's note list
+ * (test/helpers/editor-client.mjs): a new tab's kernel on #17's adapter, opened as the new tab's
+ * root opens it (#17 PR 4a), over the database the page's Storage has to have started, once
+ * it's open. Each editor makeEditor makes for the page gets it. The page's note list
  * (js/kernel/core/application/note-list.js), on the same kernel, becomes `env.noteList`, and
  * starts reading. It takes test/helpers/page-module.js, so node runs with
  * --experimental-vm-modules (npm test passes it).
@@ -1104,13 +1130,14 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
   const { kernel, documentClient, noteList, removalFor, settingsClient, storageState, recovery, validateBackup } = pageClientsFor({
-    storage: env.get('Storage'),
     settings: env.chrome.api.storage.local,
     onListQuery,
     kernelNow,
     pageNow,
     zone,
   });
+  const failure = await kernel.whenReady();
+  if (failure) throw new Error(`the page's kernel didn't start: ${failure.code}`);
   // The kernel client too, so a test can pin, trash, or rename the way another part of the page does
   env.kernel = kernel;
   env.documentClient = testDocumentClient(documentClient);
@@ -1119,7 +1146,7 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
   env.removalFor = removalFor;
   // The page's settings port (js/kernel/composition/settings.js), which controllers take as `settings`
   env.settingsClient = settingsClient;
-  // What App gives the controllers of the page's Storage: its state, the storage guard's raw
+  // What App gives the controllers of the page's database: its state, the storage guard's raw
   // export, and an import's backup check (js/kernel/composition/newtab.js)
   env.storageState = storageState;
   env.recovery = recovery;
@@ -1366,6 +1393,7 @@ module.exports = {
   requestToPromise,
   settle,
   waitFor,
+  watchTransactions,
   plain,
   note,
   block,
