@@ -294,6 +294,9 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
     await verify(['local-inference']);
     assert.equal(await stateOf('local-inference/load-failed/-'), 'open');
     // The model loads and indexes a note after the failure
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
+    // before #17's adapter opens it versioned
+    assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
     await adapter.commit(/** @type {any} */ ({
@@ -372,6 +375,9 @@ describe("the probe's edges (#78 nits 4 to 6)", () => {
   it("a note whose id is the old probe key doesn't stop the probe, and is left as it was", async () => {
     const of = freshProfile();
     await legacyEnv.createDatabase(of.real, { records: { canvases: [{ id: 'trust-probe', name: 'Imported' }] } });
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
+    // before #17's adapter opens it versioned
+    assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
     assert.notEqual(PROBE_KEY, 'trust-probe');
