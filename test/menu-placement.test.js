@@ -15,6 +15,13 @@
 // flips to the other side when it doesn't fit, is pulled in from an edge otherwise, and is
 // placed in the task that shows it, measured hidden first, never a frame later. A window
 // shorter than a menu gets one that scrolls (css/editor.css).
+//
+// #102's review: a menu with room on neither side of what it opens from goes on the roomier
+// side, capped to that room, and scrolls there instead of covering it. The link and template
+// menus, placed again each time they draw, keep the side they're on while it fits, so the list
+// changing as you type doesn't move them across the caret, and keep the highlighted item in
+// view as the arrow keys move it. The slash, link, and template menus are no wider than the
+// window, for a narrow picture-in-picture one.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -262,11 +269,30 @@ describe('Utils.menuBeside', () => {
     assert.ok(inside(position, SLASH, VIEWPORT));
   });
 
-  it('above, it opens above when it fits there and below when only that fits, and keeps its top in a window too short for either', () => {
+  it('above, it opens above when it fits there and below when only that fits, and in a window too short for either keeps its top in it, capped to the room over the bar', () => {
     assert.deepEqual(beside(rect(600, 836, 690, 864), SUBMENU, VIEWPORT, { above: true, gap: 8 }), { left: 600, top: 836 - 8 - SUBMENU.height });
     assert.deepEqual(beside(rect(600, 100, 690, 128), SUBMENU, VIEWPORT, { above: true, gap: 8 }), { left: 600, top: 128 + 8 });
     const short = { width: 1440, height: 300 };
-    assert.equal(beside(rect(600, 236, 690, 264), SUBMENU, short, { above: true, gap: 8 }).top, MARGIN);
+    assert.deepEqual(beside(rect(600, 236, 690, 264), SUBMENU, short, { above: true, gap: 8 }), { left: 600, top: MARGIN, maxHeight: 236 - 8 - MARGIN });
+  });
+
+  it('with room for all of it on neither side, it goes on the roomier one, capped to that room, not over what it opens from', () => {
+    const narrow = { width: 360, height: 640 };
+    // A block in the middle of a 360 by 640 window: 298 px under it and 268 over it for a 320 px menu
+    const under = beside(rect(24, 280, 336, 330), SLASH, narrow);
+    assert.deepEqual(under, { left: 24, top: 330 + 4, maxHeight: 640 - MARGIN - (330 + 4) });
+    // A little lower, over it has more
+    const over = beside(rect(24, 330, 336, 360), SLASH, narrow);
+    assert.deepEqual(over, { left: 24, top: MARGIN, maxHeight: 330 - 4 - MARGIN });
+    for (const { top, maxHeight } of [under, over]) {
+      assert.ok(top >= MARGIN && top + maxHeight <= narrow.height - MARGIN, 'inside the window');
+    }
+    assert.ok(over.top + over.maxHeight <= 330 - 4, 'clear of the block');
+  });
+
+  it('with no room on either side, as from a block that fills the window, it is pulled in from the edge, over it', () => {
+    const narrow = { width: 360, height: 640 };
+    assert.deepEqual(beside(rect(24, 0, 336, 640), SLASH, narrow), { left: 24, top: 640 - SLASH.height - MARGIN });
   });
 });
 
@@ -288,13 +314,17 @@ describe('Utils.submenuBeside', () => {
 
 /**
  * Give `element` a layout: in the page and not display: none (its `hidden` class), it lays out
- * at `sizeOf(element)` where its style's left and top put it, moved up by its height under
- * translateY(-100%), as a browser would. Hidden only by visibility, it still has its size.
+ * at `sizeOf(element)`, no taller than its style's max-height, where its style's left and top
+ * put it, moved up by its height under translateY(-100%), as a browser would. Hidden only by
+ * visibility, it still has its size.
  */
 function laidOut(element, sizeOf) {
   element.getBoundingClientRect = () => {
     const shown = element.isConnected && !element.classList.contains('hidden');
-    const { width, height } = shown ? sizeOf(element) : { width: 0, height: 0 };
+    const natural = shown ? sizeOf(element) : { width: 0, height: 0 };
+    const cap = parseFloat(element.style.maxHeight);
+    const width = natural.width;
+    const height = Number.isNaN(cap) ? natural.height : Math.min(natural.height, cap);
     const left = parseFloat(element.style.left) || 0;
     const top = (parseFloat(element.style.top) || 0) - (/translateY\(-100%\)/.test(element.style.transform || '') ? height : 0);
     return { left, top, right: left + width, bottom: top + height, width, height, x: left, y: top };
@@ -342,7 +372,8 @@ function editorMenuSize(element) {
 /**
  * The new tab's left pane as newtab.html has it, with its slash, link, and template menus, and
  * a real editor on it, in a window of `viewport`. Every element lays out (laidOut), so the
- * menus the editor makes have their size once they're in the page.
+ * menus the editor makes have their size once they're in the page, and `scrolls` lists each
+ * element scrolled into view, with its options.
  */
 function editorPage(viewport) {
   const env = createLegacyEnv({ document: new FakeDocument() });
@@ -352,7 +383,10 @@ function editorPage(viewport) {
   for (const view of [env.global, env.window]) Object.assign(view, { innerWidth: viewport.width, innerHeight: viewport.height });
   const doc = env.document;
   const make = doc.createElement.bind(doc);
-  doc.createElement = (tag) => Object.assign(laidOut(make(tag), editorMenuSize), { scrollIntoView() {} });
+  const scrolls = [];
+  doc.createElement = (tag) => Object.assign(laidOut(make(tag), editorMenuSize), {
+    scrollIntoView(options) { scrolls.push({ element: this, options }); },
+  });
   const add = (parent, attributes) => {
     const element = parent.appendChild(doc.createElement('div'));
     for (const [name, value] of Object.entries(attributes)) {
@@ -375,7 +409,7 @@ function editorPage(viewport) {
     element.getBoundingClientRect = () => ({ width: rect.right - rect.left, height: rect.bottom - rect.top, x: rect.left, y: rect.top, ...rect });
     return element;
   };
-  return { env, doc, editor, at };
+  return { env, doc, editor, at, scrolls };
 }
 
 const placed = (menu) => ({ left: parseFloat(menu.style.left), top: menu.getBoundingClientRect().top });
@@ -515,14 +549,35 @@ describe("each editor menu's site places it inside the window, in the task that 
     }
   }
 
-  it("Turn into for blocks selected together keeps its top in a window too short for it, above or below the bar", () => {
+  it('Turn into for blocks selected together keeps its top in a window too short for it, capped to the room over the bar', () => {
     const viewport = { width: 1440, height: 300 };
     const editorDom = editorPage(viewport);
     const menu = EDITOR_SITES.find((site) => site.key === 'selection').open(editorDom, { button: { left: 600, top: 236, right: 690, bottom: 264 } });
     assert.deepEqual(placed(menu), { left: 600, top: MARGIN });
+    assert.equal(menu.style.maxHeight, `${236 - 8 - MARGIN}px`);
   });
 
-  it('the link menu opens under its block when the caret has no box of its own', () => {
+  it('the slash menu from a block in the middle of a 360 by 640 window opens under it, capped to the room there, not over the block', () => {
+    const editorDom = editorPage({ width: 360, height: 640 });
+    const block = { left: 24, top: 280, right: 336, bottom: 330 };
+    const menu = EDITOR_SITES.find((site) => site.key === 'slash').open(editorDom, { block });
+    assert.deepEqual(placed(menu), { left: 24, top: block.bottom + 4 });
+    assert.equal(menu.style.maxHeight, `${640 - MARGIN - (block.bottom + 4)}px`);
+    assert.equal(menu.getBoundingClientRect().bottom, 640 - MARGIN);
+  });
+
+  it('a menu capped once opens at its full height where it has the room', () => {
+    const editorDom = editorPage({ width: 360, height: 640 });
+    const slash = EDITOR_SITES.find((site) => site.key === 'slash');
+    const menu = slash.open(editorDom, { block: { left: 24, top: 280, right: 336, bottom: 330 } });
+    editorDom.editor.hideSlashMenu();
+    slash.open(editorDom, { block: { left: 24, top: 40, right: 336, bottom: 70 } });
+    assert.deepEqual(placed(menu), { left: 24, top: 74 });
+    assert.equal(menu.style.maxHeight, '');
+    assert.equal(menu.getBoundingClientRect().height, EDITOR_MENUS.slash.height);
+  });
+
+  it('the link menu opens from its block when the caret has no box of its own', () => {
     const place = WINDOWS[0];
     const editorDom = editorPage(place.viewport);
     const empty = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
@@ -546,6 +601,69 @@ describe("each editor menu's site places it inside the window, in the task that 
     assert.equal(placed(wikiMenu).top + shorter.height, bottom);
   });
 
+  /** A link or template menu's size by what it lists: its header, then 56 px a row, up to its 320 px cap */
+  const listSize = (menu) => ({ width: 280, height: Math.min(320, 35 + 56 * menu.querySelectorAll('.slash-menu-item').length) });
+  const READINGS = Array.from({ length: 10 }, (_, i) => `Reading ${i + 1}`);
+  const WEEKLIES = Array.from({ length: 10 }, (_, i) => ({ id: `T${i + 1}`, name: `Weekly ${i + 1}` }));
+
+  it('the link menu keeps the side it opened on while typing changes its list, so it does not jump across the caret', () => {
+    const editorDom = editorPage(VIEWPORT);
+    const { env, editor } = editorDom;
+    // The caret at 600-620 in a 1440 by 900 window: ten names (320 px) don't fit under it, so
+    // the menu opens over it
+    const caret = { left: 600, top: 600, right: 600, bottom: 620, width: 0, height: 20 };
+    env.window.getSelection = () => ({ rangeCount: 1, getRangeAt: () => ({ getBoundingClientRect: () => caret }) });
+    laidOut(editor.wikiMenu, listSize);
+    editor.noteNames = READINGS;
+    editor.showWikiMenu(editorDom.at({ left: 560, top: 596, right: 1260, bottom: 624 }));
+    const tops = [placed(editor.wikiMenu).top];
+    // "Reading 1" leaves two names (147 px), which would fit under the caret too
+    for (const filter of ['Reading 1', 'Reading']) {
+      editor.wikiFilter = filter;
+      editor.renderWikiMenu();
+      tops.push(placed(editor.wikiMenu).top);
+    }
+    assert.deepEqual(tops, [280, 453, 280]);
+  });
+
+  it('the template menu keeps the side it opened on while its list changes', () => {
+    const editorDom = editorPage(VIEWPORT);
+    const { editor } = editorDom;
+    laidOut(editor.templateMenu, listSize);
+    editor.templates = WEEKLIES;
+    editor.showTemplateMenu(editorDom.at({ left: 560, top: 600, right: 1260, bottom: 620 }));
+    const tops = [placed(editor.templateMenu).top];
+    editor.templateFilter = 'Weekly 1';
+    editor.renderTemplateMenu();
+    tops.push(placed(editor.templateMenu).top);
+    assert.deepEqual(tops, [600 - 320, 600 - 147]);
+  });
+
+  it('the arrow keys keep the highlighted name or template in view as they move it', () => {
+    for (const { menu, open, items } of [
+      { menu: 'the link menu', open: (editor, block) => { editor.noteNames = READINGS; editor.showWikiMenu(block); }, items: (editor) => editor.wikiMenuItems },
+      { menu: 'the template menu', open: (editor, block) => { editor.templates = WEEKLIES; editor.showTemplateMenu(block); }, items: (editor) => editor.templateMenuItems },
+    ]) {
+      const editorDom = editorPage(VIEWPORT);
+      const { env, editor, scrolls } = editorDom;
+      const caret = { left: 600, top: 300, right: 600, bottom: 320, width: 0, height: 20 };
+      env.window.getSelection = () => ({ rangeCount: 1, getRangeAt: () => ({ getBoundingClientRect: () => caret }) });
+      editor.blocks = [TEXT_BLOCK];
+      const block = editorDom.at({ left: 560, top: 296, right: 1260, bottom: 324 }, { id: TEXT_BLOCK.id });
+      block.classList.add('block');
+      open(editor, block);
+      // Ten entries make about 600 px in a 320 px menu: the arrow keys reach the tenth
+      for (let step = 1; step < 10; step += 1) {
+        editor.onBlockKeyDown({ key: 'ArrowDown', target: block, preventDefault() {} });
+        const active = items(editor).querySelector('.slash-menu-item.active');
+        assert.equal(items(editor).children.indexOf(active), step, `${menu}, ArrowDown ${step}`);
+        const scrolled = scrolls.at(-1);
+        assert.equal(scrolled.element, active, `${menu}: the highlighted entry is scrolled into view`);
+        assert.deepEqual({ ...scrolled.options }, { block: 'nearest' });
+      }
+    }
+  });
+
   it('no editor menu reads the window size or adds the page scroll itself: each measures through Utils, in its own window', () => {
     const source = fs.readFileSync(path.join(ROOT, 'js/editor.js'), 'utf8');
     assert.equal(/\binner(Height|Width)\b/.test(source), false, 'no innerWidth or innerHeight');
@@ -563,9 +681,13 @@ function cssRules() {
   return rules;
 }
 
-describe('every menu fits a window shorter than it', () => {
+describe('every menu fits a window smaller than it', () => {
   const rules = cssRules();
   const rule = (selector) => rules.filter(([s]) => s === selector).map(([, body]) => body).join(';');
+
+  it('the slash, link, and template menus are no wider than the window, 8 px in, as in a narrow picture-in-picture window', () => {
+    assert.match(rule('.slash-menu'), /max-width:\s*calc\(100vw - 16px\)/);
+  });
 
   it('the note and folder menus scroll in a window shorter than they are', () => {
     assert.match(rule('.context-menu'), /max-height:\s*calc\(100vh - 16px\)/);
