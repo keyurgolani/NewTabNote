@@ -31,7 +31,7 @@ export {};
 /**
  * The note command a task's complete or reopen sent, keyed by its commandId, with the digest
  * of the lifecycle command. It names ids, a revision, and a boolean, never content.
- * @typedef {{fingerprint: string, noteCommand: {commandId: string, noteId: string, blockId: string, checked: boolean, expectedRevision: number | null}}} PendingNote
+ * @typedef {{fingerprint: string, noteCommand: {commandId: string, noteId: string, blockId: string, checked: boolean, expectedRevision: number}}} PendingNote
  */
 
 /**
