@@ -10,7 +10,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument,
-  makeEditor, runUntil, shownTabs, startEditorClient, watchTransactions, workerRun, requestToPromise, DB_NAME,
+  makeEditor, runUntil, shownTabs, startNewTabKernel, watchTransactions, workerRun, requestToPromise, DB_NAME,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -125,9 +125,9 @@ async function setup({ latest = false } = {}) {
   else await createProfile(env.indexedDB);
   env.load(...FILES);
   const Storage = env.get('Storage');
-  await Storage.init();
-  // The page's kernel, whose settings port the import runs through, as App's
-  await startEditorClient(env);
+  // The page as the new tab's root starts it: #17's adapter, whose settings port the import runs
+  // through, as App's, and the holders' Storage beside it, which the root opens
+  await startNewTabKernel(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   return { env, Storage, toasts };
@@ -637,9 +637,7 @@ describe('Replace all (AC4)', () => {
     // Reload: a new page on the same profile restores the saved workspace
     const page = createLegacyEnv({ indexedDB: env.indexedDB, chrome: env.chrome });
     page.load(...FILES);
-    const reloaded = page.get('Storage');
-    await reloaded.init();
-    await startEditorClient(page);
+    await startNewTabKernel(page);
     page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
     const restored = new (page.get('TabController'))({
       settings: page.settingsClient,
@@ -988,7 +986,7 @@ async function replaceAll(env, controller, data) {
 }
 
 async function openEditors(env, Storage) {
-  if (!env.documentClient) await startEditorClient(env);
+  if (!env.documentClient) await startNewTabKernel(env);
   const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';

@@ -10,15 +10,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory } = require('fake-indexeddb');
-const { createLegacyEnv, createDatabase, workerRun, dumpDatabase, recordsOf, settle, plain, note, block } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, workerRun, dumpDatabase, recordsOf, settle, plain, note, block, startNewTabKernel,
+} = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const FAULT = 'QuotaExceededError';
 
 /**
- * Storage started on a database the wrapper watches. `real` is fake-indexeddb itself, for
- * reading what was stored without going through the wrapper.
+ * Storage started on a database the wrapper watches, as the new tab's root opens it, beside
+ * #17's adapter (#17 PR 4a). `real` is fake-indexeddb itself, for reading what was stored
+ * without going through the wrapper.
  * @param {Object} [records] - Rows per store, as createDatabase takes them
  */
 async function started(records) {
@@ -31,7 +34,7 @@ async function started(records) {
   const env = createLegacyEnv({ indexedDB: faults.factory, document: null });
   env.load(...FILES);
   const storage = env.get('Storage');
-  await storage.init();
+  await startNewTabKernel(env);
   return { env, real, faults, storage };
 }
 

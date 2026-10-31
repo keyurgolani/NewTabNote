@@ -9,7 +9,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, note, block, plain, startEditorClient } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, note, block, plain, startNewTabKernel } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 
@@ -17,8 +17,9 @@ const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const nextMillisecond = () => new Promise((resolve) => setTimeout(resolve, 3));
 
 /**
- * Storage started on a database holding note N (Groceries) with one block, as a new tab
- * starts it, and the page's settings port, whose createAutoBackup runs on #17's adapter
+ * A new tab started on a database holding note N (Groceries) with one block, as its root starts
+ * it, with the holders' Storage beside #17's adapter, and its settings port, whose
+ * createAutoBackup runs on the adapter
  */
 async function started() {
   const env = createLegacyEnv({ document: null });
@@ -27,8 +28,7 @@ async function started() {
   });
   env.load(...FILES);
   const storage = env.get('Storage');
-  await storage.init();
-  await startEditorClient(env);
+  await startNewTabKernel(env);
   /** The auto_backup_ keys chrome.storage.local holds, oldest first */
   const backupKeys = () => Object.keys(env.chrome.local).filter((key) => key.startsWith('auto_backup_')).sort();
   return { env, storage, settings: env.settingsClient, backupKeys };

@@ -2,13 +2,15 @@
 // DatabaseManager (js/storage.js): startup maintenance on its `existing` open, the flush before
 // another context's upgrade closes the connection, the connection's state in the words App and
 // the export notice read, and the legacy stores a degraded database lacks. Each is held to what
-// js/storage.js does on the same profile.
+// js/storage.js did on the same profile, or to the frozen 1.4.1's, and none calls this build's
+// Storage open, which 4b's facade drops: the holders' Storage opens as the root opens it.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -96,21 +98,16 @@ const within = (promise, ms) =>
 const newTabAdapter = of => adapterOn(of, { mode: 'existing', maintains: true, requireCore: true });
 
 /**
- * js/storage.js's own open in a page of `of`'s profile, as the new tab ran it on #12's legacy
- * adapter, watching the connection. Resolves the Storage, and what open threw.
+ * The frozen v1.4.1's Storage in a page of `of`'s profile, opened with init as its pages opened it
  * @param {Profile} of
- * @returns {Promise<{storage: any, error: unknown}>}
+ * @returns {Promise<any>}
  */
-async function storageOpened(of) {
+async function release141On(of) {
   const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
-  env.load('js/utils.js', 'js/storage.js');
+  env.load('test/fixtures/storage/releases/v1.4.1/js/utils.js', 'test/fixtures/storage/releases/v1.4.1/js/storage.js');
   const storage = env.get('Storage');
-  try {
-    await storage.open({ watchConnection: true });
-    return { storage, error: null };
-  } catch (error) {
-    return { storage, error };
-  }
+  await storage.init();
+  return storage;
 }
 
 describe("the new tab's startup maintenance on #17's adapter (#17 PR 4a)", () => {
@@ -168,8 +165,12 @@ describe("what the holders' Storage reads of the new tab's writes on #17's adapt
   it("reads the note, its blocks, and the settings, and sync's export leaves out the six fields the record keeps", async () => {
     const of = await atThisVersion();
     const adapter = newTabAdapter(of);
-    await adapter.open();
-    const kernel = kernelOn(adapter);
+    // The holders' Storage, which the new tab's root opens beside the adapter, watching it
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    const kernel = createNewTabClient(adapter, { storage });
+    assert.equal(await kernel.whenReady(), null);
     /** @param {Record<string, unknown>} command */
     const run = async command => {
       const outcome = await kernel.execute(/** @type {any} */ (command));
@@ -185,7 +186,6 @@ describe("what the holders' Storage reads of the new tab's writes on #17's adapt
     await run({ type: 'setPreferences', commandId: 'c2', values: { sidebarWidth: 300 } });
     await run({ type: 'saveWorkspaceSession', commandId: 'c3', session: { lastOpenedNoteId: 'n1', activeTabIndex: 0 } });
 
-    const { storage } = await storageOpened(of);
     // GraphView's notes, and the editor's reads before #12
     assert.equal((await storage.getNote('n1')).name, 'Plan');
     assert.deepEqual(legacyEnv.plain((await storage.getAllNotes()).map((/** @type {{id: string}} */ note) => note.id)), ['n1']);
@@ -203,6 +203,7 @@ describe("what the holders' Storage reads of the new tab's writes on #17's adapt
       assert.ok(field in stored, field);
     }
     storage.db.close();
+    adapter.close();
   });
 });
 
@@ -264,14 +265,15 @@ describe("the new tab's connection on #17's adapter (#17 PR 4a)", () => {
     assert.equal(adapter.openState(), 'closed-by-browser');
   });
 
-  it("openState and missingStores answer as Storage's do, for every way the new tab's open goes", async () => {
+  it("openState and missingStores answer as Storage's did, for every way the new tab's open goes", async () => {
     /**
-     * Each case: the profile, then what happens to the open connection, if anything
-     * @type {Array<[string, () => Promise<Profile>, ((of: Profile, connection: IDBDatabase) => Promise<void>) | null]>}
+     * Each case: the profile, then what happens to the open connection, if anything, and the
+     * words js/storage.js's openState and missingStores gave for it, which App reads
+     * @type {Array<[string, () => Promise<Profile>, ((of: Profile, connection: IDBDatabase) => Promise<void>) | null, string, string[]]>}
      */
     const cases = [
-      ['at this version', atThisVersion, null],
-      ['at 8, without some stores', () => made({ ...AT_8, omit: ['search_index', 'themes'] }), null],
+      ['at this version', atThisVersion, null, 'open', []],
+      ['at 8, without some stores', () => made({ ...AT_8, omit: ['search_index', 'themes'] }), null, 'open', ['search_index', 'themes']],
       [
         'upgraded by a newer build',
         async () => {
@@ -280,14 +282,18 @@ describe("the new tab's connection on #17's adapter (#17 PR 4a)", () => {
           return of;
         },
         null,
+        'newer-version',
+        [],
       ],
-      ['at 8, without its blocks', () => made({ omit: ['elements'] }), null],
+      ['at 8, without its blocks', () => made({ omit: ['elements'] }), null, 'missing-core-stores', ['elements']],
       [
         'closed by an upgrade',
         atThisVersion,
         async of => {
           await upgradeTo(of.real, DB_VERSION + 1);
         },
+        'version-changed',
+        [],
       ],
       [
         'closed by Chrome',
@@ -296,21 +302,18 @@ describe("the new tab's connection on #17's adapter (#17 PR 4a)", () => {
           forceCloseDatabase(connection);
           await legacyEnv.settle();
         },
+        'closed-by-browser',
+        [],
       ],
     ];
-    for (const [name, make, then] of cases) {
+    for (const [name, make, then, openState, missingStores] of cases) {
       const ours = await make();
       const adapter = newTabAdapter(ours);
       assert.equal(adapter.openState(), 'closed', name);
       await adapter.open().catch(() => {});
       if (then) await then(ours, /** @type {IDBDatabase} */ (ours.faults.connections.at(-1)));
-
-      const theirs = await make();
-      const { storage } = await storageOpened(theirs);
-      if (then) await then(theirs, storage.db);
-      assert.equal(adapter.openState(), storage.openState, name);
-      assert.deepEqual(adapter.missingStores(), [...storage.missingStores], name);
-      if (storage.db) storage.db.close();
+      assert.equal(adapter.openState(), openState, name);
+      assert.deepEqual(adapter.missingStores(), missingStores, name);
     }
 
     // close() leaves it closed, as before it opened
@@ -374,7 +377,7 @@ describe("#33's recovery copy, before the new tab opens a database at 8 that lac
         call.method === 'set' && call.keys.some((/** @type {string} */ key) => key.startsWith('recovery_backup_')),
     );
 
-  it("writes what Storage's page open writes, once, leaving the database as it was, and the page opens", async () => {
+  it("writes what 1.4.1's page open writes, once, leaving the database as it was, and the page opens", async () => {
     const ours = await made(WITHOUT_THEMES);
     const before = await legacyEnv.dumpDatabase(ours.real);
     const adapter = copying(ours);
@@ -383,8 +386,7 @@ describe("#33's recovery copy, before the new tab opens a database at 8 that lac
     assert.deepEqual(await legacyEnv.dumpDatabase(ours.real), before);
 
     const theirs = await made(WITHOUT_THEMES);
-    const { storage, error } = await storageOpened(theirs);
-    assert.equal(error, null);
+    const storage = await release141On(theirs);
     storage.db.close();
 
     const [mine, storages] = [copiesIn(ours), copiesIn(theirs)];

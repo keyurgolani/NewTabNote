@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, plain, note, block, startEditorClient,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, plain, note, block, startNewTabKernel,
 } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
@@ -45,8 +45,8 @@ async function sourceProfile() {
     },
   });
   env.load(...FILES);
-  await env.get('Storage').init();
-  await startEditorClient(env);
+  // As the new tab's root starts the page, opening the holders' Storage beside #17's adapter
+  await startNewTabKernel(env);
   return env;
 }
 
@@ -54,8 +54,8 @@ async function sourceProfile() {
 async function emptyProfile() {
   const env = createLegacyEnv();
   env.load(...FILES);
-  await env.get('Storage').init();
-  await startEditorClient(env);
+  // As the new tab's root starts the page, opening the holders' Storage beside #17's adapter
+  await startNewTabKernel(env);
   return env;
 }
 
@@ -219,8 +219,7 @@ describe('Export JSON as a file (exportAllAsBlob, exportFile on #17\'s adapter)'
       },
     });
     env.load(...FILES);
-    await env.get('Storage').init();
-    await startEditorClient(env);
+    await startNewTabKernel(env);
     return env;
   }
 
