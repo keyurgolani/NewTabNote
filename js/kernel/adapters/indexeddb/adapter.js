@@ -102,6 +102,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
+/** @typedef {import('./connection.js').OpenState} OpenState */
 /** @typedef {import('./versions.js').VersionTracker} VersionTracker */
 /** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
@@ -122,6 +123,10 @@ import { createVersionTracker } from './versions.js';
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What an `existing` open waits on first when there's no database or an older one: a page's
  *   wait on the worker's migration run (connection.js)
+ * @property {boolean} [maintains]
+ *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
+ *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
+ *   leave it to the new tab and the worker.
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
  * @property {typeof IDBKeyRange} [keyRange] - for the change log's reads, the global one unless given
  */
@@ -131,12 +136,18 @@ import { createVersionTracker } from './versions.js';
  *   mode: OpenMode,
  *   open: () => Promise<void>,
  *   close: () => void,
+ *   beforeClose: (flush: () => void) => () => void,
+ *   openState: () => OpenState,
+ *   missingStores: () => string[],
  *   ledger: IdempotencyLedger,
  *   commitLog: CommitLog,
  *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
  * }} IndexedDbAdapter
  *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
- *   `sweepLedger` their retention (ledger.js), which only the worker runs
+ *   `sweepLedger` their retention (ledger.js), which only the worker runs. `beforeClose`,
+ *   `openState`, and `missingStores` are the connection's (connection.js), what the new tab
+ *   read of js/storage.js's: a flush before another context's upgrade closes it, the state App
+ *   and the export notice read, and the legacy stores a degraded database lacks.
  */
 
 /** @type {IDBTransactionOptions} */
@@ -400,6 +411,7 @@ export function createIndexedDbAdapter({
   openWithinMs,
   requireCore = false,
   awaitUpgrade = null,
+  maintains = false,
   clock = systemClock,
   keyRange,
 }) {
@@ -684,7 +696,8 @@ export function createIndexedDbAdapter({
    * Startup maintenance: the settings Storage writes on a profile's first run, each one only
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
    * database is blocked too. #17's read-only integrity scan moves to the worker root, at most
-   * daily, and then to #35's job host.
+   * daily, and then to #35's job host. It runs on a `versioned` open, the worker's, and on an
+   * `existing` one that `maintains`, the new tab's (#17 PR 4a).
    *
    * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
    * it opens answers every call with maintenance's failure: when chrome.storage fails it, it
@@ -696,7 +709,7 @@ export function createIndexedDbAdapter({
    */
   const maintain = async work => {
     // Popup and Side Panel never maintain the database
-    if (mode !== 'versioned') return unavailable('adapter', 'maintenance-needs-versioned-open', false);
+    if (mode !== 'versioned' && !maintains) return unavailable('adapter', 'maintenance-needs-versioned-open', false);
     try {
       const stored = (await settings.get([INITIALIZED_KEY, ...Object.keys(FIRST_RUN_SETTINGS)])) || {};
       if (!stored[INITIALIZED_KEY]) {
@@ -725,6 +738,9 @@ export function createIndexedDbAdapter({
 
     open: () => connection.open(),
     close: () => connection.close(),
+    beforeClose: flush => connection.beforeClose(flush),
+    openState: () => connection.openState(),
+    missingStores: () => connection.missingStores(),
 
     // What commit keeps is in IndexedDB, which nothing reads synchronously, so a command's own
     // record answers from commit. Only a bulk command's reservation, which no transaction
