@@ -105,13 +105,21 @@ export function utcKeyedLocalKey(note, zone) {
 export const canHoldKey = note => !note.trashed && !note.isTemplate;
 
 /**
- * Whether `note` holds `key`: a Daily Note with that key that can hold it. A note the daily index
- * names for `key` is the day's only while this is true.
+ * Whether logical 3 marked `note` as the duplicate of another note, which it keeps naming in
+ * `dailyDuplicateOf`
+ * @param {Record<string, unknown>} note
+ */
+const markedDuplicate = note => typeof note.dailyDuplicateOf === 'string' && note.dailyDuplicateOf !== note.id;
+
+/**
+ * Whether `note` holds `key`: a Daily Note with that key that can hold it, and isn't marked as
+ * another's duplicate. A note the daily index names for `key` is the day's only while this is
+ * true.
  * @param {Record<string, unknown> | undefined} note
  * @param {string} key
  */
 export const holdsKey = (note, key) =>
-  note !== undefined && Boolean(note.isDaily) && canHoldKey(note) && note.dailyKey === key;
+  note !== undefined && Boolean(note.isDaily) && canHoldKey(note) && note.dailyKey === key && !markedDuplicate(note);
 
 /**
  * Whether `a` was made before `b`, which decides who holds a key two claim: the earlier
@@ -153,8 +161,12 @@ const inMadeOrder = (a, b) => (madeBefore(a.note, b.note) ? -1 : madeBefore(b.no
  *    evening has an evening note for each day, and one that stays on the next day's date would
  *    otherwise hold every later evening note where 1.4.x showed it.
  * A note in the trash or a template gets its key by the same rules, so it moves only to a date no
- * note holds (#1's contract), and holds none. Every Daily Note whose key another holds names that
- * note as `duplicateOf`. One without a valid `dateStr` or `dailyKey` gets no key.
+ * note holds (#1's contract), and holds none. A note logical 3 marked as another's duplicate
+ * keeps its key and never counts as a claim: it holds its date only when, after the rest, no note
+ * does, as when the note it names went to the trash. So a lookup keeps what the run decided, the
+ * one exception to Q7 included, whether the run is done or a lookup comes between two of its
+ * batches, with some notes keyed and some not. Every Daily Note whose key another holds names
+ * that note as `duplicateOf`. One without a valid `dateStr` or `dailyKey` gets no key.
  * @param {Iterable<DailyRecord>} notes
  * @param {string} zone
  * @returns {Map<string, DailyAssignment>}
@@ -164,9 +176,11 @@ export function assignDailyKeys(notes, zone) {
   const claims = [];
   /** @type {Array<{note: DailyRecord, localKey: string}>} */
   const rekeys = [];
+  /** @type {Array<{note: DailyRecord, key: string}>} */
+  const duplicates = [];
   for (const note of notes) {
     if (!note.isDaily) continue;
-    if (isDateKey(note.dailyKey)) claims.push({ note, key: note.dailyKey });
+    if (isDateKey(note.dailyKey)) (markedDuplicate(note) ? duplicates : claims).push({ note, key: note.dailyKey });
     else if (isDateKey(note.dateStr)) {
       const localKey = utcKeyedLocalKey(note, zone);
       if (localKey === null) claims.push({ note, key: note.dateStr });
@@ -175,6 +189,7 @@ export function assignDailyKeys(notes, zone) {
   }
   claims.sort(inMadeOrder);
   rekeys.sort(inMadeOrder);
+  duplicates.sort(inMadeOrder);
 
   /** @type {Map<string, DailyRecord>} */
   const holders = new Map();
@@ -206,6 +221,10 @@ export function assignDailyKeys(notes, zone) {
     const dateStr = /** @type {string} */ (note.dateStr);
     keys.set(note.id, { dailyKey: dateStr, rekeyed: false });
     if (canHoldKey(note) && !holders.has(dateStr)) holders.set(dateStr, note);
+  }
+  for (const { note, key } of duplicates) {
+    keys.set(note.id, { dailyKey: key, rekeyed: false });
+    if (canHoldKey(note) && !holders.has(key)) holders.set(key, note);
   }
 
   /** @type {Map<string, DailyAssignment>} */
