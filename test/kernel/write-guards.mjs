@@ -32,11 +32,12 @@ export const SCOPE_GUARDS = Object.freeze({
  * - guarded: it writes a note or its blocks in `scope`, and a stale version at `guard`, the
  *   field's path in its payload, is a conflict, or for a derived write, dropped. `callers` are
  *   the page's methods that send it, `Class.method`, none with its version.
- * - unguarded: it writes a note or its blocks in `scope` with no version to expect, for `why`.
+ * - unguarded: it writes a note or its blocks in one of `scopes` with no version to expect,
+ *   for `why`.
  * - bulk: it writes nothing itself, and runs `items` for each note.
  * - none: it writes no note and no block, but `writes`.
  * @typedef {{kind: 'guarded', scope: WriteScope, guard: string, callers: readonly string[]}
- *   | {kind: 'unguarded', scope: WriteScope, why: string}
+ *   | {kind: 'unguarded', scopes: readonly WriteScope[], why: string}
  *   | {kind: 'bulk', items: readonly CommandType[], why: string}
  *   | {kind: 'none', writes: string}} WriteGuard
  */
@@ -51,11 +52,12 @@ const guarded = (scope, guard, callers = []) =>
   Object.freeze({ kind: 'guarded', scope, guard, callers: Object.freeze([...callers].sort()) });
 
 /**
- * @param {WriteScope} scope
+ * @param {WriteScope | WriteScope[]} scope - one, or each its modes commit in
  * @param {string} why
  * @returns {WriteGuard}
  */
-const unguarded = (scope, why) => Object.freeze({ kind: 'unguarded', scope, why });
+const unguarded = (scope, why) =>
+  Object.freeze({ kind: 'unguarded', scopes: Object.freeze(Array.isArray(scope) ? scope : [scope]), why });
 
 /**
  * @param {CommandType[]} items
@@ -141,7 +143,10 @@ export const WRITE_GUARDS = Object.freeze({
     'placement',
     "files the folder's notes at the root, moving each one's placement version, and a note filed meanwhile goes too",
   ),
-  importBackup: unguarded('content', 'adds notes under new ids, and Replace all trashes the active ones, as 1.4.x did'),
+  importBackup: unguarded(
+    ['content', 'placement'],
+    'Merge adds notes under new ids, and Replace all, in placement, also trashes the active ones, as 1.4.x did',
+  ),
   runBulkAction: bulkOf(
     ['archiveNote', 'unarchiveNote', 'trashNote', 'restoreNote', 'deleteNotePermanently'],
     'one placement command per note, each sent without a version, from SidebarController.performBulkAction',
