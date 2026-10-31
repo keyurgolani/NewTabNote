@@ -120,7 +120,8 @@ async function groupsIn(context) {
 
 /**
  * What #17's transform writes on a profile's notes (logical 2, transforms.js), put straight into
- * its database, since a profile at version 8 has no `meta` for a run to read
+ * its database, since a profile at version 8 has no `meta` for a run to read. The run starts
+ * now, as the parity kernels' clocks read, which a trashed note's time in the trash takes.
  * @param {LegacyContext} context
  */
 async function filledAsTheTransformFills(context) {
@@ -140,7 +141,7 @@ async function filledAsTheTransformFills(context) {
       folders.onsuccess = () => {
         const liveFolderIds = new Set(/** @type {string[]} */ (folders.result));
         for (const note of notes.result) {
-          const next = filledByLogical2(note, { liveFolderIds, blocks: [], runStart: SEEDED_AT });
+          const next = filledByLogical2(note, { liveFolderIds, blocks: [], runStart: Date.now() });
           if (next) tx.objectStore('canvases').put(next);
         }
       };
@@ -834,7 +835,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
-  it("deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes and the notes' search entries and links too, and keep the same notes, and a trashed note without an indexed updatedAt goes too (#17 PR 3a, KD-011)", async () => {
+  it("deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes and the notes' search entries and links too, and keep the same notes; a trashed note without an indexed updatedAt goes with Empty trash, and retention waits for the transform's time in the trash (#17 PR 3a, KD-011)", async () => {
     const day = 24 * 60 * 60 * 1000;
     const recently = Date.now() - 2 * day;
     const lastWeek = Date.now() - 8 * day;
@@ -878,8 +879,9 @@ describe("the kernel's copies of production rules, run both ways", () => {
       assertCommitted(outcome);
       const deleted = new Set(outcome.kind === 'committed' ? outcome.changedIds : []);
       // Since #17 PR 3a the kernel lists a trashed note without an updatedAt the index holds
-      // (KD-011), so it takes that one too, which Storage's index reaches once the transform
-      // has filled the field
+      // (KD-011), so Empty trash takes that one too, which Storage's index reaches once the
+      // transform has filled the field. Retention doesn't take it until then: the transform
+      // starts its time in the trash, now, so it's in Trash for a whole window first.
       const onlyKernel = new Set(filled ? [] : ['unindexed'].filter(id => deleted.has(id)));
       // Since #17 PR 2b the kernel's deletion also takes each note's search entry and its links
       // both ways, which Storage left
@@ -927,7 +929,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           'runTrashCleanup, 30 days',
           filled,
         ),
-        ['old', 'unindexed'],
+        ['old'],
       );
       assert.deepEqual(
         await both(
@@ -941,7 +943,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           'runTrashCleanup, 7 days',
           filled,
         ),
-        ['old', 'unindexed', 'week'],
+        ['old', 'week'],
       );
     }
   });
