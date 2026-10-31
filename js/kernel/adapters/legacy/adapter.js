@@ -11,12 +11,14 @@
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  *
- * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
- * older database to version 8 as Storage.init always has, and watches the connection. Their kernels set
- * `maintainOnOpen`, so Storage's startup maintenance runs before any command does, as
- * Storage.init ran it before the app did anything; its first run writes every default over
- * what's stored, so nothing may come before it. Popup and Side Panel open it `existing`:
- * whatever version is on disk, with no repair, upgrade, or maintenance. A database a newer
+ * The new tab opens it `versioned`: Storage.open, which since #17 PR 1b upgrades nothing (only
+ * the service worker does, through #17's migration runner, and the worker has its own kernel on
+ * #17's adapter), opens whatever version is on disk up to 9, and watches the connection. The
+ * new tab's kernel sets `maintainOnOpen`, so Storage's startup maintenance runs before any
+ * command does, as Storage.init ran it before the app did anything; its first run writes every
+ * default over what's stored, so nothing may come before it. Its `existing` open (Popup's and
+ * Side Panel's until #17 PR 1b moved them to #17's adapter) is whatever version is on disk,
+ * with no repair, upgrade, or maintenance. A database a newer
  * build upgraded is refused either way, as `unavailable` with cause `newer-schema`. Once
  * another context upgrades the database, or Chrome closes an `existing` connection itself,
  * that connection is gone, and every IndexedDB call answers `reload-required`, which no

@@ -53,12 +53,14 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {MigrateLocks} locks
  * @property {Estimate | null} estimate
  * @property {Digester} crypto
+ * @property {string} [version] - the build's manifest version, which a record that stands must match
  */
 
 /**
  * The run's outcome as the worker records it, under chrome.storage.local
- * `setting_storageUpgrade`: a status, a failure code, and when, never content
- * @typedef {{status: MigrationOutcome['status'], code: string | null, at: number}} UpgradeRecord
+ * `setting_storageUpgrade`: a status, a failure code, when, and the build that ran it, never
+ * content
+ * @typedef {{status: MigrationOutcome['status'], code: string | null, at: number, version: string | null}} UpgradeRecord
  */
 
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
@@ -68,9 +70,10 @@ export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 export { MIGRATE_MESSAGE };
 
 /**
- * How long a run that stopped short of space, or failed, stands before a worker start tries
- * again. Each try reads every store to measure it, and a space-blocked profile wakes the
- * worker with every new tab, so it doesn't try on each one.
+ * How long a run that stopped short of space, or failed, stands before a worker start of the
+ * same build tries again. Each try reads every store to measure it, and a space-blocked
+ * profile wakes the worker with every new tab, so it doesn't try on each one. An update tries
+ * at once.
  */
 export const RETRY_AFTER_MS = 30 * 60 * 1000;
 
@@ -97,18 +100,34 @@ export function workerHost() {
     locks: /** @type {MigrateLocks} */ (/** @type {unknown} */ (nav && nav.locks)),
     estimate: nav && nav.storage && typeof nav.storage.estimate === 'function' ? () => nav.storage.estimate() : null,
     crypto: /** @type {Digester} */ (/** @type {unknown} */ (globalThis.crypto)),
+    version: manifestVersion(),
   };
 }
 
 /**
- * Whether `record` is a run that stopped short of space or failed less than RETRY_AFTER_MS ago
+ * This build's manifest version, or null where there's no chrome.runtime
+ * @returns {string | null}
+ */
+function manifestVersion() {
+  try {
+    return globalThis.chrome.runtime.getManifest().version;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `record` is a run of this build that stopped short of space or failed less than
+ * RETRY_AFTER_MS ago
  * @param {unknown} record
  * @param {number} now
+ * @param {string | null} version
  * @returns {record is UpgradeRecord}
  */
-function standing(record, now) {
+function standing(record, now, version) {
   if (!record || typeof record !== 'object') return false;
-  const { status, at } = /** @type {UpgradeRecord} */ (record);
+  const { status, at, version: ranBy = null } = /** @type {UpgradeRecord} */ (record);
+  if (ranBy !== version) return false;
   return (status === 'space-blocked' || status === 'failed') && typeof at === 'number' && now - at < RETRY_AFTER_MS;
 }
 
@@ -119,15 +138,16 @@ function standing(record, now) {
  * @param {MigrationOutcome} outcome
  * @param {unknown} stored
  * @param {number} now
+ * @param {string | null} version
  * @returns {Promise<void>}
  */
-async function record(settings, outcome, stored, now) {
+async function record(settings, outcome, stored, now, version) {
   const code = outcome.failure ? outcome.failure.code : null;
   const previous = /** @type {Partial<UpgradeRecord>} */ (stored && typeof stored === 'object' ? stored : {});
   // A status that stands keeps its time, so a retry after RETRY_AFTER_MS still happens
-  if (previous.status === outcome.status && previous.code === code) return;
+  if (previous.status === outcome.status && previous.code === code && (previous.version ?? null) === version) return;
   try {
-    await settings.set({ [UPGRADE_RECORD_KEY]: { status: outcome.status, code, at: now } });
+    await settings.set({ [UPGRADE_RECORD_KEY]: { status: outcome.status, code, at: now, version } });
   } catch (error) {
     storageLogger.warn('storage-upgrade-record-failed', { status: outcome.status, error });
   }
@@ -165,7 +185,7 @@ export function createWorkerClient(host = workerHost()) {
     .then(stored => {
       const previous = /** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY];
       const now = systemClock.now();
-      if (standing(previous, now)) {
+      if (standing(previous, now, host.version ?? null)) {
         /** @type {MigrationOutcome} */
         const kept = {
           status: previous.status,
@@ -192,7 +212,7 @@ export function createWorkerClient(host = workerHost()) {
         },
       });
       return run.done.then(async outcome => {
-        await record(host.settings, outcome, previous, systemClock.now());
+        await record(host.settings, outcome, previous, systemClock.now(), host.version ?? null);
         return outcome;
       });
     });
