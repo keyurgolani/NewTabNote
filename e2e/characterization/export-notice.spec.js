@@ -5,6 +5,12 @@
  * records "dismissed"; after either, no tab shows it again. A profile with nothing of its
  * own at its first 1.4.1 start records "not-needed" and never sees it. Each test ends with
  * the uncaught-exception check.
+ *
+ * KD-012 (test/known-defects.json): since #17 PR 1b the service worker makes a fresh
+ * profile's database at version 9, and the notice never shows on a database the update has
+ * upgraded, so these 1.4.1 behaviors no longer hold on any profile the harness can make. They
+ * stay as expected failures until #18 retires the notice and its specs; the node tier
+ * (test/export-notice.test.js) still runs them on a version-8 database.
  */
 
 const { test, expect, expectNoUncaught } = require('../harness');
@@ -60,7 +66,7 @@ async function profileWithNotes(extension) {
   return driver.openNewTab(extension);
 }
 
-test('a first run records "not-needed", so neither the sample note nor later notes bring the notice', async ({ extension }) => {
+test.fail('KD-012 a first run records "not-needed", so neither the sample note nor later notes bring the notice', async ({ extension }) => {
   const page = await driver.openNewTab(extension, { wait: false });
   await driver.skipOnboarding(page);
   expect(await driver.noteTitle(page)).toBe('Welcome to NewTabNote 🚀');
@@ -73,7 +79,7 @@ test('a first run records "not-needed", so neither the sample note nor later not
   await expectNoUncaught(extension, page);
 });
 
-test('a profile with no notes records "not-needed", and its first notes never bring the notice', async ({ extension }) => {
+test.fail('KD-012 a profile with no notes records "not-needed", and its first notes never bring the notice', async ({ extension }) => {
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   expect(await driver.exportNotice(page)).toBeNull();
@@ -88,7 +94,7 @@ test('a profile with no notes records "not-needed", and its first notes never br
   await expectNoUncaught(extension, page);
 });
 
-test('the notice is in place before the note\'s first block, a region named by its heading whose live part holds only its text', async ({ extension }) => {
+test.fail('KD-012 the notice is in place before the note\'s first block, a region named by its heading whose live part holds only its text', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   expect(await driver.noticeShownBeforeFirstBlock(page)).toBe(true);
   expect(await driver.exportNotice(page)).toEqual(FIRST_STEP);
@@ -96,7 +102,7 @@ test('the notice is in place before the note\'s first block, a region named by i
   await expectNoUncaught(extension, page);
 });
 
-test('Export JSON asks to check the file; Done records "exported", and the file is the one Settings exports', async ({ extension }) => {
+test.fail('KD-012 Export JSON asks to check the file; Done records "exported", and the file is the one Settings exports', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   expect(await driver.exportNotice(page)).toEqual(FIRST_STEP);
 
@@ -125,7 +131,7 @@ test('Export JSON asks to check the file; Done records "exported", and the file 
   await expectNoUncaught(extension, page);
 });
 
-test('a tab opened after an Export JSON starts at the check-the-file step', async ({ extension }) => {
+test.fail('KD-012 a tab opened after an Export JSON starts at the check-the-file step', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   await driver.exportFromNotice(page);
   await expect.poll(() => driver.exportNotice(page)).toEqual(CHECK_STEP);
@@ -139,7 +145,7 @@ test('a tab opened after an Export JSON starts at the check-the-file step', asyn
   await expectNoUncaught(extension, page);
 });
 
-test('an Export JSON right after typing has the edit in the file', async ({ extension }) => {
+test.fail('KD-012 an Export JSON right after typing has the edit in the file', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   // The new tab focuses the note's first block; click Export JSON inside the editor's 500 ms save delay
   await page.keyboard.press('End');
@@ -167,7 +173,7 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
-test('an export from Settings moves the notice to the check-the-file step in every tab', async ({ extension }) => {
+test.fail('KD-012 an export from Settings moves the notice to the check-the-file step in every tab', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   const other = await driver.openNewTab(extension);
   expect(await driver.exportNotice(other)).toEqual(FIRST_STEP);
@@ -185,7 +191,7 @@ test('an export from Settings moves the notice to the check-the-file step in eve
   await expectNoUncaught(extension, page);
 });
 
-test('Not now records "dismissed", every tab drops the notice, and the note stays as it was', async ({ extension }) => {
+test.fail('KD-012 Not now records "dismissed", every tab drops the notice, and the note stays as it was', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   const other = await driver.openNewTab(extension);
   const before = await driver.blocks(page);
@@ -204,7 +210,7 @@ test('Not now records "dismissed", every tab drops the notice, and the note stay
   await expectNoUncaught(extension, page);
 });
 
-test('the title stays the first stop after the header, so typing a title there leaves the notice alone', async ({ extension }) => {
+test.fail('KD-012 the title stays the first stop after the header, so typing a title there leaves the notice alone', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   const downloads = [];
   page.on('download', download => downloads.push(download));
@@ -220,7 +226,7 @@ test('the title stays the first stop after the header, so typing a title there l
   await expectNoUncaught(extension, page);
 });
 
-test('the notice\'s buttons come next, at least 44 by 44, and letters typed on one go to the note', async ({ extension }) => {
+test.fail('KD-012 the notice\'s buttons come next, at least 44 by 44, and letters typed on one go to the note', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   for (const { label, width, height } of await driver.exportNoticeButtonSizes(page)) {
     expect(width, label).toBeGreaterThanOrEqual(44);
@@ -241,7 +247,7 @@ test('the notice\'s buttons come next, at least 44 by 44, and letters typed on o
   await expectNoUncaught(extension, page);
 });
 
-test('Space on Not now records "dismissed" and puts focus and the caret back where they were', async ({ extension }) => {
+test.fail('KD-012 Space on Not now records "dismissed" and puts focus and the caret back where they were', async ({ extension }) => {
   const page = await profileWithNotes(extension);
   // The new tab focuses the note's first block; put the caret between "egg" and "s"
   expect(await driver.focused(page)).toEqual({ kind: 'block', pane: 'left', index: 0, text: 'eggs' });
