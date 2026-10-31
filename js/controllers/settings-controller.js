@@ -240,13 +240,13 @@ class SettingsController {
   // ─── Auto-title and insights switches (Settings > AI) ───
 
   /**
-   * The auto-title and insights switches and their intervals. A change saves the switch and
-   * the interval together, in one write through the settings port, then sets that job up
-   * again at once (onSetupAutoTitle, onSetupInsightsExtraction: NotesManager starts its timer
-   * with the new interval, or stops it). Switched off, no more note text goes to the provider:
-   * a run already going checks the stored switch before each note's call, in this tab and in
-   * the others, which set their jobs up again when they hear of the change. A switch whose
-   * save fails goes back to what it was, with a toast. #8 (recipes) rebuilds these controls.
+   * The auto-title and insights switches and their intervals. A change saves the control that
+   * changed, in one write through the settings port, then sets that job up again at once
+   * (onSetupAutoTitle, onSetupInsightsExtraction: NotesManager starts its timer with the new
+   * interval, or stops it). Switched off, no more note text goes to the provider: a run already
+   * going checks the stored switch before each note's call, in this tab and in the others,
+   * which set their jobs up again when they hear of the change. A control whose save fails
+   * goes back to what's stored, with a toast. #8 (recipes) rebuilds these controls.
    * @returns {void}
    */
   setupJobSettings() {
@@ -255,16 +255,18 @@ class SettingsController {
         enabledId: 'auto-title-enabled',
         intervalId: 'auto-title-interval',
         intervalRow: '.llm-auto-title-interval-row',
+        enabledKey: 'autoTitleEnabled',
+        intervalKey: 'autoTitleInterval',
         defaultInterval: 15,
-        save: (on, minutes) => this.settings.setPreferences({ autoTitleEnabled: on, autoTitleInterval: minutes }),
         setUp: () => this.onSetupAutoTitle,
       },
       {
         enabledId: 'insights-enabled',
         intervalId: 'insights-interval',
         intervalRow: '.llm-insights-interval-row',
+        enabledKey: 'insightsEnabled',
+        intervalKey: 'insightsInterval',
         defaultInterval: 360,
-        save: (on, minutes) => this.settings.setPreferences({ insightsEnabled: on, insightsInterval: minutes }),
         setUp: () => this.onSetupInsightsExtraction,
       },
     ];
@@ -272,18 +274,22 @@ class SettingsController {
       const enabled = /** @type {HTMLInputElement|null} */ (document.getElementById(job.enabledId));
       const interval = /** @type {HTMLSelectElement|null} */ (document.getElementById(job.intervalId));
       if (!enabled) continue;
-      const intervalOf = () => {
-        const minutes = parseInt(interval ? interval.value : '', 10);
-        return Number.isSafeInteger(minutes) && minutes > 0 ? minutes : job.defaultInterval;
-      };
-      const save = async () => {
-        const on = enabled.checked;
+
+      /**
+       * Save what one control holds now, and nothing of the other, so a tab whose Settings
+       * still shows an old switch never writes it back with an interval. A save that fails puts
+       * that control back to what's stored.
+       * @param {'enabled'|'interval'} control
+       * @returns {Promise<void>}
+       */
+      const save = async (control) => {
+        const key = control === 'enabled' ? job.enabledKey : job.intervalKey;
+        const value = control === 'enabled' ? enabled.checked : parseInt(interval ? interval.value : '', 10);
         try {
-          await job.save(on, intervalOf());
+          await this.settings.setPreferences({ [key]: value });
         } catch (error) {
-          console.error(`Could not save ${job.enabledId}:`, error && error.message);
-          enabled.checked = !on;
-          this._showIntervalRow(job.intervalRow, enabled.checked);
+          console.error(`Could not save ${key}:`, error && error.message);
+          await this._restoreJobControl(job, control, enabled, interval);
           Utils.showToast('Failed to save the setting. Please try again.', 'error');
           return;
         }
@@ -292,9 +298,36 @@ class SettingsController {
       };
       enabled.addEventListener('change', async () => {
         this._showIntervalRow(job.intervalRow, enabled.checked);
-        await save();
+        await save('enabled');
       });
-      if (interval) interval.addEventListener('change', save);
+      if (interval) interval.addEventListener('change', () => save('interval'));
+    }
+  }
+
+  /**
+   * After a save that failed, the control that changed shows what's stored again: the switch
+   * (off when nothing is stored) with its interval row, or the interval (its default when
+   * nothing is stored). When even that read fails, a switch goes back to where it was, and an
+   * interval stays.
+   * @param {{enabledKey: string, intervalKey: string, intervalRow: string, defaultInterval: number}} job
+   * @param {'enabled'|'interval'} control
+   * @param {HTMLInputElement} enabled
+   * @param {HTMLSelectElement|null} interval
+   * @returns {Promise<void>}
+   */
+  async _restoreJobControl(job, control, enabled, interval) {
+    let stored = null;
+    try {
+      stored = await this.settings.preferences([job.enabledKey, job.intervalKey]);
+    } catch (error) {
+      console.warn(`Could not read ${job.enabledKey} back:`, error && error.message);
+    }
+    if (control === 'enabled') {
+      enabled.checked = stored ? stored[job.enabledKey] === true : !enabled.checked;
+      this._showIntervalRow(job.intervalRow, enabled.checked);
+    } else if (interval && stored) {
+      const minutes = stored[job.intervalKey];
+      interval.value = String(Number.isSafeInteger(minutes) && minutes > 0 ? minutes : job.defaultInterval);
     }
   }
 
@@ -875,7 +908,7 @@ class SettingsController {
       result = await this.settings.importBackup(data, choice, counts);
     } catch (error) {
       console.error('Import failed:', error && error.outcome ? `${error.outcome.kind}: ${error.outcome.code}` : error);
-      this._showImportFailed(this._importFailureReason(error));
+      this._showImportNotCommitted(error);
     }
 
     // Editors resume, and the notes Replace all trashed leave every new tab
@@ -951,22 +984,28 @@ class SettingsController {
   }
 
   /**
-   * Why an import didn't commit, in the words 1.4.x's import gave, from the importBackup
-   * outcome's code. Nothing was written: the import commits all of it or none of it.
+   * The toast for an import that didn't commit, from the importBackup outcome's code. Nothing
+   * was written: the import commits all of it or none of it. A missing store and a recovery
+   * copy that couldn't be saved keep 1.4.x's words; the browser's own error text, which 1.4.x
+   * showed for the rest, never reaches the page.
    * @param {*} error - a SettingsWriteError with the outcome, or what threw before the command ran
-   * @returns {string}
+   * @returns {void}
    */
-  _importFailureReason(error) {
+  _showImportNotCommitted(error) {
     const outcome = error && error.outcome;
-    if (!outcome) return error && error.message ? error.message : 'unknown error';
+    if (!outcome) {
+      this._showImportFailed(error && error.message ? error.message : 'unknown error');
+      return;
+    }
+    const failed = (why) => Utils.showToast(`Failed to import the backup: ${why}`, 'error', 6000);
     switch (outcome.code) {
-      case 'folders-store-missing': return "this profile's folders store is missing";
-      case 'media-store-missing': return "this profile's media store is missing";
-      case 'import-invalid': return "the file isn't a backup this version can import";
-      case 'recovery-copy-failed': return "couldn't save a recovery copy";
-      case 'quota': return 'the browser is out of storage space';
-      case 'reload-required': return 'this page needs a reload first';
-      default: return `storage couldn't write it (${outcome.code})`;
+      case 'folders-store-missing': this._showImportFailed("this profile's folders store is missing"); return;
+      case 'media-store-missing': this._showImportFailed("this profile's media store is missing"); return;
+      case 'recovery-copy-failed': this._showImportFailed("couldn't save a recovery copy"); return;
+      case 'import-invalid': failed("the file isn't a backup this version can import. Nothing was changed."); return;
+      case 'quota': failed('the browser is out of storage space. Nothing was changed.'); return;
+      case 'reload-required': failed('this page needs a reload first. Nothing was changed.'); return;
+      default: failed("storage couldn't write it. Nothing was changed. Please try again.");
     }
   }
 

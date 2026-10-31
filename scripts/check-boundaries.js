@@ -21,9 +21,10 @@
  *   getStore and objectStore counts fall in the same PR. The PR that first lists a rule in
  *   `shrinkOnly` seeds its rows by hand.
  * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
- * hits: count 1, the legacy adapter module as file, which has to exist, and #17 as owner,
- * since #17's adapter closes each gap. That module declares several gaps, told apart by
- * verify; every other row is one per file and rule.
+ * hits: count 1, an adapter module that declares gaps as file, which has to exist, and the
+ * issue that closes them as owner (DECLARED_GAP_OWNERS): #17 for the legacy adapter's, which
+ * #17's adapter closes, and #18 for #17's adapter's one, the backup tasks #18's engine brings.
+ * A module's gaps are told apart by verify; every other row is one per file and rule.
  *
  *   npm run check:boundaries                         compare with the ledger
  *   npm run check:boundaries -- --base origin/next   also compare with the ledger at a ref

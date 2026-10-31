@@ -22,6 +22,26 @@ function notStored(what, outcome) {
   return new Error(`Not stored: ${what} (${outcome.kind}: ${outcome.code})`);
 }
 
+/** The longest delay a browser timer takes: a longer one fires at once, and setInterval keeps firing */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/**
+ * How a job's timer reaches an interval of `minutes`: a period no timer overflows, and how many
+ * periods make the interval. Every month (43200 minutes) is past the most a timer waits, so it
+ * takes two periods of 15 days. An interval that isn't a positive number of minutes is
+ * `fallback`'s.
+ * @param {*} minutes
+ * @param {number} fallback - minutes
+ * @returns {{period: number, ticks: number, minutes: number}}
+ */
+function jobTimer(minutes, fallback) {
+  const wanted = Number(minutes);
+  const intervalMinutes = Number.isFinite(wanted) && wanted > 0 ? wanted : fallback;
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const ticks = Math.max(1, Math.ceil(intervalMs / MAX_TIMER_DELAY_MS));
+  return { period: Math.ceil(intervalMs / ticks), ticks, minutes: intervalMinutes };
+}
+
 class NotesManager {
   constructor({ storage, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
@@ -764,6 +784,11 @@ class NotesManager {
 
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedAutoTitles(interval);
+      // Switched off while the catch-up ran: no timer starts
+      if (!(await this.jobEnabled('autoTitleEnabled'))) {
+        this.stopAutoTitleInterval();
+        return;
+      }
       this.startAutoTitleInterval(interval);
     } else {
       this.stopAutoTitleInterval();
@@ -800,15 +825,20 @@ class NotesManager {
    */
   startAutoTitleInterval(intervalMinutes) {
     this.stopAutoTitleInterval();
-    const intervalMs = intervalMinutes * 60 * 1000;
+    const { period, ticks, minutes } = jobTimer(intervalMinutes, 15);
 
     this.runAutoTitle();
 
+    // Every `ticks` periods, so an interval past the longest timer still waits its whole length
+    let tick = 0;
     this.autoTitleIntervalId = setInterval(() => {
+      tick += 1;
+      if (tick < ticks) return;
+      tick = 0;
       this.runAutoTitle();
-    }, intervalMs);
+    }, period);
 
-    this.logger.info('NotesManager', `Auto-title started with ${intervalMinutes} minute interval`);
+    this.logger.info('NotesManager', `Auto-title started with ${minutes} minute interval`);
   }
 
   /**
@@ -933,6 +963,11 @@ class NotesManager {
 
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedInsightsExtraction(interval);
+      // Switched off while the catch-up ran: no timer starts
+      if (!(await this.jobEnabled('insightsEnabled'))) {
+        this.stopInsightsInterval();
+        return;
+      }
       this.startInsightsInterval(interval);
     } else {
       this.stopInsightsInterval();
@@ -957,15 +992,20 @@ class NotesManager {
    */
   startInsightsInterval(intervalMinutes) {
     this.stopInsightsInterval();
-    const intervalMs = intervalMinutes * 60 * 1000;
+    const { period, ticks, minutes } = jobTimer(intervalMinutes, 360);
 
     this.runInsightsExtraction();
 
+    // Every `ticks` periods, so an interval past the longest timer still waits its whole length
+    let tick = 0;
     this.insightsIntervalId = setInterval(() => {
+      tick += 1;
+      if (tick < ticks) return;
+      tick = 0;
       this.runInsightsExtraction();
-    }, intervalMs);
+    }, period);
 
-    this.logger.info('NotesManager', `Insights extraction started with ${intervalMinutes} minute interval`);
+    this.logger.info('NotesManager', `Insights extraction started with ${minutes} minute interval`);
   }
 
   /**
