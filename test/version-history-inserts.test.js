@@ -159,7 +159,7 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     client.saveContent = real;
 
     assert.equal(editor.blocks[0].content, 'Not stored');
-    assert.deepEqual(toasts.at(-1), { message: 'Failed to revert to snapshot', kind: 'error' });
+    assert.deepEqual(toasts.at(-1), { message: "Failed to revert: your latest changes aren't saved yet. Please try again.", kind: 'error' });
     const summaries = await runUntil(env, env.documentClient.snapshots('A'));
     assert.equal(summaries.length, 1, 'no pre-revert snapshot either');
   });
@@ -350,5 +350,199 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     assert.deepEqual(await storedBlocks(Storage, 'A'), []);
     assert.deepEqual(toasts.at(-1), { message: 'Failed to add content', kind: 'error' });
     await settle();
+  });
+});
+
+/** A window-like target for a PiP editor's own document, with its own listeners and frames */
+function windowTarget() {
+  const listeners = {};
+  return {
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    fire(type) { (listeners[type] || []).forEach((fn) => fn({ type })); },
+    requestAnimationFrame(fn) { setImmediate(() => fn(0)); return 1; },
+  };
+}
+
+/**
+ * The ways a page writes what's pending at once (_writePendingNow): the page hiding, a tab
+ * switch, another context's upgrade closing the connection, and the PiP window closing. Each
+ * makes an editor on note A over `env`, and `flush()` runs its route.
+ */
+const FLUSH_ROUTES = {
+  pagehide: (env) => ({ editor: makeEditor(env), flush: () => env.window.fire('pagehide') }),
+  'tab switch': (env) => ({
+    editor: makeEditor(env),
+    flush: () => {
+      env.document.visibilityState = 'hidden';
+      env.document.fire('visibilitychange');
+    },
+  }),
+  'connection close': (env) => {
+    let flushes = [];
+    const documentClient = {
+      ...env.documentClient,
+      beforeConnectionCloses: (flush) => {
+        flushes.push(flush);
+        return () => { flushes = flushes.filter((one) => one !== flush); };
+      },
+    };
+    return { editor: makeEditor(env, env.document, { documentClient }), flush: () => flushes.forEach((one) => one()) };
+  },
+  'PiP window closing': (env) => {
+    const { FakeDocument } = require('./helpers/legacy-env');
+    const pipDoc = new FakeDocument();
+    const pipWindow = windowTarget();
+    pipDoc.defaultView = pipWindow;
+    return { editor: makeEditor(env, pipDoc), flush: () => pipWindow.fire('pagehide') };
+  },
+};
+
+describe('a flush while a revert commits keeps the screen and the note the same (review R70)', () => {
+  for (const [route, make] of Object.entries(FLUSH_ROUTES)) {
+    for (const when of ['before', 'after']) {
+      it(`${route}, ${when} the restore's unit commits: no replaced block comes back, and the typing is a snapshot`, async () => {
+        const { env, Storage } = await page({ records: RECORDS });
+        const { editor, flush } = make(env);
+        await editor.loadNote('A');
+        const summary = await snapshotNow(env, editor);
+        // A block added after the snapshot, and saved
+        editor.blocks.push(env.get('Block').deserialize({ id: 'a3', type: 'text', content: 'Bread' }));
+        editor.scheduleSave();
+        env.clock.tick(600);
+        await runUntil(env, editor.flushSave());
+        assert.deepEqual((await storedBlocks(Storage, 'A')).map(([id]) => id), ['a1', 'a2', 'a3']);
+
+        const client = editor.documentClient;
+        const real = client.restoreSnapshot;
+        let release;
+        const held = new Promise((resolve) => { release = resolve; });
+        let committing;
+        client.restoreSnapshot = (...args) => {
+          committing = real(...args);
+          return held.then(() => committing);
+        };
+        const reverting = editor._revertToSnapshot(summary);
+        await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+        if (when === 'after') await runUntil(env, committing);
+        type(editor, 'Typed during the revert');
+        flush();
+        release();
+        await runUntil(env, reverting);
+        client.restoreSnapshot = real;
+        env.clock.tick(2000);
+        await runUntil(env, editor.flushSave());
+
+        const stored = await storedBlocks(Storage, 'A');
+        assert.deepEqual(stored, [['a1', 'Milk'], ['a2', 'Eggs']]);
+        assert.deepEqual(stored, editor.blocks.map((b) => [b.id, b.content]), 'the note is what the screen shows');
+        const texts = [];
+        for (const { id } of await runUntil(env, env.documentClient.snapshots('A'))) {
+          const snap = await runUntil(env, env.documentClient.snapshot(id));
+          texts.push(snap.blocks.map((b) => b.content).join('|'));
+        }
+        assert.ok(texts.includes('Typed during the revert|Eggs|Bread'), JSON.stringify(texts));
+      });
+    }
+  }
+
+  it('a save() while a revert commits waits for it, then writes the restored blocks', async () => {
+    const { env, Storage } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    type(editor, 'Oat milk');
+    env.clock.tick(600);
+    await runUntil(env, editor.flushSave());
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return held.then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(summary);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed');
+    await runUntil(env, editor.save());
+    release();
+    await runUntil(env, reverting);
+    client.restoreSnapshot = real;
+    await runUntil(env, editor.flushSave());
+    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+  });
+
+  it('a revert that fails saves what was typed meanwhile onto the note', async () => {
+    const { env, Storage } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = () => held.then(() => ({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false }));
+    const reverting = editor._revertToSnapshot(summary);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed while it failed');
+    env.window.fire('pagehide');
+    release();
+    await runUntil(env, reverting);
+    client.restoreSnapshot = real;
+    env.clock.tick(600);
+    await runUntil(env, editor.flushSave());
+    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Typed while it failed'], ['a2', 'Eggs']]);
+  });
+});
+
+describe('typing while an AI insert commits (review R70, 1.4.x misplaced the block)', () => {
+  for (const hide of [false, true]) {
+    it(`keeps every block where the insert put it${hide ? ', with the page hidden meanwhile' : ''}`, async () => {
+      const records = {
+        canvases: [note('A', { name: 'Plan' })],
+        elements: [block('0-a', 'A', 0, 'One'), block('0-b', 'A', 1, 'Two'), block('0-c', 'A', 2, 'Three')],
+      };
+      const { env, Storage } = await page({ records });
+      const editor = makeEditor(env);
+      await editor.loadNote('A');
+      editor.activeBlock = '0-a';
+      const chat = aiChat(env, Storage, editor);
+      const client = env.documentClient;
+      const real = client.insertBlocks;
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      let started;
+      const opened = new Promise((resolve) => { started = resolve; });
+      client.insertBlocks = (...args) => {
+        const outcome = real(...args);
+        started();
+        return held.then(() => outcome);
+      };
+      const inserting = chat.appendAIResponseToNote([{ type: 'text', content: 'New1' }]);
+      await runUntil(env, opened);
+      type(editor, 'Three typed', editor.blocks.findIndex((b) => b.id === '0-c'));
+      if (hide) env.window.fire('pagehide');
+      release();
+      await runUntil(env, inserting);
+      client.insertBlocks = real;
+      env.clock.tick(2000);
+      await runUntil(env, editor.flushSave());
+      assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['One', 'New1', 'Two', 'Three typed']);
+      assert.deepEqual(editor.blocks.map((b) => b.content), ['One', 'New1', 'Two', 'Three typed']);
+    });
+  }
+
+  it('an insert that is refused takes its blocks off the screen again', async () => {
+    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    editor.activeBlock = 'a1';
+    const client = env.documentClient;
+    const real = client.insertBlocks;
+    client.insertBlocks = () => Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
+    await runUntil(env, aiChat(env, Storage, editor).appendAIResponseToNote(REPLY));
+    client.insertBlocks = real;
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Failed to add content', kind: 'error' });
   });
 });
