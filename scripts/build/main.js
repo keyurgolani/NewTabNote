@@ -15,9 +15,11 @@
  *   4. the checks on what it wrote and on the modules the bundle holds: closure, each page's
  *      preloads and classic scripts, remote code, CSP, notices and source maps, vendored files,
  *      environment reads, CommonJS, and the background's own
- *   5. the type gate (scripts/build/type-gate.js)
- *   6. asset-manifest.json, build-info.json with the bundle's chunks, dist-report/modules.json,
- *      and the rename to dist/
+ *   5. the budgets, in production (scripts/build/budgets.js against build/budgets.json): each
+ *      entry's start bytes, its forbidden modules, and the third-party packages of its graph
+ *   6. the type gate (scripts/build/type-gate.js)
+ *   7. asset-manifest.json, build-info.json with the bundle's chunks, dist-report/modules.json
+ *      and dist-report/chunk-graph.json, and the rename to dist/
  * Each problem prints as `✗ [code] subject: message` (scripts/build/diagnostics.js), and the
  * summary lists them all.
  */
@@ -39,6 +41,7 @@ const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = 
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
 const { CLASSIC_SCRIPTS, STATIC_FILES, MINIMUM_CHROME_VERSION, terserOptions } = require('./vite-config.js');
+const { analyze, checkBudgets, readBudgets } = require('./budgets.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./bundle.js').Bundled} Bundled */
@@ -49,6 +52,8 @@ const DIST_DIR = path.join(ROOT_DIR, 'dist');
 // Build reports, which never ship (.gitignore's dist-report/)
 const REPORT_DIR = path.join(ROOT_DIR, 'dist-report');
 const MODULE_MAP = path.join(REPORT_DIR, 'modules.json');
+// What each entry loads (scripts/build/budgets.js), which never ships either
+const CHUNK_GRAPH = path.join(REPORT_DIR, 'chunk-graph.json');
 // Where a build writes before it's checked; a sibling of dist/, so the rename stays on one disk
 const STAGING_PREFIX = '.dist-staging-';
 
@@ -113,6 +118,7 @@ function removeOutput(staging) {
   if (staging) fs.rmSync(staging, { recursive: true, force: true });
   fs.rmSync(DIST_DIR, { recursive: true, force: true });
   fs.rmSync(MODULE_MAP, { force: true });
+  fs.rmSync(CHUNK_GRAPH, { force: true });
 }
 
 /**
@@ -306,7 +312,28 @@ async function build(argv = process.argv.slice(2)) {
     }
     console.log('  ✓ closure and preloads, remote code, CSP, notices and source maps, vendored files, environment, CommonJS, the background');
 
-    // 5. The type gate
+    // 5. The budgets, which hold for production builds
+    /** @type {Record<string, import('./budgets.js').EntryGraph> | null} */
+    let graph = null;
+    if (mode === 'production') {
+      console.log('\n📏 Checking the budgets...');
+      const read = readBudgets(ROOT_DIR);
+      const files = fromDirectory(staging, 'the build');
+      graph = read.budgets ? analyze({ chunks: bundled.report, files, loaderChunks: bundled.chunks, budgets: read.budgets, root: ROOT_DIR }) : null;
+      const over = read.budgets && graph ? checkBudgets(graph, read.budgets, { loaderChunks: bundled.chunks, files }) : read.problems;
+      if (over.length > 0) {
+        over.forEach(report);
+        removeOutput(staging);
+        fail(over);
+        return;
+      }
+      for (const [name, entry] of Object.entries(/** @type {Record<string, import('./budgets.js').EntryGraph>} */ (graph))) {
+        const js = entry.start.bytes.js || { raw: 0, gzip: 0 };
+        console.log(`  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}`);
+      }
+    }
+
+    // 6. The type gate
     console.log('\n🔍 Running the type gate...');
     const gate = await runTypeGate(ROOT_DIR);
     if (gate.problems.length > 0) {
@@ -317,12 +344,13 @@ async function build(argv = process.argv.slice(2)) {
     }
     console.log(`  ✓ ${gate.summary}`);
 
-    // 6. The build's metadata and the module map, then dist/
+    // 7. The build's metadata, the module map and the chunk graph, then dist/
     const versions = await kernelVersions(ROOT_DIR);
     const files = fromDirectory(staging, 'the build');
     const written = writeBuildInfo(staging, files, { buildId, info: source.info, mode, versions, chunks: bundled.chunks });
     fs.mkdirSync(REPORT_DIR, { recursive: true });
     fs.writeFileSync(MODULE_MAP, `${JSON.stringify({ buildId: written.buildId, modules: bundled.modules }, null, 2)}\n`);
+    if (graph) fs.writeFileSync(CHUNK_GRAPH, `${JSON.stringify({ buildId: written.buildId, entries: graph }, null, 2)}\n`);
     const total = files.paths.reduce((sum, file) => sum + files.read(file).length, 0);
     fs.renameSync(staging, DIST_DIR);
 
@@ -340,4 +368,4 @@ async function build(argv = process.argv.slice(2)) {
   }
 }
 
-module.exports = { build, manifestProblems, inputProblems, copyUnbundled, ARGUMENTS, DIST_DIR, MODULE_MAP };
+module.exports = { build, manifestProblems, inputProblems, copyUnbundled, ARGUMENTS, DIST_DIR, MODULE_MAP, CHUNK_GRAPH };

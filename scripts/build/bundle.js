@@ -32,6 +32,7 @@ const { pagesConfig, backgroundConfig, BACKGROUND_ENTRY, LOADER } = require('./v
  * @property {Record<string, string[]>} modules - source path to the files that hold it
  * @property {{background: string[], pages: string[]}} graphs - the source paths each pass bundled,
  *   workers counted with the pages
+ * @property {ChunkReport[]} report - every chunk each pass wrote, for the budgets' analyzer
  */
 
 /** ANSI color codes, which Vite's messages carry */
@@ -265,7 +266,7 @@ async function bundle({ root, outDir, mode, buildId }) {
     problems.push(bundlerProblem(error, root));
   }
   problems.push(...warnings.map(warningProblem));
-  if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] } };
+  if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] }, report: [] };
 
   const named = chunkNames(report);
   const { modules, graphs } = moduleMap(report, root);
@@ -277,6 +278,7 @@ async function bundle({ root, outDir, mode, buildId }) {
     chunks: named.chunks,
     modules,
     graphs,
+    report: report.chunks,
   };
 }
 
