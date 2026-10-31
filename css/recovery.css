@@ -1,0 +1,811 @@
+/*
+ * recovery.html: the Trust Center and the Recovery Center (#20 slice 4b). Every color, size,
+ * and radius comes from Quiet Atlas's tokens (css/design-tokens.css, #16), which also carry
+ * the light, dark, and system schemes, so nothing here branches on a theme: sage for what
+ * checked out, clay for what needs you, and danger only for capture at risk.
+ *
+ * The page keeps the approved mockup's structure: the headline on the page itself, one card
+ * per group with a seam between its rows, and a repair's panel inside its problem's card,
+ * after a seam (#115's design review, item 1).
+ */
+
+html {
+  /* The sticky header never covers what focus moves to: its one row's height plus 16px. Below
+     720px, where it wraps, it scrolls away instead (the media query at the end). */
+  scroll-padding-top: calc(var(--target-min) + 2 * var(--space-control) + 1px + 1rem);
+}
+
+.trust-page {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--type-body-size);
+  line-height: 1.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.trust-skip {
+  position: absolute;
+  left: var(--space-region);
+  top: -10rem;
+  z-index: 2;
+  padding: var(--padding-button);
+  border-radius: var(--radius-control);
+  background: var(--surface-paper);
+  color: var(--text-primary);
+}
+
+.trust-skip:focus {
+  top: var(--space-region);
+}
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  /* Quiet Atlas's inner ring fills the offset, which carries the 3:1 where Focus Blue can't: on
+     every dark surface */
+  box-shadow: 0 0 0 var(--focus-offset) var(--focus-ring-inner);
+}
+
+/* ───────── The header ───────── */
+
+.trust-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-control) var(--space-layer);
+  padding: var(--space-control) var(--space-layer);
+  background: var(--surface-paper);
+  border-bottom: 1px solid var(--seam);
+}
+
+.trust-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.trust-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact);
+  flex: 1;
+}
+
+.trust-views a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  padding: 0 var(--space-control);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.trust-views a:hover {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+.trust-views a[aria-current="page"] {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* The Recovery Center's badge: clay for attention (the director's answer 10). Dark's ink and tint
+   are neutral until #16's dark values land, so there it reads by its number. */
+.trust-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  padding: 0 0.35rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--ink-urgent);
+  background: var(--ink-urgent);
+  color: var(--surface-paper);
+  font-size: var(--type-label-size);
+  font-weight: 700;
+  line-height: 1.4rem;
+}
+
+.trust-count[data-tone="failed"] {
+  /* Red as the marker, not the digits: dark's danger red is under 4.5:1 as text (Quiet Atlas's legacyDark) */
+  border-color: var(--state-danger);
+  background: var(--surface-paper);
+  color: var(--text-primary);
+}
+
+/* ───────── The page ───────── */
+
+.trust-main {
+  max-width: 48.25rem;
+  margin: 0 auto;
+  padding: var(--space-layer) var(--space-layer) 4rem;
+}
+
+.trust-main:focus {
+  outline: none;
+}
+
+.trust-main h2 {
+  margin: 2rem 0 var(--space-control);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.trust-main h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.trust-main h4 {
+  margin: 0 0 var(--space-compact);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.trust-muted {
+  color: var(--text-secondary);
+}
+
+/* Text never runs past 66 characters a line */
+.trust-proof,
+.trust-attention-line,
+.trust-row-text,
+.trust-row-keeps,
+.trust-incident-text,
+.trust-keeps,
+.trust-fixed-line,
+.trust-notice,
+.trust-flow p,
+.trust-section-text,
+.trust-evidence-body p,
+.trust-dest-note {
+  max-width: 66ch;
+}
+
+/* ───────── Shapes: each status by its shape beside its words, never color alone ───────── */
+
+.trust-glyph {
+  display: inline-flex;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+}
+
+.trust-glyph svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.trust-tone-ok { color: var(--ink-local); }
+.trust-tone-partial,
+.trust-tone-action { color: var(--ink-urgent); }
+.trust-tone-failed { color: var(--state-danger); }
+.trust-tone-unknown,
+.trust-tone-absent,
+.trust-tone-locked,
+.trust-tone-checking,
+.trust-tone-todo { color: var(--text-secondary); }
+
+.trust-tone-checking svg {
+  animation: trust-spin 900ms linear infinite;
+}
+
+@keyframes trust-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trust-tone-checking svg { animation: none; }
+}
+
+/* ───────── Buttons and links ───────── */
+
+.trust-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  padding: var(--padding-button);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.primary-btn.trust-btn {
+  border: 1px solid var(--action-primary);
+  background: var(--action-primary);
+  color: var(--text-on-action);
+}
+
+/* Dark's primary fill is under 1.4:1 against its surfaces until #16's dark values land, so an
+   edge in the text color carries the button there (#115's design review, item 3). In light it's
+   the fill's own color. Drop this rule once #16's dark values land. */
+.primary-btn.trust-btn {
+  border-color: var(--text-primary);
+}
+
+.secondary-btn.trust-btn {
+  border: 1px solid var(--control-boundary);
+  background: var(--surface-paper);
+  color: var(--text-primary);
+}
+
+.secondary-btn.trust-btn:hover {
+  background: var(--surface-muted);
+}
+
+.trust-btn[aria-disabled="true"] {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+.trust-linkbtn,
+.trust-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-link);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.trust-link {
+  min-height: 0;
+  display: inline;
+}
+
+/* ───────── Headlines: on the page itself ───────── */
+
+.trust-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-region);
+  padding-top: var(--space-region);
+}
+
+.trust-headline h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control);
+  margin: 0;
+  font-size: var(--type-title-size);
+  line-height: var(--type-title-line-height);
+}
+
+.trust-headline h1 .trust-glyph {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+.trust-headline h1:focus {
+  outline: none;
+}
+
+.trust-headline-body {
+  flex: 1 1 24rem;
+}
+
+/* What proves it sits under the title, past its shape */
+.trust-headline-body > :not(h1) {
+  padding-left: calc(1.4rem + var(--space-control));
+}
+
+.trust-proof {
+  margin: var(--space-compact) 0 0;
+  color: var(--text-secondary);
+}
+
+.trust-attention-line {
+  margin: var(--space-control) 0 0;
+}
+
+.trust-headline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact);
+}
+
+/* ───────── The Trust Center's groups: a card each, its rows divided by seams ───────── */
+
+.trust-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+  overflow: hidden;
+}
+
+.trust-rows > li + li {
+  border-top: 1px solid var(--seam);
+}
+
+.trust-row {
+  padding: var(--padding-card) var(--space-region);
+}
+
+.trust-row[data-attention="true"] {
+  background: var(--tint-urgent);
+}
+
+.trust-row-label {
+  font-weight: 600;
+}
+
+.trust-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  /* Its status ends where a one-line row's time does, 44px in from the card's edge, past the
+     room a one-line row keeps for its chevron (the review's item 8, change 14) */
+  padding-right: calc(2.75rem - var(--space-region));
+}
+
+/* The status word leads; its time follows, quieter */
+.trust-row-status,
+.trust-row-status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.trust-row-status time {
+  color: var(--text-secondary);
+}
+
+.trust-row-text,
+.trust-row-keeps,
+.trust-keeps,
+.trust-incident-text {
+  margin: var(--space-compact) 0 0;
+}
+
+.trust-row-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  margin-top: var(--space-compact);
+}
+
+.trust-row-actions,
+.trust-incident-actions,
+.trust-flow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-compact) var(--space-region);
+}
+
+.trust-site-access {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.trust-action-note {
+  max-width: 24rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  text-align: end;
+}
+
+.trust-row--line {
+  padding: 0;
+}
+
+.trust-line > summary {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  min-height: 3rem;
+  /* The time ends 44px in, with the chevron in the room after it */
+  padding: 0 2.75rem 0 var(--space-region);
+  list-style: none;
+  cursor: pointer;
+}
+
+.trust-line > summary::-webkit-details-marker {
+  display: none;
+}
+
+.trust-line-chevron {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 1px solid var(--text-secondary);
+  border-bottom: 1px solid var(--text-secondary);
+  transform: translateY(-70%) rotate(45deg);
+}
+
+.trust-line[open] .trust-line-chevron {
+  transform: translateY(-30%) rotate(225deg);
+}
+
+.trust-line-body {
+  padding: 0 var(--space-region) var(--padding-card);
+}
+
+.trust-evidence {
+  flex: 1 1 18rem;
+}
+
+.trust-evidence > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  color: var(--text-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.trust-evidence > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure's chevron, as the one-line rows draw theirs */
+.trust-evidence > summary::after {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translateY(-20%) rotate(45deg);
+}
+
+.trust-evidence[open] > summary::after {
+  transform: translateY(20%) rotate(225deg);
+}
+
+.trust-evidence-body {
+  padding: var(--space-compact) 0;
+}
+
+.trust-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem var(--space-region);
+  margin: var(--space-compact) 0 0;
+}
+
+.trust-facts > div {
+  display: contents;
+}
+
+.trust-facts dt {
+  color: var(--text-secondary);
+}
+
+.trust-facts dd {
+  margin: 0;
+}
+
+.trust-main code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.trust-sub + .trust-sub {
+  margin-top: var(--space-control);
+}
+
+.trust-sub h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-compact);
+}
+
+.trust-dest {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-compact) 0;
+}
+
+.trust-dest th,
+.trust-dest td,
+.trust-impact th,
+.trust-impact td,
+.trust-runs th,
+.trust-runs td {
+  padding: 0.35rem var(--space-control) 0.35rem 0;
+  border-bottom: 1px solid var(--seam);
+  text-align: left;
+  vertical-align: top;
+}
+
+.trust-origin {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.trust-dest-note {
+  color: var(--text-secondary);
+}
+
+/* ───────── The Recovery Center ───────── */
+
+.trust-incidents {
+  display: grid;
+  gap: var(--space-region);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trust-incident {
+  padding: var(--space-region) var(--space-layer) var(--space-region) var(--space-region);
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+}
+
+.trust-incident[data-tone="failed"] {
+  border-color: var(--state-danger);
+}
+
+.trust-incident-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control);
+}
+
+.trust-incident-body {
+  padding-left: calc(1rem + var(--space-control));
+}
+
+.trust-fixed-line {
+  margin: var(--space-compact) 0 0;
+}
+
+/* First seen, Last seen, Times seen, and Ref: one muted line that wraps, never four rows */
+.trust-incident-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: var(--space-compact) 0 0;
+  font-size: 0.875rem;
+}
+
+.trust-incident-facts > div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.trust-incident-facts dt {
+  color: var(--text-secondary);
+}
+
+.trust-incident-facts dd {
+  margin: 0;
+}
+
+.trust-incident-actions {
+  margin-top: var(--space-control);
+}
+
+/* The way to the problem's row sits at the card's far end, as the mockup has it */
+.trust-crosslink {
+  margin-left: auto;
+}
+
+.trust-places {
+  margin: var(--space-compact) 0 0;
+  padding-left: 1.25rem;
+}
+
+.trust-section-text {
+  margin: 0 0 var(--space-control);
+  color: var(--text-secondary);
+}
+
+/* Undo sits in its sentence, on its baseline, its target still 44px tall */
+.trust-notice {
+  margin: var(--space-compact) 0 0;
+}
+
+.trust-notice .trust-linkbtn {
+  display: inline;
+  min-height: 0;
+  padding: 0.7rem 0;
+  vertical-align: baseline;
+}
+
+/* A repair's panel: inside its problem's card, after a seam, never a card of its own */
+.trust-flow {
+  margin-top: var(--space-region);
+  padding-top: var(--space-region);
+  border-top: 1px solid var(--seam);
+}
+
+.trust-flow h4:focus {
+  outline: none;
+}
+
+.trust-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-compact);
+  margin: 0 0 var(--space-control);
+}
+
+.trust-result .trust-glyph {
+  margin-top: 0.2rem;
+}
+
+/* The changed preview's note: a tinted band */
+.trust-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-compact);
+  margin: 0 0 var(--space-control);
+  padding: var(--space-control) var(--space-region);
+  border-radius: var(--radius-control);
+  background: var(--tint-urgent);
+}
+
+.trust-warning p {
+  margin: 0;
+}
+
+.trust-warning .trust-glyph {
+  margin-top: 0.2rem;
+}
+
+.trust-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact) var(--space-layer);
+  margin: 0 0 var(--space-control);
+  padding: 0;
+  list-style: none;
+}
+
+.trust-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+}
+
+.trust-steps li[data-step="todo"],
+.trust-steps li[data-step="not-run"] {
+  color: var(--text-secondary);
+}
+
+.trust-impact {
+  border-collapse: collapse;
+  margin: var(--space-control) 0;
+}
+
+.trust-impact caption {
+  text-align: left;
+  font-weight: 700;
+  padding-bottom: 0.25rem;
+}
+
+.trust-zero {
+  color: var(--text-secondary);
+}
+
+/* Recent repairs: its table in a card */
+.trust-table-wrap {
+  overflow-x: auto;
+  padding: 0 var(--space-region);
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+}
+
+.trust-runs {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.trust-runs th {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.trust-runs th,
+.trust-runs td {
+  padding: var(--space-control) var(--space-control) var(--space-control) 0;
+}
+
+.trust-runs tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Dismissed: a card of rows, each its title with when it was dismissed under it */
+.trust-dismissed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  padding: var(--padding-card) var(--space-region);
+}
+
+.trust-dismissed-text p {
+  margin: 0.15rem 0 0;
+}
+
+@media (max-width: 720px) {
+  html {
+    scroll-padding-top: 1rem;
+  }
+
+  .trust-header {
+    position: static;
+    padding: var(--space-compact) var(--space-region);
+  }
+
+  .trust-main {
+    padding: var(--space-region) var(--space-region) 3rem;
+  }
+
+  .trust-incident {
+    padding-right: var(--space-region);
+  }
+
+  .trust-incident-body {
+    padding-left: 0;
+  }
+
+  .trust-headline-body > :not(h1) {
+    padding-left: 0;
+  }
+}

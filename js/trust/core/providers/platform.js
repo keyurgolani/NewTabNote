@@ -13,7 +13,7 @@
  *   coordinator doesn't answer or refuses: in R1 no page sends anything else through it, so
  *   capture, editing, and reading don't depend on it.
  * - Contributions reads #15's resolution report over each registry root the context names,
- *   after its probes and loaders answered. `verified` when no contribution is `unresolved` or
+ *   after its probes and loaders answered, but for #14's block types, which Block types counts. `verified` when no contribution is `unresolved` or
  *   `temporarily-unavailable`, `degraded` with a `contribution-unavailable` incident when any
  *   is, and `not-configured` with no root or no contribution to read. The other states (turned off, doesn't apply here, needs setup or a permission, not
  *   built yet) are each contribution's own, and the report explains them.
@@ -201,7 +201,8 @@ export const contributions = Object.freeze({
    * @returns {CheckResult}
    */
   check(context) {
-    return fromRows(reportOf(context).rows, 'platform');
+    // Block types have their own check, so they aren't counted twice (#115's design review)
+    return fromRows(reportOf(context).rows.filter(row => row.family !== BLOCK_FAMILY), 'platform');
   },
 });
 

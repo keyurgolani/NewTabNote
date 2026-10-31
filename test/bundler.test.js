@@ -131,10 +131,11 @@ function prefixOnly(sheets) {
 }
 
 describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
-  it("builds the four pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
+  it("builds the five pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
     const pages = config.pagesConfig(passOptions());
     assert.deepEqual(pages.build.rolldownOptions.input, {
       newtab: '/repo/newtab.html', popup: '/repo/popup.html', sidepanel: '/repo/sidepanel.html', offscreen: '/repo/offscreen.html',
+      recovery: '/repo/recovery.html',
     });
     const background = config.backgroundConfig(passOptions());
     assert.deepEqual(background.build.rolldownOptions.input, { background: '/repo/js/background.js' });
@@ -256,7 +257,7 @@ describe('the pages as the bundler reads them', () => {
       assert.ok(tag.attributes.has('vite-ignore'), `${page} loads ${tag.attributes.get('src')} without vite-ignore`);
       return tag.attributes.get('src');
     }));
-    assert.deepEqual(classic.sort(), ['js/entries/boot-guard.js', 'js/insights-summary.js', 'js/network-guard.js', 'js/network-guard.js', 'js/network-guard.js', 'js/network-guard.js']);
+    assert.deepEqual(classic.sort(), ['js/entries/boot-guard.js', 'js/insights-summary.js', ...Array(5).fill('js/network-guard.js')]);
     classic.splice(0, classic.length, ...new Set(classic));
     // #27 slice 3: the vendored libraries load at their first use, as classic scripts the loader puts in
     const loaded = [...read(config.LOADER).matchAll(/chrome\.runtime\.getURL\('([^']+)'\)/g)].map(([, file]) => file);
@@ -273,7 +274,10 @@ describe('the pages as the bundler reads them', () => {
 
   it("load their own code as module scripts, offscreen.html's included, so what each imports resolves in the pages pass as the worker's does in its own", () => {
     const modules = Object.fromEntries(PAGES.map((page) => [page, scripts(page).filter(isModule).map((tag) => tag.attributes.get('src'))]));
-    assert.deepEqual(modules, { 'newtab.html': ['js/entries/newtab.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'] });
+    assert.deepEqual(modules, {
+      'newtab.html': ['js/entries/newtab.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'],
+      'recovery.html': ['js/recovery.js'],
+    });
     for (const page of PAGES) for (const tag of scripts(page).filter(isModule)) assert.equal(tag.attributes.has('vite-ignore'), false, page);
     assert.equal(Object.hasOwn(config.CLASSIC_SCRIPTS, 'js/offscreen.js'), false);
   });
@@ -290,12 +294,14 @@ describe('the pages as the bundler reads them', () => {
     }
   });
 
-  it("link stylesheets lightningcss reads with no warning at the build's targets, popup's and the side panel's in files of their own", () => {
+  it("link stylesheets lightningcss reads with no warning at the build's targets, popup's, the side panel's, and recovery.html's in files of their own", () => {
     const { transform } = require('lightningcss');
     const sheets = PAGES.flatMap((page) => htmlTags(read(page))
       .filter((tag) => tag.name === 'link' && tag.attributes.get('rel') === 'stylesheet')
       .map((tag) => tag.attributes.get('href')));
-    assert.deepEqual(sheets.sort(), ['css/editor.css', 'css/popup.css', 'css/premium-chat.css', 'css/sidepanel.css', 'css/stats.css']);
+    assert.deepEqual(sheets.sort(), [
+      'css/design-tokens.css', 'css/editor.css', 'css/popup.css', 'css/premium-chat.css', 'css/recovery.css', 'css/sidepanel.css', 'css/stats.css',
+    ]);
     for (const sheet of sheets) {
       const result = transform({ filename: sheet, code: Buffer.from(read(sheet)), minify: true, targets: config.lightningcssTargets() });
       assert.deepEqual(result.warnings, [], sheet);
@@ -643,13 +649,55 @@ describe('the CommonJS checks (scripts/build/commonjs.js, scripts/build/bundle.j
   });
 });
 
+describe("the block core's chunk (#115's review: scripts/build/vite-config.js)", () => {
+  const BLOCKS = 'js/kernel/core/blocks';
+  const at = (/** @type {string} */ file) => `/repo/${file}`;
+  /**
+   * Each module's importers, in a graph like the sources': the block registry and the
+   * projections import the core, the note domain its previews, and two block modules import
+   * each other
+   * @type {Record<string, string[]>}
+   */
+  const IMPORTERS = {
+    [`${BLOCKS}/index.js`]: ['js/kernel/composition/block-projections.js', 'js/kernel/composition/blocks.js'],
+    [`${BLOCKS}/builtins.js`]: [`${BLOCKS}/index.js`, 'js/kernel/composition/blocks.js'],
+    [`${BLOCKS}/catalog.js`]: [`${BLOCKS}/index.js`, 'js/kernel/composition/blocks.js'],
+    [`${BLOCKS}/models.js`]: [`${BLOCKS}/builtins.js`, `${BLOCKS}/catalog.js`],
+    [`${BLOCKS}/html-text.js`]: [`${BLOCKS}/models.js`],
+    [`${BLOCKS}/entities.js`]: [`${BLOCKS}/html-text.js`],
+    [`${BLOCKS}/previews.js`]: [`${BLOCKS}/models.js`, 'js/kernel/core/domain/note.js'],
+    [`${BLOCKS}/strip-tags.js`]: [`${BLOCKS}/previews.js`, `${BLOCKS}/index.js`],
+    [`${BLOCKS}/one.js`]: [`${BLOCKS}/two.js`],
+    [`${BLOCKS}/two.js`]: [`${BLOCKS}/one.js`, 'js/kernel/composition/blocks.js'],
+    [`${BLOCKS}/unused.js`]: [],
+  };
+  const ctx = { getModuleInfo: (/** @type {string} */ id) => ({ importers: (IMPORTERS[id.slice('/repo/'.length)] || []).map(at) }) };
+
+  it('names `blocks` what only the block registry and the projections import, through the core or not, and nothing else', () => {
+    const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
+    const group = output.codeSplitting.groups[1];
+    // Its own modules only: their dependencies would pull the note domain's back in
+    assert.equal(group.includeDependenciesRecursively, false);
+    for (const file of ['index', 'builtins', 'catalog', 'models', 'html-text', 'entities', 'one', 'two']) {
+      assert.equal(group.name(at(`${BLOCKS}/${file}.js`), ctx), 'blocks', file);
+    }
+    // The note domain imports the previews, so they and the tag stripping they reach stay with
+    // it, in the chunk the Popup and the Side Panel load
+    assert.equal(group.name(at(`${BLOCKS}/previews.js`), ctx), null);
+    assert.equal(group.name(at(`${BLOCKS}/strip-tags.js`), ctx), null);
+    assert.equal(group.name(at(`${BLOCKS}/unused.js`), ctx), null);
+    for (const other of ['js/kernel/composition/blocks.js', 'js/kernel/core/domain/note.js', 'js/main.js']) assert.equal(group.name(at(other), ctx), null, other);
+  });
+});
+
 describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts/build/bundle.js)", () => {
   const LOADER_ID = `/repo/${config.LOADER}`;
 
   it('puts the loader alone in a chunk the pages pass writes at its own path, and every other chunk under assets/, hashed', () => {
     const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
     const [group] = output.codeSplitting.groups;
-    assert.equal(output.codeSplitting.groups.length, 1);
+    // The loader's group, then the block core's (below)
+    assert.equal(output.codeSplitting.groups.length, 2);
     assert.equal(group.test(LOADER_ID), true);
     assert.equal(group.test('/repo/js/main.js'), false);
     const named = (moduleIds) => output.chunkFileNames({ name: 'x', isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds, exports: [] });

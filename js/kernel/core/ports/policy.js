@@ -19,6 +19,17 @@ import { SYSTEM_QUERIES } from '../contracts/system.js';
 /** @typedef {{allowed: true} | {allowed: false, code: string}} Decision */
 
 /**
+ * A row a root adds for a request type no catalog here lists (#13): the surfaces it's
+ * accepted from and, where the row narrows it further, which of those requests it accepts
+ * (`allows`, given the request). recovery.html's root passes the trust operations' rows
+ * (js/trust/core/router-rows.js), so kernel core never imports the trust catalog.
+ * @typedef {Readonly<{
+ *   surfaces: readonly Surface[],
+ *   allows?: (request: {type?: unknown} & Readonly<Record<string, unknown>>) => boolean,
+ * }>} PolicyRow
+ */
+
+/**
  * @typedef {object} PolicyPort
  * @property {(request: {type?: unknown}, caller: Caller) => Decision} authorize
  *   For a command or a query, by its `type`
@@ -65,18 +76,27 @@ function allowedSurfaces(type) {
 }
 
 /**
- * The baseline policy: each catalog entry's `surfaces`. A request the catalog doesn't have,
- * one from a surface its entry doesn't list, and any request from a caller that isn't a known
- * surface are denied.
+ * The baseline policy: each catalog entry's `surfaces`, and for a type no catalog lists, its
+ * row in `rows` when the root passes one. A request neither has, one from a surface its entry
+ * or row doesn't list, one its row's `allows` refuses, and any request from a caller that
+ * isn't a known surface are denied. A row never widens a catalog entry: the entry decides
+ * for its own type.
+ * @param {{rows?: Readonly<Record<string, PolicyRow>>}} [options]
  * @returns {PolicyPort}
  */
-export function createBaselinePolicy() {
+export function createBaselinePolicy({ rows = {} } = {}) {
   return Object.freeze({
     authorize(request, caller) {
       if (!isCaller(caller)) return deny('unknown-caller');
-      const surfaces = allowedSurfaces(request !== null && typeof request === 'object' ? request.type : undefined);
-      if (!surfaces) return deny('unknown-operation');
-      return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');
+      const type = request !== null && typeof request === 'object' ? request.type : undefined;
+      const surfaces = allowedSurfaces(type);
+      if (surfaces) return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');
+      const row = typeof type === 'string' && Object.hasOwn(rows, type) ? rows[type] : undefined;
+      if (!row) return deny('unknown-operation');
+      if (!row.surfaces.includes(caller.surface)) return deny('not-on-surface');
+      return !row.allows || row.allows(/** @type {{type?: unknown} & Record<string, unknown>} */ (request))
+        ? ALLOW
+        : deny('not-on-surface');
     },
   });
 }

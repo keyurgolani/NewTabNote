@@ -34,6 +34,12 @@ const CHEAP = Object.freeze(['open', 'verify-now', 'idle']);
 const EXPENSIVE = Object.freeze(['verify-now', 'idle']);
 
 /**
+ * Where a provider runs: the new tab, and recovery.html (#20 slice 4b), whose Trust Center has a
+ * row, a label and titles for every provider that runs there (test/kernel/recovery-surface.test.mjs)
+ */
+const ON_PAGES = Object.freeze(/** @type {const} */ (['workspace', 'recovery']));
+
+/**
  * @param {{
  *   id: string,
  *   group: HealthGroup,
@@ -46,17 +52,18 @@ const EXPENSIVE = Object.freeze(['verify-now', 'idle']);
  *   observes: readonly string[],
  *   remediations?: readonly string[],
  *   core?: boolean,
+ *   hosts?: readonly ('workspace' | 'recovery')[],
  *   load: () => Promise<unknown>,
- * }} fields
+ * }} fields - `hosts`: where it runs, the new tab and recovery.html unless it says otherwise
  * @returns {Descriptor}
  */
-function provider({ costClass = 'local-cheap', triggers, remediations, core, ...fields }) {
+function provider({ costClass = 'local-cheap', triggers, remediations, core, hosts = ON_PAGES, ...fields }) {
   /** @type {Descriptor} */
   const descriptor = {
     ...fields,
     version: 1,
     apiVersion: 1,
-    hosts: ['workspace'],
+    hosts: [...hosts],
     owner: 20,
     costClass,
     timeoutMs: costClass === 'local-cheap' ? CHEAP_TIMEOUT_MS : EXPENSIVE_TIMEOUT_MS,
@@ -205,6 +212,9 @@ export const PROVIDERS = Object.freeze([
     operation: 'coordinator.query-health',
     observes: ['start-failed'],
     freshnessMs: HOUR,
+    // Not on recovery.html yet: its row and words come with the slice that first shows it,
+    // through the design review, and the page's surface doesn't carry system.coordinatorHealth
+    hosts: ['workspace'],
     load: async () => (await import('./platform.js')).coordinator,
   }),
   provider({

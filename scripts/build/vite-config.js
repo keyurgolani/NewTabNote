@@ -3,7 +3,7 @@
 /**
  * The bundler's configuration (#27 slice 2: "Toolchain" and "Entries"). Vite runs in build
  * mode only, never as a dev server, in three passes into the same staging directory:
- *   pages       the four pages, each an HTML entry. Their module scripts and stylesheets become
+ *   pages       the five pages, each an HTML entry. Their module scripts and stylesheets become
  *               content-hashed chunks and CSS under assets/, and a module worker one of them
  *               starts with `new Worker(new URL('…', import.meta.url), {type: 'module'})` becomes
  *               an entry of its own.
@@ -51,6 +51,7 @@ const PAGES = Object.freeze({
   popup: 'popup.html',
   sidepanel: 'sidepanel.html',
   offscreen: 'offscreen.html',
+  recovery: 'recovery.html',
 });
 
 /** The service worker's entry, which ships at the same path */
@@ -88,6 +89,16 @@ const ROWS_MODULE = 'js/kernel/composition/destination-rows.js';
  * closure check knows the one file it lets build a path at run time (scripts/build/closure.js)
  */
 const LOADER = 'js/runtime/lazy.js';
+
+/**
+ * #14's block core, which the pages pass writes as a chunk of its own, `blocks` (#115's review):
+ * what only the block registry (js/kernel/composition/blocks.js) and the projections the new
+ * tab's legacy scripts read (js/kernel/composition/block-projections.js) import, html-text.js's
+ * tokenizer and its named character references among them. THIRD_PARTY_NOTICES' In: line names
+ * the chunk, so its name has to hold whichever pages share it.
+ */
+const BLOCK_CORE = 'js/kernel/core/blocks';
+const BLOCK_ROOTS = Object.freeze(['js/kernel/composition/blocks.js', 'js/kernel/composition/block-projections.js']);
 
 /**
  * Files the build copies byte for byte because no page or script imports them: the manifest,
@@ -342,6 +353,46 @@ function loaderIds(root) {
 }
 
 /**
+ * The name of the block core's chunk for a module in it, or null for one that isn't: a module of
+ * the block core whose every importer is one of the block roots or a module of the core's chunk
+ * itself. A block module anything else imports, as the note domain does its previews and wiki
+ * links, stays in the chunks that hold what imports it, and so does each block module only it
+ * imports, so the Popup and the Side Panel never load the core. The group takes only these
+ * modules, not their dependencies (`includeDependenciesRecursively: false`), or it would pull
+ * those back in.
+ * @param {string} root
+ * @returns {(id: string, ctx: {getModuleInfo(id: string): {importers: readonly string[]} | null}) => string | null}
+ */
+function blockCoreChunk(root) {
+  const roots = [root];
+  try {
+    roots.push(fs.realpathSync(root));
+  } catch {
+    // Sources that aren't there, as a test's, have no real path
+  }
+  const dirs = roots.map((at) => path.join(at, BLOCK_CORE) + path.sep);
+  const entries = new Set(roots.flatMap((at) => BLOCK_ROOTS.map((file) => path.join(at, file))));
+  /**
+   * @param {string} id
+   * @param {{getModuleInfo(id: string): {importers: readonly string[]} | null}} ctx
+   * @param {Set<string>} visiting - the modules above this one in the walk, where a cycle
+   *   inside the core counts as the core's, so only an importer outside it decides
+   * @returns {boolean}
+   */
+  const inCore = (id, ctx, visiting) => {
+    if (visiting.has(id)) return true;
+    if (!dirs.some((dir) => id.startsWith(dir))) return false;
+    const info = ctx.getModuleInfo(id);
+    if (!info || info.importers.length === 0) return false;
+    visiting.add(id);
+    const only = info.importers.every((importer) => entries.has(importer) || inCore(importer, ctx, visiting));
+    visiting.delete(id);
+    return only;
+  };
+  return (id, ctx) => (inCore(id, ctx, new Set()) ? 'blocks' : null);
+}
+
+/**
  * Where the pages pass writes a chunk that's no entry: the loader's at the loader's own path,
  * any other under assets/, content-hashed
  * @param {string} root
@@ -376,8 +427,14 @@ function pagesConfig(options) {
         output: {
           ...names,
           chunkFileNames: chunkFileName(root),
-          // The loader alone in a chunk, whichever chunks import it (#27 slice 3)
-          codeSplitting: { groups: [{ name: 'loader', test: (id) => loader.has(id) }] },
+          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), and the block
+          // core in one of its own, named for what it is (#115's review)
+          codeSplitting: {
+            groups: [
+              { name: 'loader', test: (id) => loader.has(id) },
+              { name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: false },
+            ],
+          },
         },
         checks: { ...CHECKS },
         onLog,

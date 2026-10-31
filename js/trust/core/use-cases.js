@@ -41,7 +41,7 @@ import { payload as dismissPayload } from './operations/recovery-dismiss.js';
 import { payload as raisePayload } from './operations/recovery-raise.js';
 import { payload as undismissPayload } from './operations/recovery-undismiss.js';
 import { payload as verifyPayload } from './operations/trust-verify.js';
-import { LEGACY_COPY_KEY } from './providers/recovery-readiness.js';
+import { LEGACY_COPY_KEY } from './ports.js';
 import { incidentKey } from './records.js';
 import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
 
