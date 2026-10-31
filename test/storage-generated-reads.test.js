@@ -1,8 +1,9 @@
 'use strict';
 
 // #28 slice 3: the read paths 1.4.x code takes, on production js/storage.js, over the generated
-// maximal and corrupt profiles (test/fixtures/storage/generate.mjs) at version 8. init() opens
-// each without deleting or changing a record; the note lists, archive, trash, templates,
+// maximal and corrupt profiles (test/fixtures/storage/generate.mjs) at version 8. The new tab's
+// root opens each, Storage beside #17's adapter as it has since #17 PR 4a, without deleting or
+// changing a record; the note lists, archive, trash, templates,
 // folders, blocks, backlinks, settings, auto backups, and exportAll return what the generator's
 // roles say; and the Daily Note lookup finds an existing one among duplicates and makes none.
 // Where production is wrong today, the step is an expected failure in test/known-defects.json.
@@ -34,7 +35,8 @@ async function load() {
 const TRANSFORMED_AT = Date.UTC(2026, 9, 31);
 
 /**
- * Production Storage on profile `of`, opened with init()
+ * Production Storage on profile `of`, opened as the new tab's root opens it, beside #17's
+ * adapter (#17 PR 4a)
  */
 async function storageOn(of) {
   const { support } = await load();
@@ -46,8 +48,8 @@ async function storageOn(of) {
     (value) => ({ value: value === undefined ? undefined : JSON.parse(JSON.stringify(value)) }),
     (error) => ({ error: { name: error && error.name, message: error && error.message } }),
   ));
-  const init = await settle(() => Storage.init());
-  assert.equal(init.error, undefined, `init() rejected: ${JSON.stringify(init.error)}`);
+  const started = await settle(() => support.legacyEnv.startNewTabKernel(env).then(() => undefined));
+  assert.equal(started.error, undefined, `the new tab didn't start: ${JSON.stringify(started.error)}`);
   return { Storage, settle };
 }
 
@@ -70,8 +72,8 @@ async function release141On(of) {
 }
 
 /**
- * Production Storage on a profile holding `fixture`, opened with init(), and the profile's
- * CanvasTabDB records before it opened
+ * Production Storage on a profile holding `fixture`, opened as the new tab's root opens it, and
+ * the profile's CanvasTabDB records before it opened
  */
 async function opened(fixture) {
   const { support } = await load();
@@ -104,7 +106,7 @@ const ids = (rows) => rows.map((row) => row.id).sort();
 const canvasDb = (dumped) => dumped.databases.filter((db) => db.name === 'CanvasTabDB');
 
 describe('1.4.x reads on the maximal profile', () => {
-  it('init() opens it and changes nothing; the lists, folders, blocks, links, settings, and backups are what it holds', async () => {
+  it("the new tab's root opens it and changes nothing; the lists, folders, blocks, links, settings, and backups are what it holds", async () => {
     const { generate, inputs } = await load();
     const { fixture, roles, records } = generate.maximalFixture(inputs);
     const { of, Storage, settle, before, dump } = await opened(fixture);
@@ -144,7 +146,7 @@ describe('1.4.x reads on the maximal profile', () => {
 
 describe('1.4.x reads on the corrupt profiles', () => {
   for (const id of ['truncated', 'mistyped', 'dangling', 'oversized', 'daily-duplicates']) {
-    it(`${id}: init() opens it, deletes and changes nothing, and the note list, blocks, folders, and exportAll still answer`, async () => {
+    it(`${id}: the new tab's root opens it, deletes and changes nothing, and the note list, blocks, folders, and exportAll still answer`, async () => {
       const { generate, inputs } = await load();
       const { fixture } = generate.corruptFixtures(inputs).get(id);
       const { Storage, settle, before, dump } = await opened(fixture);

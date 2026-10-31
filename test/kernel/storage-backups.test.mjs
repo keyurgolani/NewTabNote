@@ -1,8 +1,9 @@
 // #17 PR 4a, the lead's Q1: 1.4.x's export file, automatic backup, and import, moved from
 // js/storage.js to #17's adapter (adapters/indexeddb/backups.js) with what each did there. Each
-// is held to js/storage.js's own code on the same profile, and to the frozen 1.4.1's
-// (test/fixtures/storage/releases/v1.4.1, the tag's own files), both ways: a file this build
-// exports imports through 1.4.1, and a file 1.4.1 exported imports here as it does there. Then
+// is held to the frozen 1.4.1's own code on the same profile (test/fixtures/storage/releases/
+// v1.4.1, the tag's own files), both ways: a file this build exports imports through 1.4.1, and
+// a file 1.4.1 exported imports here as it does there. js/storage.js's copies, which only the
+// legacy adapter called, are 4b's facade's to drop, so nothing here calls them. Then
 // the commands that run them, on an adapter with the backup tasks, as the new tab's is, and on
 // one without, as Popup's, Side Panel's, and the worker's are. The kernel-adapter suite runs
 // its backups checks on the first (storage-contract.test.mjs).
@@ -94,21 +95,19 @@ const ticking = (start = 1760000000000) => {
 };
 
 /**
- * Storage, from `tag`'s files (the frozen release's, or this build's js/storage.js for none),
- * opened in a page of `of`'s profile, with each id it makes from `ids`
+ * The frozen v1.4.1's Storage, from the tag's own files, opened with init as its pages opened
+ * it, in a page of `of`'s profile, with each id it makes from `ids`
  * @param {Profile} of
- * @param {{tag?: string, ids?: () => string}} [options]
+ * @param {{ids?: () => string}} [options]
  * @returns {Promise<any>}
  */
-async function storageOf(of, { tag, ids } = {}) {
+async function release141(of, { ids } = {}) {
   const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
-  const dir = tag ? `test/fixtures/storage/releases/${tag}/js` : 'js';
+  const dir = 'test/fixtures/storage/releases/v1.4.1/js';
   env.load(`${dir}/utils.js`, `${dir}/storage.js`);
   if (ids) env.get('Utils').generateId = ids;
   const storage = env.get('Storage');
-  // The frozen release opens with init, as its pages did; this build's pages open as they find it
-  if (tag) await storage.init();
-  else await storage.open();
+  await storage.init();
   return storage;
 }
 
@@ -213,25 +212,23 @@ async function importOn(of, backup, mode, newId) {
 }
 
 describe("Export JSON on #17's adapter (#17 PR 4a)", () => {
-  it('writes what js/storage.js and the frozen 1.4.1 write for the same profile, byte for byte but the time', async () => {
+  it('writes what the frozen 1.4.1 writes for the same profile, byte for byte but the time', async () => {
     const of = await made();
     const db = await openDb(of);
     const rows = await readExport(db);
     db.close();
     const ours = await (await exportFile(rows, 1760000000000)).text();
-    const storage = await storageOf(of);
-    const frozen = await storageOf(of, { tag: 'v1.4.1' });
-    assert.equal(timeless(ours), timeless(await (await storage.exportAllAsBlob()).text()));
+    const frozen = await release141(of);
     assert.equal(timeless(ours), timeless(await (await frozen.exportAllAsBlob()).text()));
     // With Create Backup's fields, after the folders
     const extra = { backupType: 'full-backup', backupCreatedAt: '2026-10-31T00:00:00.000Z', backupVersion: 1 };
     assert.equal(
       timeless(await (await exportFile(rows, 1, extra)).text()),
-      timeless(await (await storage.exportAllAsBlob(extra)).text()),
+      timeless(await (await frozen.exportAllAsBlob(extra)).text()),
     );
-    // The object the automatic backup and Replace all's copy save is Storage.exportAll's
+    // The object the automatic backup and Replace all's copy save is 1.4.1's exportAll's
     const object = await exportObject(rows, 7);
-    assert.deepEqual({ ...object, exportedAt: 0 }, { ...legacyEnv.plain(await storage.exportAll()), exportedAt: 0 });
+    assert.deepEqual({ ...object, exportedAt: 0 }, { ...legacyEnv.plain(await frozen.exportAll()), exportedAt: 0 });
     // What it holds: no note in the trash, nor its media; the templates after the rest
     const file = JSON.parse(ours);
     // Newest first, ties by id from the last, as Storage's index read gives them, then the templates
@@ -243,11 +240,10 @@ describe("Export JSON on #17's adapter (#17 PR 4a)", () => {
       file.media.map((/** @type {Row} */ m) => [m.id, m.blob]),
       [['m1', `data:image/png;base64,${PNG.toString('base64')}`]],
     );
-    storage.db.close();
     frozen.db.close();
   });
 
-  it('leaves out the six fields #17 PR 3 writes beside the flags, as Storage does, and the database keeps them', async () => {
+  it('leaves out the six fields #17 PR 3 writes beside the flags, and the database keeps them', async () => {
     for (const field of NEW_NOTE_FIELDS) assert.ok(Object.hasOwn(PLACEMENT_FIELDS, field), field);
     const records = RECORDS();
     records.canvases = records.canvases.map(n => ({ ...n, ...PLACEMENT_FIELDS }));
@@ -258,16 +254,17 @@ describe("Export JSON on #17's adapter (#17 PR 4a)", () => {
     for (const exported of rows.notes) {
       for (const field of NEW_NOTE_FIELDS) assert.equal(field in exported, false, `${exported.id}: ${field}`);
     }
-    const storage = await storageOf(of);
+    // The file is the one 1.4.1 writes for the same notes without them, which it never knew
+    const frozen = await release141(await made());
     assert.equal(
       timeless(await (await exportFile(rows, 1)).text()),
-      timeless(await (await storage.exportAllAsBlob()).text()),
+      timeless(await (await frozen.exportAllAsBlob()).text()),
     );
-    storage.db.close();
+    frozen.db.close();
     assert.equal(legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'canvases').A.dailyKey, '2026-10-01');
   });
 
-  it("a database without media or folders exports none of them, as Storage's does", async () => {
+  it("a database without media or folders exports none of them, as 1.4.1's does", async () => {
     const of = await made({
       omit: ['media', 'folders'],
       records: { canvases: RECORDS().canvases, elements: RECORDS().elements },
@@ -276,12 +273,12 @@ describe("Export JSON on #17's adapter (#17 PR 4a)", () => {
     const rows = await readExport(db);
     db.close();
     assert.deepEqual([rows.media, rows.folders], [[], []]);
-    const storage = await storageOf(of);
+    const frozen = await release141(of);
     assert.equal(
       timeless(await (await exportFile(rows, 1)).text()),
-      timeless(await (await storage.exportAllAsBlob()).text()),
+      timeless(await (await frozen.exportAllAsBlob()).text()),
     );
-    storage.db.close();
+    frozen.db.close();
   });
 });
 
@@ -301,11 +298,11 @@ describe("the automatic backup on #17's adapter (#17 PR 4a)", () => {
     assert.deepEqual([newest.autoBackup, typeof newest.backupCreatedAt], [true, 'number']);
     assert.equal(typeof stored[LAST_BACKUP_KEY], 'number');
 
-    // Storage's own backup of the same profile holds the same, but its times
+    // 1.4.1's own backup of the same profile holds the same, but its times
     const theirs = await made();
-    const storage = await storageOf(theirs);
-    await storage.createAutoBackup();
-    storage.db.close();
+    const frozen = await release141(theirs);
+    await frozen.createAutoBackup();
+    frozen.db.close();
     const [[, backup]] = Object.entries(legacyEnv.plain(theirs.chrome.local)).filter(([key]) =>
       key.startsWith(AUTO_BACKUP_PREFIX),
     );
@@ -329,9 +326,9 @@ describe("the automatic backup on #17's adapter (#17 PR 4a)", () => {
 });
 
 describe("the import on #17's adapter (#17 PR 4a)", () => {
-  it('checks a parsed file as Storage.validateImport does, for every refusal it has', async () => {
+  it("checks a parsed file as 1.4.1's validateImport does, for every refusal it has", async () => {
     const of = await made();
-    const storage = await storageOf(of);
+    const storage = await release141(of);
     storage.db.close();
     const good = {
       version: 1,
@@ -366,9 +363,9 @@ describe("the import on #17's adapter (#17 PR 4a)", () => {
     }
   });
 
-  it("Merge adds what a file 1.4.1 exported as 1.4.1's and this build's Storage add it, and changes no local record", async () => {
+  it("Merge adds what a file 1.4.1 exported as 1.4.1 adds it, and changes no local record", async () => {
     const source = await made();
-    const frozen = await storageOf(source, { tag: 'v1.4.1' });
+    const frozen = await release141(source);
     const file = JSON.parse(await (await frozen.exportAllAsBlob()).text());
     frozen.db.close();
 
@@ -376,14 +373,12 @@ describe("the import on #17's adapter (#17 PR 4a)", () => {
     const before = await contents(ours);
     const { outcome, receipt } = await importOn(ours, file, 'merge', sequence());
     assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
-    for (const tag of [undefined, 'v1.4.1']) {
-      const theirs = await made();
-      const storage = await storageOf(theirs, { tag, ids: sequence() });
-      const result = await storage.importData(structuredClone(file), 'merge');
-      storage.db.close();
-      assert.deepEqual(await contents(ours), await contents(theirs), tag || 'js/storage.js');
-      assert.deepEqual(receipt?.importedIds, [...result.importedIds], tag || 'js/storage.js');
-    }
+    const theirs = await made();
+    const storage = await release141(theirs, { ids: sequence() });
+    const result = await storage.importData(structuredClone(file), 'merge');
+    storage.db.close();
+    assert.deepEqual(await contents(ours), await contents(theirs));
+    assert.deepEqual(receipt?.importedIds, [...result.importedIds]);
     // Every local record is as it was
     const now = await contents(ours);
     for (const store of Object.keys(before)) {
@@ -395,9 +390,9 @@ describe("the import on #17's adapter (#17 PR 4a)", () => {
     assert.deepEqual([daily?.isDaily, daily?.dateStr], [false, null]);
   });
 
-  it("Replace all saves its recovery copy first, then moves every active note to trash in the import's own commit, as Storage does", async () => {
+  it("Replace all saves its recovery copy first, then moves every active note to trash in the import's own commit, as 1.4.1 does", async () => {
     const source = await made();
-    const frozen = await storageOf(source, { tag: 'v1.4.1' });
+    const frozen = await release141(source);
     const file = JSON.parse(await (await frozen.exportAllAsBlob()).text());
     frozen.db.close();
 
@@ -405,12 +400,12 @@ describe("the import on #17's adapter (#17 PR 4a)", () => {
     const { outcome, receipt } = await importOn(ours, file, 'replace', sequence());
     assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
     const theirs = await made();
-    const storage = await storageOf(theirs, { ids: sequence() });
+    const storage = await release141(theirs, { ids: sequence() });
     const result = await storage.importData(structuredClone(file), 'replace');
     storage.db.close();
     assert.deepEqual(await contents(ours), await contents(theirs));
     assert.deepEqual(receipt?.trashedIds, [...result.trashedIds]);
-    // The copy holds the export as it was before the import, as Storage's does
+    // The copy holds the export as it was before the import, as 1.4.1's does
     /** @param {Profile} of */
     const copyOf = of => {
       const copies = Object.entries(legacyEnv.plain(of.chrome.local)).filter(([key]) =>
@@ -666,7 +661,7 @@ describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
 
     const there = profile();
     profiles.push(there);
-    const frozen = await storageOf(there, { tag: 'v1.4.1' });
+    const frozen = await release141(there);
     const result = await frozen.importData(structuredClone(file), 'merge');
     frozen.db.close();
     assert.deepEqual(

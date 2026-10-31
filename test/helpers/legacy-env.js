@@ -1174,7 +1174,10 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
  * from the page's globals: #17's adapter, opened as the database is, with startup maintenance,
  * and Storage opened beside it, watching its connection, for the holders that still call it.
  * Its document client becomes the one makeEditor gives editors, and `env.adapter` the adapter.
- * Storage must not have started.
+ * The page's clients are the root's, as startEditorClient sets them: `env.kernel`,
+ * `env.noteList`, `env.settingsClient`, and what App gives its controllers of the database
+ * (`env.storageState`, `env.recovery`, `env.validateBackup`). Storage must not have started:
+ * the root opens it, so a test of a path #17 PR 4a ported calls none of Storage's opens.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @returns {Promise<Object>} the document client, once the kernel is ready
  */
@@ -1187,9 +1190,13 @@ async function startNewTabKernel(env) {
   const failure = await kernel.whenReady();
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
   env.adapter = adapter;
+  env.kernel = kernel;
   env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, adapter));
   env.noteList = root.createNewTabNoteList(kernel);
   env.settingsClient = root.createNewTabSettingsClient(kernel, host);
+  env.storageState = root.createNewTabStorageState(adapter);
+  env.recovery = root.createNewTabRecovery(host);
+  env.validateBackup = root.createNewTabBackupCheck();
   return env.documentClient;
 }
 
