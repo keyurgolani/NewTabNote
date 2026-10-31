@@ -13,7 +13,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('../scripts/build/vite-config.js');
-const { bundlerProblem, warningProblem, chunkNames, moduleMap, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { checkCommonJs } = require('../scripts/build/commonjs.js');
 const { BUILD_INPUTS, SOURCE_DIRS, listedInputs, buildEntries } = require('../scripts/build/inputs.js');
 const { checkBackgroundSources, pageGlobalReads, loadingProblems } = require('../scripts/build/background.js');
 const { checkSourceEnvironment } = require('../scripts/build/environment.js');
@@ -22,6 +23,7 @@ const { checkClosure, resolve } = require('../scripts/build/closure.js');
 const { scanScript } = require('../scripts/build/js-scan.js');
 const { htmlTags, rawTextElements } = require('../scripts/build/markup.js');
 const { fromMap } = require('../scripts/build/package-files.js');
+const { parse: parseCss, walk, splitTopLevel } = require('../scripts/css-parser.js');
 const { ROOT, sourcePackage, filesUnder } = require('./helpers/source-package.js');
 
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -35,7 +37,7 @@ function passOptions(mode = 'production') {
 
 /** A chunk as the report plugin records one */
 function chunk(pass, name, fileName, fields = {}) {
-  return { pass, name, fileName, isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds: [], imports: [], ...fields };
+  return { pass, name, fileName, isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds: [], imports: [], commonJs: [], ...fields };
 }
 
 /** A page's <script src> tags */
@@ -66,6 +68,67 @@ function graphFrom(entries, { vendored = false } = {}) {
 }
 
 const PAGE_ENTRIES = PAGES.flatMap((page) => scripts(page).filter(isModule).map((tag) => resolve(tag.attributes.get('src'), '')));
+
+/** CSS as the bundler minifies a page's stylesheets: lightningcss, at the build's targets */
+function minifiedCss(text) {
+  const { transform } = require('lightningcss');
+  return Buffer.from(transform({ filename: 'page.css', code: Buffer.from(text), minify: true, targets: config.lightningcssTargets() }).code).toString('utf8');
+}
+
+/** A rule's key: the at-rules and rules around it, then one selector of its list */
+const ruleKey = (ancestors, selector) => [...ancestors.map((node) => (node.type === 'at-rule' ? `@${node.name} ${node.prelude}` : node.prelude)), selector].join(' || ');
+
+/** Each key a source selector has in lightningcss's output, from the selector minified alone */
+const outputKeys = new Map();
+function keysOf(ancestors, selector) {
+  const snippet = ancestors.reduceRight((inner, node) => `${node.type === 'at-rule' ? `@${node.name} ${node.prelude}` : node.prelude}{${inner}}`, `${selector}{color:red}`);
+  if (!outputKeys.has(snippet)) {
+    const keys = [];
+    walk(parseCss(minifiedCss(snippet)), (node, around) => {
+      if (node.type === 'rule' && node.declarations.length > 0) splitTopLevel(node.prelude).forEach((one) => keys.push(ruleKey(around, one)));
+    });
+    outputKeys.set(snippet, keys);
+  }
+  return outputKeys.get(snippet);
+}
+
+/**
+ * The unprefixed declarations of a page's stylesheets that its minified CSS holds only in a
+ * prefixed form, as `file:line selector property`. Each source selector is matched with the
+ * output's by minifying it alone, and the output's selector lists are split, so a rule the
+ * minifier merges with another still matches.
+ * @param {Array<{file: string, text: string}>} sheets - in the order the page links them
+ * @returns {string[]}
+ */
+function prefixOnly(sheets) {
+  /** @type {Map<string, Set<string>>} */
+  const output = new Map();
+  walk(parseCss(minifiedCss(sheets.map(({ text }) => text).join('\n'))), (node, ancestors) => {
+    if (node.type !== 'rule') return;
+    for (const selector of splitTopLevel(node.prelude)) {
+      const key = ruleKey(ancestors, selector);
+      if (!output.has(key)) output.set(key, new Set());
+      node.declarations.forEach(({ property }) => output.get(key).add(property));
+    }
+  });
+  const found = new Set();
+  for (const { file, text } of sheets) {
+    walk(parseCss(text), (node, ancestors) => {
+      if (node.type !== 'rule') return;
+      for (const selector of splitTopLevel(node.prelude)) {
+        for (const key of keysOf(ancestors, selector)) {
+          const kept = output.get(key);
+          if (!kept) continue;
+          for (const { property, line } of node.declarations) {
+            if (property.startsWith('-') || kept.has(property)) continue;
+            if ([...kept].some((name) => /^-[a-z]+-/.test(name) && name.replace(/^-[a-z]+-/, '') === property)) found.add(`${file}:${line} ${selector} ${property}`);
+          }
+        }
+      }
+    });
+  }
+  return [...found];
+}
 
 describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
   it("builds the four pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
@@ -231,6 +294,28 @@ describe('the pages as the bundler reads them', () => {
       const result = transform({ filename: sheet, code: Buffer.from(read(sheet)), minify: true, targets: config.lightningcssTargets() });
       assert.deepEqual(result.warnings, [], sheet);
     }
+  });
+
+  it("keep every unprefixed declaration through lightningcss: none comes out only in a prefixed form, which Chrome may ignore", () => {
+    // lightningcss takes backdrop-filter and -webkit-backdrop-filter for one property and keeps
+    // the last, and Chrome doesn't support the prefixed one, so the AI chat's ticker and tool
+    // cards lost their blur (#99's review). Each page's stylesheets, as the bundler minifies them
+    for (const page of PAGES) {
+      const sheets = htmlTags(read(page))
+        .filter((tag) => tag.name === 'link' && tag.attributes.get('rel') === 'stylesheet')
+        .map((tag) => ({ file: /** @type {string} */ (tag.attributes.get('href')), text: read(/** @type {string} */ (tag.attributes.get('href'))) }));
+      assert.deepEqual(prefixOnly(sheets), [], page);
+    }
+    // The check itself: in one rule, in two the minifier merges, in a media query with a selector
+    // list, and in the order lightningcss keeps the unprefixed one
+    const one = (text) => prefixOnly([{ file: 'a.css', text }]);
+    assert.deepEqual(one('.a {\n  backdrop-filter: blur(1px);\n  -webkit-backdrop-filter: blur(1px);\n}'), ['a.css:2 .a backdrop-filter']);
+    assert.deepEqual(one('.a { backdrop-filter: blur(1px) }\n.a { -webkit-backdrop-filter: blur(1px) }'), ['a.css:1 .a backdrop-filter']);
+    assert.deepEqual(one('@media (max-width: 640px) { .b, .c > d { backdrop-filter: blur(var(--x)); -webkit-backdrop-filter: blur(var(--x)) } }'), [
+      'a.css:1 .b backdrop-filter', 'a.css:1 .c > d backdrop-filter',
+    ]);
+    assert.deepEqual(one('.a { -webkit-backdrop-filter: blur(1px); backdrop-filter: blur(1px) }'), []);
+    assert.deepEqual(one('.a { -webkit-background-clip: text; background-clip: text }'), []);
   });
 });
 
@@ -441,27 +526,14 @@ describe('the graphs in the sources, as the bundler folds them', () => {
     assert.deepEqual(checkSourceEnvironment(modules), []);
   });
 
-  it("hold no first-party module the bundler would wrap as CommonJS: the legacy files' dual export names a free module, which the build defines as undefined, and none names exports or require", () => {
+  it("hold no first-party module the bundler would wrap as CommonJS: the legacy files' dual export reads module only behind its typeof check, which the build defines as undefined, and none names exports or require", () => {
     // Wrapped, a legacy file would get a module object and take its Node branch, so the page
-    // never gets its global (#27 slice 2's first extension run: "createLogger is not defined")
-    const ts = require('typescript');
-    const dual = new Set();
-    const other = [];
-    const named = (node, name) => ts.isIdentifier(node) && node.text === name;
-    for (const file of [...new Set([...pages, ...background])]) {
-      const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-      const visit = (node) => {
-        // The CommonJS forms: typeof module, module.exports, exports.x, exports[x], and require()
-        if ((ts.isTypeOfExpression(node) && named(node.expression, 'module'))
-          || (ts.isPropertyAccessExpression(node) && named(node.expression, 'module') && node.name.text === 'exports')) dual.add(file);
-        if (((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && named(node.expression, 'exports'))
-          || (ts.isCallExpression(node) && named(node.expression, 'require'))) other.push(file);
-        ts.forEachChild(node, visit);
-      };
-      visit(source);
-    }
-    assert.deepEqual(other, []);
-    assert.ok(dual.size > 0 && [...dual].every((file) => /typeof module !== 'undefined' && module\.exports/.test(read(file))), [...dual].join('\n'));
+    // never gets its global (#27 slice 2's first extension run: "createLogger is not defined").
+    // Any other read of module would be undefined.exports, which throws (#99's review).
+    const modules = [...new Set([...pages, ...background])].map((file) => ({ file, text: read(file) }));
+    assert.deepEqual(checkCommonJs(modules), []);
+    const dual = modules.filter(({ text }) => /typeof module !== 'undefined' && module\.exports/.test(text));
+    assert.ok(dual.length >= 20, `${dual.length} files with the dual export`);
     for (const pass of [config.pagesConfig(passOptions()), config.backgroundConfig(passOptions())]) assert.equal(pass.define.module, 'undefined');
   });
 
@@ -491,6 +563,65 @@ describe('the graphs in the sources, as the bundler folds them', () => {
       'env/reference js/a.js:2:13 process.env.API_KEY',
       'env/reference js/a.js:3:13 import.meta.env',
     ]);
+  });
+});
+
+describe('the CommonJS checks (scripts/build/commonjs.js, scripts/build/bundle.js)', () => {
+  const found = (text) => checkCommonJs([{ file: 'js/a.js', text }]).map(({ code, subject, message }) => `${code} ${subject} ${message.split(',')[0]}`);
+
+  it('pass the dual export, a parameter or local named module or require, and typeof on its own', () => {
+    assert.deepEqual(found([
+      'function f() {}',
+      "if (typeof module !== 'undefined' && module.exports) {",
+      '  module.exports = { f };',
+      "} else if (typeof window !== 'undefined') {",
+      '  window.f = f;',
+      '}',
+      "export const node = typeof module !== 'undefined' ? module.exports : null;",
+      'export const load = (module) => module.default;',
+      'export function local() { const require = (x) => x; return require(1); }',
+      "export const commonJs = typeof require === 'function' && typeof exports === 'object';",
+    ].join('\n')), []);
+  });
+
+  it("fail a module.exports outside the typeof check, module read on its own, and a free exports or require", () => {
+    // #99's review: with module defined as undefined, the first two read undefined.exports and
+    // throw, and the bundler wraps a file that names exports or require
+    assert.deepEqual(found([
+      "if (typeof module !== 'undefined' && module.exports) module.exports = { f };",
+      'module.exports.extra = 1;',
+      'const m = module;',
+      'exports.g = 2;',
+      "const h = require('./h.js');",
+    ].join('\n')), [
+      'build/commonjs js/a.js:2:1 reads module outside a typeof check',
+      'build/commonjs js/a.js:3:11 reads module outside a typeof check',
+      'build/commonjs js/a.js:4:1 names exports',
+      'build/commonjs js/a.js:5:11 names require',
+    ]);
+  });
+
+  it('fail a chunk that holds a module the bundler wrapped as CommonJS, by the module, whatever made it wrap', () => {
+    // The report plugin finds the wrapper in each module as the bundler rendered it, before
+    // terser renames it
+    const options = passOptions();
+    const [report] = config.pagesConfig(options).plugins;
+    report.generateBundle({}, {
+      'assets/newtab-A1.js': {
+        type: 'chunk', fileName: 'assets/newtab-A1.js', name: 'newtab', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/newtab.html',
+        moduleIds: ['\0rolldown/runtime.js', '/repo/js/a.js', '/repo/js/b.js'], imports: [],
+        modules: {
+          '\0rolldown/runtime.js': { code: 'var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod, mod.exports), cb = null), mod.exports);\n' },
+          '/repo/js/a.js': { code: '// js/a.js\nvar require_a = /* @__PURE__ */ __commonJSMin(((exports) => {\n\texports.c = 3;\n}));\n' },
+          '/repo/js/b.js': { code: '// js/b.js\nconst d = require_a();\n' },
+        },
+      },
+    });
+    assert.deepEqual(options.report.chunks.map(({ commonJs }) => commonJs), [['/repo/js/a.js']]);
+    assert.deepEqual(commonJsProblems(options.report, '/repo').map(({ code, subject, message }) => `${code} ${subject} ${message.split(',')[0]}`), [
+      'build/commonjs js/a.js the bundler wrapped it as CommonJS in assets/newtab-A1.js',
+    ]);
+    assert.deepEqual(commonJsProblems({ chunks: [chunk('pages', 'newtab', 'assets/newtab-A1.js')], assets: [] }, '/repo'), []);
   });
 });
 

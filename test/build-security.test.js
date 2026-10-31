@@ -262,6 +262,25 @@ describe('the environment check (AC9)', () => {
     const mixed = packageOf({ 'js/mixed.js': text });
     assert.deepEqual(checkEnvironment(mixed, NONE).map(({ subject }) => subject), [`js/mixed.js:1:${text.indexOf('process.env') + 1}`]);
   });
+
+  it("leaves process alone only where the file's own binding of it is in scope, and counts the global's reads elsewhere in the file", () => {
+    // #99's review: one parameter named process turned the check off for the whole file
+    const lines = [
+      'export function run(process) { return process.step(); }',
+      'export const leak = () => process;',
+      '{ const process = 1; use(process); }',
+      'send(process);',
+      'export function hoisted() { if (ok) { var process = 2; } return process; }',
+      'try { go(); } catch (process) { use(process); }',
+      'export class Job { constructor(process) { this.p = process; } read() { return process; } }',
+    ];
+    const scoped = packageOf({ 'js/scoped.js': lines.join('\n') });
+    assert.deepEqual(checkEnvironment(scoped, NONE).map(({ subject, message }) => `${subject} ${message.split(' in ')[0]}`), [
+      `js/scoped.js:2:${lines[1].indexOf('process') + 1} process`,
+      `js/scoped.js:4:${lines[3].indexOf('process') + 1} process`,
+      `js/scoped.js:7:${lines[6].lastIndexOf('process') + 1} process`,
+    ]);
+  });
 });
 
 describe('the canary scan (AC9)', () => {
