@@ -1761,6 +1761,159 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe("a Daily Note's local date and the daily index (#17 PR 3b)", () => {
+      /** 01:30 UTC on Oct 21: the evening of Oct 20 in Los Angeles, where 1.4.x took Oct 21 for today */
+      const EVENING = Date.UTC(2026, 9, 21, 1, 30);
+      const LA = 'America/Los_Angeles';
+      const page = /** @type {const} */ ({ type: 'text', content: 'Quote' });
+      /** @param {string} key */
+      const entryOf = key => ctx.adapter.read(['dailyIndex'], tx => tx.get('dailyIndex', key));
+      /** @param {string} dateStr */
+      const dailyIdOn = async dateStr => {
+        const state = await kernel.query({ type: 'findDailyNote', dateStr });
+        return state.kind === 'ready' ? state.data.note.id : undefined;
+      };
+      /** @returns {Promise<NoteRecord[]>} */
+      const dailyNotes = async () => {
+        const state = await kernel.query({ type: 'listNotes', view: 'sidePanel' });
+        return state.kind === 'ready' ? state.data.filter(note => note.isDaily) : [];
+      };
+      /**
+       * A Daily Note as 1.4.x's ensureDailyNote made it, keyed by the UTC date of `createdAt`
+       * @param {string} id
+       * @param {number} createdAt
+       * @param {Record<string, unknown>} [fields]
+       */
+      const legacyDaily = (id, createdAt, fields = {}) => {
+        const name = `Daily Note - ${new Date(createdAt).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          timeZone: LA,
+        })}`;
+        return {
+          ...storageNote(id, name, createdAt),
+          isDaily: true,
+          dateStr: new Date(createdAt).toISOString().slice(0, 10),
+          ...fields,
+        };
+      };
+
+      it("keys today's by its local date in the clock's zone, and the capture that evening adds to it", async () => {
+        ctx.clock.advance(EVENING - NOW);
+        ctx.clock.setZone(LA);
+        const made = await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        assert.deepEqual([made.code, made.changedIds], ['daily-note-created', ['d1']]);
+        const note = await noteOf('d1');
+        assert.deepEqual(
+          [note?.dateStr, note?.dailyKey, note?.dailyTimeZone, note?.dailyDuplicateOf, note?.name, note?.placement],
+          ['2026-10-20', '2026-10-20', LA, null, 'Daily Note - Oct 20, 2026', { kind: 'daily', dateKey: '2026-10-20' }],
+        );
+        assert.deepEqual(await entryOf('2026-10-20'), { dailyKey: '2026-10-20', noteId: 'd1' });
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const captured = committedOf(
+          await worker.execute(cmd('captureToDailyNote', { noteId: 'd2', blockId: 'c1', capture: page })),
+        );
+        assert.deepEqual(captured.changedIds, ['d1'], "the evening's capture lands in today's note");
+        assert.equal(await noteOf('d2'), undefined);
+        assert.equal(await dailyIdOn('2026-10-20'), 'd1');
+        // An instant from the page decides the same day
+        const asked = committedOf(await kernel.execute(cmd('ensureDailyNote', { noteId: 'd3', at: EVENING + 1 })));
+        assert.deepEqual([asked.code, asked.changedIds], ['daily-note-exists', []]);
+      });
+
+      it('finds a Daily Note 1.4.x made the evening before under the date its name gives, gives it its key, and opens a new one for today', async () => {
+        ctx.clock.advance(EVENING - NOW);
+        ctx.clock.setZone(LA);
+        // 20:00 on Oct 19 in Los Angeles, which 1.4.x keyed by Oct 20
+        const before = Date.UTC(2026, 9, 20, 3);
+        await seed('notes', [legacyDaily('legacy', before)]);
+        assert.equal(await dailyIdOn('2026-10-19'), 'legacy', 'the read finds it without a key');
+        const found = await run(cmd('ensureDailyNote', { noteId: 'x1', dateStr: '2026-10-19' }));
+        assert.deepEqual([found.code, found.changedIds], ['daily-note-exists', ['legacy']]);
+        const keyed = await noteOf('legacy');
+        assert.deepEqual(
+          [keyed?.dateStr, keyed?.dailyKey, keyed?.dailyTimeZone, keyed?.name],
+          ['2026-10-19', '2026-10-19', null, 'Daily Note - Oct 19, 2026'],
+        );
+        assert.deepEqual(await entryOf('2026-10-19'), { dailyKey: '2026-10-19', noteId: 'legacy' });
+        // Today, Oct 20, which 1.4.x would have opened it for, gets a note of its own
+        const today = await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        assert.deepEqual([today.code, today.changedIds], ['daily-note-created', ['d1']]);
+        assert.equal((await noteOf('d1'))?.dateStr, '2026-10-20');
+      });
+
+      it('two Daily Notes for one date: the earliest made opens, and the index keeps it', async () => {
+        await seed('notes', [
+          { ...storageNote('late', 'Daily Note - Oct 20, 2026', NOW - 1000), isDaily: true, dateStr: '2026-10-20' },
+          { ...storageNote('early', 'Daily Note - Oct 20, 2026', NOW - 2000), isDaily: true, dateStr: '2026-10-20' },
+        ]);
+        const found = await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        assert.deepEqual([found.code, found.changedIds], ['daily-note-exists', ['early']]);
+        assert.deepEqual(await entryOf('2026-10-20'), { dailyKey: '2026-10-20', noteId: 'early' });
+        assert.equal(await dailyIdOn('2026-10-20'), 'early');
+        assert.equal(await noteOf('d1'), undefined);
+      });
+
+      it('an entry a trash left stale goes to the next note that holds the date, or a new one; a delete for good drops it', async () => {
+        await run(cmd('ensureDailyNote', { noteId: 'd1', dateStr: '2026-10-18' }));
+        await run(cmd('trashNote', { noteId: 'd1' }));
+        assert.equal(await dailyIdOn('2026-10-18'), undefined, 'the read takes no note in the trash');
+        const made = await run(cmd('ensureDailyNote', { noteId: 'd2', dateStr: '2026-10-18' }));
+        assert.deepEqual([made.code, made.changedIds], ['daily-note-created', ['d2']]);
+        assert.deepEqual(await entryOf('2026-10-18'), { dailyKey: '2026-10-18', noteId: 'd2' });
+        await run(cmd('trashNote', { noteId: 'd2' }));
+        await run(cmd('deleteNotePermanently', { noteId: 'd2' }));
+        assert.equal(await entryOf('2026-10-18'), undefined);
+        // A delete of a note the entry doesn't name leaves the entry
+        await run(cmd('ensureDailyNote', { noteId: 'd3', dateStr: '2026-10-18' }));
+        await run(cmd('deleteNotePermanently', { noteId: 'd1' }));
+        assert.deepEqual(await entryOf('2026-10-18'), { dailyKey: '2026-10-18', noteId: 'd3' });
+      });
+
+      it('ten at once, from the page, a second context, and the worker, make one Daily Note, which the index names', async () => {
+        const other = await ctx.secondContext();
+        const second = other.kernel();
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const outcomes = await Promise.all([
+          ...['p1', 'p2', 'p3', 'p4'].map(noteId => kernel.execute(cmd('ensureDailyNote', { noteId }))),
+          ...['s1', 's2', 's3'].map(noteId => second.execute(cmd('ensureDailyNote', { noteId }))),
+          ...['w1', 'w2', 'w3'].map((noteId, i) =>
+            worker.execute(cmd('captureToDailyNote', { noteId, blockId: `c${i}`, capture: page })),
+          ),
+        ]);
+        for (const outcome of outcomes) committedOf(outcome);
+        const daily = await dailyNotes();
+        assert.equal(daily.length, 1, JSON.stringify(daily.map(note => note.id)));
+        assert.deepEqual(await entryOf('2026-10-20'), { dailyKey: '2026-10-20', noteId: daily[0].id });
+        assert.deepEqual((await blocksOf(daily[0].id)).map(block => block.id).sort(), ['c0', 'c1', 'c2']);
+      });
+
+      it(
+        'below version 11, where there is no index, every lookup scans and a date still gets one Daily Note',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const older = await startWithout(['dailyIndex']);
+          try {
+            const tab = older.kernel();
+            const first = committedOf(await tab.execute(newCommand(older.ids, 'ensureDailyNote', { noteId: 'd1' })));
+            const again = committedOf(await tab.execute(newCommand(older.ids, 'ensureDailyNote', { noteId: 'd2' })));
+            assert.deepEqual(
+              [first.code, again.code, again.changedIds],
+              ['daily-note-created', 'daily-note-exists', []],
+            );
+            const state = await tab.query({ type: 'findDailyNote', dateStr: '2026-10-20' });
+            assert.equal(state.kind === 'ready' && state.data.note.id, 'd1');
+            // At version 8, which 1.4.1 still opens, the note has no field of #17 PR 3's
+            assert.equal(state.kind === 'ready' && 'dailyKey' in state.data.note, false);
+          } finally {
+            await older.close();
+          }
+        },
+      );
+    });
+
     describe('runBulkAction', () => {
       it('returns one outcome per note, in order, and counts only the committed ones', async () => {
         await createNote({ noteId: 'a', name: 'A' });
