@@ -19,21 +19,22 @@
  *    note made again since, which stays.
  * 3. Find the rows those tombstones' entities own (OWNERS), by key or by a field of the row,
  *    read in bounded readonly batches. A point that holds none is done, unread past that.
- * 4. Verify a point that holds some. One that doesn't verify stops the purge, and is left as
- *    it was, with every tombstone still pending: the purge never purges a point it can't check,
- *    and never discards one.
+ * 4. Verify a point that holds some. One that doesn't verify is left as it was, with every
+ *    tombstone still pending: the purge never purges a point it can't check, and never
+ *    discards one. The points after it are still purged.
  * 5. Purge them in strict batches of at most 100 rows or 2 MB (recovery-points.js's
  *    purgeRows), each of which leaves the point verifying, and verify the point again after
  *    each. A point that doesn't verify after a batch gets that batch back, rows and record, so
- *    it's as it was before the batch, which it verified as, and the purge stops.
- * 6. Once every point is done, the tombstones lose their `purge` field (deletion.js).
+ *    it's as it was before the batch, which it verified as, and the purge leaves that point.
+ * 6. Once every point is purged, the tombstones lose their `purge` field (deletion.js).
  * Cut off anywhere, the next sweep finishes the rest: a batch commits whole or not at all, and a
  * tombstone stays pending until every point is purged of it.
  *
- * A sweep that stops records where, in `meta` (PURGE_STOP_KEY: the point's id, the code, and
- * the points as they were), and every later sweep backs off at once, reading no row, until the
- * points change: a point made, verified, or dropped. The worker root journals the stop and its
- * end (`storage.purge-stopped`, `storage.purge-completed`), with ids and codes only.
+ * A sweep records each point it left, in `meta` (PURGE_STOP_KEY: the point's id, the code, when,
+ * and the point as it was), and every later sweep backs off that point, reading none of it,
+ * until it changes: verified again, say, or dropped. The other points go on being purged. The
+ * worker root journals each stop and its end (`storage.purge-stopped`, `storage.purge-completed`),
+ * with ids and codes only.
  *
  * Only a tombstone drives it, never a difference between a point and the live database, since
  * a point exists to recover what the live database lost, and a note that's in a point but
@@ -118,8 +119,9 @@ export const OWNERS = Object.freeze({
 /**
  * - `purged`: every pending tombstone's entity is out of every point, and the tombstones say so
  * - `nothing`: no tombstone was pending
- * - `stopped`: a point didn't verify, before a batch or after one, and was left as it was; the
- *   tombstones stay pending. Also what a sweep that backed off answers (`backedOff`).
+ * - `stopped`: a point didn't verify, before a batch or after one, and was left as it was, while
+ *   the points that verify were purged; the tombstones stay pending. Also what a sweep answers
+ *   that backed off a point it left before (`stops`, `backedOff`).
  * - `failed`: IndexedDB or the lock failed; the tombstones stay pending
  * @typedef {'purged' | 'nothing' | 'stopped' | 'failed'} PurgeStatus
  */
@@ -129,25 +131,40 @@ export const OWNERS = Object.freeze({
  * @property {PurgeStatus} status
  * @property {number} tombstones - the pending ones the sweep took
  * @property {number} rows - the rows it purged from the points
- * @property {{code: string, pointId: string | null} | null} failure
- * @property {boolean} backedOff - it stopped as the recorded sweep did, reading no row, since
- *   the points are as they were then
- * @property {string[]} cleared - the point a recorded stop named, once this sweep finished it
- *   or found it gone
+ * @property {{code: string, pointId: string | null} | null} failure - the first point it left,
+ *   or what failed
+ * @property {Array<{pointId: string, code: string, backedOff: boolean}>} stops - each point it
+ *   left as it was, and whether it backed off one a sweep left before, reading none of it,
+ *   since the point is as it was then
+ * @property {boolean} backedOff - every point it left was one it backed off
+ * @property {string[]} cleared - each point a recorded stop named, once this sweep purged it or
+ *   found it gone
  */
 
 /**
  * @param {Partial<PurgeOutcome> & {status: PurgeStatus}} fields
  * @returns {PurgeOutcome}
  */
-const outcome = fields => ({ tombstones: 0, rows: 0, failure: null, backedOff: false, cleared: [], ...fields });
+const outcome = fields => ({
+  tombstones: 0,
+  rows: 0,
+  failure: null,
+  stops: [],
+  backedOff: false,
+  cleared: [],
+  ...fields,
+});
 
-/** `meta`'s record of the sweep that stopped, which later sweeps back off on */
+/** `meta`'s record of the points sweeps left, which later sweeps back off */
 export const PURGE_STOP_KEY = 'purge-stop';
 
 /**
- * Where a sweep stopped: the point, the code, when, and the points as they were (stampOf)
- * @typedef {{key: typeof PURGE_STOP_KEY, pointId: string, code: string, at: number, points: string}} StopRecord
+ * A point a sweep left: its id, the code, when, and the point as it was then (stampOf)
+ * @typedef {{pointId: string, code: string, at: number, point: string}} StopEntry
+ */
+
+/**
+ * @typedef {{key: typeof PURGE_STOP_KEY, stops: StopEntry[]}} StopRecord
  */
 
 /** @type {IDBTransactionOptions} */
@@ -167,23 +184,32 @@ export function stampOf(points) {
 }
 
 /**
- * The recorded stop, or null
+ * The points sweeps left, as recorded
  * @param {IDBDatabase} db - CanvasTabDB
- * @returns {Promise<StopRecord | null>}
+ * @returns {Promise<StopEntry[]>}
  */
-async function readStop(db) {
-  if (!db.objectStoreNames.contains(META_STORE)) return null;
+async function readStops(db) {
+  if (!db.objectStoreNames.contains(META_STORE)) return [];
   const tx = db.transaction(META_STORE, 'readonly');
   const stored = /** @type {StopRecord | undefined} */ (await result(tx.objectStore(META_STORE).get(PURGE_STOP_KEY)));
-  return stored && typeof stored.pointId === 'string' && typeof stored.points === 'string' ? stored : null;
+  if (!stored || !Array.isArray(stored.stops)) return [];
+  return stored.stops.filter(
+    entry =>
+      entry && typeof entry.pointId === 'string' && typeof entry.code === 'string' && typeof entry.point === 'string',
+  );
 }
 
+/** The points `stops` names, each with its code and as it was, in one order */
+const keyOfStops = (/** @type {StopEntry[]} */ stops) =>
+  JSON.stringify(stops.map(({ pointId, code, point }) => [pointId, code, point]).sort());
+
 /**
- * Puts `stop` as the recorded stop, or drops the one there is, in one strict transaction
+ * Puts `stops` as the points sweeps left, or drops the record when there are none, in one
+ * strict transaction
  * @param {IDBFactory} indexedDB
- * @param {StopRecord | null} stop
+ * @param {StopEntry[]} stops
  */
-async function recordStop(indexedDB, stop) {
+async function recordStops(indexedDB, stops) {
   const db = await openWithoutUpgrade(indexedDB, DB_NAME);
   if (!db) return;
   try {
@@ -193,7 +219,7 @@ async function recordStop(indexedDB, stop) {
       tx.addEventListener('complete', () => resolve(undefined));
       tx.addEventListener('abort', () => reject(tx.error || new DOMException('The transaction aborted', 'AbortError')));
     });
-    if (stop) tx.objectStore(META_STORE).put(stop);
+    if (stops.length > 0) tx.objectStore(META_STORE).put(/** @type {StopRecord} */ ({ key: PURGE_STOP_KEY, stops }));
     else tx.objectStore(META_STORE).delete(PURGE_STOP_KEY);
     await done;
   } finally {
@@ -201,7 +227,7 @@ async function recordStop(indexedDB, stop) {
   }
 }
 
-/** Thrown inside a sweep when a point doesn't verify, so the sweep stops where it is */
+/** Thrown inside a sweep when a point doesn't verify, so the sweep leaves that point where it is */
 class Stop extends Error {
   /**
    * @param {string} code
@@ -426,11 +452,11 @@ async function sweep(options) {
   if (!source) return outcome({ status: 'nothing' });
   /** @type {TombstoneRecord[]} */
   let tombstones;
-  /** @type {StopRecord | null} */
-  let stop = null;
+  /** @type {StopEntry[]} */
+  let standing = [];
   try {
     tombstones = await pendingTombstones(source);
-    if (tombstones.length > 0) stop = await readStop(source);
+    if (tombstones.length > 0) standing = await readStops(source);
   } finally {
     source.close();
   }
@@ -438,49 +464,56 @@ async function sweep(options) {
   await between('pending-read');
 
   let rows = 0;
-  /** The points this sweep got past */
+  /** The points this sweep purged */
   const finished = new Set();
+  /** @type {StopEntry[]} the points it left, as the record will name them */
+  const left = [];
+  /** @type {PurgeOutcome['stops']} */
+  const stops = [];
+  /** @type {string[]} */
+  let present = [];
   const recovery = await openRecovery(indexedDB, { create: false });
   if (recovery) {
     try {
       const points = await listPoints(recovery);
-      const stamp = stampOf(points);
-      // The points are as they were when it stopped, so it would stop there again
-      if (stop && stop.points === stamp) {
-        return outcome({
-          status: 'stopped',
-          tombstones: tombstones.length,
-          failure: { code: stop.code, pointId: stop.pointId },
-          backedOff: true,
-        });
-      }
-      const gone = stop !== null && !points.some(point => point.id === /** @type {StopRecord} */ (stop).pointId);
-      try {
-        for (const point of points) {
+      present = points.map(point => point.id);
+      for (const point of points) {
+        // A point a sweep left that's as it was then would be left again: it's read no further
+        const before = standing.find(entry => entry.pointId === point.id);
+        if (before && before.point === stampOf([point])) {
+          left.push(before);
+          stops.push({ pointId: point.id, code: before.code, backedOff: true });
+          continue;
+        }
+        try {
           rows += await purgePoint({ recovery, point, tombstones, io, between });
           finished.add(point.id);
+        } catch (error) {
+          if (!(error instanceof Stop)) throw error;
+          // Left as it was, and the points after it are still purged
+          left.push({ pointId: error.pointId, code: error.code, at: clock.now(), point: stampOf([point]) });
+          stops.push({ pointId: error.pointId, code: error.code, backedOff: false });
         }
-      } catch (error) {
-        if (!(error instanceof Stop)) throw error;
-        await recordStop(indexedDB, {
-          key: PURGE_STOP_KEY,
-          pointId: error.pointId,
-          code: error.code,
-          at: clock.now(),
-          points: stamp,
-        });
-        const ended = stop !== null && stop.pointId !== error.pointId && (gone || finished.has(stop.pointId));
-        return outcome({
-          status: 'stopped',
-          tombstones: tombstones.length,
-          rows,
-          failure: { code: error.code, pointId: error.pointId },
-          cleared: ended ? [/** @type {StopRecord} */ (stop).pointId] : [],
-        });
       }
     } finally {
       recovery.close();
     }
+  }
+  // A recorded stop ends once its point is purged, or gone
+  const cleared = standing
+    .filter(entry => finished.has(entry.pointId) || !present.includes(entry.pointId))
+    .map(entry => entry.pointId);
+  if (left.length > 0) {
+    if (keyOfStops(left) !== keyOfStops(standing)) await recordStops(indexedDB, left);
+    return outcome({
+      status: 'stopped',
+      tombstones: tombstones.length,
+      rows,
+      failure: { code: stops[0].code, pointId: stops[0].pointId },
+      stops,
+      backedOff: stops.every(entry => entry.backedOff),
+      cleared,
+    });
   }
 
   const db = await openWithoutUpgrade(indexedDB, DB_NAME);
@@ -496,9 +529,9 @@ async function sweep(options) {
   } finally {
     db.close();
   }
-  if (stop) await recordStop(indexedDB, null);
+  if (standing.length > 0) await recordStops(indexedDB, []);
   await between('tombstones-marked');
-  return outcome({ status: 'purged', tombstones: tombstones.length, rows, cleared: stop ? [stop.pointId] : [] });
+  return outcome({ status: 'purged', tombstones: tombstones.length, rows, cleared });
 }
 
 /**
