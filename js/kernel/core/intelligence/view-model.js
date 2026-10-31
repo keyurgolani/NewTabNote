@@ -135,18 +135,24 @@ const NOTE_UNCHANGED = 'Your note is unchanged.';
 const UNTITLED = 'Untitled item';
 
 /**
+ * Intl's text with plain spaces: some ICU versions put a narrow no-break space before AM and PM
+ * @param {string} text
+ */
+const spaced = text => text.replace(/[\u00a0\u202f]/g, ' ');
+
+/**
  * @param {number} instant
  * @param {string} timeZone
  */
 const dayText = (instant, timeZone) =>
-  new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric' }).format(instant);
+  spaced(new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric' }).format(instant));
 
 /**
  * @param {number} instant
  * @param {string} timeZone
  */
 const timeText = (instant, timeZone) =>
-  new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(instant);
+  spaced(new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(instant));
 
 /**
  * A local date as text: a floating date is read at UTC noon, so no zone moves it a day

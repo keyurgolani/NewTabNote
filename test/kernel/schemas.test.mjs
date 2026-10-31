@@ -196,7 +196,7 @@ describe('fields', () => {
     assert.equal(accepts(id, 'n1'), true);
     assert.equal(accepts(id, 'x'.repeat(MAX_ID_LENGTH)), true);
     for (const bad of ['', 'x'.repeat(MAX_ID_LENGTH + 1), 5, null]) assert.equal(accepts(id, bad), false, String(bad));
-    assert.deepEqual(ENTITY_TYPES, ['note', 'block', 'folder', 'snapshot']);
+    assert.deepEqual(ENTITY_TYPES, ['note', 'block', 'folder', 'snapshot', 'intelligence']);
     assert.deepEqual(v.getMetadata(entityId('folder')), { entity: 'folder' });
     assert.equal(accepts(entityId('note'), ''), false);
     assert.deepEqual(v.getMetadata(content(v.string())), { content: true });
