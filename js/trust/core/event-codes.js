@@ -86,9 +86,11 @@ export const EVENT_CODES = Object.freeze({
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),
   'indexer.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'indexer.start-failed' }),
-  // #17 PR 1b's migration run in the worker. None raises an incident: version 8 keeps working
-  // while a run is blocked or failed, so nothing the user has is at risk, and storage's check
-  // reports the state (`degraded`, a migration fault), which its check at 9 resolves.
+  // #17 PR 1b's migration run in the worker. None raises an incident of its own: a failed or
+  // space-short run leaves version 8 working, and storage's check reports the state
+  // (`degraded`, a migration fault), which its check at 9 resolves. While an upgrade is
+  // blocked, every worker command answers `blocked-upgrade`, so captures fail and raise
+  // `capture/capture-failed`: capture carries that risk, not this event.
   // `schemaVersion` is the version the run upgrades to; `errorCode` why it stopped.
   'storage.migration-completed': Object.freeze({ fields: Object.freeze(['surface', 'schemaVersion']) }),
   'storage.migration-failed': Object.freeze({ fields: Object.freeze([...ERROR, 'surface', 'schemaVersion']) }),
