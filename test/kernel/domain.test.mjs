@@ -155,7 +155,7 @@ describe('Daily Notes', () => {
     });
   });
 
-  it('builds the captured block background.js builds', () => {
+  it('builds the captured block background.js builds, with its capture time as createdAt and updatedAt (#17 PR 2a)', () => {
     assert.deepEqual(
       captureBlock({ id: 'c1', noteId: 'd1', now: NOW, capture: { type: 'bookmark', url: 'u', title: 't' } }),
       {
@@ -166,6 +166,8 @@ describe('Daily Notes', () => {
         title: 't',
         canvasId: 'd1',
         order: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
       },
     );
     assert.deepEqual(captureBlock({ id: 'c2', noteId: 'd1', now: NOW, capture: { type: 'text', content: 'Quote' } }), {
@@ -174,6 +176,8 @@ describe('Daily Notes', () => {
       content: 'Quote',
       canvasId: 'd1',
       order: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
     });
   });
 });

@@ -1967,15 +1967,11 @@ class BlockEditor {
     // In the order they were made, not always the order the template shows them, as 1.4.x's
     // Storage.getElementsByNote listed them by id when every id began with the time it was made.
     // Kept on purpose for R1's no visible change rule, so a later slice can choose the order the
-    // template shows instead. Since #17 PR 2a ids are UUIDs, which say nothing of time, so this
-    // goes by when each block was made: its createdAt, which every block the editor makes has
-    // (blocks.js), or for a captured block, which has none, its order, which is when it was
-    // captured. The id only breaks a tie.
-    const madeAt = (block) =>
-      typeof block.createdAt === 'number' ? block.createdAt : typeof block.order === 'number' ? block.order : 0;
-    const templateBlocks = (await this.documentClient.blocksOf(templateId))
-      .slice()
-      .sort((a, b) => madeAt(a) - madeAt(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    // template shows instead. Since #17 PR 2a a new block's id can be a UUID, so this goes by
+    // Utils.inCreationOrder's key: the time in an id Utils.generateId made, else createdAt, then
+    // order, then the id. A copy this insert makes has such an id, and the createdAt of the
+    // block it copies, as in 1.4.x.
+    const templateBlocks = Utils.inCreationOrder(await this.documentClient.blocksOf(templateId));
     if (!templateBlocks || templateBlocks.length === 0) {
       this.hideTemplateMenu();
       return;
