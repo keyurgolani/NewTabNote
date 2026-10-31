@@ -7,7 +7,6 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
 
 import { createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
@@ -24,7 +23,6 @@ import { KeyRange, dump, legacyEnv } from './migration-support.mjs';
 import { MANIFEST, freshProfile, providerContext } from './trust-provider-support.mjs';
 import { dumpTrustDatabase, hexIds, lockManager, manualClock, realTimers } from './trust-support.mjs';
 
-void webcrypto;
 
 /** A synthetic secret, new each run */
 const canary = (/** @type {string} */ slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
@@ -145,6 +143,32 @@ describe('the legacy secret reader (#20 slice 2, Credentials)', () => {
       { context: { secrets: createLegacySecretReader({ indexedDB: factory, settings: broken }) }, clock: manualClock(), timers: realTimers },
     );
     assert.deepEqual([receipt.status, receipt.evidence], ['unverified', { errorCode: 'check-threw', exception: 'UnavailableError' }]);
+  });
+});
+
+describe('the settings area every other provider reads (#20 slice 2, security)', () => {
+  it('no provider asks chrome.storage.local for a secret key: only the secret reader reads them', async () => {
+    const { of } = await profileWithSecrets();
+    const { context } = await providerContext(of);
+    /** @type {string[]} */
+    const asked = [];
+    const settings = /** @type {any} */ (context.settings);
+    const spied = {
+      ...settings,
+      get: (/** @type {string[]} */ keys) => {
+        asked.push(...keys);
+        return settings.get(keys);
+      },
+    };
+    for (const descriptor of PROVIDERS) {
+      const implementation = /** @type {any} */ (await /** @type {() => Promise<unknown>} */ (descriptor.load)());
+      await implementation.check({ ...context, settings: spied });
+    }
+    assert.ok(asked.length > 0, 'no provider read the settings area');
+    assert.deepEqual(
+      asked.filter(key => key === 'setting_llmApiKey' || key === 'setting_syncWebdavConfig'),
+      [],
+    );
   });
 });
 
