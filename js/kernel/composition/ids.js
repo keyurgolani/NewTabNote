@@ -4,7 +4,8 @@
  * opId), a context's caller id, and #13's sessions, requests, and coordinator instance. Ids
  * 1.4.x's Utils.generateId made stay as they are, and the legacy code keeps making them until
  * #12 slice 7. No code reads a time or an order from an id: the sorts that meet one only break
- * a tie with it, after the time, order, or timestamp they sort by.
+ * a tie with it, after the time, order, or timestamp they sort by. That includes the editor's
+ * template insert, which goes by when each block was made (js/editor.js, selectTemplateItem).
  *
  * Loading this module touches no browser API: crypto is read when an id is made.
  */

@@ -13,7 +13,17 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import {
+  DEFAULT_LIMITS,
+  committed,
+  copyPoint,
+  keepVerified,
+  listPoints,
+  openRecovery,
+  startPoint,
+  storesToCopy,
+  verifyPoint,
+} from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import {
   LATEST_STRUCTURAL,
   LEGACY_STORE_NAMES,
@@ -856,5 +866,93 @@ describe("#61's carry-overs (#17 PR 1b)", () => {
           opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
       );
     assert.ok(storeReads.length > 0);
+  });
+});
+
+describe("a 9 profile #17 PR 1b's run left, updated to 10 (#17 PR 2a, review R88)", () => {
+  /**
+   * v8.basic as #17 PR 1b's worker left it: a verified, pinned point before step 9, then step 9
+   * in its versionchange, and its receipt naming that point
+   * @returns {Promise<{of: Profile, pointId: string}>}
+   */
+  async function leftBy1b() {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const io = { keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto), limits: DEFAULT_LIMITS };
+    const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: true }));
+    const pointId = `pre-migration-${NOW - 60_000}`;
+    try {
+      const { point, progress } = await startPoint(recovery, {
+        id: pointId,
+        kind: 'pre-migration',
+        sourceShape: 'legacy',
+        sourceVersion: 8,
+        structuralVersion: null,
+        logicalVersion: null,
+        target: 9,
+        stores: storesToCopy(source),
+        createdAt: NOW - 60_000,
+      });
+      await copyPoint({ source, recovery, point, progress, io });
+      const [stored] = await listPoints(recovery);
+      assert.deepEqual(await verifyPoint({ recovery, point: stored, io }), { ok: true });
+      await keepVerified({ recovery, point: stored, clock: { now: () => NOW - 30_000 }, io });
+    } finally {
+      source.close();
+      recovery.close();
+    }
+    // Step 9 alone, as 1b's registry had it, and its receipt
+    const db = await new Promise((resolve, reject) => {
+      const request = of.real.open('CanvasTabDB', 9);
+      request.onupgradeneeded = () =>
+        STEPS[0].apply(request.result, /** @type {IDBTransaction} */ (request.transaction), { logicalVersion: null });
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const tx = /** @type {IDBDatabase} */ (db).transaction('migrations', 'readwrite');
+    const written = committed(tx);
+    tx.objectStore('migrations').put({
+      id: 'structural-9',
+      from: 8,
+      to: 9,
+      status: 'completed',
+      startedAt: NOW - 30_000,
+      completedAt: NOW - 30_000,
+      recoveryPointId: pointId,
+      failure: null,
+    });
+    await written;
+    /** @type {IDBDatabase} */ (db).close();
+    return { of, pointId };
+  }
+
+  it("keeps 1b's pinned 8 to 9 point pinned, with an unpinned 9 to 10 point beside it, and both receipts", async () => {
+    const { of, pointId } = await leftBy1b();
+    const shape = detectShape(await inspect(of.real));
+    assert.deepEqual([shape.kind, shape.kind === 'current' && shape.structuralVersion], ['current', 9]);
+    const outcome = await run(of);
+    assert.deepEqual([outcome.status, outcome.steps, outcome.to], ['migrated', ['structural-10'], 10]);
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    let points;
+    try {
+      points = await listPoints(recovery);
+    } finally {
+      recovery.close();
+    }
+    assert.deepEqual(
+      points.map(point => [point.id === pointId, point.sourceVersion, point.target, point.status, point.pinned]),
+      [
+        [true, 8, 9, 'verified', true],
+        [false, 9, 10, 'verified', false],
+      ],
+    );
+    assert.equal(outcome.recoveryPointId, points[1].id);
+    const receipts = recordsIn(await dump(of), 'CanvasTabDB', 'migrations').map(record => record.value);
+    assert.deepEqual(receipts.map(receipt => [receipt.id, receipt.status, receipt.recoveryPointId]).sort(), [
+      ['structural-10', 'completed', points[1].id],
+      ['structural-9', 'completed', pointId],
+    ]);
+    // Settings' pre-update export still offers 1b's point, the one from before any upgrade
+    assert.equal(await exportablePoint({ indexedDB: of.real }), pointId);
   });
 });

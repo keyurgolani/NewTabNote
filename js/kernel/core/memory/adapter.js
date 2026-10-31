@@ -159,16 +159,15 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   };
 
   /**
-   * A committed record's content revision: a note's, 0 until something moves it, and a
-   * folder's once a content command moved it
+   * A committed note's content revision, 0 until something moves it. Folders carry no versions
+   * (#17 PR 2a's rule, as on #17's adapter), so a folder has none.
    * @param {StoreName} store
    * @param {string} key
    * @returns {number | undefined}
    */
   const committedRevision = (store, key) => {
-    if (!storeOf(store).has(key)) return undefined;
-    const revision = revisions.get(revisionKey(store, key));
-    return revision === undefined && store === 'notes' ? 0 : revision;
+    if (store !== 'notes' || !storeOf(store).has(key)) return undefined;
+    return revisions.get(revisionKey(store, key)) ?? 0;
   };
 
   /**
@@ -282,10 +281,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
   /**
    * Moves the versions a commit moves, once its writes are in (ports/repository.js,
-   * WriteScope): the primary record's content revision by one when a content command changed
+   * WriteScope): the primary note's content revision by one when a content command changed
    * its content, the placement version of every note a placement command put, and the primary
    * note's source revision to the Work.sourceRevision a derived command that put it carries. A
    * deleted note keeps only its content revision, as #17's tombstone keeps `lastRevision`.
+   * Folders carry none, so a folder command moves nothing.
    * @param {Work} work
    * @param {Pending} pending
    * @returns {{store: StoreName, key: string} | null} the primary record, when its content revision moved
@@ -308,7 +308,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     if (scope === 'derived' && work.sourceRevision !== undefined && pending.get(id)?.record !== undefined) {
       sources.set(id, work.sourceRevision);
     }
-    if (scope !== 'content' || !work.revised || !work.revised()) return null;
+    if (primary.store !== 'notes' || scope !== 'content' || !work.revised || !work.revised()) return null;
     revisions.set(id, (revisions.get(id) || 0) + 1);
     return primary;
   };
@@ -403,7 +403,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
   /**
    * The changes a committed command appends to the commit log: each entity it changed, at its
-   * revision, or 0 for one that has none. Settings and maintenance change no entity.
+   * revision, or 0 for one that has none, which every folder is. Settings and maintenance
+   * change no entity.
    * @param {Applied} applied
    * @returns {Change[]}
    */
@@ -412,7 +413,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     return changed.map(({ store, key }) => ({
       entityType: store === 'notes' ? 'note' : 'folder',
       entityId: key,
-      revision: revisions.get(revisionKey(store, key)) ?? 0,
+      revision: store === 'notes' ? (revisions.get(revisionKey(store, key)) ?? 0) : 0,
     }));
   };
 

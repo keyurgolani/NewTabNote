@@ -522,6 +522,16 @@
       "name": "two contexts: when both save one note's blocks from the revision they loaded, the later save is a conflict"
     },
     {
+      "id": "insights-same-revision-stale",
+      "behavior": "conflict branches",
+      "protects": "Insights made from the revision the stored ones came from land: only older ones are dropped as insights-stale.",
+      "file": "js/kernel/core/application/notes.js",
+      "find": "        stale = versions !== undefined && /** @type {number} */ (sourceRevision) < versions.sourceRevision;",
+      "replace": "        stale = versions !== undefined && /** @type {number} */ (sourceRevision) <= versions.sourceRevision;",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "revisions: insights from a revision older than the ones the note has are dropped as insights-stale, and newer ones land"
+    },
+    {
       "id": "conflict-client-resends-again",
       "behavior": "conflict branches",
       "protects": "A command whose reply was lost is sent again once at most.",
