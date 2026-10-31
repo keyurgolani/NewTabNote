@@ -133,26 +133,25 @@ function combined(first, then) {
   };
   if (then.status === 'stopped' || then.status === 'failed') return { ...then, ...totals };
   if (first.status === 'purged' || then.status === 'purged') {
-    return { status: 'purged', failure: null, backedOff: false, ...totals };
+    return { status: 'purged', failure: null, stops: [], backedOff: false, ...totals };
   }
   return { ...then, ...totals };
 }
 
 /**
- * Journals what one sweep stopped at and what it ended (#20): `storage.purge-stopped` for a
- * stop it found, not one it backed off on, and `storage.purge-completed` for each recorded stop
- * it finished or found gone. Codes and ids only.
+ * Journals what one sweep stopped at and what it ended (#20): `storage.purge-stopped` for each
+ * point it left, but one it backed off, and `storage.purge-completed` for each recorded stop it
+ * purged or found gone. Codes and ids only.
  * @param {PurgeEvents | null | undefined} events
  * @param {PurgeOutcome} outcome
  */
-function journalPurge(events, outcome) {
+export function journalPurge(events, outcome) {
   if (!events) return;
   try {
     for (const pointId of outcome.cleared) events.event('storage.purge-completed', { subjectId: pointId });
-    const { failure } = outcome;
-    if (outcome.status === 'stopped' && !outcome.backedOff && failure && failure.pointId) {
+    for (const stop of outcome.stops) {
       // The code goes as the failure's, so the journal keeps it only when it's a registered one
-      events.event('storage.purge-stopped', { subjectId: failure.pointId }, { code: failure.code });
+      if (!stop.backedOff) events.event('storage.purge-stopped', { subjectId: stop.pointId }, { code: stop.code });
     }
   } catch {
     // Best effort: the purge never hears of the journal's
