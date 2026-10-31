@@ -162,6 +162,50 @@ describe("the new tab's startup maintenance on #17's adapter (#17 PR 4a)", () =>
   });
 });
 
+describe("what the holders' Storage reads of the new tab's writes on #17's adapter (#17 PR 4a)", () => {
+  // legacy.test.mjs held the legacy adapter to Storage's readers. The holders #22 and #19 own
+  // still read through Storage until 4b, so they find what the new tab writes now
+  it("reads the note, its blocks, and the settings, and sync's export leaves out the six fields the record keeps", async () => {
+    const of = await atThisVersion();
+    const adapter = newTabAdapter(of);
+    await adapter.open();
+    const kernel = kernelOn(adapter);
+    /** @param {Record<string, unknown>} command */
+    const run = async command => {
+      const outcome = await kernel.execute(/** @type {any} */ (command));
+      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+    };
+    await run({
+      type: 'createNote',
+      commandId: 'c1',
+      noteId: 'n1',
+      name: 'Plan',
+      blocks: [{ id: 'b1', type: 'text', content: 'Milk', order: 0 }],
+    });
+    await run({ type: 'setPreferences', commandId: 'c2', values: { sidebarWidth: 300 } });
+    await run({ type: 'saveWorkspaceSession', commandId: 'c3', session: { lastOpenedNoteId: 'n1', activeTabIndex: 0 } });
+
+    const { storage } = await storageOpened(of);
+    // GraphView's notes, and the editor's reads before #12
+    assert.equal((await storage.getNote('n1')).name, 'Plan');
+    assert.deepEqual(legacyEnv.plain((await storage.getAllNotes()).map((/** @type {{id: string}} */ note) => note.id)), ['n1']);
+    assert.equal((await storage.getElementsByNote('n1'))[0].content, 'Milk');
+    // Sync's settings
+    assert.equal(await storage.getSetting('sidebarWidth'), 300);
+    assert.equal(await storage.getSetting('activeTabIndex'), 0);
+    assert.equal(of.chrome.local.lastOpenedNoteId, 'n1');
+    // Sync's export, without what #17 PR 3 writes beside a note's flags, which the record keeps
+    const exported = legacyEnv.plain(await storage.exportAll());
+    const note = exported.canvases.find((/** @type {{id: string}} */ found) => found.id === 'n1');
+    const stored = (await recordsOf(of, 'canvases')).find(record => record.id === 'n1');
+    for (const field of ['placement', 'kind', 'lifecycle']) {
+      assert.equal(field in note, false, field);
+      assert.ok(field in stored, field);
+    }
+    storage.db.close();
+  });
+});
+
 describe("the new tab's connection on #17's adapter (#17 PR 4a)", () => {
   it("a write a flush opens as another context's upgrade closes the connection still commits", async () => {
     const of = await atThisVersion();

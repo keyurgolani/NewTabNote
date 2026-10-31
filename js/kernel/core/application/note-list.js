@@ -18,7 +18,7 @@
  * copy.
  *
  * It's host-neutral: it takes the kernel client's query, subscribe, and whenReady, and
- * nothing else, so the node tests run it over the memory and legacy adapters.
+ * nothing else, so the node tests run it over the memory adapter and #17's.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';

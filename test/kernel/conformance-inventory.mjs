@@ -30,7 +30,6 @@ export const PORTS = Object.freeze({
     suite: { module: 'test/kernel/contract.mjs', runner: 'runContractSuite' },
     implementations: [
       { module: 'js/kernel/core/memory/adapter.js', run: 'test/kernel/memory.test.mjs' },
-      { module: 'js/kernel/adapters/legacy/adapter.js', run: 'test/kernel/legacy.test.mjs' },
       { module: 'js/kernel/adapters/indexeddb/adapter.js', run: 'test/kernel/storage-contract.test.mjs' },
     ],
   },
@@ -183,16 +182,9 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
-    'js/kernel/adapters/legacy/adapter.js',
   ],
-  'js/kernel/adapters/indexeddb/schema.js': [
-    'js/kernel/adapters/indexeddb/adapter.js',
-    'js/kernel/adapters/legacy/adapter.js',
-  ],
-  'js/kernel/adapters/indexeddb/settings.js': [
-    'js/kernel/adapters/indexeddb/adapter.js',
-    'js/kernel/adapters/legacy/adapter.js',
-  ],
+  'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/versions.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // The digest #17's ledger keeps too, so a command is the same command on every adapter
   'js/kernel/core/memory/fingerprint.js': [
@@ -219,7 +211,6 @@ export const COMPOSERS = Object.freeze({
   // #20 slice 1b: a context's failure events, on NewTabNoteTrust (js/kernel/composition/
   // lazy-failure-events.js, the new tab's, only imports this one and composes nothing itself)
   'js/kernel/composition/trust.js': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
-  'test/kernel/legacy-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/legacy/adapter.js'] },
   'test/kernel/storage-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   'test/kernel/trust-support.mjs': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
 });

@@ -72,16 +72,6 @@
       "name": "doesn't run a failed write again once this context sent a later one, so it can't land over the later one"
     },
     {
-      "id": "commit-wait-legacy-answer-before-complete",
-      "behavior": "commit waits",
-      "protects": "A unit on the legacy adapter answers only once its transaction commits.",
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "find": "      await committed;\n      return undefined;",
-      "replace": "      return undefined;",
-      "test": "test/kernel/legacy.test.mjs",
-      "name": "a write whose transaction aborts as it commits is unavailable, never committed"
-    },
-    {
       "id": "commit-wait-idb-throw-keeps-earlier-writes",
       "behavior": "commit waits",
       "protects": "A unit that throws aborts its command's transaction, so nothing an earlier unit wrote commits.",
@@ -544,12 +534,12 @@
     {
       "id": "save-splits-note-and-blocks",
       "behavior": "#33 save fixes",
-      "protects": "saveNoteContent writes a note's fields and its blocks in one unit, so a save of a deleted note writes neither.",
+      "protects": "saveNoteContent writes a note's fields and its blocks in one unit, so a stale save, which is a conflict, writes neither.",
       "file": "js/kernel/core/application/notes.js",
       "find": "    /** @type {Unit[]} */\n    const units = [save];",
       "replace": "    /** @type {Unit[]} */\n    const units = [\n      { stores: ['blocks'], async run(tx) { for (const block of records) tx.put('blocks', block); } },\n      { ...save, stores: ['notes'], run: tx => save.run({ ...tx, put: (store, record) => (store === 'blocks' ? undefined : tx.put(store, record)) }) },\n    ];",
-      "test": "test/kernel/legacy.test.mjs",
-      "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
+      "test": "test/kernel/storage-contract.test.mjs",
+      "name": "revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that changes nothing in the note or its blocks"
     },
     {
       "id": "save-resurrects-deleted-note",

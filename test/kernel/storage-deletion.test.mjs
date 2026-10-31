@@ -3,8 +3,8 @@
 // holds canaries in a note's title, blocks, search entry, snapshot, links both ways, media,
 // and vector, and in a folder's name. It's migrated, so its pinned recovery point holds them
 // all, and a save that loses to a newer revision keeps one more in a conflict record. Then the
-// note and the folder are deleted, through #17's adapter and, as the new tab deletes them,
-// through the legacy adapter, and the purge runs: no store in CanvasTabDB or
+// note and the folder are deleted, through #17's adapter opened versioned and, as the new tab
+// deletes them since #17 PR 4a, opened as its root opens it, and the purge runs: no store in CanvasTabDB or
 // NewTabNoteRecovery, and no chrome.storage.local key, holds a canary; the point still
 // verifies; its pre-update export lacks both; and every other note's rows are as they were.
 
@@ -21,7 +21,7 @@ import {
   verifyPoint,
   DEFAULT_LIMITS,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
+import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
@@ -138,7 +138,7 @@ async function doomedProfile() {
 }
 
 /**
- * A new-tab kernel on #17's adapter over `of`, as PR 4's new tab will have it
+ * A new-tab kernel on #17's adapter over `of`, opened versioned
  * @param {Profile} of
  */
 async function onIndexedDb(of) {
@@ -154,16 +154,19 @@ async function onIndexedDb(of) {
 }
 
 /**
- * A new-tab kernel on the legacy adapter over `of`, as the new tab has it until PR 4
+ * A new-tab kernel on #17's adapter over `of`, as the new tab's root opens it since #17 PR 4a:
+ * the database as it is, with its maintenance, #33's copy and the backup tasks
  * @param {Profile} of
  */
-async function onLegacy(of) {
-  const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-  env.load('js/utils.js', 'js/storage.js');
-  const storage = env.get('Storage');
-  const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+async function onNewTab(of) {
+  const adapter = createNewTabAdapter({
+    indexedDB: of.faults.factory,
+    settings: of.chrome.api.storage.local,
+    awaitUpgrade: async () => {},
+    locks: null,
+  });
   await adapter.open();
-  open.push({ close: () => storage.db && storage.db.close() });
+  open.push(adapter);
   return kernelFor(adapter);
 }
 
@@ -273,8 +276,8 @@ async function pinnedAndExport(of) {
 
 describe('a note and a folder deleted for good leave nothing behind once the purge has run (#17 PR 2b)', () => {
   for (const [label, kernelOn] of /** @type {const} */ ([
-    ["#17's adapter", onIndexedDb],
-    ['the legacy adapter, as the new tab deletes', onLegacy],
+    ["#17's adapter, opened versioned", onIndexedDb],
+    ["#17's adapter as the new tab's root opens it, as the new tab deletes", onNewTab],
   ])) {
     it(`through ${label}: no canary in either database or chrome.storage.local, and the point still verifies`, async () => {
       const { of, kept } = await doomedProfile();
@@ -359,7 +362,7 @@ describe('a note and a folder deleted for good leave nothing behind once the pur
     const refused = await run(of);
     assert.deepEqual([refused.status, typeof refused.recoveryPointId], ['refused', 'string']);
     const noteId = recordsIn(fixture, 'CanvasTabDB', 'canvases')[0].value.id;
-    const kernel = await onLegacy(of);
+    const kernel = await onNewTab(of);
     await kernel.execute(/** @type {any} */ ({ type: 'trashNote', commandId: 'trash', noteId }));
     const deleted = await kernel.execute(
       /** @type {any} */ ({ type: 'deleteNotePermanently', commandId: 'delete', noteId }),
