@@ -532,6 +532,29 @@ describe('the note-list projection', () => {
     assert.equal(list.note('n1')?.name, 'Plans');
   });
 
+  it('gives a failed read of changes its full retries again once a reload has read what it missed', async () => {
+    let failing = false;
+    const { list, run, reads } = start({
+      around: async (query, read) =>
+        failing && query.type === 'getNotesByIds'
+          ? { kind: 'failed', cause: 'storage', code: 'read-failed' }
+          : read(query),
+    });
+    await list.settled();
+    failing = true;
+    reads.length = 0;
+    await run('createNote', { noteId: 'n1', name: 'One' });
+    await list.settled();
+    assert.deepEqual(reads, Array(4).fill('getNotesByIds n1'), 'one read and three retries');
+    // A reload reads what the failed reads missed
+    reads.length = 0;
+    assert.deepEqual(await list.reload(), { kind: 'ready', asOf: NOW });
+    assert.ok(list.note('n1'));
+    await run('createNote', { noteId: 'n2', name: 'Two' });
+    await list.settled();
+    assert.deepEqual(reads, ['getNoteList', ...Array(4).fill('getNotesByIds n2')], 'three retries again, not fewer');
+  });
+
   it('stays stale after a failed reload, even once a read of changes succeeds, until a reload succeeds', async () => {
     let failReload = false;
     const { list, run } = start({

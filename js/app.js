@@ -370,6 +370,9 @@ class App {
 
       this.updateEmptyState();
       this.updateBadgeCounts();
+      // A start that restored no saved tab rendered no list yet, so 1.4.x showed the badge's
+      // count over an empty list until something refreshed it
+      if (!this.sidebarController.listRendered) await this.sidebarController.renderNotesList();
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
