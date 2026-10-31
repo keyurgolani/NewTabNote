@@ -207,7 +207,9 @@ const outcome = fields => ({
  * @returns {TransformCounts}
  */
 const noCounts = step =>
-  Object.fromEntries((COUNTED[/** @type {keyof typeof COUNTED} */ (step.id)] || ['read', 'filled']).map(name => [name, 0]));
+  Object.fromEntries(
+    (COUNTED[/** @type {keyof typeof COUNTED} */ (step.id)] || ['read', 'filled']).map(name => [name, 0]),
+  );
 
 /**
  * Whether logical 2 has something to fill on `note`. A note without its placement gets the
@@ -633,7 +635,14 @@ async function finishStep(db, step, { from, startedAt, completedAt, recoveryPoin
   meta.put({ ...schema, logicalVersion: step.to });
   if (next) {
     /** @type {TransformProgress} */
-    const progress = { key: TRANSFORM_KEY, id: next.id, after: null, recoveryPointId, startedAt, counts: noCounts(next) };
+    const progress = {
+      key: TRANSFORM_KEY,
+      id: next.id,
+      after: null,
+      recoveryPointId,
+      startedAt,
+      counts: noCounts(next),
+    };
     meta.put(progress);
   } else {
     meta.delete(TRANSFORM_KEY);
