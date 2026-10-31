@@ -128,6 +128,7 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
   'js/kernel/core/application/': 'the use cases, which the kernel-adapter suite runs on each adapter',
   'js/kernel/core/contracts/': 'the message catalog, codec, and validators',
   'js/kernel/core/domain/': 'the domain rules',
+  'js/kernel/core/intelligence/': "#7's intelligence domain: records, rules, use cases, and the view model",
   'js/kernel/core/messaging/': 'the router, the client, and their parts',
   'js/kernel/core/ports/': 'the contracts, each in PORTS or WITHOUT_SUITE',
   'js/kernel/composition/': 'the composition roots',
@@ -183,6 +184,11 @@ export const UNSHARED = Object.freeze({
   'js/kernel/adapters/messaging/status-region.js': {
     implements: "the status region over #13's client (StatusSource)",
     tests: 'test/kernel/status-region.test.mjs',
+  },
+  // #7 slice 2's IndexedDB stores are the second, and move IntelligenceRepository to PORTS
+  'js/kernel/core/memory/intelligence.js': {
+    implements: 'IntelligenceRepository (js/kernel/core/intelligence/repository.js), in memory',
+    tests: 'test/kernel/intelligence-records.test.mjs',
   },
   // #17 PR 1a's migration framework, which no shipped root loads until PR 1b; one runner, one
   // recovery database, one registry, so nothing to share a suite with

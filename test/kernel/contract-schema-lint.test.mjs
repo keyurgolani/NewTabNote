@@ -29,6 +29,10 @@ import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import * as settings from '../../js/kernel/core/contracts/settings.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { isContent, walk } from '../../js/kernel/core/contracts/schema-walk.js';
+import * as intelligenceEvents from '../../js/kernel/core/intelligence/events.js';
+import * as intelligenceInvalidation from '../../js/kernel/core/intelligence/invalidation.js';
+import * as intelligenceOperations from '../../js/kernel/core/intelligence/operations.js';
+import * as intelligenceRecords from '../../js/kernel/core/intelligence/records.js';
 
 /** @typedef {import('../../js/kernel/core/contracts/schema-walk.js').Schema} Schema */
 /** @typedef {import('../../js/kernel/core/contracts/schema-walk.js').Visit} Visit */
@@ -381,6 +385,45 @@ describe('the contract schema lint (#13, AC5)', () => {
       snapshotRecord: ['blocks', 'title'],
       workspaceSession: ['openTabs.[]'],
     });
+  });
+
+  it("holds #7's intelligence schemas to the same rules, with content only where text travels", () => {
+    const payloads = [
+      intelligenceOperations.completePayload,
+      intelligenceOperations.reopenPayload,
+      intelligenceOperations.dismissPayload,
+      intelligenceOperations.snoozePayload,
+      intelligenceOperations.correctPayload,
+      intelligenceOperations.payload,
+    ];
+    for (const schema of payloads) assert.deepEqual(lint(schema, { role: 'payload' }), []);
+    for (const schema of [intelligenceOperations.signalConflictSchema, intelligenceOperations.result]) {
+      assert.deepEqual(lint(schema, { role: 'outcome' }), []);
+    }
+    // Events and regeneration requests travel like hints: ids, codes, and numbers only
+    for (const schema of [intelligenceEvents.eventSchema, intelligenceInvalidation.regenerationRequestSchema]) {
+      assert.deepEqual(lint(schema, { role: 'frame' }), []);
+    }
+    const records = {
+      signalRecord: intelligenceRecords.signalRecord,
+      decisionRecord: intelligenceRecords.decisionRecord,
+      correctionRecord: intelligenceRecords.correctionRecord,
+    };
+    for (const [name, schema] of Object.entries(records)) assert.deepEqual(lint(schema, { role: 'result' }), [], name);
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries({ ...records, correctPayload: intelligenceOperations.correctPayload }).map(([name, schema]) => [
+          name,
+          contentPaths(schema),
+        ]),
+      ),
+      {
+        signalRecord: ['confidence.reason', 'identity.subjectKey', 'title'],
+        decisionRecord: ['identity.subjectKey'],
+        correctionRecord: ['identity.subjectKey', 'note'],
+        correctPayload: ['note'],
+      },
+    );
   });
 
   it('refuses a field named for a credential, and leaves one that only sounds like it', () => {

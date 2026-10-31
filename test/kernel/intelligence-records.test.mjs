@@ -6,6 +6,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { SIGNAL_ID, signalIdOf } from '../../js/kernel/core/intelligence/identity.js';
@@ -35,6 +37,7 @@ import {
   pinDraft,
   taskDraft,
 } from './intelligence-fixtures.mjs';
+import { staticImports } from './import-graph.mjs';
 import { NOW, testClock } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/intelligence/service.js').SignalDraft} SignalDraft */
@@ -326,5 +329,34 @@ describe('quarantine on read (#7, "Required states and failure behavior")', () =
     });
     assert.equal(outcome.kind, 'rejected');
     assert.equal(outcome.code, 'signal-not-found');
+  });
+});
+
+describe('unshipped (#7 slice 1, R1)', () => {
+  it('is imported by nothing outside the domain, so no shipped page or worker loads it', () => {
+    const root = path.join(import.meta.dirname, '..', '..');
+    const domain = path.join(root, 'js', 'kernel', 'core', 'intelligence');
+    const memory = path.join(root, 'js', 'kernel', 'core', 'memory', 'intelligence.js');
+    const isDomain = (/** @type {string} */ file) => file.startsWith(`${domain}${path.sep}`) || file === memory;
+    /** @type {string[]} */
+    const modules = [];
+    /** @param {string} dir */
+    const collect = dir => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (file !== path.join(root, 'js', 'lib')) collect(file);
+        } else if (/\.m?js$/.test(entry.name)) {
+          modules.push(file);
+        }
+      }
+    };
+    collect(path.join(root, 'js'));
+    assert.ok(modules.some(isDomain));
+    const importers = modules
+      .filter(file => !isDomain(file))
+      .filter(file => staticImports(file).some(isDomain))
+      .map(file => path.relative(root, file));
+    assert.deepEqual(importers, []);
   });
 });
