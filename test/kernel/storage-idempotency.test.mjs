@@ -350,8 +350,18 @@ describe("#17's adapter keeps each note's versions, its change log, and its tomb
     assertKind(await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' }), 'committed');
     const trashed = await kernel.execute({ type: 'trashNote', commandId: 'c2', noteId: 'n1' });
     assert.deepEqual(trashed.kind === 'committed' && [trashed.code, trashed.commitSeq], ['note-deleted', 2]);
+    // Core's deletion puts it, with its reason and its purge pending, and the adapter gives it
+    // the note's last revision and the commit's seq (#17 PR 2b)
     assert.deepEqual(await recordsOf(of, 'tombstones'), [
-      { entityType: 'note', id: 'n1', deletedAt: NOW, lastRevision: 1, seq: 2, reason: 'deleted' },
+      {
+        entityType: 'note',
+        id: 'n1',
+        deletedAt: NOW,
+        reason: 'empty-note',
+        purge: 'pending',
+        lastRevision: 1,
+        seq: 2,
+      },
     ]);
     const again = await kernel.execute({ type: 'createNote', commandId: 'c3', noteId: 'n1', name: 'Again' });
     assert.deepEqual(again.kind === 'committed' && again.revision, 2);

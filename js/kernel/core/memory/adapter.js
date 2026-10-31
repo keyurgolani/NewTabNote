@@ -109,8 +109,8 @@ const keyString = (store, key) => {
  * @returns {string | undefined}
  */
 const keyOf = (store, record) => {
-  const { keyPath } = STORES[store];
-  return keyString(store, Array.isArray(keyPath) ? keyPath.map(field => record[field]) : record[keyPath]);
+  const { keyPath } = /** @type {{keyPath: string | readonly string[]}} */ (STORES[store]);
+  return keyString(store, typeof keyPath === 'string' ? record[keyPath] : keyPath.map(field => record[field]));
 };
 
 /**
@@ -459,8 +459,10 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     const tombstones = [];
     for (const { store, key, record } of pending.values()) {
       if (store !== 'tombstones' || !record) continue;
+      /** @type {Record<string, unknown>} */
       const filled = { ...record, seq: null };
-      if (record.entityType === 'note') filled.lastRevision = revisions.get(revisionKey('notes', String(record.id))) ?? 0;
+      if (record.entityType === 'note')
+        filled.lastRevision = revisions.get(revisionKey('notes', String(record.id))) ?? 0;
       storeOf('tombstones').set(key, filled);
       tombstones.push(key);
     }

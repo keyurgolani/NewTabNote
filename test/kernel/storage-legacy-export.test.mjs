@@ -10,7 +10,15 @@ import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { ROWS_STORE, committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { KeyRange, legacyEnv, profileWith, run, synthesized, writeHistory } from './migration-support.mjs';
+import {
+  KeyRange,
+  deleteAndPurge,
+  legacyEnv,
+  profileWith,
+  run,
+  synthesized,
+  writeHistory,
+} from './migration-support.mjs';
 import { NOW } from './support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
@@ -145,6 +153,48 @@ describe('a pre-migration point exported for 1.4.1', () => {
     // The point holds the profile as it was before the upgrade, so nothing written since is in it
     const ids = (/** @type {any[]} */ rows) => rows.map(row => row.id).sort();
     assert.deepStrictEqual(ids([...file.canvases, ...file.trashedCanvases]), ids(valuesOf(fixture, 'canvases')));
+    const { Storage } = await release141();
+    assert.equal(Storage.validateImport(file).ok, true);
+    const result = await Storage.importData(file, 'merge');
+    assert.equal(result.notes, file.canvases.length);
+  });
+
+  it('once a note and a folder are deleted for good and purged, exports the point without them, and 1.4.1 imports it (#17 PR 2b)', async () => {
+    const fixture = /** @type {any} */ (FIXTURES.get('v8.basic'));
+    const of = await profileWith(fixture);
+    assert.equal((await run(of)).status, 'migrated');
+    const { noteId, folderId, purged } = await deleteAndPurge(of);
+    assert.equal(purged.status, 'purged');
+    const pointId = /** @type {string} */ (await exportablePoint({ indexedDB: of.real }));
+    const file = JSON.parse(
+      JSON.stringify(
+        await exportPoint({
+          indexedDB: of.real,
+          keyRange: KeyRange,
+          crypto,
+          clock: { now: () => NOW },
+          pointId,
+          locks: legacyEnv.createLockManager(),
+        }),
+      ),
+    );
+    const ids = (/** @type {any[]} */ rows) => rows.map(row => row.id).sort();
+    assert.deepStrictEqual(
+      ids([...file.canvases, ...file.trashedCanvases]),
+      ids(valuesOf(fixture, 'canvases')).filter(id => id !== noteId),
+    );
+    assert.deepStrictEqual(
+      ids([...file.elements, ...file.orphanElements]),
+      ids(valuesOf(fixture, 'elements').filter(block => block.canvasId !== noteId)),
+    );
+    assert.deepStrictEqual(
+      ids(file.folders),
+      ids(valuesOf(fixture, 'folders')).filter(id => id !== folderId),
+    );
+    assert.equal(
+      file.media.some((/** @type {any} */ media) => media.canvasId === noteId),
+      false,
+    );
     const { Storage } = await release141();
     assert.equal(Storage.validateImport(file).ok, true);
     const result = await Storage.importData(file, 'merge');

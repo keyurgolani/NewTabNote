@@ -57,7 +57,8 @@ function spyTx(log, records) {
       return undefined;
     },
     put: (store, record) => {
-      log.push(`put ${store} ${record.id ?? record.noteId}`);
+      const { id, noteId } = /** @type {{id?: unknown, noteId?: unknown}} */ (record);
+      log.push(`put ${store} ${id ?? noteId}`);
     },
     delete: (store, key) => {
       log.push(`delete ${store} ${key}`);

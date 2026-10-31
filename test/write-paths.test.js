@@ -51,6 +51,17 @@ describe('the write-path doc', () => {
     assert.deepEqual(check(ROOT), []);
   });
 
+  it("Storage's own deletes run on no live path, so every delete leaves its tombstone (#17 PR 2b)", () => {
+    // DatabaseManager's deletes leave no tombstone, so a note they deleted would stay in the
+    // recovery points: each call is App's copy of a controller path, for slice 7 to delete
+    const { rows } = collect(ROOT);
+    const deletes = rows.filter(row => /\.(permanentlyDeleteNote|emptyTrash|cleanupTrash|deleteFolder|bulkNoteAction)\(/.test(row.call));
+    assert.ok(deletes.length >= 3, `${deletes.length} delete calls`);
+    for (const row of deletes) {
+      assert.ok(['deleted in slice 7', 'no live caller'].includes(row.status), `${row.method}: ${row.call} is ${row.status}`);
+    }
+  });
+
   it('no DatabaseManager method is listed as both a read and a write', () => {
     const listed = [...WRITES, ...MODE_WRITES, ...READS];
     assert.equal(listed.length, new Set(listed).size);

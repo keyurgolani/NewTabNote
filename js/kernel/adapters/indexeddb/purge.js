@@ -163,8 +163,13 @@ function doomedOf(tombstones) {
  * @param {Set<string>} ids
  */
 function owned(row, fields, ids) {
-  const value = /** @type {Record<string, unknown> | null} */ (row.value && typeof row.value === 'object' ? row.value : null);
-  return Boolean(value) && fields.some(field => typeof value?.[field] === 'string' && ids.has(/** @type {string} */ (value[field])));
+  const value = /** @type {Record<string, unknown> | null} */ (
+    row.value && typeof row.value === 'object' ? row.value : null
+  );
+  return (
+    Boolean(value) &&
+    fields.some(field => typeof value?.[field] === 'string' && ids.has(/** @type {string} */ (value[field])))
+  );
 }
 
 /**
@@ -306,7 +311,13 @@ async function sweep(options) {
   }
 
   const db = await openWithoutUpgrade(indexedDB, DB_NAME);
-  if (!db) return outcome({ status: 'failed', tombstones: tombstones.length, rows, failure: { code: 'no-database', pointId: null } });
+  if (!db)
+    return outcome({
+      status: 'failed',
+      tombstones: tombstones.length,
+      rows,
+      failure: { code: 'no-database', pointId: null },
+    });
   try {
     await markPurged(db, tombstones, clock.now());
   } finally {
