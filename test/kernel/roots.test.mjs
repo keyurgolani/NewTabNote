@@ -19,8 +19,8 @@ import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 
-/** @type {{IDBKeyRange: typeof IDBKeyRange}} */
-const { IDBKeyRange } = createRequire(import.meta.url)('fake-indexeddb');
+/** @type {{IDBKeyRange: typeof globalThis.IDBKeyRange}} */
+const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
 
 /**
  * What the new tab's root reads from its context's globals: the Storage global and chrome.storage.local
@@ -48,7 +48,7 @@ const pageHostOf = (context, waits = { count: 0 }) => ({
  */
 const workerHostOf = context => ({
   indexedDB: context.env.indexedDB,
-  keyRange: IDBKeyRange,
+  keyRange: KeyRange,
   settings: context.env.chrome.api.storage.local,
   locks: legacyEnv.createLockManager(),
   estimate: null,
@@ -138,7 +138,7 @@ describe('each composition root', () => {
     assert.deepEqual(await databases(fresh.env.indexedDB), [['CanvasTabDB', 9]]);
     assert.equal(fresh.env.chrome.local.setting_storageInitialized, true);
     assert.deepEqual(
-      { ...(/** @type {any} */ (fresh.env.chrome.local[UPGRADE_RECORD_KEY])), at: 0 },
+      { .../** @type {any} */ (fresh.env.chrome.local[UPGRADE_RECORD_KEY]), at: 0 },
       { status: 'migrated', code: null, at: 0 },
     );
     // And a new tab that wakes it then opens the database as it is, and maintains it
@@ -174,7 +174,10 @@ describe('each composition root', () => {
     /** @type {IDBDatabase} */ (upgraded).close();
     assert.equal(tab.storage.openState, 'version-changed');
     const refused = await capture('second');
-    assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], ['newer-schema', 'version-too-new']);
+    assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
+      'newer-schema',
+      'version-too-new',
+    ]);
     closeAll([tab]);
   });
 

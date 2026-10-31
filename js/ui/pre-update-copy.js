@@ -119,7 +119,7 @@ class PreUpdateCopySection {
     } catch (error) {
       console.warn('Pre-update copy: could not read whether there is one', error);
     }
-    if (read !== this.reads || this.state === 'exporting') return;
+    if (read !== this.reads || /** @type {PreUpdateCopyState} */ (this.state) === 'exporting') return;
     this.point = point;
     this.show(state);
   }
