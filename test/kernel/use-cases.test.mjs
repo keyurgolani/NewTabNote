@@ -299,6 +299,78 @@ describe('the derived scope', () => {
     assert.deepEqual(log, ['get notes n1', 'put notes n1']);
   });
 
+  it('takes a search entry and an embedding of a note it read and found, from a get or a list, and deletes either (#17 PR 4b)', async () => {
+    const note = { id: 'n1', name: 'Plan' };
+    for (const read of /** @type {Array<(tx: Tx) => Promise<unknown>>} */ ([
+      tx => tx.get('notes', 'n1'),
+      tx => tx.getAll('notes'),
+    ])) {
+      const { log, error } = await runDerived(note, async tx => {
+        await read(tx);
+        tx.put('searchIndex', { noteId: 'n1', name: 'Plan', content: 'Line', sourceRevision: 2 });
+        tx.put('vectors', { id: 'n1', noteId: 'n1', vector: [0.5], updatedAt: NOW });
+        // Dropping either loses nothing the user wrote, so any note's goes
+        tx.delete('searchIndex', 'gone');
+        tx.delete('vectors', 'gone');
+      });
+      assert.equal(error, undefined);
+      assert.deepEqual(log.slice(1), [
+        'put searchIndex n1',
+        'put vectors n1',
+        'delete searchIndex gone',
+        'delete vectors gone',
+      ]);
+    }
+  });
+
+  it("refuses a search entry or an embedding of a note it didn't read or didn't find, and any other store's record", async () => {
+    /** @type {Array<[string, (tx: Tx) => Promise<void>]>} */
+    const writes = [
+      ['an entry of a note it never read', async tx => tx.put('searchIndex', { noteId: 'n1' })],
+      [
+        'an embedding of a note that is gone',
+        async tx => {
+          await tx.get('notes', 'gone');
+          tx.put('vectors', { id: 'gone', noteId: 'gone', vector: [1] });
+        },
+      ],
+      [
+        'an embedding without the id it is kept under',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.put('vectors', /** @type {any} */ ({ noteId: 'n1', vector: [1] }));
+        },
+      ],
+      [
+        'a link',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.put('links', { id: 'l1', fromNoteId: 'n1', toNoteId: 'n2' });
+        },
+      ],
+      [
+        'a deleted link',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.delete('links', 'l1');
+        },
+      ],
+    ];
+    for (const [what, run] of writes) {
+      const { log, error } = await runDerived({ id: 'n1', name: 'Plan' }, run);
+      assert.deepEqual(
+        error instanceof UnavailableError && [error.unavailableCause, error.code],
+        ['adapter', 'write-outside-scope'],
+        what,
+      );
+      assert.deepEqual(
+        log.filter(line => line.startsWith('put') || line.startsWith('delete')),
+        [],
+        what,
+      );
+    }
+  });
+
   it("refuses a note with a field it can't compare, such as a Map, even for a write that keeps it", async () => {
     const note = { id: 'n1', name: 'Plan', extra: new Map([['a', 1]]) };
     const { log, error } = await runDerived(note, async tx => {

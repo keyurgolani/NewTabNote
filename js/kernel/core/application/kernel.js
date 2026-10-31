@@ -34,6 +34,7 @@ import { isQueryType } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
 import { folderCommands, folderQueries } from './folders.js';
+import { indexCommands, indexQueries } from './indexing.js';
 import { jobCommands, jobQueries } from './jobs.js';
 import { maintenanceCommands } from './maintenance.js';
 import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
@@ -96,6 +97,7 @@ const COMMAND_HANDLERS = Object.freeze({
   ...jobCommands,
   ...snapshotCommands,
   ...workspaceDataCommands,
+  ...indexCommands,
 });
 
 /** @type {Readonly<{[T in QueryType]: QueryHandler<T>}>} */
@@ -107,6 +109,7 @@ const QUERY_HANDLERS = Object.freeze({
   ...jobQueries,
   ...snapshotQueries,
   ...workspaceDataQueries,
+  ...indexQueries,
 });
 
 /**
