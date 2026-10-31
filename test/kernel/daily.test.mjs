@@ -186,8 +186,13 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
       daily('trashed-first', 'Oct 15', '2025-10-15', Date.UTC(2025, 9, 15, 16), { trashed: true }),
       daily('template', 'Oct 15', '2025-10-15', Date.UTC(2025, 9, 15, 15), { isTemplate: true }),
       daily('kept', 'Oct 15', '2025-10-15', Date.UTC(2025, 9, 15, 18)),
-      // In the trash and made in the evening: it moves, and holds nothing where it goes
+      // In the trash and made in the evening: like any note, it moves only to a date no note
+      // holds, so this one stays where 1.4.x showed it, since Oct 15 is held
       daily('trashed-evening', 'Oct 15', '2025-10-16', Date.UTC(2025, 9, 16, 3), { trashed: true }),
+      // And this one moves to Oct 13, which it holds no more than a trashed note holds any date,
+      // so the note made that evening after it moves there too, and holds it
+      daily('trashed-evening-13', 'Oct 13', '2025-10-14', Date.UTC(2025, 9, 14, 3), { trashed: true }),
+      daily('oct-13-evening', 'Oct 13', '2025-10-14', Date.UTC(2025, 9, 14, 4)),
       // The kernel's, keyed by its local date in its zone, which a later legacy note can't take
       { ...daily('kernel', 'Oct 17', '2025-10-17', Date.UTC(2025, 9, 18, 2)), dailyKey: '2025-10-17' },
       daily('legacy-17', 'Oct 17', '2025-10-17', Date.UTC(2025, 9, 18, 3)),
@@ -199,10 +204,14 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
       kernel: { dailyKey: '2025-10-17', rekeyed: false, duplicateOf: null },
       kept: { dailyKey: '2025-10-15', rekeyed: false, duplicateOf: null },
       'legacy-17': { dailyKey: '2025-10-17', rekeyed: false, duplicateOf: 'kernel' },
+      'oct-13-evening': { dailyKey: '2025-10-13', rekeyed: true, duplicateOf: null },
       template: { dailyKey: '2025-10-15', rekeyed: false, duplicateOf: 'kept' },
-      'trashed-evening': { dailyKey: '2025-10-15', rekeyed: true, duplicateOf: 'kept' },
+      'trashed-evening': { dailyKey: '2025-10-16', rekeyed: false, duplicateOf: null },
+      'trashed-evening-13': { dailyKey: '2025-10-13', rekeyed: true, duplicateOf: 'oct-13-evening' },
       'trashed-first': { dailyKey: '2025-10-15', rekeyed: false, duplicateOf: 'kept' },
     });
+    // A trashed note holds no date, even one only it has
+    assert.equal(dailyHolder(notes, '2025-10-16', LA), undefined);
   });
 
   it('gives the same answer whatever order the notes come in', () => {
