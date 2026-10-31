@@ -1,0 +1,81 @@
+name: perf
+
+# #27 slice 4b: timing and heap against the frozen 1.4.0 package, report-only. This workflow is
+# not pr-gate and no ruleset requires it, so it never blocks a merge. It runs on every PR push
+# and every push to next to gather CI's numbers fast; build/budgets.json's timing and heap rows
+# say `report`, and docs/performance/budgets.md has the rule for when they become gates.
+on:
+  pull_request:
+    branches: [next]
+  push:
+    branches: [next]
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels that PR's older run; every push to next gets its own
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('perf-{0}', github.event.pull_request.number) || format('perf-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  perf:
+    name: perf (report)
+    runs-on: ubuntu-24.04
+    # Two builds, Chromium, and 72 install-cold runs
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      # The reference is built from its tag here, never taken from a machine
+      - name: Fetch the v1.4.0 tag
+        run: git fetch --no-tags --depth=1 origin '+refs/tags/v1.4.0:refs/tags/v1.4.0'
+      - name: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts
+      - name: npm run build
+        run: npm run build
+      # Fails the job when the package built from v1.4.0 isn't the pinned digest
+      - name: Build the 1.4.0 reference and check its digest
+        id: reference
+        run: |
+          set -euo pipefail
+          npm run perf:reference -- "$RUNNER_TEMP/reference" | tee "$RUNNER_TEMP/reference.log"
+          echo "dist=$(tail -n 1 "$RUNNER_TEMP/reference.log")" >> "$GITHUB_OUTPUT"
+      # The locked Playwright from node_modules/.bin, never npx, which can fetch another version
+      - name: Install Playwright Chromium
+        run: node_modules/.bin/playwright install --with-deps --no-shell chromium
+      # The probe exits 2 when it refuses the run (the reference isn't the pinned package, or the
+      # rounds don't balance), which fails the job, and 1 when the run measured but is invalid or
+      # a run failed, which the summary reports
+      - name: Time 1.4.0, 1.4.0 again, and the candidate
+        env:
+          REFERENCE: ${{ steps.reference.outputs.dist }}
+        run: |
+          set -uo pipefail
+          npm run perf:probe -- --dist "$REFERENCE" --label 1.4.0 --dist "$REFERENCE" --label 1.4.0-again \
+            --dist dist --label candidate --timing --runs 12 --profiles typical,maximal \
+            --baseline build/budgets.json --out dist-report/perf.json
+          code=$?
+          echo "probe exit $code"
+          if [ "$code" -ge 2 ]; then exit "$code"; fi
+      - name: Summarize against build/budgets.json
+        run: node scripts/perf/gate-report.js dist-report/perf.json build/budgets.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf
+          path: dist-report/perf.json
+          if-no-files-found: ignore
+          retention-days: 30
