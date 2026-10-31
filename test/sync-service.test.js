@@ -9,6 +9,7 @@ globalThis.confirmDialog = null;
 globalThis.btoa = (s) => Buffer.from(s).toString('base64');
 
 const { SyncService, GoogleDriveProvider, DropboxProvider, WebDAVProvider } = require('../js/services/sync-service.js');
+const { expectFailure } = require('./helpers/expect-failure');
 
 function createMockStorage() {
   const settings = new Map();
@@ -215,6 +216,31 @@ describe('WebDAVProvider', () => {
   it('connect throws without serverUrl', async () => {
     const p = new WebDAVProvider();
     await assert.rejects(() => p.connect(), /server URL is required/);
+  });
+
+  it('connects only once the server takes the credentials: a 401 rejects and leaves it disconnected', async (t) => {
+    const statuses = [401, 200];
+    t.mock.method(globalThis, 'fetch', async () => ({ status: statuses.shift() }));
+    const p = new WebDAVProvider();
+    p.configure({ serverUrl: 'https://dav.example.test', username: 'user', password: 'synthetic-test-value' });
+    await assert.rejects(() => p.connect(), /^Error: WebDAV connection failed: WebDAV authentication failed$/);
+    assert.equal(p.connected, false);
+    await p.connect();
+    assert.equal(p.connected, true);
+  });
+
+  // connect() refuses only a 401, so any other answer counts as connected. #15 slice 4 owns
+  // the honest state; #19's real verification is the fix that lands it.
+  expectFailure('KD-009 WebDAV connect stays disconnected when the server answers 403, 404, or 500', async (t) => {
+    let status = 0;
+    t.mock.method(globalThis, 'fetch', async () => ({ status, ok: status >= 200 && status < 300 }));
+    for (const answer of [403, 404, 500]) {
+      status = answer;
+      const p = new WebDAVProvider();
+      p.configure({ serverUrl: 'https://dav.example.test', username: 'user', password: 'synthetic-test-value' });
+      await assert.rejects(() => p.connect(), /^Error: WebDAV connection failed/, `a ${answer} connects`);
+      assert.equal(p.connected, false, `a ${answer} leaves it connected`);
+    }
   });
 
   it('_authHeaders returns Basic auth header', () => {

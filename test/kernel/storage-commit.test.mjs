@@ -167,4 +167,34 @@ describe('commits on the IndexedDB adapter', () => {
       assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, kind);
     }
   });
+
+  it("a unit declared readonly can't write, even in a command another unit makes readwrite", async () => {
+    const { of, adapter, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
+    const before = await legacyEnv.dumpDatabase(of.real);
+    const command = /** @type {Command} */ ({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
+    /** @type {Unit[]} */
+    const units = [
+      {
+        stores: ['notes'],
+        async run(tx) {
+          tx.put('notes', { id: 'n2', name: 'Written' });
+        },
+      },
+      {
+        stores: ['blocks'],
+        mode: 'readonly',
+        async run(tx) {
+          tx.put('blocks', { id: 'b2', canvasId: 'n2' });
+        },
+      },
+    ];
+    const { outcome } = await adapter.commit(unitsWork(command, units, () => committed('created', ['n2'])));
+    assert.deepEqual(
+      outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable],
+      ['adapter', 'write-in-readonly-transaction', false],
+      JSON.stringify(outcome),
+    );
+    assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
+  });
 });
