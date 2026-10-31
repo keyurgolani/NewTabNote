@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
-import { UPGRADE_RECORD_KEY, createWorkerClient, migrationEvents } from '../../js/kernel/composition/background.js';
+import { UPGRADE_BLOCKED_KEY, UPGRADE_RECORD_KEY, createWorkerClient, migrationEvents } from '../../js/kernel/composition/background.js';
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createMigrationReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
 import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
@@ -30,7 +31,7 @@ import { MANIFEST, providerContext } from './trust-provider-support.mjs';
 import { hexIds, lockManager, manualClock, realTimers } from './trust-support.mjs';
 
 /** @type {{IDBKeyRange: typeof globalThis.IDBKeyRange}} */
-const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
+const { IDBKeyRange: KeyRange, IDBFactory } = createRequire(import.meta.url)('fake-indexeddb');
 const FIXTURES = synthesized();
 const MIGRATION_FAULTS = ['migration-pending', 'migration-failed', 'migration-blocked'];
 
@@ -186,7 +187,7 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     adapter.close();
   });
 
-  it('at 9, storage verifies and looks at every migration fault, and a migration record that fails to read verifies nothing', async () => {
+  it("at 9, storage verifies and looks at every migration fault, and with a migration state it can't read it probes anyway, looking at no migration fault", async () => {
     const of = await profileAt8();
     assert.equal((await createWorkerClient(hostOf(of)).migration.done).status, 'migrated');
     const adapter = adapterOn(of, { mode: 'versioned' });
@@ -194,10 +195,11 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     const stored = await checkOf('storage', probeContext(of, adapter));
     assert.deepEqual([stored.receipt.status, stored.faults], ['verified', []]);
     assert.ok(MIGRATION_FAULTS.every(fault => stored.looked.some(item => item.faultCode === fault)));
-    const broken = { storage: adapter, migration: { current: async () => { throw new Error('no read'); } } };
-    assert.equal((await checkOf('storage', broken)).receipt.status, 'unverified');
-    const garbage = { storage: adapter, migration: { current: async () => ({ version: 'nine' }) } };
-    assert.equal((await checkOf('storage', garbage)).receipt.status, 'unverified');
+    for (const current of [async () => { throw new Error('no read'); }, async () => ({ version: 'nine' })]) {
+      const unknown = await checkOf('storage', { storage: adapter, migration: { current } });
+      assert.deepEqual([unknown.receipt.status, unknown.receipt.capture, unknown.faults], ['verified', 'safe', []]);
+      assert.ok(!unknown.looked.some(item => MIGRATION_FAULTS.includes(item.faultCode)), JSON.stringify(unknown.looked));
+    }
     adapter.close();
   });
 
@@ -253,5 +255,145 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     const { context } = await providerContext(of);
     assert.equal(/** @type {any} */ (context.storage).mode, 'existing');
     assert.equal((await checkOf('capture', context)).receipt.status, 'verified');
+  });
+});
+
+/** A factory whose open of CanvasTabDB answers an error, as a damaged profile's does */
+function brokenFactory() {
+  const real = new IDBFactory();
+  return /** @type {any} */ ({
+    open(/** @type {string} */ name, /** @type {number | undefined} */ version) {
+      if (name !== 'CanvasTabDB') return version === undefined ? real.open(name) : real.open(name, version);
+      const request = /** @type {any} */ ({ result: undefined, error: new DOMException('broken', 'UnknownError'), transaction: null });
+      setTimeout(() => request.onerror && request.onerror({ target: request, preventDefault() {} }), 0);
+      return request;
+    },
+    deleteDatabase: (/** @type {string} */ name) => real.deleteDatabase(name),
+    databases: () => real.databases(),
+    cmp: (/** @type {unknown} */ a, /** @type {unknown} */ b) => real.cmp(a, b),
+  });
+}
+
+/** A chrome.storage.local stand-in holding `items` */
+const areaOf = (/** @type {Record<string, unknown>} */ items = {}) => ({
+  get: async (/** @type {string[]} */ keys) => Object.fromEntries(keys.filter(key => key in items).map(key => [key, items[key]])),
+  set: async (/** @type {Record<string, unknown>} */ more) => { Object.assign(items, more); },
+  remove: async (/** @type {string | string[]} */ keys) => { for (const key of [keys].flat()) delete items[key]; },
+});
+
+/** `promise`, or 'no answer' when it hasn't settled within `ms` */
+const within = (/** @type {Promise<unknown>} */ promise, /** @type {number} */ ms) =>
+  Promise.race([promise.then(value => ({ value }), error => ({ error: error && (error.code || String(error)) })), new Promise(resolve => setTimeout(() => resolve('no answer'), ms))]);
+
+describe("the migration state storage reads, and the worker's blocked marker (#20 slice 4 prerequisites, part 2, review)", () => {
+  it("a database that won't open fails storage's check as before, whatever the migration state reads", async () => {
+    const factory = brokenFactory();
+    const settings = areaOf();
+    const adapter = createIndexedDbAdapter({ indexedDB: factory, settings, mode: 'existing', requireCore: true, keyRange: KeyRange });
+    const stored = await checkOf('storage', { storage: adapter, migration: createMigrationReader({ indexedDB: factory, settings }) });
+    assert.equal(stored.receipt.status, 'failed');
+    assert.equal(stored.receipt.capture, 'at-risk');
+    assert.deepEqual(stored.faults.map(fault => [fault.subjectId, fault.severity]), [['CanvasTabDB', 'capture-risk']]);
+  });
+
+  it('the reader answers while an upgrade waits on an open connection', async () => {
+    const factory = new IDBFactory();
+    const old = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise((() => {
+      const request = factory.open('CanvasTabDB', 8);
+      request.onupgradeneeded = () => request.result.createObjectStore('canvases');
+      return request;
+    })()));
+    old.onversionchange = () => {};
+    const upgrading = factory.open('CanvasTabDB', 9);
+    upgrading.onblocked = () => {};
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const reader = createMigrationReader({ indexedDB: factory, settings: areaOf() });
+    const got = /** @type {any} */ (await within(reader.current(), 300));
+    assert.notEqual(got, 'no answer');
+    assert.equal(got.value.version, 8);
+    old.close();
+  });
+
+  it('a factory that lists no databases leaves the version unknown, and storage probes anyway', async () => {
+    const of = await profileAt8();
+    const adapter = adapterOn(of, { mode: 'existing' });
+    await adapter.open();
+    const listless = /** @type {any} */ ({ open: of.faults.factory.open.bind(of.faults.factory), cmp: of.faults.factory.cmp.bind(of.faults.factory) });
+    const reader = createMigrationReader({ indexedDB: listless, settings: of.chrome.api.storage.local });
+    await assert.rejects(reader.current());
+    const stored = await checkOf('storage', { storage: adapter, migration: reader });
+    assert.deepEqual([stored.receipt.status, stored.faults], ['verified', []]);
+    adapter.close();
+  });
+
+  it("a standing blocked marker reads migration-blocked below 9, and its key is outside the settings' keys", async () => {
+    assert.equal(UPGRADE_BLOCKED_KEY.startsWith('setting_'), false);
+    const of = await profileAt8();
+    of.chrome.local[UPGRADE_BLOCKED_KEY] = { at: Date.now() };
+    const adapter = adapterOn(of, { mode: 'existing' });
+    await adapter.open();
+    const stored = await checkOf('storage', probeContext(of, adapter));
+    assert.deepEqual([stored.receipt.status, stored.faults.map(fault => fault.faultCode)], ['degraded', ['migration-blocked']]);
+    adapter.close();
+  });
+
+  it('the runner sets the marker while its upgrade is blocked, and clears it when an attempt starts and when the run ends', async () => {
+    const of = await profileAt8();
+    of.chrome.local[UPGRADE_BLOCKED_KEY] = { at: 1 };
+    const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
+    const reports = /** @type {any[]} */ ([]);
+    const worker = createWorkerClient(hostOf(of, { report: (/** @type {any} */ seen) => reports.push(seen) }));
+    await legacyEnv.waitFor(async () => (reports.length > 0 ? true : null), { withinMs: 10_000, message: 'the blocked report' });
+    assert.equal(reports[0].kind, 'blocked');
+    assert.equal(reports[0].standing, true, 'a marker stood when the attempt started');
+    const marker = /** @type {any} */ (of.chrome.local[UPGRADE_BLOCKED_KEY]);
+    assert.ok(marker && marker.at !== 1, 'the blocked run set its own marker');
+    blocker.close();
+    assert.equal((await worker.migration.done).status, 'migrated');
+    assert.equal(of.chrome.local[UPGRADE_BLOCKED_KEY], undefined);
+  });
+
+  it("an ended run's report carries the record it replaced, and migrationEvents skips a failure that record already held", async () => {
+    const of = await profileAt8();
+    of.chrome.local[UPGRADE_RECORD_KEY] = { status: 'failed', code: 'locks-unavailable', at: Date.now(), version: '1.4.1', costly: false };
+    const reports = /** @type {any[]} */ ([]);
+    const locks = { request: () => { throw new DOMException('no locks', 'InvalidStateError'); } };
+    await createWorkerClient(hostOf(of, { locks, report: (/** @type {any} */ seen) => reports.push(seen) })).migration.done;
+    assert.deepEqual(reports.map(seen => [seen.kind, seen.outcome.status, seen.previous]), [['ended', 'failed', { status: 'failed', code: 'locks-unavailable' }]]);
+
+    const sent = /** @type {any[]} */ ([]);
+    const report = migrationEvents((code, fields, failure) => sent.push([code, failure && /** @type {any} */ (failure).code]));
+    const failed = /** @type {any} */ ({ status: 'failed', shape: 'legacy', to: null, steps: [], recoveryPointId: null, failure: { code: 'locks-unavailable' } });
+    report({ kind: 'ended', outcome: failed, previous: { status: 'failed', code: 'locks-unavailable' } });
+    report({ kind: 'blocked', standing: true });
+    assert.deepEqual(sent, []);
+    report({ kind: 'ended', outcome: failed, previous: { status: 'failed', code: 'schema-mismatch' } });
+    report({ kind: 'blocked', standing: false });
+    assert.deepEqual(sent.map(([code]) => code), ['storage.migration-failed', 'storage.migration-blocked']);
+  });
+
+  it("a refused run journals storage.migration-failed with its code, except a refusal the open journals itself", () => {
+    const sent = /** @type {any[]} */ ([]);
+    const report = migrationEvents((code, fields, failure) => sent.push([code, failure && /** @type {any} */ (failure).code]));
+    const refused = (/** @type {string} */ code) => /** @type {any} */ ({ status: 'refused', shape: 'unknown', to: null, steps: [], recoveryPointId: 'p', failure: { code } });
+    report({ kind: 'ended', outcome: refused('unknown-shape'), previous: null });
+    report({ kind: 'ended', outcome: refused('missing-core-stores'), previous: null });
+    report({ kind: 'ended', outcome: refused('version-too-new'), previous: null });
+    assert.deepEqual(sent, [['storage.migration-failed', 'unknown-shape']]);
+  });
+
+  it('a report that rejects later never leaves a rejection unhandled', async () => {
+    const unhandled = /** @type {unknown[]} */ ([]);
+    const listen = (/** @type {unknown} */ reason) => unhandled.push(reason);
+    process.on('unhandledRejection', listen);
+    try {
+      const of = await profileAt8();
+      const worker = createWorkerClient(hostOf(of, { report: async () => { throw new Error('report failed later'); } }));
+      assert.equal((await worker.migration.done).status, 'migrated');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', listen);
+    }
   });
 });
