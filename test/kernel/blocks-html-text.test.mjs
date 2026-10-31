@@ -37,13 +37,17 @@ const timeOf = html => {
 
 /**
  * Whether reading grows linearly: four times the input takes well under the sixteen times a
- * quadratic read would, with room for timer noise on small inputs
+ * quadratic read would, with room for timer noise on small inputs. A busy machine can stall a
+ * measurement, so it measures up to three times; a quadratic read grows too fast every time.
  * @param {(n: number) => string} make
  */
 const readsLinearly = make => {
-  const small = timeOf(make(20_000));
-  const large = timeOf(make(80_000));
-  return large < Math.max(small * 8, 50);
+  const small = make(20_000);
+  const large = make(80_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (timeOf(large) < Math.max(timeOf(small) * 8, 50)) return true;
+  }
+  return false;
 };
 
 describe("html-text.js reads markup's text as a div's textContent does (#14 slice 1)", () => {

@@ -102,8 +102,19 @@ function timeOf(fn, value) {
   return best;
 }
 
-/** Whether four times the input takes well under the sixteen times a quadratic read would */
-const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
+/**
+ * Whether four times the input takes well under the sixteen times a quadratic read would. A
+ * busy machine can stall a measurement, so it measures up to three times; a quadratic read
+ * grows too fast every time.
+ */
+const linear = (fn, make) => {
+  const small = make(20_000);
+  const large = make(80_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (timeOf(fn, large) < Math.max(timeOf(fn, small) * 8, 50)) return true;
+  }
+  return false;
+};
 
 describe("AIResponseUtils' inline Markdown keeps 1.4.x's bytes (#14 slice 1)", () => {
   it('markdownInlineToHtml gives what it gave, wherever no link has a refused scheme', () => {

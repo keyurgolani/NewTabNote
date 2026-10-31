@@ -31,11 +31,19 @@ const timeOf = (fn, value) => {
 
 /**
  * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
- * the sixteen times a quadratic read would
+ * the sixteen times a quadratic read would. A busy machine can stall a measurement, so it
+ * measures up to three times; a quadratic read grows too fast every time.
  * @param {(value: string) => unknown} fn
  * @param {(n: number) => string} make
  */
-const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
+const linear = (fn, make) => {
+  const small = make(20_000);
+  const large = make(80_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (timeOf(fn, large) < Math.max(timeOf(fn, small) * 8, 50)) return true;
+  }
+  return false;
+};
 
 describe('the legacy rendering adapter (#14 slice 2)', () => {
   it("renders by assigning the markup as it is, and normalizes nothing", () => {
