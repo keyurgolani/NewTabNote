@@ -140,6 +140,14 @@ export function hexIds(prefix = 'a1b2') {
 }
 
 /**
+ * A legacy record id, as Utils.generateId makes one: a 13-digit millisecond time, a hyphen,
+ * and up to nine base-36 characters. `Math.random().toString(36).substr(2, 9)` gives fewer
+ * now and then, so small `n` give the short suffixes real ids have.
+ * @param {number} n
+ */
+export const legacyId = n => `${1730000000000 + n}-${n.toString(36).slice(-9)}`;
+
+/**
  * `store` with runs a test can make fail: the next `count` runs reject with an
  * UnavailableError of `code`, as a store whose writes the disk refuses does
  * @param {TrustStore} store
