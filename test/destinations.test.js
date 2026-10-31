@@ -49,6 +49,26 @@ describe('the destination registry (security/destinations.json)', () => {
     assert.deepEqual(client.DESTINATIONS.map((entry) => entry.id), registry.destinations.map((entry) => entry.id));
   });
 
+  it("the code's module of the registry matches it, and a registry edited without it fails", () => {
+    const check = require('../scripts/check-destinations.js');
+    const lines = [];
+    assert.equal(check.main([], { log: (line) => lines.push(line), error: (line) => lines.push(line) }), 0, lines.join('\n'));
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-destinations-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'security'));
+      fs.mkdirSync(path.join(dir, 'js/kernel/composition'), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, check.MODULE), path.join(dir, check.MODULE));
+      const edited = { ...registry, destinations: registry.destinations.slice(1) };
+      fs.writeFileSync(path.join(dir, check.REGISTRY), JSON.stringify(edited));
+      assert.equal(check.main([], { root: dir, log: () => {}, error: () => {} }), 1);
+      assert.equal(check.main(['--write'], { root: dir, log: () => {}, error: () => {} }), 0);
+      assert.equal(check.main([], { root: dir, log: () => {}, error: () => {} }), 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a row that breaks a rule: a wildcard outside legacy, http off loopback, a legacy row with no removeWhen, a path or userinfo in the origin, an unknown credential or method, a header with a line break, a repeated id', () => {
     const cases = [
       row({ origin: 'https://*.example.test' }),

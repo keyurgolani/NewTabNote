@@ -1,0 +1,364 @@
+{
+  "about": "Every network call first-party code makes outside the destination client (#21 slice 1b): each file and function with its count, the credential it carries, the registry rows it reaches, and the issue that removes it. test/network-ledger.test.js fails on a call no row covers, a count that changed, or a row whose call is gone. js/lib/ is vendored and left out; the guard covers it.",
+  "version": 1,
+  "client": [
+    "js/kernel/composition/api-request.js",
+    "js/kernel/composition/destinations.js"
+  ],
+  "calls": [
+    {
+      "file": "js/llm.js",
+      "function": "fetchViaBackground",
+      "count": 1,
+      "credential": "caller",
+      "destinations": [
+        "glm-general",
+        "glm-coding",
+        "glm-china",
+        "ollama-localhost",
+        "ollama-127"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator",
+      "note": "The page's own fetch when the worker can't be reached or doesn't answer in 30 s, with the caller's headers"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchOpenAIModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "openai"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchAnthropicModels",
+      "count": 1,
+      "credential": "x-api-key",
+      "destinations": [
+        "anthropic"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchGeminiModels",
+      "count": 1,
+      "credential": "x-goog-api-key",
+      "destinations": [
+        "gemini"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchOpenRouterModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "openrouter"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchXAIModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "xai"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchDeepseekModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "deepseek"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchMistralModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "mistral"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "fetchGroqModels",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "groq"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatOpenAI",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "openai"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatAnthropic",
+      "count": 1,
+      "credential": "x-api-key",
+      "destinations": [
+        "anthropic"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatGemini",
+      "count": 1,
+      "credential": "x-goog-api-key",
+      "destinations": [
+        "gemini"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatOpenRouter",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "openrouter"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatXAI",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "xai"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatDeepseek",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "deepseek"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatMistral",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "mistral"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatGroq",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "groq"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatQwen",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "qwen-intl",
+        "qwen-china"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatGLM",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "glm-general",
+        "glm-coding",
+        "glm-china"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatKimi",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "kimi-intl",
+        "kimi-china"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "chatMiniMax",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "minimax-intl",
+        "minimax-china"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "_streamOpenAICompatible",
+      "count": 1,
+      "credential": "bearer",
+      "destinations": [
+        "openai",
+        "openrouter",
+        "xai",
+        "deepseek",
+        "mistral",
+        "groq",
+        "qwen-intl",
+        "qwen-china",
+        "glm-general",
+        "glm-coding",
+        "glm-china",
+        "kimi-intl",
+        "kimi-china",
+        "minimax-intl",
+        "minimax-china"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "_streamAnthropic",
+      "count": 1,
+      "credential": "x-api-key",
+      "destinations": [
+        "anthropic"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "_streamGemini",
+      "count": 1,
+      "credential": "x-goog-api-key",
+      "destinations": [
+        "gemini"
+      ],
+      "owner": 11,
+      "removeWhen": "#11's slice 2 moves provider calls behind the coordinator"
+    },
+    {
+      "file": "js/llm.js",
+      "function": "_streamOllama",
+      "count": 1,
+      "credential": "none",
+      "destinations": [
+        "ollama-localhost",
+        "ollama-127"
+      ],
+      "owner": 9,
+      "removeWhen": "#9's Ollama adapter"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "function": "connect",
+      "count": 1,
+      "credential": "basic",
+      "destinations": [],
+      "owner": 19,
+      "removeWhen": "#19's sync engine deletes this file",
+      "note": "The user's WebDAV server, which no row lists yet: today's CSP reaches only localhost, and a user row needs a later slice's gesture"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "function": "upload",
+      "count": 1,
+      "credential": "basic",
+      "destinations": [],
+      "owner": 19,
+      "removeWhen": "#19's sync engine deletes this file",
+      "note": "The user's WebDAV server, which no row lists yet: today's CSP reaches only localhost, and a user row needs a later slice's gesture"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "function": "download",
+      "count": 1,
+      "credential": "basic",
+      "destinations": [],
+      "owner": 19,
+      "removeWhen": "#19's sync engine deletes this file",
+      "note": "The user's WebDAV server, which no row lists yet: today's CSP reaches only localhost, and a user row needs a later slice's gesture"
+    },
+    {
+      "file": "js/services/sync-service.js",
+      "function": "getLastModified",
+      "count": 1,
+      "credential": "basic",
+      "destinations": [],
+      "owner": 19,
+      "removeWhen": "#19's sync engine deletes this file",
+      "note": "The user's WebDAV server, which no row lists yet: today's CSP reaches only localhost, and a user row needs a later slice's gesture"
+    }
+  ],
+  "proxies": [
+    {
+      "message": "API_REQUEST",
+      "handler": "js/background.js",
+      "owner": 11,
+      "removeWhen": "#11 moves the provider request proxy into its AI adapter"
+    },
+    {
+      "message": "OFFSCREEN_API_REQUEST",
+      "handler": "js/offscreen.js",
+      "owner": 9,
+      "removeWhen": "#9's Ollama adapter"
+    }
+  ]
+}
