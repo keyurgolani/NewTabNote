@@ -133,6 +133,10 @@ export function failureEvidence(failure) {
  * @returns {Record<string, unknown>}
  */
 function fieldsOf(code, surface, fields, failure) {
+  // What isn't an object goes to the journal as it is, which refuses it as `not-an-object`
+  if (fields !== undefined && (fields === null || typeof fields !== 'object' || Array.isArray(fields))) {
+    return /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (fields));
+  }
   const listed = isEventCode(code) ? EVENT_CODES[code].fields : [];
   /** @type {Record<string, unknown>} */
   const out = {};

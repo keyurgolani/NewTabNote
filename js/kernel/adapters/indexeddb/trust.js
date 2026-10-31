@@ -17,8 +17,8 @@
  * Everything it stores is `diagnostic` (#17's classification): never in a backup or in sync.
  * js/trust/core/ validates every record before it reaches this adapter. The adapter knows
  * nothing about bounds or keys beyond the layout below, which js/trust/core/memory-store.js
- * repeats and test/kernel/trust-store.test.mjs holds equal. No shipped entry point opens it
- * yet.
+ * repeats and test/kernel/trust-store.test.mjs holds equal. The service worker's and the new
+ * tab's failure events (js/kernel/composition/trust.js) open it on their first failure.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';

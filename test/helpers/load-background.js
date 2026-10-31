@@ -118,8 +118,11 @@ async function startWorker(env) {
 /**
  * Start js/background.js on an empty profile and wait until it has opened the database.
  * `mutate`, for the self-tests that check these assertions catch a broken worker, gets the
- * worker's global once it has started, to break something in it.
- * @param {{mutate?: (worker: any) => void}} [options]
+ * worker's global once it has started, to break something in it. `setup` gets the worker's
+ * environment before it starts, to lay out a profile or replace a global, and with
+ * `opens: false` a worker whose database didn't open is returned rather than refused, for
+ * #20's failure-site tests (test/failure-events.test.js).
+ * @param {{mutate?: (worker: any) => void, setup?: (env: any) => Promise<void> | void, opens?: boolean}} [options]
  * @returns {Promise<{
  *   tab: {id: number, windowId: number, url: string, title: string},
  *   selection: {text: string, title: string, url: string},
@@ -129,7 +132,7 @@ async function startWorker(env) {
  *   indexedDB: any,
  * }>}
  */
-async function loadBackground({ mutate } = {}) {
+async function loadBackground({ mutate, setup, opens = true } = {}) {
   if (fs.existsSync(DEFINE_ALLOWLIST)) {
     throw new Error(`${path.relative(ROOT, DEFINE_ALLOWLIST)} exists: set each of its rows to its release-build value in test/helpers/load-background.js before loading the worker`);
   }
@@ -145,13 +148,14 @@ async function loadBackground({ mutate } = {}) {
     executeScript: async () => [{ frameId: 0, result: { ...SELECTION } }],
   };
 
+  if (setup) await setup(env);
   await startWorker(env);
   // background.js's kernel opens the database and runs startup maintenance as the worker
   // starts, and captures wait for it. A module's top-level bindings aren't globals, so wait
   // until the worker is idle, when that has settled, and check it opened the database.
   await drain();
   const { openState } = env.global.Storage;
-  if (openState !== 'open') {
+  if (opens && openState !== 'open') {
     throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
   }
   if (mutate) mutate(env.global);
@@ -177,6 +181,10 @@ async function loadBackground({ mutate } = {}) {
       for (const listener of [...event.listeners]) await listener(...args);
     },
     indexedDB: env.indexedDB,
+    /** The worker's environment: its console's logs, chrome.* calls, and notifications */
+    env,
+    /** Wait until the worker is idle */
+    drain,
   };
 }
 
