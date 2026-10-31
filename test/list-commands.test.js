@@ -304,6 +304,51 @@ describe("the sidebar's new notes and Daily Notes", () => {
   });
 });
 
+describe("the calendar's today and its dots (#17 PR 3b)", () => {
+  it("highlights the host's local day, where 1.4.x took toISOString's UTC one", async () => {
+    const { env, sidebar } = await openPage();
+    const els = env.document.stub(['calendar-days', 'calendar-month-label']);
+    const now = new Date();
+    sidebar.calendarYear = now.getFullYear();
+    sidebar.calendarMonth = now.getMonth();
+    sidebar.renderCalendar();
+    const today = els['calendar-days'].querySelectorAll('.calendar-day.today').map((day) => day.dataset.date);
+    const pad = (n) => String(n).padStart(2, '0');
+    assert.deepEqual(today, [`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`]);
+  });
+
+  it("dots each Daily Note's local date, and the dateStr of one #17's transform hasn't keyed yet", async () => {
+    const { env, sidebar } = await openPage();
+    const els = env.document.stub(['calendar-days', 'calendar-month-label']);
+    const views = {
+      active: [
+        { id: 'keyed', isDaily: true, dailyKey: '2026-10-05', dateStr: '2026-10-06' },
+        { id: 'unkeyed', isDaily: true, dateStr: '2026-10-09' },
+        { id: 'plain', isDaily: false, dateStr: '2026-10-11' },
+      ],
+      archived: [{ id: 'archived', isDaily: true, dailyKey: '2026-10-12', dateStr: '2026-10-12' }],
+    };
+    sidebar._noteList = { view: (name) => views[name] || [] };
+    sidebar.calendarYear = 2026;
+    sidebar.calendarMonth = 9;
+    sidebar.renderCalendar();
+    const dotted = els['calendar-days'].querySelectorAll('.calendar-day.has-note').map((day) => day.dataset.date);
+    assert.deepEqual(dotted, ['2026-10-05', '2026-10-09', '2026-10-12']);
+  });
+
+  it("Utils.localDateKey is #1's localDateKey, through a year's every hour", async () => {
+    const env = createLegacyEnv();
+    env.load('js/utils.js');
+    const Utils = env.get('Utils');
+    const { localDateKey } = await import('../js/product/placement.js');
+    const start = Date.UTC(2026, 0, 1);
+    for (let at = start; at < start + 366 * 24 * 3600 * 1000; at += 3600 * 1000 + 61 * 1000) {
+      assert.equal(Utils.localDateKey(at), localDateKey(at), new Date(at).toISOString());
+      assert.equal(Utils.localDateKey(new Date(at)), localDateKey(at));
+    }
+  });
+});
+
 describe('archive and unarchive through the kernel', () => {
   it("archiving the open note keeps #46's order: its pane moves off and saves first, then the write, then the other tabs hear", async () => {
     const { env, page, notes, toasts, reloads, Storage } = await openPage();

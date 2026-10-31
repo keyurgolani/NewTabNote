@@ -1,9 +1,11 @@
 'use strict';
 
-// #17 PR 1b, rolling back once version 9 ships (plan risk 1), and version 10 since #17 PR 2a:
-// the shipped service worker (js/background.js, through test/helpers/load-background.js)
-// migrates each storage fixture to 10 and, since #17 PR 3a, runs its transforms, so the notes
-// carry placement, kind, and lifecycle beside their flags, and then the frozen v1.4.0 and v1.4.1 Storage
+// #17 PR 1b, rolling back once version 9 ships (plan risk 1), version 10 since #17 PR 2a, and 11
+// since #17 PR 3b: the shipped service worker (js/background.js, through
+// test/helpers/load-background.js) migrates each storage fixture to 11 and, since #17 PR 3a, runs
+// its transforms, so the notes carry placement, kind, and lifecycle beside their flags, and a
+// Daily Note its local key, some moved off the UTC date 1.4.x gave them, with the daily index
+// naming each date's, and then the frozen v1.4.0 and v1.4.1 Storage
 // (test/fixtures/storage/releases/, the tags' own files) opens that profile. Neither deletes or changes anything: CanvasTabDB and
 // NewTabNoteRecovery stay byte for byte, and no chrome.storage.local key goes, auto_backup_*
 // and recovery_backup_* included. v1.4.1's #33 guard refuses with NEWER_SCHEMA, and v1.4.0
@@ -21,7 +23,9 @@ const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
 const RELEASES = 'test/fixtures/storage/releases';
-const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic'];
+const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic', 'v8.evening-daily-notes'];
+// The fields 1.4.x doesn't know (js/kernel/core/domain/placement.js's NEW_NOTE_FIELDS)
+const NEW_NOTE_FIELDS = ['placement', 'kind', 'lifecycle', 'dailyKey', 'dailyTimeZone', 'dailyDuplicateOf'];
 // Keys a profile may hold that a rollback mustn't lose
 const KEPT_KEYS = {
   auto_backup_1760000000000: { canvases: [], elements: [], timestamp: 1760000000000 },
@@ -54,6 +58,7 @@ async function migrated(id) {
   const dump = () => load.dumpFixture({ factory: worker.indexedDB, storage: worker.chrome.api.storage.local });
   const notes = Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'canvases'));
   for (const note of notes) assert.ok(note.placement && note.kind && note.lifecycle, `${id}: ${note.id} has its group`);
+  for (const note of notes) if (note.isDaily && note.dateStr) assert.equal(note.dailyKey, note.dateStr, `${id}: ${note.id} has its key`);
   return { worker, dump };
 }
 
@@ -91,13 +96,24 @@ async function release141() {
   return { env, Storage };
 }
 
-describe('a profile the shipped worker migrated to 10, opened by a 1.4.x build', () => {
+describe('a profile the shipped worker migrated to 11, opened by a 1.4.x build', () => {
   for (const id of CASES) {
     for (const tag of ['v1.4.0', 'v1.4.1']) {
       it(`${id}, then ${tag}: refused, and nothing changed or deleted`, async () => {
         const { worker, dump } = await migrated(id);
         const before = await dump();
         assert.ok(before.databases.some((db) => db.name === 'NewTabNoteRecovery'), 'the worker made its recovery point');
+        if (id === 'v8.evening-daily-notes') {
+          // Moved Daily Notes, a duplicate, and the index, all of which 1.4.x leaves as they are
+          const canvas = before.databases.find((db) => db.name === 'CanvasTabDB');
+          const records = (name) => canvas.stores.find((store) => store.name === name).records.map((record) => record.value);
+          const notes = Object.fromEntries(records('canvases').map((note) => [note.id, note]));
+          assert.deepStrictEqual(
+            [notes['daily-oct-7-evening'].dateStr, notes['daily-oct-10-b'].dailyDuplicateOf],
+            ['2025-10-07', 'daily-oct-10-a'],
+          );
+          assert.equal(records('daily_index').length, 5);
+        }
         const { error, Storage } = await rollBack(worker, tag);
         if (tag === 'v1.4.0') {
           assert.equal(error && error.name, 'VersionError', String(error));
@@ -116,14 +132,14 @@ describe('a profile the shipped worker migrated to 10, opened by a 1.4.x build',
   }
 });
 
-describe('a profile the shipped worker migrated to 10 and captured into, opened by a 1.4.x build (#17 PR 2a)', () => {
+describe('a profile the shipped worker migrated to 11 and captured into, opened by a 1.4.x build (#17 PR 2a)', () => {
   for (const tag of ['v1.4.0', 'v1.4.1']) {
-    it(`v8.basic with a capture at 10, then ${tag}: refused, and nothing changed or deleted`, async () => {
+    it(`v8.basic with a capture at 11, then ${tag}: refused, and nothing changed or deleted`, async () => {
       const { worker, dump } = await migrated('v8.basic');
       await capture(worker);
       const before = await dump();
       const canvas = before.databases.find((db) => db.name === 'CanvasTabDB');
-      for (const store of ['operations', 'changes']) {
+      for (const store of ['operations', 'changes', 'daily_index']) {
         assert.ok(canvas.stores.find((found) => found.name === store).records.length > 0, `the capture left ${store} rows`);
       }
       const { error } = await rollBack(worker, tag);
@@ -162,14 +178,14 @@ describe('going back to 1.4.1 with a file it imports', () => {
     const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome, worker: false });
     const points = await loadPageModule(page, 'js/kernel/adapters/indexeddb/recovery-points.js');
     const { openWithoutUpgrade } = await loadPageModule(page, 'js/kernel/adapters/indexeddb/shapes.js');
-    // A point a later run takes, as #17 PR 3b's step 11 will, holds the notes with their group
+    // A point a later run takes, as a later build's step past 11 will, holds the notes with their group and keys
     const io = { keyRange: IDBKeyRange, crypto: webcrypto, limits: points.DEFAULT_LIMITS };
     const source = await openWithoutUpgrade(worker.indexedDB, 'CanvasTabDB');
     const recovery = await points.openRecovery(worker.indexedDB, { create: false });
     const createdAt = Date.now() + 60 * 1000;
     const { point, progress } = await points.startPoint(recovery, {
       id: `pre-migration-${createdAt}`, kind: 'pre-migration', sourceShape: 'current', sourceVersion: source.version,
-      structuralVersion: 10, logicalVersion: 2, target: 11, stores: points.storesToCopy(source), createdAt,
+      structuralVersion: 11, logicalVersion: 3, target: 12, stores: points.storesToCopy(source), createdAt,
     });
     await points.copyPoint({ source, recovery, point, progress, io });
     const stored = (await points.listPoints(recovery)).find((found) => found.id === point.id);
@@ -183,7 +199,7 @@ describe('going back to 1.4.1 with a file it imports', () => {
     const file = JSON.parse(JSON.stringify(await copy.export(point.id)));
     assert.ok(file.canvases.length > 0);
     for (const note of [...file.canvases, ...file.trashedCanvases]) {
-      for (const field of ['placement', 'kind', 'lifecycle']) assert.equal(field in note, false, `${note.id}: ${field}`);
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, `${note.id}: ${field}`);
     }
     const { env, Storage } = await release141();
     const check = Storage.validateImport(file);
@@ -195,8 +211,8 @@ describe('going back to 1.4.1 with a file it imports', () => {
     for (const note of imported) assert.equal('placement' in note, false, note.name);
   });
 
-  it("this build's Export JSON, taken after the upgrade, imports through the frozen v1.4.1 importData too", async () => {
-    const { worker } = await migrated('v8.basic');
+  it("this build's Export JSON, taken after the upgrade, holds no field 1.4.x doesn't know, and imports through the frozen v1.4.1 importData too", async () => {
+    const { worker } = await migrated('v8.evening-daily-notes');
     // The new tab's own Storage, on the version-11 database
     const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
     page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
@@ -206,6 +222,11 @@ describe('going back to 1.4.1 with a file it imports', () => {
     const blob = await Current.exportAllAsBlob();
     const file = JSON.parse(await blob.text());
     assert.ok(file.canvases.length > 0);
+    for (const note of file.canvases) {
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, `${note.id}: ${field}`);
+    }
+    // A Daily Note logical 3 moved goes out under its new date, the one its name gives
+    assert.equal(file.canvases.find((note) => note.id === 'daily-oct-7-evening').dateStr, '2025-10-07');
     const { env, Storage } = await release141();
     const check = Storage.validateImport(file);
     assert.equal(check.ok, true, check.reason);
