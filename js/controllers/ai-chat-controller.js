@@ -2444,11 +2444,28 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     return api.getAIPromptTemplatesForScope(this.aiPromptTemplates, scope);
   }
 
+  /**
+   * The prompt templates as stored, read through the settings port. A read that works and
+   * finds no list of them stored shows the defaults and saves them, as 1.4.x seeded them. A
+   * read that fails shows the defaults too, and writes nothing: 1.4.x saved them over the
+   * templates it couldn't read.
+   * @returns {Promise<Array<Object>>}
+   */
   async loadAIPromptTemplates() {
-    const { aiPromptTemplates: savedTemplates } = await this.settings.workspaceDataOr({ aiPromptTemplates: null });
+    let stored;
+    try {
+      stored = await this.settings.workspaceData(['aiPromptTemplates']);
+    } catch (error) {
+      // As getSetting warned of a failed read
+      console.warn('Error getting setting:', error);
+      this.aiPromptTemplates = this.getDefaultAIPromptTemplates();
+      this.renderAIPromptSuggestions();
+      return this.aiPromptTemplates;
+    }
+    const savedTemplates = stored.aiPromptTemplates;
     this.aiPromptTemplates = this.sanitizeAIPromptTemplates(savedTemplates);
 
-    if (savedTemplates === null || !Array.isArray(savedTemplates)) {
+    if (!Array.isArray(savedTemplates)) {
       try {
         await this.settings.savePromptTemplates(this.aiPromptTemplates);
       } catch (error) {
