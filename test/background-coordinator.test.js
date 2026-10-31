@@ -65,10 +65,13 @@ function pagePort(surface = 'popup') {
   return {
     port,
     received,
+    /** Send `frame` to the worker, as the page's client would */
+    send(frame) {
+      for (const listener of onMessage) listener(JSON.stringify(frame));
+    },
     /** Say hello, as #13's client does on its first send */
     hello(sessionId) {
-      const frame = { frame: 'hello', protocol: { ...limits.PROTOCOL_VERSION }, extensionVersion: '1.4.1', surface, sessionId };
-      for (const listener of onMessage) listener(JSON.stringify(frame));
+      this.send({ frame: 'hello', protocol: { ...limits.PROTOCOL_VERSION }, extensionVersion: '1.4.1', surface, sessionId });
     },
   };
 }
@@ -167,6 +170,36 @@ describe("the coordinator's welcome", () => {
   });
 });
 
+describe("the coordinator's health (system.coordinatorHealth)", () => {
+  it("answers a page with what its welcome says, when its start began, and the commands it ran by outcome", async () => {
+    const worker = await loadBackground();
+    await worker.dispatch('commands.onCommand', 'capture-page');
+    await worker.drain();
+    const page = pagePort();
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('session-1');
+    page.send({
+      frame: 'request',
+      requestId: 'r1',
+      operation: 'system.coordinatorHealth',
+      version: 1,
+      deadline: Date.now() + 10_000,
+      payload: { type: 'system.coordinatorHealth' },
+    });
+    await worker.drain();
+    const [welcome, response] = page.received;
+    assert.deepEqual([response.frame, response.requestId, response.result.kind], ['response', 'r1', 'ready']);
+    const { startedAt, ...health } = response.result.data;
+    assert.ok(Number.isSafeInteger(startedAt) && startedAt <= Date.now(), String(startedAt));
+    assert.deepEqual(health, {
+      status: 'ready',
+      coordinatorId: welcome.coordinatorId,
+      commands: [{ outcome: 'committed', count: 1 }],
+      oldestOrphanedEntryAt: null,
+    });
+  });
+});
+
 describe('a worker whose storage can\'t be reached', () => {
   it('keeps every listener, creates the menus, and answers a capture and a hello with why', async () => {
     const worker = await loadBackground({ start: false, opens: false, setup: noStorage });
@@ -239,6 +272,15 @@ describe("a worker whose coordinator can't serve", () => {
     welcome: { status: 'degraded', reason: 'coordinator-unavailable' },
   };
 
+  /** The coordinator's start failure and each capture's, and the incidents they raise (#20) */
+  function assertUnavailableJournaled({ events, incidents }) {
+    assert.deepEqual(events, ['coordinator.start-failed', 'capture.failed', 'capture.failed']);
+    assert.deepEqual([...incidents].sort(), [
+      ['capture', 'capture-failed'],
+      ['coordinator', 'start-failed'],
+    ]);
+  }
+
   for (const failTrust of [false, true]) {
     it(`whose kernel can't be built keeps its menus, and answers each capture and a hello as unavailable${failTrust ? ", with a journal that won't open" : ''}`, async () => {
       const opens = [];
@@ -253,7 +295,7 @@ describe("a worker whose coordinator can't serve", () => {
       assert.deepEqual(Object.keys(worker.listenerCounts()).sort(), Object.keys(LISTENERS).sort());
       assert.deepEqual(await useWorker(worker), UNAVAILABLE);
       assert.equal(opens.includes('CanvasTabDB'), false);
-      if (!failTrust) assert.deepEqual((await trustOf(worker.indexedDB)).events, ['capture.failed', 'capture.failed']);
+      if (!failTrust) assertUnavailableJournaled(await trustOf(worker.indexedDB));
     });
   }
 
@@ -271,7 +313,7 @@ describe("a worker whose coordinator can't serve", () => {
     await worker.drain();
     assert.deepEqual(Object.keys(worker.listenerCounts()).sort(), Object.keys(LISTENERS).sort());
     assert.deepEqual(await useWorker(worker), UNAVAILABLE);
-    assert.deepEqual((await trustOf(worker.indexedDB)).events, ['capture.failed', 'capture.failed']);
+    assertUnavailableJournaled(await trustOf(worker.indexedDB));
     const errors = worker.env.logs.filter((log) => log.level === 'error').map((log) => String(log.args[0]));
     assert.ok(errors.includes("NewTabNote: the background coordinator couldn't be built"), JSON.stringify(errors));
   });

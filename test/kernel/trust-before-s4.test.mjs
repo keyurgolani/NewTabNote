@@ -27,6 +27,7 @@ const SITES = /** @type {const} */ ([
   ['indexer.start-failed', 'indexer.started', 'index/indexer-start-failed/-'],
   ['backup.auto-failed', 'backup.auto-succeeded', 'backup/auto-backup-failed/-'],
   ['capture.failed', 'capture.committed', 'capture/capture-failed/-'],
+  ['coordinator.start-failed', 'coordinator.started', 'coordinator/start-failed/-'],
 ]);
 
 /**

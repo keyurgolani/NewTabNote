@@ -198,6 +198,16 @@ export const PROVIDERS = Object.freeze([
     load: async () => (await import('./index-lag.js')).indexLag,
   }),
   provider({
+    id: 'coordinator',
+    group: 'platform',
+    rank: 5,
+    label: 'Background tasks',
+    operation: 'coordinator.query-health',
+    observes: ['start-failed'],
+    freshnessMs: HOUR,
+    load: async () => (await import('./platform.js')).coordinator,
+  }),
+  provider({
     id: 'messaging',
     group: 'platform',
     rank: 10,

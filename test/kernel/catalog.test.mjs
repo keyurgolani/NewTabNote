@@ -153,7 +153,7 @@ const QUERY_SAMPLES = {
 };
 
 /** The coordinator's own queries, which take no field */
-const SYSTEM_SAMPLES = { 'system.messagingHealth': {} };
+const SYSTEM_SAMPLES = { 'system.messagingHealth': {}, 'system.coordinatorHealth': {} };
 
 /**
  * Every entry of every catalog: the kernel's commands and queries, and the coordinator's own
@@ -383,6 +383,33 @@ describe('schema modules (#13, AC1)', () => {
       { ...health, requests: [{ operation: 'Bad Name', count: 1 }] },
       { ...health, rejections: [{ reason: 'storage', code: 'x', count: 1 }] },
       { ...health, latency: [{ underMs: 7, count: 1 }] },
+    ]) {
+      assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success, false, JSON.stringify(data));
+    }
+  });
+
+  it('system.coordinatorHealth answers ids, counts, times, and codes only (#35)', () => {
+    const health = {
+      status: 'degraded',
+      reason: 'starting',
+      coordinatorId: 'c1',
+      startedAt: NOW,
+      commands: [{ outcome: 'committed', count: 2 }],
+      oldestOrphanedEntryAt: null,
+    };
+    const { result } = moduleOf('system.coordinatorHealth');
+    assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data: health }).success, true);
+    const { reason, ...ready } = health;
+    assert.equal(
+      v.safeParse(result, { kind: 'ready', asOf: NOW, data: { ...ready, status: 'ready', startedAt: null } }).success,
+      true,
+    );
+    for (const data of [
+      { ...health, reason: 'Disk full' },
+      { ...health, lastError: 'boom' },
+      { ...health, commands: [{ outcome: 'saved', count: 1 }] },
+      { ...health, status: 'starting' },
+      { ...health, oldestOrphanedEntryAt: 'yesterday' },
     ]) {
       assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success, false, JSON.stringify(data));
     }

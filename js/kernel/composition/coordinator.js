@@ -9,21 +9,26 @@
  * Each welcome says what it can do (#13, "Handshake and compatibility"): `starting` until the
  * database is open, then `ready`, or degraded and why: the open's code (`newer-schema`,
  * `missing-core-stores`), else `storage-unavailable`, and `coordinator-unavailable` when the
- * kernel couldn't be built at all, which every command then answers too, and the worker's
- * console shows why. A start writes first-run settings only; the read-only integrity check
- * runs after an install or an update (`installed`). Loading this module touches no browser API.
+ * kernel couldn't be built at all, which every command then answers too. A start writes
+ * first-run settings only; the read-only integrity check runs after an install or an update
+ * (`installed`). system.coordinatorHealth says the same, with this instance's start and the
+ * commands it ran by outcome. Loading this module touches no browser API.
  *
- * What it journals is best effort (#20, "Diagnostic journal"): a journal that throws changes
- * nothing it answers.
+ * A kernel that can't be built is `coordinator.start-failed` (#20, "Diagnostic journal"),
+ * which raises the `coordinator` provider's incident, and a start that opens is
+ * `coordinator.started`, which resolves it. What it journals is best effort: a journal that
+ * throws changes nothing it answers.
  */
 
-import { failed, unavailable } from '../core/contracts/outcomes.js';
+import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './messaging.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../core/contracts/outcomes.js').Unavailable} Unavailable */
+/** @typedef {import('../core/contracts/operations/system-coordinator-health.js').CoordinatorHealth} CoordinatorHealth */
 /** @typedef {import('../core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
+/** @typedef {import('../core/messaging/router.js').Handler} Handler */
 
 /**
  * What the coordinator journals through: the worker's failure events (./trust.js's
@@ -37,7 +42,9 @@ import { randomIds } from './messaging.js';
  * @property {string} instanceId - this worker instance's, the router's coordinatorId
  * @property {() => Promise<void>} start - once per instance; later calls share the first
  * @property {() => CoordinatorStatus} status - what a welcome says now
- * @property {() => Client} client - the kernel the worker's own handlers run commands on
+ * @property {() => CoordinatorHealth} health - what system.coordinatorHealth answers with
+ * @property {() => Client} client
+ *   The kernel the worker's own handlers run commands on, which counts each outcome by kind
  * @property {(reason: unknown) => Promise<void>} installed
  *   Starts it for an onInstalled event, and after an install or an update runs the read-only
  *   integrity check once
@@ -63,12 +70,14 @@ export function coordinatorInstanceId() {
 }
 
 /**
+ * Journals `code` through `events`, and never throws, whatever `events` does: js/background.js
+ * journals through it too, in top-level code, where a throw would stop the worker's start
  * @param {Events | null | undefined} events
  * @param {string} code
  * @param {Record<string, unknown>} fields
  * @param {unknown} [error]
  */
-function journal(events, code, fields, error) {
+export function journal(events, code, fields, error) {
   try {
     if (events) events.event(code, fields, error);
   } catch {
@@ -111,6 +120,17 @@ function reasonOf({ cause, code }) {
 const reportUnbuilt = error => console.error("NewTabNote: the background coordinator couldn't build its kernel", error);
 
 /**
+ * The router's handler for system.coordinatorHealth, which asks whichever coordinator
+ * `current` gives at the time, since js/background.js installs the router before it builds one
+ * @param {() => Coordinator} current
+ * @param {{now(): number}} [clock]
+ * @returns {Readonly<Record<string, Handler>>}
+ */
+export function coordinatorHandlers(current, clock = systemClock) {
+  return Object.freeze({ 'system.coordinatorHealth': () => ready(clock.now(), current().health()) });
+}
+
+/**
  * A coordinator that can't serve: what js/background.js keeps when building the real one
  * threw, and what it answers with until that's done
  * @param {string} instanceId
@@ -123,6 +143,14 @@ export function unavailableCoordinator(instanceId) {
     instanceId,
     start,
     status: () => ({ status: /** @type {const} */ ('degraded'), reason: UNAVAILABLE }),
+    health: () => ({
+      status: /** @type {const} */ ('degraded'),
+      reason: UNAVAILABLE,
+      coordinatorId: instanceId,
+      startedAt: null,
+      commands: [],
+      oldestOrphanedEntryAt: null,
+    }),
     client: () => client,
     installed: start,
   });
@@ -130,8 +158,9 @@ export function unavailableCoordinator(instanceId) {
 
 /**
  * The worker's coordinator. `makeKernel` builds the worker's kernel, which opens the database
- * as it's built, so it's called on the first start, never before; a throw from it leaves the
- * coordinator unavailable for this instance, and goes to `report`.
+ * as it's built, so it's called on the first start, never before. A throw from it leaves the
+ * coordinator unavailable for this instance, is `coordinator.start-failed`, and goes to
+ * `report`.
  * @param {{
  *   instanceId: string,
  *   makeKernel: () => Client,
@@ -158,15 +187,37 @@ export function createCoordinator({
   const unbuilt = unavailableClient(unavailable('coordinator', UNAVAILABLE, false));
   /** @type {Promise<void> | null} */
   let started = null;
+  /** @type {number | null} */
+  let startedAt = null;
+  /** @type {Map<string, number>} each command outcome's kind, and how many there were */
+  const outcomes = new Map();
+
+  /**
+   * `built`, counting each command's outcome by kind for system.coordinatorHealth
+   * @param {Client} built
+   * @returns {Client}
+   */
+  const counted = built => {
+    /** @param {import('../core/contracts/commands.js').Command} command */
+    const execute = async command => {
+      const outcome = await built.execute(command);
+      outcomes.set(outcome.kind, (outcomes.get(outcome.kind) ?? 0) + 1);
+      return outcome;
+    };
+    // The same overloads as the kernel's own execute, which this calls
+    return Object.freeze({ ...built, execute: /** @type {Client['execute']} */ (/** @type {unknown} */ (execute)) });
+  };
 
   const run = async () => {
     state = 'starting';
-    const openStartedAt = clock.now();
+    const began = clock.now();
+    startedAt = began;
     try {
-      kernel = makeKernel();
+      kernel = counted(makeKernel());
     } catch (error) {
       state = 'unavailable';
       reason = UNAVAILABLE;
+      journal(events, 'coordinator.start-failed', {}, error);
       try {
         report(error);
       } catch {
@@ -189,12 +240,14 @@ export function createCoordinator({
       journal(
         events,
         'storage.open-failed',
-        { subjectId: 'CanvasTabDB', durationMs: Math.max(0, clock.now() - openStartedAt) },
+        { subjectId: 'CanvasTabDB', durationMs: Math.max(0, clock.now() - began) },
         failure,
       );
       return;
     }
     state = 'ready';
+    // A start that opened resolves a coordinator.start-failed an earlier instance raised
+    journal(events, 'coordinator.started', {});
   };
 
   const start = () => {
@@ -202,14 +255,27 @@ export function createCoordinator({
     return started;
   };
 
+  /** @returns {CoordinatorStatus} */
+  const status = () => {
+    if (state === 'ready') return { status: 'ready' };
+    return { status: 'degraded', reason: state === 'idle' || state === 'starting' ? 'starting' : reason };
+  };
+
   return Object.freeze({
     instanceId,
     start,
-    status() {
-      if (state === 'ready') return { status: /** @type {const} */ ('ready') };
-      const now = state === 'idle' || state === 'starting' ? 'starting' : reason;
-      return { status: /** @type {const} */ ('degraded'), reason: now };
-    },
+    status,
+    health: () => ({
+      ...status(),
+      coordinatorId: instanceId,
+      startedAt,
+      commands: [...outcomes].map(([outcome, count]) => ({
+        outcome: /** @type {CoordinatorHealth['commands'][number]['outcome']} */ (outcome),
+        count,
+      })),
+      // Until #35's journal (slice 3) there are no journal entries to replay
+      oldestOrphanedEntryAt: null,
+    }),
     client: () => kernel || unbuilt,
     async installed(installReason) {
       await start();

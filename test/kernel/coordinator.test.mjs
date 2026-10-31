@@ -2,13 +2,16 @@
 // a fake kernel: it builds the worker's kernel on its first start and never before, says
 // what each welcome says (`starting`, `ready`, or degraded and why), and after an install or
 // an update runs the read-only integrity check once. A kernel that can't be built leaves it
-// unavailable, and every command answers so. Nothing it journals or reports changes what it
-// answers. test/background-coordinator.test.js runs it in js/background.js.
+// unavailable, every command answers so, and it's `coordinator.start-failed`; a start that
+// opens is `coordinator.started`. system.coordinatorHealth says the same, with when it started
+// and its commands by outcome. Nothing it journals or reports changes what it answers.
+// test/background-coordinator.test.js runs it in js/background.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  coordinatorHandlers,
   coordinatorInstanceId,
   createCoordinator,
   unavailableCoordinator,
@@ -100,10 +103,13 @@ describe('the background coordinator (#35 slice 1)', () => {
     kernel.open();
     await first;
     assert.deepEqual(coordinator.status(), { status: 'ready' });
-    assert.equal(coordinator.client(), kernel.client);
     await coordinator.start();
     assert.equal(built.count, 1);
-    assert.deepEqual(seen, []);
+    // A start that opened resolves a coordinator.start-failed an earlier instance raised (#20)
+    assert.deepEqual(seen, [['coordinator.started', {}, undefined]]);
+    // The worker's handlers run on the kernel it built
+    await coordinator.client().execute({ type: 'runIntegrityCheck', commandId: 'c1' });
+    assert.deepEqual(kernel.executed, [{ type: 'runIntegrityCheck', commandId: 'c1' }]);
   });
 
   it("says why it's degraded when the open failed, and journals the failed open with how long it took", async () => {
@@ -123,7 +129,7 @@ describe('the background coordinator (#35 slice 1)', () => {
       assert.deepEqual(coordinator.status(), { status: 'degraded', reason }, reason);
       assert.deepEqual(seen, [['storage.open-failed', { subjectId: 'CanvasTabDB', durationMs: 250 }, failure]], reason);
       // Its commands answer the failure themselves
-      assert.equal(coordinator.client(), kernel.client);
+      assert.equal(await coordinator.client().whenReady(), failure, reason);
     }
 
     const kernel = fakeKernel({ rejects: true });
@@ -139,7 +145,7 @@ describe('the background coordinator (#35 slice 1)', () => {
     );
   });
 
-  it("is unavailable when its kernel can't be built: every command answers so, and the report hears why once", async () => {
+  it("is unavailable when its kernel can't be built: every command answers so, and the journal and the report hear why once", async () => {
     const thrown = new Error('no Storage');
     /** @type {unknown[]} */
     const reported = [];
@@ -159,7 +165,8 @@ describe('the background coordinator (#35 slice 1)', () => {
     await coordinator.installed('install');
     assert.equal(builds, 1);
     assert.deepEqual(reported, [thrown]);
-    assert.deepEqual(seen, []);
+    // #20 raises the coordinator provider's incident from it
+    assert.deepEqual(seen, [['coordinator.start-failed', {}, thrown]]);
     assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'coordinator-unavailable' });
     const client = coordinator.client();
     assert.deepEqual(await client.execute({ type: 'runIntegrityCheck', commandId: client.ids.next() }), UNAVAILABLE);
@@ -197,6 +204,66 @@ describe('the background coordinator (#35 slice 1)', () => {
     });
     await unbuilt.start();
     assert.deepEqual(unbuilt.status(), { status: 'degraded', reason: 'coordinator-unavailable' });
+  });
+});
+
+describe("the coordinator's health (#35 slice 1, system.coordinatorHealth)", () => {
+  it('says what the welcome says, when its start began, and the commands it ran by outcome', async () => {
+    const kernel = fakeKernel();
+    let now = 1000;
+    const { coordinator } = coordinatorOn(kernel, { clock: { now: () => now } });
+    const before = {
+      status: 'degraded',
+      reason: 'starting',
+      coordinatorId: 'coordinator-1',
+      startedAt: null,
+      commands: [],
+      oldestOrphanedEntryAt: null,
+    };
+    assert.deepEqual(coordinator.health(), before);
+    const started = coordinator.start();
+    now = 1500;
+    kernel.open();
+    await started;
+    const client = coordinator.client();
+    await client.execute({ type: 'runIntegrityCheck', commandId: 'c1' });
+    await client.execute({ type: 'runIntegrityCheck', commandId: 'c2' });
+    kernel.client.execute = async () => ({ kind: 'unavailable', cause: 'storage', code: 'quota', retryable: false });
+    await client.execute({ type: 'runIntegrityCheck', commandId: 'c3' });
+    assert.deepEqual(coordinator.health(), {
+      status: 'ready',
+      coordinatorId: 'coordinator-1',
+      startedAt: 1000,
+      commands: [
+        { outcome: 'committed', count: 2 },
+        { outcome: 'unavailable', count: 1 },
+      ],
+      oldestOrphanedEntryAt: null,
+    });
+  });
+
+  it("answers through the router's handler from the coordinator there is when it's asked", async () => {
+    /** @type {import('../../js/kernel/composition/coordinator.js').Coordinator} */
+    let current = unavailableCoordinator('coordinator-1');
+    const handlers = coordinatorHandlers(() => current, { now: () => 42 });
+    const ask = () => /** @type {any} */ (handlers['system.coordinatorHealth']({}, /** @type {any} */ ({})));
+    assert.deepEqual(ask(), {
+      kind: 'ready',
+      asOf: 42,
+      data: {
+        status: 'degraded',
+        reason: 'coordinator-unavailable',
+        coordinatorId: 'coordinator-1',
+        startedAt: null,
+        commands: [],
+        oldestOrphanedEntryAt: null,
+      },
+    });
+    const kernel = fakeKernel();
+    kernel.open();
+    current = coordinatorOn(kernel).coordinator;
+    await current.start();
+    assert.equal(ask().data.status, 'ready');
   });
 });
 

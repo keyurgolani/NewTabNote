@@ -81,7 +81,7 @@ describe('the baseline policy', () => {
     assert.deepEqual(shared, [], 'a command and a query share a name, so the policy could read the wrong entry');
   });
 
-  it("reads the coordinator's own queries from their entries too, and lets the pages ask for messaging health", () => {
+  it("reads the coordinator's own queries from their entries too, and lets the pages ask for its health", () => {
     for (const [type, entry] of Object.entries(SYSTEM_QUERIES)) {
       for (const surface of SURFACES) {
         assert.equal(
@@ -91,10 +91,10 @@ describe('the baseline policy', () => {
         );
       }
     }
-    const asking = SURFACES.filter(
-      surface => policy.authorize({ type: 'system.messagingHealth' }, CALLERS[surface]).allowed,
-    );
-    assert.deepEqual(asking, ['newtab', 'popup', 'sidepanel', 'recovery']);
+    for (const type of ['system.messagingHealth', 'system.coordinatorHealth']) {
+      const asking = SURFACES.filter(surface => policy.authorize({ type }, CALLERS[surface]).allowed);
+      assert.deepEqual(asking, ['newtab', 'popup', 'sidepanel', 'recovery'], type);
+    }
   });
 
   it('rejects a request the catalog lacks, from every surface', () => {
