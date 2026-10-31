@@ -58,6 +58,11 @@ import { settingKey } from '../indexeddb/settings.js';
  *   1.4.x's import, recovery copy before Replace all included, in one transaction
  * @property {() => Promise<void>} createAutoBackup - 1.4.x's automatic backup, keeping the newest three
  * @property {(extra?: Record<string, unknown>) => Promise<Blob>} exportAllAsBlob - 1.4.x's export file, with `extra` fields
+ * @property {string[]} missingStores - the stores the open database lacks
+ * @property {() => Promise<Record<string, unknown>>} exportRawStores - every store but settings, read as it is
+ * @property {(data: unknown) => unknown} validateImport - a parsed backup's check, which writes nothing
+ * @property {(listener: (notice: Readonly<{type: 'settings.changed', keys: readonly string[]}>) => void) => () => void} onSettingsChange
+ *   Runs `listener` with the keys of each chrome.storage settings change, and answers the function that stops it
  */
 
 /**

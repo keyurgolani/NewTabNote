@@ -6,7 +6,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createLegacyEnv, createDatabase, FakeDocument, settle, plain } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, FakeDocument, settle, plain, startEditorClient } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/settings-controller.js'];
 
@@ -16,6 +16,9 @@ async function setup() {
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  // The page's settings port, which Settings hears of changes and reads them again through, as App gives it
+  await startEditorClient(env);
+  await env.noteList.settled();
   /** Tells every onChanged listener what chrome.storage reported, as Chrome does */
   const report = (changes, area = 'local') => {
     env.chrome.api.storage.onChanged.listeners.slice().forEach((listener) => listener(changes, area));
@@ -45,9 +48,9 @@ describe('settings.changed (#13)', () => {
   });
 
   it('lets Settings read again the values it applies, so a change from another tab still lands', async () => {
-    const { env, Storage, report } = await setup();
+    const { env, report } = await setup();
     const SettingsController = env.get('SettingsController');
-    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: null });
+    const settings = new SettingsController({ settings: env.settingsClient, domRefs: null, logger: null });
     const applied = [];
     settings.onSidebarStateChanged = (key, value) => applied.push(['sidebar', key, value]);
     settings.onAISidebarWidthChanged = (value) => applied.push(['aiSidebarWidth', value]);
@@ -78,9 +81,9 @@ describe('settings.changed (#13)', () => {
     ]);
   });
   it("applies nothing for a setting it couldn't read again, rather than a missing value", async () => {
-    const { env, Storage, report } = await setup();
+    const { env, report } = await setup();
     const SettingsController = env.get('SettingsController');
-    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: null });
+    const settings = new SettingsController({ settings: env.settingsClient, domRefs: null, logger: null });
     const applied = [];
     settings.onSidebarStateChanged = (key, value) => applied.push([key, value]);
     await new Promise((resolve) => env.chrome.api.storage.local.set({ setting_sidebarOpen: true, setting_sidebarWidth: 300 }, resolve));

@@ -31,8 +31,9 @@ async function openTab(shared) {
   await startEditorClient(env);
   env.get('Utils').showToast = () => {};
   const settings = new (env.get('SettingsController'))({
-    storage: Storage,
     settings: env.settingsClient,
+    documentClient: env.documentClient,
+    validateBackup: env.validateBackup,
     domRefs: null,
     logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
@@ -81,7 +82,6 @@ describe('the settings port (#12 slice 6)', () => {
     const tab = await openTab();
     const { env } = tab;
     const builder = new (env.get('ThemeBuilderController'))({
-      storage: tab.Storage,
       settings: env.settingsClient,
       domRefs: null,
       logger: null,
@@ -126,7 +126,7 @@ describe('the settings port (#12 slice 6)', () => {
       env.chrome.writes().slice(before).map((write) => write.keys.slice().sort()),
       [['setting_autoTitleEnabled', 'setting_embeddingsEnabled', 'setting_insightsEnabled'], ['setting_hasCompletedOnboarding']],
     );
-    assert.equal(await Onboarding.hasCompleted(), true);
+    assert.equal(await Onboarding.hasCompleted(env.settingsClient), true);
   });
 
   it('a write that fails rejects with its kind and code, never what was being saved', async () => {
@@ -141,5 +141,148 @@ describe('the settings port (#12 slice 6)', () => {
         return true;
       },
     );
+  });
+});
+
+// #12 slice 7: the controllers read their settings through the port in place of Storage. Where
+// 1.4.x called getSetting, each key nothing is stored under, and every key when the read fails,
+// gets the default that call gave, and the console says the read failed as getSetting did.
+describe("the controllers' reads through the settings port (#12 slice 7)", () => {
+  const READ_FILES = [
+    ...FILES,
+    'js/theme-engine.js',
+    'js/controllers/sidebar-controller.js',
+    'js/controllers/ai-chat-controller.js',
+    'js/search.js',
+    'js/app.js',
+  ];
+  const SIDEBAR_STEPS = [
+    'updateSidebarState', 'applySidebarWidth', 'applySidebarViewMode', '_bindSidebarListeners', 'setupCalendar',
+    'setupSidebarResize', 'setupSidebarViewToggle', 'setupNoteContextMenu', '_bindBulkActions', '_bindSidebarDropHandlers',
+  ];
+
+  /** Settings as App makes it, on `settings` unless given */
+  const settingsOf = (env, settings = env.settingsClient) => new (env.get('SettingsController'))({
+    settings,
+    documentClient: env.documentClient,
+    validateBackup: env.validateBackup,
+    domRefs: null,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+
+  // [what reads, what's stored for it, its read, what it read from that, what it reads with nothing there]
+  const READS = [
+    ['the sidebar', { sidebarOpen: false, sidebarWidth: 300, sidebarSortMode: 'title', sidebarViewMode: 'cards' }, async (env) => {
+      const sidebar = new (env.get('SidebarController'))({
+        settings: env.settingsClient, storageState: env.storageState, domRefs: null, logger: null,
+      });
+      for (const step of SIDEBAR_STEPS) sidebar[step] = () => {};
+      await sidebar.init();
+      return [sidebar.sidebarOpen, sidebar.sidebarWidth, sidebar.sidebarSortMode, sidebar.sidebarViewMode];
+    }, [false, 300, 'title', 'cards'], [true, 260, 'updated', 'list']],
+    ["AI chat's conversations", {
+      aiChatHistory: [{ role: 'user', content: 'a question' }],
+      noteChatMessages: [{ content: 'a question', type: 'user' }],
+      globalChatHistory: [{ role: 'user', content: 'another' }],
+      globalChatMessages: [{ content: 'another', type: 'user' }],
+    }, async (env) => {
+      const chat = new (env.get('AIChatController'))({
+        settings: env.settingsClient, domRefs: null, logger: null, llm: null, documentClient: env.documentClient,
+      });
+      chat.addChatMessage = () => {};
+      chat.addGlobalChatMessage = () => {};
+      await chat.loadChatHistory();
+      return plain([chat.aiChatHistory, chat.noteChatMessages, chat.globalChatHistory, chat.globalChatMessages]);
+    }, [
+      [{ role: 'user', content: 'a question' }], [{ content: 'a question', type: 'user' }],
+      [{ role: 'user', content: 'another' }], [{ content: 'another', type: 'user' }],
+    ], [[], [], [], []]],
+    ["Settings' font", { font: 'serif' }, async (env) => {
+      await settingsOf(env).applyFont();
+      return env.document.documentElement.dataset.font;
+    }, 'serif', 'default'],
+    ["Settings' width", { width: 'wide' }, async (env) => {
+      const settings = settingsOf(env);
+      settings.updateWidthSelectorPill = () => {};
+      await settings.applyWidth();
+      return env.document.documentElement.dataset.width;
+    }, 'wide', 'default'],
+    ["auto-backup's check", { autoBackupEnabled: true, autoBackupFrequency: 1, lastBackupAt: 0 }, async (env) => {
+      let backups = 0;
+      await settingsOf(env, { ...env.settingsClient, createAutoBackup: async () => { backups += 1; } }).checkBackupStatus();
+      return backups;
+    }, 1, 0],
+    ["Replace all's trash retention", { trashRetention: 7 }, async (env) => {
+      const settings = settingsOf(env);
+      let message = '';
+      settings._dialogs = () => ({ confirmDialog: async (dialog) => { message = dialog.message; return false; } });
+      await settings._confirmReplaceAll();
+      return message.match(/for \d+ days/)[0];
+    }, 'for 7 days', 'for 30 days'],
+    ["the theme builder's starting colors", { theme: 'dark' }, async (env) => {
+      env.document.stub(['theme-builder-modal', 'theme-color-controls', { id: 'theme-builder-name', tag: 'input' }]);
+      const builder = new (env.get('ThemeBuilderController'))({ settings: env.settingsClient, domRefs: null, logger: null });
+      await builder.openThemeBuilder();
+      const Themes = env.get('Themes');
+      return plain(builder.tempThemeProperties)['--bg-primary'] === Themes.darkProperties['--bg-primary'] ? 'dark' : 'light';
+    }, 'dark', 'light'],
+    ['the theme the page starts with', { theme: 'dark' }, async (env) => {
+      const Themes = env.get('Themes');
+      await Themes.init();
+      return Themes.currentTheme;
+    }, 'dark', 'light'],
+    ['the theme App applies when it changes', { theme: 'dark' }, async (env) => {
+      const applied = [];
+      env.get('Themes').applyTheme = async (theme) => { applied.push(theme); };
+      await env.get('App').prototype.applyTheme.call({ settings: env.settingsClient });
+      return applied;
+    }, ['dark'], ['system']],
+    ['whether onboarding ran', { hasCompletedOnboarding: true }, async (env) => env.get('Onboarding').hasCompleted(env.settingsClient), true, false],
+  ];
+  const READ_KEYS = [...new Set(READS.flatMap(([, stored]) => Object.keys(stored)))];
+
+  /**
+   * A new tab whose chrome.storage holds `stored` and nothing else of what these reads read:
+   * startup stored some of 1.4.x's first-run values, which go. With `failing`, the next
+   * chrome.storage read fails.
+   */
+  async function tabWith(stored, { failing = false } = {}) {
+    const env = createLegacyEnv({ document: new FakeDocument() });
+    await createDatabase(env.indexedDB, { records: { canvases: [note('A', { name: 'Alpha' })] } });
+    env.load(...READ_FILES);
+    await env.get('Storage').init();
+    await startEditorClient(env);
+    await env.noteList.settled();
+    for (const key of READ_KEYS) delete env.chrome.local[`setting_${key}`];
+    for (const [key, value] of Object.entries(stored)) env.chrome.local[`setting_${key}`] = value;
+    const Themes = env.get('Themes');
+    Themes.connect({ settings: env.settingsClient });
+    // The fake document's style can't take custom properties
+    Themes.injectProperties = () => {};
+    if (failing) env.chrome.failNextGet();
+    return env;
+  }
+
+  for (const [what, stored, read, asStored, byDefault] of READS) {
+    it(`${what} reads what's stored, and 1.4.x's defaults where nothing is or the read fails`, async () => {
+      assert.deepEqual(await read(await tabWith(stored)), asStored, 'as stored');
+      assert.deepEqual(await read(await tabWith({})), byDefault, 'nothing stored');
+      const failing = await tabWith(stored, { failing: true });
+      assert.deepEqual(await read(failing), byDefault, 'the read fails');
+      assert.equal(failing.logs.filter(({ level, args }) => level === 'warn' && args[0] === 'Error getting setting:').length, 1);
+    });
+  }
+
+  it('a custom theme the page starts on, and the theme options, come from the themes the port lists', async () => {
+    const env = await tabWith({});
+    const themeId = await env.settingsClient.saveTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
+    env.chrome.local.setting_theme = themeId;
+    const Themes = env.get('Themes');
+    const injected = [];
+    Themes.injectProperties = (properties) => injected.push(plain(properties));
+    await Themes.init();
+    assert.deepEqual(injected, [{ '--bg-primary': '#101010' }]);
+    assert.equal(env.document.documentElement.getAttribute('data-theme'), 'dark');
+    assert.deepEqual(plain(await Themes.getThemeOptions()).at(-1), { id: themeId, name: 'Dusk', isCustom: true });
   });
 });

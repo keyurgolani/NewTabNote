@@ -24,13 +24,12 @@
         "Cannot find name 'SidebarController'.": 1,
         "Cannot find name 'SyncService'.": 2,
         "Cannot find name 'ThemeBuilderController'.": 1,
-        "Cannot find name 'Themes'.": 2,
         "Cannot find name 'confirmDialog'.": 1,
         "Cannot find name 'createDomRefs'.": 1,
         "Cannot find name 'createLogger'.": 1
       },
       "TS2339": {
-        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
         "Property 'value' does not exist on type 'HTMLElement'.": 1
       },
       "TS2552": {
@@ -148,7 +147,6 @@
         "Cannot find name 'DomRefs'.": 1,
         "Cannot find name 'JSZip'.": 1,
         "Cannot find name 'Logger'.": 1,
-        "Cannot find name 'Themes'.": 2,
         "Cannot find name 'confirmDialog'.": 1
       },
       "TS2339": {
@@ -223,8 +221,7 @@
     "js/controllers/theme-builder-controller.js": {
       "TS2304": {
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'Logger'.": 1,
-        "Cannot find name 'Themes'.": 4
+        "Cannot find name 'Logger'.": 1
       },
       "TS2339": {
         "Property 'ThemeBuilderController' does not exist on type 'Window & typeof globalThis'.": 1,
@@ -306,8 +303,7 @@
     },
     "js/onboarding.js": {
       "TS2339": {
-        "Property 'Onboarding' does not exist on type 'Window & typeof globalThis'.": 1,
-        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+        "Property 'Onboarding' does not exist on type 'Window & typeof globalThis'.": 1
       }
     },
     "js/popup.js": {
@@ -380,9 +376,7 @@
     },
     "js/theme-engine.js": {
       "TS2339": {
-        "Property 'Themes' does not exist on type 'Window & typeof globalThis'.": 1,
-        "Property 'getCustomThemes' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
-        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
+        "Property 'Themes' does not exist on type 'Window & typeof globalThis'.": 1
       },
       "TS2345": {
         "Argument of type '{}' is not assignable to parameter of type '{ [x: string]: string; }'.\n  Index signature for type 'string' is missing in type '{}'.": 1

@@ -4,16 +4,17 @@
  * prompt templates, and LLM settings.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js):
+ *   the panel's width, the chats, and the prompt templates are read and saved through it
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {LLMService} deps.llm
- * @param {Object} [deps.documentClient] - What the chat's title and insights writes go through
+ * @param {Object} deps.documentClient - What the chat reads notes, blocks, and search entries
+ *   through, as stored, and its title and insights writes go through
  *   (js/kernel/composition/document.js): each names its note, and none takes a note record
  */
 class AIChatController {
-  constructor({ storage, settings = null, domRefs, logger, llm, documentClient = null }) {
-    this.storage = storage;
+  constructor({ settings, domRefs, logger, llm, documentClient }) {
     /** @type {any} The page's settings port (js/kernel/composition/settings.js): the panel's width, the chats, and the prompt templates */
     this.settings = settings;
     this.domRefs = domRefs;
@@ -106,7 +107,7 @@ class AIChatController {
 
     // Initialize chat state
     this.aiSidebarOpen = false;
-    this.aiSidebarWidth = await this.storage.getSetting('aiSidebarWidth', 360);
+    this.aiSidebarWidth = (await this.settings.preferencesOr({ aiSidebarWidth: 360 })).aiSidebarWidth;
     this.aiActiveTab = 'note';
 
     // Load persisted chat history
@@ -338,13 +339,21 @@ class AIChatController {
   // ─── Chat history persistence ───
 
   async loadChatHistory() {
-    this.aiChatHistory = await this.storage.getSetting('aiChatHistory', []);
-    this.noteChatMessages = await this.storage.getSetting('noteChatMessages', []);
-    this.globalChatHistory = await this.storage.getSetting('globalChatHistory', []);
-    this.globalChatMessages = await this.storage.getSetting('globalChatMessages', []);
+    // Each as stored, or empty where nothing is or the read fails
+    const chats = await this.settings.workspaceDataOr({
+      aiChatHistory: [],
+      noteChatMessages: [],
+      globalChatHistory: [],
+      globalChatMessages: [],
+    });
+    this.aiChatHistory = chats.aiChatHistory;
+    this.noteChatMessages = chats.noteChatMessages;
+    this.globalChatHistory = chats.globalChatHistory;
+    this.globalChatMessages = chats.globalChatMessages;
 
-    // Cache display name for synchronous use in addChatMessage
-    this._cachedDisplayName = await this.storage.getSetting('displayName', 'U');
+    // The avatar's initial in addChatMessage. No version has ever saved a display name, so the
+    // setting 1.4.x read here was always its default.
+    this._cachedDisplayName = 'U';
 
     // Restore note chat UI
     if (this.noteChatMessages.length > 0) {
@@ -1564,7 +1573,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (sendBtn) sendBtn.disabled = true;
 
     try {
-      const allNotes = await this.storage.getAllNotes();
+      // As stored, other tabs' notes included
+      const allNotes = await this.documentClient.activeNotes();
 
       if (allNotes.length === 0) {
         this.addGlobalChatMessage('You don\'t have any notes yet. Create some notes first to search across them.', 'assistant');
@@ -1575,7 +1585,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
       // Sync search index data to SearchEngine before searching
       if (this.searchEngine) {
-        const searchIndexData = await this.storage.getSearchIndex();
+        const searchIndexData = await this.documentClient.searchEntries();
         this.searchEngine.updateIndex(searchIndexData);
       }
 
@@ -1593,7 +1603,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       for (const result of relevantResults) {
         const note = allNotes.find(n => n.id === result.id);
         if (note) {
-          const blocks = await this.storage.getElementsByNote(note.id);
+          const blocks = await this.documentClient.blocksAsStored(note.id);
           const content = blocks
             .sort((a, b) => (a.order || 0) - (b.order || 0))
             .map(b => this.extractBlockText(b))
@@ -2448,7 +2458,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   async loadAIPromptTemplates() {
-    const savedTemplates = await this.storage.getSetting('aiPromptTemplates', null);
+    const { aiPromptTemplates: savedTemplates } = await this.settings.workspaceDataOr({ aiPromptTemplates: null });
     this.aiPromptTemplates = this.sanitizeAIPromptTemplates(savedTemplates);
 
     if (savedTemplates === null || !Array.isArray(savedTemplates)) {

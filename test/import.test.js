@@ -114,11 +114,20 @@ async function snapshot(env) {
   return { db: await dumpDatabase(env.indexedDB), local: JSON.parse(JSON.stringify(env.chrome.local)) };
 }
 
-function makeController(env, Storage) {
+function makeController(env) {
   const SettingsController = env.get('SettingsController');
-  const controller = new SettingsController({ storage: Storage, settings: null, domRefs: null, logger: null });
-  // The page's settings port, as App gives it, once the page's kernel has started (openEditors)
+  const controller = new SettingsController({
+    settings: null,
+    documentClient: null,
+    validateBackup: null,
+    domRefs: null,
+    logger: null,
+  });
+  // The page's settings port, document client, and backup check, as App gives them, once the
+  // page's kernel has started (openEditors)
   Object.defineProperty(controller, 'settings', { get: () => env.settingsClient });
+  Object.defineProperty(controller, 'documentClient', { get: () => env.documentClient });
+  Object.defineProperty(controller, 'validateBackup', { get: () => env.validateBackup });
   return controller;
 }
 
@@ -172,7 +181,7 @@ describe('Import dialogs and refused packages (AC2)', () => {
 
   beforeEach(async () => {
     ({ env, Storage, toasts } = await setup());
-    controller = makeController(env, Storage);
+    controller = makeController(env);
   });
 
   for (const [how, dismiss] of [
@@ -340,8 +349,8 @@ describe('Merge (AC3)', () => {
   });
 
   it('the success toast counts what was imported and the orphan media skipped', async () => {
-    const { env: e, Storage: s, toasts } = await setup();
-    const controller = makeController(e, s);
+    const { env: e, toasts } = await setup();
+    const controller = makeController(e);
     const done = controller.importFromFile(fileOf(backup140()));
     choose(await waitForDialog(e, 'Import backup'), 'merge');
     await done;
@@ -403,7 +412,7 @@ describe('Replace all (AC4)', () => {
   });
 
   it('a failed recovery write stops the import with IndexedDB unchanged', async () => {
-    const controller = makeController(env, Storage);
+    const controller = makeController(env);
     const before = await dumpDatabase(env.indexedDB);
     env.chrome.failNextSet(new Error('Resource::kQuotaBytes quota exceeded'));
     const done = controller.importFromFile(fileOf(sameProfileBackup()));
@@ -429,7 +438,7 @@ describe('Replace all (AC4)', () => {
 
   it('after Replace all no pane stays on a trashed note, and none can save one back to active', async () => {
     const { tabs, editors, pip } = await openEditors(env, Storage);
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     typeInto(editors.primary, 'typed before import');
     await replaceAll(env, controller, sameProfileBackup());
@@ -457,7 +466,7 @@ describe('Replace all (AC4)', () => {
     tabs._setSplitView(true);
     tabs.setActiveEditorSide('right');
     tabs.openTabs.push({ noteId: 'D', name: 'Daily' });
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     await replaceAll(env, controller, sameProfileBackup());
 
@@ -474,7 +483,7 @@ describe('Replace all (AC4)', () => {
     await runUntil(env, editors.primary.loadNote('AR')); // archived: Replace all keeps it
     tabs._setSplitView(true);
     tabs.openTabs.push({ noteId: 'D', name: 'Daily' }); // the right pane's note, which Replace all trashes
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     await replaceAll(env, controller, sameProfileBackup());
 
@@ -498,7 +507,7 @@ describe('Replace all (AC4)', () => {
       const { tabs, editors } = await openEditors(env, Storage);
       tabs._setSplitView(true);
       tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
-      const controller = wireImport(makeController(env, Storage), tabs);
+      const controller = wireImport(makeController(env), tabs);
 
       await replaceAll(env, controller, backup);
 
@@ -517,7 +526,7 @@ describe('Replace all (AC4)', () => {
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'AR', name: 'Old daily' }, { noteId: 'E', name: 'Untitled' });
     tabs.activeTabIndex = 2;
     await tabs.saveTabs({ lastOpenedNoteId: 'E' });
-    const controller = makeController(env, Storage);
+    const controller = makeController(env);
     controller.onFlushEditors = () => tabs.flushEditorsForImport();
     controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
 
@@ -545,7 +554,7 @@ describe('Replace all (AC4)', () => {
     tabs._setSplitView(true);
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' }, { noteId: 'E', name: 'Untitled' });
     await tabs.saveTabs({ lastOpenedNoteId: 'A' });
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     await replaceAll(env, controller, sameProfileBackup());
 
@@ -563,7 +572,12 @@ describe('Replace all (AC4)', () => {
     await reloaded.init();
     await startEditorClient(page);
     page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
-    const restored = new (page.get('TabController'))({ storage: reloaded, settings: page.settingsClient, domRefs: null, logger: null });
+    const restored = new (page.get('TabController'))({
+      settings: page.settingsClient,
+      documentClient: page.documentClient,
+      domRefs: null,
+      logger: null,
+    });
     restored.editor = makeEditor(page, page.document);
     restored.secondaryEditor = makeEditor(page, page.document);
     await page.noteList.settled();
@@ -580,7 +594,7 @@ describe('Replace all (AC4)', () => {
 
   it('a page-hide write queued behind the commit cannot move a trashed note back to active', async () => {
     const { tabs, editors } = await openEditors(env, Storage);
-    const controller = makeController(env, Storage);
+    const controller = makeController(env);
     controller.onFlushEditors = () => tabs.flushEditorsForImport();
     controller.onReloadEditors = (ids, at) => tabs.reloadEditorsAfterImport(ids, at);
 
@@ -612,7 +626,7 @@ describe('Replace all (AC4)', () => {
 
   it('a chrome.storage write that fails after the commit still reports the import, opens the note, and refreshes', async () => {
     const { tabs, editors } = await openEditors(env, Storage);
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
     let refreshes = 0;
     controller.onRefreshNotesList = async () => { refreshes += 1; };
     // The commit lands, then the next chrome.storage.local write (the open tabs) fails
@@ -639,7 +653,7 @@ describe('Replace all (AC4)', () => {
     const { tabs } = await openEditors(env, Storage);
     const channel = { sent: [], postMessage(data) { this.sent.push(plain(data)); } };
     tabs.channel = channel;
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
     const realImport = Storage.importData.bind(Storage);
     Storage.importData = async (...args) => {
       const result = await realImport(...args);
@@ -659,7 +673,7 @@ describe('Merge and the tab bar', () => {
     const { env, Storage } = await setup();
     const { tabs, editors } = await openEditors(env, Storage);
     tabs.openTabs.push({ noteId: 'A', name: 'Alpha' });
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
     const newer = {
       version: 1,
       exportedAt: 1,
@@ -692,7 +706,7 @@ describe('Merge and the tab bar', () => {
     env.clock.tick(500);
     await runUntil(env, editors.secondary.flushSave());
     assert.equal(plain(await Storage.getAllNotes())[0].id, 'D');
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     const done = controller.importFromFile(fileOf(backup140()));
     choose(await waitForDialog(env, 'Import backup'), 'merge');
@@ -713,7 +727,7 @@ describe('Merge and the tab bar', () => {
     await Storage.permanentlyDeleteNote('A'); // another tab
     await runUntil(env, editors.primary.flushSave());
     assert.equal(editors.primary.noteGone, true);
-    const controller = wireImport(makeController(env, Storage), tabs);
+    const controller = wireImport(makeController(env), tabs);
 
     const done = controller.importFromFile(fileOf(backup140()));
     choose(await waitForDialog(env, 'Import backup'), 'merge');
@@ -728,7 +742,7 @@ describe('Merge and the tab bar', () => {
 describe('The import file input', () => {
   it('clears after an import, and after one that throws, so the same file can be picked again', async () => {
     const { env, Storage } = await setup();
-    const controller = makeController(env, Storage);
+    const controller = makeController(env);
     env.document.stub(['settings-modal', 'settings-btn', 'import-btn', { id: 'import-input', tag: 'input' }]);
     controller.setupSettings();
     const input = env.document.getElementById('import-input');
@@ -780,7 +794,12 @@ async function openEditors(env, Storage) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
+  const tabs = new TabController({
+    settings: env.settingsClient,
+    documentClient: env.documentClient,
+    domRefs: null,
+    logger: null,
+  });
   tabs.onCreateNote = () => Storage.createNote('Untitled');
   const primary = makeEditor(env, env.document, { root: panes['editor-container'] });
   const secondary = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });

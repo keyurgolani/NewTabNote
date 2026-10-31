@@ -3,13 +3,15 @@
  * search index updates, embedding generation, and note export/import.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
+ * @param {DatabaseManager} deps.storage - js/storage.js's, which the search index and vector
+ *   calls go through until #22 moves them
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} deps.llm - The AI port (js/services/ai-port.mjs) the jobs call the provider through
  * @param {Object} [deps.documentClient] - What the title and insights jobs read and write
  *   through (js/kernel/composition/document.js): each write names its note, and none takes a
- *   note record
+ *   note record. The export, the search index, and the embeddings read notes and blocks
+ *   through it, as stored.
  */
 /**
  * The error a job throws when the kernel didn't store its write: its kind and code, never the
@@ -257,13 +259,13 @@ class NotesManager {
    */
   async exportNoteById(noteId) {
     try {
-      const note = await this.storage.getNote(noteId);
+      const note = await this.documentClient.readNote(noteId);
       if (!note) {
         Utils.showToast('Note not found', 'error');
         return;
       }
 
-      const blocks = await this.storage.getElementsByNote(noteId);
+      const blocks = await this.documentClient.blocksAsStored(noteId);
 
       // Build markdown content
       let markdown = `# ${note.name || 'Untitled'}\n\n`;
@@ -1242,7 +1244,7 @@ class NotesManager {
     if (!this.indexerWorker) return;
     const blocksByNote = {};
     for (const note of this.notes) {
-      blocksByNote[note.id] = await this.storage.getElementsByNote(note.id);
+      blocksByNote[note.id] = await this.documentClient.blocksAsStored(note.id);
     }
     this.indexerWorker.postMessage({
       type: 'INDEX_NOTES',
@@ -1257,9 +1259,9 @@ class NotesManager {
   async updateNoteIndex(noteId) {
     if (!this.indexerWorker) return;
     // The note as stored, so the index never takes an older name than the note has
-    const note = await this.storage.getNote(noteId);
+    const note = await this.documentClient.readNote(noteId);
     if (!note || note.trashed || note.archived || note.isTemplate) return;
-    const blocks = await this.storage.getElementsByNote(noteId);
+    const blocks = await this.documentClient.blocksAsStored(noteId);
     this.indexerWorker.postMessage({
       type: 'UPDATE_NOTE',
       data: { note, blocks }
@@ -1322,7 +1324,7 @@ class NotesManager {
 
     for (let i = 0; i < notesToEmbed.length; i++) {
       const note = notesToEmbed[i];
-      const elements = await this.storage.getElementsByNote(note.id);
+      const elements = await this.documentClient.blocksAsStored(note.id);
       const content = elements
         .filter(el => el.type === 'text')
         .map(el => el.content)

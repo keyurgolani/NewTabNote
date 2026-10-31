@@ -49,9 +49,14 @@ async function openPage({ kernelNow, pageNow } = {}) {
   const page = { ...booted, noteList: booted.page.noteList, get refreshes() { return booted.page.refreshes; } };
   await page.tabs.openNoteInNewTab('A');
   env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
-  const deps = { storage: page.Storage, domRefs: null, logger: null };
-  const sidebar = page.wire(new (env.get('SidebarController'))(deps));
-  const notes = page.wire(new (env.get('NotesManager'))({ ...deps, llm: null }));
+  const deps = { domRefs: null, logger: null };
+  const sidebar = page.wire(new (env.get('SidebarController'))({
+    ...deps,
+    settings: env.settingsClient,
+    storageState: env.storageState,
+  }));
+  // The search index and vectors still go through the page's Storage (#22)
+  const notes = page.wire(new (env.get('NotesManager'))({ ...deps, storage: page.Storage, llm: null }));
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   const reloads = { sidebar: 0, page: () => page.refreshes, list: () => listQueries.filter((type) => type === 'getNoteList').length };

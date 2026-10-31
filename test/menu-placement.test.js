@@ -122,7 +122,7 @@ describe("the note menu's site places it after measuring it", () => {
       files: ['js/controllers/sidebar-controller.js'],
       open: (env, event) => {
         const SidebarController = env.get('SidebarController');
-        const sidebar = new SidebarController({ storage: {}, settings: {}, domRefs: {}, logger: { warn() {} } });
+        const sidebar = new SidebarController({ settings: {}, domRefs: {}, logger: { warn() {} } });
         sidebar._noteList = { view: () => [{ id: 'N', pinned: false }] };
         sidebar.showNoteContextMenu(event, 'N', 'notes');
       },
@@ -206,7 +206,7 @@ describe("the folder menu's site places it after measuring it", () => {
       files: ['js/controllers/sidebar-controller.js'],
       open: (env, event) => {
         const SidebarController = env.get('SidebarController');
-        const sidebar = new SidebarController({ storage: {}, settings: {}, domRefs: {}, logger: { warn() {} } });
+        const sidebar = new SidebarController({ settings: {}, domRefs: {}, logger: { warn() {} } });
         return sidebar.showFolderContextMenu(event, { id: 'F', name: 'Folder' });
       },
     },

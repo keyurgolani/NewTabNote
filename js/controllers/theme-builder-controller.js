@@ -3,14 +3,14 @@
  * live preview, and saving via the theme builder modal.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+ *   which the theme and the custom themes are read and saved through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class ThemeBuilderController {
-  constructor({ storage, settings, domRefs, logger }) {
-    this.storage = storage;
-    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are saved through */
+  constructor({ settings, domRefs, logger }) {
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which the theme and the custom themes are read and saved through */
     this.settings = settings;
     this.domRefs = domRefs;
     this.logger = logger;
@@ -92,11 +92,12 @@ class ThemeBuilderController {
     controls.innerHTML = '';
 
     // Start with current properties
-    const currentThemeId = await this.storage.getSetting('theme', 'light');
+    const { theme: currentThemeId } = await this.settings.preferencesOr({ theme: 'light' });
     const options = await Themes.getThemeOptions();
     const currentTheme = options.find(o => o.id === currentThemeId);
 
     // Determine base properties to start from
+    /** @type {Object<string, string>} */
     let baseProps = { ...Themes.defaultProperties };
     if (currentThemeId === 'dark' || (currentThemeId === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
       baseProps = { ...Themes.darkProperties };
@@ -104,7 +105,7 @@ class ThemeBuilderController {
 
     // If current is custom, use its name and props
     if (currentTheme && currentTheme.isCustom) {
-      const allCustom = await this.storage.getCustomThemes();
+      const allCustom = await this.settings.themes();
       const fullTheme = allCustom.find(t => t.id === currentThemeId);
       if (fullTheme) {
         baseProps = { ...fullTheme.properties };
