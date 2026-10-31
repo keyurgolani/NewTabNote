@@ -13,6 +13,7 @@ import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
 import { kernelClient, legacyHost } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
+import { journalRefusals } from './network-refusals.js';
 import { createNoteRemoval } from './removal.js';
 import { startIndexer } from './workers.js';
 
@@ -259,13 +260,16 @@ export function startNewTab({ loader = null } = {}) {
     /** @type {NewTabApp | null} */
     let built = null;
     const stores = createNewTabLegacyStores(host);
+    const events = createNewTabFailureEvents();
+    // The calls the page's network guard refused (#21 slice 1b), the ones it held until now first
+    journalRefusals(globalThis, events);
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
       settings: createNewTabSettingsClient(kernel, host),
       ai: createAIPort(),
       noteList,
-      events: createNewTabFailureEvents(),
+      events,
       removal: createNewTabRemoval(kernel, noteList, () => built),
       storageState: createNewTabStorageState(host),
       recovery: createNewTabRecovery(host),

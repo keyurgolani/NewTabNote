@@ -399,9 +399,12 @@ function checkPreloads(files) {
  * A script a page loads without type="module" runs as a classic script, which can't parse an
  * import or export statement or import.meta, so none of it runs (`build/load-mode`)
  * @param {PackageFiles} files
+ * @param {{bundled?: string[]}} [options] - on the sources, the classic scripts whose source is
+ *   a module a pass bundles into a classic script at its path (CLASSIC_SCRIPTS' 'bundle'), which
+ *   the check reads in the build instead
  * @returns {Problem[]}
  */
-function checkClassicScripts(files) {
+function checkClassicScripts(files, { bundled = [] } = {}) {
   /** @type {Problem[]} */
   const problems = [];
   for (const page of files.paths.filter((file) => kindOf(file) === 'page')) {
@@ -410,7 +413,7 @@ function checkClassicScripts(files) {
       const src = tag.attributes.get('src');
       if (tag.name !== 'script' || !src || (tag.attributes.get('type') || '').trim().toLowerCase() === 'module') continue;
       const file = resolve(src, dir);
-      if (!files.has(file) || kindOf(file) !== 'script') continue;
+      if (!files.has(file) || kindOf(file) !== 'script' || bundled.includes(file)) continue;
       const [first] = scanScript(file, files.text(file)).moduleSyntax;
       if (first !== undefined) {
         problems.push(problem('build/load-mode', file, `${page} loads it as a classic script at ${tag.at}, but it has an import or export statement or import.meta at ${first}, which only a module parses`));

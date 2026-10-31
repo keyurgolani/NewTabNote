@@ -121,6 +121,13 @@ export const ERROR_CODES = Object.freeze([
   // its database couldn't be opened
   'coordinator-unavailable',
   'storage-unavailable',
+  // A call the network guard refused (#21 slice 1b): a destination no registry row takes,
+  // headers its row doesn't, a call that would follow a redirect it mustn't, or a registry
+  // that can't be read
+  'destination-refused',
+  'headers-refused',
+  'redirect-refused',
+  'registry-unreadable',
 ]);
 
 /** Faults an incident can be about, from the failure sites and the providers that report them */
