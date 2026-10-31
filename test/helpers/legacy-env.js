@@ -167,6 +167,14 @@ class FakeElement {
 
   get id() { return this.attributes.id || ''; }
   set id(value) { this.attributes.id = String(value); }
+
+  /** No layout here: an element sits where its style's left and top put it, 0 by 0 */
+  getBoundingClientRect() {
+    const left = parseFloat(this.style.left) || 0;
+    const top = parseFloat(this.style.top) || 0;
+    return { left, top, right: left, bottom: top, width: 0, height: 0, x: left, y: top };
+  }
+
   get className() { return this.classList.toString(); }
   set className(value) {
     this.classList.set = new Set(String(value).split(/\s+/).filter(Boolean));

@@ -1695,12 +1695,8 @@ class App {
     if (convertTemplateBtn) convertTemplateBtn.classList.toggle('hidden', !isNotes);
     if (backToNoteBtn) backToNoteBtn.classList.toggle('hidden', !isTemplates);
 
-    // Position context menu
-    const x = Math.min(e.clientX, window.innerWidth - 180);
-    const y = Math.min(e.clientY, window.innerHeight - 200);
-    contextMenu.style.left = x + 'px';
-    contextMenu.style.top = y + 'px';
-    contextMenu.classList.remove('hidden');
+    // Measured, so a low note's menu opens above the pointer, inside the window
+    Utils.placeMenu(contextMenu, e.clientX, e.clientY);
   }
 
   /**
@@ -4536,8 +4532,6 @@ class App {
     }
     const menu = document.createElement('div');
     menu.className = 'context-menu';
-    menu.style.left = `${e.pageX}px`;
-    menu.style.top = `${e.pageY}px`;
 
     const items = [
       {
@@ -4600,6 +4594,8 @@ class App {
     });
 
     document.body.appendChild(menu);
+    // Measured, so a low folder's menu opens above the pointer, inside the window
+    Utils.placeMenu(menu, e.clientX, e.clientY);
 
     const closeMenu = (event) => {
       if (!menu.contains(event.target)) {

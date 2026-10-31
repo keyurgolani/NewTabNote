@@ -349,6 +349,46 @@ const Utils = {
    * @param {number} [duration=3000] - Duration in milliseconds
    * @returns {void}
    */
+  /**
+   * Where a menu of `size` opened at the pointer (x, y) goes so all of it stays in `viewport`,
+   * `margin` from each edge: at the pointer when it fits there, above the pointer when it fits
+   * there and not below, and otherwise pulled in from the edge it would cross. A menu taller
+   * than the window keeps its top in view.
+   * @param {number} x
+   * @param {number} y
+   * @param {{width: number, height: number}} size
+   * @param {{width: number, height: number}} viewport
+   * @param {number} [margin=8]
+   * @returns {{left: number, top: number}}
+   */
+  menuPosition(x, y, size, viewport, margin = 8) {
+    const left = Math.max(margin, Math.min(x, viewport.width - size.width - margin));
+    let top = y;
+    if (y + size.height > viewport.height - margin) {
+      top = y - size.height >= margin ? y - size.height : viewport.height - size.height - margin;
+    }
+    return { left, top: Math.max(margin, top) };
+  },
+
+  /**
+   * Show `menu`, a position: fixed element, at the pointer (x, y), measured first so it opens
+   * inside the window (menuPosition). It's laid out hidden, so it never shows where it won't stay.
+   * @param {HTMLElement} menu
+   * @param {number} x
+   * @param {number} y
+   */
+  placeMenu(menu, x, y) {
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    menu.classList.remove('hidden');
+    const rect = menu.getBoundingClientRect();
+    const { left, top } = this.menuPosition(x, y, rect, { width: window.innerWidth, height: window.innerHeight });
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.style.visibility = '';
+  },
+
   showToast(message, type = 'info', duration = 3000) {
     if (typeof document === 'undefined') {
       console.debug(`Toast (${type}): ${message}`);
