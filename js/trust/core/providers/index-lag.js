@@ -32,7 +32,8 @@ export const indexLag = Object.freeze({
    */
   async check(context) {
     // A root with no pipelines passes an empty list; one that passes none can't say
-    const pipelines = portOf(context, 'pipelines');
+    const pipelines = /** @type {unknown} */ (portOf(context, 'pipelines'));
+    if (!Array.isArray(pipelines)) throw new TypeError('not a list of pipelines');
     if (pipelines.length === 0) return { status: 'not-configured', evidence: { records: 0 }, looked: LOOKED() };
     const head = position(await portOf(context, 'commitLog').head());
     let lag = 0;
@@ -51,29 +52,22 @@ export const indexLag = Object.freeze({
       if (behind > pipeline.windowSeq) lagging += 1;
     }
     const evidence = { records: pipelines.length, lag, ...(head > 0 ? { seq: head } : {}) };
+    // Every pipeline was read, so both faults were looked for; each one that applies is
+    // reported, so a stalled pipeline never resolves another one's lag
     const looked = LOOKED();
-    if (ahead > 0) {
-      return {
-        status: 'degraded',
-        evidence: { ...evidence, count: ahead },
-        consequenceKey: 'indexing.resync-required',
-        looked,
-        preserved: ['capture', 'editing', 'reading'],
-        faults: [
-          { faultCode: 'stalled', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },
-        ],
-      };
-    }
-    if (lagging === 0) return { status: 'verified', evidence, looked };
+    /** @type {NonNullable<CheckResult['faults']>} */
+    const faults = [];
+    const kept = /** @type {const} */ (['capture', 'editing', 'reading']);
+    if (ahead > 0) faults.push({ faultCode: 'stalled', subjectId: null, severity: 'degraded', affected: ['search'], preserved: [...kept] });
+    if (lagging > 0) faults.push({ faultCode: 'lagging', subjectId: null, severity: 'degraded', affected: ['search'], preserved: [...kept] });
+    if (faults.length === 0) return { status: 'verified', evidence, looked };
     return {
       status: 'degraded',
-      evidence: { ...evidence, count: lagging },
-      consequenceKey: 'indexing.lagging',
+      evidence: { ...evidence, count: ahead + lagging },
+      consequenceKey: ahead > 0 ? 'indexing.resync-required' : 'indexing.lagging',
+      preserved: [...kept],
+      faults,
       looked,
-      preserved: ['capture', 'editing', 'reading'],
-      faults: [
-        { faultCode: 'lagging', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },
-      ],
     };
   },
 });

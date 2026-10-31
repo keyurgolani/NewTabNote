@@ -5,9 +5,9 @@
  *
  * - the recovery reader: NewTabNoteRecovery's points, as kind, status, and times only, and a
  *   point read back and matched by #17's verifyPoint, for recovery readiness;
- * - the vectors reader: whether CanvasTabDB's `vectors` store holds a record, and when the
- *   newest was written, which is how local inference tells the embedding model has loaded
- *   since a failure (nothing journals a load that worked).
+ * - the vectors reader: whether CanvasTabDB's `vectors` store holds a record, and whether one
+ *   was written after a time, which is how local inference tells the embedding model has
+ *   loaded since a failure (nothing journals a load that worked).
  *
  * A composition root makes them with the context's IndexedDB, and Web Crypto and IDBKeyRange
  * for verification. No shipped root does yet.
@@ -76,47 +76,69 @@ export function createRecoveryReader({ indexedDB, keyRange, crypto }) {
 }
 
 /**
+ * Runs `body` on CanvasTabDB's `vectors` store when there is one, and closes the database
+ * after; `none` when there's no database or no store
+ * @template T
+ * @param {IDBFactory} indexedDB
+ * @param {T} none
+ * @param {(store: IDBObjectStore) => Promise<T>} body
+ * @returns {Promise<T>}
+ */
+async function withVectors(indexedDB, none, body) {
+  /** @type {IDBDatabase | null} */
+  let db = null;
+  try {
+    db = await openWithoutUpgrade(indexedDB, DB_NAME);
+    if (!db || !db.objectStoreNames.contains('vectors')) return none;
+    return await body(db.transaction('vectors', 'readonly').objectStore('vectors'));
+  } catch {
+    throw new UnavailableError('storage', 'unreadable', true);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
  * @param {{indexedDB: IDBFactory}} options
  */
 export function createVectorsReader({ indexedDB }) {
   return Object.freeze({
+    /** @returns {Promise<boolean>} whether `vectors` holds a record, counted without reading one */
+    stored: () =>
+      withVectors(indexedDB, false, store =>
+        new Promise((resolve, reject) => {
+          const request = store.count();
+          request.onsuccess = () => resolve(request.result > 0);
+          request.onerror = () => reject(request.error);
+        }),
+      ),
+
     /**
-     * Whether `vectors` holds a record, and the newest `updatedAt` any holds (Storage.saveVector
-     * writes one with each), null when none says. It reads each record once, in one readonly
-     * cursor, keeping only that time.
-     * @returns {Promise<{stored: boolean, at: number | null}>}
+     * Whether a vector was written after `at`, by the `updatedAt` Storage.saveVector writes with
+     * each. It reads in key order and stops at the first one newer, so it reads every vector
+     * only when none is.
+     * @param {number} at
+     * @returns {Promise<boolean>}
      */
-    async latest() {
-      /** @type {IDBDatabase | null} */
-      let db = null;
-      try {
-        db = await openWithoutUpgrade(indexedDB, DB_NAME);
-        if (!db || !db.objectStoreNames.contains('vectors')) return { stored: false, at: null };
-        const request = db.transaction('vectors', 'readonly').objectStore('vectors').openCursor();
-        return await new Promise((resolve, reject) => {
-          let stored = false;
-          /** @type {number | null} */
-          let at = null;
+    newerThan: at =>
+      withVectors(indexedDB, false, store =>
+        new Promise((resolve, reject) => {
+          const request = store.openCursor();
           request.onsuccess = () => {
             const cursor = request.result;
             if (!cursor) {
-              resolve({ stored, at });
+              resolve(false);
               return;
             }
-            stored = true;
             const updatedAt = /** @type {{updatedAt?: unknown}} */ (cursor.value || {}).updatedAt;
-            if (typeof updatedAt === 'number' && Number.isSafeInteger(updatedAt) && updatedAt >= 0) {
-              at = at === null ? updatedAt : Math.max(at, updatedAt);
+            if (typeof updatedAt === 'number' && Number.isSafeInteger(updatedAt) && updatedAt > at) {
+              resolve(true);
+              return;
             }
             cursor.continue();
           };
           request.onerror = () => reject(request.error);
-        });
-      } catch {
-        throw new UnavailableError('storage', 'unreadable', true);
-      } finally {
-        if (db) db.close();
-      }
-    },
+        }),
+      ),
   });
 }

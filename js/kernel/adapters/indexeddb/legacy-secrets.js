@@ -45,7 +45,9 @@ async function inSettings(settings) {
   /** @type {SecretSource[]} */
   const found = [];
   try {
-    const stored = (await settings.get([...SECRET_SETTING_KEYS])) || {};
+    const stored = await settings.get([...SECRET_SETTING_KEYS]);
+    // An answer that isn't an object is a read that didn't work, never "nothing stored"
+    if (stored === null || typeof stored !== 'object') throw new TypeError('not a settings answer');
     if (nonEmpty(stored.setting_llmApiKey)) found.push('setting_llmApiKey');
     const webdav = stored.setting_syncWebdavConfig;
     if (webdav !== null && typeof webdav === 'object' && nonEmpty(/** @type {{password?: unknown}} */ (webdav).password)) {

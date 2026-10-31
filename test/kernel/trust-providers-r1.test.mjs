@@ -95,10 +95,13 @@ describe('a port that answers garbage verifies nothing (#78 should-fix 2)', () =
 describe('local inference decides from the journal (#78 should-fix 1)', () => {
   /** A journal reader over these events */
   const journalOf = (/** @type {Array<{code: string, at: number}>} */ events) => ({
-    events: async () => events.map((event, index) => ({ seq: index + 1, fields: {}, ...event })),
+    eventsRead: async () => ({ events: events.map((event, index) => ({ seq: index + 1, fields: {}, ...event })), ok: true }),
   });
   /** A vectors reader whose newest write is at `at` */
-  const vectorsAt = (/** @type {number | null} */ at) => ({ latest: async () => ({ stored: at !== null, at }) });
+  const vectorsAt = (/** @type {number | null} */ at) => ({
+    stored: async () => at !== null,
+    newerThan: async (/** @type {number} */ after) => at !== null && at > after,
+  });
 
   it('a load failure newer than every vectors write is action-required, reporting the fault it observes', async () => {
     const run = await checkOf('local-inference', {
@@ -121,18 +124,20 @@ describe('local inference decides from the journal (#78 should-fix 1)', () => {
     assert.equal((await checkOf('local-inference', { trust: journalOf([]), vectors: vectorsAt(null) })).receipt.status, 'not-configured');
     assert.equal((await checkOf('local-inference', { trust: journalOf([]), vectors: vectorsAt(5) })).receipt.status, 'unverified');
     // A failure and vectors that never said when they were written: the failure can't be shown past
-    const timeless = { latest: async () => ({ stored: true, at: null }) };
+    const timeless = { stored: async () => true, newerThan: async () => false };
     const run = await checkOf('local-inference', { trust: journalOf([{ code: 'embeddings.load-failed', at: 2000 }]), vectors: timeless });
     assert.equal(run.receipt.status, 'action-required');
   });
 
-  it("the vectors reader answers the newest updatedAt, as Storage.saveVector writes it", async () => {
+  it("the vectors reader tells a vector written after a time, by the updatedAt Storage.saveVector writes", async () => {
     const of = freshProfile();
     await legacyEnv.createDatabase(of.real, {
       records: { vectors: [{ id: 'a', noteId: 'a', vector: [0.1], updatedAt: 10 }, { id: 'b', noteId: 'b', vector: [0.2], updatedAt: 30 }] },
     });
-    assert.deepEqual(await createVectorsReader({ indexedDB: of.faults.factory }).latest(), { stored: true, at: 30 });
-    assert.deepEqual(await createVectorsReader({ indexedDB: freshProfile().faults.factory }).latest(), { stored: false, at: null });
+    const reader = createVectorsReader({ indexedDB: of.faults.factory });
+    assert.deepEqual([await reader.stored(), await reader.newerThan(20), await reader.newerThan(30)], [true, true, false]);
+    const none = createVectorsReader({ indexedDB: freshProfile().faults.factory });
+    assert.deepEqual([await none.stored(), await none.newerThan(0)], [false, false]);
   });
 });
 

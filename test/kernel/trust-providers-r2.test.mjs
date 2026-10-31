@@ -140,7 +140,7 @@ describe('garbage that filled looked (#78 delta, nits 3 to 5)', () => {
   it("credentials: a settings read that answers nothing isn't no saved keys", async () => {
     const of = freshProfile();
     for (const answer of [undefined, null, 'x']) {
-      const reader = createLegacySecretReader({ indexedDB: of.faults.factory, settings: { get: async () => answer, set: async () => {} } });
+      const reader = createLegacySecretReader({ indexedDB: of.faults.factory, settings: /** @type {any} */ ({ get: async () => answer, set: async () => {} }) });
       const run = await checkOf('credentials', { secrets: reader });
       assert.deepEqual([run.receipt.status, run.looked], ['unverified', []], `get answering ${JSON.stringify(answer)}`);
     }

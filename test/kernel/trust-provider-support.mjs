@@ -106,7 +106,7 @@ export async function providerContext(of = freshProfile(), { events = async () =
     pipelines: [],
     messaging: messagingClient(),
     resolutions: () => [resolution],
-    trust: { events },
+    trust: { eventsRead: async () => ({ events: await events(), ok: true }) },
   };
   return { of, adapter, context, resolution };
 }
