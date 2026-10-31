@@ -214,6 +214,8 @@ function view(storage, tx, scope) {
       return undefined;
     },
     has: store => handle(store) !== null,
+    // Only the service worker runs logical 3, on #17's adapter; this one never reads its answer
+    dailyAnswer: async () => null,
     // A database without a derived store skips its writes, and one below version 10 the
     // tombstone a deletion puts (LATER_STORES), so a note deleted there stays in its recovery
     // point (#17 PR 2b's declared gap). At 10 the tombstone goes in the delete's own

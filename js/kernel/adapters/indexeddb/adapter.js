@@ -81,6 +81,7 @@ import { createAutoBackup, exportFile, prepareImport, readExport } from './backu
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
+import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { runIntegrityCheck } from './integrity.js';
@@ -90,6 +91,7 @@ import {
   CHANGES_KEY,
   CHANGES_STORE,
   CONFLICTS_STORE,
+  DAILY_INDEX_STORE,
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
@@ -215,6 +217,18 @@ function ending(tx) {
 function present(db, stores) {
   const names = new Set(stores.filter(store => Object.hasOwn(IDB_STORES, store)).map(store => IDB_STORES[store]));
   return [...names].filter(name => db.objectStoreNames.contains(name));
+}
+
+/**
+ * `names` with `meta` when they hold the daily index and the database has `meta`, so a Daily
+ * Note lookup reads logical 3's kept answer in its own transaction (daily-answer.js, F10)
+ * @param {IDBDatabase} db
+ * @param {string[]} names
+ * @returns {string[]}
+ */
+function withAnswer(db, names) {
+  if (!names.includes(DAILY_INDEX_STORE) || names.includes(META_STORE)) return names;
+  return db.objectStoreNames.contains(META_STORE) ? [...names, META_STORE] : names;
 }
 
 /**
@@ -344,6 +358,11 @@ function view(db, tx, scope, writable, tracker) {
       return store === 'notes' ? tracker.versions(key) : undefined;
     },
     has: store => handle(store) !== null,
+    // Logical 3's kept answer, from `meta`, which a transaction over the daily index spans
+    dailyAnswer: async () =>
+      tx && tx.objectStoreNames.contains(META_STORE)
+        ? answerOf(await result(tx.objectStore(META_STORE).get(TRANSFORM_DAILY_KEY)))
+        : null,
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {
@@ -616,7 +635,7 @@ export function createIndexedDbAdapter({
       // The primary note's revision may move, or be reported, though no unit touches the note
       /** @type {StoreName[]} */
       const primaryStores = work.primary ? ['notes'] : [];
-      const names = present(db, [...unitStores, ...primaryStores]);
+      const names = withAnswer(db, present(db, [...unitStores, ...primaryStores]));
       // A deletion's own rows in step 10's stores aren't counted for a retry, as the
       // bookkeeping isn't: each command's tombstones and conflict records are its own
       const unitNames = present(
@@ -923,7 +942,7 @@ export function createIndexedDbAdapter({
       let tx = null;
       try {
         db = connection.database();
-        const names = present(db, stores);
+        const names = withAnswer(db, present(db, stores));
         if (names.length > 0) tx = db.transaction(names, 'readonly');
       } catch (error) {
         throw startFailure(error);

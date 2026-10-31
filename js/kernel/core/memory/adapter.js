@@ -310,6 +310,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         scoped(store);
         return true;
       },
+      // No transforms run here, so no answer is ever kept
+      dailyAnswer: async () => null,
       put: (store, record) =>
         write(store, /** @type {string} */ (keyOf(store, /** @type {Record<string, unknown>} */ (record))), record),
       delete: (store, key) => write(store, /** @type {string} */ (keyString(store, key)), undefined),

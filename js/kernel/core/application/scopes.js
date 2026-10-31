@@ -97,6 +97,7 @@ function derivedTx(tx) {
     revision: (store, key) => tx.revision(store, key),
     versions: (store, key) => tx.versions(store, key),
     has: store => tx.has(store),
+    dailyAnswer: () => tx.dailyAnswer(),
     put: (store, record) => {
       const before = store === 'notes' ? read.get(/** @type {string} */ (record.id)) : undefined;
       if (!before) throw outsideScope();

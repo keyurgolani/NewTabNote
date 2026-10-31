@@ -257,6 +257,30 @@ export function dailyHolder(notes, key, zone) {
 }
 
 /**
+ * `notes` as logical 3's kept answer will leave them, for a lookup between two of its batches
+ * (#17 PR 4a, F10): each Daily Note the run read gets the key fields the answer gives it
+ * (withAssignedKey), as its batch writes them, and every other note is as it is. A lookup over
+ * them then finds the note it will find once the run is done. A note that changed since the run
+ * read it, restored from the trash or renamed to another day, keeps the key the run gives it,
+ * and a note a page made since claims its own, the earlier made holding a key both claim. A
+ * note a command keyed to another day since the run read it keeps that key, as its batch leaves
+ * it. With no answer, no run is going, and the notes are as they are.
+ * @template {DailyRecord} T
+ * @param {readonly T[]} notes
+ * @param {ReadonlyMap<string, DailyAssignment> | null} answer
+ * @returns {T[]}
+ */
+export function underAnswer(notes, answer) {
+  if (!answer) return [...notes];
+  return notes.map(note => {
+    const assignment = answer.get(note.id);
+    if (!assignment || !note.isDaily) return note;
+    if (isDateKey(note.dailyKey) && note.dailyKey !== assignment.dailyKey) return note;
+    return withAssignedKey(note, assignment);
+  });
+}
+
+/**
  * `note` with the key `assignment` gives it, or `note` itself when it has it all: its
  * `dailyKey`, a `dailyTimeZone` (null for a 1.4.x note, Q4), and its `dailyDuplicateOf`. A note
  * that moved to its local date gets that date as `dateStr` (Q2), and as its daily placement's
