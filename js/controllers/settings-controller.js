@@ -1180,7 +1180,7 @@ class SettingsController {
       }
 
       // Reinitialize LLM if provider settings changed
-      if (['llmProvider', 'llmApiKey', 'llmModel', 'ollamaUrl'].some((key) => changed.has(key))) {
+      if (['llmProvider', 'llmApiKey', 'llmApiKeyProvider', 'llmModel', 'ollamaUrl'].some((key) => changed.has(key))) {
         if (this.onLLMSettingsChanged) this.onLLMSettingsChanged();
       }
 

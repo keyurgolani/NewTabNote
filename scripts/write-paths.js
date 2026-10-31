@@ -190,7 +190,7 @@ const PREFERENCE_KEYS = [
 /** The workspace session #12's state ownership table gives TabController */
 const SESSION_KEYS = ['openTabs', 'activeTabIndex', 'splitViewEnabled', 'secondaryNoteId', 'lastOpenedNoteId'];
 const CHAT_KEYS = ['aiChatHistory', 'noteChatMessages', 'globalChatHistory', 'globalChatMessages'];
-const PROVIDER_KEYS = ['llmEndpoint', 'llmProvider', 'llmApiKey', 'llmModel', 'ollamaUrl'];
+const PROVIDER_KEYS = ['llmEndpoint', 'llmProvider', 'llmApiKey', 'llmApiKeyProvider', 'llmModel', 'ollamaUrl'];
 const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
 
 /**

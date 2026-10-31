@@ -336,13 +336,12 @@ class SyncService {
    */
   async _exportLocalData() {
     const exportData = await this.storage.exportAll();
-    // Augment with folders and settings for full sync
+    // Augment with folders for full sync. Never the IndexedDB `settings` store: releases up
+    // to 1.1.2 kept every setting there, the AI key in plaintext included (#21)
     const folders = await this._getAllFromStore('folders');
-    const settings = await this._getAllFromStore('settings');
     return {
       ...exportData,
       folders,
-      settings,
       syncVersion: 1,
       syncedAt: Date.now(),
     };

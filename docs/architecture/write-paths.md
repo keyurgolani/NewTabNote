@@ -15,11 +15,11 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | kernel command, slice 6 | 0 | #12 slice 6 (preferences and session) routes it through the command. |
 | deleted in slice 7 | 0 | App's copy of a controller path. It runs only after an `if (this.<controller>)` check has handed off to that controller and returned, or in that check's else branch, or nothing reaches it from App's bootstrap and the methods `js/editor.js` calls. Slice 7 deletes it with App's fallback bodies. The command is the one the controller path becomes. |
 | no live caller | 0 | Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become. |
-| ledgered to #11 | 4 | Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows). |
+| ledgered to #11 | 6 | Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows). |
 | ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
 | ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
-| Total | 17 | |
+| Total | 19 | |
 
 No row is UI-only. Presentation state (panels, the palette index, selection mode, the calendar month) isn't persisted, and every persisted preference goes through the settings port.
 
@@ -68,7 +68,7 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | `recordExportNotice` | kernel command, slice 6 | 0 |
 | `createAutoBackup` | kernel command, slice 6 | 0 |
 | `importBackup` | kernel command, slice 6 | 0 |
-| `saveProviderSettings` | ledgered to #11 | 4 |
+| `saveProviderSettings` | ledgered to #11 | 6 |
 | `saveSyncSettings` | ledgered to #19 | 6 |
 | `applyRemoteChanges` | ledgered to #19 | 3 |
 | `updateSearchIndex` | ledgered to #22 | 3 |
@@ -84,20 +84,22 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/controllers/notes-manager.js` | [1194](../../js/controllers/notes-manager.js#L1194) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1198](../../js/controllers/notes-manager.js#L1198) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1202](../../js/controllers/notes-manager.js#L1202) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1320](../../js/controllers/notes-manager.js#L1320) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
-| `js/llm.js` | [659](../../js/llm.js#L659) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [671](../../js/llm.js#L671) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [679](../../js/llm.js#L679) | `LLMService.setModel` | `Storage.setSetting('llmModel', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/llm.js` | [684](../../js/llm.js#L684) | `LLMService.setOllamaUrl` | `Storage.setSetting('ollamaUrl', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/controllers/notes-manager.js` | [1195](../../js/controllers/notes-manager.js#L1195) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1205](../../js/controllers/notes-manager.js#L1205) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1209](../../js/controllers/notes-manager.js#L1209) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1335](../../js/controllers/notes-manager.js#L1335) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
+| `js/llm.js` | [109](../../js/llm.js#L109) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [719](../../js/llm.js#L719) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [733](../../js/llm.js#L733) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [734](../../js/llm.js#L734) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [742](../../js/llm.js#L742) | `LLMService.setModel` | `Storage.setSetting('llmModel', …)` | `saveProviderSettings` | ledgered to #11 |
+| `js/llm.js` | [747](../../js/llm.js#L747) | `LLMService.setOllamaUrl` | `Storage.setSetting('ollamaUrl', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/services/sync-service.js` | [299](../../js/services/sync-service.js#L299) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [301](../../js/services/sync-service.js#L301) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [325](../../js/services/sync-service.js#L325) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [326](../../js/services/sync-service.js#L326) | `SyncService.disconnect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [327](../../js/services/sync-service.js#L327) | `SyncService.disconnect` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [418](../../js/services/sync-service.js#L418) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [489](../../js/services/sync-service.js#L489) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [495](../../js/services/sync-service.js#L495) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [513](../../js/services/sync-service.js#L513) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [417](../../js/services/sync-service.js#L417) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [488](../../js/services/sync-service.js#L488) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [494](../../js/services/sync-service.js#L494) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [512](../../js/services/sync-service.js#L512) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | ledgered to #19 |

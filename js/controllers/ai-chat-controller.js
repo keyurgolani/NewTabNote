@@ -2222,24 +2222,43 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     if (!providerSelect) return;
 
+    // The Ollama hint names this extension's own origin (#21)
+    const ollamaCommand = document.getElementById('ollama-origins-command');
+    if (ollamaCommand && typeof this.llm.ollamaOriginsCommand === 'function') ollamaCommand.textContent = this.llm.ollamaOriginsCommand();
+
+    /** Show `key` in the key field */
+    const showKey = (key) => {
+      /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#llm-api-key')).forEach(el => { el.value = key; });
+    };
+
     providerSelect.addEventListener('change', async (e) => {
       const provider = e.target.value;
       await this.llm.setProvider(provider);
+      // A later change took over while this one saved: it shows and lists its own provider
+      if (this.llm.provider !== provider) return;
+      // This provider's key, which is none unless one was saved for it: another provider's key
+      // is never shown for it, nor sent to it to list its models (#21)
+      const key = this.llm.keyFor(provider);
+      showKey(key);
       this.updateLLMSettingsVisibility(provider);
-      await this.loadAndPopulateModels(provider, this.llm.apiKey);
+      await this.loadAndPopulateModels(provider, key);
       this.updateAISidebarState();
     });
 
-    const debouncedApiKeySave = Utils.debounce(async (value) => {
-      await this.llm.setApiKey(value);
-      if (value && this.llm.provider !== 'none') {
-        await this.loadAndPopulateModels(this.llm.provider, value);
+    // A key is saved for the provider shown when it was typed, even when the provider changes
+    // before the save, and it lists that provider's models only while it's still the one shown
+    const debouncedApiKeySave = Utils.debounce(async (value, provider) => {
+      await this.llm.setApiKey(value, provider);
+      if (provider === this.llm.provider) {
+        // Shown again when the provider changed away and back before this landed
+        showKey(this.llm.keyFor(provider));
+        if (value && provider !== 'none') await this.loadAndPopulateModels(provider, value);
       }
       this.updateAISidebarState();
     }, 800);
 
     apiKeyInput?.addEventListener('input', (e) => {
-      debouncedApiKeySave(e.target.value);
+      debouncedApiKeySave(e.target.value, this.llm.provider);
     });
 
     modelSelect?.addEventListener('change', async (e) => {

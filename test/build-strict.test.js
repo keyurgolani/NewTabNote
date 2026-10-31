@@ -196,15 +196,15 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
     }
 
     const line = file => output.split('\n').find(l => l.includes(` ${file}: `)) || '';
-    for (const file of ['js/popup.js', 'js/sidepanel.js', 'js/background.js', 'js/utils.js', 'js/app.js', 'js/kernel/composition/background.js']) {
+    for (const file of ['js/popup.js', 'js/sidepanel.js', 'js/background.js', 'js/offscreen.js', 'js/utils.js', 'js/app.js', 'js/kernel/composition/background.js']) {
       assert.match(line(file), /saved, module\)$/, `${file} should be minified as an ES module`);
     }
-    for (const file of ['js/offscreen.js', 'js/insights-summary.js']) {
+    for (const file of ['js/insights-summary.js']) {
       assert.match(line(file), /saved\)$/, `${file} should be minified as a classic script`);
     }
-    // A classic script keeps its top-level names. offscreen.js comes after js/main.js, and
-    // terser used to carry main.js's module: true over to it through the shared options.
-    assert.match(fs.readFileSync(path.join(dist, 'js/offscreen.js'), 'utf8'), /function handleApiRequest\(/);
+    // The offscreen document is a module since #21 slice 1a, on the worker's request policy;
+    // terserOptions' own test keeps a module minify from carrying over to the next file
+    assert.match(fs.readFileSync(path.join(dist, 'js/offscreen.js'), 'utf8'), /\.\/kernel\/composition\/api-request\.js/);
 
     const lines = [];
     const checked = require('../scripts/check-dist.js').main([dist], { log: l => lines.push(l), error: l => lines.push(l) });
