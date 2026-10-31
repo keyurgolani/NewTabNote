@@ -131,6 +131,11 @@ describe('the invalidation table (#7, "Data and migration")', () => {
     assert.equal(task.signal.freshness.state, 'current');
     assert.equal(task.signal.sourceRefs[0].revision, (await w.readNote('n1'))?.revision);
 
+    // An edit at the revision the inference already read changes nothing about it
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n1', blockId: 't2', revision: 0 });
+    assert.equal((await read(w, ids.inferred)).signal.freshness.state, 'current');
+    assert.deepEqual(w.requests, []);
+
     await w.editBlock('n1', todo('t2', 'Draft the Q3 report'));
     const staled = await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n1', blockId: 't2', revision: 3 });
     const inferred = await read(w, ids.inferred);
