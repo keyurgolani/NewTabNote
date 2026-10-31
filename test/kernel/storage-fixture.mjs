@@ -9,7 +9,7 @@ import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapt
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { faultyFactory } from './storage-faults.mjs';
-import { CALLERS, testClock, testIds } from './support.mjs';
+import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbAdapter} IndexedDbAdapter */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbOptions} IndexedDbOptions */
@@ -101,7 +101,7 @@ async function startIndexedDb(missing) {
     },
     // A write the disk refuses: it goes through, then its transaction aborts as it commits
     failNextWrite: target => {
-      if (target === 'preferences' || target === 'session' || target === 'jobs') first.chrome.failNextSet();
+      if (isSettingsArea(target)) first.chrome.failNextSet();
       else first.faults.abortAfterNextWrite(IDB_STORES[target], 'QuotaExceededError');
     },
     close: async () => closeAll(first),
@@ -111,7 +111,7 @@ async function startIndexedDb(missing) {
 /** @type {ContractFixture} */
 export const indexedDbFixture = {
   name: 'indexeddb',
-  flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false }),
+  flags: Object.freeze({ atomicMultiStore: true, revisions: false, idempotency: false, backups: false }),
   start: () => startIndexedDb([]),
   startWithout: startIndexedDb,
 };

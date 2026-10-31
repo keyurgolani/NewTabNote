@@ -10,6 +10,7 @@ import { createAIPort } from '../../services/ai-port.mjs';
 import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
 import { createNoteList } from '../core/application/note-list.js';
 import { createDocumentClient } from './document.js';
+import { createSettingsClient } from './settings.js';
 import { kernelClient, legacyHost } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
@@ -17,6 +18,7 @@ import { createNoteRemoval } from './removal.js';
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./host.js').LegacyHost} LegacyHost */
 /** @typedef {import('./document.js').DocumentClient} DocumentClient */
+/** @typedef {import('./settings.js').SettingsClient} SettingsClient */
 /** @typedef {import('../../services/ai-port.mjs').AIPort} AIPort */
 /** @typedef {import('../core/application/note-list.js').NoteList} NoteList */
 /** @typedef {ReturnType<typeof lazyFailureEvents>} PageFailureEvents */
@@ -33,7 +35,8 @@ import { createNoteRemoval } from './removal.js';
  * The legacy App class app.js puts on window, and the instance the controllers still read as
  * window.app until #12 slice 7 removes it
  * @typedef {object} NewTabPage
- * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval}) => NewTabApp} App
+ * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
+ *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval}) => NewTabApp} App
  * @property {unknown} [app]
  */
 
@@ -116,9 +119,19 @@ export function createNewTabRemoval(kernel, noteList, page) {
 }
 
 /**
+ * The tab's settings port on `kernel` (#12 slice 6): its controllers' preferences, workspace
+ * session, AI chat history, themes, onboarding, and backups go through it.
+ * @param {Client} kernel
+ * @returns {SettingsClient}
+ */
+export function createNewTabSettingsClient(kernel) {
+  return createSettingsClient(kernel);
+}
+
+/**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
- * client, its document client, its AI port, its note list, its failure events, and its
- * removeNotes, and becomes window.app before init runs. The listener answers with init's
+ * client, its document client, its settings client, its AI port, its note list, its failure
+ * events, and its removeNotes, and becomes window.app before init runs. The listener answers with init's
  * promise, which a page ignores and a test can wait for.
  * @returns {void}
  */
@@ -133,6 +146,7 @@ export function startNewTab() {
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
+      settings: createNewTabSettingsClient(kernel),
       ai: createAIPort(),
       noteList,
       events: createNewTabFailureEvents(),

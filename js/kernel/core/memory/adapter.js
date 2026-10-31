@@ -1,5 +1,5 @@
 /**
- * The in-memory adapter (#12, "Layout"), with all three flags:
+ * The in-memory adapter (#12, "Layout"), with three of the four flags:
  * - atomicMultiStore: a command's units commit together, or nothing does
  * - revisions: a note has a content revision, which only a content command's change to its
  *   title or blocks moves (Work.scope, Work.revised). Committed outcomes report it, and a
@@ -13,6 +13,9 @@
  *   again: each item that committed or conflicted answers from its own record, and each
  *   other item runs again. The same command is the same SHA-256 of its canonical JSON, keys
  *   sorted (memory/fingerprint.js), the digest #17 keeps, so no record holds the command.
+ *
+ * - backups: false. The legacy import and auto-backup are 1.4.x's Storage code, so they answer
+ *   `unavailable` here, until #18's backup engine runs on every adapter.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
@@ -31,7 +34,7 @@
 
 import { clone } from '../contracts/clone.js';
 import { COMMANDS } from '../contracts/commands.js';
-import { UnavailableError, rejected, unavailableFrom } from '../contracts/outcomes.js';
+import { UnavailableError, rejected, unavailable, unavailableFrom } from '../contracts/outcomes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
@@ -100,7 +103,15 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   /** @type {KeptConflict[]} */
   const conflicts = [];
   /** @type {Record<ReadableSettingsArea, Map<string, unknown>>} */
-  const settings = { preferences: new Map(), session: new Map(), jobs: new Map(), idbSettings: new Map() };
+  const settings = {
+    preferences: new Map(),
+    session: new Map(),
+    jobs: new Map(),
+    chat: new Map(),
+    onboarding: new Map(),
+    backup: new Map(),
+    idbSettings: new Map(),
+  };
   /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
 
@@ -258,6 +269,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       for (const [key, value] of entries) settings[effect.area].set(key, clone(value));
       return finish(work);
     }
+    // The legacy backup tasks run only on 1.4.x's Storage (the `backups` flag)
+    if (effect.kind === 'backup') return unavailable('adapter', 'backups-need-legacy-storage', false);
     if (effect.kind === 'maintenance') {
       /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
       const defaults = [
@@ -348,7 +361,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
   return Object.freeze({
     name: 'memory',
-    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true }),
+    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
 
     recall(command) {
       const kept = keptFor(command.commandId, command);

@@ -71,6 +71,7 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
  * @property {Array<string>} trashedIds - Local notes Replace all moved to trash
  * @property {number} trashedAt
  * @property {Array<string>} importedIds - The new IDs of the notes it added, in backup order
+ * @property {Array<string>} addedFolderIds - The IDs of the folders it added, in backup order
  */
 
 class DatabaseManager {
@@ -2436,6 +2437,7 @@ class DatabaseManager {
         trashedIds: [],
         trashedAt: now,
         importedIds: plan.notes.map((n) => plan.noteIds.get(n.id)),
+        addedFolderIds: [],
       };
       /** @type {*} */
       let failure = null;
@@ -2504,6 +2506,7 @@ class DatabaseManager {
         }
         folderStore.add({ ...folder, parentId: resolveFolder(folder.parentId) });
         result.folders += 1;
+        result.addedFolderIds.push(folder.id);
       }
     }
 

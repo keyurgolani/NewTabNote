@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
+import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
 import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { testIds } from './support.mjs';
@@ -1038,14 +1039,21 @@ describe("the kernel's copies of production rules, run both ways", () => {
         await storage.getSetting('activeTabIndex', 0),
         await storage.getSetting('splitViewEnabled', false),
         await storage.getSetting('secondaryNoteId', null),
-        await TabController.getCachedLastOpenedNoteId(),
+        // Under its own name, as 1.4.x's TabController.cacheLastOpenedNoteId wrote it
+        env.chrome.local.lastOpenedNoteId,
       ]),
       [300, 'dark', session.openTabs, 0, true, 'n2', 'n1'],
     );
 
-    // Storage and TabController write, and the kernel reads
+    // Storage writes, and TabController saves through the settings port (slice 6), in one
+    // chrome.storage.local set under 1.4.x's keys, and the kernel reads
     await storage.setSetting('font', 'serif');
-    const tabs = new TabController({ storage, domRefs: null, logger: null });
+    const tabs = new TabController({
+      storage,
+      settings: createSettingsClient({ ...kernel, ids: testIds('s') }),
+      domRefs: null,
+      logger: null,
+    });
     tabs.openTabs = [
       { noteId: 'n3', name: 'Three' },
       { noteId: 'n4', name: 'Four' },
@@ -1053,9 +1061,20 @@ describe("the kernel's copies of production rules, run both ways", () => {
     tabs.activeTabIndex = 1;
     tabs.splitViewEnabled = false;
     tabs.secondaryEditor = { noteId: 'n4' };
-    await tabs.saveTabs();
-    tabs.cacheLastOpenedNoteId('n4');
+    const writesBefore = env.chrome.writes().length;
+    await tabs.saveTabs({ lastOpenedNoteId: 'n4' });
+    assert.equal(env.chrome.writes().length - writesBefore, 1, 'the tabs and the last-opened note are one write');
     await legacyEnv.settle();
+    assert.deepEqual(
+      legacyEnv.plain([
+        env.chrome.local.setting_openTabs,
+        env.chrome.local.setting_activeTabIndex,
+        env.chrome.local.setting_splitViewEnabled,
+        env.chrome.local.setting_secondaryNoteId,
+        env.chrome.local.lastOpenedNoteId,
+      ]),
+      [tabs.openTabs, 1, false, 'n4', 'n4'],
+    );
     const preferences = await kernel.query({ type: 'getPreferences', keys: ['font'] });
     const saved = await kernel.query({ type: 'getWorkspaceSession' });
     assert.deepEqual(
@@ -1072,6 +1091,134 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     );
   });
+  // ============ Chat history, themes, onboarding, and backups (#12 slice 6) ============
+
+  /**
+   * Everything chrome.storage.local holds for `context`, with a time a write stamped read as
+   * 'written'
+   * @param {LegacyContext} context
+   * @returns {Promise<Record<string, any>>}
+   */
+  const localOf = async context => {
+    const stored = legacyEnv.plain(await new Promise(resolve => context.env.chrome.api.storage.local.get(null, resolve)));
+    const now = Date.now();
+    return JSON.parse(
+      JSON.stringify(stored, (key, value) =>
+        typeof value === 'number' && value > SEEDED_AT && value <= now ? 'written' : value,
+      ),
+    );
+  };
+
+  it("chat history, prompt templates, onboarding, and the backup records land where 1.4.x's setSetting calls put them", async () => {
+    const { viaStorage, viaKernel, kernel } = await twin();
+    const history = [{ role: 'user', content: 'Plan the week' }];
+    const messages = [{ type: 'user', content: 'Plan the week', timestamp: 1 }];
+    const templates = [{ id: 't1', label: 'Sum', prompt: 'Summarize', scope: 'note' }];
+
+    // What AIChatController, OnboardingManager, SettingsController, and ExportNotice wrote in 1.4.x
+    const storage = viaStorage.storage;
+    await storage.setSetting('aiChatHistory', history);
+    await storage.setSetting('noteChatMessages', messages);
+    await storage.setSetting('globalChatHistory', []);
+    await storage.setSetting('globalChatMessages', []);
+    await storage.setSetting('aiPromptTemplates', templates);
+    await storage.setSetting('embeddingsEnabled', true);
+    await storage.setSetting('autoTitleEnabled', true);
+    await storage.setSetting('insightsEnabled', true);
+    await storage.setSetting('hasCompletedOnboarding', true);
+    await storage.setSetting('lastFullExportAt', Date.now());
+    await storage.setSetting('lastBackupAt', Date.now());
+    await storage.setSetting('preMigrationNotice', { version: 1, outcome: 'exported', at: Date.now() });
+
+    // The same through the kernel
+    let n = 0;
+    const send = async (/** @type {any} */ fields) =>
+      assertCommitted(await kernel.execute({ ...fields, commandId: `w${(n += 1)}` }));
+    await send({ type: 'saveChatHistory', chat: 'note', history, messages });
+    await send({ type: 'saveChatHistory', chat: 'global', history: [], messages: [] });
+    await send({ type: 'savePromptTemplates', templates });
+    await send({ type: 'setPreferences', values: { embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true } });
+    await send({ type: 'completeOnboarding' });
+    await send({ type: 'recordBackup', fullExport: true, backup: true });
+    await send({ type: 'recordExportNotice', version: 1, outcome: 'exported' });
+
+    assert.deepEqual(await localOf(viaKernel), await localOf(viaStorage));
+  });
+
+  it("saveTheme stores the record Storage.saveCustomTheme stores for the Theme Builder", async () => {
+    const { viaStorage, viaKernel, kernel } = await twin();
+    const properties = { '--bg-primary': '#101010', '--text-primary': '#fafafa' };
+    const saved = await viaStorage.storage.saveCustomTheme({ name: 'Dusk', properties });
+    assertCommitted(
+      await kernel.execute({ type: 'saveTheme', commandId: 'c1', themeId: saved.id, name: 'Dusk', properties }),
+    );
+    const themes = async (/** @type {LegacyContext} */ context) =>
+      legacyEnv.plain(await context.storage.getCustomThemes()).map((/** @type {any} */ theme) => ({
+        ...theme,
+        updatedAt: theme.updatedAt > SEEDED_AT ? 'written' : theme.updatedAt,
+      }));
+    assert.deepEqual(await themes(viaKernel), await themes(viaStorage));
+  });
+
+  it('createAutoBackup keeps the newest three backups and the time, under the keys Storage.createAutoBackup uses', async () => {
+    const { viaStorage, viaKernel, kernel } = await twin({
+      canvases: [legacyEnv.note('n1', { name: 'Plan' })],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Line')],
+    });
+    for (let run = 0; run < 4; run += 1) {
+      await viaStorage.storage.createAutoBackup();
+      assertCommitted(await kernel.execute({ type: 'createAutoBackup', commandId: `a${run}` }));
+      // Each backup is keyed by its time, so the next one gets a key of its own
+      await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    /** @param {LegacyContext} context */
+    const backups = async context => {
+      const stored = await localOf(context);
+      const keys = Object.keys(stored).filter(key => key.startsWith('auto_backup_'));
+      return {
+        count: keys.length,
+        lastBackupAt: stored.setting_lastBackupAt,
+        notes: keys.map(key => stored[key].canvases.map((/** @type {any} */ note) => note.id)),
+      };
+    };
+    assert.deepEqual(await backups(viaKernel), await backups(viaStorage));
+    assert.equal((await backups(viaKernel)).count, 3);
+  });
+
+  it('importBackup leaves the records Storage.importData leaves, Replace all and its recovery copy included', async () => {
+    const records = {
+      canvases: [legacyEnv.note('L1', { name: 'Local' })],
+      elements: [legacyEnv.block('l1', 'L1', 0, 'local line')],
+    };
+    const backup = {
+      version: 1,
+      exportedAt: 1,
+      canvases: [legacyEnv.note('P1', { name: 'From the file', folderId: 'PF' })],
+      elements: [legacyEnv.block('p1', 'P1', 0, 'file line')],
+      folders: [{ id: 'PF', name: 'Filed', parentId: null, createdAt: 1, updatedAt: 1, color: null, collapsed: false }],
+    };
+    const { viaStorage, viaKernel, kernel } = await twin(records);
+    const result = legacyEnv.plain(await viaStorage.storage.importData(structuredClone(backup), 'replace'));
+    const outcome = /** @type {import('../../js/kernel/core/contracts/outcomes.js').Committed} */ (
+      await kernel.execute({ type: 'importBackup', commandId: 'c1', mode: 'replace', backup: structuredClone(backup) })
+    );
+    assertCommitted(outcome);
+    // The note it added, then the folder it added, then the note it trashed, as Storage's result names them
+    assert.equal(outcome.changedIds.length, 3);
+    assert.deepEqual(outcome.changedIds.slice(1), [...result.addedFolderIds, ...result.trashedIds]);
+
+    /** Each context's records, with the import's new ids as the order they were made in */
+    const shaped = async (/** @type {LegacyContext} */ context, /** @type {string} */ importedId) => {
+      const { canvases: notes, elements: blocks, folders } = await recordsIn(context, ['canvases', 'elements', 'folders']);
+      const rename = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value).replaceAll(importedId, 'IMPORTED'));
+      return rename({ notes, blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })), folders });
+    };
+    assert.deepEqual(await shaped(viaKernel, outcome.changedIds[0]), await shaped(viaStorage, result.importedIds[0]));
+    const copies = async (/** @type {LegacyContext} */ context) =>
+      Object.keys(await localOf(context)).filter(key => key.startsWith('recovery_backup_')).length;
+    assert.deepEqual([await copies(viaKernel), await copies(viaStorage)], [1, 1]);
+  });
+
   // ============ Version history and AI chat inserts (#12 slice 4b2b) ============
 
   /**

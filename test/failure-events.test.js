@@ -14,7 +14,7 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
-const { createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient } = require('./helpers/legacy-env');
 const { loadBackground } = require('./helpers/load-background');
 
 const TITLE = 'Canary title: plans for the divorce lawyer';
@@ -518,13 +518,23 @@ function pageObserved(env) {
 }
 
 describe('auto-backup reports a failed backup (js/controllers/settings-controller.js)', () => {
-  /** A due backup whose chrome.storage.local write fails, with the canaries in lastError */
-  async function failedBackup(events) {
+  /**
+   * A due backup whose chrome.storage.local write fails, with the canaries in lastError, or
+   * that fails as `fail` makes it
+   */
+  async function failedBackup(events, fail = ({ env }) => env.chrome.failNextSet(canaryError())) {
     const { env, Storage } = await page();
     await Storage.setSetting('autoBackupEnabled', true);
+    // The page's settings port, which runs the auto-backup command (#12 slice 6)
+    await startEditorClient(env);
     const SettingsController = env.get('SettingsController');
-    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: loggerWith(events) });
-    env.chrome.failNextSet(canaryError());
+    const settings = new SettingsController({
+      storage: Storage,
+      settings: env.settingsClient,
+      domRefs: null,
+      logger: loggerWith(events),
+    });
+    fail({ env, Storage });
     await settings.checkBackupStatus();
     if (events) await events.flush();
     return { env, Storage };
@@ -534,10 +544,32 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
     const { host, working } = variants();
     await failedBackup(working);
     const seen = await inspect(host.indexedDB, host.settings.items);
-    // chrome.runtime.lastError holds only a message, so the event has no evidence beyond its code
-    assert.deepEqual(failures(seen.events), [['backup.auto-failed', {}]]);
+    // chrome.runtime.lastError holds only a message; the createAutoBackup outcome the event
+    // reads it through carries its cause and whether a retry can work, and nothing of the message
+    assert.deepEqual(failures(seen.events), [['backup.auto-failed', { cause: 'storage', errorCode: 'transaction-failed', retryable: true }]]);
     assert.deepEqual(incidentsOf(seen.incidents), [['backup', 'auto-backup-failed', null, 'data-risk', 1]]);
     assertNoCanary(seen.text, 'NewTabNoteTrust, the settings area, or the export');
+  });
+
+  it("an IndexedDB failure keeps the exception's name, so an UnknownError and an AbortError stay apart", async () => {
+    const seenFor = async (name) => {
+      const { host, working } = variants();
+      await failedBackup(working, ({ Storage }) => {
+        // The export reads every store first, so a failing database fails it there
+        Storage.exportAll = async () => {
+          throw new DOMException(`${MESSAGE}: ${TITLE} at ${URL_CANARY} with ${CREDENTIAL}`, name);
+        };
+      });
+      const seen = await inspect(host.indexedDB, host.settings.items);
+      assertNoCanary(seen.text, `NewTabNoteTrust, the settings area, or the export, after ${name}`);
+      return failures(seen.events);
+    };
+    assert.deepEqual(await seenFor('UnknownError'), [
+      ['backup.auto-failed', { exception: 'UnknownError', cause: 'storage', errorCode: 'transaction-failed', retryable: true }],
+    ]);
+    assert.deepEqual(await seenFor('AbortError'), [
+      ['backup.auto-failed', { exception: 'AbortError', cause: 'storage', errorCode: 'transaction-failed', retryable: true }],
+    ]);
   });
 
   it('warns, toasts, and stores nothing exactly as before, whatever the failure events are', async () => {

@@ -57,13 +57,35 @@ export const REJECT_REASONS = Object.freeze(['validation', 'policy', 'not-found'
 export const UNAVAILABLE_CAUSES = Object.freeze(['storage', 'quota', 'newer-schema', 'adapter', 'coordinator']);
 
 /**
+ * The DOMException names IndexedDB and storage fail with, which an `unavailable` outcome may
+ * name as `exception`: a name from this list, never the exception's message
+ */
+export const STORAGE_EXCEPTIONS = Object.freeze([
+  'AbortError',
+  'ConstraintError',
+  'DataCloneError',
+  'DataError',
+  'InvalidStateError',
+  'NotFoundError',
+  'QuotaExceededError',
+  'ReadOnlyError',
+  'TimeoutError',
+  'TransactionInactiveError',
+  'UnknownError',
+  'VersionError',
+]);
+
+/**
  * Storage couldn't run the command. `retryable` says whether the same command, sent again,
- * can succeed.
+ * can succeed. `exception` is the storage exception it failed with, one of
+ * STORAGE_EXCEPTIONS, where an adapter reports it (the legacy backup tasks do), so a
+ * diagnostic tells an UnknownError from an AbortError that both read as one code.
  * @typedef {object} Unavailable
  * @property {'unavailable'} kind
  * @property {UnavailableCause} cause
  * @property {string} code
  * @property {boolean} retryable
+ * @property {string} [exception]
  * @property {string} messageKey
  * @property {Severity} severity
  */

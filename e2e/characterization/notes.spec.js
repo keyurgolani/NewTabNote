@@ -43,10 +43,14 @@ test('two notes keep their own blocks in order after a switch and a reload, whic
 });
 
 test('the reopen check fails on a build whose saved tabs always reopen the first tab', async ({ playwright, headless }, testInfo) => {
-  // TabController.loadSavedTabs reads the saved activeTabIndex; asking for a key nobody
-  // saves gets its default, 0, the tab of Note A
+  // TabController.loadSavedTabs takes the saved activeTabIndex from the session it read, or 0
+  // when none is saved; reading it as never saved gives 0, the tab of Note A
   const edits = {
-    'js/controllers/tab-controller.js': text => text.replace('getSetting("activeTabIndex",0)', 'getSetting("ntnSelfTestUnsavedKey",0)'),
+    'js/controllers/tab-controller.js': text => {
+      const edited = text.replace(/void 0!==(\w+)\.activeTabIndex\?\1\.activeTabIndex:0/, '0');
+      if (edited === text) throw new Error("the self-test's edit didn't match the build of tab-controller.js");
+      return edited;
+    },
   };
   await driver.withEditedBuild({ playwright, headless }, testInfo, edits, async extension => {
     const error = await twoNotesAcrossReloads(extension).then(() => null, thrown => thrown);

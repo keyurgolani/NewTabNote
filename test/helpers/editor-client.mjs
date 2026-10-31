@@ -7,6 +7,7 @@ import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js'
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
 import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
+import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
@@ -25,6 +26,7 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   noteList: import('../../js/kernel/core/application/note-list.js').NoteList,
  *   removalFor: (ports: Omit<import('../../js/kernel/composition/removal.js').RemovalPorts, 'settled'>) =>
  *     import('../../js/kernel/composition/removal.js').NoteRemoval,
+ *   settingsClient: import('../../js/kernel/composition/settings.js').SettingsClient,
  * }}
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
@@ -56,6 +58,7 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     documentClient: createDocumentClient(client, pageNow ? { now: pageNow } : {}),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
+    settingsClient: createSettingsClient(client),
   };
 }
 

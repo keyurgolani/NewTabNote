@@ -214,6 +214,7 @@ function aiChat(env, Storage, editor) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
     storage: Storage,
+    settings: env.settingsClient,
     eventBus: null,
     domRefs: null,
     logger: { debug() {}, info() {}, warn() {}, error() {} },

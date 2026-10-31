@@ -6,6 +6,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { runContractSuite } from './contract.mjs';
@@ -36,4 +37,18 @@ it("no page or the service worker loads the IndexedDB adapter yet, only the help
     'js/kernel/adapters/indexeddb/settings.js',
     'js/kernel/adapters/indexeddb/trust.js',
   ]);
+});
+
+it("lacks only the backups flag the ledger declares, as a gap #18's backup engine closes", () => {
+  assert.equal(indexedDbFixture.flags.backups, false);
+  const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/architecture/kernel-ledger.json'), 'utf8'));
+  /** @type {Array<{file: string, rule: string, owner: number, verify: string}>} */
+  const gaps = ledger.rows.filter(
+    (/** @type {{rule: string, file: string}} */ row) =>
+      row.rule === 'declared-gap' && row.file === 'js/kernel/adapters/indexeddb/adapter.js',
+  );
+  assert.deepEqual(
+    gaps.map(row => [row.owner, row.verify]),
+    [[18, 'npm run test:kernel: the backups check in test/kernel/contract.mjs']],
+  );
 });

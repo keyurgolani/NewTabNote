@@ -4,12 +4,17 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+ *   which the workspace session is read and saved through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class TabController {
-  constructor({ storage, domRefs, logger }) {
+  constructor({ storage, settings, domRefs, logger }) {
     this.storage = storage;
+    this.settings = settings;
+    /** @type {Promise<Object|null>|null} The session as stored, read once for a start (_savedSession) */
+    this._startupSession = null;
     this.domRefs = domRefs;
     this.logger = logger;
 
@@ -226,8 +231,7 @@ class TabController {
     if (current && current.noteId === active.noteId) return;
     this._pushTab({ id: active.noteId, name: active.noteData && active.noteData.name });
     this.renderTabs();
-    await this.saveTabs();
-    this.cacheLastOpenedNoteId(active.noteId);
+    await this.saveTabs({ lastOpenedNoteId: active.noteId });
   }
 
   /**
@@ -333,9 +337,8 @@ class TabController {
     this.renderTabs();
     // The sidebar marks the note the pane shows again, as a tab switch does
     if (this.onRenderNotesList) await this.onRenderNotesList();
-    await this.saveTabs();
     const shown = this.getEditor();
-    if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
+    await this.saveTabs({ lastOpenedNoteId: shown && shown.noteId });
   }
 
   /**
@@ -403,8 +406,7 @@ class TabController {
     // The sidebar marks the note now in view, as a tab switch does. The list may have drawn a
     // new note from its commit before the pane opened it
     if (this.onRenderNotesList) await this.onRenderNotesList();
-    await this.saveTabs();
-    if (shown && shown.noteId) this.cacheLastOpenedNoteId(shown.noteId);
+    await this.saveTabs({ lastOpenedNoteId: shown && shown.noteId });
   }
 
   /**
@@ -596,8 +598,7 @@ class TabController {
     }
     this.renderTabs();
     if (this.onRefreshNotesList) await this.onRefreshNotesList();
-    await this.saveTabs();
-    if (isActive) this.cacheLastOpenedNoteId(note.id);
+    await this.saveTabs({ lastOpenedNoteId: isActive ? note.id : null });
   }
 
   /**
@@ -627,16 +628,47 @@ class TabController {
   // ─── Tab CRUD ───
 
   /**
+   * The workspace session as stored, read once for a start: the last-opened note App loads
+   * first, and the tabs loadSavedTabs restores, come from one read. Null when the read failed
+   * (the kernel query answered `failed`), which a start treats as nothing saved, as 1.4.x's
+   * reads answered their defaults, except that it then writes nothing over what may be there.
+   * @returns {Promise<Object|null>}
+   */
+  _savedSession() {
+    if (!this._startupSession) {
+      this._startupSession = this.settings.session().catch((error) => {
+        console.warn('TabController: could not read the saved tabs', error && error.message);
+        return null;
+      });
+    }
+    return this._startupSession;
+  }
+
+  /**
+   * The note the last new tab showed, for a fast start (Req 27.2), or null when there's none
+   * or the read failed, so the start opens the first note.
+   * @returns {Promise<string|null>}
+   */
+  async lastOpenedNoteId() {
+    const saved = await this._savedSession();
+    return (saved && saved.lastOpenedNoteId) || null;
+  }
+
+  /**
    * Load saved tabs from storage or create initial tab. Saved tabs and the
-   * split note whose notes are gone or in trash aren't reopened, the split
-   * note never repeats the left pane's, and the layout that opens is saved.
+   * split note whose notes are gone or in trash aren't reopened, and the split
+   * note never repeats the left pane's. The layout that opens is saved, in one
+   * write, only when it isn't what's stored (a tab whose note went, a split
+   * view that couldn't come back), and never after a read that failed.
    */
   async loadSavedTabs() {
-    const storage = this.storage;
-    const savedTabs = await storage.getSetting('openTabs', null);
-    const savedActiveIndex = await storage.getSetting('activeTabIndex', 0);
-    const savedSplitView = await storage.getSetting('splitViewEnabled', false);
-    const savedSecondaryId = await storage.getSetting('secondaryNoteId', null);
+    const saved = await this._savedSession();
+    this._startupSession = null;
+    const stored = saved || {};
+    const savedTabs = stored.openTabs !== undefined ? stored.openTabs : null;
+    const savedActiveIndex = stored.activeTabIndex !== undefined ? stored.activeTabIndex : 0;
+    const savedSplitView = stored.splitViewEnabled !== undefined ? stored.splitViewEnabled : false;
+    const savedSecondaryId = stored.secondaryNoteId !== undefined ? stored.secondaryNoteId : null;
     this.splitViewEnabled = false;
 
     // Keep the saved tabs whose notes still exist outside trash
@@ -650,10 +682,15 @@ class TabController {
       }
     }
 
+    /** @type {string|undefined} The note the restored active tab shows, which becomes the last opened */
+    let lastOpenedNoteId;
     if (validTabs.length > 0) {
       this.openTabs = validTabs;
       this.activeTabIndex = TabController.keptActiveIndex(kept, savedActiveIndex);
-      await this.switchToTab(this.activeTabIndex);
+      // Saved once, below, with the rest of the restored layout
+      if (await this.switchToTab(this.activeTabIndex, { persist: false })) {
+        lastOpenedNoteId = this.openTabs[this.activeTabIndex].noteId;
+      }
     } else {
       // No saved tabs or all invalid - create initial tab with first note
       const notes = this.noteList ? this.noteList.view('active') : [];
@@ -670,63 +707,42 @@ class TabController {
     }
 
     this.renderTabs();
-    await this.saveTabs();
+    if (saved) {
+      const session = this._session(lastOpenedNoteId);
+      const changed = Object.keys(session).some((key) => JSON.stringify(session[key]) !== JSON.stringify(stored[key]));
+      if (changed) await this.settings.saveSession(session);
+    }
     this.workspaceReady();
   }
 
   /**
-   * Save tabs to storage.
+   * The workspace session this tab shows: its tabs, the active one, split view, the right
+   * pane's note when it has one, and, when given, the note that was opened last.
+   * @param {string} [lastOpenedNoteId]
+   * @returns {Object}
    */
-  async saveTabs() {
-    const storage = this.storage;
-    await storage.setSetting('openTabs', this.openTabs);
-    await storage.setSetting('activeTabIndex', this.activeTabIndex);
-    await storage.setSetting('splitViewEnabled', this.splitViewEnabled);
-    if (this.secondaryEditor && this.secondaryEditor.noteId) {
-      await storage.setSetting('secondaryNoteId', this.secondaryEditor.noteId);
-    }
+  _session(lastOpenedNoteId) {
+    /** @type {Object<string, *>} */
+    const session = {
+      openTabs: this.openTabs,
+      activeTabIndex: this.activeTabIndex,
+      splitViewEnabled: this.splitViewEnabled,
+    };
+    if (this.secondaryEditor && this.secondaryEditor.noteId) session.secondaryNoteId = this.secondaryEditor.noteId;
+    if (lastOpenedNoteId) session.lastOpenedNoteId = lastOpenedNoteId;
+    return session;
   }
 
   /**
-   * Cache last-opened note ID in chrome.storage.local for fast startup.
-   * @param {string} noteId
+   * Save the tabs, in one write through the settings port (saveWorkspaceSession), with the
+   * note that was just opened when there is one, for a fast start (Req 27.2).
+   * @param {{lastOpenedNoteId?: string|null}} [options]
+   * @returns {Promise<void>}
    */
-  cacheLastOpenedNoteId(noteId) {
-    const api = TabController._chromeApi();
-    if (api && api.storage && api.storage.local) {
-      api.storage.local.set({ lastOpenedNoteId: noteId });
-    }
+  async saveTabs({ lastOpenedNoteId = null } = {}) {
+    await this.settings.saveSession(this._session(lastOpenedNoteId || undefined));
   }
 
-  /**
-   * Get cached last-opened note ID from chrome.storage.local. A read that
-   * fails resolves null.
-   * @returns {Promise<string|null>}
-   */
-  static getCachedLastOpenedNoteId() {
-    return new Promise((resolve) => {
-      const api = TabController._chromeApi();
-      if (!api || !api.storage || !api.storage.local) {
-        resolve(null);
-        return;
-      }
-      api.storage.local.get('lastOpenedNoteId', (result) => {
-        if (api.runtime && api.runtime.lastError) {
-          resolve(null);
-          return;
-        }
-        resolve((result && result.lastOpenedNoteId) || null);
-      });
-    });
-  }
-
-  /**
-   * The chrome API, where there is one.
-   * @returns {any}
-   */
-  static _chromeApi() {
-    return /** @type {any} */ (globalThis).chrome;
-  }
 
   /**
    * Render tabs in the header.
@@ -786,10 +802,14 @@ class TabController {
    * Switch to a specific tab. The tab bar and the saved tabs follow only a
    * load that happened, so a refused one leaves them on the note on screen.
    * Leaving a deleted note's notice takes that note's tab away, and so does
-   * clicking the tab of a note deleted elsewhere, with a toast.
+   * clicking the tab of a note deleted elsewhere, with a toast. A start's
+   * restore saves the layout itself, once (`persist: false`).
+   * @param {number} index
+   * @param {{persist?: boolean}} [options]
+   * @returns {Promise<boolean>} whether the tab's note loaded
    */
-  async switchToTab(index) {
-    if (index < 0 || index >= this.openTabs.length) return;
+  async switchToTab(index, { persist = true } = {}) {
+    if (index < 0 || index >= this.openTabs.length) return false;
     const tab = this.openTabs[index];
     const editor = this.getEditor();
     const goneId = editor.noteGone ? editor.noteId : null;
@@ -797,17 +817,16 @@ class TabController {
     if (!(await editor.loadNote(tab.noteId))) {
       if (tab.noteId !== editor.noteId && !(await this.storage.getNote(tab.noteId))) await this._dropDeletedTab(tab);
       else this.renderTabs();
-      return;
+      return false;
     }
     this._dropGoneTab(goneId);
     const at = this.openTabs.indexOf(tab);
     if (at !== -1) this.activeTabIndex = at;
     this.renderTabs();
     if (this.onRenderNotesList) await this.onRenderNotesList();
-    await this.saveTabs();
-
-    // Cache last-opened note ID for fast startup (Req 27.2)
-    this.cacheLastOpenedNoteId(tab.noteId);
+    // With the last-opened note, for a fast start (Req 27.2), in the same write
+    if (persist) await this.saveTabs({ lastOpenedNoteId: tab.noteId });
+    return true;
   }
 
   /**
@@ -832,10 +851,8 @@ class TabController {
     this._pushTab(note);
     this.renderTabs();
     if (this.onRenderNotesList) await this.onRenderNotesList();
-    await this.saveTabs();
-
-    // Cache last-opened note ID for fast startup (Req 27.2)
-    this.cacheLastOpenedNoteId(noteId);
+    // With the last-opened note, for a fast start (Req 27.2), in the same write
+    await this.saveTabs({ lastOpenedNoteId: noteId });
   }
 
   /**
@@ -914,8 +931,7 @@ class TabController {
     this.activeTabIndex = Math.max(0, this.openTabs.indexOf(next));
     this.renderTabs();
     if (this.onRenderNotesList) await this.onRenderNotesList();
-    await this.saveTabs();
-    this.cacheLastOpenedNoteId(next.noteId);
+    await this.saveTabs({ lastOpenedNoteId: next.noteId });
   }
 
   /**
@@ -997,6 +1013,8 @@ class TabController {
         return;
       }
       this._setSplitView(false);
+      // Saved now, so a reload keeps it (1.4.x saved it only with the next tab change)
+      await this.saveTabs();
       return;
     }
     // A right pane without a note would take typing and save none of it
@@ -1005,6 +1023,7 @@ class TabController {
       return;
     }
     this._setSplitView(true);
+    await this.saveTabs();
   }
 
   /**

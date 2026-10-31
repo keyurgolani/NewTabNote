@@ -55,6 +55,14 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/save-snapshot.js').SaveSnapshot} SaveSnapshot */
 /** @typedef {import('./operations/restore-snapshot.js').RestoreSnapshot} RestoreSnapshot */
 /** @typedef {import('./operations/insert-blocks.js').InsertBlocks} InsertBlocks */
+/** @typedef {import('./operations/save-chat-history.js').SaveChatHistory} SaveChatHistory */
+/** @typedef {import('./operations/save-prompt-templates.js').SavePromptTemplates} SavePromptTemplates */
+/** @typedef {import('./operations/save-theme.js').SaveTheme} SaveTheme */
+/** @typedef {import('./operations/complete-onboarding.js').CompleteOnboarding} CompleteOnboarding */
+/** @typedef {import('./operations/record-backup.js').RecordBackup} RecordBackup */
+/** @typedef {import('./operations/record-export-notice.js').RecordExportNotice} RecordExportNotice */
+/** @typedef {import('./operations/create-auto-backup.js').CreateAutoBackup} CreateAutoBackup */
+/** @typedef {import('./operations/import-backup.js').ImportBackup} ImportBackup */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -64,7 +72,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | RunBulkAction | CreateFolder | MoveFolder | RenameFolder | SetFolderCollapsed | DeleteFolder | MoveNoteToFolder
  *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
  *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | SetInsightsPending | RecordJobRun
- *   | SaveSnapshot | RestoreSnapshot | InsertBlocks} Command
+ *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
+ *   | CompleteOnboarding | RecordBackup | RecordExportNotice | CreateAutoBackup | ImportBackup} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -76,8 +85,11 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * What the commit feed names a commit by. `job` is the jobs' own bookkeeping, and `snapshot` a
- * note's version history, neither of which changes a note, so a note list ignores both.
- * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'snapshot' | 'system'} Aggregate
+ * note's version history, neither of which changes a note, so a note list ignores both, as it
+ * does AI chat's `chat`, a custom `theme`, `onboarding`, and the `backup` bookkeeping. An
+ * import is `note`: it adds notes and folders, and trashes notes.
+ * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'snapshot' | 'system' | 'chat' | 'theme'
+ *   | 'onboarding' | 'backup'} Aggregate
  */
 
 /**
@@ -195,6 +207,16 @@ export const COMMANDS = Object.freeze({
     maxBytes: LARGE,
   }),
   insertBlocks: entry('insert-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  // Preferences' neighbours in chrome.storage.local, which only the new tab has written
+  saveChatHistory: entry('save-chat-history', 'chat', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
+  savePromptTemplates: entry('save-prompt-templates', 'chat', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
+  saveTheme: entry('save-theme', 'theme', ['newtab'], { entityTypes: [] }),
+  completeOnboarding: entry('complete-onboarding', 'onboarding', ['newtab'], { entityTypes: [] }),
+  recordBackup: entry('record-backup', 'backup', ['newtab'], { entityTypes: [] }),
+  recordExportNotice: entry('record-export-notice', 'backup', ['newtab'], { entityTypes: [] }),
+  // The legacy backup tasks, until #18's engine
+  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], { entityTypes: [] }),
+  importBackup: entry('import-backup', 'note', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
 });
 
 /** @type {readonly CommandType[]} */

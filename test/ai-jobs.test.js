@@ -122,11 +122,18 @@ function notesManager(env, Storage, { ai, editor, tabs = [] }) {
   return manager;
 }
 
+/**
+ * Switch both jobs on, as Settings and onboarding do: a run checks the stored switch before
+ * each note's provider call
+ */
+const jobsOn = (env) => env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true, setting_insightsEnabled: true });
+
 /** AIChatController as App wires it, with its chat log reduced to a list */
 function aiChat(env, Storage, { ai, editor, tabs = [] }) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
     storage: Storage,
+    settings: env.settingsClient,
     domRefs: null,
     logger: quietLogger,
     llm: ai,
@@ -212,6 +219,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
 
   it('the auto-title job puts the title on the note it read', async () => {
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await switchThenAnswer('generateTitle', 'Groceries');
     await drive(env, job);
@@ -314,6 +322,7 @@ describe('T1: auto-title while the note is edited', () => {
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
     const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs });
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
 
@@ -349,6 +358,7 @@ describe('T2: insights while the note is edited', () => {
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    await jobsOn(env);
     const job = manager.runInsightsExtraction();
     await ai.waitFor('extractInsights');
 
@@ -391,6 +401,7 @@ describe('T3: a title set by hand stays', () => {
     const rendered = [];
     manager.onRenderTabs = () => rendered.push('tabs');
     manager.onRenderNotesList = () => rendered.push('list');
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
     // Another tab names the note
@@ -413,6 +424,7 @@ describe('T3: a title set by hand stays', () => {
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
     const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs });
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
     typeTitle(editor, 'Typed');
@@ -546,6 +558,7 @@ describe('T4: insights write the insight fields only', () => {
 
   it('the insights job writes only attachInsights per note, after its run is recorded', async () => {
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    await jobsOn(env);
     const job = manager.runInsightsExtraction();
     await ai.answer('extractInsights', { todos: ['Call'] });
     await drive(env, ai.answer('extractInsights', { todos: ['Plan'] }));
@@ -623,6 +636,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   it('after the auto-title job names the open note', async () => {
     const { env, Storage, ai, editor, page, sidebar, list } = await appWithSidebar();
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
@@ -650,6 +664,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   it('not after a title kept out by a hand-set one, which changed nothing', async () => {
     const { env, Storage, ai, editor, sidebar, list } = await appWithSidebar();
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
     await execute(env, 'renameNote', { noteId: 'A', name: 'Mine' });

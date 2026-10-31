@@ -108,7 +108,10 @@ describe('the legacy adapter', () => {
   it('has a declared-gap row in the kernel ledger for each guarantee it lacks, two contexts included', () => {
     const ledger = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/architecture/kernel-ledger.json'), 'utf8'));
     /** @type {Array<{file: string, rule: string, owner: number, verify: string}>} */
-    const gaps = ledger.rows.filter((/** @type {{rule: string}} */ row) => row.rule === 'declared-gap');
+    const gaps = ledger.rows.filter(
+      (/** @type {{rule: string, file: string}} */ row) =>
+        row.rule === 'declared-gap' && row.file === 'js/kernel/adapters/legacy/adapter.js',
+    );
     const flags = /** @type {Record<string, boolean>} */ ({ ...adapterFor(context()).flags });
     const lacking = Object.keys(flags).filter(flag => !flags[flag]);
     // Without revisions, two contexts saving one note's blocks race too (contract.mjs)

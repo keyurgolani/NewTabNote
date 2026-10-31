@@ -5,12 +5,15 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+ *   which every preference, backup record, auto-backup, and import here goes through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class SettingsController {
-  constructor({ storage, domRefs, logger }) {
+  constructor({ storage, settings, domRefs, logger }) {
     this.storage = storage;
+    this.settings = settings;
     this.domRefs = domRefs;
     this.logger = logger;
 
@@ -47,6 +50,7 @@ class SettingsController {
   /** Initialize settings: wire DOM listeners, check backup status. */
   async init() {
     this.setupSettings();
+    this.setupJobSettings();
     this.setupSettingsNav();
     this.setupSettingsSearch();
     this.setupWidthSelectorPill();
@@ -90,7 +94,7 @@ class SettingsController {
     const themeSelect = document.getElementById('theme-select');
     if (themeSelect) {
       themeSelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('theme', e.target.value);
+        await this.settings.setPreferences({ theme: e.target.value });
         if (this.onApplyTheme) this.onApplyTheme();
         this.updateThemePreview(e.target.value);
       });
@@ -100,7 +104,7 @@ class SettingsController {
     const fontSelect = document.getElementById('font-select');
     if (fontSelect) {
       fontSelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('font', e.target.value);
+        await this.settings.setPreferences({ font: e.target.value });
         this.applyFont();
       });
     }
@@ -109,7 +113,7 @@ class SettingsController {
     const widthSelect = document.getElementById('width-select');
     if (widthSelect) {
       widthSelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('width', e.target.value);
+        await this.settings.setPreferences({ width: e.target.value });
         this.applyWidth();
       });
     }
@@ -178,7 +182,7 @@ class SettingsController {
     const trashRetentionSelect = document.getElementById('trash-retention-select');
     if (trashRetentionSelect) {
       trashRetentionSelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('trashRetention', parseInt(e.target.value));
+        await this.settings.setPreferences({ trashRetention: parseInt(e.target.value) });
       });
     }
 
@@ -186,7 +190,7 @@ class SettingsController {
     const dailyNoteTemplateSelect = document.getElementById('daily-note-template-select');
     if (dailyNoteTemplateSelect) {
       dailyNoteTemplateSelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('dailyNoteTemplate', e.target.value);
+        await this.settings.setPreferences({ dailyNoteTemplate: e.target.value });
       });
     }
 
@@ -194,14 +198,14 @@ class SettingsController {
     const autoBackupToggle = document.getElementById('auto-backup-toggle');
     if (autoBackupToggle) {
       autoBackupToggle.addEventListener('change', async (e) => {
-        await this.storage.setSetting('autoBackupEnabled', e.target.checked);
+        await this.settings.setPreferences({ autoBackupEnabled: e.target.checked });
       });
     }
 
     const backupFrequencySelect = document.getElementById('backup-frequency-select');
     if (backupFrequencySelect) {
       backupFrequencySelect.addEventListener('change', async (e) => {
-        await this.storage.setSetting('autoBackupFrequency', parseInt(e.target.value));
+        await this.settings.setPreferences({ autoBackupFrequency: parseInt(e.target.value) });
       });
     }
 
@@ -231,6 +235,110 @@ class SettingsController {
         if (e.target === shortcutsModal) this.toggleShortcutsModal(false);
       });
     }
+  }
+
+  // ─── Auto-title and insights switches (Settings > AI) ───
+
+  /**
+   * The auto-title and insights switches and their intervals. A change saves the control that
+   * changed, in one write through the settings port, then sets that job up again at once
+   * (onSetupAutoTitle, onSetupInsightsExtraction: NotesManager starts its timer with the new
+   * interval, or stops it). Switched off, no more note text goes to the provider: a run already
+   * going checks the stored switch before each note's call, in this tab and in the others,
+   * which set their jobs up again when they hear of the change. A control whose save fails
+   * goes back to what's stored, with a toast. #8 (recipes) rebuilds these controls.
+   * @returns {void}
+   */
+  setupJobSettings() {
+    const jobs = [
+      {
+        enabledId: 'auto-title-enabled',
+        intervalId: 'auto-title-interval',
+        intervalRow: '.llm-auto-title-interval-row',
+        enabledKey: 'autoTitleEnabled',
+        intervalKey: 'autoTitleInterval',
+        defaultInterval: 15,
+        setUp: () => this.onSetupAutoTitle,
+      },
+      {
+        enabledId: 'insights-enabled',
+        intervalId: 'insights-interval',
+        intervalRow: '.llm-insights-interval-row',
+        enabledKey: 'insightsEnabled',
+        intervalKey: 'insightsInterval',
+        defaultInterval: 360,
+        setUp: () => this.onSetupInsightsExtraction,
+      },
+    ];
+    for (const job of jobs) {
+      const enabled = /** @type {HTMLInputElement|null} */ (document.getElementById(job.enabledId));
+      const interval = /** @type {HTMLSelectElement|null} */ (document.getElementById(job.intervalId));
+      if (!enabled) continue;
+
+      /**
+       * Save what one control holds now, and nothing of the other, so a tab whose Settings
+       * still shows an old switch never writes it back with an interval. A save that fails puts
+       * that control back to what's stored.
+       * @param {'enabled'|'interval'} control
+       * @returns {Promise<void>}
+       */
+      const save = async (control) => {
+        const key = control === 'enabled' ? job.enabledKey : job.intervalKey;
+        const value = control === 'enabled' ? enabled.checked : parseInt(interval ? interval.value : '', 10);
+        try {
+          await this.settings.setPreferences({ [key]: value });
+        } catch (error) {
+          console.error(`Could not save ${key}:`, error && error.message);
+          await this._restoreJobControl(job, control, enabled, interval);
+          Utils.showToast('Failed to save the setting. Please try again.', 'error');
+          return;
+        }
+        const setUp = job.setUp();
+        if (setUp) await setUp();
+      };
+      enabled.addEventListener('change', async () => {
+        this._showIntervalRow(job.intervalRow, enabled.checked);
+        await save('enabled');
+      });
+      if (interval) interval.addEventListener('change', () => save('interval'));
+    }
+  }
+
+  /**
+   * After a save that failed, the control that changed shows what's stored again: the switch
+   * (off when nothing is stored) with its interval row, or the interval (its default when
+   * nothing is stored). When even that read fails, a switch goes back to where it was, and an
+   * interval stays.
+   * @param {{enabledKey: string, intervalKey: string, intervalRow: string, defaultInterval: number}} job
+   * @param {'enabled'|'interval'} control
+   * @param {HTMLInputElement} enabled
+   * @param {HTMLSelectElement|null} interval
+   * @returns {Promise<void>}
+   */
+  async _restoreJobControl(job, control, enabled, interval) {
+    let stored = null;
+    try {
+      stored = await this.settings.preferences([job.enabledKey, job.intervalKey]);
+    } catch (error) {
+      console.warn(`Could not read ${job.enabledKey} back:`, error && error.message);
+    }
+    if (control === 'enabled') {
+      enabled.checked = stored ? stored[job.enabledKey] === true : !enabled.checked;
+      this._showIntervalRow(job.intervalRow, enabled.checked);
+    } else if (interval && stored) {
+      const minutes = stored[job.intervalKey];
+      interval.value = String(Number.isSafeInteger(minutes) && minutes > 0 ? minutes : job.defaultInterval);
+    }
+  }
+
+  /**
+   * @param {string} selector - the interval's row
+   * @param {boolean} shown
+   * @returns {void}
+   */
+  _showIntervalRow(selector, shown) {
+    const row = document.querySelector(selector);
+    if (row) row.classList.toggle('hidden', !shown);
   }
 
   // ─── Settings category navigation ───
@@ -549,7 +657,7 @@ class SettingsController {
       if (!btn) return;
 
       const width = btn.dataset.width;
-      await this.storage.setSetting('width', width);
+      await this.settings.setPreferences({ width });
       this.applyWidth();
 
       // Also update the settings modal select if it's open
@@ -636,10 +744,9 @@ class SettingsController {
    * @returns {Promise<void>}
    */
   async _afterFullExport({ backup = false } = {}) {
-    const at = Date.now();
     try {
-      await this.storage.setSetting('lastFullExportAt', at);
-      if (backup) await this.storage.setSetting('lastBackupAt', at);
+      // One write, stamped by the kernel's clock
+      await this.settings.recordBackup({ fullExport: true, backup });
     } catch (error) {
       console.warn('The export was handed to the browser, but its time was not saved:', error);
     }
@@ -683,7 +790,7 @@ class SettingsController {
       URL.revokeObjectURL(url);
 
       Utils.showToast('All notes exported as ZIP', 'success');
-      await this.storage.setSetting('lastBackupAt', Date.now());
+      await this.settings.recordBackup({ fullExport: false, backup: true });
     } catch (error) {
       console.error('ZIP export failed:', error);
       Utils.showToast('Export failed', 'error');
@@ -755,9 +862,10 @@ class SettingsController {
 
   /**
    * Import a backup file. Order: parse, validate, choose, confirm Replace all,
-   * flush every open editor, then let Storage.importData write the recovery
-   * copy (Replace all) and commit. Dismissing a dialog or a refused file
-   * changes nothing.
+   * flush every open editor, then run the importBackup command, whose legacy
+   * import writes the recovery copy (Replace all) and commits. Dismissing a
+   * dialog or a refused file changes nothing, and a failed import is never
+   * reported as one that happened.
    * @param {Blob} file
    * @returns {Promise<void>}
    */
@@ -792,19 +900,20 @@ class SettingsController {
     if (choice !== 'merge' && choice !== 'replace') return;
     if (choice === 'replace' && !(await this._confirmReplaceAll())) return;
 
-    /** @type {ImportResult|null} */
+    /** @type {import('../kernel/composition/settings.js').ImportSummary|null} */
     let result = null;
     try {
       if (this.onFlushEditors) await this.onFlushEditors();
-      result = await this.storage.importData(data, choice);
+      // The importBackup command: all of it commits or none of it does, so the counts are what committed
+      result = await this.settings.importBackup(data, choice, counts);
     } catch (error) {
-      console.error('Import failed:', error);
-      this._showImportFailed(error && error.message ? error.message : 'unknown error');
+      console.error('Import failed:', error && error.outcome ? `${error.outcome.kind}: ${error.outcome.code}` : error);
+      this._showImportNotCommitted(error);
     }
 
     // Editors resume, and the notes Replace all trashed leave every new tab
     const resumed = await this._afterImport(async () => {
-      if (this.onReloadEditors) await this.onReloadEditors(result ? result.trashedIds : [], result ? result.trashedAt : null);
+      if (this.onReloadEditors) await this.onReloadEditors(result ? result.trashedIds : [], null);
     });
     if (!result) return;
 
@@ -875,6 +984,32 @@ class SettingsController {
   }
 
   /**
+   * The toast for an import that didn't commit, from the importBackup outcome's code. Nothing
+   * was written: the import commits all of it or none of it. A missing store and a recovery
+   * copy that couldn't be saved keep 1.4.x's words; the browser's own error text, which 1.4.x
+   * showed for the rest, never reaches the page.
+   * @param {*} error - a SettingsWriteError with the outcome, or what threw before the command ran
+   * @returns {void}
+   */
+  _showImportNotCommitted(error) {
+    const outcome = error && error.outcome;
+    if (!outcome) {
+      this._showImportFailed(error && error.message ? error.message : 'unknown error');
+      return;
+    }
+    const failed = (why) => Utils.showToast(`Failed to import the backup: ${why}`, 'error', 6000);
+    switch (outcome.code) {
+      case 'folders-store-missing': this._showImportFailed("this profile's folders store is missing"); return;
+      case 'media-store-missing': this._showImportFailed("this profile's media store is missing"); return;
+      case 'recovery-copy-failed': this._showImportFailed("couldn't save a recovery copy"); return;
+      case 'import-invalid': failed("the file isn't a backup this version can import. Nothing was changed."); return;
+      case 'quota': failed('the browser is out of storage space. Nothing was changed.'); return;
+      case 'reload-required': failed('this page needs a reload first. Nothing was changed.'); return;
+      default: failed("storage couldn't write it. Nothing was changed. Please try again.");
+    }
+  }
+
+  /**
    * @param {string} reason
    * @returns {void}
    */
@@ -883,7 +1018,7 @@ class SettingsController {
   }
 
   /**
-   * @param {ImportResult} result
+   * @param {import('../kernel/composition/settings.js').ImportSummary} result
    * @returns {string}
    */
   _importSummary(result) {
@@ -1080,7 +1215,7 @@ class SettingsController {
 
     if (daysSinceBackup >= frequency) {
       try {
-        await this.storage.createAutoBackup();
+        await this.settings.createAutoBackup();
         this.logger?.info?.('SettingsController', 'Auto-backup created to chrome.storage.local');
       } catch (error) {
         console.warn('Auto-backup failed:', error);
