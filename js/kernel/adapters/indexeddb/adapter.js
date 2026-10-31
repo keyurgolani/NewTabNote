@@ -205,7 +205,10 @@ function booksOf(db) {
  * row and never replays one, so each run of it runs, and it leaves CanvasTabDB as it found it.
  * @param {Work} work
  */
-const isCatalogCommand = work => Object.hasOwn(COMMANDS, /** @type {{type?: unknown}} */ (work.command).type ?? '');
+const isCatalogCommand = work => {
+  const { type } = /** @type {{type?: unknown}} */ (work.command);
+  return typeof type === 'string' && Object.hasOwn(COMMANDS, type);
+};
 
 /**
  * A unit's view of its command's transaction: only the stores it named, and no writes when
