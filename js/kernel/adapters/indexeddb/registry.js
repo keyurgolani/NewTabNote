@@ -69,9 +69,9 @@ export const LEGACY_STORE_NAMES = Object.freeze(Object.keys(STORE_SCHEMAS).sort(
  * - `conflicts`: `{id, noteId, scope, expected, current, at, command}`, keyed by the commandId
  *   that lost (conflicts.js)
  * - `tombstones`: `{entityType, id, deletedAt, lastRevision, seq, reason, purge}`, content-free.
- *   #17's adapter writes one for each note a commit deletes, with no `purge`, and #17 PR 2b's
- *   permanent deletion writes it in core instead. Only a tombstone whose recovery-point purge
- *   is pending holds `purge`, so its index lists just those.
+ *   Core's deletion puts one for each note deleted for good and each folder deleted, in the
+ *   delete's own transaction (#17 PR 2b, deletion.js). Only a tombstone whose recovery-point
+ *   purge is pending holds `purge`, so its index lists just those (purge.js).
  */
 export const OPERATIONS_STORE = 'operations';
 export const CHANGES_STORE = 'changes';

@@ -19,6 +19,7 @@ import { OPEN_WITHIN_MS } from './connection.js';
 import { failureOf } from './failures.js';
 import {
   DEFAULT_LIMITS,
+  POINTS_LOCK,
   committed,
   copyPoint,
   discardPoint,
@@ -52,8 +53,8 @@ import { checkSpace } from './space.js';
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
 
-/** The Web Lock every runner takes (#17, "Hosting") */
-export const MIGRATE_LOCK = 'storage.migrate';
+/** The Web Lock every runner takes (#17, "Hosting"), which the purge and the readers of points share */
+export const MIGRATE_LOCK = POINTS_LOCK;
 
 /**
  * Web Locks, or anything with its request(name, options, callback)

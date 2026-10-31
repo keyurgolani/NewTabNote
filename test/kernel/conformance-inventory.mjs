@@ -150,6 +150,11 @@ export const HELPERS = Object.freeze({
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // #17 PR 2b's tombstones: the adapter completes them, and the purge reads and marks them
+  'js/kernel/adapters/indexeddb/deletion.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/purge.js',
+  ],
   'js/kernel/adapters/indexeddb/failures.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/indexeddb/changes.js',
@@ -278,6 +283,11 @@ export const UNSHARED = Object.freeze({
   'js/kernel/adapters/files/save-picker.js': {
     implements: "#20's FilePort, over showSaveFilePicker: a closed write, read back from the same handle",
     tests: 'test/kernel/trust-salvage.test.mjs',
+  },
+  // #17 PR 2b: the one purge of the one recovery database, driven by tombstones
+  'js/kernel/adapters/indexeddb/purge.js': {
+    implements: "#17's recovery-point purge (purgeRecoveryPoints), under Web Lock storage.migrate",
+    tests: 'test/kernel/storage-purge.test.mjs',
   },
 });
 
