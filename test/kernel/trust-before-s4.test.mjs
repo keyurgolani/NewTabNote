@@ -465,4 +465,100 @@ describe("#87's review: a success counts only what was sighted at its own moment
     await page.reconcile();
     assert.equal(loads, 0);
   });
+
+  it("Q1: a tab's success queued behind a slow load reads the mark when it happened, so another tab's failure meanwhile stays open", async () => {
+    const profile = trustProfile();
+    const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    /** @type {() => void} */
+    let releaseLoad = () => {};
+    const loaded = new Promise(resolve => {
+      releaseLoad = () => resolve(undefined);
+    });
+    const ha = gatedHost(profile);
+    const a = lazyFailureEvents({
+      surface: 'newtab',
+      read: keys => profile.settings.get(keys),
+      load: async () => {
+        await loaded;
+        return {
+          createFailureEvents: (/** @type {any} */ options) => createFailureEvents({ ...options, host: ha.host }),
+        };
+      },
+    });
+    // The tab's first event, at another site, loads the trust code, slowly
+    a.event('embeddings.load-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await tick();
+    // The auto-backup succeeds now, queued behind it
+    a.event('backup.auto-succeeded', {});
+    await tick();
+    // Another tab's backup fails again meanwhile
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    releaseLoad();
+    await a.flush();
+    const incident = await incidentIn(profile, 'backup/auto-backup-failed/-');
+    assert.deepEqual([incident?.state, incident?.occurrences], ['open', 2], "B's newer failure read resolved");
+  });
+
+  it('Q1, in the worker: a success queued behind a slow event reads the mark when it happened', async () => {
+    const profile = trustProfile();
+    const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    const gated = gatedHost(profile);
+    const a = createFailureEvents({ surface: 'worker-internal', host: gated.host });
+    // A's capture failure is held at its mark write, so A's queue waits behind it
+    gated.gate.armed = 1;
+    a.event('capture.failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await tick();
+    assert.equal(gated.gate.waiting.length, 1, 'the failure is held at its mark write');
+    a.event('backup.auto-succeeded', {});
+    await tick();
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    gated.release();
+    await a.flush();
+    const incident = await incidentIn(profile, 'backup/auto-backup-failed/-');
+    assert.deepEqual([incident?.state, incident?.occurrences], ['open', 2], "B's newer failure read resolved");
+  });
+
+  for (const [shape, stale] of /** @type {const} */ ([
+    ["today's count alone", 1],
+    ["an incident id that's gone", { id: 'an-incident-that-is-gone', occurrences: 1 }],
+  ])) {
+    it(`Q3: a mark left by an incident that's gone (${shape}) never matches a new one`, async () => {
+      const profile = trustProfile();
+      profile.settings.items.set(SETTINGS_KEYS.openSites, {
+        'backup.auto-failed': { 'backup/auto-backup-failed/-': stale },
+      });
+      /** @type {() => void} */
+      let releaseLoad = () => {};
+      const loaded = new Promise(resolve => {
+        releaseLoad = () => resolve(undefined);
+      });
+      const ha = gatedHost(profile);
+      const a = lazyFailureEvents({
+        surface: 'newtab',
+        read: keys => profile.settings.get(keys),
+        load: async () => {
+          await loaded;
+          return {
+            createFailureEvents: (/** @type {any} */ options) => createFailureEvents({ ...options, host: ha.host }),
+          };
+        },
+      });
+      a.event('backup.auto-succeeded', {});
+      await tick();
+      // A new incident, made after the success, with the same count
+      const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
+      b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+      await b.flush();
+      releaseLoad();
+      await a.flush();
+      const incident = await incidentIn(profile, 'backup/auto-backup-failed/-');
+      assert.deepEqual([incident?.state, incident?.occurrences], ['open', 1], 'a stale mark resolved a new incident');
+    });
+  }
 });
