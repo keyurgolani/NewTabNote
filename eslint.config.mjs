@@ -82,6 +82,13 @@ const LEGACY_SYNTAX = [
 // its owner, and the whole of it under the name App held it by before
 const LEGACY_STORES = ['legacyStorage', 'searchIndexStore', 'graphStore', 'syncStore', 'recovery'];
 
+// The rule that counts them, which every legacy file keeps, the loader included
+const LEGACY_STORE_RULE = ['error', {
+  rule: 'legacy-store',
+  message: "A handle on js/storage.js the new tab's root gives App, ledgered to the issue that moves its holder off Storage.",
+  names: LEGACY_STORES,
+}];
+
 /**
  * The package root as a URL. Chrome registers chrome-extension: as a standard scheme, so its
  * URL parser reads a backslash in a path as a slash. Node's URL keeps the backslash, since
@@ -493,11 +500,7 @@ export default [
         message: 'Only js/kernel/ imports from js/kernel/adapters/; take a client from your composition root.',
         deny: ['js/kernel/adapters/'],
       }],
-      'kernel/this-member': ['error', {
-        rule: 'legacy-store',
-        message: "A handle on js/storage.js the new tab's root gives App, ledgered to the issue that moves its holder off Storage.",
-        names: LEGACY_STORES,
-      }],
+      'kernel/this-member': LEGACY_STORE_RULE,
     },
   },
   {
@@ -510,14 +513,17 @@ export default [
       }],
     },
   },
-  // The loader keeps the rules above but two: the fetch ban, for its one read of build-info.json,
-  // and the import rule, whose one hit would be the retry's import() of a chunk build-info.json
-  // names. test/lazy-boundaries.test.js pins that it imports nothing else.
+  // The loader keeps the legacy rules above, kernel/this-member's legacy-store rule included, but
+  // two: the fetch ban, for its one read of build-info.json, and the import rule, whose one hit
+  // would be the retry's import() of a chunk build-info.json names. test/lazy-boundaries.test.js
+  // pins that it imports nothing else, and that its rules are a legacy file's but those two.
   {
     files: [LOADER],
+    plugins: { kernel },
     rules: {
       'no-restricted-globals': ['error', { globals: LEGACY_GLOBALS.filter(({ name }) => name !== 'fetch'), checkGlobalObject: true }],
       'no-restricted-syntax': ['error', ...LEGACY_SYNTAX],
+      'kernel/this-member': LEGACY_STORE_RULE,
     },
   },
   {
