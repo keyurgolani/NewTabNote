@@ -38,8 +38,8 @@ import {
 
 /**
  * A receipt (migrate.js), as `migrations` holds it: ids, versions, times, and a failure code,
- * never content
- * @typedef {{id: string, from: number | null, to: number, status: 'completed' | 'failed' | 'space-blocked', startedAt: number, completedAt: number, recoveryPointId: string | null, failure: {code: string} | null}} Receipt
+ * never content. A transform step's (transforms.js) adds how many records it read and filled.
+ * @typedef {{id: string, from: number | null, to: number, status: 'completed' | 'failed' | 'space-blocked', startedAt: number, completedAt: number, recoveryPointId: string | null, failure: {code: string} | null, counts?: Record<string, number>}} Receipt
  */
 
 /**

@@ -2,11 +2,13 @@
  * Notes and their blocks, as IndexedDB has stored them since 1.4.0. No kernel slice changes
  * a record's shape (#12, "Data and migration"), so the field names stay: a block names its
  * note in `canvasId`. Stored records can lack fields (Popup wrote four-field notes until
- * slice 4), and every function here takes that into account.
+ * slice 4), and every function here takes that into account. #17 PR 3a adds placement, kind,
+ * and lifecycle beside the flags (placement.js), and every flag stays.
  */
 
 import { previewText } from '../blocks/previews.js';
 import { escapeAttributeText, escapePlainText } from '../blocks/rich-text.js';
+import { withNewPlacement } from './placement.js';
 
 /**
  * @typedef {object} NoteFields
@@ -32,6 +34,9 @@ import { escapeAttributeText, escapePlainText } from '../blocks/rich-text.js';
  * @property {string | null} folderId
  * @property {{scale: number, offsetX: number, offsetY: number}} viewport
  * @property {{gridType: string, backgroundColor: string}} settings
+ * @property {import('./placement.js').Placement} placement - #17 PR 3a's, beside the flags
+ * @property {import('./placement.js').NoteKind} kind
+ * @property {import('./placement.js').Lifecycle} lifecycle
  */
 
 /** @typedef {{id: string} & Partial<NoteFields> & Record<string, unknown>} NoteRecord */
@@ -79,7 +84,9 @@ export const DERIVED_FIELDS = Object.freeze(['preview', 'todoProgress', ...INSIG
 
 /**
  * A new note, field for field the one Storage.createNote has written since 1.4.0, pinned or with
- * a title set by hand when it carries over a note the editor saved as a new one.
+ * a title set by hand when it carries over a note the editor saved as a new one, and with
+ * #17 PR 3a's placement, kind, and lifecycle beside its flags (placement.js): its folder's
+ * collection, or Unfiled at the root.
  * @param {object} fields
  * @param {string} fields.id
  * @param {string} fields.name
@@ -90,7 +97,7 @@ export const DERIVED_FIELDS = Object.freeze(['preview', 'todoProgress', ...INSIG
  * @returns {NoteRecord}
  */
 export function newNoteRecord({ id, name, now, folderId = null, pinned = false, titleManuallySet = false }) {
-  return {
+  return withNewPlacement({
     id,
     name,
     createdAt: now,
@@ -110,7 +117,7 @@ export function newNoteRecord({ id, name, now, folderId = null, pinned = false, 
     folderId,
     viewport: { scale: 1, offsetX: 0, offsetY: 0 },
     settings: { gridType: 'dots', backgroundColor: '#fafafa' },
-  };
+  });
 }
 
 /**
@@ -260,16 +267,56 @@ function timeOf(value) {
 }
 
 /**
+ * The time a note lists by: its `updatedAt` when an IndexedDB index can hold it, else its
+ * `createdAt`, else 0, so a note without a usable `updatedAt` lists last rather than nowhere
+ * (#17 PR 3a, KD-011)
+ * @param {NoteRecord} note
+ * @returns {unknown}
+ */
+export function listTimeOf(note) {
+  if (isIndexKey(note.updatedAt)) return note.updatedAt;
+  return typeof note.createdAt === 'number' && Number.isFinite(note.createdAt) ? note.createdAt : 0;
+}
+
+/**
+ * Whether an IndexedDB index on `updatedAt` lists `note`
+ * @param {NoteRecord} note
+ */
+export const hasIndexedTime = note => isIndexKey(note.updatedAt);
+
+/**
+ * The `updatedAt` #17's transform gives a note that has none an index can hold (#17 PR 3a): its
+ * `createdAt`, else the newest time on its blocks, else `fallback`, the run's start
+ * @param {NoteRecord} note
+ * @param {readonly BlockRecord[]} blocks - the note's
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function filledUpdatedAt(note, blocks, fallback) {
+  const isTime = /** @param {unknown} value @returns {value is number} */ value =>
+    typeof value === 'number' && Number.isFinite(value);
+  if (isTime(note.createdAt)) return note.createdAt;
+  /** @type {number | null} */
+  let newest = null;
+  for (const block of blocks) {
+    for (const time of [block.updatedAt, block.createdAt]) {
+      if (isTime(time) && (newest === null || time > newest)) newest = time;
+    }
+  }
+  return newest ?? fallback;
+}
+
+/**
  * One view's notes, in the order Storage lists them. Storage reads through the `updatedAt`
- * index, which leaves out a record without a usable `updatedAt`, so this does too.
+ * index, which leaves out a record without a usable `updatedAt`. Since #17 PR 3a such a note
+ * lists by listTimeOf here (KD-011), and the worker's transform fills the field, after which
+ * Storage lists it too.
  * @param {NoteRecord[]} notes
  * @param {NoteView} view
  * @returns {NoteRecord[]}
  */
 export function notesInView(notes, view) {
-  const indexed = notes
-    .filter(note => isIndexKey(note.updatedAt))
-    .sort((a, b) => compareKeys(a.updatedAt, b.updatedAt) || compareKeys(a.id, b.id));
+  const indexed = [...notes].sort((a, b) => compareKeys(listTimeOf(a), listTimeOf(b)) || compareKeys(a.id, b.id));
   switch (view) {
     case 'active':
       return indexed.reverse().filter(note => !note.trashed && !note.isTemplate && !note.archived);
@@ -284,7 +331,7 @@ export function notesInView(notes, view) {
     case 'templates':
       return indexed
         .filter(note => note.isTemplate && !note.trashed)
-        .sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt));
+        .sort((a, b) => timeOf(listTimeOf(b)) - timeOf(listTimeOf(a)));
     case 'popup':
       return indexed.reverse().filter(note => !note.archivedAt && !note.trashedAt);
     case 'sidePanel':
@@ -441,7 +488,7 @@ export function findDailyNote(notes, now) {
  * @returns {NoteRecord}
  */
 export function newDailyNoteRecord({ id, name, dateStr, now }) {
-  return { ...newNoteRecord({ id, name, now }), isDaily: true, dateStr };
+  return withNewPlacement({ ...newNoteRecord({ id, name, now }), isDaily: true, dateStr });
 }
 
 /**
