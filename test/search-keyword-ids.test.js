@@ -4,7 +4,8 @@
 // `noteId`, as the indexer writes them (js/workers/indexer.js), and every caller of
 // SearchEngine.search reads a match's `id`. In 1.4.x and until this fix a Fuse.js match had no
 // `id`, so the sidebar said "No matching notes" for a note it lists, the AI chat's All Notes found
-// no note to answer from, and Related Notes drew one "Untitled" item for every keyword match.
+// no note to answer from, and Related Notes drew one "Untitled" item for every keyword match. A
+// match the model alone found looked its entry up by `id` too, and came back without its name.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -49,6 +50,28 @@ describe('a keyword match names its note (js/search.js)', () => {
     assert.deepEqual(await ids('Camping'), ['A']);
     assert.deepEqual(await ids('tent'), ['A']);
     assert.deepEqual(await ids('bread'), ['B']);
+  });
+
+  it("a match the model alone found carries its note's entry, name included", async () => {
+    const env = createLegacyEnv({ document: null });
+    env.load('js/search.js', 'js/embeddings.js');
+    const Embeddings = env.get('Embeddings');
+    // The model, loaded: every text embeds as note B's vector does
+    Embeddings.isReady = true;
+    Embeddings.pipeline = async () => ({ data: [1, 0] });
+    const searchEngine = engineIn(env);
+    await searchEngine.updateIndex(ENTRIES);
+    searchEngine.setVectors([{ noteId: 'B', vector: [1, 0] }]);
+    const matches = plain(await searchEngine.search('zzz'));
+    assert.deepEqual(matches.map((match) => [match.id, match.name, match.isSemantic]), [['B', 'Groceries', true]]);
+  });
+
+  it('a match whose entry already names its note as id keeps it', async () => {
+    const env = createLegacyEnv({ document: null });
+    env.load('js/search.js');
+    const searchEngine = engineIn(env);
+    await searchEngine.updateIndex([{ id: 'A', name: 'Camping trip', content: '' }]);
+    assert.deepEqual(plain((await searchEngine.search('Camping')).map((match) => match.id)), ['A']);
   });
 
   it('the sidebar lists the note a title matches', async () => {
