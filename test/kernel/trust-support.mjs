@@ -149,6 +149,8 @@ export function flakyStore(store) {
     count: 0,
     cause: /** @type {import('../../js/kernel/core/contracts/outcomes.js').UnavailableCause} */ ('storage'),
     code: 'unreadable',
+    /** Whether the next failure is a TypeError, as a programming error throws, not an UnavailableError */
+    typeError: false,
   };
   return {
     store: /** @type {TrustStore} */ ({
@@ -157,15 +159,17 @@ export function flakyStore(store) {
       run: (stores, mode, unit) => {
         if (plan.count > 0) {
           plan.count--;
+          if (plan.typeError) return Promise.reject(new TypeError('a store that broke'));
           return Promise.reject(new UnavailableError(plan.cause, plan.code, false));
         }
         return store.run(stores, mode, unit);
       },
     }),
-    /** @param {number} count @param {string} [code] */
-    failNext(count, code = 'unreadable') {
+    /** @param {number} count @param {string} [code] @param {{typeError?: boolean}} [options] */
+    failNext(count, code = 'unreadable', { typeError = false } = {}) {
       plan.count = count;
       plan.code = code;
+      plan.typeError = typeError;
     },
   };
 }
