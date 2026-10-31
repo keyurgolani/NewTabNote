@@ -301,12 +301,13 @@ describe("#75's follow-ups (part 2)", () => {
     const up = databaseOn(profile);
     opened.push(up);
     const rb = await recordsOn(up, profile, { clock, prefix: 'bbbb' });
-    a.failNext(5);
+    a.failNext(1, 'unreadable', { writesOnly: true });
     await ra.records.append(event(0));
-    await rb.records.append(event(0));
+    // Part 3: A's own next write that lands resolves its write-failed
     clock.advance(10_000);
-    await rb.records.resolve('storage', []);
+    await ra.records.append(event(0));
     assert.equal((await storedAt(up, WRITE_FAILED))?.state, 'resolved');
+    assert.ok(rb);
     // The clock steps back; A fails a write and its copy set fails too: memory only
     clock.advance(-60_000);
     a.failNext(5);

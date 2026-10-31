@@ -158,7 +158,8 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
    * Runs one provider's check and stores what it found. Answers its receipt, and whether all
    * of it landed: the receipt, each fault's incident (a held one isn't stored, so it hasn't),
    * and the resolution. A check that answered, whatever its status, resolves the provider's
-   * open incidents it looked at (`looked`), no longer reports, and last saw before it started;
+   * open incidents it looked at (`looked`), no longer reports, and saw no new sighting of
+   * while it ran (their occurrences, read before it, unchanged);
    * one that timed out, threw, or answered outside the schema resolves nothing. What didn't
    * land is counted in the storage incident.
    * @param {ProviderInfo} provider
@@ -174,6 +175,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         : () => {
             throw new TypeError('provider has no check');
           };
+    // What the provider's open incidents count before the check, so only one with no sighting
+    // while it ran can resolve; a read that fails resolves nothing
+    const seen = await records.occurrencesOf(provider.id);
     const run = await runCheck({ ...provider, check }, { context: registry.context || {}, clock, timers });
     if (run.outcome === 'timed-out') {
       note('trust.check-timed-out', {
@@ -199,11 +203,11 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     }
     if (!recorded.recorded) return { receipt: null, complete: false };
     const { receipt } = recorded;
-    if (run.outcome === 'answered' && run.looked.length > 0) {
+    if (run.outcome === 'answered' && run.looked.length > 0 && seen.ok) {
       const still = run.faults.map(fault => incidentKey(fault.providerId, fault.faultCode, fault.subjectId));
       const resolved = await records.resolve(provider.id, still, {
         looked: run.looked,
-        seenBy: run.receipt.verifiedAt,
+        seen: /** @type {{counts: Record<string, number>}} */ (seen).counts,
       });
       if (!resolved.recorded) return { receipt, complete: false };
       for (const incident of resolved.resolved) {
