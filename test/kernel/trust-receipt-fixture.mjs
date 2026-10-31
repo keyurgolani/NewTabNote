@@ -51,6 +51,13 @@ export function truthfulReceipt({ context = {}, answers = false, then } = {}) {
     assert.equal(receipt.freshnessMs, data.freshnessMs, 'a receipt carries its declared freshness');
     assert.ok(checkEvidence(receipt.evidence).ok);
     assert.notEqual(run.outcome, 'invalid', `${contribution.ref} answered something a receipt can't hold`);
+    // A check reports only faults it declares it observes, so its next answer can resolve them
+    for (const fault of run.faults) {
+      assert.ok(
+        data.observes.includes(fault.faultCode),
+        `${contribution.ref} reported ${fault.faultCode}, which it doesn't list in observes`,
+      );
+    }
     if (answers) assert.equal(run.outcome, 'answered', `${contribution.ref}'s check ${run.outcome} against the context`);
     if (then) then(contribution, run);
   };
