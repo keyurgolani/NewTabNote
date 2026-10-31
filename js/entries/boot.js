@@ -2,13 +2,12 @@
  * The new tab's start (#27 slice 3, "Entries"), which the boot root (js/entries/newtab.js) runs.
  * It holds the shared Web Lock ntn-boot while the tab starts, for #35's job boot guard, and
  * loads the workspace chunk, today's whole new tab, through the page's loader, then calls the
- * chunk's boot(). The boot guard (js/entries/boot-guard.js) watches for a failure until then:
- * `ntn:boot` tells it the root is calling boot(), and `ntn:boot-failed` that the chunk didn't
- * load. From boot() on, the app owns its failures.
+ * chunk's boot(). The boot guard (js/entries/boot-guard.js) watches for a failure until boot()
+ * has returned: `ntn:boot` tells it the app owns its failures from then on, and
+ * `ntn:boot-failed` that the start failed, with the build, what didn't start, and why.
  */
 
 /** @typedef {import('../runtime/lazy.js').Loader} Loader */
-/** @typedef {import('../runtime/lazy.js').Result} Result */
 
 /** The lock #35's job boot guard waits on while a new tab starts */
 export const BOOT_LOCK = 'ntn-boot';
@@ -68,22 +67,53 @@ export function holdBootLock({ locks, whenReady, setTimeout: schedule, clearTime
 }
 
 /**
- * Load the workspace chunk through `loader` and call its boot() with the loader, telling the
- * boot guard on `target` first: `ntn:boot`, or `ntn:boot-failed` with the build, the chunk, and
- * the reason when it didn't load
- * @param {{loader: Loader, target: EventTarget, load: () => Promise<any>}} options - `load` is
- *   the root's `() => import('../workspace.js')`
- * @returns {Promise<Result>}
+ * @typedef {object} StartOptions
+ * @property {Loader} loader - the page's
+ * @property {EventTarget} target - where the boot guard listens: the page's window
+ * @property {() => Promise<any>} load - the root's `() => import('../workspace.js')`
+ */
+
+/**
+ * Tell the boot guard on `target` the start failed: `ntn:boot-failed`, with the build, what
+ * didn't start, and why. Answers false, App not having taken over.
+ * @param {EventTarget} target
+ * @param {{buildId: string | null, chunk: string, reason: string}} failure
+ * @returns {false}
+ */
+function startFailed(target, failure) {
+  target.dispatchEvent(new CustomEvent('ntn:boot-failed', { detail: failure }));
+  return false;
+}
+
+/**
+ * Load the workspace chunk through `loader` and call its boot() with the loader. The boot guard
+ * on `target` hears `ntn:boot` once boot() has returned, when App owns its failures, or
+ * `ntn:boot-failed` with the build, the chunk, and the reason: the loader's when the chunk
+ * didn't load, and evaluation-failed when boot() threw before App took over, as for a chunk that
+ * throws as it evaluates. Answers whether App took over.
+ * @param {StartOptions} options
+ * @returns {Promise<boolean>}
  */
 export async function bootWorkspace({ loader, target, load }) {
   const result = await loader.loadChunk('workspace', load);
-  if (result.status !== 'loaded') {
-    target.dispatchEvent(new CustomEvent('ntn:boot-failed', {
-      detail: { buildId: loader.buildId, chunk: 'workspace', reason: result.reason },
-    }));
-    return result;
+  if (result.status !== 'loaded') return startFailed(target, { buildId: loader.buildId, chunk: 'workspace', reason: result.reason });
+  try {
+    result.module.boot(loader);
+  } catch {
+    // Only the reason: what threw is the chunk's, and the loader's lines never carry it either
+    return startFailed(target, { buildId: loader.buildId, chunk: 'workspace', reason: 'evaluation-failed' });
   }
   target.dispatchEvent(new CustomEvent('ntn:boot'));
-  result.module.boot(loader);
-  return result;
+  return true;
+}
+
+/**
+ * The boot root's start: bootWorkspace, whose own failure, such as a loader seam that throws,
+ * the boot guard on `target` hears as `ntn:boot-failed` for the root, so no rejection of the
+ * start goes unhandled. Answers whether App took over, and never rejects.
+ * @param {StartOptions} options
+ * @returns {Promise<boolean>}
+ */
+export function startWorkspace(options) {
+  return bootWorkspace(options).catch(() => startFailed(options.target, { buildId: options.loader.buildId, chunk: 'newtab', reason: 'uncaught' }));
 }

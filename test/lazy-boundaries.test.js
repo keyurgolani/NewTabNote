@@ -2,8 +2,9 @@
 
 // #27 slice 3, "Lazy boundaries": js/runtime/lazy.js. loadChunk and loadLibrary load what a
 // page needs only at first use and say how it went, loaded or failed with a reason, after one
-// retry; the reload guards; the extra documents a lazy chunk's stylesheets also reach; and the
-// two seams #27 slice 3b replaces (states 2 and 4), which show nothing in slice 3.
+// retry; the reload guards; the extra documents a lazy chunk's stylesheets also reach; the
+// two seams #27 slice 3b replaces (states 2 and 4), which show nothing in slice 3; and the
+// boundary rules the loader keeps.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -191,6 +192,63 @@ describe('loadChunk (js/runtime/lazy.js)', () => {
     assert.equal(createLoader(fakeHost().host).seams.failed, seams.failed);
   });
 
+  /**
+   * A chunk's load as Vite 8's preload runs it (preloadOnce in its helper): it puts in each of the
+   * chunk's stylesheets it hasn't put in before, waits for it, and imports the chunk's code only
+   * once every one loaded. It remembers every URL it put in, one that failed included, and passes
+   * over it on any later load, so a stylesheet never goes in twice. `plays` says how each
+   * stylesheet it puts in goes: 'error', or anything else for a load.
+   */
+  function preloading(document, href, plays) {
+    const runs = [];
+    const seen = new Set();
+    const load = async () => {
+      if (seen.has(href)) {
+        runs.push('passed over');
+      } else {
+        seen.add(href);
+        document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'stylesheet', href }));
+        const play = plays.shift();
+        runs.push(play);
+        if (play === 'error') throw new Error(`Unable to preload CSS for ${href}`);
+      }
+      return { workspace: true };
+    };
+    return { load, runs };
+  }
+
+  const sheet = 'chrome-extension://ntn/assets/workspace-A1.css';
+  const links = (document) => document.head.children.filter((child) => child.href === sheet);
+
+  // No lazy chunk has a stylesheet today. The first one that does has to bring the loader's own
+  // retry of its stylesheet, and this case changes with it.
+  it("answers loaded without a stylesheet that didn't load: the retry imports the chunk's code alone, and no later load puts the stylesheet in", async () => {
+    const { createLoader } = await lazy();
+    const document = fakeDocument();
+    const { host, calls } = fakeHost({ document });
+    const { load, runs } = preloading(document, sheet, ['error', 'load']);
+    const loader = createLoader(host);
+    assert.deepEqual(await loader.loadChunk('workspace', load), { status: 'loaded', module: { retried: true } });
+    assert.deepEqual(calls.imported, ['chrome-extension://ntn/assets/workspace-A1.js?r=1'], 'the code alone, at its own path');
+    assert.deepEqual(runs, ['error']);
+    assert.equal(links(document).length, 1, 'the failed link stays');
+    assert.deepEqual(calls.warned, []);
+
+    assert.deepEqual(await loader.loadChunk('workspace', load), { status: 'loaded', module: { workspace: true } });
+    assert.deepEqual(runs, ['error', 'passed over'], 'the preload remembers the URL, so the stylesheet never goes in again');
+    assert.equal(links(document).length, 1);
+  });
+
+  it("is build-mismatch, with no retry, when a stylesheet didn't load under another build's build-info.json", async () => {
+    const { createLoader } = await lazy();
+    const document = fakeDocument();
+    const { host, calls } = fakeHost({ document, fetchJson: async () => ({ buildId: 'build-b', chunks: {} }) });
+    const { load, runs } = preloading(document, sheet, ['error', 'load']);
+    assert.equal((await createLoader(host).loadChunk('workspace', load)).reason, 'build-mismatch');
+    assert.deepEqual(runs, ['error']);
+    assert.deepEqual(calls.imported, []);
+  });
+
   it('never rejects, whatever the load throws', async () => {
     const { createLoader } = await lazy();
     const { host } = fakeHost({ importUrl: async () => { throw new SyntaxError('Unexpected token'); } });
@@ -222,16 +280,37 @@ describe('loadLibrary (js/runtime/lazy.js)', () => {
     return { host, calls, seen, document };
   };
 
-  it('puts the vendored file in as a classic script and answers its global, once', async () => {
+  it("checks build-info.json is the page's build, then puts the vendored file in as a classic script and answers its global, once", async () => {
     const { createLoader } = await lazy();
-    const { host, seen } = scripted(['define']);
+    const { host, seen, calls } = scripted(['define']);
     const loader = createLoader(host);
     const result = await loader.loadLibrary('chart');
     assert.equal(result.status, 'loaded');
     assert.equal(result.module, host.global.Chart);
     assert.deepEqual(seen, ['chrome-extension://ntn/js/lib/chart.js']);
+    assert.deepEqual(calls.fetched, ['chrome-extension://ntn/build-info.json']);
     assert.equal((await loader.loadLibrary('chart')).module, host.global.Chart);
     assert.deepEqual(seen, ['chrome-extension://ntn/js/lib/chart.js'], 'the second call puts in no script');
+    assert.equal(calls.fetched.length, 1, 'and reads nothing');
+  });
+
+  it("doesn't run a library under another build's build-info.json: it's build-mismatch before any script goes in", async () => {
+    const { createLoader } = await lazy();
+    const { host, seen, calls } = scripted(['define']);
+    host.fetchJson = async (url) => {
+      calls.fetched.push(url);
+      return { buildId: 'build-b', chunks: {} };
+    };
+    const loader = createLoader(host);
+    const updated = [];
+    loader.seams.updated = (name) => updated.push(name);
+    const result = await loader.loadLibrary('chart');
+    assert.equal(result.reason, 'build-mismatch');
+    assert.deepEqual(seen, [], 'no script');
+    assert.equal(host.global.Chart, undefined);
+    assert.deepEqual(calls.fetched, ['chrome-extension://ntn/build-info.json']);
+    assert.deepEqual(updated, ['chart']);
+    assert.deepEqual(calls.warned.map(([, detail]) => detail), [{ buildId: 'build-a', chunk: 'chart', reason: 'build-mismatch' }]);
   });
 
   it('loads it once for calls that overlap', async () => {
@@ -271,13 +350,27 @@ describe('loadLibrary (js/runtime/lazy.js)', () => {
     assert.equal(await loader.loadLibrary('chart'), retried);
   });
 
-  it("is build-mismatch when the script fails under another build's build-info.json, with no second script", async () => {
+  it("is build-mismatch when the script fails and build-info.json has turned another build's since the check, with no second script", async () => {
     const { createLoader } = await lazy();
     const { host, seen } = scripted(['error']);
-    host.fetchJson = async () => ({ buildId: 'build-b', chunks: {} });
+    const answers = [{ buildId: 'build-a', chunks: {} }, { buildId: 'build-b', chunks: {} }];
+    host.fetchJson = async () => answers.shift();
     const result = await createLoader(host).loadLibrary('chart');
     assert.equal(result.reason, 'build-mismatch');
     assert.equal(seen.length, 1);
+  });
+
+  it("runs one load for a failure's retry that's called again while it runs: no second script", async () => {
+    const { createLoader } = await lazy();
+    const { host, seen } = scripted(['error', 'error', 'define']);
+    const loader = createLoader(host);
+    const first = await loader.loadLibrary('chart');
+    assert.equal(first.reason, 'chunk-missing');
+    const [one, two] = await Promise.all([first.retry(), first.retry()]);
+    assert.equal(one.status, 'loaded');
+    assert.equal(two, one);
+    assert.equal(seen.length, 3, 'one script for both');
+    assert.equal(await loader.loadLibrary('chart'), one);
   });
 
   it('is chunk-missing for a name it has no library for', async () => {
@@ -404,5 +497,18 @@ describe('the extra documents (js/runtime/lazy.js)', () => {
       throw new Error('x');
     });
     assert.deepEqual(pip.head.children, []);
+  });
+});
+
+describe("the loader's boundary rules (eslint.config.mjs)", () => {
+  it("are a legacy file's but two: the fetch ban, for its read of build-info.json, and the import rule, for its retry", async () => {
+    const { ESLint } = require('eslint');
+    const eslint = new ESLint({ cwd: ROOT });
+    const [legacy, loader] = await Promise.all(['js/search.js', 'js/runtime/lazy.js'].map((file) => eslint.calculateConfigForFile(file)));
+    const on = (config) => Object.keys(config.rules).filter((name) => [].concat(config.rules[name])[0] !== 0).sort();
+    assert.deepEqual(on(loader), on(legacy).filter((name) => name !== 'kernel/imports'));
+    const banned = (config) => config.rules['no-restricted-globals'][1].globals.map(({ name }) => name);
+    assert.deepEqual(banned(loader), banned(legacy).filter((name) => name !== 'fetch'));
+    for (const name of ['no-restricted-syntax', 'kernel/this-member']) assert.deepEqual(loader.rules[name], legacy.rules[name], name);
   });
 });
