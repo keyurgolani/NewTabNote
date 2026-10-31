@@ -19,6 +19,7 @@
  */
 
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
+import { failureOf } from '../adapters/indexeddb/failures.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
@@ -140,11 +141,12 @@ function manifestVersion() {
 }
 
 /**
- * Whether a run's outcome came after reading the stores: it found a database with stores, so it
- * measured them for the space check, and copied and verified them if there was room
- * @param {MigrationOutcome} outcome
+ * The runner's phase marks (migrate.js's hooks.between) that come only after it read the stores:
+ * it measured them for the space check, then copied them. A point it reuses it read against the
+ * stores too, with no mark, so a run with a point counts as well. A run that failed before
+ * either read nothing but the database's shape (`inspected`), and backs nothing off (review R79).
  */
-const readTheStores = outcome => outcome.shape !== null && outcome.shape !== 'none';
+const READ_MARKS = Object.freeze(['measured', 'point-started', 'copy-read', 'copied', 'verified']);
 
 /**
  * Whether `record` is a run of this build that read the stores and then stopped short of space
@@ -171,11 +173,11 @@ function standing(record, now, version) {
  * @param {unknown} stored
  * @param {number} now
  * @param {string | null} version
+ * @param {boolean} costly - whether the run read the stores
  * @returns {Promise<void>}
  */
-async function record(settings, outcome, stored, now, version) {
+async function record(settings, outcome, stored, now, version, costly) {
   const code = outcome.failure ? outcome.failure.code : null;
-  const costly = readTheStores(outcome);
   const previous = /** @type {Partial<UpgradeRecord>} */ (stored && typeof stored === 'object' ? stored : {});
   const backsOff = outcome.status === 'space-blocked' || outcome.status === 'failed';
   const same =
@@ -257,12 +259,18 @@ export function createWorkerClient(host = workerHost()) {
     ending.finally(() => timers.clearInterval(id)).catch(() => {});
   };
 
+  /** The outcomes an attempt kept from a standing record, without running */
+  /** @type {WeakSet<MigrationOutcome>} */
+  const kept = new WeakSet();
+
   /**
-   * One attempt: read the record, then run unless a run that read the stores stands
+   * One attempt: read the record, then run unless a run that read the stores stands. It never
+   * rejects: a run that couldn't start (a lock manager that throws, say) is a failed outcome.
    * @returns {Promise<MigrationOutcome>}
    */
   const attempt = () => {
     attempts += 1;
+    let readStores = false;
     /** @type {Promise<MigrationOutcome>} */
     const outcome = Promise.resolve()
       .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
@@ -271,7 +279,7 @@ export function createWorkerClient(host = workerHost()) {
         const previous = /** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY];
         if (standing(previous, systemClock.now(), version)) {
           /** @type {MigrationOutcome} */
-          const kept = {
+          const standingOutcome = {
             status: previous.status,
             shape: null,
             to: null,
@@ -279,7 +287,8 @@ export function createWorkerClient(host = workerHost()) {
             recoveryPointId: null,
             failure: previous.code ? { code: previous.code } : null,
           };
-          return kept;
+          kept.add(standingOutcome);
+          return standingOutcome;
         }
         run = startMigrations({
           indexedDB: host.indexedDB,
@@ -289,6 +298,11 @@ export function createWorkerClient(host = workerHost()) {
           crypto: host.crypto,
           clock: systemClock,
           logger: storageLogger,
+          hooks: {
+            between: async label => {
+              if (READ_MARKS.includes(label)) readStores = true;
+            },
+          },
           onBlocked: () => {
             // migrate.js marks the run blocked before it calls this
             for (const stop of [...onBlock]) stop();
@@ -296,9 +310,25 @@ export function createWorkerClient(host = workerHost()) {
           },
         });
         return run.done.then(async ended => {
-          await record(host.settings, ended, previous, systemClock.now(), version);
+          await record(
+            host.settings,
+            ended,
+            previous,
+            systemClock.now(),
+            version,
+            (readStores || ended.recoveryPointId !== null) && ended.shape !== 'none',
+          );
           return ended;
         });
+      })
+      .catch(async error => {
+        const { code } = failureOf(error);
+        storageLogger.warn('storage-migration-not-started', { code });
+        /** @type {MigrationOutcome} */
+        const failed = { status: 'failed', shape: null, to: null, steps: [], recoveryPointId: null, failure: { code } };
+        // It read nothing, so the next request runs again at once
+        await record(host.settings, failed, null, systemClock.now(), version, false);
+        return failed;
       });
     keepAliveUntil(outcome);
     outcome.then(
@@ -312,58 +342,95 @@ export function createWorkerClient(host = workerHost()) {
     return outcome;
   };
 
+  /** @type {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter | null} */
+  let adapter = null;
+
   /**
-   * The kernel on the database `outcome` left: versioned at 9, as it is otherwise
+   * The kernel on the database `outcome` left: versioned at 9, as it is otherwise. An outcome
+   * kept from a standing record changes nothing, so `keep`, the client before it, stays. Any
+   * other closes the adapter it replaces, so the worker holds one connection (review R79).
    * @param {Promise<MigrationOutcome>} outcome
+   * @param {Promise<Client> | null} [keep]
    * @returns {Promise<Client>}
    */
-  const build = outcome =>
+  const build = (outcome, keep = null) =>
     outcome.then(ended => {
+      if (keep && kept.has(ended)) return keep;
       const upgraded = ended.status === 'migrated' || ended.status === 'current';
-      const adapter = createIndexedDbAdapter({
+      const replaced = adapter;
+      adapter = createIndexedDbAdapter({
         indexedDB: host.indexedDB,
         settings: host.settings,
         mode: upgraded ? 'versioned' : 'existing',
         requireCore: true,
       });
+      if (replaced) replaced.close();
       return kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
     });
 
   let done = attempt();
   let client = build(done);
 
-  /** Starts another attempt, and builds the kernel on it */
-  const again = () => {
+  /**
+   * Starts another attempt, and builds the kernel on it. `keep` keeps the client when the
+   * attempt only finds the record standing; a command whose connection went needs a new one.
+   * @param {{keep?: boolean}} [options]
+   */
+  const again = ({ keep = false } = {}) => {
+    const before = client;
     done = attempt();
-    client = build(done);
+    client = build(done, keep ? before : null);
     return done;
   };
+
+  /** The retry that requests arriving together after a failed or space-blocked attempt share */
+  /** @type {Promise<MigrationOutcome> | null} */
+  let retry = null;
 
   /** @returns {Promise<MigrationOutcome>} */
   const request = () => {
     // One in progress, blocked or not, is the answer: another would only queue behind it
     if (settled < attempts) return done;
-    return done.then(ended => (ended.status === 'space-blocked' || ended.status === 'failed' ? again() : ended));
+    if (!retry) {
+      const shared = done
+        .then(ended => (ended.status === 'space-blocked' || ended.status === 'failed' ? again({ keep: true }) : ended))
+        .finally(() => {
+          if (retry === shared) retry = null;
+        });
+      retry = shared;
+    }
+    return retry;
   };
 
   /** @returns {Unavailable} */
   const blockedUpgrade = () => unavailable('storage', 'blocked-upgrade', true);
 
+  /** @returns {Unavailable} */
+  const notOpened = () => unavailable('storage', 'open-failed', true);
+
   /**
-   * Resolves `waiting`, or with null at once while the upgrade is blocked
+   * Resolves `waiting`, or with null at once while the upgrade is blocked, or with undefined
+   * when `waiting` rejects (a kernel that couldn't be built), so no call waits for ever
    * @template T
    * @param {Promise<T>} waiting
-   * @returns {Promise<T | null>}
+   * @returns {Promise<T | null | undefined>}
    */
   const unlessBlocked = waiting => {
     if (blocked()) return Promise.resolve(null);
     return new Promise(resolve => {
       const stop = () => resolve(null);
       onBlock.add(stop);
-      waiting.then(value => {
-        onBlock.delete(stop);
-        resolve(value);
-      });
+      waiting.then(
+        value => {
+          onBlock.delete(stop);
+          resolve(value);
+        },
+        error => {
+          onBlock.delete(stop);
+          storageLogger.warn('storage-kernel-not-built', { code: failureOf(error).code });
+          resolve(undefined);
+        },
+      );
     });
   };
 
@@ -371,7 +438,8 @@ export function createWorkerClient(host = workerHost()) {
   const execute = /** @type {any} */ (
     async (/** @type {any} */ command) => {
       const ready = await unlessBlocked(client);
-      if (!ready) return blockedUpgrade();
+      if (ready === null) return blockedUpgrade();
+      if (ready === undefined) return notOpened();
       const outcome = await ready.execute(command);
       if (outcome.kind !== 'unavailable' || !RETRIED_CODES.includes(outcome.code)) return outcome;
       // The connection went before this command's transaction began, or the open found an older
@@ -380,7 +448,9 @@ export function createWorkerClient(host = workerHost()) {
       // point, then a new connection and the command once more.
       again();
       const next = await unlessBlocked(client);
-      return next ? next.execute(command) : blockedUpgrade();
+      if (next === null) return blockedUpgrade();
+      if (next === undefined) return notOpened();
+      return next.execute(command);
     }
   );
 
@@ -402,7 +472,9 @@ export function createWorkerClient(host = workerHost()) {
     },
     whenReady: async () => {
       const ready = await unlessBlocked(client);
-      return ready ? ready.whenReady() : blockedUpgrade();
+      if (ready === null) return blockedUpgrade();
+      if (ready === undefined) return notOpened();
+      return ready.whenReady();
     },
     ids: legacyIds,
     migration: Object.freeze({
