@@ -20,6 +20,8 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+# The Impeccable design hook's per-session cache, which it writes in every worktree
+.impeccable/
 
 # Logs
 *.log
