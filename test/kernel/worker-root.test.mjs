@@ -11,10 +11,14 @@ import { webcrypto } from 'node:crypto';
 
 import {
   KEEPALIVE_MS,
+  PURGE_RECOVERY_POINTS,
   RETRY_AFTER_MS,
   UPGRADE_RECORD_KEY,
   createWorkerClient,
 } from '../../js/kernel/composition/background.js';
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
@@ -23,6 +27,7 @@ import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
 import { recordsOf } from './storage-fixture.mjs';
+import { CALLERS } from './support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -341,10 +346,14 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
       blocker.close();
     }
     await worker.migration.done;
+    // The run is followed by the start's purge sweep (#17 PR 2b), which the keepalive spans too
+    assert.equal(await worker.whenReady(), null);
+    await worker.purge.done;
     await legacyEnv.waitFor(() => timers.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
     assert.equal(worker.migration.running(), false);
+    const before = calls;
     timers.fire();
-    assert.equal(calls, 3, 'none once the run ended');
+    assert.equal(calls, before, 'none once the run and the sweep ended');
     assert.equal(KEEPALIVE_MS, 20 * 1000);
   });
 });
@@ -556,5 +565,123 @@ describe("the worker's integrity check once another context deleted the database
     assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
     assert.notEqual(worker.migration.done, first, 'a new attempt');
     assert.ok((await databasesOf(of)).includes(`CanvasTabDB@${DB_VERSION}`), `made again: ${await databasesOf(of)}`);
+  });
+});
+
+describe('the worker purges what was deleted for good from the recovery points (#17 PR 2b)', () => {
+  /**
+   * Trashes one of the profile's notes and deletes it for good, as a page would, on #17's
+   * adapter over the profile; answers its id
+   * @param {Profile} of
+   * @param {number} [index] - which of the stored notes, by id
+   * @returns {Promise<string>}
+   */
+  const deleteForGood = async (of, index = 0) => {
+    const noteId = (await recordsOf(of, 'canvases')).map(note => note.id).sort()[index];
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.real,
+      settings: of.chrome.api.storage.local,
+      keyRange: KeyRange,
+    });
+    await adapter.open();
+    try {
+      let count = 0;
+      const ids = { next: () => `delete-${noteId}-${(count += 1)}` };
+      const clock = { now: () => Date.now() };
+      const page = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+      const trashed = await page.execute(/** @type {any} */ ({ type: 'trashNote', commandId: ids.next(), noteId }));
+      assert.equal(trashed.kind, 'committed', JSON.stringify(trashed));
+      const deleted = await page.execute(
+        /** @type {any} */ ({ type: 'deleteNotePermanently', commandId: ids.next(), noteId }),
+      );
+      assert.equal(deleted.kind, 'committed', JSON.stringify(deleted));
+      return noteId;
+    } finally {
+      adapter.close();
+    }
+  };
+
+  /**
+   * The ids of the notes the pinned point's export holds
+   * @param {Profile} of
+   */
+  const inPoint = async of => {
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    let pointId;
+    try {
+      pointId = (await listPoints(recovery)).filter(point => point.pinned)[0].id;
+    } finally {
+      recovery.close();
+    }
+    const file = await exportPoint({
+      indexedDB: of.real,
+      keyRange: KeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      clock: { now: () => Date.now() },
+      pointId,
+    });
+    return [...file.canvases, ...file.trashedCanvases].map((/** @type {any} */ note) => note.id);
+  };
+
+  /** @param {Profile} of */
+  const pending = async of =>
+    (await recordsOf(of, 'tombstones'))
+      .filter(tombstone => tombstone.purge === 'pending')
+      .map(tombstone => tombstone.id);
+
+  it('at every start, once its run is in, purges what a delete it never heard of left pending', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const first = createWorkerClient(hostOf(of));
+    assert.equal((await first.migration.done).status, 'migrated');
+    assert.equal(await first.whenReady(), null);
+    assert.equal((await first.purge.done)?.status, 'nothing');
+    const noteId = await deleteForGood(of);
+    assert.ok((await inPoint(of)).includes(noteId));
+    assert.deepEqual(await pending(of), [noteId]);
+    const next = createWorkerClient(hostOf(of));
+    assert.equal(await next.whenReady(), null);
+    assert.equal((await next.purge.done)?.status, 'purged');
+    assert.equal((await inPoint(of)).includes(noteId), false);
+    assert.deepEqual(await pending(of), []);
+  });
+
+  it("a page's storage.purge after a delete purges it, and two at once both see it done", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient(hostOf(of));
+    assert.equal(await worker.whenReady(), null);
+    // The start's sweep first, which would otherwise purge these deletes itself
+    assert.equal((await worker.purge.done)?.status, 'nothing');
+    const one = await deleteForGood(of, 0);
+    const two = await deleteForGood(of, 0);
+    const [a, b] = await Promise.all([worker.purge.request(), worker.purge.request()]);
+    assert.deepEqual([a?.status, b?.status], ['purged', 'purged']);
+    const held = await inPoint(of);
+    assert.deepEqual([held.includes(one), held.includes(two)], [false, false]);
+    assert.deepEqual(await pending(of), []);
+    assert.equal((await worker.purge.request())?.status, 'nothing');
+  });
+
+  it('with PURGE_RECOVERY_POINTS off it never purges, and the tombstone stays pending for when it is on', async () => {
+    assert.equal(PURGE_RECOVERY_POINTS, true);
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const off = createWorkerClient({ ...hostOf(of), purgeRecoveryPoints: false });
+    assert.equal(await off.whenReady(), null);
+    const noteId = await deleteForGood(of);
+    assert.equal(await off.purge.request(), null);
+    assert.equal(await off.purge.done, null);
+    assert.ok((await inPoint(of)).includes(noteId));
+    assert.deepEqual(await pending(of), [noteId]);
+    const on = createWorkerClient(hostOf(of));
+    assert.equal(await on.whenReady(), null);
+    assert.equal((await on.purge.done)?.status, 'purged');
+    assert.equal((await inPoint(of)).includes(noteId), false);
+  });
+
+  it('on a database the run left below 10 it never purges', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal(await worker.purge.request(), null);
+    assert.equal(await recoveryExists(of), false);
   });
 });

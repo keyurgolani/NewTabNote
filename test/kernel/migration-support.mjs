@@ -10,6 +10,7 @@ import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
+import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -173,6 +174,61 @@ export async function writeHistory(of) {
   } finally {
     adapter.close();
   }
+}
+
+/**
+ * Deletes the profile's first note (by id) and its first folder for good on #17's adapter, as a
+ * page would, then purges the recovery points of both, as the worker does (#17 PR 2b). Answers
+ * their ids and the purge's outcome.
+ * @param {Profile} of
+ * @returns {Promise<{noteId: string, folderId: string | null, purged: import('../../js/kernel/adapters/indexeddb/purge.js').PurgeOutcome}>}
+ */
+export async function deleteAndPurge(of) {
+  const adapter = createIndexedDbAdapter({
+    indexedDB: of.faults.factory,
+    settings: of.chrome.api.storage.local,
+    keyRange: KeyRange,
+    clock: { now: () => NOW },
+  });
+  await adapter.open();
+  /** @type {string} */
+  let noteId;
+  /** @type {string | null} */
+  let folderId;
+  try {
+    let count = 0;
+    const ids = { next: () => `deleted-${(count += 1)}` };
+    const tab = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids,
+      clock: { now: () => NOW },
+    });
+    const notes = await tab.query({ type: 'listNotes', view: 'active' });
+    const folders = await tab.query({ type: 'listFolders' });
+    noteId = notes.kind === 'ready' ? [...notes.data.map(note => note.id)].sort()[0] : '';
+    folderId = folders.kind === 'ready' ? [...folders.data.map(folder => folder.id)].sort()[0] : null;
+    /** @param {Record<string, unknown>} fields */
+    const send = async fields => {
+      const outcome = await tab.execute(/** @type {any} */ ({ commandId: ids.next(), ...fields }));
+      if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
+    };
+    await send({ type: 'trashNote', noteId });
+    await send({ type: 'deleteNotePermanently', noteId });
+    if (folderId) await send({ type: 'deleteFolder', folderId });
+  } finally {
+    adapter.close();
+  }
+  const purged = await purgeRecoveryPoints({
+    indexedDB: of.faults.factory,
+    keyRange: KeyRange,
+    locks: legacyEnv.createLockManager(),
+    crypto: /** @type {any} */ (webcrypto),
+    clock: { now: () => NOW },
+    logger: { warn: (event, detail) => of.logs.push({ event, detail }) },
+  });
+  return { noteId, folderId, purged };
 }
 
 /**

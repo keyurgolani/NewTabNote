@@ -110,6 +110,20 @@ function recordedOf(stored) {
  * @typedef {{status: MigrationOutcome['status'], code: string | null, at: number, version: string | null, costly: boolean}} UpgradeRecord
  */
 
+/**
+ * What two sweeps in a row did, as one answer: the later one's stop or failure when it had
+ * one, and otherwise purged when either purged, with the tombstones and rows of both
+ * @param {PurgeOutcome} first
+ * @param {PurgeOutcome} then
+ * @returns {PurgeOutcome}
+ */
+function combined(first, then) {
+  const totals = { tombstones: first.tombstones + then.tombstones, rows: first.rows + then.rows };
+  if (then.status === 'stopped' || then.status === 'failed') return { ...then, ...totals };
+  if (first.status === 'purged' || then.status === 'purged') return { status: 'purged', failure: null, ...totals };
+  return then;
+}
+
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
 export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 
@@ -474,11 +488,11 @@ export function createWorkerClient(host = workerHost()) {
       return sweeping;
     }
     const running = (async () => {
-      /** @type {PurgeOutcome} */
-      let ended;
+      /** @type {PurgeOutcome | null} */
+      let ended = null;
       do {
         sweepAgain = false;
-        ended = await purgeRecoveryPoints({
+        const next = await purgeRecoveryPoints({
           indexedDB: host.indexedDB,
           keyRange: host.keyRange,
           locks: host.locks,
@@ -486,8 +500,10 @@ export function createWorkerClient(host = workerHost()) {
           clock: systemClock,
           logger: storageLogger,
         });
+        ended = ended ? combined(ended, next) : next;
       } while (sweepAgain);
-      return ended;
+      // The loop runs at least once
+      return /** @type {PurgeOutcome} */ (ended);
     })().finally(() => {
       sweeping = null;
     });

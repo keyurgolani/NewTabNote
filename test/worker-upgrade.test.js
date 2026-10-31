@@ -79,6 +79,20 @@ describe('the worker upgrades the database and answers the pages that wait on it
     assert.deepEqual(await message(env, { type: 'storage.migrate' }), { status: 'migrated' });
   });
 
+  it("answers this extension's storage.purge with the sweep's status, and refuses anyone else's and starts no sweep for it, as storage.migrate does (#17 PR 2b)", async () => {
+    const env = workerEnv();
+    await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
+    await startWorker(env);
+    assert.deepEqual(await message(env, { type: 'storage.migrate' }), { status: 'migrated' });
+    assert.deepEqual(await message(env, { type: 'storage.purge' }), { status: 'nothing' });
+    // The latest sweep, which any sweep a request started would replace
+    const sweep = env.global.storagePurge;
+    for (const sender of FOREIGN) {
+      assert.deepEqual(await message(env, { type: 'storage.purge' }, sender), { error: 'request-refused' }, JSON.stringify(sender));
+    }
+    assert.equal(env.global.storagePurge, sweep, 'no sweep started');
+  });
+
   it('while an older page blocks the upgrade, a capture says Not captured and why, and saves nothing; then captures save', async () => {
     const env = workerEnv();
     await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
