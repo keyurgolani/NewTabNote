@@ -3,7 +3,7 @@
  * reopens the note opened last.
  */
 
-const { test, expect } = require('../harness');
+const { test, expect, resolveDist, editSkipReason } = require('../harness');
 const driver = require('./driver');
 
 /**
@@ -42,12 +42,20 @@ test('two notes keep their own blocks in order after a switch and a reload, whic
   await twoNotesAcrossReloads(extension);
 });
 
+// TabController.loadSavedTabs takes the saved activeTabIndex from the session it read, or 0
+// when none is saved, as this checkout builds it; reading it as never saved gives 0, the tab of
+// Note A
+const SAVED_ACTIVE_TAB = /void 0!==(\w+)\.activeTabIndex\?\1\.activeTabIndex:0/;
+
 test('the reopen check fails on a build whose saved tabs always reopen the first tab', async ({ playwright, headless }, testInfo) => {
-  // TabController.loadSavedTabs takes the saved activeTabIndex from the session it read, or 0
-  // when none is saved; reading it as never saved gives 0, the tab of Note A
+  // A build from elsewhere, such as a release tag's own, may not have that code to edit
+  const skip = editSkipReason({
+    dist: resolveDist(), file: 'js/controllers/tab-controller.js', pattern: SAVED_ACTIVE_TAB, external: Boolean(process.env.NTN_DIST),
+  });
+  test.skip(skip !== null, skip || '');
   const edits = {
     'js/controllers/tab-controller.js': text => {
-      const edited = text.replace(/void 0!==(\w+)\.activeTabIndex\?\1\.activeTabIndex:0/, '0');
+      const edited = text.replace(SAVED_ACTIVE_TAB, '0');
       if (edited === text) throw new Error("the self-test's edit didn't match the build of tab-controller.js");
       return edited;
     },
