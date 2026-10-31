@@ -60,6 +60,10 @@ function spyTx(log, records) {
       log.push(`has ${store}`);
       return true;
     },
+    dailyAnswer: async () => {
+      log.push('dailyAnswer');
+      return null;
+    },
     put: (store, record) => {
       const { id, noteId, dailyKey } = /** @type {{id?: unknown, noteId?: unknown, dailyKey?: unknown}} */ (record);
       log.push(`put ${store} ${id ?? (store === 'dailyIndex' ? dailyKey : noteId)}`);
@@ -249,8 +253,11 @@ describe('units an adapter runs again', () => {
     const day = dailyDateStr(NOW, 'UTC');
     const today = { id: 'their-daily', name: 'Daily Note', isDaily: true, dateStr: day, updatedAt: NOW };
     const { log } = await runUnits(work, { notes: { 'their-daily': today } });
-    // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b)
+    // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b),
+    // each going by logical 3's kept answer while its batches run, which this one has none of
+    // (#17 PR 4a, F10)
     assert.deepEqual(log, [
+      'dailyAnswer',
       `get dailyIndex ${day}`,
       'getAll notes',
       'has dailyIndex',

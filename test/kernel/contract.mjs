@@ -3344,6 +3344,10 @@ export function runContractSuite(fixture) {
         assert.equal(keys.length, 2);
       });
 
+      it('has no kept Daily Note answer in a transaction over the daily index while no transform runs (#17 PR 4a, F10)', async () => {
+        assert.equal(await ctx.adapter.read(['notes', 'dailyIndex'], tx => tx.dailyAnswer()), null);
+      });
+
       it("another context's kernel over the same storage sees a commit on its next read", async () => {
         await createNote({ noteId: 'n1', name: 'Shared' });
         const panel = ctx.kernel(CALLERS.sidepanel);
