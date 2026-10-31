@@ -289,6 +289,7 @@ class App {
         settings: {
           read: (key) => appStorage().readSetting(key),
           snooze: () => appStorage().setSetting('spaceNoticeSnoozedAt', Date.now()),
+          upgraded: () => appStorage().isUpgraded(),
         },
       });
       /** @param {any} notice */
@@ -866,6 +867,7 @@ class App {
       this.preUpdateCopySection = new PreUpdateCopySection({
         copy: this.preUpdateCopy,
         readUpgrade: () => appStorage().readSetting('storageUpgrade'),
+        isUpgraded: () => appStorage().isUpgraded(),
       });
       this.preUpdateCopySection.mount(preUpdateSection);
     }

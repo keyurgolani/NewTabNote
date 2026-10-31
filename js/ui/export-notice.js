@@ -426,6 +426,7 @@ function isSpaceBlocked(record) {
  * @typedef {Object} SpaceNoticeSettings
  * @property {(key: string) => Promise<*>} read - Storage.readSetting, which rejects on a failed read
  * @property {() => Promise<void>} snooze - records now as `spaceNoticeSnoozedAt`
+ * @property {() => boolean} upgraded - Storage.isUpgraded: whether the tab's database is already at 9
  */
 
 /**
@@ -462,6 +463,8 @@ class SpaceNotice extends ExportNotice {
    * @returns {Promise<boolean>}
    */
   async isDue() {
+    // A record a full disk kept from being replaced says nothing once the database is at 9 (review R79)
+    if (this.settings.upgraded()) return false;
     if (!isSpaceBlocked(await this.settings.read(UPGRADE_RECORD_SETTING))) return false;
     const snoozedAt = Number(await this.settings.read(SPACE_NOTICE_SETTING));
     if (Number.isFinite(snoozedAt) && snoozedAt > 0 && Date.now() - snoozedAt < SPACE_NOTICE_SNOOZE_MS) return false;
