@@ -1,0 +1,15 @@
+{
+  "rule": "the new tab's start path takes the trust code in, which slice 3 made lazy (#27 AC3)",
+  "expect": [
+    "budget/forbidden"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/entries/newtab.js",
+      "append": "\nimport { EVENT_CODES } from '../trust/core/event-codes.js';\nwindow.ntnFixtureCodes = EVENT_CODES;\n"
+    }
+  ]
+}

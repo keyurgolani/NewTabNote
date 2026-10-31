@@ -37,7 +37,7 @@ function passOptions(mode = 'production') {
 
 /** A chunk as the report plugin records one */
 function chunk(pass, name, fileName, fields = {}) {
-  return { pass, name, fileName, isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds: [], imports: [], commonJs: [], ...fields };
+  return { pass, name, fileName, isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds: [], imports: [], dynamicImports: [], importedCss: [], commonJs: [], ...fields };
 }
 
 /** A page's <script src> tags */
@@ -220,7 +220,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     const [pagesReport] = config.pagesConfig(options).plugins;
     const [backgroundReport] = config.backgroundConfig(options).plugins;
     pagesReport.generateBundle({}, {
-      'assets/newtab-A1.js': { type: 'chunk', fileName: 'assets/newtab-A1.js', name: 'newtab', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'] },
+      'assets/newtab-A1.js': { type: 'chunk', fileName: 'assets/newtab-A1.js', name: 'newtab', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'], dynamicImports: ['assets/workspace-D4.js'], viteMetadata: { importedCss: new Set(['assets/newtab-C3.css']) } },
       'assets/newtab-C3.css': { type: 'asset', fileName: 'assets/newtab-C3.css' },
     });
     backgroundReport.generateBundle({}, {
@@ -228,7 +228,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     });
     assert.deepEqual(options.report, {
       chunks: [
-        chunk('pages', 'newtab', 'assets/newtab-A1.js', { isEntry: true, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'] }),
+        chunk('pages', 'newtab', 'assets/newtab-A1.js', { isEntry: true, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'], dynamicImports: ['assets/workspace-D4.js'], importedCss: ['assets/newtab-C3.css'] }),
         chunk('background', 'background', 'js/background.js', { isEntry: true, facadeModuleId: '/repo/js/background.js', moduleIds: ['/repo/js/background.js'] }),
       ],
       assets: [{ pass: 'pages', fileName: 'assets/newtab-C3.css' }],

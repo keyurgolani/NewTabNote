@@ -1,0 +1,16 @@
+{
+  "rule": "a page the build has loses its build/budgets.json row (#27 AC3: a built entry with no budget)",
+  "expect": [
+    "budget/entry"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"offscreen\": {\n      \"page\": \"offscreen.html\"",
+      "with": "\"offscreen-gone\": {\n      \"page\": \"offscreen-gone.html\""
+    }
+  ]
+}
