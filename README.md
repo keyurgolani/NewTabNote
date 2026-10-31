@@ -83,18 +83,31 @@ After a rebuild, click **Reload** on the extension in `chrome://extensions/`. St
 ## 🛠 Development
 
 ### Scripts
+The build runs only on the Node version in `.nvmrc` (24.18.0), with npm 11.16.0, which it bundles.
+
 ```bash
 # Install dependencies
 npm install
 
-# Build for production (minified)
+# Build for production (minified). Any problem (a type, CSS, terser, or manifest error, a
+# missing input, a file the package names but lacks, remote or inline code) fails it with a
+# [code] per problem, and it leaves no dist/
 npm run build
 
-# Build for development (no minification)
+# Build for development (no minification, the same checks)
 npm run build:dev
 
-# Create release package (.zip)
+# Create release package (.zip), the same bytes for the same build
 npm run package
+
+# The type gate: the kernel and the build code at zero diagnostics, the legacy files held to
+# ci/baselines/typecheck.json
+npm run typecheck:ratchet
+
+# A build per failure rule (test/build-fixtures/), and two clean builds of HEAD that have to
+# package the same zip
+npm run verify:fixtures
+npm run verify:reproducible
 
 # Full release build (clean + build + package)
 npm run release

@@ -1,13 +1,14 @@
 name: Release
 
 # A v* tag push checks the tag against every version field and that it's on main or a
-# release/** branch, runs pr-checks.yml on the tagged commit, and packages the dist/ that
-# run built and tested. attest signs the zip's build provenance in a job that runs no
-# package code, and release creates the GitHub Release with that zip. None of it reads a
-# store secret or calls the store. Publishing to the Chrome Web Store is a
-# workflow_dispatch for an existing release tag, from main or release/**, that waits for
-# the maintainer's approval in the chrome-web-store environment and verifies the zip's
-# attestation first. docs/release-plan.md has the steps.
+# release/** branch, runs pr-checks.yml on the tagged commit, whose build job runs the build,
+# verify:fixtures, and verify:reproducible before it packages (#27), and packages the dist/
+# that run built and tested into the same deterministic zip. attest signs the zip's build
+# provenance in a job that runs no package code, and release creates the GitHub Release with
+# that zip. None of it reads a store secret or calls the store. Publishing to the Chrome
+# Web Store is a workflow_dispatch for an existing release tag, from main or release/**,
+# that waits for the maintainer's approval in the chrome-web-store environment and verifies
+# the zip's attestation first. docs/release-plan.md has the steps.
 on:
   push:
     tags: ['v*']

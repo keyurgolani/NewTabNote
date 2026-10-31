@@ -1,0 +1,13 @@
+{
+  "rule": "manifest.json drops minimum_chrome_version, which the APIs the extension uses need at 116",
+  "expect": [
+    "build/manifest"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "  \"minimum_chrome_version\": \"116\",\n",
+      "with": ""
+    }
+  ]
+}

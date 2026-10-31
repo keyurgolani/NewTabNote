@@ -33,7 +33,7 @@ Components
 
 License:   MIT
 Copyright: Copyright (c) 2014-2022 Chart.js Contributors
-In:        js/lib/chart.js: dist/chart.umd.js from the chart.js package, as served by jsDelivr (which adds a six-line comment at the top), otherwise unmodified
+In:        js/lib/chart.js: dist/chart.umd.js from the chart.js package, as served by jsDelivr (which adds a six-line comment at the top), with its closing sourceMappingURL comment deleted, since the map doesn't ship. No other changes.
 Source:    https://www.npmjs.com/package/chart.js/v/4.4.1
 
 The MIT License (MIT)
@@ -446,7 +446,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 License:   Apache-2.0
 Copyright: The upstream LICENSE has no copyright line; the package author is Xenova
-In:        js/lib/transformers.js: dist/transformers.min.js from the @xenova/transformers package, modified: its closing ES module `export{...}` statement is replaced with `window.transformers=__webpack_exports__;` so it loads as a classic script. No other changes. The package ships no NOTICE file.
+In:        js/lib/transformers.js: dist/transformers.min.js from the @xenova/transformers package, modified: its closing ES module `export{...}` statement is replaced with `window.transformers=__webpack_exports__;` so it loads as a classic script, and its closing sourceMappingURL comment is deleted, since the map doesn't ship. No other changes. The package ships no NOTICE file.
 Source:    https://www.npmjs.com/package/@xenova/transformers/v/2.17.1
 
 

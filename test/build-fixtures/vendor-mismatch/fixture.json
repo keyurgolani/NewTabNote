@@ -1,0 +1,12 @@
+{
+  "rule": "a vendored file changes without its js/lib/vendor.json record",
+  "expect": [
+    "vendor/mismatch"
+  ],
+  "edits": [
+    {
+      "file": "js/lib/fuse.js",
+      "append": "\n// a local edit\n"
+    }
+  ]
+}

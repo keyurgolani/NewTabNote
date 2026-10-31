@@ -11,7 +11,10 @@
  * - PRIVACY_POLICY.md's "## Permissions" bullets (`- **<permission>**: <use>`) differ from
  *   manifest.json `permissions`, or a host permission isn't described;
  * - PRIVACY_POLICY.md doesn't name a network destination the code uses;
- * - js/lib/README.md lacks a License entry for a js/lib file.
+ * - js/lib/README.md lacks a License entry for a js/lib file;
+ * - a vendored file lost its license banner, a file under js/lib differs from its
+ *   js/lib/vendor.json record or has none, or the zip holds a source map or a sourceMappingURL
+ *   comment (#27 AC9, scripts/build/notices.js).
  *
  * Usage: node scripts/check-notices.js [path/to/package.zip]
  */
@@ -21,12 +24,15 @@
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('../js/lib/jszip.min.js');
+const { format } = require('./build/diagnostics.js');
+const { fromZip } = require('./build/package-files.js');
+const { checkBanners, checkSourceMaps, checkVendor } = require('./build/notices.js');
 
 const ROOT = path.join(__dirname, '..');
 const NOTICE_FILES = ['LICENSE', 'THIRD_PARTY_NOTICES'];
 const VENDOR_DIR = 'js/lib';
-/** js/lib files that don't ship: this README, and Valibot's type declarations and vendor record */
-const VENDOR_SKIP = new Set(['README.md', 'valibot/index.d.mts', 'valibot/vendor.json']);
+/** js/lib files that don't ship: this README, the vendor records, and Valibot's type declarations */
+const VENDOR_SKIP = new Set(['README.md', 'vendor.json', 'valibot/index.d.mts', 'valibot/vendor.json']);
 
 /** Network destinations the extension's code can contact, which the policy must name. */
 const REQUIRED_DESTINATIONS = [
@@ -192,8 +198,12 @@ async function main() {
     process.exit(1);
   }
 
+  const zip = fs.readFileSync(zipPath);
+  const files = fromZip(zip, 'the package');
   const problems = [
-    ...(await checkZip(fs.readFileSync(zipPath))),
+    ...(await checkZip(zip)),
+    // #27 AC9. #33's checkZip already covers LICENSE and THIRD_PARTY_NOTICES at the root.
+    ...[...checkBanners(files), ...checkSourceMaps(files), ...checkVendor(files)].map(format),
     ...checkPolicy(fs.readFileSync(path.join(ROOT, 'PRIVACY_POLICY.md'), 'utf8'), manifest),
     ...checkLibReadme(fs.readFileSync(path.join(ROOT, VENDOR_DIR, 'README.md'), 'utf8'), vendoredFiles()),
   ];
@@ -204,7 +214,7 @@ async function main() {
     process.exit(1);
   }
   console.log(`check:notices passed: ${path.relative(ROOT, zipPath)} carries ${NOTICE_FILES.join(' and ')} and `
-    + `${vendoredFiles().length} unmodified js/lib files; the privacy policy and js/lib/README.md match.`);
+    + `${vendoredFiles().length} js/lib files as committed and recorded, with their license banners and no source map; the privacy policy and js/lib/README.md match.`);
 }
 
 module.exports = { REQUIRED_DESTINATIONS, vendoredFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip };

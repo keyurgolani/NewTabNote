@@ -1,0 +1,13 @@
+{
+  "rule": "chrome.runtime.getURL gets a path built at run time",
+  "expect": [
+    "closure/non-literal"
+  ],
+  "edits": [
+    {
+      "file": "js/background.js",
+      "replace": "documentUrls: [chrome.runtime.getURL('offscreen.html')]",
+      "with": "documentUrls: [chrome.runtime.getURL(['offscreen', 'html'].join('.'))]"
+    }
+  ]
+}

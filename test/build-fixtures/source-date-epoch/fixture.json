@@ -1,0 +1,9 @@
+{
+  "rule": "SOURCE_DATE_EPOCH is set to something that isn't a number of seconds",
+  "expect": [
+    "build/source-date"
+  ],
+  "env": {
+    "SOURCE_DATE_EPOCH": "yesterday"
+  }
+}

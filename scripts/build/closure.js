@@ -1,0 +1,284 @@
+'use strict';
+
+/**
+ * The closure check (#27 AC5; safety: a missing file is a broken feature). Starting from
+ * manifest.json, it follows every path the package names: manifest keys, each page's src,
+ * href, poster, data, and srcset, stylesheet url() and CSS imports, static and literal dynamic
+ * imports, new Worker, importScripts, chrome.runtime.getURL, chrome.offscreen.createDocument's
+ * url, chrome.tabs.create's url, and iconUrl. It fails on a named path the package lacks, on a
+ * file nothing names that build/static-assets.json doesn't list, and on a getURL or
+ * createDocument path built at run time, which it couldn't follow.
+ *
+ * Paths resolve as Chrome resolves them: imports, page attributes, and stylesheet URLs from
+ * their own file; new Worker and importScripts from the page or worker that runs the script;
+ * the chrome.* paths and iconUrl from the package root.
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { problem } = require('./diagnostics.js');
+const { scanScript } = require('./js-scan.js');
+const { htmlTags, rawTextElements, cssUrls } = require('./markup.js');
+
+/** @typedef {import('./diagnostics.js').Problem} Problem */
+/** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
+
+const STATIC_ASSETS = path.join(__dirname, '..', '..', 'build', 'static-assets.json');
+
+/** Manifest keys that name one file */
+const MANIFEST_FILES = [
+  ['background', 'service_worker'],
+  ['chrome_url_overrides', 'newtab'],
+  ['chrome_url_overrides', 'history'],
+  ['chrome_url_overrides', 'bookmarks'],
+  ['side_panel', 'default_path'],
+  ['action', 'default_popup'],
+  ['options_ui', 'page'],
+  ['options_page'],
+  ['devtools_page'],
+];
+
+/** Page attributes that name a file */
+const URL_ATTRIBUTES = ['src', 'href', 'poster', 'data'];
+
+/** @typedef {'page' | 'stylesheet' | 'script' | 'other'} Kind */
+
+/**
+ * @typedef {object} StaticAssets
+ * @property {Set<string>} files
+ * @property {string[]} directories - each ending in /
+ */
+
+/**
+ * The static assets the package may hold without anything naming them
+ * @param {string} [file]
+ * @returns {StaticAssets}
+ */
+function staticAssets(file = STATIC_ASSETS) {
+  const listed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const paths = (/** @type {unknown} */ rows) => (Array.isArray(rows) ? rows.map((row) => String(row.path)) : []);
+  return { files: new Set(paths(listed.files)), directories: paths(listed.directories) };
+}
+
+/**
+ * Whether the static assets list `file`. A directory row covers only scripts, so any other
+ * file under it still has to be named.
+ * @param {StaticAssets} assets
+ * @param {string} file
+ * @returns {boolean}
+ */
+function isListed(assets, file) {
+  if (assets.files.has(file)) return true;
+  return /\.m?js$/.test(file) && assets.directories.some((dir) => file.startsWith(dir));
+}
+
+/**
+ * What kind of file a path is, by its extension
+ * @param {string} file
+ * @returns {Kind}
+ */
+function kindOf(file) {
+  if (/\.html?$/i.test(file)) return 'page';
+  if (/\.css$/i.test(file)) return 'stylesheet';
+  if (/\.m?js$/i.test(file)) return 'script';
+  return 'other';
+}
+
+/**
+ * The package path `value` names, resolved against the directory `base` ('' for the root);
+ * 'elsewhere' for a URL outside the package, a fragment, or nothing; 'outside' for a path
+ * that climbs out of the package
+ * @param {string} value
+ * @param {string} base
+ * @returns {string}
+ */
+function resolve(value, base) {
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith('//')) return 'elsewhere';
+  let pathname = trimmed;
+  const scheme = /^([a-z][a-z\d+.-]*):/i.exec(trimmed);
+  if (scheme) {
+    if (scheme[1].toLowerCase() !== 'chrome-extension') return 'elsewhere';
+    pathname = trimmed.replace(/^chrome-extension:\/\/[^/]*/i, '');
+  }
+  pathname = pathname.replace(/[?#].*$/, '');
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Not percent-encoded as a URL would be; Chrome opens the path as written
+  }
+  // A directory, such as the package root getURL('') names, isn't a file to look for
+  if (pathname === '' || pathname.endsWith('/')) return 'elsewhere';
+  const joined = pathname.startsWith('/') ? pathname.slice(1) : path.posix.join(base, pathname);
+  const normalized = path.posix.normalize(joined);
+  if (normalized === '..' || normalized.startsWith('../')) return 'outside';
+  if (normalized === '.') return 'elsewhere';
+  return normalized;
+}
+
+/**
+ * The paths a manifest names, as [key, path]
+ * @param {any} manifest
+ * @returns {Array<[string, string]>}
+ */
+function manifestPaths(manifest) {
+  /** @type {Array<[string, string]>} */
+  const found = [];
+  for (const keys of MANIFEST_FILES) {
+    const value = keys.reduce((object, key) => (object && typeof object === 'object' ? object[key] : undefined), manifest);
+    if (typeof value === 'string') found.push([keys.join('.'), value]);
+  }
+  const icons = (/** @type {string} */ key, /** @type {unknown} */ value) => {
+    if (typeof value === 'string') found.push([key, value]);
+    else if (value && typeof value === 'object') {
+      for (const [size, file] of Object.entries(value)) if (typeof file === 'string') found.push([`${key}.${size}`, file]);
+    }
+  };
+  icons('icons', manifest.icons);
+  icons('action.default_icon', manifest.action && manifest.action.default_icon);
+  const lists = (/** @type {string} */ key, /** @type {unknown} */ entries, /** @type {string[]} */ fields) => {
+    if (!Array.isArray(entries)) return;
+    entries.forEach((entry, i) => {
+      for (const field of fields) {
+        const files = entry && entry[field];
+        if (Array.isArray(files)) files.forEach((file) => { if (typeof file === 'string' && !file.includes('*')) found.push([`${key}[${i}].${field}`, file]); });
+      }
+    });
+  };
+  lists('content_scripts', manifest.content_scripts, ['js', 'css']);
+  lists('web_accessible_resources', manifest.web_accessible_resources, ['resources']);
+  if (manifest.sandbox && Array.isArray(manifest.sandbox.pages)) {
+    manifest.sandbox.pages.forEach((/** @type {unknown} */ file, /** @type {number} */ i) => { if (typeof file === 'string') found.push([`sandbox.pages[${i}]`, file]); });
+  }
+  return found;
+}
+
+/**
+ * Check that the package's references close over its files
+ * @param {PackageFiles} files
+ * @param {{staticAssets?: StaticAssets}} [options]
+ * @returns {{problems: Problem[], referenced: Set<string>}}
+ */
+function checkClosure(files, { staticAssets: assets = staticAssets() } = {}) {
+  /** @type {Problem[]} */
+  const problems = [];
+  /** @type {Set<string>} */
+  const referenced = new Set(['manifest.json']);
+  /** @type {Array<{file: string, base: string}>} */
+  const pending = [];
+  const followed = new Set();
+
+  /**
+   * Follow a reference from `from`: `value` resolved against `base`, read as `kind` of file
+   * @param {string} from
+   * @param {string} what
+   * @param {string} value
+   * @param {string} base
+   * @param {string} [scriptBase] - where a script it names resolves new Worker and importScripts
+   */
+  const follow = (from, what, value, base, scriptBase) => {
+    const target = resolve(value, base);
+    if (target === 'elsewhere') return;
+    if (target === 'outside') {
+      problems.push(problem('closure/missing', value, `${what} in ${from} resolves outside the package`));
+      return;
+    }
+    if (!files.has(target)) {
+      problems.push(problem('closure/missing', target, `${what} in ${from}, but ${files.label} doesn't have it`));
+      return;
+    }
+    referenced.add(target);
+    const contextBase = kindOf(target) === 'script' ? (scriptBase ?? path.posix.dirname(target).replace(/^\.$/, '')) : '';
+    const key = `${target}\0${contextBase}`;
+    if (!followed.has(key)) {
+      followed.add(key);
+      pending.push({ file: target, base: contextBase });
+    }
+  };
+
+  if (!files.has('manifest.json')) {
+    problems.push(problem('closure/missing', 'manifest.json', `${files.label} has no manifest.json`));
+    return { problems, referenced };
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(files.text('manifest.json'));
+  } catch (error) {
+    problems.push(problem('build/manifest', 'manifest.json', `doesn't parse: ${error instanceof Error ? error.message : error}`));
+    return { problems, referenced };
+  }
+  for (const [key, value] of manifestPaths(manifest)) {
+    // The service worker runs its scripts from its own directory; pages from theirs
+    follow('manifest.json', `names it as ${key}`, value, '');
+  }
+
+  while (pending.length > 0) {
+    const next = pending.shift();
+    if (!next) break;
+    const { file, base } = next;
+    const dir = path.posix.dirname(file) === '.' ? '' : path.posix.dirname(file);
+    const kind = kindOf(file);
+
+    if (kind === 'page') {
+      const html = files.text(file);
+      for (const tag of htmlTags(html)) {
+        for (const name of URL_ATTRIBUTES) {
+          const value = tag.attributes.get(name);
+          if (value === undefined) continue;
+          // A page's scripts resolve workers against the page
+          follow(file, `<${tag.name} ${name}> at ${tag.at}`, value, dir, dir);
+        }
+        const srcset = tag.attributes.get('srcset');
+        if (srcset) {
+          for (const candidate of srcset.split(',')) {
+            const url = candidate.trim().split(/\s+/)[0];
+            if (url) follow(file, `<${tag.name} srcset> at ${tag.at}`, url, dir);
+          }
+        }
+        const style = tag.attributes.get('style');
+        if (style) cssUrls(style).forEach(({ value }) => follow(file, `a style attribute at ${tag.at}`, value, dir));
+      }
+      for (const element of rawTextElements(html)) {
+        if (element.name === 'style') cssUrls(element.body).forEach(({ value }) => follow(file, `its <style> at ${element.at}`, value, dir));
+      }
+    } else if (kind === 'stylesheet') {
+      for (const { value, at } of cssUrls(files.text(file))) follow(file, `url() at ${at}`, value, dir);
+    } else if (kind === 'script') {
+      const scan = scanScript(file, files.text(file));
+      for (const { kind: referenceKind, value, at } of scan.references) {
+        const where = `${file}:${at}`;
+        if (value === null) {
+          if (referenceKind === 'get-url' || referenceKind === 'offscreen-document') {
+            const call = referenceKind === 'get-url' ? 'chrome.runtime.getURL' : 'chrome.offscreen.createDocument\'s url';
+            problems.push(problem('closure/non-literal', where, `${call} gets a path built at run time, which the closure check can't follow. Pass a string literal.`));
+          }
+          continue;
+        }
+        if (referenceKind === 'import' || referenceKind === 'dynamic-import') {
+          follow(file, `${referenceKind === 'import' ? 'imported' : 'import()ed'} at ${at}`, value, dir, base);
+        } else if (referenceKind === 'worker') {
+          follow(file, `new Worker() at ${at}`, value, base);
+        } else if (referenceKind === 'import-scripts') {
+          follow(file, `importScripts() at ${at}`, value, base, base);
+        } else {
+          const names = {
+            'get-url': 'chrome.runtime.getURL',
+            'offscreen-document': 'chrome.offscreen.createDocument',
+            'tabs-create': 'chrome.tabs.create',
+            'icon-url': 'iconUrl',
+          };
+          follow(file, `${names[referenceKind]} at ${at}`, value, '');
+        }
+      }
+    }
+  }
+
+  for (const file of files.paths) {
+    if (!referenced.has(file) && !isListed(assets, file)) {
+      problems.push(problem('closure/unreferenced', file, `nothing in ${files.label} names it, and build/static-assets.json doesn't list it`));
+    }
+  }
+  return { problems, referenced };
+}
+
+module.exports = { checkClosure, staticAssets, isListed, resolve, manifestPaths, STATIC_ASSETS };

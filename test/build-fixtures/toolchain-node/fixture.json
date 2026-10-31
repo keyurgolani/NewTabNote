@@ -1,0 +1,12 @@
+{
+  "rule": "Node isn't the version .nvmrc pins",
+  "expect": [
+    "toolchain/node-version"
+  ],
+  "edits": [
+    {
+      "file": ".nvmrc",
+      "write": "24.0.0\n"
+    }
+  ]
+}

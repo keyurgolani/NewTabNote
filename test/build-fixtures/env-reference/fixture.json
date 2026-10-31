@@ -1,0 +1,12 @@
+{
+  "rule": "first-party code reads process.env",
+  "expect": [
+    "env/reference"
+  ],
+  "edits": [
+    {
+      "file": "js/offscreen.js",
+      "append": "\nconst ntnFixtureKey = process.env.NTN_FIXTURE_KEY;\n"
+    }
+  ]
+}

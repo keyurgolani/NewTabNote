@@ -12,11 +12,10 @@ const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 
 const LISTS = [build.JS_FILES, build.CSS_FILES, build.HTML_FILES, build.STATIC_FILES, build.STATIC_DIRS];
 
-// What scripts/build.js reads: itself, the top-level entries its lists name, and tsc's config
+// What scripts/build.js reads: its own inputs (the toolchain pin, the type gate's projects
+// and baseline, the checks' reviewed lists, and itself) and the top-level entries its lists name
 const SOURCE_ENTRIES = [...new Set([
-  'scripts',
-  'package.json',
-  'jsconfig.json',
+  ...build.BUILD_INPUTS,
   ...LISTS.flat().map(entry => entry.split('/')[0]),
 ])];
 
@@ -75,13 +74,15 @@ function brief(output) {
   return (notable.length > 0 ? notable : lines.slice(-15)).join('\n');
 }
 
-function assertRefused({ code, output }, file, refusal) {
+// Each refusal prints as `✗ [<code>] <file>: <refusal>`, and the build leaves no dist/
+function assertRefused({ code, output, dist }, file, refusal, diagnostic) {
   assert.equal(code, 1, brief(output));
-  const line = output.split('\n').find(l => l.includes(`✗ ${file}: --strict`));
-  assert.ok(line, `no refusal line for ${file} in:\n${brief(output)}`);
+  const line = output.split('\n').find(l => l.includes(`✗ [${diagnostic}] ${file}: `));
+  assert.ok(line, `no [${diagnostic}] line for ${file} in:\n${brief(output)}`);
   assert.ok(line.includes(refusal), `"${refusal}" missing from: ${line}`);
-  assert.match(output, /Strict build failed: refused \d+ fallback/);
+  assert.match(output, /✗ Build failed: \d+ problems?\. No dist\/ was written\./);
   assert.doesNotMatch(output, /Build complete/);
+  assert.equal(fs.existsSync(dist), false, 'a failed build left dist/');
 }
 
 function listFiles(dir, prefix = '') {
@@ -110,18 +111,18 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
     const result = await runBuild(tree(({ remove }) => missing.forEach(remove)), ['--strict']);
     for (const file of missing) {
       const label = build.STATIC_DIRS.includes(file) ? `${file}/` : file;
-      assertRefused(result, label, 'refused to skip a missing listed file');
+      assertRefused(result, label, 'refused to skip a missing listed file', 'build/missing-input');
     }
   });
 
   it('refuses to copy a JS file unminified after a terser error', async () => {
     const result = await runBuild(tree(({ append }) => append(MINIFIED_JS, TERSER_ERROR)), ['--strict']);
-    assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error');
+    assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error', 'build/terser');
   });
 
   it('refuses to copy a CSS file unminified after a CleanCSS error', async () => {
     const result = await runBuild(tree(({ prepend }) => prepend(LEVEL_2_CSS, CLEANCSS_ERROR)), ['--strict']);
-    assertRefused(result, LEVEL_2_CSS, 'refused to copy it unminified after a CleanCSS error');
+    assertRefused(result, LEVEL_2_CSS, 'refused to copy it unminified after a CleanCSS error', 'build/css');
   });
 
   it('refuses the level-1 retry after a CleanCSS level-2 error', async () => {
@@ -130,7 +131,7 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
       'CleanCSS no longer throws on this fixture: pick another level-2 crash, and check whether CSS_LEVEL_1 in scripts/build.js is still needed',
     );
     const result = await runBuild(tree(({ append }) => append(LEVEL_2_CSS, LEVEL_2_CRASH)), ['--strict']);
-    assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error');
+    assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error', 'build/css');
   });
 
   it('lists every refusal with its detail, and pr-gate\'s build excerpt starts there', async () => {
@@ -138,8 +139,8 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
       append(MINIFIED_JS, TERSER_ERROR);
       append(LEVEL_2_CSS, LEVEL_2_CRASH);
     }), ['--strict']);
-    assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error');
-    assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error');
+    assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error', 'build/terser');
+    assertRefused(result, LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error', 'build/css');
 
     // terser's location, with the column counted from 1 like an editor
     const source = fs.readFileSync(path.join(ROOT, MINIFIED_JS), 'utf8') + TERSER_ERROR;
@@ -156,30 +157,30 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
 
     const lines = excerpt(result.output, MARKERS.build).split('\n');
     const shown = lines.join('\n');
-    assert.equal(lines[0], '✗ Strict build failed: refused 2 fallbacks', shown);
-    assert.ok(lines.includes(`   ${MINIFIED_JS}: refused to copy it unminified after a terser error: Name expected (${location})`), shown);
-    assert.ok(lines.includes(`   ${LEVEL_2_CSS}: refused the level-1 retry after a CleanCSS level-2 error: ${crash}`), shown);
+    assert.equal(lines[0], '✗ Build failed: 2 problems. No dist/ was written.', shown);
+    assert.ok(lines.includes(`   [build/terser] ${MINIFIED_JS}: refused to copy it unminified after a terser error: Name expected (${location})`), shown);
+    assert.ok(lines.includes(`   [build/css] ${LEVEL_2_CSS}: refused the level-1 retry after a CleanCSS level-2 error: ${crash}`), shown);
   });
 
-  it('without --strict, falls back as before and exits 0', async () => {
-    const missingJs = build.JS_FILES[build.JS_FILES.length - 1];
-    const dir = tree(({ append, prepend, remove }) => {
-      remove(missingJs);
-      append(MINIFIED_JS, TERSER_ERROR);
-      prepend(LEVEL_2_CSS, CLEANCSS_ERROR);
-      append(OTHER_LEVEL_2_CSS, LEVEL_2_CRASH);
+  // #27: what --strict refused before is now the only behavior, with the flag or without it,
+  // and in dev mode too
+  for (const args of [[], ['--dev']]) {
+    it(`without --strict${args.length ? `, with ${args.join(' ')},` : ','} refuses every fallback --strict refused and leaves no dist/`, async () => {
+      const missingJs = build.JS_FILES[build.JS_FILES.length - 1];
+      const dir = tree(({ append, prepend, remove }) => {
+        remove(missingJs);
+        append(MINIFIED_JS, TERSER_ERROR);
+        prepend(LEVEL_2_CSS, CLEANCSS_ERROR);
+        append(OTHER_LEVEL_2_CSS, LEVEL_2_CRASH);
+      });
+      const result = await runBuild(dir, args);
+      assertRefused(result, missingJs, 'refused to skip a missing listed file', 'build/missing-input');
+      assertRefused(result, MINIFIED_JS, 'refused to copy it unminified after a terser error', 'build/terser');
+      assertRefused(result, LEVEL_2_CSS, 'refused to copy it unminified after a CleanCSS error', 'build/css');
+      assertRefused(result, OTHER_LEVEL_2_CSS, 'refused the level-1 retry after a CleanCSS level-2 error', 'build/css');
+      assert.doesNotMatch(result.output, /not found, skipping|falling back to level-1/);
     });
-    const { code, output, dist } = await runBuild(dir);
-    assert.equal(code, 0, brief(output));
-    assert.match(output, new RegExp(`${missingJs} not found, skipping`));
-    assert.match(output, /Level-2 minification failed for .*falling back to level-1/);
-    assert.equal(fs.existsSync(path.join(dist, missingJs)), false);
-    // terser and CleanCSS errors copy the source unminified
-    for (const file of [MINIFIED_JS, LEVEL_2_CSS]) {
-      assert.equal(fs.readFileSync(path.join(dist, file), 'utf8'), fs.readFileSync(path.join(dir, file), 'utf8'), file);
-    }
-    assert.ok(fs.statSync(path.join(dist, OTHER_LEVEL_2_CSS)).size > 0);
-  });
+  }
 
   it('ships every file under js/kernel/ but its package.json, Valibot as published, and minifies each file the way it loads', async () => {
     const { code, output, dist } = await runBuild(tree(), ['--strict']);
@@ -216,8 +217,8 @@ describe('scripts/build.js --strict', { concurrency: true }, () => {
       replace('popup.html', entry, `<script src="js/utils.js"></script>\n  ${entry}`);
       remove('js/kernel');
     }), ['--strict']);
-    assertRefused(result, 'js/utils.js', 'refused to minify a file loaded both as an ES module and as a classic script');
-    assertRefused(result, 'js/kernel/', 'refused to skip a missing listed file');
+    assertRefused(result, 'js/utils.js', 'refused to minify a file loaded both as an ES module and as a classic script', 'build/load-mode');
+    assertRefused(result, 'js/kernel/', 'refused to skip a missing listed file', 'build/missing-input');
   });
 });
 

@@ -1,0 +1,17 @@
+{
+  "rule": "terser minifies a vendored file and strips its license banner (Fuse.js's Apache-2.0 header, as before #33). Production only: a development build ships the source terser checked, banner included.",
+  "expect": [
+    "notices/banner",
+    "vendor/mismatch"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build.js",
+      "replace": "  'js/lib/',\n",
+      "with": "  'js/lib/chart.js',\n  'js/lib/jszip.min.js',\n  'js/lib/transformers.js',\n  'js/lib/valibot/',\n"
+    }
+  ]
+}

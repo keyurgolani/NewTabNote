@@ -1,0 +1,13 @@
+{
+  "rule": "manifest.json's CSP allows eval",
+  "expect": [
+    "csp/policy"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "script-src 'self' 'wasm-unsafe-eval';",
+      "with": "script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval';"
+    }
+  ]
+}

@@ -127,12 +127,11 @@ async function openExtensionSidePanel(tab) {
  * @returns {Promise<void>}
  */
 async function ensureOffscreenDocument() {
-  const offscreenUrl = 'offscreen.html';
-
-  // Check if offscreen document already exists
+  // Check if offscreen document already exists. Both paths stay string literals, so the
+  // build's closure check (#27) can find offscreen.html in the package.
   const existingContexts = await chrome.runtime.getContexts({
     contextTypes: ['OFFSCREEN_DOCUMENT'],
-    documentUrls: [chrome.runtime.getURL(offscreenUrl)]
+    documentUrls: [chrome.runtime.getURL('offscreen.html')]
   });
 
   if (existingContexts.length > 0) {
@@ -144,7 +143,7 @@ async function ensureOffscreenDocument() {
     await creatingOffscreen;
   } else {
     creatingOffscreen = chrome.offscreen.createDocument({
-      url: offscreenUrl,
+      url: 'offscreen.html',
       reasons: ['DOM_SCRAPING'],
       justification: 'Making API requests to bypass CORS for Ollama and other LLM providers'
     });

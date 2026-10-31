@@ -1,0 +1,13 @@
+{
+  "rule": "THIRD_PARTY_NOTICES leaves the package",
+  "expect": [
+    "notices/missing-file"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build.js",
+      "replace": "  'THIRD_PARTY_NOTICES',\n",
+      "with": ""
+    }
+  ]
+}

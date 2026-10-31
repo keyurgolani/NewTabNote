@@ -1,0 +1,4 @@
+{
+  "rule": "a secret set in the build's environment reaches neither its logs, dist/, nor the zip",
+  "kind": "canary"
+}
