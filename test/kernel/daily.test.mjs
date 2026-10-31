@@ -146,9 +146,9 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
     });
   });
 
-  it('an evening note that falls back to its own date holds it against a note made after it', () => {
-    // Oct 19's own note holds Oct 19, so the one made that evening stays on Oct 20, where a
-    // note the calendar made the next morning also claims a place
+  it('an evening note that stays where 1.4.x showed it takes no date from the note made for that date', () => {
+    // Oct 19's own note holds Oct 19, so the one made that evening stays on Oct 20, which the
+    // note the calendar made for Oct 20 holds: it's that one's duplicate there
     const notes = [
       daily('oct-19', 'Oct 19', '2025-10-19', Date.UTC(2025, 9, 19, 16)),
       daily('oct-19-evening', 'Oct 19', '2025-10-20', Date.UTC(2025, 9, 20, 4)),
@@ -156,9 +156,29 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
     ];
     assert.deepEqual(table(assignDailyKeys(notes, LA)), {
       'oct-19': { dailyKey: '2025-10-19', rekeyed: false, duplicateOf: null },
-      'oct-19-evening': { dailyKey: '2025-10-20', rekeyed: false, duplicateOf: null },
-      'oct-20': { dailyKey: '2025-10-20', rekeyed: false, duplicateOf: 'oct-19-evening' },
+      'oct-19-evening': { dailyKey: '2025-10-20', rekeyed: false, duplicateOf: 'oct-20' },
+      'oct-20': { dailyKey: '2025-10-20', rekeyed: false, duplicateOf: null },
     });
+  });
+
+  it('every move comes before any note stays, so one that stays never keeps a later evening note off its own date', () => {
+    // Daily opened every morning and evening in 1.4.x: Oct 27's morning note, then each
+    // evening's, which 1.4.x keyed by the next day and the next morning opened again
+    const notes = [
+      daily('oct-27', 'Oct 27', '2025-10-27', Date.UTC(2025, 9, 27, 16)),
+      daily('oct-27-evening', 'Oct 27', '2025-10-28', Date.UTC(2025, 9, 28, 3)),
+      daily('oct-28-evening', 'Oct 28', '2025-10-29', Date.UTC(2025, 9, 29, 2)),
+      daily('oct-29-evening', 'Oct 29', '2025-10-30', Date.UTC(2025, 9, 30, 2)),
+    ];
+    assert.deepEqual(table(assignDailyKeys(notes, LA)), {
+      'oct-27': { dailyKey: '2025-10-27', rekeyed: false, duplicateOf: null },
+      // Its own date is held, and Oct 28's note moved to where 1.4.x showed it
+      'oct-27-evening': { dailyKey: '2025-10-28', rekeyed: false, duplicateOf: 'oct-28-evening' },
+      'oct-28-evening': { dailyKey: '2025-10-28', rekeyed: true, duplicateOf: null },
+      'oct-29-evening': { dailyKey: '2025-10-29', rekeyed: true, duplicateOf: null },
+    });
+    // So Oct 30, the day after, has no note yet: today's opens fresh
+    assert.equal(dailyHolder(notes, '2025-10-30', LA), undefined);
   });
 
   it('a note in the trash or a template gets its key and holds none, and one with a key claims it as the kernel made it', () => {
@@ -205,12 +225,13 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
     }
     // Oct 8's own note holds Oct 8, so that evening's stays on Oct 9
     assert.deepEqual(expected['oct-8-evening'], { dailyKey: '2025-10-09', rekeyed: false, duplicateOf: null });
-    // Renamed, so its local date is createdAt's, Oct 11, which Oct 10's evening note kept; and
-    // Oct 12, its own, the calendar's note made earlier holds
-    assert.deepEqual(expected['oct-11-evening'], {
-      dailyKey: '2025-10-12',
+    // Renamed, so its local date is createdAt's, Oct 11, where it moves; Oct 10's evening note,
+    // whose own date is held, stays there as its duplicate
+    assert.deepEqual(expected['oct-11-evening'], { dailyKey: '2025-10-11', rekeyed: true, duplicateOf: null });
+    assert.deepEqual(expected['oct-10-evening'], {
+      dailyKey: '2025-10-11',
       rekeyed: false,
-      duplicateOf: 'oct-12-planned',
+      duplicateOf: 'oct-11-evening',
     });
   });
 
