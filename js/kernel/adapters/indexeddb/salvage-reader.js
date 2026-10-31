@@ -21,7 +21,7 @@
  */
 
 import { failureOf } from './failures.js';
-import { withDataUrls } from './recovery.js';
+import { withDataUrls } from './data-urls.js';
 import {
   DEFAULT_LIMITS,
   EXCLUDED_STORES,

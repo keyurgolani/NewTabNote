@@ -1,7 +1,7 @@
 // #12's contract suite on #17's IndexedDB adapter (#17 slice 1: "This issue's IndexedDB
 // adapter passes #12's contract suite alongside the in-memory adapter"), over fake-indexeddb
-// behind the fault-injecting wrapper. And, until a composition root moves to it, that no
-// page or the service worker loads it.
+// behind the fault-injecting wrapper. And which composition roots load it since #17 PR 1b:
+// the service worker, Popup, and Side Panel.
 
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,33 +10,50 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { runContractSuite } from './contract.mjs';
+import { importGraph } from './import-graph.mjs';
 import { indexedDbFixture } from './storage-fixture.mjs';
 
 runContractSuite(indexedDbFixture);
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
-/** @type {{readScriptGraph: (root: string, options: {pages: string[]}) => {modules: Set<string>, workerFiles: Set<string>, problems: unknown[]}}} */
+/** @type {{readScriptGraph: (root: string, options: {pages: string[]}) => {modules: Set<string>, workerFiles: Set<string>, pageModules: Map<string, Array<{file: string}>>, problems: unknown[]}}} */
 const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/script-graph.js');
 
-it("no page or the service worker loads the IndexedDB adapter yet, only the helpers the legacy adapter shares with it, and the worker's NewTabNoteTrust", () => {
-  const graph = readScriptGraph(ROOT, { pages: ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html'] });
-  assert.deepEqual(graph.problems, []);
-  assert.ok(graph.workerFiles.has('js/kernel/composition/background.js'), 'the graph reaches the kernel');
-  // #12 slice 4's roots build on the legacy adapter, which takes the store names, setting
-  // keys, and request helpers from here, so the two adapters agree; a root moves to #17's
-  // adapter itself later (#17, AC4)
-  const loaded = [...new Set([...graph.modules, ...graph.workerFiles])]
-    .filter(file => file.startsWith('js/kernel/adapters/indexeddb/'))
-    .sort();
-  // The worker's failure events (#20 slice 1b) open NewTabNoteTrust on #17's transaction
-  // rules, which takes failures.js too; CanvasTabDB's adapter.js stays unloaded
-  assert.deepEqual(loaded, [
-    'js/kernel/adapters/indexeddb/failures.js',
-    'js/kernel/adapters/indexeddb/requests.js',
-    'js/kernel/adapters/indexeddb/schema.js',
-    'js/kernel/adapters/indexeddb/settings.js',
-    'js/kernel/adapters/indexeddb/trust.js',
-  ]);
+it('only these roots load the IndexedDB adapter: the service worker, Popup, and Side Panel; only the worker runs migrations', () => {
+  const ADAPTER = 'js/kernel/adapters/indexeddb/adapter.js';
+  const RUNNER = 'js/kernel/adapters/indexeddb/migrate.js';
+  const all = readScriptGraph(ROOT, { pages: ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html'] });
+  /** @param {string} page */
+  const modulesOf = page => new Set((all.pageModules.get(page) || []).map(({ file }) => file));
+  assert.deepEqual(all.problems, []);
+  // #17 PR 1b: the worker upgrades the database through the runner, then opens #17's adapter
+  assert.ok(all.workerFiles.has(ADAPTER), 'the worker loads the adapter');
+  assert.ok(all.workerFiles.has(RUNNER), 'the worker loads the migration runner');
+  assert.ok(!all.workerFiles.has('js/kernel/adapters/legacy/adapter.js'), 'the worker is off the legacy adapter');
+  // Popup and Side Panel open it as it is (Q3), and never run a migration
+  for (const page of ['popup.html', 'sidepanel.html']) {
+    const modules = modulesOf(page);
+    assert.ok(modules.has(ADAPTER), `${page} loads the adapter`);
+    assert.ok(!modules.has(RUNNER), `${page} never loads the runner`);
+    assert.ok(!modules.has('js/kernel/adapters/legacy/adapter.js'), `${page} is off the legacy adapter`);
+  }
+  // The new tab stays on the legacy adapter until #12 moves its writers, and reads the
+  // pre-update copy (legacy-export.js) for Settings, but never the adapter or the runner. What
+  // it loads is the boot root's graph and the workspace chunk's, which the root loads at once
+  // through the loader (#27 slice 3)
+  const workspace = [...importGraph(path.join(ROOT, 'js', 'workspace.js'))].map(file =>
+    path.relative(ROOT, file).split(path.sep).join('/'),
+  );
+  const newtab = new Set([...modulesOf('newtab.html'), ...workspace]);
+  assert.ok(newtab.has('js/kernel/composition/newtab.js'), "the new tab's graph reaches its composition root");
+  assert.ok(!newtab.has(ADAPTER), 'the new tab is on the legacy adapter');
+  assert.ok(!newtab.has(RUNNER), 'the new tab never loads the runner');
+  assert.ok(newtab.has('js/kernel/adapters/indexeddb/legacy-export.js'), 'the new tab exports the pre-update copy');
+  // The offscreen document only makes #21's API requests, and opens no storage
+  assert.deepEqual(
+    [...modulesOf('offscreen.html')].filter(file => file.startsWith('js/kernel/adapters/')),
+    [],
+  );
 });
 
 it("lacks only the backups flag the ledger declares, as a gap #18's backup engine closes", () => {

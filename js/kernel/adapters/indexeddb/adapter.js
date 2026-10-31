@@ -33,14 +33,14 @@
  * - idempotency: false. Persisted outcomes live in #17's `operations` store, which the first
  *   schema change (#17 slice 2) creates, so a resent command runs again.
  *
- * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})` where
- * they make the legacy adapter today, `versioned` for the new tab and the service worker and
- * `existing` for Popup and Side Panel (connection.js). No shipped entry point does yet.
+ * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
+ * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
+ * to 9, `existing` when the run left it as it was), Popup's and Side Panel's (`existing`). The
+ * new tab stays on #12's legacy adapter until #12 moves its writers (connection.js).
  */
 
 import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
-import { silentLogger } from '../../core/ports/runtime.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { abort, indexValue, result } from './requests.js';
@@ -54,7 +54,6 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 /** @typedef {import('../../core/ports/repository.js').Unit} Unit */
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
-/** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 
 /**
@@ -70,12 +69,10 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
  * @property {SettingsStore} settings
  * @property {OpenMode} [mode] - versioned unless given
  * @property {number} [openWithinMs] - how long open() waits for a blocked or slow open (connection.js)
- * @property {boolean} [pageContext]
- *   Whether this is a page, which saves the missing-stores recovery copy as it opens versioned
- *   (recovery.js). A page has a document and the service worker doesn't, as Storage tells them
- *   apart, so a root leaves it out.
- * @property {import('./recovery.js').Locks} [locks] - navigator.locks unless given
- * @property {Logger} [logger] - where a recovery copy that failed is reported; silent unless given
+ * @property {boolean} [requireCore] - an `existing` open refuses a database without notes or blocks (connection.js)
+ * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
+ *   What an `existing` open waits on first when there's no database or an older one: a page's
+ *   wait on the worker's migration run (connection.js)
  */
 
 /** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>, close: () => void}} IndexedDbAdapter */
@@ -232,13 +229,10 @@ export function createIndexedDbAdapter({
   settings,
   mode = 'versioned',
   openWithinMs,
-  pageContext = typeof document !== 'undefined',
-  locks = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks : undefined,
-  logger = silentLogger,
+  requireCore = false,
+  awaitUpgrade = null,
 }) {
-  // Only a page's versioned open saves the copy, as only the new tab's Storage.open does
-  const recovery = mode === 'versioned' && pageContext ? { settings, locks, logger } : null;
-  const connection = createConnection({ indexedDB, mode, openWithinMs, recovery });
+  const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another
