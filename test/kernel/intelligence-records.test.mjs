@@ -456,3 +456,53 @@ describe('URLs, tokens, and free text in records (#71 review)', () => {
     }
   });
 });
+
+describe('link redaction, round 2 (#71)', () => {
+  it('redacts IPs, ports, queries and fragments after a host, localhost, internationalized hosts, hidden characters, and userinfo', () => {
+    for (const link of [
+      '10.0.0.1/reset?token=abc',
+      '192.168.1.1:8080/admin',
+      'evil.example:8080/reset?token=abc',
+      'evil.example?token=abc123',
+      'evil.example#token=abc',
+      'localhost:3000/reset?pw=x',
+      'xn--80ak6aa92e.xn--p1ai/login',
+      'пример.рф/login',
+      'evil\u200b.example/reset?token=abc',
+      'magnet:?xt=urn:btih:abc',
+      'about:blank',
+      'skype:bob?call',
+      'user:pw@evil.example/x',
+    ]) {
+      assert.equal(plainTitle(`Call ${link} today`), 'Call [link] today', link);
+      assert.ok(!v.is(signalRecord, asSignal(inferredDraft(), { title: `Call ${link} today` })), link);
+    }
+  });
+
+  it('leaves text that only looks like a link, keeps punctuation outside one, and keeps plain emails', () => {
+    for (const text of [
+      'Fix README.md/CHANGELOG.md',
+      'Page file:2 of 3',
+      'data:Q3 numbers',
+      'Call re:sms:send',
+      'Meet at 10:30',
+      'Update data: Q3',
+      'ratio 3:2',
+      'Email bob@corp.example about it',
+    ]) {
+      assert.equal(plainTitle(text), text, text);
+      assert.ok(v.is(signalRecord, asSignal(inferredDraft(), { title: text })), text);
+    }
+    assert.equal(plainTitle('see (https://x.example/a), then call'), 'see ([link]), then call');
+    assert.equal(plainTitle('Go to evil.example/x.'), 'Go to [link].');
+    assert.equal(plainTitle('mailto:ceo@corp.example'), '[link]');
+  });
+
+  it('refuses or strips the other invisible marks', () => {
+    const signal = asSignal(taskDraft());
+    for (const mark of ['\u200e', '\u200f', '\u061c', '\u00ad', '\u200b', '\u2060', '\ufeff']) {
+      assert.ok(!v.is(signalRecord, { ...signal, title: `Call ${mark}vendor` }), mark.codePointAt(0)?.toString(16));
+      assert.equal(plainTitle(`Call ${mark}vendor`), 'Call vendor');
+    }
+  });
+});
