@@ -208,6 +208,16 @@ export const UNSHARED = Object.freeze({
     implements: "#17's space check before a recovery point",
     tests: 'test/kernel/storage-migrate.test.mjs',
   },
+  // #20 slice 2's IndexedDB reads for its health providers, which no shipped root loads yet;
+  // each is the one reader of what it reads, so nothing to share a suite with
+  'js/kernel/adapters/indexeddb/health.js': {
+    implements: "#20's recovery reader (RecoveryReader) and vectors reader, over NewTabNoteRecovery and CanvasTabDB",
+    tests: 'test/kernel/trust-recovery-readiness.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/legacy-secrets.js': {
+    implements: "#20's legacy secret reader (SecretReader), present or absent and never the value",
+    tests: 'test/kernel/trust-secrets.test.mjs',
+  },
   'js/kernel/adapters/indexeddb/recovery-points.js': {
     implements: "#17's verified recovery points in NewTabNoteRecovery",
     tests: 'test/kernel/storage-recovery-points.test.mjs',
