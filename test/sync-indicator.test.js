@@ -6,6 +6,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createLegacyEnv, createDatabase, FakeDocument, plain } = require('./helpers/legacy-env');
+const { loadPageModule } = require('./helpers/page-module');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js', 'js/storage.js',
   'js/search.js', 'js/services/sync-service.js', 'js/app.js'];
@@ -16,11 +17,12 @@ describe("App's sync indicator (#13)", () => {
     await createDatabase(env.indexedDB, {});
     env.load(...FILES);
     await env.get('Storage').init();
+    const { createNewTabLegacyStores } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
     const shown = [];
     const app = {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
-      // The page's Storage, which the new tab's root gives App for sync (#19)
-      legacyStorage: env.get('Storage'),
+      // Sync's handle on the page's Storage, as the new tab's root gives it to App (#19)
+      syncStore: createNewTabLegacyStores({ storage: env.get('Storage') }).sync,
       _updateSyncStatusUI: (state) => shown.push(state),
     };
     await env.get('App').prototype.initSyncService.call(app);
