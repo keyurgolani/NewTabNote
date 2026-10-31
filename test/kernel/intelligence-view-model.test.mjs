@@ -254,7 +254,7 @@ describe('toSignalViewModel (#7, "Contracts")', () => {
         cause: 'note-trashed',
         since: NOW,
         invalidatedAt: null,
-        resumeTo: { state: 'current', cause: null, invalidatedAt: null },
+        resumeTo: { state: 'current', cause: null, invalidatedAt: null, regenerationSent: false },
       },
     });
     assert.equal(suspended.hidden, true);

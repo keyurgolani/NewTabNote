@@ -300,11 +300,11 @@ export async function intelligenceWorld({
   const readNote = async noteId => {
     const note = await kernel.query({ type: 'getNote', noteId });
     const blocks = await kernel.query({ type: 'getNoteBlocks', noteId });
-    if (note.kind !== 'ready' || blocks.kind !== 'ready') return null;
+    if (note.kind !== 'ready' || (blocks.kind !== 'ready' && blocks.kind !== 'empty')) return null;
     return {
       note: note.data.note,
       revision: note.data.revision ?? null,
-      blocks: /** @type {BlockRecord[]} */ (blocks.data),
+      blocks: blocks.kind === 'ready' ? /** @type {BlockRecord[]} */ (blocks.data) : [],
     };
   };
 
