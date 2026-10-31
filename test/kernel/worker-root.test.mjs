@@ -15,6 +15,7 @@ import {
   RETRY_AFTER_MS,
   UPGRADE_RECORD_KEY,
   createWorkerClient,
+  journalPurge,
 } from '../../js/kernel/composition/background.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
@@ -601,6 +602,31 @@ describe('the worker purges what was deleted for good from the recovery points (
     assert.equal(await on.whenReady(), null);
     assert.equal((await on.purge.done)?.status, 'purged');
     assert.equal((await inPoint(of)).includes(noteId), false);
+  });
+
+  it('journals each point a sweep left, but one it backed off, and the end of each stop it cleared (per-point stop)', () => {
+    /** @type {Array<[string, unknown, unknown]>} */
+    const journaled = [];
+    const events = {
+      event: (/** @type {string} */ code, /** @type {unknown} */ fields, /** @type {any} */ failure) =>
+        void journaled.push([code, fields, failure ? failure.code : null]),
+    };
+    journalPurge(events, {
+      status: 'stopped',
+      tombstones: 1,
+      rows: 5,
+      failure: { code: 'record-mismatch', pointId: 'pre-migration-1760000000001' },
+      stops: [
+        { pointId: 'pre-migration-1760000000001', code: 'record-mismatch', backedOff: false },
+        { pointId: 'pre-migration-1760000000002', code: 'record-mismatch', backedOff: true },
+      ],
+      backedOff: false,
+      cleared: ['pre-migration-1760000000003'],
+    });
+    assert.deepEqual(journaled, [
+      ['storage.purge-completed', { subjectId: 'pre-migration-1760000000003' }, null],
+      ['storage.purge-stopped', { subjectId: 'pre-migration-1760000000001' }, 'record-mismatch'],
+    ]);
   });
 
   it('journals a stopped purge once, not the wakes it backs off on, and its end once the point goes (review R93)', async () => {

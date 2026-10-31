@@ -504,6 +504,7 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
       tombstones: 0,
       rows: 0,
       failure: null,
+      stops: [],
       backedOff: false,
       cleared: [],
     });
@@ -680,15 +681,17 @@ describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, rev
     assert.deepEqual(await pendingOf(of), { 'made-after': null });
   });
 
-  it("records a point that doesn't verify, backs off reading no row until the points change, and clears it once the point goes", async () => {
-    const { of } = await deletedProfile();
-    const [pinned] = await points(of);
-    // One of the point's rows of a note that stays no longer matches its hash
+  /**
+   * Makes a row of a note that stays in `pointId` no longer match its hash
+   * @param {Profile} of
+   * @param {string} pointId
+   */
+  async function damage(of, pointId) {
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     try {
       const tx = recovery.transaction(ROWS_STORE, 'readwrite');
       const rows = tx.objectStore(ROWS_STORE);
-      const range = KeyRange.bound([pinned.id, 'canvases'], [pinned.id, 'canvases\u0000'], false, true);
+      const range = KeyRange.bound([pointId, 'canvases'], [pointId, 'canvases\u0000'], false, true);
       const all = /** @type {any[]} */ (await done(rows.getAll(range)));
       const kept = /** @type {any} */ (all.find(row => row.key !== DOOMED));
       rows.put({ ...kept, value: { ...kept.value, name: 'Bit rot' } });
@@ -696,37 +699,57 @@ describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, rev
     } finally {
       recovery.close();
     }
+  }
+
+  it("records a point that doesn't verify, backs off reading none of it until it changes, and clears it once the point goes", async () => {
+    const { of } = await deletedProfile();
+    const [pinned] = await points(of);
+    await damage(of, pinned.id);
 
     const first = await purge(of);
     assert.deepEqual(
-      [first.status, first.failure, first.backedOff, first.cleared],
-      ['stopped', { code: 'record-mismatch', pointId: pinned.id }, false, []],
+      [first.status, first.failure, first.stops, first.backedOff, first.cleared],
+      [
+        'stopped',
+        { code: 'record-mismatch', pointId: pinned.id },
+        [{ pointId: pinned.id, code: 'record-mismatch', backedOff: false }],
+        false,
+        [],
+      ],
     );
-    const stop = await recordedStop(of);
-    assert.deepEqual(
-      [stop?.pointId, stop?.code, stop?.at, stop?.points],
-      [pinned.id, 'record-mismatch', DELETED_AT, `${pinned.id}:verified`],
-    );
+    assert.deepEqual(await recordedStop(of), {
+      key: 'purge-stop',
+      stops: [{ pointId: pinned.id, code: 'record-mismatch', at: DELETED_AT, point: `${pinned.id}:verified` }],
+    });
 
-    // Each later sweep, a wake's or a start's, backs off at once
+    // Each later sweep, a wake's or a start's, backs off that point at once
     for (let n = 0; n < 2; n++) {
       const from = of.faults.transactions.length;
       const again = await purge(of);
       assert.deepEqual(
-        [again.status, again.failure, again.backedOff],
-        ['stopped', { code: 'record-mismatch', pointId: pinned.id }, true],
+        [again.status, again.failure, again.stops, again.backedOff],
+        [
+          'stopped',
+          { code: 'record-mismatch', pointId: pinned.id },
+          [{ pointId: pinned.id, code: 'record-mismatch', backedOff: true }],
+          true,
+        ],
       );
       assert.equal(rowReads(of, from), 0, 'a sweep that backs off read the point');
     }
     assert.deepEqual(await pendingOf(of), { [DOOMED]: 'pending' });
 
-    // A point made since: the points changed, so the next sweep reads them, and stops again
-    const later = await laterPoint(of, DELETED_AT + 1000);
+    // A point made since holds nothing the delete took, so it's passed over unread, and the
+    // damaged one is still backed off, its record as it was
+    await laterPoint(of, DELETED_AT + 1000);
     const from = of.faults.transactions.length;
     const third = await purge(of);
-    assert.deepEqual([third.status, third.backedOff, third.cleared], ['stopped', false, []]);
-    assert.ok(rowReads(of, from) > 0);
-    assert.equal((await recordedStop(of))?.points, [`${later}:verified`, `${pinned.id}:verified`].sort().join(','));
+    assert.deepEqual([third.status, third.backedOff, third.cleared], ['stopped', true, []]);
+    assert.equal(rowReads(of, from), 0);
+    assert.deepEqual(
+      (await recordedStop(of))?.stops.map((/** @type {any} */ entry) => entry.pointId),
+      [pinned.id],
+    );
 
     // The damaged point dropped: the next sweep finishes, and ends the stop it recorded
     const store = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
@@ -736,8 +759,46 @@ describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, rev
       store.close();
     }
     const fourth = await purge(of);
-    assert.deepEqual([fourth.status, fourth.backedOff, fourth.cleared], ['purged', false, [pinned.id]]);
+    assert.deepEqual(
+      [fourth.status, fourth.stops, fourth.backedOff, fourth.cleared],
+      ['purged', [], false, [pinned.id]],
+    );
     assert.equal(await recordedStop(of), null);
     assert.deepEqual(await pendingOf(of), { [DOOMED]: null });
+  });
+
+  it('purges the points that verify and leaves the damaged one as it was, per point (#17 PR 2b, carry item 9)', async () => {
+    // Two points made before the delete, both holding the note: the run's, and a later one
+    const { of } = await deletedProfile({ deleteIt: false });
+    const [pinned] = await points(of);
+    const healthy = await laterPoint(of, NOW + 30_000);
+    await deleteNote(of, DOOMED);
+    await damage(of, pinned.id);
+    const pinnedRows = await heldBy(of, pinned.id, DOOMED);
+    assert.ok(pinnedRows.length > 0 && (await heldBy(of, healthy, DOOMED)).length > 0);
+
+    const swept = await purge(of);
+    assert.deepEqual(
+      [swept.status, swept.rows, swept.stops, swept.backedOff],
+      ['stopped', 5, [{ pointId: pinned.id, code: 'record-mismatch', backedOff: false }], false],
+    );
+    // The point that verifies holds none of the note now, and still verifies; the damaged one
+    // holds it as it did, and its stop is recorded
+    assert.deepEqual(await heldBy(of, healthy, DOOMED), []);
+    assert.deepEqual(await heldBy(of, pinned.id, DOOMED), pinnedRows);
+    assert.deepEqual(
+      (await allVerify(of)).map((/** @type {any} */ verdict) => verdict.ok),
+      [false, true],
+    );
+    assert.deepEqual(
+      (await recordedStop(of))?.stops.map((/** @type {any} */ entry) => [entry.pointId, entry.code]),
+      [[pinned.id, 'record-mismatch']],
+    );
+    // The tombstone waits for the damaged point
+    assert.deepEqual(await pendingOf(of), { [DOOMED]: 'pending' });
+
+    // The next sweep backs off the damaged point and has nothing left in the other
+    const again = await purge(of);
+    assert.deepEqual([again.status, again.rows, again.backedOff], ['stopped', 0, true]);
   });
 });

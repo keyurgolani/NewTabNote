@@ -22,7 +22,7 @@ import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { health } from '../../js/trust/core/families.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
-import { KeyRange } from './migration-support.mjs';
+import { KeyRange, legacyEnv } from './migration-support.mjs';
 import { adapterOn, profile } from './storage-fixture.mjs';
 import { realTimers } from './trust-support.mjs';
 
@@ -104,7 +104,14 @@ export async function providerContext(of = freshProfile(), { events = async () =
     migration: createMigrationReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
     settings: settingsOf(of),
     secrets: createLegacySecretReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
-    recovery: createRecoveryReader({ indexedDB: of.faults.factory, keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto) }),
+    // The readiness check verifies a point under the points lock, shared, as the purge's readers
+    // do (#17 PR 2b), so it never reads one between two of the purge's batches
+    recovery: createRecoveryReader({
+      indexedDB: of.faults.factory,
+      keyRange: KeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      locks: legacyEnv.createLockManager(),
+    }),
     vectors: createVectorsReader({ indexedDB: of.faults.factory }),
     permissions: grantedAsDeclared(),
     manifest: MANIFEST,
