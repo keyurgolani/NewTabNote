@@ -16,6 +16,7 @@ import { walk } from '../../js/kernel/core/contracts/schema-walk.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
+import { indexedDbFixture } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 import { SCOPE_GUARDS, VERSION_FIELDS, WRITE_GUARDS } from './write-guards.mjs';
 
@@ -164,21 +165,15 @@ describe("#17's AC1: every writer's scope and guard", () => {
     }
   });
 
-  it('each writer commits in the scope the table gives it, and a command the table says writes no note or block writes none', async () => {
+  /**
+   * Runs every catalog sample through a kernel over `inner`, and answers the scopes each
+   * command's work committed in, and which commands committed or ran
+   * @param {KernelAdapter} inner
+   * @param {{committing: CommandType | null}} [tracking] - set to the command whose work commits
+   */
+  async function samplesOn(inner, tracking = { committing: null }) {
     /** @type {Map<CommandType, Set<WriteScope>>} */
     const scopes = new Map();
-    /** @type {Map<CommandType, Set<string>>} */
-    const writes = new Map();
-    /** @type {CommandType | null} */
-    let committing = null;
-    const inner = createMemoryAdapter({
-      beforeWrite: target => {
-        if (!committing) return;
-        const stores = writes.get(committing) || new Set();
-        stores.add(target);
-        writes.set(committing, stores);
-      },
-    });
     /** @type {KernelAdapter} */
     const adapter = {
       ...inner,
@@ -187,11 +182,11 @@ describe("#17's AC1: every writer's scope and guard", () => {
         const kinds = scopes.get(type) || new Set();
         kinds.add(work.scope || 'content');
         scopes.set(type, kinds);
-        committing = type;
+        tracking.committing = type;
         try {
           return await inner.commit(work);
         } finally {
-          committing = null;
+          tracking.committing = null;
         }
       },
     };
@@ -203,28 +198,69 @@ describe("#17's AC1: every writer's scope and guard", () => {
       clock: testClock(),
     });
     /** @type {string[]} */
-    const committed = [];
+    const ran = [];
     for (const [type, fields] of Object.entries(COMMAND_SAMPLES)) {
       const outcome = await kernel.execute(/** @type {Command} */ ({ ...fields, type, commandId: `c-${type}` }));
-      if (outcome.kind === 'committed' || outcome.kind === 'bulk') committed.push(type);
+      if (outcome.kind === 'committed' || outcome.kind === 'bulk') ran.push(type);
     }
-    // The samples commit, so the checks below aren't empty
-    assert.ok(committed.length >= 40, committed.join(', '));
+    return { scopes, ran };
+  }
+
+  /**
+   * Holds each command's committed scopes to the table's
+   * @param {Map<CommandType, Set<WriteScope>>} scopes
+   * @param {string} where
+   */
+  function assertScopes(scopes, where) {
     for (const [type, guard] of /** @type {Array<[CommandType, WriteGuard]>} */ (Object.entries(WRITE_GUARDS))) {
       const kinds = [...(scopes.get(type) || [])];
       if (guard.kind === 'guarded' || guard.kind === 'unguarded') {
+        const declared = guard.kind === 'guarded' ? [guard.scope] : guard.scopes;
         assert.ok(
-          kinds.every(kind => kind === guard.scope),
-          `${type} committed in ${kinds.join(', ')}`,
+          kinds.every(kind => declared.includes(kind)),
+          `${where}: ${type} committed in ${kinds.join(', ')}`,
         );
       } else if (guard.kind === 'bulk') {
-        assert.deepEqual(kinds, [], `${type} commits nothing of its own`);
-      } else {
-        const touched = [...(writes.get(type) || [])].filter(store => store === 'notes' || store === 'blocks');
-        assert.deepEqual(touched, [], type);
+        assert.deepEqual(kinds, [], `${where}: ${type} commits nothing of its own`);
       }
     }
-    // Each bulk command's items are the commands the table says it runs
-    assert.ok(scopes.has('applyRemoteContent') && scopes.has('applyRemotePlacement'));
+    // The bulk commands' items ran as their own commands
+    assert.ok(scopes.has('applyRemoteContent') && scopes.has('applyRemotePlacement'), where);
+  }
+
+  it('each writer commits in the scope the table gives it, and a command the table says writes no note or block writes none', async () => {
+    /** @type {Map<CommandType, Set<string>>} */
+    const writes = new Map();
+    /** @type {{committing: CommandType | null}} */
+    const tracking = { committing: null };
+    const memory = createMemoryAdapter({
+      beforeWrite: target => {
+        if (!tracking.committing) return;
+        const stores = writes.get(tracking.committing) || new Set();
+        stores.add(target);
+        writes.set(tracking.committing, stores);
+      },
+    });
+    const { scopes, ran } = await samplesOn(memory, tracking);
+    // The samples commit, so the checks below aren't empty
+    assert.ok(ran.length >= 40, ran.join(', '));
+    assertScopes(scopes, 'memory');
+    for (const [type, guard] of /** @type {Array<[CommandType, WriteGuard]>} */ (Object.entries(WRITE_GUARDS))) {
+      if (guard.kind !== 'none') continue;
+      const touched = [...(writes.get(type) || [])].filter(store => store === 'notes' || store === 'blocks');
+      assert.deepEqual(touched, [], type);
+    }
+  });
+
+  it("#17's adapter commits each writer in the scope the table gives it, the backup tasks included", async () => {
+    const ctx = await indexedDbFixture.start();
+    try {
+      const { scopes, ran } = await samplesOn(ctx.adapter);
+      // #17's adapter runs the import, which the in-memory one can't
+      assert.ok(ran.includes('importBackup') && scopes.has('importBackup'), ran.join(', '));
+      assertScopes(scopes, 'indexeddb');
+    } finally {
+      await ctx.close();
+    }
   });
 });
