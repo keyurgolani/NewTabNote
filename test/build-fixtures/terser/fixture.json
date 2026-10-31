@@ -1,0 +1,12 @@
+{
+  "rule": "terser can't minify a JavaScript file",
+  "expect": [
+    "build/terser"
+  ],
+  "edits": [
+    {
+      "file": "js/utils.js",
+      "append": "\nconst = ;\n"
+    }
+  ]
+}

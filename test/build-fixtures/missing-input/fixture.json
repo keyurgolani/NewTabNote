@@ -1,0 +1,23 @@
+{
+  "rule": "a listed input is missing, from every list: a JS file, a walked directory, a stylesheet, a page, a static file, and a static directory",
+  "expect": [
+    "build/missing-input"
+  ],
+  "edits": [
+    {
+      "remove": "js/offscreen.js"
+    },
+    {
+      "remove": "js/lib/valibot"
+    },
+    {
+      "remove": "css/stats.css"
+    },
+    {
+      "remove": "offscreen.html"
+    },
+    {
+      "remove": "icons"
+    }
+  ]
+}

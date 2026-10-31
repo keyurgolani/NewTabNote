@@ -1,0 +1,79 @@
+{
+  "about": "What each vendored file in js/lib/ is (#27, 'Third-party code'): its package, version, license, where it came from, the SHA-256 of the file as committed, the license banner it carries (null when the upstream build has none), its THIRD_PARTY_NOTICES heading, and every local edit. An edit made here records the file's SHA-256 before it. js/lib/valibot/ has its own record, valibot/vendor.json. test/vendor.test.js checks every file against this record, and the build fails on a shipped js/lib file that differs from it or isn't in it.",
+  "files": {
+    "chart.js": {
+      "package": "chart.js",
+      "version": "4.4.1",
+      "license": "MIT",
+      "page": "https://www.npmjs.com/package/chart.js/v/4.4.1",
+      "source": "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js",
+      "from": "package/dist/chart.umd.js",
+      "sha256": "089cbc3fd443a347d63abd1d365faf36cd74d90e5f65986a9a380a6f9d5bce22",
+      "banner": "/*!\n * Chart.js v4.4.1\n * https://www.chartjs.org\n * (c) 2023 Chart.js Contributors\n * Released under the MIT License\n */",
+      "notice": "Chart.js 4.4.1",
+      "edits": [
+        {
+          "by": "jsDelivr",
+          "change": "The six-line comment at the top, which jsDelivr adds to the file it serves."
+        },
+        {
+          "by": "#27 slice 1",
+          "change": "Deleted the closing `//# sourceMappingURL=chart.umd.js.map` line. The map doesn't ship.",
+          "sha256Before": "d2af8974e95271638772e9e9524db5b9a6f58d6ec2d5d781400447b4a31c681e"
+        }
+      ]
+    },
+    "fuse.js": {
+      "package": "fuse.js",
+      "version": "7.1.0",
+      "license": "Apache-2.0",
+      "page": "https://www.npmjs.com/package/fuse.js/v/7.1.0",
+      "source": "https://registry.npmjs.org/fuse.js/-/fuse.js-7.1.0.tgz",
+      "from": "package/dist/fuse.basic.min.js",
+      "sha256": "1ab274a4d4b8f6d992abc07c62205f9c2c8a32a45ecf2d4f7233e32aec8326f5",
+      "banner": "/**\n * Fuse.js v7.1.0 - Lightweight fuzzy-search (http://fusejs.io)\n *\n * Copyright (c) 2025 Kiro Risk (http://kiro.me)\n * All Rights Reserved. Apache Software License 2.0\n *\n * http://www.apache.org/licenses/LICENSE-2.0\n */",
+      "notice": "Fuse.js 7.1.0",
+      "edits": []
+    },
+    "jszip.min.js": {
+      "package": "jszip",
+      "version": "3.10.1",
+      "license": "MIT",
+      "page": "https://www.npmjs.com/package/jszip/v/3.10.1",
+      "source": "https://registry.npmjs.org/jszip/-/jszip-3.10.1.tgz",
+      "from": "package/dist/jszip.min.js",
+      "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
+      "banner": "/*!\n\nJSZip v3.10.1 - A JavaScript class for generating and reading zip files\n<http://stuartk.com/jszip>\n\n(c) 2009-2016 Stuart Knightley <stuart [at] stuartk.com>\nDual licenced under the MIT license or GPLv3. See https://raw.github.com/Stuk/jszip/main/LICENSE.markdown.\n\nJSZip uses the library pako released under the MIT license :\nhttps://github.com/nodeca/pako/blob/main/LICENSE\n*/",
+      "notice": "JSZip 3.10.1",
+      "edits": []
+    },
+    "transformers.js": {
+      "package": "@xenova/transformers",
+      "version": "2.17.1",
+      "license": "Apache-2.0",
+      "page": "https://www.npmjs.com/package/@xenova/transformers/v/2.17.1",
+      "source": "https://registry.npmjs.org/@xenova/transformers/-/transformers-2.17.1.tgz",
+      "from": "package/dist/transformers.min.js",
+      "sha256": "d135323ef84c81ea044cc8c6e6bcbaf11de279ccf908ad905646ff629473b525",
+      "banner": null,
+      "notice": "@xenova/transformers (Transformers.js) 2.17.1",
+      "edits": [
+        {
+          "by": "the original vendoring",
+          "change": "The closing ES module `export{...}` statement replaced with `window.transformers=__webpack_exports__;`, so the file loads as a classic script."
+        },
+        {
+          "by": "#27 slice 1",
+          "change": "Deleted the closing `//# sourceMappingURL=transformers.min.js.map` line. The map doesn't ship.",
+          "sha256Before": "7f0a4d82f6539707599f5fd663c1d054aeb15f92915eb6f9651ee5090876b124"
+        }
+      ]
+    }
+  },
+  "records": {
+    "valibot/": {
+      "record": "valibot/vendor.json",
+      "notice": "Valibot 1.5.0"
+    }
+  }
+}

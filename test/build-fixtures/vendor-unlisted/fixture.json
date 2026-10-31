@@ -1,0 +1,22 @@
+{
+  "rule": "a vendored file ships with no js/lib/vendor.json record",
+  "expect": [
+    "vendor/unlisted"
+  ],
+  "edits": [
+    {
+      "file": "js/lib/ntn-fixture.js",
+      "write": "window.ntnFixtureVendored = 1;\n"
+    },
+    {
+      "file": "scripts/build.js",
+      "replace": "  'js/lib/fuse.js',\n",
+      "with": "  'js/lib/ntn-fixture.js',\n  'js/lib/fuse.js',\n"
+    },
+    {
+      "file": "newtab.html",
+      "replace": "  <script src=\"js/lib/fuse.js\"></script>",
+      "with": "  <script src=\"js/lib/ntn-fixture.js\"></script>\n  <script src=\"js/lib/fuse.js\"></script>"
+    }
+  ]
+}

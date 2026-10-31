@@ -1,0 +1,12 @@
+{
+  "rule": "first-party code passes a string to setTimeout",
+  "expect": [
+    "csp/dynamic-code"
+  ],
+  "edits": [
+    {
+      "file": "js/offscreen.js",
+      "append": "\nsetTimeout('window.ntnFixture = 1', 0);\n"
+    }
+  ]
+}

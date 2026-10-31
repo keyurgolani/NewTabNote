@@ -9,6 +9,8 @@ How the tests are set up, what they're allowed to fake, and the three records th
 | `npm test` | `test/*.test.js` and `test/kernel/*.test.mjs` under `node --test` | every PR (`pr-checks.yml`) |
 | `npm run test:kernel` | `test/kernel/*.test.mjs` alone | every PR |
 | `npm run test:extension` | the Playwright specs in `e2e/`, on the built extension in Chromium | every PR, and locally only through the machine lock |
+| `npm run verify:fixtures` | one build per build failure rule, each a copy of the tree with the defect `test/build-fixtures/<rule>/fixture.json` writes, which has to fail with its `[code]` and leave no `dist/` | every PR's build job, and locally only through the machine lock |
+| `npm run verify:reproducible` | two clean builds of `HEAD`, in different directories at different times, which have to package the same zip, `buildId`, and `outputDigest` | every PR's build job, and locally only through the machine lock |
 | `npm run test:mutants` | the mutant catalog, `scripts/mutants.js` | by hand, when reviewing a test PR that touches a protected behavior |
 
 `test/test-files-run.test.js` fails `npm test` when a `*.test.js` or `*.test.mjs` under `test/` isn't reached by a script the workflow runs, so a test file in a new folder can't sit there unrun.

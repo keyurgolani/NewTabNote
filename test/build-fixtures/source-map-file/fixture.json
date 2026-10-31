@@ -1,0 +1,18 @@
+{
+  "rule": "the package holds a source map, which nothing names",
+  "expect": [
+    "source-map/file",
+    "closure/unreferenced"
+  ],
+  "edits": [
+    {
+      "file": "css/editor.css.map",
+      "write": "{\"version\":3,\"sources\":[],\"mappings\":\"\"}\n"
+    },
+    {
+      "file": "scripts/build.js",
+      "replace": "  'js/lib/valibot/LICENSE.md',\n",
+      "with": "  'js/lib/valibot/LICENSE.md',\n  'css/editor.css.map',\n"
+    }
+  ]
+}

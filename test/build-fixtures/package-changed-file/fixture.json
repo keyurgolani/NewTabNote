@@ -1,0 +1,13 @@
+{
+  "rule": "a file in dist/ changed after the build, so asset-manifest.json no longer lists it as it is",
+  "kind": "package",
+  "expect": [
+    "package/no-build"
+  ],
+  "distEdits": [
+    {
+      "file": "dist/js/offscreen.js",
+      "append": "\n// changed after the build\n"
+    }
+  ]
+}

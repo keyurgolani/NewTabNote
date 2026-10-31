@@ -32,21 +32,30 @@ test('takes the last lines when nothing matches the marker', () => {
   assert.equal(lines[lines.length - 1], 'line 50');
 });
 
-test('starts a build excerpt at the strict summary, which lists every refusal', () => {
+test('starts a build excerpt at the failed build\'s summary, which lists every problem', () => {
   const log = [
     '  ✓ js/a.js: 1 KB → 500 B (50.0% saved)',
-    '  ✗ js/b.js: --strict refused to copy it unminified after a terser error: Name expected (js/b.js:3:7)',
     ...numbered(30, '  ✓ saved'),
-    '  ✗ css/c.css: --strict refused to copy it unminified after a CleanCSS error: Broken @import',
+    '  ✗ [build/terser] js/b.js: refused to copy it unminified after a terser error: Name expected (js/b.js:3:7)',
+    '  ✗ [build/css] css/c.css: refused to copy it unminified after a CleanCSS error: Broken @import',
     '',
-    '✗ Strict build failed: refused 2 fallbacks',
-    '   js/b.js: refused to copy it unminified after a terser error: Name expected (js/b.js:3:7)',
-    '   css/c.css: refused to copy it unminified after a CleanCSS error: Broken @import',
+    '✗ Build failed: 2 problems. No dist/ was written.',
+    '   [build/terser] js/b.js: refused to copy it unminified after a terser error: Name expected (js/b.js:3:7)',
+    '   [build/css] css/c.css: refused to copy it unminified after a CleanCSS error: Broken @import',
   ].join('\n');
   const lines = excerpt(log, MARKERS.build).split('\n');
-  assert.equal(lines[0], '✗ Strict build failed: refused 2 fallbacks');
-  assert.match(lines[1], /js\/b\.js: .*Name expected \(js\/b\.js:3:7\)/);
-  assert.match(lines[2], /css\/c\.css: .*Broken @import/);
+  assert.equal(lines[0], '✗ Build failed: 2 problems. No dist/ was written.');
+  assert.match(lines[1], /\[build\/terser\] js\/b\.js: .*Name expected \(js\/b\.js:3:7\)/);
+  assert.match(lines[2], /\[build\/css\] css\/c\.css: .*Broken @import/);
+});
+
+test('starts a build excerpt at a failed verify script, and a typecheck excerpt at the type gate\'s report', () => {
+  for (const script of ['verify:fixtures', 'verify:reproducible']) {
+    const log = [`> new-tab-note@1.4.1 ${script}`, ...numbered(30, '  ✓ fixture'), `${script} failed: 1 of 34 fixtures`, '  terser (production): ...'].join('\n');
+    assert.equal(excerpt(log, MARKERS.build).split('\n')[0], `${script} failed: 1 of 34 fixtures`);
+  }
+  const gate = ['> node scripts/build/type-gate.js', '', 'type gate failed: 1 problem', "  [type/strict] scripts/build/a.js:3:7: TS7006 Parameter 'x' implicitly has an 'any' type."].join('\n');
+  assert.equal(excerpt(gate, MARKERS.typecheck).split('\n')[0], 'type gate failed: 1 problem');
 });
 
 test('starts an extension excerpt at the first failed test, past the github annotations', () => {

@@ -1,14 +1,29 @@
 #!/usr/bin/env node
 
 /**
- * Build script for New Tab Note Chrome Extension
- * Minifies JS and CSS, copies assets to dist folder
+ * Build script for New Tab Note Chrome Extension (#27 slice 1: verifiers on the legacy build).
+ * Minifies JS and CSS and copies the rest into a staging directory, checks what it wrote, and
+ * only then renames it to dist/. A problem in any mode exits 1 and leaves no dist/: nothing
+ * falls back to unminified source, a lower optimization level, or a skipped input (#27,
+ * "Failure rules").
  *
- *   --dev     copy JS and CSS without minifying
- *   --strict  exit 1 instead of falling back: a missing listed file or walked directory,
- *             a terser error, a file loaded both as a module and as a classic script,
- *             a CleanCSS error, and the CleanCSS level-2 to level-1 retry each name
- *             the file and the fallback refused. #27 (route-level builds) replaces it.
+ *   node scripts/build.js          production build
+ *   node scripts/build.js --dev    development build: JS and CSS go through terser and
+ *                                  CleanCSS as in production, so they fail the same way, and
+ *                                  then ship unminified
+ *   --strict                       accepted and ignored: what it refused before #27 is now the
+ *                                  only behavior, and CI still passes it
+ *
+ * In order, each step reporting every problem it finds before the build stops:
+ *   1. the toolchain: Node is the version .nvmrc pins, and SOURCE_DATE_EPOCH, if set, is a number
+ *   2. the inputs: each listed file minified the way the extension loads it, or copied, and the
+ *      manifest checked
+ *   3. the output checks on the staged files (scripts/build/): closure, remote code, CSP,
+ *      notices and source maps, vendored files, and environment reads
+ *   4. the type gate (scripts/build/type-gate.js)
+ *   5. asset-manifest.json and build-info.json, and the rename to dist/
+ * Each problem prints as `✗ [code] subject: message` (scripts/build/diagnostics.js), and the
+ * summary lists them all.
  *
  * Each JS file is minified the way the extension loads it (scripts/lib/script-graph.js):
  * as an ES module when a page's <script type="module"> or the module service worker
@@ -19,17 +34,27 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { minify: minifyJS } = require('terser');
 const CleanCSS = require('clean-css');
 const { readScriptGraph } = require('./lib/script-graph');
+const { problem, format, plural } = require('./build/diagnostics.js');
+const { checkNode } = require('./build/toolchain.js');
+const { runTypeGate } = require('./build/type-gate.js');
+const { fromDirectory } = require('./build/package-files.js');
+const { checkClosure } = require('./build/closure.js');
+const { checkRemoteCode } = require('./build/remote-code.js');
+const { checkCsp } = require('./build/csp.js');
+const { checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor } = require('./build/notices.js');
+const { checkEnvironment } = require('./build/environment.js');
+const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build/build-info.js');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const SRC_DIR = ROOT_DIR;
+// Where a build writes before it's checked; a sibling of dist/, so the rename stays on one disk
+const STAGING_PREFIX = '.dist-staging-';
 
-const isDev = process.argv.includes('--dev');
-const isStrict = process.argv.includes('--strict');
+const ARGUMENTS = ['--dev', '--strict'];
 
 // Files to process
 const JS_FILES = [
@@ -85,6 +110,9 @@ const JS_FILES = [
   'js/sidepanel.js',
   'js/background.js',
   'js/offscreen.js',
+  // The search indexer, which NotesManager.initIndexer and App.initIndexer start with
+  // new Worker('js/workers/indexer.js'). Before #27 it shipped only in unpacked source loads.
+  'js/workers/indexer.js',
 ];
 
 // Directories shipped without a list: every .js and .mjs file under each, sorted, after
@@ -122,6 +150,21 @@ const STATIC_DIRS = [
   'icons',
 ];
 
+// What the build reads besides its lists and the files they name: the toolchain pin, the
+// lockfile, the type gate's projects and baseline, the reviewed lists the checks read, and
+// the build code. A copy of the tree with these and the listed files builds as this one does.
+const BUILD_INPUTS = [
+  '.nvmrc',
+  'package.json',
+  'package-lock.json',
+  'jsconfig.json',
+  'tsconfig.kernel.json',
+  'tsconfig.strict.json',
+  'ci',
+  'build',
+  'scripts',
+];
+
 // JS_FILES entries, and files a JS_DIRS walk finds, copied byte for byte instead of
 // minified, such as vendored code terser can't parse. An entry ending in '/' covers every
 // such file under it. js/lib/ keeps its license headers this way (Fuse.js's has no
@@ -131,12 +174,17 @@ const COPY_AS_IS = [
   'js/lib/',
 ];
 
-// CSS_FILES entries that build at CleanCSS level 1 instead of level 2. CleanCSS 5.3.3's
-// level-2 removeUnusedAtRules pass throws on an `animation` shorthand that uses var()
-// in a sheet with @keyframes. Level 1 is what the level-2 retry always shipped for it.
+// CSS_FILES entries that build at CleanCSS level 1 instead of level 2, a reviewed list and
+// not a fallback: a level-2 error on any other file fails the build. CleanCSS 5.3.3's
+// level-2 removeUnusedAtRules pass throws on an `animation` shorthand that uses var() in a
+// sheet with @keyframes. Level 1 is what the level-2 retry always shipped for it.
 const CSS_LEVEL_1 = [
   'css/premium-chat.css',
 ];
+
+// The Chrome version every API the extension uses needs: chrome.sidePanel.open,
+// chrome.runtime.getContexts, Document Picture-in-Picture, and a module service worker
+const MINIMUM_CHROME_VERSION = 116;
 
 // Terser options for maximum compression. terser writes into the nested objects it's
 // given (module: true lands in compress and mangle), so each call gets its own copy
@@ -185,7 +233,7 @@ const CLEANCSS_OPTIONS = {
   },
 };
 
-// Level-1 options, for CSS_LEVEL_1 files and the level-2 retry
+// Level-1 options, for CSS_LEVEL_1 files
 const CLEANCSS_LEVEL_1_OPTIONS = { level: 1 };
 
 /**
@@ -193,29 +241,6 @@ const CLEANCSS_LEVEL_1_OPTIONS = { level: 1 };
  */
 function terserOptions(module) {
   return { ...structuredClone(TERSER_OPTIONS), module };
-}
-
-// Fallbacks --strict refuses, recorded as { file, message }
-const refused = [];
-
-/**
- * Under --strict, record and print a fallback the build refuses, and return true.
- * Without --strict, return false so the caller falls back as before.
- */
-function refuse(file, refusal, detail) {
-  if (!isStrict) return false;
-  const message = `${refusal}${detail ? `: ${detail}` : ''}`;
-  refused.push({ file, message });
-  console.error(`  ✗ ${file}: --strict ${message}`);
-  return true;
-}
-
-/**
- * Warn about a missing listed file and skip it, or refuse the skip under --strict
- */
-function skipMissing(label) {
-  if (refuse(label, 'refused to skip a missing listed file')) return;
-  console.warn(`  ⚠️  ${label} not found, skipping`);
 }
 
 /**
@@ -271,11 +296,11 @@ function copyFile(src, dest) {
 }
 
 /**
- * Copy directory recursively
+ * Copy directory recursively, in sorted order
  */
 function copyDir(src, dest) {
   ensureDir(dest);
-  const entries = fs.readdirSync(src, { withFileTypes: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
@@ -290,124 +315,103 @@ function copyDir(src, dest) {
 }
 
 /**
- * Minify JavaScript file, as an ES module when `module` is true
+ * Minify a JavaScript file, as an ES module when `module` is true. In dev mode terser still
+ * runs, so a file it can't minify fails there too, and the source ships as written.
  */
-async function minifyJSFile(file, srcPath, destPath, module) {
+async function minifyJSFile(file, srcPath, destPath, module, isDev) {
   const code = fs.readFileSync(srcPath, 'utf8');
-
-  if (isDev) {
-    // In dev mode, just copy without minification
-    ensureDir(path.dirname(destPath));
-    fs.writeFileSync(destPath, code);
-    return { original: code.length, minified: code.length };
-  }
 
   if (isCopiedAsIs(file)) {
     copyFile(srcPath, destPath);
     return { original: code.length, minified: code.length, copiedAsIs: true };
   }
 
+  let result;
   try {
-    const result = await minifyJS(code, terserOptions(module));
-    ensureDir(path.dirname(destPath));
-    fs.writeFileSync(destPath, result.code);
-    return { original: code.length, minified: result.code.length, module };
+    result = await minifyJS(code, terserOptions(module));
   } catch (error) {
     // terser's col is 0-based; print file:line:col the way editors count
     const at = Number.isInteger(error.line) && Number.isInteger(error.col) ? ` (${file}:${error.line}:${error.col + 1})` : '';
-    if (refuse(file, 'refused to copy it unminified after a terser error', `${error.message}${at}`)) {
-      return { refused: true };
-    }
-    console.error(`Error minifying ${srcPath}:`, error.message);
-    // Fall back to copying original
-    ensureDir(path.dirname(destPath));
-    fs.writeFileSync(destPath, code);
-    return { original: code.length, minified: code.length, error: true };
+    return { problem: problem('build/terser', file, `refused to copy it unminified after a terser error: ${error.message}${at}`) };
   }
+  const output = isDev ? code : result.code;
+  ensureDir(path.dirname(destPath));
+  fs.writeFileSync(destPath, output);
+  return { original: code.length, minified: output.length, module };
 }
 
 /**
- * Minify CSS file
+ * Minify a CSS file at level 2, or at level 1 when CSS_LEVEL_1 lists it. Any CleanCSS error or
+ * throw fails it, in dev mode too, where the source then ships as written.
  */
-function minifyCSSFile(file, srcPath, destPath) {
+function minifyCSSFile(file, srcPath, destPath, isDev) {
   const code = fs.readFileSync(srcPath, 'utf8');
-
-  if (isDev) {
-    // In dev mode, just copy without minification
-    ensureDir(path.dirname(destPath));
-    fs.writeFileSync(destPath, code);
-    return { original: code.length, minified: code.length };
-  }
+  const levelOne = CSS_LEVEL_1.includes(file);
 
   let result;
-  if (CSS_LEVEL_1.includes(file)) {
-    result = new CleanCSS(CLEANCSS_LEVEL_1_OPTIONS).minify(code);
-  } else {
-    const cleanCSS = new CleanCSS(CLEANCSS_OPTIONS);
-    try {
-      result = cleanCSS.minify(code);
-    } catch (e) {
-      if (refuse(file, 'refused the level-1 retry after a CleanCSS level-2 error', e.message)) {
-        return { refused: true };
-      }
-      // Level-2 optimization can crash on some CSS features; fall back to level-1
-      console.warn(`  ⚠️  Level-2 minification failed for ${path.basename(srcPath)}, falling back to level-1`);
-      const fallbackCSS = new CleanCSS(CLEANCSS_LEVEL_1_OPTIONS);
-      result = fallbackCSS.minify(code);
-    }
+  try {
+    result = new CleanCSS(levelOne ? CLEANCSS_LEVEL_1_OPTIONS : CLEANCSS_OPTIONS).minify(code);
+  } catch (e) {
+    const refusal = levelOne ? 'refused to copy it unminified after a CleanCSS level-1 error' : 'refused the level-1 retry after a CleanCSS level-2 error';
+    return { problem: problem('build/css', file, `${refusal}: ${e.message}`) };
   }
 
   if (result.errors.length > 0) {
-    if (refuse(file, 'refused to copy it unminified after a CleanCSS error', result.errors.join('; '))) {
-      return { refused: true };
-    }
-    console.error(`Error minifying ${srcPath}:`, result.errors);
-    ensureDir(path.dirname(destPath));
-    fs.writeFileSync(destPath, code);
-    return { original: code.length, minified: code.length, error: true };
+    return { problem: problem('build/css', file, `refused to copy it unminified after a CleanCSS error: ${result.errors.join('; ')}`) };
   }
 
+  const output = isDev ? code : result.styles;
   ensureDir(path.dirname(destPath));
-  fs.writeFileSync(destPath, result.styles);
-  return { original: code.length, minified: result.styles.length };
+  fs.writeFileSync(destPath, output);
+  return { original: code.length, minified: output.length };
 }
 
 /**
- * Process HTML file - update script/css references if needed
+ * Problems with manifest.json: it parses, is Manifest V3 with a name, a version, and a service
+ * worker, and asks for at least MINIMUM_CHROME_VERSION
  */
-function processHTMLFile(srcPath, destPath) {
-  let html = fs.readFileSync(srcPath, 'utf8');
-
-  // HTML files reference the same paths, so just copy
-  ensureDir(path.dirname(destPath));
-  fs.writeFileSync(destPath, html);
+function manifestProblems(text) {
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch (error) {
+    return [problem('build/manifest', 'manifest.json', `doesn't parse: ${error.message}`)];
+  }
+  const problems = [];
+  const fail = message => problems.push(problem('build/manifest', 'manifest.json', message));
+  if (manifest.manifest_version !== 3) fail(`manifest_version is ${JSON.stringify(manifest.manifest_version)}, not 3`);
+  if (typeof manifest.name !== 'string' || manifest.name === '') fail('has no name');
+  if (typeof manifest.version !== 'string' || !/^\d+(\.\d+){0,3}$/.test(manifest.version)) fail(`version ${JSON.stringify(manifest.version)} isn't one to four dot-separated numbers`);
+  if (!manifest.background || typeof manifest.background.service_worker !== 'string') fail('names no background.service_worker');
+  const minimum = manifest.minimum_chrome_version;
+  if (typeof minimum !== 'string' || !/^\d+$/.test(minimum) || Number(minimum) < MINIMUM_CHROME_VERSION) {
+    fail(`minimum_chrome_version is ${JSON.stringify(minimum)}; the APIs the extension uses need "${MINIMUM_CHROME_VERSION}" or later`);
+  }
+  return problems;
 }
 
 /**
- * Main build function
+ * Print a problem as it's found
  */
-async function build() {
-  const modes = [isDev && 'dev mode', isStrict && 'strict'].filter(Boolean).join(', ');
-  console.log(`\n🔨 Building New Tab Note Extension${modes ? ` (${modes})` : ''}...\n`);
+function report(found) {
+  console.error(`  ✗ ${format(found)}`);
+  for (const line of found.details || []) console.error(`      ${line}`);
+}
 
-  const startTime = Date.now();
+/**
+ * Process the listed inputs into `outDir`. Returns the problems and the byte totals.
+ */
+async function processInputs(outDir, isDev) {
+  const problems = [];
+  const missing = label => problems.push(problem('build/missing-input', label, 'refused to skip a missing listed file'));
   let totalOriginal = 0;
   let totalMinified = 0;
 
-  // Clean dist directory
-  if (fs.existsSync(DIST_DIR)) {
-    fs.rmSync(DIST_DIR, { recursive: true });
-  }
-  ensureDir(DIST_DIR);
-
-  // Process JavaScript files
   console.log('📦 Processing JavaScript files...');
-  ensureDir(path.join(DIST_DIR, 'js'));
-
   const walked = [];
   for (const dir of JS_DIRS) {
     const files = walkJSDir(dir);
-    if (files === null) skipMissing(dir);
+    if (files === null) missing(dir);
     else walked.push(...files.filter(file => !JS_FILES.includes(file)));
   }
   // How each page and the service worker load their scripts, so each is minified that way
@@ -415,23 +419,24 @@ async function build() {
 
   for (const file of [...JS_FILES, ...walked]) {
     const srcPath = path.join(SRC_DIR, file);
-    const destPath = path.join(DIST_DIR, file);
+    const destPath = path.join(outDir, file);
 
     if (!fs.existsSync(srcPath)) {
-      skipMissing(file);
+      missing(file);
       continue;
     }
 
-    let module = loadsAsModule(file, graph);
+    const module = loadsAsModule(file, graph);
     if (module === null && !isCopiedAsIs(file)) {
-      if (refuse(file, 'refused to minify a file loaded both as an ES module and as a classic script')) continue;
-      // A classic minify keeps top-level names, which is safe both ways
-      console.warn(`  ⚠️  ${file} is loaded both as an ES module and as a classic script, minifying it as a classic script`);
+      problems.push(problem('build/load-mode', file, 'refused to minify a file loaded both as an ES module and as a classic script'));
+      continue;
     }
-    module = module === true;
 
-    const result = await minifyJSFile(file, srcPath, destPath, module);
-    if (result.refused) continue;
+    const result = await minifyJSFile(file, srcPath, destPath, module === true, isDev);
+    if (result.problem) {
+      problems.push(result.problem);
+      continue;
+    }
     totalOriginal += result.original;
     totalMinified += result.minified;
 
@@ -441,118 +446,186 @@ async function build() {
     }
 
     const savings = result.original > 0 ? ((1 - result.minified / result.original) * 100).toFixed(1) : '0.0';
-    const status = result.error ? '⚠️' : '✓';
     const kind = result.module ? ', module' : '';
-    console.log(`  ${status} ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved${kind})`);
+    console.log(`  ✓ ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved${kind})`);
   }
 
-  // Process CSS files
   console.log('\n🎨 Processing CSS files...');
-  ensureDir(path.join(DIST_DIR, 'css'));
-
   for (const file of CSS_FILES) {
     const srcPath = path.join(SRC_DIR, file);
-    const destPath = path.join(DIST_DIR, file);
-
     if (!fs.existsSync(srcPath)) {
-      skipMissing(file);
+      missing(file);
       continue;
     }
-
-    const result = minifyCSSFile(file, srcPath, destPath);
-    if (result.refused) continue;
+    const result = minifyCSSFile(file, srcPath, path.join(outDir, file), isDev);
+    if (result.problem) {
+      problems.push(result.problem);
+      continue;
+    }
     totalOriginal += result.original;
     totalMinified += result.minified;
-
-    const savings = ((1 - result.minified / result.original) * 100).toFixed(1);
-    const status = result.error ? '⚠️' : '✓';
-    console.log(`  ${status} ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved)`);
+    const savings = result.original > 0 ? ((1 - result.minified / result.original) * 100).toFixed(1) : '0.0';
+    console.log(`  ✓ ${file}: ${formatBytes(result.original)} → ${formatBytes(result.minified)} (${savings}% saved)`);
   }
 
-  // Process HTML files
+  // HTML files reference the same paths, so they're copied
   console.log('\n📄 Processing HTML files...');
-
   for (const file of HTML_FILES) {
     const srcPath = path.join(SRC_DIR, file);
-    const destPath = path.join(DIST_DIR, file);
-
     if (!fs.existsSync(srcPath)) {
-      skipMissing(file);
+      missing(file);
       continue;
     }
-
-    processHTMLFile(srcPath, destPath);
+    copyFile(srcPath, path.join(outDir, file));
     console.log(`  ✓ ${file}`);
   }
 
-  // Copy static files
   console.log('\n📋 Copying static files...');
-
   for (const file of STATIC_FILES) {
     const srcPath = path.join(SRC_DIR, file);
-    const destPath = path.join(DIST_DIR, file);
-
     if (!fs.existsSync(srcPath)) {
-      skipMissing(file);
+      missing(file);
       continue;
     }
-
-    copyFile(srcPath, destPath);
+    if (file === 'manifest.json') problems.push(...manifestProblems(fs.readFileSync(srcPath, 'utf8')));
+    copyFile(srcPath, path.join(outDir, file));
     console.log(`  ✓ ${file}`);
   }
 
-  // Copy static directories
   console.log('\n📁 Copying static directories...');
-
   for (const dir of STATIC_DIRS) {
     const srcPath = path.join(SRC_DIR, dir);
-    const destPath = path.join(DIST_DIR, dir);
-
     if (!fs.existsSync(srcPath)) {
-      skipMissing(`${dir}/`);
+      missing(`${dir}/`);
       continue;
     }
-
-    copyDir(srcPath, destPath);
+    copyDir(srcPath, path.join(outDir, dir));
     console.log(`  ✓ ${dir}/`);
   }
 
-  if (refused.length > 0) {
-    console.error(`\n✗ Strict build failed: refused ${refused.length} fallback${refused.length === 1 ? '' : 's'}`);
-    refused.forEach(({ file, message }) => console.error(`   ${file}: ${message}`));
-    console.error('');
-    process.exitCode = 1;
+  problems.forEach(report);
+  return { problems, totalOriginal, totalMinified };
+}
+
+/**
+ * Every output check on the staged build, which reads only the files it holds
+ */
+function checkOutput(outDir) {
+  const files = fromDirectory(outDir, 'the build');
+  const problems = [
+    ...checkClosure(files).problems,
+    ...checkRemoteCode(files),
+    ...checkCsp(files),
+    ...checkNoticeFiles(files),
+    ...checkBanners(files),
+    ...checkSourceMaps(files),
+    ...checkVendor(files),
+    ...checkEnvironment(files),
+  ];
+  problems.forEach(report);
+  return problems;
+}
+
+/**
+ * Leave no build behind: the staging directory and any dist/
+ */
+function removeOutput(staging) {
+  if (staging) fs.rmSync(staging, { recursive: true, force: true });
+  fs.rmSync(DIST_DIR, { recursive: true, force: true });
+}
+
+/**
+ * Print the summary of a failed build and set the exit code
+ */
+function fail(problems) {
+  console.error(`\n✗ Build failed: ${plural(problems.length, 'problem')}. No dist/ was written.`);
+  for (const found of problems) {
+    console.error(`   ${format(found)}`);
+    for (const line of found.details || []) console.error(`      ${line}`);
+  }
+  console.error('');
+  process.exitCode = 1;
+}
+
+/**
+ * Main build function
+ */
+async function build(argv = process.argv.slice(2)) {
+  const unknown = argv.filter(arg => !ARGUMENTS.includes(arg));
+  if (unknown.length > 0) {
+    fail([problem('build/usage', unknown.join(' '), `usage: node scripts/build.js [--dev] [--strict]`)]);
     return;
   }
+  const isDev = argv.includes('--dev');
+  const mode = isDev ? 'development' : 'production';
+  console.log(`\n🔨 Building New Tab Note Extension (${mode})...\n`);
+  const startTime = Date.now();
 
-  // Run JSDoc type checking (warning-only, does not block build)
-  console.log('\n🔍 Running JSDoc type check...');
-  try {
-    execSync('npx tsc --project jsconfig.json', { cwd: ROOT_DIR, stdio: 'pipe' });
-    console.log('  ✓ No type errors found');
-  } catch (error) {
-    const output = (error.stdout || '').toString().trim();
-    const lines = output ? output.split('\n') : [];
-    const errorCount = lines.filter(l => /error TS\d+/.test(l)).length;
-    console.warn(`  ⚠️  ${errorCount} type warning(s) found (non-blocking)`);
-    if (lines.length > 0) {
-      // Show first few warnings
-      lines.slice(0, 10).forEach(line => console.warn(`     ${line}`));
-      if (lines.length > 10) {
-        console.warn(`     ... and ${lines.length - 10} more`);
-      }
-    }
+  // No build stays behind from before, half-made or not
+  removeOutput(null);
+  for (const entry of fs.readdirSync(ROOT_DIR)) {
+    if (entry.startsWith(STAGING_PREFIX)) fs.rmSync(path.join(ROOT_DIR, entry), { recursive: true, force: true });
   }
 
-  // Summary
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-  const totalSavings = ((1 - totalMinified / totalOriginal) * 100).toFixed(1);
+  // 1. The toolchain, and the build's identity before anything is built
+  const source = sourceInfo(ROOT_DIR);
+  const early = [...checkNode(ROOT_DIR), ...source.problems];
+  if (early.length > 0) {
+    early.forEach(report);
+    fail(early);
+    return;
+  }
+  const buildId = computeBuildId(ROOT_DIR, source.info, mode);
 
-  console.log('\n' + '─'.repeat(50));
-  console.log(`✅ Build complete in ${elapsed}s`);
-  console.log(`   Total: ${formatBytes(totalOriginal)} → ${formatBytes(totalMinified)} (${totalSavings}% saved)`);
-  console.log(`   Output: ${DIST_DIR}`);
-  console.log('');
+  const staging = fs.mkdtempSync(path.join(ROOT_DIR, STAGING_PREFIX));
+  try {
+    // 2. The inputs
+    const inputs = await processInputs(staging, isDev);
+    if (inputs.problems.length > 0) {
+      removeOutput(staging);
+      fail(inputs.problems);
+      return;
+    }
+
+    // 3. What the build wrote
+    console.log('\n🔎 Checking the output...');
+    const checked = checkOutput(staging);
+    if (checked.length > 0) {
+      removeOutput(staging);
+      fail(checked);
+      return;
+    }
+    console.log('  ✓ closure, remote code, CSP, notices and source maps, vendored files, environment');
+
+    // 4. The type gate
+    console.log('\n🔍 Running the type gate...');
+    const gate = await runTypeGate(ROOT_DIR);
+    if (gate.problems.length > 0) {
+      gate.problems.forEach(report);
+      removeOutput(staging);
+      fail(gate.problems);
+      return;
+    }
+    console.log(`  ✓ ${gate.summary}`);
+
+    // 5. The build's metadata, then dist/
+    const versions = await kernelVersions(ROOT_DIR);
+    const written = writeBuildInfo(staging, fromDirectory(staging, 'the build'), { buildId, info: source.info, mode, versions });
+    fs.renameSync(staging, DIST_DIR);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    const totalSavings = inputs.totalOriginal > 0 ? ((1 - inputs.totalMinified / inputs.totalOriginal) * 100).toFixed(1) : '0.0';
+    console.log('\n' + '─'.repeat(50));
+    console.log(`✅ Build complete in ${elapsed}s`);
+    console.log(`   Total: ${formatBytes(inputs.totalOriginal)} → ${formatBytes(inputs.totalMinified)} (${totalSavings}% saved)`);
+    console.log(`   buildId: ${written.buildId}`);
+    console.log(`   outputDigest: ${written.outputDigest}`);
+    console.log(`   Output: ${DIST_DIR}`);
+    console.log('');
+  } catch (error) {
+    removeOutput(staging);
+    throw error;
+  }
 }
 
 /**
@@ -567,7 +640,7 @@ function formatBytes(bytes) {
 // Run build when invoked as a script; tests require the lists
 if (require.main === module) {
   build().catch(error => {
-    console.error('Build failed:', error);
+    console.error(`\n✗ Build failed: ${error && error.stack ? error.stack : error}. No dist/ was written.`);
     process.exit(1);
   });
 }
@@ -579,10 +652,13 @@ module.exports = {
   HTML_FILES,
   STATIC_FILES,
   STATIC_DIRS,
+  BUILD_INPUTS,
   COPY_AS_IS,
   CSS_LEVEL_1,
   CLEANCSS_OPTIONS,
   TERSER_OPTIONS,
+  MINIMUM_CHROME_VERSION,
   isCopiedAsIs,
   terserOptions,
+  manifestProblems,
 };

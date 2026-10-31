@@ -1,0 +1,17 @@
+{
+  "rule": "the package holds a stylesheet nothing names",
+  "expect": [
+    "closure/unreferenced"
+  ],
+  "edits": [
+    {
+      "file": "css/ntn-fixture-unused.css",
+      "write": ".ntn-fixture-unused{color:red}\n"
+    },
+    {
+      "file": "scripts/build.js",
+      "replace": "  'css/stats.css',\n",
+      "with": "  'css/stats.css',\n  'css/ntn-fixture-unused.css',\n"
+    }
+  ]
+}

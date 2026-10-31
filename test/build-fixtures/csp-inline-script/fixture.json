@@ -1,0 +1,13 @@
+{
+  "rule": "a page has an inline script",
+  "expect": [
+    "csp/inline-script"
+  ],
+  "edits": [
+    {
+      "file": "popup.html",
+      "replace": "</body>",
+      "with": "  <script>window.ntnFixture = 1;</script>\n</body>"
+    }
+  ]
+}

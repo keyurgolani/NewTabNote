@@ -1,0 +1,13 @@
+{
+  "rule": "a shipped page names a source map",
+  "expect": [
+    "source-map/comment"
+  ],
+  "edits": [
+    {
+      "file": "offscreen.html",
+      "replace": "</html>",
+      "with": "</html>\n<!--# sourceMappingURL=offscreen.html.map -->"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "about": "Dynamic code in vendored files, reviewed to ship under the extension CSP (#27 AC6). scripts/build/csp.js runs ESLint's no-eval, no-new-func, and no-implied-eval on every shipped script: first-party code may have none, and each vendored file only the occurrences a row counts. A row pins the file's SHA-256, so it changes only with its dependency: a new version fails until its occurrences are reviewed again.",
+  "rows": [
+    {
+      "file": "js/lib/jszip.min.js",
+      "package": "jszip",
+      "version": "3.10.1",
+      "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
+      "rule": "no-new-func",
+      "count": 1,
+      "reason": "The setimmediate polyfill JSZip bundles turns a callback that isn't a function into one with new Function(\"\" + callback). JSZip only passes it functions, so the constructor never runs here."
+    },
+    {
+      "file": "js/lib/transformers.js",
+      "package": "@xenova/transformers",
+      "version": "2.17.1",
+      "sha256": "d135323ef84c81ea044cc8c6e6bcbaf11de279ccf908ad905646ff629473b525",
+      "rule": "no-eval",
+      "count": 1,
+      "reason": "@protobufjs/inquire looks for Node's require with eval(\"quire\".replace(/^/, \"re\")) inside a try. Under the extension CSP the eval throws, the catch returns null, and protobuf.js carries on without it."
+    },
+    {
+      "file": "js/lib/transformers.js",
+      "package": "@xenova/transformers",
+      "version": "2.17.1",
+      "sha256": "d135323ef84c81ea044cc8c6e6bcbaf11de279ccf908ad905646ff629473b525",
+      "rule": "no-new-func",
+      "count": 1,
+      "reason": "webpack's global-object lookup returns globalThis when it exists and only otherwise tries new Function(\"return this\")(). Chrome has globalThis, so the constructor never runs."
+    }
+  ]
+}

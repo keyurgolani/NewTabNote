@@ -1,0 +1,12 @@
+{
+  "rule": "a kernel file has a strict type error",
+  "expect": [
+    "type/kernel"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/core/contracts/limits.js",
+      "append": "\nexport function ntnFixture(value) {\n  return value;\n}\n"
+    }
+  ]
+}

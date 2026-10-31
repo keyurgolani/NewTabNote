@@ -1,0 +1,13 @@
+{
+  "rule": "a build/remote-allowlist.json row allows more than the package holds, so the list didn't shrink with the code",
+  "expect": [
+    "remote-code/stale-row"
+  ],
+  "edits": [
+    {
+      "file": "build/remote-allowlist.json",
+      "replace": "\"count\": 1,",
+      "with": "\"count\": 2,"
+    }
+  ]
+}

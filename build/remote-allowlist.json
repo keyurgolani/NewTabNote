@@ -1,0 +1,13 @@
+{
+  "about": "Remote executable URLs reviewed to stay in shipped code (#27 AC6), each with the reason and the issue that removes it. scripts/build/remote-code.js fails on any other one, and on a row the package no longer has. The list only shrinks: test/remote-code.test.js pins the rows it may hold. A template literal's expressions read as ${...}.",
+  "rows": [
+    {
+      "file": "js/lib/transformers.js",
+      "url": "https://cdn.jsdelivr.net/npm/@xenova/transformers@${...}/dist/",
+      "context": "wasmPaths",
+      "count": 1,
+      "reason": "transformers.js's default for where ONNX Runtime loads its WASM files when the page doesn't set one. js/embeddings.js doesn't, so the first semantic search model load fetches them from jsDelivr. #9 hosts the runtime in the package and removes this row.",
+      "issue": 9
+    }
+  ]
+}

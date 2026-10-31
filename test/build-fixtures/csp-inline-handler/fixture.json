@@ -1,0 +1,13 @@
+{
+  "rule": "a page has an inline event handler",
+  "expect": [
+    "csp/inline-handler"
+  ],
+  "edits": [
+    {
+      "file": "popup.html",
+      "replace": "<body>",
+      "with": "<body onload=\"window.ntnFixture = 1\">"
+    }
+  ]
+}

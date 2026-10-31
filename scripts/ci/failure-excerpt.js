@@ -19,10 +19,11 @@ const ANSI_ESCAPE = /\u001b\[[0-9;?]*[A-Za-z]/g;
 // Where each pr-checks job's failure report starts in its log
 const MARKERS = {
   unit: /^✖ failing tests:/,
-  typecheck: /^typecheck ratchet/,
+  // The type gate's report (scripts/build/type-gate.js), or the ratchet's own
+  typecheck: /^type gate failed|^typecheck ratchet/,
   // test:kernel's summary, typecheck:kernel's first diagnostic, or check:boundaries' report
   kernel: /^✖ failing tests:|error TS\d+:|^check:boundaries failed/,
-  build: /^✗ Strict build failed|^Build failed|^check:dist failed|^Packaging failed|^Error|^check:notices failed/,
+  build: /^✗ Build failed|^check:dist failed|^verify:fixtures failed|^verify:reproducible failed|^Packaging failed|^Error|^check:notices failed/,
   // Playwright's list reporter numbers each failed test; a spec or config that fails to
   // load, or a failed browser install, prints a bare Error line instead
   extension: /^ {2}1\) |^Error: /,
