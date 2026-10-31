@@ -93,6 +93,17 @@ class NotesManager {
         this.rebuildSearchIndex();
       }
     }, 300);
+
+    /**
+     * What AI chat reaches of the search index and the embedding model (#22's), set by App: a
+     * note it wrote blocks into indexes every note again, after a pause shared with the
+     * editor's saves, as App's callback did, which dropped the note's id. Opening its sidebar
+     * loads the model.
+     */
+    this.indexing = Object.freeze({
+      noteChanged: () => this.triggerIndexing(),
+      loadEmbeddingsModel: () => this.loadEmbeddingsModel(),
+    });
   }
 
   /** Initialize: setup auto-title (critical for note management). */
