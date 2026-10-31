@@ -21,8 +21,9 @@
  * 5. Writes the step's receipt and raises `meta.schema.logicalVersion` to it, in one
  *    transaction.
  * Cut off anywhere, the next run picks up where `meta` says, and each fill looks at what's there
- * first, so a batch run twice changes nothing. A fill takes only what's absent, and never
- * overwrites a field a command wrote.
+ * first, so a batch run twice changes nothing. A fill takes only what's absent, but for one
+ * field, a trashed note's `trashedAt` when 1.4.x never listed the note (filledByLogical2), and
+ * never overwrites a field a command wrote.
  *
  * A run that read every store and then stopped, short of space or on a point that didn't
  * verify, records the stop in `meta` (TRANSFORM_STOP_KEY), and the worker's starts in the next
@@ -31,12 +32,12 @@
  * Logical 2 gives each note without a placement its placement, kind, and lifecycle from its
  * flags, by #1's rules (domain/placement.js). It also gives a note whose `updatedAt` no index
  * can hold one (domain/note.js, filledUpdatedAt), so Storage's lists and its export list it too
- * (KD-011). It writes no change entry and moves no version: it adds what the flags already say.
- * Its receipt counts the notes it read and filled, and #1's findings (placementFindingsOf),
- * never content.
+ * (KD-011), and a trashed note its time in the trash, which retention counts from. It writes no
+ * change entry and moves no version: it adds what the flags already say. Its receipt counts the
+ * notes it read and filled, and #1's findings (placementFindingsOf), never content.
  */
 
-import { filledUpdatedAt, hasIndexedTime } from '../../core/domain/note.js';
+import { filledUpdatedAt, hasIndexedTime, hasTrashTime } from '../../core/domain/note.js';
 import { hasPlacementGroup, placementFindingsOf, placementGroupOf } from '../../core/domain/placement.js';
 import { failureOf } from './failures.js';
 import { approximateBytes } from './records.js';
@@ -159,11 +160,18 @@ const noCounts = () => ({ read: 0, filled: 0, staleFolder: 0, dailyWithoutDate: 
  * as that command left them.
  * @param {NoteRecord} note
  */
-export const needsLogical2 = note => !hasPlacementGroup(note) || !hasIndexedTime(note);
+export const needsLogical2 = note =>
+  !hasPlacementGroup(note) || !hasIndexedTime(note) || (Boolean(note.trashed) && !hasTrashTime(note));
 
 /**
- * A note with what logical 2 fills: its placement, kind, and lifecycle unless it has them, and
- * an `updatedAt` an index can hold, or null when it has both
+ * A note with what logical 2 fills, or null when it has it all:
+ * - its placement, kind, and lifecycle, unless it has a placement;
+ * - for a trashed note, its time in the trash: the run's start when it has none, and also when
+ *   it had no updatedAt an index held, since 1.4.x never listed it, so it shows in Trash for a
+ *   whole retention window before retention can take it. That second case writes over an old
+ *   `trashedAt`, the one field logical 2 writes over (#17 PR 3a, the lead's call). Every other
+ *   trashed note keeps its own;
+ * - an `updatedAt` an index can hold, when it has none.
  * @param {NoteRecord} note
  * @param {{liveFolderIds: ReadonlySet<string>, blocks: readonly any[], runStart: number}} context
  * @returns {NoteRecord | null}
@@ -172,6 +180,7 @@ export function filledByLogical2(note, { liveFolderIds, blocks, runStart }) {
   /** @type {NoteRecord} */
   let next = note;
   if (!hasPlacementGroup(note)) next = { ...next, ...placementGroupOf(note, liveFolderIds) };
+  if (note.trashed && (!hasIndexedTime(note) || !hasTrashTime(note))) next = { ...next, trashedAt: runStart };
   if (!hasIndexedTime(note)) next = { ...next, updatedAt: filledUpdatedAt(note, blocks, runStart) };
   return next === note ? null : next;
 }

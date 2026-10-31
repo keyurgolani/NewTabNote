@@ -10,8 +10,10 @@ import {
   captureBlock,
   dailyDateStr,
   dailyNoteName,
+  expiredInTrash,
   findDailyNote,
   filledUpdatedAt,
+  hasTrashTime,
   inBlockOrder,
   isEmpty,
   isUntitled,
@@ -126,6 +128,34 @@ describe('notes', () => {
       'a',
       'noTime',
     ]);
+  });
+
+  it('expiredInTrash takes a trashed note past the window by its trashedAt, and waits for one 1.4.x never listed, or one with no time in the trash (#17 PR 3a)', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const old = NOW - 40 * day;
+    const notes = [
+      note('expired', { trashed: true, trashedAt: old }),
+      note('recent', { trashed: true, trashedAt: NOW - day }),
+      note('negative', { trashed: true, trashedAt: -5 }),
+      // Never listed by 1.4.x: the transform starts their time in the trash when it fills
+      note('unlisted', { trashed: true, trashedAt: old, updatedAt: undefined }),
+      note('unlistedNaN', { trashed: true, trashedAt: old, updatedAt: NaN }),
+      // No time in the trash, which retention can't count from
+      note('zero', { trashed: true, trashedAt: 0 }),
+      note('none', { trashed: true, trashedAt: null }),
+      note('notANumber', { trashed: true, trashedAt: NaN }),
+      note('active', { trashedAt: old }),
+    ];
+    assert.deepEqual(
+      expiredInTrash(notes, NOW, 30)
+        .map(n => n.id)
+        .sort(),
+      ['expired', 'negative'],
+    );
+    assert.deepEqual(
+      [hasTrashTime(note('a', { trashedAt: old })), hasTrashTime(note('b', { trashedAt: Infinity }))],
+      [true, false],
+    );
   });
 
   it("listTimeOf and filledUpdatedAt: the time a note lists by, and the one #17's transform gives it (#17 PR 3a)", () => {
