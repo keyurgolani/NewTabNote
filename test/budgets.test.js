@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf } = require('../scripts/build/budgets.js');
+const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf } = require('../scripts/build/budgets.js');
 const { fromMap } = require('../scripts/build/package-files.js');
 const { gateReport } = require('../scripts/perf/gate-report.js');
 const { fixtureProblems } = require('../scripts/perf-probe.js');
@@ -236,6 +236,9 @@ describe('the budget gate', () => {
     assert.ok(graph.lazy.files.some(entry => entry.file === 'assets/workspace.js'));
     assert.ok(!graph.start.files.some(entry => entry.file === 'assets/workspace.js'));
     assert.deepEqual(run(budgets), []);
+    // The build's line names only what loads at boot
+    assert.deepEqual(startChunksOf(graph), []);
+    assert.deepEqual(startChunksOf(analyze({ ...bundleFixture(), budgets: budgetsFor() }).newtab), ['workspace']);
   });
 
   it("fails a package in the service worker its row doesn't allow", () => {
@@ -378,6 +381,31 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gateReport(probe(1.01, 1.05, 4.4), gated).failed, false);
   });
 
+  it('writes a profile with a package that measured nothing as invalid, instead of throwing', () => {
+    const gated = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'gate' }, heap: { ...BUDGETS.heap, mode: 'gate' } };
+    // Every candidate round failed: the probe writes null for what it couldn't summarize
+    const failures = Array.from({ length: 12 }, (_, index) => ({ round: index + 1, message: 'the page never marked ready' }));
+    const empty = probe(1.01, 1.05, 4.4, { failures });
+    const typical = empty.timing.profiles.typical;
+    typical.packages.candidate = { ...typical.packages.candidate, interactionReadyMs: null, heapBytes: null };
+    typical.ratios.candidate = { rounds: 0, interactionReady: null, heap: null, againstBoth: { rounds: 0, interactionReady: null, heap: null } };
+    const reported = gateReport(empty, BUDGETS);
+    assert.equal(reported.failed, false, 'report mode still summarizes');
+    assert.equal(reported.verdicts[0].timing, 'invalid');
+    assert.equal(reported.verdicts[0].heap, 'invalid');
+    assert.ok(reported.verdicts[0].problems.includes('candidate measured no round'), reported.verdicts[0].problems.join('; '));
+    assert.ok(reported.verdicts[0].problems.includes('the candidate has no round paired with both 1.4.0 runs'));
+    assert.match(reported.markdown, /\| typical \| 0 \| .* \| \*\*no\*\* \| n\/a \| invalid \| n\/a \| invalid \|/);
+    assert.equal(gateReport(empty, gated).failed, true, 'gate mode still fails');
+    // 1.4.0 measured nothing either, and a run with no pair at all
+    const none = probe(1.01, 1.05, 4.4);
+    none.timing.profiles.typical.ratios = {};
+    const unpaired = gateReport(none, BUDGETS);
+    assert.equal(unpaired.failed, false);
+    assert.deepEqual(unpaired.verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'invalid', problems: ['the run has no 1.4.0 pair and candidate'] });
+    assert.equal(gateReport(none, gated).failed, true);
+  });
+
   it("writes the summary when the probe exits 1, and stays out of pr-gate's needs while the rows report", () => {
     const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/perf.yml'), 'utf8');
     const step = name => workflow.slice(workflow.indexOf(`- name: ${name}`), workflow.indexOf('- name:', workflow.indexOf(`- name: ${name}`) + 1));
@@ -385,7 +413,11 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.match(step('Time 1.4.0'), /--out dist-report\/perf\.json \|\| code=\$\?/);
     assert.match(step('Time 1.4.0'), /if \[ "\$code" -ge 2 \]; then exit "\$code"; fi/);
     assert.match(step('Summarize'), /if: always\(\)/);
-    assert.match(step('Summarize'), /set -o pipefail\n\s+node scripts\/perf\/gate-report\.js .* \| tee -a "\$GITHUB_STEP_SUMMARY"/);
+    // Every step runs as bash -e -o pipefail because of the workflow's default shell, so tee can't
+    // hide a gate row's exit 1; the step's own set -o pipefail matters only if that default changes
+    assert.match(workflow, /\ndefaults:\n {2}run:\n {4}shell: bash\n/);
+    assert.ok(!/\n {4}defaults:|\n {8}shell:/.test(workflow), 'no job or step overrides the shell');
+    assert.match(step('Summarize'), /node scripts\/perf\/gate-report\.js .* \| tee -a "\$GITHUB_STEP_SUMMARY"/);
     const gate = fs.readFileSync(path.join(ROOT, '.github/workflows/pr-checks.yml'), 'utf8');
     assert.match(gate, /needs: \[unit, typecheck, kernel, build, extension\]/, "timing blocks a merge only once pr-gate needs it, or a ruleset requires it: the owner's call");
   });
