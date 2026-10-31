@@ -164,7 +164,7 @@ describe("capture and storage probe through #12's legacy adapter (#20 slice 2)",
       assert.deepEqual([receipt.status, receipt.capture], ['verified', 'safe'], id);
     }
     const left = await legacyEnv.dumpDatabase(context.env.indexedDB);
-    assert.ok(!JSON.stringify(left).includes(PROBE_KEY), 'the probe left its record');
+    assert.ok(!JSON.stringify(left).includes(PROBE_KEY[0]), 'the probe left its record');
     closeAll([context]);
   });
 
