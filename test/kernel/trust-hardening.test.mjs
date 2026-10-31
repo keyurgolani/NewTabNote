@@ -13,7 +13,7 @@ import { health } from '../../js/trust/core/families.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { BOUNDS } from '../../js/trust/core/records.js';
-import { createTrustRecords } from '../../js/trust/core/trust-records.js';
+import { FALLBACK_LIMITS, createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases } from '../../js/trust/core/use-cases.js';
 import {
   brokenFactory,
@@ -165,27 +165,32 @@ describe("#68's review round", () => {
     const profile = trustProfile();
     const { records, clock } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile);
     /** @param {number} n */
-    const subject = n => `17300000000${String(n).padStart(2, '0')}-a`;
-    for (let n = 0; n < 49; n++) {
+    const subject = n => `${1730000000000 + n}-${n.toString(36).padStart(9, '0')}`;
+    const limit = FALLBACK_LIMITS.operations;
+    for (let n = 0; n < limit - 2; n++) {
       await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(n), severity: 'degraded' });
       clock.advance(1);
     }
     await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
+    clock.advance(1);
     await records.resolve('sync', []);
     clock.advance(1);
-    // The 51st held incident: the resolved one goes, not an open one
-    await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(49), severity: 'degraded' });
-    const kept = await records.incidents();
-    assert.equal(kept.length, 50);
-    assert.equal(
-      kept.filter(incident => incident.state === 'open').length,
-      50,
-      'an open incident was dropped before a resolved one',
-    );
-    assert.equal(records.dropped().incidents, 0);
+    // One past the limit, twice: the operations of the incident that ends resolved go first
+    await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(limit), severity: 'degraded' });
     clock.advance(1);
     await records.raise({ providerId: 'backup', faultCode: 'stale-backup', severity: 'data-risk' });
-    assert.equal((await records.incidents()).length, 50);
+    const kept = await records.incidents();
+    assert.equal(kept.length, limit);
+    assert.equal(
+      kept.filter(incident => incident.state === 'open').length,
+      limit,
+      'an open sighting was dropped before a resolved incident',
+    );
+    assert.equal(records.dropped().incidents, 0);
+    // Then an open sighting has to go, and it's counted
+    clock.advance(1);
+    await records.raise({ providerId: 'storage', faultCode: 'scan-findings', severity: 'degraded' });
+    assert.equal((await records.incidents()).length, limit);
     assert.equal(records.dropped().incidents, 1);
     assert.ok((await records.events()).some(event => event.code === 'trust.fallback-dropped'));
     // Runs: a running one outlives finished ones

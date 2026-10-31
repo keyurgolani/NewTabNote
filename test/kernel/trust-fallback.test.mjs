@@ -39,7 +39,11 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
 
     const held = /** @type {any} */ (profile.settings.items.get(KEY));
-    assert.equal(held.incident.key, 'capture/capture-failed/-', 'the latest storage incident is the one kept');
+    assert.deepEqual(
+      held.ops.map((/** @type {any} */ op) => op.key),
+      ['storage/open-failed/-', 'storage/open-failed/-', 'capture/capture-failed/-'],
+      'the copy keeps the storage sightings, in order',
+    );
     assert.ok(
       profile.settings.sets.every(set => Object.keys(set).every(key => key === KEY || key === 'trust.installId')),
     );
@@ -72,7 +76,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     );
   });
 
-  it('the next open reconciles the held incident into NewTabNoteTrust once, and one that cannot clear the copy leaves it for later', async () => {
+  it("the next open replays the held sightings into NewTabNoteTrust once, even when it can't trim the copy after", async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const down = createTrustRecords({
@@ -92,27 +96,28 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     clock.advance(10);
     await down.raise({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' });
 
-    // The first open can't clear the copy, so it leaves it for later and counts none of it
+    // The first open replays both, but can't trim the copy, which keeps them
     profile.settings.failSets = 1;
     const store = databaseOn(profile);
     opened.push(store);
     const first = await openRecords(store, profile, { clock });
     assert.equal(first.opened.ok, true);
-    assert.deepEqual(await first.records.incidents(), []);
-    assert.equal(/** @type {any} */ (profile.settings.items.get(KEY)).added, 2);
-
-    const store2 = databaseOn(profile);
-    opened.push(store2);
-    const up = await openRecords(store2, profile, { clock });
-    const [incident] = await up.records.incidents();
+    const [incident] = await first.records.incidents();
     assert.equal(incident.key, 'storage/open-failed/-');
     assert.equal(incident.occurrences, 2);
     assert.equal(incident.id.startsWith('dead'), true, 'the held incident keeps its id and ref');
-    assert.equal(profile.settings.items.get(KEY), null);
+    assert.equal(/** @type {any} */ (profile.settings.items.get(KEY)).ops.length, 2);
     assert.deepEqual(
-      (await up.records.events()).map(event => event.code),
+      (await first.records.events()).map(event => event.code),
       ['trust.reconciled'],
     );
+
+    // The next open replays them again, which adds nothing, and trims the copy
+    const store2 = databaseOn(profile);
+    opened.push(store2);
+    const up = await openRecords(store2, profile, { clock });
+    assert.equal((await up.records.incidents())[0].occurrences, 2);
+    assert.equal(profile.settings.items.get(KEY), null);
 
     // Opening again adds nothing
     const store3 = databaseOn(profile);
@@ -169,18 +174,18 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
   it('memory keeps a bounded number of incidents and events', async () => {
     const profile = trustProfile();
     const { records, clock } = await openRecords(createTrustDatabase({ indexedDB: brokenFactory }), profile);
-    for (let n = 0; n < 80; n++) {
+    for (let n = 0; n < 250; n++) {
       await records.raise({
         providerId: 'index',
         faultCode: 'lagging',
-        subjectId: `${1730000000000 + n}-s`,
+        subjectId: `${1730000000000 + n}-${n.toString(36).padStart(9, '0')}`,
         severity: 'degraded',
       });
     }
     for (let n = 0; n < 250; n++)
       await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: n } });
-    assert.equal((await records.incidents()).length, 50);
-    assert.equal(records.dropped().incidents, 30);
+    assert.equal((await records.incidents()).length, 200);
+    assert.equal(records.dropped().incidents, 50);
     assert.equal((await records.events()).length, 200);
   });
 });

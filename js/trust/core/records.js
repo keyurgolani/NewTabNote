@@ -11,7 +11,7 @@ import { count, timestamp } from '../../kernel/core/contracts/fields.js';
 import { check } from '../../kernel/core/contracts/validate.js';
 import { RUN_OUTCOMES } from './codes.js';
 import { EVENT_CODE_NAMES } from './event-codes.js';
-import { capability, contributionId, evidenceSchema, faultCode, recordId, subjectId } from './evidence.js';
+import { capability, evidenceSchema, faultCode, providerId, recordId, remediationId, subjectId } from './evidence.js';
 import {
   CAPTURE_STATES,
   COST_CLASSES,
@@ -73,7 +73,7 @@ export const incidentKeySchema = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:/-]{1
  */
 export const receiptSchema = v.strictObject({
   id: recordId,
-  providerId: contributionId,
+  providerId,
   installId: recordId,
   status: v.picklist(RECEIPT_STATUSES),
   capture: v.optional(v.picklist(CAPTURE_STATES)),
@@ -84,7 +84,7 @@ export const receiptSchema = v.strictObject({
   evidence: evidenceSchema,
   consequenceKey: v.nullable(consequenceKey),
   preserved: capabilities,
-  nextAction: v.nullable(contributionId),
+  nextAction: v.nullable(remediationId),
   executionClass: v.optional(v.picklist(COST_CLASSES)),
   transition: v.boolean(),
 });
@@ -94,18 +94,20 @@ export const receiptSchema = v.strictObject({
 /**
  * An Incident. `key` (provider, fault, subject) makes a repeat update this record, and `ref`
  * is the first 6 characters of `id`, uppercased, for support. `resolvedAt` is set once
- * re-verification passes, and cleared if the fault comes back.
+ * re-verification passes, and cleared if the fault comes back after it. `dismissedAt` is when
+ * it was dismissed, which a later sighting overrides. incidents.js holds the rules.
  */
 export const incidentSchema = v.strictObject({
   id: recordId,
   ref: v.pipe(v.string(), v.regex(/^[A-Z0-9-]{6}$/)),
   key: incidentKeySchema,
-  providerId: contributionId,
+  providerId,
   faultCode,
   subjectId: v.nullable(subjectId),
   severity: v.picklist(SEVERITIES),
   state: v.picklist(INCIDENT_STATES),
   dismissed: v.boolean(),
+  dismissedAt: v.nullable(timestamp),
   firstSeenAt: timestamp,
   lastSeenAt: timestamp,
   resolvedAt: v.nullable(timestamp),
@@ -113,6 +115,8 @@ export const incidentSchema = v.strictObject({
   affected: capabilities,
   preserved: capabilities,
   evidence: evidenceSchema,
+  // The held operations already applied to it, newest last, so a replay never counts twice
+  appliedOps: v.pipe(v.array(recordId), v.maxLength(64)),
 });
 
 /** @typedef {v.InferOutput<typeof incidentSchema>} Incident */
@@ -120,7 +124,7 @@ export const incidentSchema = v.strictObject({
 /** A RemediationRun: one remediation's run, written before its first mutation (slice 3) */
 export const runSchema = v.strictObject({
   id: recordId,
-  commandId: contributionId,
+  commandId: remediationId,
   incidentId: v.nullable(recordId),
   state: v.picklist(RUN_STATES),
   recoveryPointId: v.optional(recordId),

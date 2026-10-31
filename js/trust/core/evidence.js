@@ -6,9 +6,9 @@
  * nothing else: no note text, title, URL, credential, prompt, model output, or error message.
  * Titles resolve at render from the ids.
  *
- * No string here is free: an id has a record id's shape (a UUID or a legacy id) or a
- * contribution id's, a subject is a record id or a registered name, and every code, reason,
- * exception, and capability is one codes.js lists. So no title, key, host, or message fits in
+ * No string here is free: a record id has a UUID's or a legacy id's shape, and a provider,
+ * a remediation, a subject that isn't a record, and every code, reason, exception, and
+ * capability is one codes.js lists. So no title, key, host, or message fits in
  * any field. A field outside this list, or a value its schema refuses, is refused whole.
  */
 
@@ -16,7 +16,16 @@ import * as v from '../../lib/valibot/index.mjs';
 import { commitSeq, count, revision, timestamp } from '../../kernel/core/contracts/fields.js';
 import { FAIL_CAUSES } from '../../kernel/core/contracts/outcomes.js';
 import { SURFACES } from '../../kernel/core/contracts/surfaces.js';
-import { CAPABILITIES, ERROR_CODES, EXCEPTION_NAMES, FAULT_CODES, REASON_CODES, SUBJECT_NAMES } from './codes.js';
+import {
+  CAPABILITIES,
+  ERROR_CODES,
+  EXCEPTION_NAMES,
+  FAULT_CODES,
+  PROVIDER_IDS,
+  REASON_CODES,
+  REMEDIATION_IDS,
+  SUBJECT_NAMES,
+} from './codes.js';
 import {
   CAPTURE_STATES,
   COST_CLASSES,
@@ -29,24 +38,20 @@ import {
 
 /**
  * A record's id, which the host's ids port makes: a UUID (crypto.randomUUID), or the id
- * Utils.generateId has always made (a millisecond time, a hyphen, and base-36 letters). No
- * word, key, host, or path has either shape.
+ * Utils.generateId has always made, a 13-digit millisecond time, a hyphen, and the nine
+ * base-36 characters `Math.random().toString(36).substr(2, 9)` gives. No word, key, host, or
+ * path has either shape.
  */
 export const recordId = v.pipe(
   v.string(),
-  v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{1,12})$/),
+  v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{9})$/),
 );
 
-/**
- * A contribution's id, as a provider or remediation descriptor declares it: lowercase words
- * joined by hyphens, in dotted segments, 64 characters at most. Code owns these, so none is
- * ever a value a user typed.
- */
-export const contributionId = v.pipe(
-  v.string(),
-  v.regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/),
-  v.maxLength(64),
-);
+/** A health provider's id, from the registered ones (codes.js) */
+export const providerId = v.picklist(PROVIDER_IDS);
+
+/** A remediation's id, from the registered ones (codes.js) */
+export const remediationId = v.picklist(REMEDIATION_IDS);
 
 /** What an incident is about: a record's id, a named database, store, or permission, or a legacy copy's key */
 export const subjectId = v.union([
@@ -82,8 +87,8 @@ const integerVersion = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
  */
 export const EVIDENCE_FIELDS = Object.freeze({
   // Ids
-  providerId: contributionId,
-  remediationId: contributionId,
+  providerId,
+  remediationId,
   incidentId: recordId,
   runId: recordId,
   commandId: recordId,

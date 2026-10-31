@@ -50,7 +50,13 @@ const legacyId = n => `${1730000000000 + n}-${n.toString(36).padStart(9, '0')}`;
  * @param {{clock?: ReturnType<typeof manualClock>, prefix?: string}} [options]
  */
 async function recordsOn(store, profile, { clock = manualClock(), prefix = 'a1b2' } = {}) {
-  const records = createTrustRecords({ store, settings: profile.settings, clock, ids: hexIds(prefix), locks: profile.locks });
+  const records = createTrustRecords({
+    store,
+    settings: profile.settings,
+    clock,
+    ids: hexIds(prefix),
+    locks: profile.locks,
+  });
   const result = await records.open();
   return { records, clock, result };
 }
@@ -186,7 +192,13 @@ describe("#68's second review round", () => {
       versions: VERSIONS,
     });
     const answers = [
-      await trust.raise({ type: 'recovery.raise', commandId: 'c1', providerId: 'my-divorce-plans', faultCode: 'open-failed', severity: 'degraded' }),
+      await trust.raise({
+        type: 'recovery.raise',
+        commandId: 'c1',
+        providerId: 'my-divorce-plans',
+        faultCode: 'open-failed',
+        severity: 'degraded',
+      }),
       await trust.raise({
         type: 'recovery.raise',
         commandId: 'c2',
@@ -201,8 +213,14 @@ describe("#68's second review round", () => {
       ['rejected', 'rejected'],
     );
     assert.equal(journal.event('trust.check-failed', { providerId: 'john.smith.at.example.com' }), false);
-    assert.equal(journal.event('capture.failed', { subjectId: '1730000000000-hunter2', commandId: '1730000000000-mypassword' }), false);
-    await assert.rejects(records.raise({ providerId: 'my-divorce-plans', faultCode: 'open-failed', severity: 'degraded' }), TypeError);
+    assert.equal(
+      journal.event('capture.failed', { subjectId: '1730000000000-hunter2', commandId: '1730000000000-mypassword' }),
+      false,
+    );
+    await assert.rejects(
+      records.raise({ providerId: 'my-divorce-plans', faultCode: 'open-failed', severity: 'degraded' }),
+      TypeError,
+    );
     await journal.flush();
     const dump = await dumpTrustDatabase(profile.real);
     for (const canary of ['divorce', 'mail.google', 'canary.example', 'john.smith', 'hunter2', 'mypassword']) {
@@ -210,7 +228,7 @@ describe("#68's second review round", () => {
     }
   });
 
-  it("S5: a reconcile that fails, or throws, keeps the settings copy, and open() still answers", async () => {
+  it('S5: a reconcile that fails, or throws, keeps the settings copy, and open() still answers', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const down = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
@@ -249,7 +267,10 @@ describe("#68's second review round", () => {
       clock.advance(1);
     }
     const events = await records.events();
-    assert.ok(events.some(event => event.code === 'capture.failed'), 'dropped sightings pushed a real event out');
+    assert.ok(
+      events.some(event => event.code === 'capture.failed'),
+      'dropped sightings pushed a real event out',
+    );
     assert.equal(records.dropped().events, 0);
     assert.ok(events.filter(event => event.code === 'trust.fallback-dropped').length <= 1);
     assert.ok(records.dropped().incidents > 0);
@@ -296,7 +317,13 @@ describe("#68's second review round", () => {
     const other = databaseOn(profile);
     opened.push(other);
     const b = await recordsOn(other, profile, { clock, prefix: 'bbbb' });
-    await b.records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded', affected: ['search'], evidence: { lag: 3 } });
+    await b.records.raise({
+      providerId: 'index',
+      faultCode: 'lagging',
+      severity: 'degraded',
+      affected: ['search'],
+      evidence: { lag: 3 },
+    });
     clock.advance(10);
     await a.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
     const [incident] = await a.records.incidents();
