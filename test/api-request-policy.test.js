@@ -81,6 +81,23 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     assert.equal(check('https://huggingface.co/Xenova/model', { method: 'POST', body: '{}' }), false);
   });
 
+  it("refuses a path outside its row's prefix, and a registry row the proxy may not reach", () => {
+    const check = (url, method = 'GET') => policy.checkRequest({ type: 'API_REQUEST', url, options: { method } }, { loopback: null }).ok;
+    assert.equal(check('https://api.openai.com/v1/models'), true);
+    assert.equal(check('https://api.groq.com/openai/v1/models'), true);
+    for (const url of [
+      'https://api.openai.com/v2/models',
+      'https://api.openai.com/models',
+      'https://api.groq.com/v1/models',
+      'https://api.z.ai/api/other/v4/models',
+      'https://cdn-lfs.huggingface.co/repos/x',
+      'https://www.google.com/s2/favicons?domain=example.test',
+      'https://www.youtube.com/embed/x',
+    ]) {
+      assert.equal(check(url), false, `${url} was allowed`);
+    }
+  });
+
   it('takes the Ollama URL only on loopback http, any port, without userinfo', () => {
     assert.equal(policy.loopbackOrigin('http://localhost:11434'), 'http://localhost:11434');
     assert.equal(policy.loopbackOrigin('http://127.0.0.1:8080/'), 'http://127.0.0.1:8080');
@@ -210,7 +227,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
 /**
  * The worker, its fetches recorded, answering each message as Chrome's onMessage does
  */
-async function worker() {
+async function worker({ offscreenAnswer = async () => ({ ok: true, status: 200, data: { models: [] } }) } = {}) {
   // URL is a global in every extension context; legacy-env's sandbox leaves it out
   const started = await loadBackground({ setup: (env) => { env.global.URL = URL; } });
   const env = started.env;
@@ -224,7 +241,7 @@ async function worker() {
   env.chrome.api.runtime.sendMessage = async (message) => {
     if (message && message.type === 'OFFSCREEN_API_REQUEST') {
       offscreen.push(JSON.parse(JSON.stringify(message)));
-      return { ok: true, status: 200, data: { models: [] } };
+      return offscreenAnswer(message);
     }
     return send(message);
   };
@@ -280,6 +297,19 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
     const answer = await within(pending, 1000);
     assert.deepEqual(answer, { error: 'request-refused' });
     assert.deepEqual(offscreen, []);
+  });
+
+  it("takes the offscreen document's answer as final, an error included, and fetches itself only when the document can't be reached or doesn't answer", async () => {
+    const message = { type: 'API_REQUEST', url: 'http://localhost:11434/api/chat', options: { method: 'POST', body: '{}' } };
+    const answered = await worker({ offscreenAnswer: async () => ({ error: 'Failed to fetch' }) });
+    assert.deepEqual(await answered.ask(message, page()), { error: 'Failed to fetch' });
+    assert.equal(answered.offscreen.length, 1);
+    assert.deepEqual(answered.fetches, [], 'the worker reached the loopback origin again');
+    for (const offscreenAnswer of [async () => { throw new Error('Could not establish connection'); }, async () => undefined]) {
+      const unreachable = await worker({ offscreenAnswer });
+      assert.equal((await unreachable.ask(message, page())).ok, true);
+      assert.deepEqual(unreachable.fetches.map(({ url }) => url), ['http://localhost:11434/api/chat']);
+    }
   });
 
   it('every provider endpoint, as llm.js names it, still goes, with Content-Type only', async () => {
