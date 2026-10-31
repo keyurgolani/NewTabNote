@@ -14,7 +14,7 @@
  */
 
 const { test: base, expect } = require('@playwright/test');
-const { launchExtension, resolveDist, SURFACES, VIEWPORT } = require('./extension');
+const { launchExtension, resolveDist, SURFACES, VIEWPORT, TIME_ZONE } = require('./extension');
 const { expectNoUncaught } = require('./uncaught');
 const { builtFiles, chunkFile, editSkipReason } = require('./build-files');
 
@@ -33,4 +33,4 @@ const test = base.extend({
   },
 });
 
-module.exports = { test, expect, expectNoUncaught, launchExtension, resolveDist, builtFiles, chunkFile, editSkipReason, SURFACES, VIEWPORT };
+module.exports = { test, expect, expectNoUncaught, launchExtension, resolveDist, builtFiles, chunkFile, editSkipReason, SURFACES, VIEWPORT, TIME_ZONE };
