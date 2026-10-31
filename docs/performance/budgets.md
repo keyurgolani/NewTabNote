@@ -1,0 +1,88 @@
+# Budgets
+
+#27 slice 4b. `build/budgets.json` holds the numbers the owner approved on 2026-10-31 from [baseline-1.4.0.md](baseline-1.4.0.md). No script writes it. A row changes only in a reviewed PR, with its reason and evidence, and a number over a row goes back to the owner through the lead. The lane never raises it.
+
+## The rows
+
+| Entry | Row | Limit | On `next` with #107 (headroom) |
+| --- | --- | --- | --- |
+| New tab | start JS, raw / gzip | 700 / 200 KiB | 547.5 / 141.7 KiB (152.5 / 58.3) |
+| New tab | start CSS, raw / gzip | 100 / 19 KiB | 99.9 / 15.9 KiB (66 bytes / 3.1 KiB) |
+| New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
+| Popup | start JS, raw / gzip | 115 / 40 KiB | 95.5 / 25.9 KiB (19.5 / 14.1) |
+| Side Panel | start JS, raw / gzip | 112 / 40 KiB | 94.0 / 25.7 KiB (18.0 / 14.3) |
+| New tab | interaction-ready against 1.4.0 | median ratio at most +7% | reported, not gated yet |
+| New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated yet |
+
+- **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment.
+- Bytes are raw and gzip at level 9, the way `npm run perf:probe` measures them.
+- Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the offscreen document. The service worker's cold-start time is #35's.
+- The new tab's CSS is 66 bytes under its row. Whatever adds CSS to the start path needs the owner's call on the row first.
+
+## The forbidden list
+
+`build/budgets.json`'s `forbidden` has the scope's whole list as categories, each with the paths that are it. An entry gates the categories it names, on its start path only:
+
+- **New tab**: the four libraries and the trust code. That's `chart-library` (Chart.js), `search-library` (Fuse.js), `zip-library` (JSZip), `model-runtime` (transformers.js and every `.wasm`), and `trust` (`js/trust/**`). Slice 3 made all five lazy, so this is what today's new tab can be held to.
+- **Popup and Side Panel**: the full list. Both pass it today.
+- **Moment** (`planned`): the full list. It switches on the day #2 builds a `moment` chunk: a built planned row fails until its numbers are set and `planned` is false, and from then on the full list holds on its start (`test/budgets.test.js`).
+
+Today's new tab still imports these modules of the full list at its start, through the workspace chunk:
+
+- `js/analytics.js` and `js/controllers/analytics-controller.js`
+- `js/ui/graph-view.js`
+- `js/search.js` (the wrapper; Fuse.js itself is lazy)
+- `js/controllers/export-import-service.js`
+- `js/controllers/settings-controller.js` and `js/controllers/theme-builder-controller.js`
+- `js/services/sync-service.js`
+- `js/llm.js`
+- `js/embeddings.js` (the wrapper; transformers.js is lazy)
+- `js/onboarding.js`
+- `js/workspace.js` itself
+
+#2's Moment starts from that list.
+
+Three categories have no paths yet: `archive-trash` (no module of its own until #3 splits it out of the sidebar), `recipes` (#8), and `ai-policy` (#21). Each gets its paths with its owner's module.
+
+## Dependencies
+
+Each entry lists the third-party packages its whole graph may hold: start, lazy and workers. A package found in `node_modules/`, or a vendored file under `js/lib/` by its `vendor.json` record, has to be on its entry's list. An allowed package the graph no longer holds fails too, so the list stays exact.
+
+| Entry | Allowed |
+| --- | --- |
+| New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the trust chunk) |
+| Popup, Side Panel, offscreen, Moment | none |
+
+## How each gate runs
+
+**Bytes, forbidden modules and dependencies** run in every production build (`npm run build`, step 5), so they fail closed in CI's `build` job on every PR. A budget problem exits 1 and leaves no `dist/`. A development build isn't checked: budgets hold for what ships. The analyzer writes what it read to `dist-report/chunk-graph.json`: per entry, the start, lazy and workers files with their bytes, modules and packages. The build fails on:
+
+| Code | When |
+| --- | --- |
+| `budget/bytes` | an entry's start JS, CSS, HTML or fonts is over its row, raw or gzip |
+| `budget/forbidden` | a module or file a gated category names is on an entry's start path |
+| `budget/dependency` | an entry's graph holds a package its row doesn't allow, or its row allows one the graph no longer holds |
+| `budget/entry` | a page or the service worker the build has with no row, a row for an entry it doesn't have that isn't `planned`, or a `planned` row for one it has |
+| `budget/file` | `build/budgets.json` is missing, doesn't parse, or doesn't read as a budget file |
+
+`npm run verify:fixtures` breaks each rule on purpose and checks that the build fails with its code (`test/build-fixtures/budget-*`).
+
+**Timing and heap** run in CI's `perf` workflow (`.github/workflows/perf.yml`), on every PR push and every push to `next`. It's its own workflow, not part of `pr-gate`, so it never blocks a merge.
+
+- It builds the candidate.
+- It builds 1.4.0 from the `v1.4.0` tag with v1.4.0's own lockfile and build (`npm run perf:reference`) and checks it against the digest pinned in `build/budgets.json`. A mismatch fails the job: a run against any other package would compare against the wrong one.
+- It runs `npm run perf:probe` with 1.4.0, 1.4.0 again and the candidate: 12 rounds each on `typical` and `maximal`, with `--baseline build/budgets.json`.
+- `scripts/perf/gate-report.js` writes the job summary. For each profile it shows whether the run is valid (1.4.0 against itself within 7%), the candidate's median ratio to both 1.4.0 runs against the 7% row, its heap against 4.45 MiB plus 3%, and the absolute milliseconds beside them.
+
+Both rows say `mode: report`, so nothing in the summary fails the job.
+
+- **Timing becomes a gate** after 10 CI runs, if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed. If it didn't, the timing gate moves to a release gate on `ref-desktop` through the machine lock, which the lead approves before it's built.
+- **Heap becomes a gate** once CI's runs sit within its 3% of a stable value. 4.45 MiB was measured on the Mac, and a Linux Chromium's heap can differ.
+
+Either flip changes the row's `mode` to `gate` in its own reviewed PR, or in #27 slice 3b. From then on `gate-report.js` exits 1 on a fail or an invalid run.
+
+## Changing a number
+
+1. Measure it: `npm run build` prints each entry's start, and `dist-report/chunk-graph.json` has the rest. For timing, use `npm run perf:probe` interleaved against 1.4.0.
+2. Take the number and its evidence to the owner through the lead.
+3. Change the row in a PR that says why and links the evidence, and get it reviewed. Nothing else writes the file.

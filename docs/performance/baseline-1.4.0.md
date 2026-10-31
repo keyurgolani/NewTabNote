@@ -1,6 +1,6 @@
 # Performance baseline: 1.4.0 and `next`
 
-#27 slice 4a. #27's budgets need numbers the owner approves after a measurement of the 1.4.0 package. This is that measurement, with `next` beside it, and the numbers it proposes. Nothing here is a budget yet: slice 4b writes `build/budgets.json` with the numbers the owner approves, and no script writes that file.
+#27 slice 4a. The owner approved the numbers on 2026-10-31, with option 2 for heap (4.45 MiB); [budgets.md](budgets.md) has them as `build/budgets.json` holds them, and how each gate runs. #27's budgets need numbers the owner approves after a measurement of the 1.4.0 package. This is that measurement, with `next` beside it, and the numbers it proposes. Nothing here is a budget yet: slice 4b writes `build/budgets.json` with the numbers the owner approves, and no script writes that file.
 
 `baseline-1.4.0.json` holds the probe's report as `npm run perf:probe` wrote it, every run's value and every file included, the fixtures' digests, and the proposal below.
 
