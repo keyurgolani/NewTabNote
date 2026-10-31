@@ -241,7 +241,10 @@ async function ensurePoint(options) {
       const unwritten = target === null && (shape.kind === 'newer' || shape.kind === 'missing-core');
       if (reusable && (unwritten || (await matchesSource({ source, point: reusable, io })))) {
         // A run cut off after the newer copy saved can leave an older one too (carry-over 1)
-        return { status: 'ready', point: await dropOlderCopies({ recovery: /** @type {IDBDatabase} */ (recovery), point: reusable, io }) };
+        return {
+          status: 'ready',
+          point: await dropOlderCopies({ recovery: /** @type {IDBDatabase} */ (recovery), point: reusable, io }),
+        };
       }
       if (reusable) logger.warn('storage-recovery-point-stale', { pointId: reusable.id });
 

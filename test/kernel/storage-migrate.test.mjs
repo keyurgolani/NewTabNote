@@ -710,3 +710,87 @@ describe('an empty CanvasTabDB, and a database with any store, are never deleted
     assert.deepStrictEqual(of.faults.deletes, []);
   });
 });
+
+describe("#61's carry-overs (#17 PR 1b)", () => {
+  it('a run that reuses a point drops an older copy a cut-off run left pinned, so one pinned point stays (carry-over 1)', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const killedAtVerified = {
+      hooks: {
+        between: (/** @type {string} */ label) => {
+          if (label === 'verified') throw new Killed();
+        },
+      },
+    };
+    assert.equal((await run(of, killedAtVerified)).status, 'failed');
+    /** @returns {Promise<any[]>} */
+    const points = async () => recordsIn(await dump(of), 'NewTabNoteRecovery', 'points').map(record => record.value);
+    const [older] = await points();
+    // The user writes on 8, so the next run remakes the point, and is cut off once the newer one
+    // is saved and before the older one goes: put the older record back, as that cut leaves it
+    const db = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const tx = db.transaction('canvases', 'readwrite');
+    const done = committed(tx);
+    tx.objectStore('canvases').put({ ...legacyEnv.note('written-after-point'), name: 'Later' });
+    await done;
+    db.close();
+    assert.equal((await run(of, killedAtVerified)).status, 'failed');
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    const put = recovery.transaction('points', 'readwrite');
+    const putDone = committed(put);
+    put.objectStore('points').put(older);
+    await putDone;
+    recovery.close();
+    assert.deepStrictEqual(
+      (await points()).map(point => [point.id, point.pinned]),
+      [
+        [`pre-migration-${NOW}`, true],
+        [`pre-migration-${NOW}-2`, true],
+      ],
+    );
+
+    // The next run reuses the newer point and drops the older one, as keepVerified would have
+    const outcome = await run(of);
+    assert.equal(outcome.status, 'migrated');
+    assert.equal(outcome.recoveryPointId, `pre-migration-${NOW}-2`);
+    assert.deepStrictEqual(
+      (await points()).map(point => [point.id, point.pinned]),
+      [[`pre-migration-${NOW}-2`, true]],
+    );
+  });
+
+  for (const id of ['v8.missing-core', 'v9.newer']) {
+    it(`${id}: a run on a refused profile reuses its point without reading every store again (carry-over 3)`, async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get(id)));
+      const first = await run(of);
+      assert.equal(first.status, 'refused');
+      const before = of.faults.transactions.length;
+      const second = await run(of);
+      assert.deepStrictEqual([second.status, second.recoveryPointId], ['refused', first.recoveryPointId]);
+      // matchesSource reads each store in its own transaction; the schema read takes them all at once
+      const storeReads = of.faults.transactions
+        .slice(before)
+        .filter(
+          opened =>
+            opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
+        );
+      assert.deepStrictEqual(
+        storeReads.map(opened => opened.names),
+        [],
+      );
+    });
+  }
+
+  it('an unknown shape, which the new tab still writes to, is checked against its point on each run', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.extra-store')));
+    assert.equal((await run(of)).status, 'refused');
+    const before = of.faults.transactions.length;
+    assert.equal((await run(of)).status, 'refused');
+    const storeReads = of.faults.transactions
+      .slice(before)
+      .filter(
+        opened =>
+          opened.mode === 'readonly' && opened.names.length === 1 && LEGACY_STORE_NAMES.includes(opened.names[0]),
+      );
+    assert.ok(storeReads.length > 0);
+  });
+});

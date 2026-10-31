@@ -1,14 +1,18 @@
-// How #17's IndexedDB adapter opens CanvasTabDB (#17 slice 1): it changes nothing about the
-// database Storage.open wouldn't, a blocked or slow open answers within openWithinMs and keeps
-// waiting, a connection another context's upgrade or Chrome closes answers reload-required,
-// a newer database is refused and left alone, and startup maintenance writes what Storage
-// writes on a first run.
+// How #17's IndexedDB adapter opens CanvasTabDB (#17 slice 1, PR 1b): the worker's versioned
+// open brings a database to 9 only through step 9, which keeps every record, while the new
+// tab's Storage.open upgrades nothing; a page that finds no database or an older one waits on
+// the worker first (Q12); a blocked or slow open answers within openWithinMs and keeps waiting;
+// a connection another context's upgrade or Chrome closes answers reload-required; a newer
+// database is refused and left alone; and startup maintenance writes what Storage writes on a
+// first run.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
@@ -535,4 +539,93 @@ describe('startup maintenance on the IndexedDB adapter', () => {
     assert.deepEqual(unavailableAs(outcome), ['adapter', 'maintenance-needs-versioned-open', false]);
     assert.deepEqual(of.chrome.writes(), []);
   });
+});
+
+describe('a page that finds no database, or an older one, waits on the worker first (#17 PR 1b, Q12)', () => {
+  it("Popup's and Side Panel's open waits on awaitUpgrade below 9, and not at 9, then opens what's there", async () => {
+    /** @type {Array<[string, number]>} */
+    const waits = [];
+    for (const [name, spec] of /** @type {const} */ ([
+      ['no database', undefined],
+      ['version 8', SHAPES['version 8 (1.3.0 to 1.4.x)']],
+      ['version 9', 'nine'],
+    ])) {
+      const of = await made(spec === 'nine' ? undefined : spec);
+      if (spec === 'nine')
+        await adapterOn(of)
+          .open()
+          .then(() => of.adapters.at(-1)?.close());
+      let count = 0;
+      const adapter = adapterOn(of, {
+        mode: 'existing',
+        awaitUpgrade: async () => {
+          count++;
+        },
+      });
+      const opened = await adapter.open().then(
+        () => 'open',
+        error => /** @type {any} */ (error).code,
+      );
+      waits.push([name, count]);
+      assert.equal(opened, name === 'no database' ? 'no-database' : 'open', name);
+    }
+    assert.deepStrictEqual(waits, [
+      ['no database', 1],
+      ['version 8', 1],
+      ['version 9', 0],
+    ]);
+  });
+
+  it("the new tab's Storage.open wakes the worker below 9, waits at most 5 seconds, then opens what's there", async () => {
+    const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
+    /** @type {unknown[]} */
+    const sent = [];
+    // A worker that never answers
+    env.chrome.api.runtime.answerMigrate = () => {
+      sent.push('storage.migrate');
+      return new Promise(() => {});
+    };
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    let settled = false;
+    const opening = storage.open().then(() => {
+      settled = true;
+    });
+    await legacyEnv.waitFor(() => env.clock.pending() > 0, { message: 'the wait' });
+    assert.deepStrictEqual(sent, ['storage.migrate']);
+    assert.equal(settled, false, 'it waits for the worker');
+    env.clock.tick(5000);
+    await opening;
+    assert.equal(storage.openState, 'open');
+    assert.equal(storage.db.version, 8, 'and opens version 8 as it is');
+    storage.db.close();
+
+    // At 9 it sends nothing
+    const nine = await made();
+    await adapterOn(nine).open();
+    nine.adapters.at(-1)?.close();
+    const page = legacyEnv.createLegacyEnv({
+      context: 'page',
+      indexedDB: nine.real,
+      chrome: nine.chrome,
+      worker: false,
+    });
+    let asked = 0;
+    page.chrome.api.runtime.answerMigrate = async () => {
+      asked++;
+    };
+    page.load('js/utils.js', 'js/storage.js');
+    const current = page.get('Storage');
+    await current.open();
+    assert.equal(asked, 0);
+    assert.equal(current.db.version, 9);
+    current.db.close();
+  });
+});
+
+it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 9 (#17 PR 1b)", () => {
+  const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
+  env.load('js/utils.js', 'js/storage.js');
+  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [9, 9, 9]);
 });
