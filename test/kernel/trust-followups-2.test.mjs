@@ -657,7 +657,7 @@ describe("#80's review round", () => {
     );
   });
 
-  it("R6d: observes refuses the records' own faults, open-failed and write-failed", () => {
+  it('R6d: observes refuses write-failed, and allows open-failed, whose NewTabNoteTrust subject no check resolves', () => {
     const root = createRegistryRoot({ host: 'workspace' });
     const base = provider('storage', () => ({ status: 'verified' }), { group: 'storage' });
     root.register(health, [
@@ -666,7 +666,34 @@ describe("#80's review round", () => {
       { ...base, id: 'backup', rank: 3, observes: ['quota'] },
     ]);
     const states = Object.fromEntries(root.resolve().contributions.map(item => [item.id, item.state]));
-    assert.deepEqual(states, { storage: 'unresolved', capture: 'unresolved', backup: 'enabled' });
+    assert.deepEqual(states, { storage: 'enabled', capture: 'unresolved', backup: 'enabled' });
+  });
+
+  it("R6d: a storage check in B that looked at open-failed, for every subject or by name, leaves A's NewTabNoteTrust sighting open", async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const ra = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
+    const db = databaseOn(profile);
+    opened.push(db);
+    clock.advance(10);
+    const rb = await recordsOn(db, profile, { clock, prefix: 'bbbb' });
+    clock.advance(1000);
+    await ra.records.append(event(1));
+    await rb.records.append(event(1));
+    assert.equal((await storedAt(db, OPEN_FAILED))?.state, 'open');
+    clock.advance(1000);
+    for (const looked of [
+      [{ faultCode: 'open-failed' }],
+      [{ faultCode: 'open-failed', subjectId: 'NewTabNoteTrust' }],
+    ]) {
+      const { trust } = await useCases(rb.records, clock, [
+        provider('storage', () => ({ status: 'verified', looked }), { group: 'storage', observes: ['open-failed'] }),
+      ]);
+      await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+      assert.equal((await storedAt(db, OPEN_FAILED))?.state, 'open', JSON.stringify(looked));
+    }
+    const summary = await summaryOf(rb.records, clock);
+    assert.equal(summary.route, 'recovery');
   });
 
   it('nit 9: a result that looked at a fault outside observes is answered as outside the schema', async () => {
@@ -828,7 +855,7 @@ describe("1b's failure incidents under observes and looked (#81)", () => {
     });
   }
 
-  it("storage.open-failed's incident can't be observed, so no check resolves it", async () => {
+  it("storage.open-failed's CanvasTabDB incident resolves for a check that looked at it, and only sightings from before it started", async () => {
     const profile = trustProfile();
     const db = databaseOn(profile);
     opened.push(db);
@@ -837,13 +864,30 @@ describe("1b's failure incidents under observes and looked (#81)", () => {
     journal.event('storage.open-failed', { errorCode: 'quota', subjectId: 'CanvasTabDB' });
     await journal.flush();
     clock.advance(1000);
+    // A probe that opened CanvasTabDB, during which the site fails again
+    let during = false;
+    const check = async () => {
+      if (during) {
+        clock.advance(100);
+        journal.event('storage.open-failed', { errorCode: 'quota', subjectId: 'CanvasTabDB' });
+        await journal.flush();
+        clock.advance(100);
+      }
+      return { status: 'verified', looked: [{ faultCode: 'open-failed', subjectId: 'CanvasTabDB' }] };
+    };
     const { trust } = await useCases(records, clock, [
-      provider('storage', () => ({ status: 'verified', looked: [{ faultCode: 'open-failed' }] }), {
-        group: 'storage',
-        observes: ['open-failed'],
-      }),
+      provider('storage', check, { group: 'storage', observes: ['open-failed'] }),
     ]);
+    during = true;
     await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
-    assert.equal((await at(records, 'storage/open-failed/CanvasTabDB'))?.state, 'open');
+    assert.equal(
+      (await at(records, 'storage/open-failed/CanvasTabDB'))?.state,
+      'open',
+      'resolved a sighting from while it ran',
+    );
+    clock.advance(1000);
+    during = false;
+    await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+    assert.equal((await at(records, 'storage/open-failed/CanvasTabDB'))?.state, 'resolved');
   });
 });

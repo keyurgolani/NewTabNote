@@ -42,8 +42,9 @@
  *   write after the store opens in this context, the first time or after this context held a
  *   sighting, resolves the sightings no later than that open (`openedAt`), in the transaction
  *   that replays them; a later sighting, from a context that still can't open, stays open. A
- *   plain reconnect that never failed resolves nothing. No check may observe `open-failed` or
- *   `write-failed` (families.js).
+ *   plain reconnect that never failed resolves nothing. No check resolves it, whatever its
+ *   `looked` says, an entry for every subject included, and no check may observe
+ *   `write-failed` (families.js), so the records' own two incidents resolve only here.
  * - Known limit: a fresh context's first open also resolves sightings from a context that's
  *   still stuck, until that context's next failed write sights it again. On a new-tab page
  *   fresh contexts are constant, so `open-failed` can read resolved between a stuck context's
@@ -820,7 +821,8 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * Resolves the provider's open incidents whose key isn't in `still`. Answers the ones it
    * resolved, or `recorded: false` when the store won't take the write, which isn't "nothing to
    * resolve". A check passes `looked`, what it really looked at (checks.js), so only those
-   * incidents resolve, and `seenBy`, when it started, so a sighting from while it ran stays.
+   * incidents resolve, never the records' own (`open-failed` for NewTabNoteTrust and
+   * `write-failed`), and `seenBy`, when it started, so a sighting from while it ran stays.
    * @param {string} provider
    * @param {readonly string[]} still - keys of the faults the check still reports
    * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seenBy?: number}} [options]
@@ -838,11 +840,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
           !still.includes(incident.key) &&
           (seenBy === undefined || incident.lastSeenAt <= seenBy) &&
           (!looked ||
-            looked.some(
+            (!OWN_KEYS.has(incident.key) &&
+              looked.some(
               item =>
                 item.faultCode === incident.faultCode &&
-                (item.subjectId === undefined || item.subjectId === incident.subjectId),
-            )),
+                  (item.subjectId === undefined || item.subjectId === incident.subjectId),
+              ))),
       );
       /** @type {Incident[]} */
       const done = [];

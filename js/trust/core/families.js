@@ -5,8 +5,10 @@
  *   data, and its implementation (a static `implementation` or a lazy `load`) holds `check()`,
  *   which answers a CheckResult (checks.js). `core` marks the providers capture depends on, the
  *   only ones that set a receipt's `capture`. `observes` lists the faults (codes.js) its check
- *   may report or look for, possibly none, never the records' own `open-failed` and
- *   `write-failed`. A check resolves only what it says it looked at (`looked`, checks.js). An
+ *   may report or look for, possibly none, never the records' own `write-failed`. It may list
+ *   `open-failed` (a probe that opened CanvasTabDB can resolve 1b's incident for it), but no
+ *   check resolves `open-failed` for NewTabNoteTrust, which the records raise and resolve
+ *   themselves. A check resolves only what it says it looked at (`looked`, checks.js). An
  *   incident for a fault no check looks at (a failure event's) resolves through a
  *   remediation's verify step or a later success event from the same site.
  * - `remediation`: a RemediationCommand, `{id, owner, class, appliesTo, preview(), apply(),
@@ -29,10 +31,12 @@ export const MAX_TIMEOUT_MS = 60_000;
 export const MAX_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * The faults the trust records raise and resolve themselves (trust-records.js), which no check
- * may observe: a check in one context can't see that another context's store won't open
+ * The fault only the trust records raise and resolve (trust-records.js), which no check may
+ * observe: a check in one context can't see another context's failed writes. Their other one,
+ * `open-failed` for NewTabNoteTrust, shares its fault with other subjects, so the records'
+ * resolve step skips that subject instead.
  */
-const RECORDS_OWN_FAULTS = Object.freeze(['open-failed', 'write-failed']);
+const RECORDS_OWN_FAULTS = Object.freeze(['write-failed']);
 
 /** A verification operation's code, as records.js's operationCode takes it */
 const OPERATION = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){0,3}$/;

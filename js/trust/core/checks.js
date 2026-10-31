@@ -11,7 +11,9 @@
  * An entry names a fault from the provider's `observes`, and a subject when the check looked
  * at that subject only (no `subjectId` means every subject; `null` the incident without one).
  * A check that couldn't read leaves the fault out, and a missing or empty `looked` resolves
- * nothing, so an `unverified` answer after a failed read never reads as an all clear. A result
+ * nothing, so an `unverified` answer after a failed read never reads as an all clear. The
+ * records' own incidents (`open-failed` for NewTabNoteTrust, `write-failed`) never resolve
+ * through a check, whatever `looked` says. A result
  * whose `faults` or `looked` names a fault outside `observes` is answered as outside the
  * schema.
  *
