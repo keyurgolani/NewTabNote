@@ -4,21 +4,21 @@
 
 ## The rows
 
-| Entry | Row | Limit | On `next` with #107 (headroom) |
+| Entry | Row | Limit | On `next` at `10fdade` (headroom) |
 | --- | --- | --- | --- |
-| New tab | start JS, raw / gzip | 700 / 200 KiB | 547.5 / 141.7 KiB (152.5 / 58.3) |
-| New tab | start CSS, raw / gzip | 100 / 19 KiB | 99.9 / 15.9 KiB (66 bytes / 3.1 KiB) |
+| New tab | start JS, raw / gzip | 700 / 200 KiB | 548.5 / 142.1 KiB (151.5 / 57.9) |
+| New tab | start CSS, raw / gzip | 100 / 19 KiB | 99.9 / 16.0 KiB (126 bytes / 3.0 KiB) |
 | New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
 | Popup | start JS, raw / gzip | 115 / 40 KiB | 95.5 / 25.9 KiB (19.5 / 14.1) |
 | Side Panel | start JS, raw / gzip | 112 / 40 KiB | 94.0 / 25.7 KiB (18.0 / 14.3) |
 | New tab | interaction-ready against 1.4.0 | median ratio at most +7% | reported, not gated yet |
 | New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated yet |
 
-- **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 540.4. Counting the root alone, the 700 KiB row would check nothing. A `startChunks` name the build has no loader chunk for, or one nothing on the page's start loads with `import()`, fails the build, so the row can't quietly fall back to the root.
+- **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 541.4. Counting the root alone, the 700 KiB row would check nothing. A `startChunks` name the build has no loader chunk for, or one nothing on the page's start loads with `import()`, fails the build, so the row can't quietly fall back to the root.
 - `npm run perf:probe`'s byte mode files every chunk behind an `import()` as lazy, the workspace too, so its start number for the new tab is the root's. The build's number, and `dist-report/chunk-graph.json`, are the start the row holds.
 - Bytes are raw and gzip at level 9, the way `npm run perf:probe` measures them.
 - Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the offscreen document. The service worker's cold-start time is #35's.
-- The new tab's CSS is 66 bytes under its row. Whatever adds CSS to the start path needs the owner's call on the row first.
+- The new tab's CSS is 126 bytes under its row, after #112 took back what #102 added. The row was sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger. Whatever adds CSS to the start path needs the owner's call on the row first.
 
 ## The forbidden list
 
