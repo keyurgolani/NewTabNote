@@ -41,7 +41,7 @@ const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = 
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
 const { CLASSIC_SCRIPTS, STATIC_FILES, MINIMUM_CHROME_VERSION, terserOptions } = require('./vite-config.js');
-const { analyze, checkBudgets, readBudgets } = require('./budgets.js');
+const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./bundle.js').Bundled} Bundled */
@@ -329,7 +329,7 @@ async function build(argv = process.argv.slice(2)) {
       }
       for (const [name, entry] of Object.entries(/** @type {Record<string, import('./budgets.js').EntryGraph>} */ (graph))) {
         const js = entry.start.bytes.js || { raw: 0, gzip: 0 };
-        const booted = (entry.boots || []).map((boot) => boot.chunk);
+        const booted = startChunksOf(entry);
         console.log(`  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}${booted.length > 0 ? `, with ${booted.join(', ')} loaded at boot` : ''}`);
       }
     }

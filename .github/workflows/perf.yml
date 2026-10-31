@@ -72,7 +72,8 @@ jobs:
           if [ "$code" -ge 2 ]; then exit "$code"; fi
       # Whatever the run did, a run that wrote its JSON gets its summary. In report mode the
       # summary exits 0 even for an invalid run; a row in gate mode exits 1 on a fail or an
-      # invalid run, and pipefail keeps tee from hiding that
+      # invalid run. The workflow's default shell (bash -e -o pipefail) already keeps tee from
+      # hiding that; the step's own pipefail matters only if that default changes
       - name: Summarize against build/budgets.json
         if: always() && hashFiles('dist-report/perf.json') != ''
         run: |

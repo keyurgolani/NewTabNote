@@ -58,30 +58,40 @@ function gateReport(probe, budgets) {
     const self = ratios.find(([, ratio]) => ratio.self);
     const candidate = ratios.find(([, ratio]) => ratio.againstBoth);
     if (!self || !candidate) {
-      lines.push(`| ${name} | | the run has no reference pair and candidate | | | | | | |`);
-      failed = true;
+      // Not a run this summary can read: invalid, so a gate fails and a report still writes
+      const problems = ['the run has no 1.4.0 pair and candidate'];
+      lines.push(`| ${name} | 0 | n/a | **no** | n/a | invalid | n/a | invalid | |`);
+      notes.push(...problems.map(item => `- ${name}: ${item}`));
+      if (timing.mode === 'gate' || heap.mode === 'gate') failed = true;
+      verdicts.push({ profile: name, valid: false, timing: 'invalid', heap: 'invalid', problems });
       continue;
     }
-    const selfMedian = self[1].interactionReady.median;
+    // A package whose rounds all failed has null where the probe couldn't summarize
+    const selfRatio = self[1].interactionReady;
     const both = candidate[1].againstBoth.interactionReady;
+    const candidateHeap = profile.packages[candidate[0]] && profile.packages[candidate[0]].heapBytes;
     // What makes the whole profile's run unusable, timing and heap alike
     const problems = [];
     for (const [label, entry] of Object.entries(profile.packages)) {
+      if (!entry.interactionReadyMs) problems.push(`${label} measured no round`);
       for (const failure of entry.failures || []) problems.push(`${label} round ${failure.round} failed: ${failure.message}`);
     }
+    if (!selfRatio) problems.push('1.4.0 against itself has no paired round');
+    if (!both) problems.push(`the ${candidate[0]} has no round paired with both 1.4.0 runs`);
     for (const item of probeProblems) problems.push(`the probe: ${item}`);
-    const rounds = Math.min(probe.timing.runs ?? Infinity, both.values.length);
+    const rounds = Math.min(probe.timing.runs ?? Infinity, both ? both.values.length : 0);
     if (rounds < timing.rounds) problems.push(`${rounds} rounds, fewer than the ${timing.rounds} build/budgets.json takes`);
-    const valid = problems.length === 0 && Math.abs(selfMedian - 1) * 100 <= timing.tolerancePct;
+    const valid = problems.length === 0 && Math.abs(selfRatio.median - 1) * 100 <= timing.tolerancePct;
     const timingVerdict = !valid ? 'invalid' : both.median - 1 <= timing.tolerancePct / 100 ? 'pass' : 'fail';
-    const heapMiB = profile.packages[candidate[0]].heapBytes.median / MIB;
-    const heapVerdict = problems.length > 0 ? 'invalid' : heapMiB <= heapCeiling ? 'pass' : 'fail';
+    const heapMiB = candidateHeap ? candidateHeap.median / MIB : null;
+    const heapVerdict = problems.length > 0 || heapMiB === null ? 'invalid' : heapMiB <= heapCeiling ? 'pass' : 'fail';
     notes.push(...problems.map(item => `- ${name}: ${item}`));
     if (timing.mode === 'gate' && timingVerdict !== 'pass') failed = true;
     if (heap.mode === 'gate' && heapVerdict !== 'pass') failed = true;
     const labels = Object.keys(profile.packages);
     const absolute = labels.map(label => ms(profile.packages[label].interactionReadyMs && profile.packages[label].interactionReadyMs.median)).join(', ');
-    lines.push(`| ${name} | ${both.values.length} | ${pct(selfMedian)} (${pct(self[1].interactionReady.q1)} to ${pct(self[1].interactionReady.q3)}) | ${valid ? 'yes' : '**no**'} | ${pct(both.median)} (${pct(both.q1)} to ${pct(both.q3)}) | ${timingVerdict} | ${heapMiB.toFixed(2)} MiB | ${heapVerdict} | ${absolute} |`);
+    const spread = (/** @type {any} */ summary) => (summary ? `${pct(summary.median)} (${pct(summary.q1)} to ${pct(summary.q3)})` : 'n/a');
+    lines.push(`| ${name} | ${both ? both.values.length : 0} | ${spread(selfRatio)} | ${valid ? 'yes' : '**no**'} | ${spread(both)} | ${timingVerdict} | ${heapMiB === null ? 'n/a' : `${heapMiB.toFixed(2)} MiB`} | ${heapVerdict} | ${absolute} |`);
     verdicts.push({ profile: name, valid, timing: timingVerdict, heap: heapVerdict, problems });
   }
   if (notes.length > 0) lines.push('', 'Invalid, so neither row is read:', '', ...notes);

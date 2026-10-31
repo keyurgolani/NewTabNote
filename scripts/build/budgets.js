@@ -364,6 +364,16 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
 }
 
 /**
+ * The loader chunks a page's row counts as start, the ones the build has: what the build's line
+ * says loads at boot
+ * @param {EntryGraph} graph
+ * @returns {string[]}
+ */
+function startChunksOf(graph) {
+  return (graph.boots || []).filter((boot) => boot.as === 'start' && boot.file !== null).map((boot) => boot.chunk);
+}
+
+/**
  * The problems with budgets.json's shape, before it's used
  * @param {any} budgets
  * @returns {Problem[]}
@@ -493,4 +503,4 @@ function readBudgets(root = ROOT) {
   }
 }
 
-module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, BUDGETS_FILE };
+module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE };
