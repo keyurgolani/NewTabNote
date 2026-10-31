@@ -137,8 +137,9 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     await scope.fetch('https://huggingface.co/Xenova/model/resolve/main/config.json');
     await scope.fetch(new Request('https://api.openai.com/v1/models', { headers: { Authorization: 'Bearer test' } }));
     assert.deepEqual(sent.slice(0, 3).map(({ init }) => init.redirect), ['error', 'error', undefined]);
-    assert.equal(sent[3].input.redirect, 'error');
-    assert.deepEqual([...sent[3].input.headers], [['authorization', 'Bearer test']]);
+    assert.ok(sent[3].input instanceof Request);
+    assert.equal(sent[3].init.redirect, 'error');
+    assert.deepEqual(sent[3].init.headers, [['authorization', 'Bearer test']]);
   });
 
   it("refuses a header the row doesn't take, and a credential in the query", async () => {
@@ -270,6 +271,12 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     assert.equal(cut.length, rows.filter((row) => row.reachedBy === 'fetch').length);
     assert.deepEqual(Object.keys(cut[0]).sort(), ['credential', 'headers', 'location', 'methods', 'origin', 'pathPrefix']);
     assert.deepEqual(guardRows(cut), cut, 'cutting again changes nothing');
+    // As the build inlines them, a field at its usual value left out, and read back the same
+    const { compactRows } = await import('../js/kernel/composition/destination-match.js');
+    const compact = compactRows(cut);
+    assert.deepEqual(compact[0], { origin: 'https://api.openai.com', pathPrefix: '/v1/' });
+    assert.ok(JSON.stringify(compact).length < JSON.stringify(cut).length * 0.6);
+    assert.deepEqual(guardRows(compact), cut);
     for (const bad of [null, {}, [null], [{ ...rows[0], origin: 'https://api.openai.com/v1' }], [{ ...rows[0], location: 'loopback' }], [{ ...rows[0], methods: 'GET' }], [{ ...rows[0], headers: [1] }]]) {
       assert.equal(guardRows(bad), null, JSON.stringify(bad));
     }

@@ -18,9 +18,6 @@
 import { storedLoopbackOrigin } from './destination-match.js';
 import { ANY_LOOPBACK, installGuard } from './network-guard.js';
 
-/** The pages, by file, as the journal names them (surfaces.js) */
-const PAGES = Object.freeze({ 'newtab.html': 'newtab', 'popup.html': 'popup', 'sidepanel.html': 'sidepanel', 'offscreen.html': 'offscreen' });
-
 /**
  * The context `scope` is, by its location: a page's surface, or worker-internal
  * @param {any} scope
@@ -28,9 +25,9 @@ const PAGES = Object.freeze({ 'newtab.html': 'newtab', 'popup.html': 'popup', 's
  */
 export function surfaceOf(scope) {
   try {
-    const path = scope && scope.location && typeof scope.location.pathname === 'string' ? scope.location.pathname : '';
-    const file = path.slice(path.lastIndexOf('/') + 1);
-    return Object.hasOwn(PAGES, file) ? PAGES[/** @type {keyof typeof PAGES} */ (file)] : 'worker-internal';
+    // The pages, by file, as the journal names them (surfaces.js)
+    const page = /\/(newtab|popup|sidepanel|offscreen)\.html$/.exec(scope.location.pathname);
+    return page ? page[1] : 'worker-internal';
   } catch {
     return 'worker-internal';
   }
