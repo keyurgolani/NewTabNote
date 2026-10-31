@@ -56,7 +56,7 @@ function provider({ costClass = 'local-cheap', triggers, remediations, core, ...
     ...fields,
     version: 1,
     apiVersion: 1,
-    hosts: ['workspace'],
+    hosts: ['workspace', 'recovery'],
     owner: 20,
     costClass,
     timeoutMs: costClass === 'local-cheap' ? CHEAP_TIMEOUT_MS : EXPENSIVE_TIMEOUT_MS,

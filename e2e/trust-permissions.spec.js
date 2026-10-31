@@ -4,11 +4,11 @@
  * verifies, and the receipt runCheck makes from it is one NewTabNoteTrust's schema takes. And
  * the legacy secret reader leaves no database behind.
  *
- * Since #27 slice 2 the bundler ships only what an entry imports, folded into chunks, and no
- * entry imports the providers or the legacy secret reader until #20 slice 4 wires them. Until
- * then the page imports them from the sources, which the harness copies into this spec's
- * extension copy at their own paths: js/trust/, js/kernel/, and Valibot's build. Once slice 4
- * wires them, the spec goes back to the shipped bundle.
+ * Since #27 slice 2 the bundler ships only what an entry imports, folded into chunks. Since
+ * #20 slice 4b recovery.html's bundle runs these checks on open (e2e/recovery-page.spec.js),
+ * but it shows a receipt only as the Trust Center's words, so this spec still imports the
+ * providers and the legacy secret reader from the sources, which the harness copies into this
+ * spec's extension copy at their own paths: js/trust/, js/kernel/, and Valibot's build.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
