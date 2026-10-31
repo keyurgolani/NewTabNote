@@ -11,6 +11,7 @@ How the tests are set up, what they're allowed to fake, and the three records th
 | `npm run test:extension` | the Playwright specs in `e2e/`, on the built extension in Chromium | every PR, and locally only through the machine lock |
 | `npm run verify:fixtures` | one build per build failure rule, each a copy of the tree with the defect `test/build-fixtures/<rule>/fixture.json` writes, which has to fail with its `[code]` and leave no `dist/` | every PR's build job, and locally only through the machine lock |
 | `npm run verify:reproducible` | two clean builds of `HEAD`, in different directories at different times, which have to package the same zip, `buildId`, and `outputDigest` | every PR's build job, and locally only through the machine lock |
+| `npm run perf:probe` | a package's bytes and, with `--timing`, its interaction-ready time and heap on `ref-desktop` ("The performance probe") | by hand, and through the machine lock with `--timing`; `e2e/perf-probe.spec.js` runs one timed run on every PR |
 | `npm run test:mutants` | the mutant catalog, `scripts/mutants.js` | by hand, when reviewing a test PR that touches a protected behavior |
 
 `test/test-files-run.test.js` fails `npm test` when a `*.test.js` or `*.test.mjs` under `test/` isn't reached by a script the workflow runs, so a test file in a new folder can't sit there unrun.
@@ -52,6 +53,38 @@ node scripts/fixtures/derive-expected.mjs
 ```
 
 The recorder `git archive`s the tag into a scratch directory, loads it unpacked in the harness, headless, writes the seed through the release's own `Storage`, Popup, and settings, and dumps it with each canary back to its placeholder. A canary the release changed fails the run. The header pins the tag's commit and tree, and lists the write paths that ran. `test/kernel/storage-recorded.test.mjs` checks those pins against the tags. CI's unit job fetches the tags and sets `NTN_RELEASE_TAGS=required`, so a missing tag fails there; a local clone without them shows the check as skipped. Nothing is downloaded, and a release Chromium won't load falls back to #17's synthesized fixture for its row, listed in the test's `FALLBACKS`.
+
+## The performance probe
+
+`npm run perf:probe` (#27 slice 4a) measures a built extension from the outside: its pages, its marks, and CDP. It never reads how the package was built, so it runs the same on the legacy build, the 1.4.0 package, and a bundler's output. It writes JSON to `dist-report/`, which git ignores.
+
+- **Bytes** (always, no browser): for the new tab, the Popup and the Side Panel, the JS, CSS, HTML and font bytes, raw and gzip at level 9, of what each page loads before it runs, and its module count. That's its `<script src>` and `<link rel="modulepreload">` files and every static import reached from them, its stylesheets and their `@import`s, and the fonts they name. Two buckets sit outside that total: `lazy`, what a literal `import()` in it loads, and `workers`, what a `new Worker()` in it starts (a literal path, or `new URL(..., import.meta.url)`), each with what they import in turn. A non-literal `import()` is only counted. A reference in the page's own closure to a file the package lacks fails the probe, and a lazy chunk or worker the package lacks is listed as `missing` (1.4.0's indexer). `scripts/perf/package-bytes.js` reads them, and slice 4b's analyzer reuses its `sizesOf`.
+- **Timing** (`--timing`, a Playwright run, so locally it goes through the machine lock): for each fixture profile, `--runs` rounds of install-cold runs (11 by default), each on `ref-desktop`, reported as the median, quartiles, minimum and maximum. `scripts/perf/timing.js` runs them. With two or more `--dist`s the runs interleave: every round runs each package once, the order rotated each round (AB, BA for two; ABC, BCA, CAB for three), and each package also gets its per-round ratio to the first. When the second package is the first one again, each later one also gets its ratio to the mean of the two copies. The machine drifts by up to 10% between sessions, so compare packages only within one run of the probe, by that ratio. `--baseline <file>` makes it a gate run: it refuses to start unless the first two packages are the baseline's reference package (by a SHA-256 over its sorted files) and the rounds are at least 12 and a multiple of the package count (12, 15, 18 for three), so each package runs in each position equally often, and it fails when a profile's fixture isn't the one that baseline measured (`maximal` comes from this tree's code, so a later commit can change it) or when the reference against itself is off by more than the tolerance, which makes the run invalid.
+
+`ref-desktop`, the reference environment:
+
+- #34's harness (`e2e/harness/`): Playwright's pinned Chromium, headless, a fresh profile per run, a 1280 by 800 viewport, and `en-US` in UTC.
+- The network is off in Chromium itself (the harness's `network: 'offline'`: a dead proxy and no host resolution), from pages and the service worker alike. The functional e2e block the network with a route instead, which sends every one of the extension's own requests through Playwright's process, 49 per new tab on 1.4.0 and 90 on `next`, so it would charge a package for its file count. `e2e/perf-probe.spec.js` checks that the offline mode still stops requests outside the extension.
+- 4x CPU throttling (CDP `Emulation.setCPUThrottlingRate`) on the new tab, from when the harness first sees the page: 10 to 27 ms after its document exists in the baseline's runs, the same for every package. Playwright can't throttle a page before it has one. The report gives both times on the page's clock (`throttledAtMs`, `documentAtMs`).
+- Install-cold: the package installs, the profile is seeded through the fixture host into the service worker, the probe waits 1 s, and then the service worker opens the new tab with `chrome.tabs.create`.
+- Interaction-ready runs from that `chrome.tabs.create` to the first printable key echoed in the focused editor. The driver waits for an editable block in the editor, focuses it, types one key, and stops the clock when the key is in the block's text. So the time includes how long the driver took to see the editor, which the report gives as `driverMs`. The page's own `performance.mark('ntn:interaction-ready')` is read too where the package has one. The legacy app marks when the first `editor.loadNote` on any `App.init` path resolves (the welcome note, a first note, the restored or first listed note), or, with no note to load, once the start updates its empty state. `e2e/interaction-ready.spec.js` pins each path. 1.4.0 has no mark.
+- JS heap is CDP `Runtime.getHeapUsage`'s `usedSize` after `HeapProfiler.collectGarbage`, at interaction-ready.
+
+The fixture profiles (`scripts/perf/profiles.js`), each recorded in the report by its SHA-256:
+
+| Profile | What it holds |
+| --- | --- |
+| `first-run` | nothing, not onboarded: the new tab runs the 1.4.0 walkthrough over the welcome note |
+| `typical` | `recorded/v8.v1.4.0.json`, what 1.4.0's own code wrote for a synthetic seed (eight notes in a folder, archived, trashed, a Daily Note and a template, media, a snapshot, backups and settings, the welcome note last opened), onboarded |
+| `maximal` | #73's maximal profile from `generate.mjs`, every record type past #17's copy bounds, from this tree's block types and default settings, onboarded |
+
+```
+npm run perf:probe                                      # bytes for dist/
+npm run perf:probe -- --dist <dir> --label 1.4.0        # another package
+npm run perf:probe -- --dist <1.4.0> --label 1.4.0 --dist dist --label next --timing --profiles typical,maximal
+```
+
+`docs/performance/baseline-1.4.0.md` is the first report: 1.4.0 against itself and against `next`, interleaved, on every profile, and the budget numbers proposed from it. The browser-cold, post-update and warm scenarios, and IndexedDB read and off-origin request counts, are deferred to the backlog.
 
 ## The known-defect ledger
 

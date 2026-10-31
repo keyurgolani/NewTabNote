@@ -12,7 +12,10 @@
  *
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
- * requests it blocked or that failed. The `extension` fixture (index.js) attaches that log
+ * requests it blocked or that failed. With `network: 'offline'` (the performance probe's,
+ * scripts/perf/timing.js) Chromium itself has no network instead, a dead proxy and no host
+ * resolution, so no request waits on a route in this process; the log then has no blocked
+ * requests. The `extension` fixture (index.js) attaches that log
  * to a failed test.
  */
 
@@ -153,9 +156,10 @@ function activationState(worker) {
 }
 
 class ExtensionSession {
-  constructor(context, { dist, root, extensionDir }) {
+  constructor(context, { dist, root, extensionDir, network = 'route' }) {
     this.context = context;
     this.dist = dist;
+    this._network = network;
     this.extensionId = null;
     this._root = root;
     this._extensionDir = extensionDir;
@@ -293,7 +297,7 @@ class ExtensionSession {
 
   async _start() {
     this._watch();
-    await this._blockNetwork();
+    if (this._network === 'route') await this._blockNetwork();
 
     this.context.serviceWorkers().forEach(worker => this._adoptWorker(worker));
     if (!this._worker) {
@@ -422,6 +426,11 @@ class ExtensionSession {
   }
 }
 
+// The 'offline' network: every request outside the extension fails in Chromium's own network
+// stack, from pages and the service worker alike, IP literals included (the proxy), and names
+// never resolve
+const OFFLINE_ARGS = ['--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', '--host-resolver-rules=MAP * ~NOTFOUND'];
+
 /**
  * Launch Chromium with a hooked copy of the built extension on a fresh profile. Resolves
  * once the extension's service worker has activated.
@@ -429,8 +438,14 @@ class ExtensionSession {
  *   dist      the built extension directory (default: resolveDist()); never modified
  *   headless  default true
  *   chromium  the Playwright browser type; the fixture passes its own
+ *   network   'route' (default): every request outside the extension is aborted through a
+ *             route, and logged. 'offline': Chromium runs with a dead proxy and no host
+ *             resolution, so nothing outside the extension loads, and no extension request
+ *             passes through a route here, which would cost each one a round trip to this
+ *             process (the performance probe's timing depends on that)
  */
-async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium } = {}) {
+async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium, network = 'route' } = {}) {
+  if (network !== 'route' && network !== 'offline') throw new Error(`launchExtension: network is 'route' or 'offline', not ${JSON.stringify(network)}`);
   if (!fs.existsSync(path.join(dist, 'manifest.json'))) {
     throw new Error(`No built extension at ${dist} (no manifest.json). npm run test:extension tests a build and `
       + 'never makes one: run `npm run build` first, or set NTN_DIST to a built extension directory.');
@@ -447,7 +462,7 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
       ...(headless ? { channel: 'chromium' } : {}),
       headless,
       // --enable-unsafe-extension-debugging turns on the CDP Extensions domain update() uses
-      args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, `--lang=${LOCALE}`, '--enable-unsafe-extension-debugging'],
+      args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, `--lang=${LOCALE}`, '--enable-unsafe-extension-debugging', ...(network === 'offline' ? OFFLINE_ARGS : [])],
       // Pages get locale and timezoneId emulation; the worker takes the process's TZ and,
       // on Linux, LANGUAGE
       env: { ...process.env, TZ: TIME_ZONE, LANGUAGE: LOCALE.replace('-', '_') },
@@ -460,7 +475,7 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
     throw error;
   }
 
-  const session = new ExtensionSession(context, { dist, root, extensionDir });
+  const session = new ExtensionSession(context, { dist, root, extensionDir, network });
   try {
     await session._start();
   } catch (error) {
