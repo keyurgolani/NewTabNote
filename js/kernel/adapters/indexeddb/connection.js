@@ -103,6 +103,10 @@ const LEGACY_STORES = Object.freeze(Object.keys(STORE_SCHEMAS));
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What an `existing` open waits on first when it finds no database, or one below this
  *   build's version. It never rejects: a page passes its wait on the worker's run.
+ * @property {(() => Promise<unknown>) | null} [beforeOpen]
+ *   What an `existing` open runs next, before it opens the database: the new tab's #33 copy of
+ *   a database at 8 that lacks stores (recovery-copies.js). Whatever it answers, and if it
+ *   rejects, the open goes on.
  */
 
 /** How long open() waits before it answers for an open that hasn't finished (#17: "within 5 seconds") */
@@ -142,6 +146,7 @@ export function createConnection({
   openWithinMs = OPEN_WITHIN_MS,
   requireCore = false,
   awaitUpgrade = null,
+  beforeOpen = null,
 }) {
   /** @type {ConnectionState} */
   let state = 'closed';
@@ -360,16 +365,28 @@ export function createConnection({
         return opening;
       }
       state = 'opening';
-      opening =
-        mode === 'existing' && awaitUpgrade
-          ? waitForUpgrade(awaitUpgrade).then(() => {
-              // close() while it waited: it opens nothing
-              if (/** @type {ConnectionState} */ (state) === 'gone') {
-                throw new UnavailableError('storage', 'reload-required', false);
-              }
-              return connectWithin();
-            })
-          : connectWithin();
+      const waited = mode === 'existing' && awaitUpgrade ? waitForUpgrade(awaitUpgrade) : null;
+      // What the root runs first, after any wait on the worker's run, which never fails the open
+      const ahead =
+        mode === 'existing' && beforeOpen
+          ? (waited || Promise.resolve()).then(() =>
+              Promise.resolve()
+                .then(beforeOpen)
+                .then(
+                  () => undefined,
+                  () => undefined,
+                ),
+            )
+          : waited;
+      opening = ahead
+        ? ahead.then(() => {
+            // close() while it waited: it opens nothing
+            if (/** @type {ConnectionState} */ (state) === 'gone') {
+              throw new UnavailableError('storage', 'reload-required', false);
+            }
+            return connectWithin();
+          })
+        : connectWithin();
       // Once open() has answered, a later failure is answered by database()
       opening.catch(() => {});
       return opening;
