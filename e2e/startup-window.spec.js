@@ -5,9 +5,11 @@
  * before the later controllers existed, ran App's own copy of their code, now removed, or
  * threw: Focus mode set App's copy of the state, which ShortcutsManager never read, so
  * Escape didn't leave it, an import wrote the note with Storage.createNote, outside the
- * kernel, and Move to trash threw on the missing NotesManager. Each test holds
- * SettingsController's init, which runs after the sidebar's, so the window stays open, and
- * fails on an uncaught exception that test/known-defects.json doesn't list.
+ * kernel, Move to trash threw on the missing NotesManager, and a job switch turned on started
+ * App's own job timer, which kept running once the switch was off. Each test holds
+ * SettingsController's init, which runs after the sidebar's, all of it or what's left once
+ * its controls are bound, so the window stays open, and fails on an uncaught exception that
+ * test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -37,12 +39,39 @@ function holdSettingsInit() {
   });
 }
 
-/** A new tab on an onboarded profile with two notes, held while its later controllers start */
-async function openHeld(extension) {
+/**
+ * Hold SettingsController's init once it has bound Settings' controls, the job switches among
+ * them: its applyFont, which it runs next, waits for window.__ntnReleaseSettingsInit, as
+ * holdSettingsInit holds all of init
+ */
+function holdSettingsAfterControls() {
+  let SettingsController;
+  const released = new Promise(resolve => { window.__ntnReleaseSettingsInit = resolve; });
+  Object.defineProperty(window, 'SettingsController', {
+    configurable: true,
+    enumerable: true,
+    get: () => SettingsController,
+    set(value) {
+      SettingsController = value;
+      const applyFont = value.prototype.applyFont;
+      value.prototype.applyFont = async function heldApplyFont(...args) {
+        window.__ntnSettingsInitHeld = true;
+        await released;
+        return applyFont.apply(this, args);
+      };
+    },
+  });
+}
+
+/**
+ * A new tab on an onboarded profile with two notes, held while its later controllers start,
+ * by `hold`
+ */
+async function openHeld(extension, hold = holdSettingsInit) {
   await extension.seedOnboarded();
   await driver.seedNotes(extension, ['Alpha', 'Beta'].map(name => ({ name, blocks: [{ type: 'text', content: `${name} body` }] })));
   await driver.trackStartup(extension);
-  await extension.context.addInitScript(holdSettingsInit);
+  await extension.context.addInitScript(hold);
   const page = await extension.openSurface('newtab');
   await page.waitForFunction(() => window.__ntnSettingsInitHeld === true);
   return page;
@@ -100,5 +129,25 @@ test("Move to trash, from a note's menu while the new tab starts, moves the note
   await release(page);
   await driver.waitForApp(page);
   await expect.poll(() => driver.listedNoteNames(page)).toEqual(['Beta']);
+  await expectNoUncaught(extension, page);
+});
+
+test('a job switch turned on while the new tab starts, then off once it has started, leaves no job timer running', async ({ extension }) => {
+  const page = await openHeld(extension, holdSettingsAfterControls);
+  // A stub provider, so auto-title starts its timer as with a real one. The notes have titles,
+  // so a run would send nothing.
+  await page.evaluate(() => Object.assign(LLM, { isConfigured: () => true, generateTitle: async () => null }));
+  const turn = (on) => page.locator('#auto-title-enabled').evaluate((input, checked) => {
+    input.checked = checked;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, on);
+  await turn(true);
+  // NotesManager's timer runs it; App kept one of its own here, which the switch never stopped
+  await expect.poll(() => page.evaluate(() => app.notesManager.autoTitleIntervalId !== null)).toBe(true);
+
+  await release(page);
+  await turn(false);
+  await expect.poll(() => page.evaluate(() => app.notesManager.autoTitleIntervalId)).toBeNull();
+  expect(await page.evaluate(() => 'autoTitleIntervalId' in app)).toBe(false);
   await expectNoUncaught(extension, page);
 });
