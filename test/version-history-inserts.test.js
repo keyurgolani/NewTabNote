@@ -571,6 +571,92 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     assert.equal(editor._hasPendingSave(), false, 'nothing is left pending');
     assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
   });
+  it('a second revert while one commits is refused, and an append waiting on the first still settles (review R77, P6)', async () => {
+    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const first = await snapshotNow(env, editor);
+    editor.blocks.push(env.get('Block').deserialize({ id: 'a3', type: 'text', content: 'Bread' }));
+    editor.scheduleSave();
+    env.clock.tick(600);
+    await runUntil(env, editor.flushSave());
+    env.clock.tick(1000);
+    const second = await snapshotNow(env, editor);
+
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    const releases = [];
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return new Promise((resolve) => releases.push(resolve)).then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(first);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed');
+    editor.activeBlock = null;
+    let appended = false;
+    const appending = aiChat(env, Storage, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
+      .then(() => { appended = true; });
+    await settle();
+    env.window.fire('pagehide');
+    // The user confirms a second revert from the panel still open
+    await runUntil(env, editor._revertToSnapshot(second));
+    assert.equal(releases.length, 1, 'no second restore');
+    assert.deepEqual(toasts.at(-1), {
+      message: 'Failed to revert: another revert is still in progress. Please try again.',
+      kind: 'error',
+    });
+    releases[0]();
+    await runUntil(env, reverting);
+    await runUntil(env, appending);
+    client.restoreSnapshot = real;
+    env.clock.tick(2000);
+    await runUntil(env, editor.flushSave());
+
+    assert.equal(appended, true);
+    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs', 'New1']);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs', 'New1']);
+    // And a revert after the first one ends runs
+    const after = await runUntil(env, env.documentClient.snapshots('A'));
+    await runUntil(env, editor._revertToSnapshot(after.find((s) => s.id === second.id)));
+    assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
+  });
+
+  it('a revert that throws after its restore still lets the saves waiting on it go on (review R77)', async () => {
+    const { env, Storage } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    const render = editor.renderBlocks;
+    let throwOnce = true;
+    editor.renderBlocks = function () {
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error('render failed');
+      }
+      return render.call(this);
+    };
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return held.then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(summary).then(() => 'resolved', (error) => error.message);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed');
+    const saving = editor.save();
+    release();
+    assert.equal(await runUntil(env, reverting), 'render failed');
+    await runUntil(env, saving);
+    client.restoreSnapshot = real;
+    assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor._hasPendingSave(), false);
+    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
+  });
 });
 
 describe('typing while an AI insert commits (review R70, 1.4.x misplaced the block)', () => {

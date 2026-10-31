@@ -3877,8 +3877,8 @@ class BlockEditor {
     this._revertEditsKept = false;
     /** @type {Promise<void>} Resolves once the revert in progress is done */
     this._revertDone = Promise.resolve();
-    /** @type {() => void} */
-    this._endRevert = () => {};
+    /** A revert is running, from its confirm to its end; a second one is refused meanwhile */
+    this._revertInFlight = false;
     /** @type {Set<{state: EditorSaveState, promise: Promise<void>}>} */
     this._inFlightSaves = new Set();
     /** Load counter; a load that is no longer the latest drops its result */
@@ -5717,6 +5717,26 @@ class BlockEditor {
    * @param {{id: string, timestamp: number}} summary - The snapshot, as version history lists it
    */
   async _revertToSnapshot(summary) {
+    // One revert at a time: a second one, from the panel left open, would race the first's
+    // hold and the saves waiting on it
+    if (this._revertInFlight) {
+      Utils.showToast('Failed to revert: another revert is still in progress. Please try again.', 'error');
+      return;
+    }
+    this._revertInFlight = true;
+    try {
+      await this._runRevert(summary);
+    } finally {
+      this._revertInFlight = false;
+    }
+  }
+
+  /**
+   * The revert itself (see _revertToSnapshot), which only one call runs at a time
+   * @param {{id: string, timestamp: number}} summary
+   * @returns {Promise<void>}
+   */
+  async _runRevert(summary) {
     const noteId = this.noteId;
     let confirmed = true;
     if (typeof confirmDialog === 'function') {
@@ -5744,57 +5764,62 @@ class BlockEditor {
     // Its transaction opens now, with nothing waiting to save
     const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
     this._revertingNoteId = noteId;
+    /** @type {() => void} This revert's own, so nothing else can end it */
+    let endRevert = () => {};
     this._revertDone = new Promise((resolve) => {
-      this._endRevert = resolve;
+      endRevert = resolve;
     });
     this._revertEditsKept = false;
     this._snapshotDirty = false;
     const holding = !this._savesHeld;
     if (holding) this.holdSaves();
-    let outcome;
     try {
-      outcome = await restoring;
-    } catch (error) {
-      outcome = { kind: 'unavailable', code: 'revert-failed' };
-      console.error('Failed to revert:', error && error.message);
-    }
-
-    if (outcome.kind !== 'committed') {
-      this._revertingNoteId = null;
-      // Nothing was reverted: what was typed meanwhile saves to the note as it is, a flush's
-      // snapshot of it included
-      if (this._revertEditsKept || this._snapshotDirty) {
-        this._loadedDue = true;
-        this._heldSaveDue = true;
+      let outcome;
+      try {
+        outcome = await restoring;
+      } catch (error) {
+        outcome = { kind: 'unavailable', code: 'revert-failed' };
+        console.error('Failed to revert:', error && error.message);
       }
-      if (holding) this.releaseSaves();
-      this._endRevert();
-      this._versionHistoryGone(outcome);
-      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
-        this._onReloadRequired();
+
+      if (outcome.kind !== 'committed') {
+        this._revertingNoteId = null;
+        // Nothing was reverted: what was typed meanwhile saves to the note as it is, a flush's
+        // snapshot of it included
+        if (this._revertEditsKept || this._snapshotDirty) {
+          this._loadedDue = true;
+          this._heldSaveDue = true;
+        }
+        this._versionHistoryGone(outcome);
+        if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
+          this._onReloadRequired();
+          return;
+        }
+        // Its kind and code, never what the note holds
+        console.error('Revert not stored:', outcome.kind, outcome.code);
+        Utils.showToast('Failed to revert to snapshot', 'error');
         return;
       }
-      // Its kind and code, never what the note holds
-      console.error('Revert not stored:', outcome.kind, outcome.code);
-      Utils.showToast('Failed to revert to snapshot', 'error');
-      return;
-    }
 
-    if (noteId === this.noteId) {
-      // Text typed while the revert committed went into the blocks it replaced: it goes into
-      // version history, so it isn't lost
-      if (this._snapshotDirty) this._keepEditsOfRevert();
-      this.blocks = (snap.blocks || []).map((data) => Block.deserialize(data));
-      if (snap.title && this.noteData) {
-        this.noteData.name = snap.title;
-        this.titleEl.textContent = snap.title;
+      if (noteId === this.noteId) {
+        // Text typed while the revert committed went into the blocks it replaced: it goes into
+        // version history, so it isn't lost
+        if (this._snapshotDirty) this._keepEditsOfRevert();
+        this.blocks = (snap.blocks || []).map((data) => Block.deserialize(data));
+        if (snap.title && this.noteData) {
+          this.noteData.name = snap.title;
+          this.titleEl.textContent = snap.title;
+        }
+        this.renderBlocks();
+        this._snapshotDirty = false;
       }
-      this.renderBlocks();
-      this._snapshotDirty = false;
+    } finally {
+      // Whatever happened above, the hold and the saves waiting on this revert go on, the saves
+      // once the hold has let the loaded note's save start
+      this._revertingNoteId = null;
+      if (holding) this.releaseSaves();
+      endRevert();
     }
-    this._revertingNoteId = null;
-    if (holding) this.releaseSaves();
-    this._endRevert();
 
     // Close version history panel
     const panel = this.doc.getElementById('version-history-panel');
