@@ -126,6 +126,25 @@ describe('the analyzer (scripts/build/budgets.js)', () => {
     assert.equal(graphs.moment, undefined, 'a planned chunk the build lacks has no graph');
   });
 
+  it("counts the network guard, the guard pass's classic script each page loads first, in the page's start, with the modules it bundles (#21 slice 1b)", () => {
+    const guard = 'var g=1;'.repeat(50);
+    const files = fromMap(new Map([
+      ['popup.html', Buffer.from('<script src="js/network-guard.js"></script><script type="module" src="/assets/popup.js"></script>')],
+      ['js/network-guard.js', Buffer.from(guard)],
+      ['assets/popup.js', Buffer.from('x'.repeat(10))],
+    ]), 'the fixture');
+    const chunks = [
+      chunk({ fileName: 'js/network-guard.js', pass: 'guard', name: 'network-guard', isEntry: true, moduleIds: [id('js/kernel/composition/destination-match.js'), id('js/kernel/composition/network-guard.js'), id('js/network-guard.js')] }),
+      chunk({ fileName: 'assets/popup.js', isEntry: true, moduleIds: [id('js/popup.js')] }),
+    ];
+    const budgets = { forbidden: { 'destination-client': { about: 'the full client', paths: ['js/kernel/composition/destinations.js'] } }, entries: { popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 } }, forbidden: ['destination-client'], dependencies: [] } } };
+    const popup = analyze({ chunks, files, loaderChunks: { popup: 'assets/popup.js' }, budgets }).popup;
+    assert.deepEqual(popup.start.files.filter(entry => entry.type === 'js').map(entry => entry.file), ['assets/popup.js', 'js/network-guard.js']);
+    assert.equal(popup.start.bytes.js.raw, guard.length + 10);
+    assert.ok(popup.start.modules.includes('js/kernel/composition/network-guard.js'), popup.start.modules.join(', '));
+    assert.ok(!popup.start.modules.includes('js/kernel/composition/destinations.js'));
+  });
+
   it('counts the chunk the root loads at once as start, not lazy, so the row measures the tab and not only its root', () => {
     const { files, chunks, loaderChunks } = bundleFixture();
     const booted = analyze({ chunks, files, loaderChunks, budgets: budgetsFor() }).newtab;

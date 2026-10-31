@@ -56,19 +56,16 @@ export function parse(value) {
 
 /**
  * A row's origin split into scheme, host (a leading `*.` for subdomains), and port (`*` for
- * any loopback port), or null when it isn't one. Read without `URL`, so a check at load never
- * depends on it.
+ * any loopback port), or null when it isn't one's shape. Read without `URL`, so a check at load
+ * never depends on it. destinations.js's validator holds the host's labels and the port's
+ * range to more.
  * @param {unknown} origin
  * @returns {{protocol: string, host: string, wildcard: boolean, port: string} | null}
  */
 export function originParts(origin) {
-  if (typeof origin !== 'string') return null;
-  const match = /^(https?):\/\/(\*\.)?([a-z0-9.-]+)(?::(\*|\d+))?$/.exec(origin);
+  const match = typeof origin === 'string' ? /^(https?):\/\/(\*\.)?([a-z0-9.-]+)(?::(\*|\d+))?$/.exec(origin) : null;
   if (!match) return null;
   const [, scheme, star, host, port = ''] = match;
-  // Labels of letters, digits, and inner dashes, as `URL` writes a host back
-  if (!host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return null;
-  if (port !== '' && port !== '*' && (Number(port) > 65535 || String(Number(port)) !== port)) return null;
   return { protocol: `${scheme}:`, host, wildcard: Boolean(star), port };
 }
 
@@ -210,10 +207,26 @@ export function carriesCredential(pairs) {
 const strings = list => Array.isArray(list) && list.every(item => typeof item === 'string');
 
 /**
+ * What most rows hold, which the rows the build inlines in the page guard leave out
+ * (compactRows) and guardRows puts back
+ */
+const USUAL = Object.freeze({ methods: Object.freeze(['GET', 'POST']), credential: 'bearer', headers: Object.freeze(['Authorization', 'Content-Type']), location: 'remote' });
+
+/**
+ * `rows` (guardRows' cut) with each field that holds its usual value left out, as the build
+ * inlines them in the page guard
+ * @param {readonly MatchRow[]} rows
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function compactRows(rows) {
+  return rows.map(row => Object.fromEntries(Object.entries(row).filter(([key, value]) => JSON.stringify(USUAL[/** @type {keyof typeof USUAL} */ (key)]) !== JSON.stringify(value))));
+}
+
+/**
  * `rows`' fetch rows cut to what the guard reads (origin, path prefix, methods, credential,
- * headers, location), frozen, or null when one isn't the shape a row has: then the guard
- * refuses every destination. The build cuts the rows it inlines in the page guard this way,
- * after destinations.js has validated them.
+ * headers, location), copied, a field compactRows left out back at its usual value, or null when
+ * one isn't the shape a row has: then the guard refuses every destination. The build cuts the
+ * rows it inlines in the page guard this way, once destinations.js has validated them.
  * @param {unknown} rows
  * @returns {readonly MatchRow[] | null}
  */
@@ -224,15 +237,16 @@ export function guardRows(rows) {
     const cut = [];
     for (const row of rows) {
       if (row === null || typeof row !== 'object') return null;
-      const { origin, pathPrefix, methods, credential, headers, location, reachedBy = 'fetch' } = row;
+      const { origin, pathPrefix, methods = USUAL.methods, credential = USUAL.credential, headers = USUAL.headers, location = USUAL.location, reachedBy = 'fetch' } = row;
       const parts = originParts(origin);
       const local = location === 'loopback';
       if (!parts || (local ? parts.protocol !== 'http:' || !LOOPBACK_HOSTS.includes(parts.host) : location !== 'remote' || parts.protocol !== 'https:')) return null;
       if (typeof pathPrefix !== 'string' || !pathPrefix.startsWith('/') || !strings(methods) || typeof credential !== 'string' || !strings(headers)) return null;
       if (reachedBy !== 'fetch') continue;
-      cut.push(Object.freeze({ origin, pathPrefix, methods: Object.freeze([...methods]), credential, headers: Object.freeze([...headers]), location }));
+      // Copies, which only the guard that asked for them holds
+      cut.push({ origin, pathPrefix, methods: [...methods], credential, headers: [...headers], location });
     }
-    return Object.freeze(cut);
+    return cut;
   } catch {
     return null;
   }

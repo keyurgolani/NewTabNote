@@ -75,6 +75,17 @@ const CREDENTIAL_HEADERS = Object.freeze({ bearer: 'authorization', 'x-api-key':
 const DEFAULT_PORTS = Object.freeze({ 'http:': '80', 'https:': '443' });
 
 /**
+ * Whether an origin's host is labels of letters, digits, and inner dashes, as `URL` writes a
+ * host back, and its port, when it names one, a port
+ * @param {{host: string, port: string}} parts - originParts'
+ * @returns {boolean}
+ */
+function wellFormed({ host, port }) {
+  if (!host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return false;
+  return port === '' || port === '*' || (Number(port) <= 65535 && String(Number(port)) === port);
+}
+
+/**
  * Whether two rows could take the same request: one origin and way, prefixes where one holds
  * the other, and a method in common
  * @param {Record<string, unknown>} a
@@ -111,7 +122,7 @@ export function destinationProblems(rows) {
     if (!REACHED_BY.includes(/** @type {string} */ (row.reachedBy))) problem(`reached by ${REACHED_BY.join(', ')}`);
     if (!CREDENTIALS.includes(/** @type {string} */ (row.credential))) problem(`a credential of ${CREDENTIALS.join(', ')}`);
     const parts = originParts(row.origin);
-    if (!parts) {
+    if (!parts || !wellFormed(parts)) {
       problem('an origin: a scheme and a host, and no path, query, or userinfo');
     } else {
       if (row.location === 'loopback') {

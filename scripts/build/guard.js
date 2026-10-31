@@ -193,7 +193,8 @@ function checkGuardScript(files) {
 
 /**
  * The registry's rows for the page guard: validated by the destination client, then cut to
- * what the guard reads (destination-match.js's guardRows), from the sources at `root`
+ * what the guard reads and compacted (destination-match.js's guardRows and compactRows), from
+ * the sources at `root`
  * @param {string} root
  * @returns {Promise<{rows: readonly object[]} | {problem: Problem}>}
  */
@@ -206,7 +207,7 @@ async function guardRegistry(root) {
     if (client.REGISTRY_PROBLEMS.length > 0) return fail(`the registry has ${client.REGISTRY_PROBLEMS.length === 1 ? 'a problem' : 'problems'}, so the page guard would refuse every destination: ${client.REGISTRY_PROBLEMS.join('; ')}. npm run check:destinations checks it.`);
     const rows = match.guardRows(client.DESTINATIONS);
     if (rows === null) return fail("the page guard can't read the registry's rows");
-    return { rows };
+    return { rows: match.compactRows(rows) };
   } catch (error) {
     return fail(`the registry couldn't be read: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`);
   }
