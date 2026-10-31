@@ -7,13 +7,14 @@
 // storage.migration-completed. A blocked upgrade no longer journals storage.open-failed, and no
 // migration event raises an incident: capture keeps working at 8, and storage's check reports
 // the state. Each event holds value-free evidence only, and the same one is journaled once per
-// worker start however often a page's request runs it again.
+// worker start however often a page's request runs it again, and once across worker starts
+// while the record or the blocked marker says the same.
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
-const { IDBKeyRange } = require('fake-indexeddb');
-const { createDatabase, note, block } = require('./helpers/legacy-env');
-const { loadBackground } = require('./helpers/load-background');
+const { IDBKeyRange, IDBFactory } = require('fake-indexeddb');
+const { createLegacyEnv, createDatabase, note, block } = require('./helpers/legacy-env');
+const { loadBackground, startWorker } = require('./helpers/load-background');
 
 /** @type {any} */
 let core;
@@ -133,4 +134,106 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
     assert.ok(!codes(seen).includes('storage.open-failed'));
     assert.deepEqual(seen.incidents.filter(incident => incident.providerId === 'storage'), []);
   });
+
+  it("a run that never starts, the migration's lock throwing, journals storage.migration-failed once", async () => {
+    const worker = await loadBackground({
+      opens: false,
+      setup: async env => {
+        await profileAt8(env);
+        // Only the migration's lock: the journal takes its own locks to write
+        const locks = env.global.navigator.locks;
+        env.global.navigator.locks = {
+          request: (name, ...rest) => {
+            if (name === 'storage.migrate') throw new DOMException('no locks', 'InvalidStateError');
+            return locks.request(name, ...rest);
+          },
+          query: (...args) => locks.query(...args),
+        };
+      },
+    });
+    await worker.drain();
+    await worker.dispatch('commands.onCommand', 'capture-selection', worker.tab);
+    await worker.drain();
+    const seen = await inspect(worker.indexedDB);
+    assert.equal(seen.events.filter(([code]) => code === 'storage.migration-failed').length, 1, JSON.stringify(seen.events));
+    assert.ok(!codes(seen).includes('storage.open-failed'));
+  });
 });
+
+/** A recovery database without its stores, which the run refuses before it copies */
+function brokenRecovery(factory) {
+  return new Promise((resolve, reject) => {
+    const request = factory.open('NewTabNoteRecovery', 1);
+    request.onsuccess = () => {
+      request.result.close();
+      resolve(undefined);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * Starts js/background.js `times` times on one profile, each a new worker as Chrome starts one
+ * after the last stopped: the same IndexedDB and chrome.storage. `setup` gets each start's
+ * environment before it starts. Answers NewTabNoteTrust's journal and the storage after them.
+ */
+async function restarts(times, setup) {
+  const factory = new IDBFactory();
+  let chrome;
+  for (let start = 1; start <= times; start += 1) {
+    const env = createLegacyEnv({ context: 'worker', indexedDB: factory, ...(chrome ? { chrome } : {}) });
+    chrome = env.chrome;
+    env.chrome.api.contextMenus.create = (properties, callback) => {
+      if (typeof callback === 'function') callback();
+    };
+    await setup(env, start);
+    await startWorker(env);
+    for (let round = 0; round < 10; round += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+  }
+  return { seen: await inspect(factory), local: chrome.local };
+}
+
+describe('the migration events across worker starts (#20 slice 4 prerequisites, part 2, review)', () => {
+  it('a run that fails the same way on each start journals storage.migration-failed once', async () => {
+    const { seen } = await restarts(3, async (env, start) => {
+      if (start === 1) {
+        await profileAt8(env);
+        await brokenRecovery(env.indexedDB);
+      }
+    });
+    assert.equal(seen.events.filter(([code]) => code === 'storage.migration-failed').length, 1, JSON.stringify(seen.events));
+  });
+
+  it('a blocked marker a stopped worker left goes when the next start runs unblocked, and storage reads migrated', async () => {
+    const { seen, local } = await restarts(1, async env => {
+      await profileAt8(env);
+      env.chrome.local.storageUpgradeBlocked = { at: 1 };
+    });
+    assert.equal(local.storageUpgradeBlocked, undefined);
+    assert.equal(local.setting_storageUpgrade.status, 'migrated');
+    assert.deepEqual(codes(seen), ['storage.migration-completed']);
+  });
+
+  it('an upgrade still blocked on the next start journals storage.migration-blocked once, while its marker stands', async () => {
+    let blocker;
+    const { seen, local } = await restarts(2, async (env, start) => {
+      if (start === 1) {
+        await profileAt8(env);
+        // An older build's page that stays open across both starts
+        blocker = await new Promise((resolve, reject) => {
+          const request = env.indexedDB.open('CanvasTabDB');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        blocker.onversionchange = () => {};
+      }
+    });
+    assert.equal(seen.events.filter(([code]) => code === 'storage.migration-blocked').length, 1, JSON.stringify(seen.events));
+    assert.ok(local.storageUpgradeBlocked, 'the marker stands while the upgrade waits');
+    blocker.close();
+  });
+});
+

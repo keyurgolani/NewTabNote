@@ -87,6 +87,13 @@ import { hostTimers, randomIds } from './messaging.js';
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
 export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 
+/**
+ * chrome.storage.local key of the marker a run sets while its upgrade waits on another
+ * connection. It's outside `setting_*`, so no page's settings listener hears of it, and no
+ * export of the settings copies it.
+ */
+export const UPGRADE_BLOCKED_KEY = 'storageUpgradeBlocked';
+
 /** What a page sends to wake the worker and hear its run's status (#17, Q12), from host.js */
 export { MIGRATE_MESSAGE };
 
