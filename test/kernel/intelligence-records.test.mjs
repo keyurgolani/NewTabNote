@@ -24,6 +24,7 @@ import {
   signalRecord,
   signalRefusal,
 } from '../../js/kernel/core/intelligence/records.js';
+import { correctPayload } from '../../js/kernel/core/intelligence/operations.js';
 import { createIntelligence } from '../../js/kernel/core/intelligence/service.js';
 import { createMemoryIntelligenceRepository } from '../../js/kernel/core/memory/intelligence.js';
 import {
@@ -570,15 +571,72 @@ describe('link redaction, round 3 (#71)', () => {
     }
   });
 
-  it('leaves ASP.NET/Core, Status:?, and Talk about:things as written', () => {
+  it('leaves Status:?, Talk about:things, and version numbers as written', () => {
     for (const text of [
-      'ASP.NET/Core',
       'Status:?',
       'Talk about:things',
       'Fix README.md/CHANGELOG.md',
       'Email bob@corp.example',
+      'v1.2#3',
+      'pi 3.14:15',
     ]) {
       assert.equal(plainTitle(text), text, text);
+    }
+  });
+});
+
+describe('link redaction, round 4 (#71)', () => {
+  it('redacts uppercase TLDs, a query or fragment after any host path, short IPv4, and other dots and slashes', () => {
+    for (const link of [
+      'EVIL.COM/reset?token=abc',
+      'Evil.Com/reset?token=abc',
+      'HTTPS:EVIL.COM/x',
+      'evil.pw/reset?token=abc',
+      'x.ro/abc123',
+      'https:evil.pw/r?t=abc',
+      '127.1/admin?pw=x',
+      '10.0.1/admin?pw=x',
+      'evil\u2024example/reset?token=abc',
+      'evil\ufe52example/reset?token=abc',
+      'evil.example\uff0freset?token=abc',
+    ]) {
+      const redacted = plainTitle(`Call ${link} today`);
+      assert.equal(redacted, 'Call [link] today', link);
+      assert.ok(!v.is(signalRecord, asSignal(inferredDraft(), { title: `Call ${link} today` })), link);
+    }
+  });
+
+  it('checks a long or adversarial text in well under 50 ms, in the schema and in redaction', () => {
+    const base = asSignal(inferredDraft());
+    const correction = {
+      recordVersion: 1,
+      entryId: 'e1',
+      signalId: base.id,
+      identity: base.identity,
+      change: { field: 'category', before: null, after: 'today' },
+      note: null,
+      at: NOW,
+      commandId: 'c1',
+    };
+    const correctCommand = {
+      type: 'intelligence.correct',
+      commandId: 'c1',
+      signalId: base.id,
+      expectedDecisionRevision: 0,
+      entryId: 'e1',
+      change: { field: 'category', after: 'today' },
+    };
+    for (const unit of ['a:', 'a.', 'a@', 'a:@', '[:', 'a.a/', 'a.a?', 'a.a:1', 'https:', 'www.', '1.', 'a-', 'a:b@']) {
+      const text = unit.repeat(Math.ceil(200000 / unit.length));
+      let started = performance.now();
+      // safeParse collects every issue, as the router's check does, rather than stopping at the first
+      v.safeParse(signalRecord, { ...base, title: text });
+      v.safeParse(correctionRecord, { ...correction, note: text });
+      v.safeParse(correctPayload, { ...correctCommand, note: text });
+      assert.ok(performance.now() - started < 50, `schema on ${unit}`);
+      started = performance.now();
+      plainTitle(text);
+      assert.ok(performance.now() - started < 50, `redaction on ${unit}`);
     }
   });
 });
