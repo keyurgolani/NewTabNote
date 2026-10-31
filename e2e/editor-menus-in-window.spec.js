@@ -21,11 +21,13 @@ const WINDOWS = [
 const line = text => ({ type: 'text', content: text });
 const lines = (from, count) => Array.from({ length: count }, (_, i) => line(`Line ${String(from + i).padStart(2, '0')}`));
 const TABLE = { type: 'table', content: '', tableData: [['a', 'b'], ['1', '2']], rows: 2, cols: 2 };
-// The blocks the menus open from sit mid-note, so the pane can scroll each one low
-const TABLE_AT = 20;
-const LINKS_AT = 21;
-const EMPTY_AT = 22;
-const NOTE = { name: 'Menus', blocks: [...lines(1, 20), TABLE, line('Links from here'), line(''), ...lines(21, 16)] };
+// The blocks the menus open from sit mid-note, under 40 lines that fill more than either
+// window's height, so the pane can scroll each one low
+const ABOVE = 40;
+const TABLE_AT = ABOVE;
+const LINKS_AT = ABOVE + 1;
+const EMPTY_AT = ABOVE + 2;
+const NOTE = { name: 'Menus', blocks: [...lines(1, ABOVE), TABLE, line('Links from here'), line(''), ...lines(ABOVE + 1, 16)] };
 // Names for the link menu to list, and a template for the template menu
 const OTHERS = Array.from({ length: 10 }, (_, i) => ({ name: `Reading ${i + 1}`, blocks: [line('notes')] }));
 const TEMPLATE = { name: 'Weekly plan', isTemplate: true, blocks: [line('plan')] };
@@ -34,16 +36,45 @@ const blockAt = (page, index) => page.locator('#blocks-container > .block').nth(
 
 /**
  * Scroll the note so `locator`'s bottom sits 24 px above the window's, check it's low, and
- * return its box
+ * return its box. A scroll still moving the pane, such as a smooth one, would carry the block
+ * past that place after it's set, so the pane has to be still, two frames at one scrollTop,
+ * before the scroll and before the check. One that never stops is left after two seconds, for
+ * the check to fail on.
  */
 async function low(page, locator, viewport) {
-  await locator.evaluate(element => {
+  const bottom = await locator.evaluate(async element => {
     const pane = element.closest('.editor-pane');
+    const still = async () => {
+      let last = pane.scrollTop;
+      for (let same = 0, frames = 0; same < 2 && frames < 120; frames += 1) {
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        same = pane.scrollTop === last ? same + 1 : 0;
+        last = pane.scrollTop;
+      }
+    };
+    await still();
     pane.scrollTop += element.getBoundingClientRect().bottom - (window.innerHeight - 24);
+    await still();
+    return element.getBoundingClientRect().bottom;
   });
-  const box = await locator.boundingBox();
-  expect(box.y + box.height, 'what the menu opens from sits low in the window').toBeGreaterThan(viewport.height - 100);
-  return box;
+  expect(bottom, 'what the menu opens from sits low in the window').toBeGreaterThan(viewport.height - 100);
+  return locator.boundingBox();
+}
+
+/**
+ * Put the caret at the end of `locator`'s text. The End key does that on Windows and Linux,
+ * but on macOS it scrolls the pane to the note's end, smoothly, so the next menu's block
+ * landed wherever that scroll stopped.
+ */
+function caretAtEnd(locator) {
+  return locator.evaluate(element => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
 }
 
 /**
@@ -117,7 +148,7 @@ const MENUS = [
     open: async (page, viewport) => {
       await low(page, blockAt(page, LINKS_AT), viewport);
       await blockAt(page, LINKS_AT).locator('.block-content').click();
-      await page.keyboard.press('End');
+      await caretAtEnd(blockAt(page, LINKS_AT).locator('.block-content'));
       await page.keyboard.type('[[');
     },
   },
