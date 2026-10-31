@@ -176,10 +176,12 @@ describe('the salvage file (#20 slice 3)', () => {
     assert.equal(file.media.length, 2);
     assert.match(file.media[0].blob, /^data:image\/png;base64,/);
     assert.equal(file.folders.length, 1);
-    // Every other store under its own name, step 10's four included (#17 PR 2a), settings never
+    // Every other store under its own name, step 10's four (#17 PR 2a) and step 11's daily index
+    // (#17 PR 3b) included, settings never
     assert.deepEqual(Object.keys(file.stores).sort(), [
       'changes',
       'conflicts',
+      'daily_index',
       'links',
       'meta',
       'migrations',

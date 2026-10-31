@@ -34,6 +34,7 @@ import {
 import {
   CHANGES_STORE,
   CONFLICTS_STORE,
+  DAILY_INDEX_STORE,
   META_STORE,
   MIGRATIONS_STORE,
   OPERATIONS_STORE,
@@ -48,7 +49,7 @@ import { openWithoutUpgrade } from './shapes.js';
 /**
  * The stores it reads: every one CanvasTabDB's schema knows, but the secret-class `settings`.
  * That's step 10's four too (#17 PR 2a): the ledger, the change log, the conflict records,
- * which hold the text a conflict kept, and the tombstones.
+ * which hold the text a conflict kept, and the tombstones; and step 11's daily index (#17 PR 3b).
  */
 export const READ_STORES = Object.freeze(
   [
@@ -59,6 +60,7 @@ export const READ_STORES = Object.freeze(
     CHANGES_STORE,
     CONFLICTS_STORE,
     TOMBSTONES_STORE,
+    DAILY_INDEX_STORE,
   ]
     .filter(name => !EXCLUDED_STORES.includes(name))
     .sort(),
