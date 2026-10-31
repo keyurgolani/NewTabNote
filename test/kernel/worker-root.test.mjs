@@ -765,3 +765,64 @@ describe('the worker purges what was deleted for good from the recovery points (
     assert.equal(await recoveryExists(of), false);
   });
 });
+
+describe("the worker's data transforms (#17 PR 3a)", () => {
+  /**
+   * The profile's `meta.schema` and whether every note has its group
+   * @param {Profile} of
+   */
+  const state = async of => {
+    const [schema] = (await recordsOf(of, 'meta')).filter(record => record.key === 'schema');
+    const notes = await recordsOf(of, 'canvases');
+    return { logicalVersion: schema.logicalVersion, grouped: notes.every(note => note.placement && note.lifecycle) };
+  };
+
+  it('at every start, once its run is in, runs the transforms the database still needs, then the purge, without holding the kernel up', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    // The logical version as each holder of the points lock lets it go: the run, then the
+    // transforms, then the purge, each after the one before
+    const manager = legacyEnv.createLockManager();
+    /** @type {number[]} */
+    const released = [];
+    const locks = {
+      request: (/** @type {string} */ name, /** @type {any} */ options, /** @type {() => Promise<any>} */ callback) =>
+        manager.request(name, options, async () => {
+          try {
+            return await callback();
+          } finally {
+            released.push((await state(of)).logicalVersion);
+          }
+        }),
+    };
+    const base = fakeTimers();
+    let kept = 0;
+    const timers = {
+      ...base,
+      setInterval: (/** @type {() => void} */ fn) => {
+        kept += 1;
+        return base.setInterval(fn);
+      },
+    };
+    const worker = createWorkerClient({ ...hostOf(of), locks, timers, keepAlive: async () => {} });
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.transforms.done)?.status, 'transformed');
+    assert.equal((await worker.purge.done)?.status, 'nothing');
+    assert.deepEqual(released, [1, 2, 2]);
+    assert.deepEqual(await state(of), { logicalVersion: 2, grouped: true });
+    // The keepalive spans each: the run, the transforms, and the sweep
+    assert.equal(kept, 3);
+    await legacyEnv.waitFor(() => base.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
+    // The next start finds nothing to do
+    const next = createWorkerClient(hostOf(of));
+    assert.equal(await next.whenReady(), null);
+    assert.equal((await next.transforms.done)?.status, 'current');
+  });
+
+  it('on a database the run left below 10 it runs none, and reads nothing for them', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal(await worker.whenReady(), null);
+    assert.equal(await worker.transforms.done, null);
+  });
+});

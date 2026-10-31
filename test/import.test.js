@@ -671,6 +671,47 @@ describe('Replace all (AC4)', () => {
   });
 });
 
+describe('the fields #17 PR 3a writes beside the flags (Q8)', () => {
+  it("a backup's notes come in without placement, kind, and lifecycle, every field the kernel's list names, whatever they said", async () => {
+    const { PLACEMENT_FIELDS } = await import('../js/kernel/core/domain/placement.js');
+    const { env, Storage } = await setup();
+    const data = sameProfileBackup();
+    const stale = { placement: { kind: 'inbox' }, kind: 'template', lifecycle: 'trashed' };
+    for (const field of PLACEMENT_FIELDS) assert.ok(Object.hasOwn(stale, field), field);
+    data.canvases = data.canvases.map((n) => ({ ...n, ...stale }));
+    for (const mode of ['merge', 'replace']) {
+      await Storage.importData(structuredClone(data), mode);
+    }
+    const notes = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases'));
+    const copies = notes.filter((n) => !['A', 'E', 'D', 'AR', 'T', 'TR'].includes(n.id));
+    assert.equal(copies.length, 10);
+    for (const copy of copies) {
+      for (const field of PLACEMENT_FIELDS) assert.equal(field in copy, false, `${copy.name}: ${field}`);
+    }
+  });
+
+  it('Replace all moves a lifecycle the kernel wrote to trashed with the note, and leaves a note without one as it was', async () => {
+    const { env, Storage } = await setup();
+    const group = { placement: { kind: 'collection', folderId: 'F2' }, kind: 'note', lifecycle: 'active' };
+    await new Promise((resolve, reject) => {
+      const tx = Storage.db.transaction('canvases', 'readwrite');
+      const store = tx.objectStore('canvases');
+      const request = store.get('A');
+      request.onsuccess = () => store.put({ ...request.result, ...group });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    await Storage.importData(sameProfileBackup(), 'replace');
+    const notes = recordsOf(await dumpDatabase(env.indexedDB), 'canvases');
+    assert.deepEqual(
+      [notes.A.trashed, notes.A.lifecycle, notes.A.placement, notes.A.kind],
+      [true, 'trashed', group.placement, 'note'],
+    );
+    assert.equal(notes.D.trashed, true);
+    assert.equal('lifecycle' in notes.D, false);
+  });
+});
+
 describe('Merge and the tab bar', () => {
   it('Merge opens the first note in a tab, so the tab bar and the editor agree', async () => {
     const { env, Storage } = await setup();
