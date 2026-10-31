@@ -18,7 +18,7 @@ import { createRuntime } from '../../js/kernel/registry/runtime.js';
 import { TRUST_COMMANDS, TRUST_QUERIES } from '../../js/trust/core/contracts.js';
 import { health, remediation } from '../../js/trust/core/families.js';
 import { applyRaise } from '../../js/trust/core/incidents.js';
-import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
+import { REJECTION_REASONS, createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { nextActionOf, nextActionSchema, repairFor } from '../../js/trust/core/next-action.js';
 import { summarySchema } from '../../js/trust/core/operations/trust-summary.js';
@@ -162,6 +162,32 @@ let commands = 0;
 /** @param {string} type @param {Record<string, unknown>} [more] */
 const command = (type, more = {}) => ({ type, commandId: `s4a-${++commands}`, ...more });
 
+/**
+ * A diagnostic report as diagnostics.export serializes it, with `journal` events made up of
+ * nothing but their count, so two reports differ
+ * @param {number} [createdAt]
+ */
+const reportText = (createdAt = 1) =>
+  JSON.stringify(
+    {
+      format: 'newtabnote-diagnostics',
+      formatVersion: 1,
+      createdAt,
+      installId: null,
+      versions: { extension: '1.4.1', browser: null, canvasSchema: 8, trustSchema: 1 },
+      records: 'open',
+      recordsFailure: null,
+      migrations: [],
+      receipts: [],
+      incidents: [],
+      runs: [],
+      journal: [],
+      rejected: Object.fromEntries(REJECTION_REASONS.map(reason => [reason, 0])),
+    },
+    null,
+    2,
+  );
+
 const verifyNow = (/** @type {string[]} */ providerIds) =>
   command('trust.verify', { trigger: 'verify-now', providerIds });
 
@@ -264,7 +290,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const [incident] = await records.incidents();
     const dismissedAnswer = checked(
       'recovery.dismiss',
-      await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id })),
+      await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences })),
     );
     assert.equal(dismissedAnswer.kind, 'committed');
     assert.deepEqual(dismissedAnswer.changedIds, [incident.id]);
@@ -303,7 +329,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const { trust, records, clock } = await center(answers);
     await trust.verify(verifyNow(['capture']));
     const [incident] = await records.incidents();
-    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences }));
     // The receipt still says at risk, so only a fixed check makes it safe
     assert.equal(dataOf(await trust.summary()).capture, 'at-risk');
     answers.capture = allPassing().capture;
@@ -320,7 +346,12 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     assert.equal(raised.kind, 'committed');
     assert.equal(dataOf(await trust.summary()).capture, 'at-risk');
     const failed = (await records.incidents()).find(item => item.faultCode === 'capture-failed');
-    await trust.dismiss(command('recovery.dismiss', { incidentId: /** @type {Incident} */ (failed).id }));
+    await trust.dismiss(
+      command('recovery.dismiss', {
+        incidentId: /** @type {Incident} */ (failed).id,
+        occurrences: /** @type {Incident} */ (failed).occurrences,
+      }),
+    );
     const summary = dataOf(await trust.summary());
     assert.equal(summary.capture, 'unknown');
     assert.equal(summary.actionRequired, 0);
@@ -344,7 +375,9 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const { trust } = await center(allPassing());
     const missing = checked(
       'recovery.dismiss',
-      await trust.dismiss(command('recovery.dismiss', { incidentId: 'a1b2ffff-0000-4000-8000-000000000000' })),
+      await trust.dismiss(
+        command('recovery.dismiss', { incidentId: 'a1b2ffff-0000-4000-8000-000000000000', occurrences: 1 }),
+      ),
     );
     assert.equal(missing.kind, 'rejected');
     assert.equal(missing.code, 'incident-not-found');
@@ -859,7 +892,7 @@ describe('what a run answers for the views (#20 slice 4a, item 5)', () => {
 
   it('export-diagnostics saves the report through the picker and reads it back', async () => {
     const files = memoryFiles();
-    const serialized = JSON.stringify({ format: 'newtabnote-diagnostics', formatVersion: 1 }, null, 2);
+    const serialized = reportText();
     const diagnostics = async () => ({
       kind: 'diagnostics',
       filename: 'newtabnote-diagnostics-2026-10-20.json',
@@ -1335,7 +1368,7 @@ describe('capture risk is the exception to a dismissal that holds (#100 review)'
     await trust.verify(verifyNow(['capture', 'storage']));
     await trust.raise(failedCapture());
     const [incident] = await records.incidents();
-    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences }));
     assert.equal(dataOf(await trust.summary()).capture, 'unknown');
     for (let n = 0; n < 10; n++) {
       clock.advance(6 * 60_000);
@@ -1355,7 +1388,7 @@ describe('capture risk is the exception to a dismissal that holds (#100 review)'
     await trust.verify(verifyNow(['capture', 'storage']));
     await trust.raise(failedOpen());
     const [incident] = await records.incidents();
-    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences }));
     assert.equal(dataOf(await trust.summary()).capture, 'unknown');
     clock.advance(60_000);
     await trust.raise(failedOpen());
@@ -1375,7 +1408,7 @@ describe('capture risk is the exception to a dismissal that holds (#100 review)'
     const { trust, records, clock } = await center(answers);
     await trust.verify(verifyNow(['capture']));
     const [incident] = await records.incidents();
-    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences }));
     for (let open = 0; open < 3; open++) {
       clock.advance(60_000);
       await trust.verify(command('trust.verify', { trigger: 'open' }));
@@ -1585,13 +1618,13 @@ describe('the repair table and the diagnostics save (#100 review)', () => {
   });
 
   it('export-diagnostics saves the report the user previewed, whatever is built after', async () => {
-    const previewed = { kind: 'diagnostics', serialized: JSON.stringify({ events: 1 }, null, 2) };
+    const previewed = { kind: 'diagnostics', serialized: reportText(1) };
     let held = previewed;
     const files = memoryFiles();
     const pick = files.pick;
     files.pick = async options => {
       // A newer report replaces the one the view holds once the picker opens
-      held = { kind: 'diagnostics', serialized: JSON.stringify({ events: 2 }, null, 2) };
+      held = { kind: 'diagnostics', serialized: reportText(2) };
       return pick(options);
     };
     const { pipeline } = await remediationCenter({
@@ -1683,5 +1716,137 @@ describe('#100 review nits', () => {
     );
     assert.equal(answer.outcome, 'salvage-incomplete');
     assert.equal(applied, false);
+  });
+});
+
+// ============ #100's delta round ============
+
+describe('capture reads safe only on a probe after the last failure, whatever the clocks (#100 delta)', () => {
+  /** A failed capture, as the worker raises it */
+  const failedCapture = () =>
+    command('recovery.raise', {
+      providerId: 'capture',
+      faultCode: 'capture-failed',
+      severity: 'capture-risk',
+      evidence: { errorCode: 'transaction-failed' },
+    });
+
+  it('a new capture-risk incident after a clock step back is ordered after the probe before it', async () => {
+    const { trust, records, clock } = await center(allPassing());
+    await trust.verify(verifyNow(['capture', 'storage']));
+    const probedAt = clock.now();
+    clock.advance(-10 * 60_000);
+    await trust.raise(failedCapture());
+    const [incident] = await records.incidents();
+    assert.ok(incident.lastSeenAt > probedAt);
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id, occurrences: incident.occurrences }));
+    clock.advance(11 * 60_000);
+    assert.equal(dataOf(await trust.summary()).capture, 'unknown');
+  });
+
+  it('a reopened capture-risk incident after a clock step back is ordered after the probe too', async () => {
+    const { trust, records, clock } = await center(allPassing());
+    await trust.raise(failedCapture());
+    clock.advance(1000);
+    await records.resolve('capture', []);
+    clock.advance(5 * 60_000);
+    await trust.verify(verifyNow(['capture', 'storage']));
+    const probedAt = clock.now();
+    clock.advance(-10 * 60_000);
+    await trust.raise(failedCapture());
+    const [reopened] = (await records.incidents()).filter(item => item.state === 'open');
+    assert.ok(reopened && reopened.lastSeenAt > probedAt);
+    await trust.dismiss(command('recovery.dismiss', { incidentId: reopened.id, occurrences: reopened.occurrences }));
+    clock.advance(11 * 60_000);
+    assert.equal(dataOf(await trust.summary()).capture, 'unknown');
+  });
+});
+
+describe('a dismissal covers only what the user saw (#100 delta)', () => {
+  it('refuses to dismiss a capture-risk problem that was sighted again since it was shown', async () => {
+    const { trust, records, clock } = await center(allPassing());
+    await trust.raise(
+      command('recovery.raise', { providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' }),
+    );
+    const [shown] = await records.incidents();
+    clock.advance(1000);
+    await trust.raise(
+      command('recovery.raise', { providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' }),
+    );
+    const answer = checked(
+      'recovery.dismiss',
+      await trust.dismiss(command('recovery.dismiss', { incidentId: shown.id, occurrences: shown.occurrences })),
+    );
+    assert.equal(answer.kind, 'conflict');
+    assert.equal(answer.code, 'incident-changed');
+    assert.equal(answer.currentRevision, 2);
+    assert.equal((await records.incidents())[0].dismissed, false);
+  });
+
+  it('dismisses a milder problem sighted again since, which the same sighting keeps dismissed anyway', async () => {
+    const answers = /** @type {Record<string, any>} */ (allPassing());
+    answers.index = {
+      status: 'degraded',
+      faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+      looked: [{ faultCode: 'lagging' }],
+    };
+    const { trust, records, clock } = await center(answers);
+    await trust.verify(verifyNow(['index']));
+    const [shown] = await records.incidents();
+    clock.advance(1000);
+    await trust.verify(verifyNow(['index']));
+    const answer = await trust.dismiss(
+      command('recovery.dismiss', { incidentId: shown.id, occurrences: shown.occurrences }),
+    );
+    assert.equal(answer.kind, 'committed');
+  });
+});
+
+describe('the diagnostics save and the key removal say what they hold (#100 delta)', () => {
+  it('refuses a previewed report that is not a diagnostic report, before the picker opens', async () => {
+    const files = memoryFiles();
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files, diagnostics: () => ({ kind: 'diagnostics', serialized: 'not a report {"note":"text"}' }) },
+    });
+    const done = /** @type {any} */ (await pipeline.run(runOf('export-diagnostics')));
+    assert.equal(done.state, 'failed');
+    assert.equal(done.outcome, 'preview-invalid');
+    assert.equal(files.picks, 0);
+    // A report with a field nobody listed is refused too
+    const extra = JSON.stringify({ ...JSON.parse(reportText()), notes: ['text'] }, null, 2);
+    const other = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files, diagnostics: () => ({ kind: 'diagnostics', serialized: extra }) },
+    });
+    assert.equal(/** @type {any} */ (await other.pipeline.run(runOf('export-diagnostics'))).outcome, 'preview-invalid');
+    assert.equal(files.picks, 0);
+  });
+
+  it('a removal whose re-read fails names every place it tried as unknown', async () => {
+    let reads = 0;
+    const secrets = {
+      async present() {
+        if (++reads > 2) throw new Error('read failed');
+        return ['setting_llmApiKey', 'settings'];
+      },
+      async remove() {
+        throw Object.assign(new Error('write failed'), { code: 'settings-write-failed' });
+      },
+    };
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { secrets },
+    });
+    const first = /** @type {any} */ (await pipeline.run(runOf('remove-saved-key')));
+    const done = /** @type {any} */ (
+      await pipeline.run(
+        runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }),
+      )
+    );
+    assert.ok(v.safeParse(runResult, done).success, JSON.stringify(done));
+    assert.equal(done.state, 'failed');
+    assert.equal(done.outcome, 'settings-write-failed');
+    assert.deepEqual([done.removed, done.kept, done.unknown], [[], [], ['setting_llmApiKey', 'settings']]);
   });
 });

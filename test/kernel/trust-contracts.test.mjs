@@ -102,7 +102,7 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
         'trust.verify': { trigger: 'verify-now' },
         'recovery.raise': { providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' },
         'recovery.run': { remediationId: 'retry-open', userInitiated: true },
-        'recovery.dismiss': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
+        'recovery.dismiss': { incidentId: 'a1b20001-0000-4000-8000-000000000000', occurrences: 1 },
         'recovery.undismiss': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
         'recovery.check': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
       }[name];
