@@ -6,6 +6,9 @@
 // folders, blocks, backlinks, settings, auto backups, and exportAll return what the generator's
 // roles say; and the Daily Note lookup finds an existing one among duplicates and makes none.
 // Where production is wrong today, the step is an expected failure in test/known-defects.json.
+// The Daily Note lookup and the wiki-link save run on the frozen v1.4.1 Storage, over the same
+// profile: js/storage.js's copies had no caller once the new tab wrote through #17's adapter,
+// and went with #17 PR 4a.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -49,6 +52,24 @@ async function storageOn(of) {
 }
 
 /**
+ * The frozen v1.4.1 Storage (test/fixtures/storage/releases/) on profile `of`, opened with
+ * init(), for the 1.4.x writers js/storage.js no longer has
+ */
+async function release141On(of) {
+  const { support } = await load();
+  const env = support.legacyEnv.createLegacyEnv({ indexedDB: of.real, chrome: of.chrome, worker: false });
+  env.load('test/fixtures/storage/releases/v1.4.1/js/utils.js', 'test/fixtures/storage/releases/v1.4.1/js/storage.js');
+  const Storage = env.get('Storage');
+  const settle = (call) => support.legacyEnv.runUntil(env, Promise.resolve().then(call).then(
+    (value) => ({ value: value === undefined ? undefined : JSON.parse(JSON.stringify(value)) }),
+    (error) => ({ error: { name: error && error.name, message: error && error.message } }),
+  ));
+  const init = await settle(() => Storage.init());
+  assert.equal(init.error, undefined, `v1.4.1 init() rejected: ${JSON.stringify(init.error)}`);
+  return { Storage, settle };
+}
+
+/**
  * Production Storage on a profile holding `fixture`, opened with init(), and the profile's
  * CanvasTabDB records before it opened
  */
@@ -86,7 +107,7 @@ describe('1.4.x reads on the maximal profile', () => {
   it('init() opens it and changes nothing; the lists, folders, blocks, links, settings, and backups are what it holds', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles, records } = generate.maximalFixture(inputs);
-    const { Storage, settle, before, dump } = await opened(fixture);
+    const { of, Storage, settle, before, dump } = await opened(fixture);
     assert.deepStrictEqual(canvasDb(await dump()), canvasDb(before));
 
     const listed = [roles.plain, roles.foldered, roles.daily, roles.pinned, roles.popup, roles.blocks].sort();
@@ -114,7 +135,8 @@ describe('1.4.x reads on the maximal profile', () => {
     const exported = await value(settle, () => Storage.exportAll(), 'exportAll');
     assert.deepStrictEqual(ids(exported.canvases), records.canvases.filter((note) => !note.trashed).map((note) => note.id).sort());
     // The Daily Note for its date is the one there, and none is made
-    const daily = await value(settle, () => Storage.ensureDailyNoteForDate(generate.DAILY_DATE), 'ensureDailyNoteForDate');
+    const old = await release141On(of);
+    const daily = await value(old.settle, () => old.Storage.ensureDailyNoteForDate(generate.DAILY_DATE), 'ensureDailyNoteForDate');
     assert.equal(daily.id, roles.daily);
     assert.equal((await dump()).databases[0].stores.find((s) => s.name === 'canvases').records.length, records.canvases.length);
   });
@@ -197,8 +219,9 @@ describe('1.4.x reads on the corrupt profiles', () => {
   expectFailure('KD-010 a note whose name isn\'t text doesn\'t stop another note\'s wiki links from saving', async () => {
     const { generate, inputs } = await load();
     const { fixture } = generate.corruptFixtures(inputs).get('mistyped');
-    const { Storage, settle, dump } = await opened(fixture);
-    await value(settle, () => Storage.updateNoteLinks('note-a', ['Beta']), 'updateNoteLinks');
+    const { of, dump } = await opened(fixture);
+    const old = await release141On(of);
+    await value(old.settle, () => old.Storage.updateNoteLinks('note-a', ['Beta']), 'updateNoteLinks');
     const links = (await dump()).databases[0].stores.find((s) => s.name === 'links').records.map((r) => r.value);
     assert.deepStrictEqual(links.map((link) => [link.fromNoteId, link.toNoteId]), [['note-a', 'note-b']]);
   });
@@ -225,8 +248,9 @@ describe('1.4.x reads on the corrupt profiles', () => {
   it('daily-duplicates: the lookup for that day finds the newest Daily Note outside trash and makes none', async () => {
     const { generate, inputs } = await load();
     const { fixture } = generate.corruptFixtures(inputs).get('daily-duplicates');
-    const { Storage, settle, dump } = await opened(fixture);
-    const daily = await value(settle, () => Storage.ensureDailyNoteForDate(generate.DAILY_DATE), 'ensureDailyNoteForDate');
+    const { of, dump } = await opened(fixture);
+    const old = await release141On(of);
+    const daily = await value(old.settle, () => old.Storage.ensureDailyNoteForDate(generate.DAILY_DATE), 'ensureDailyNoteForDate');
     // getAllNotes(true) lists by updatedAt, newest first, outside trash
     assert.equal(daily.id, 'note-daily-2');
     const canvases = (await dump()).databases[0].stores.find((s) => s.name === 'canvases').records;

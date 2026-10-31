@@ -124,6 +124,23 @@ const view = (tabs) => plain({
   right: tabs.secondaryEditor.noteId,
 });
 
+/**
+ * What another tab's sidebar wrote for a folder it changed, as Storage.updateFolder wrote it,
+ * which had no caller once the new tab wrote through #17's adapter, and went with #17 PR 4a
+ */
+function otherTabPutsFolder(Storage, folder) {
+  return new Promise((resolve, reject) => {
+    const request = Storage.getStore('folders', 'readwrite').put({ ...folder, updatedAt: Date.now() });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/** What another tab wrote restoring a note from the trash, as Storage.restoreNote wrote it */
+async function otherTabRestores(Storage, noteId) {
+  await Storage.updateNote({ ...(await Storage.getNote(noteId)), trashed: false, trashedAt: null });
+}
+
 describe('removeNotes, when the write fails', () => {
   it('a trash that fails to store leaves the panes, tabs, and split view as they were, and says so', async () => {
     const env = createLegacyEnv();
@@ -359,7 +376,7 @@ describe('filing and templates with the note open', () => {
     await page.Storage.createFolder('elsewhere');
     const folders = await page.Storage.getAllFolders();
     const h = folders.find((f) => f.name === 'elsewhere');
-    await page.Storage.updateFolder({ ...h, parentId: 'G' });
+    await otherTabPutsFolder(page.Storage, { ...h, parentId: 'G' });
     assert.equal(page.sidebar.isChildFolder(h.id, 'F'), false, 'the stale view allows it');
 
     await runUntil(env, page.sidebar.moveFolder('F', h.id));
@@ -590,7 +607,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     await page.Storage.trashNote('C');
     await page.page.noteList.reload();
     // Another tab restores C after this tab listed it in the trash
-    await page.Storage.restoreNote('C');
+    await otherTabRestores(page.Storage, 'C');
     const before = view(page.tabs);
 
     const emptied = page.sidebar.emptyTrash();
@@ -606,7 +623,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.restoreNote('TR');
+    await otherTabRestores(page.Storage, 'TR');
 
     const deleted = page.notes.permanentlyDeleteNoteById('TR');
     await confirmIn(env, 'Delete Permanently');

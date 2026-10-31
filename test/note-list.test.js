@@ -304,8 +304,9 @@ describe('one note list per new tab', () => {
     assert.equal(els['editor-container'].classList.contains('hidden'), true);
 
     // Another tab restores one, which this tab hears of only through a reload: the lists have
-    // it, and the editor area stays as it is
-    await Storage.restoreNote('A');
+    // it, and the editor area stays as it is. It writes what Storage.restoreNote wrote, which had
+    // no caller and went with #17 PR 4a
+    await Storage.updateNote({ ...(await Storage.getNote('A')), trashed: false, trashedAt: null });
     await noteList.reload();
     assert.deepEqual(ids(noteList.view('active')), ['A']);
     assert.equal(shown(), true);
