@@ -13,7 +13,7 @@
  *
  * The new tab opens it `versioned`: Storage.open, which since #17 PR 1b upgrades nothing (only
  * the service worker does, through #17's migration runner, and the worker has its own kernel on
- * #17's adapter), opens whatever version is on disk up to 9, and watches the connection. The
+ * #17's adapter), opens whatever version is on disk up to this build's (10 since #17 PR 2a), and watches the connection. The
  * new tab's kernel sets `maintainOnOpen`, so Storage's startup maintenance runs before any
  * command does, as Storage.init ran it before the app did anything; its first run writes every
  * default over what's stored, so nothing may come before it. Its `existing` open (Popup's and

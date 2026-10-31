@@ -53,8 +53,8 @@ const UNDEFINED = { $type: 'undefined' };
 /** A note as each tag's Storage.createNote writes it */
 function note(shape, id, name, fields = {}) {
   const base = { id, name, createdAt: T0, updatedAt: T0, archived: false, archivedAt: null, titleManuallySet: false, lastAutoTitleAt: null };
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9';
-  const v8Fields = shape === 'v8' || shape === 'v9';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10';
+  const v8Fields = shape === 'v8' || shape === 'v9' || shape === 'v10';
   return {
     ...base,
     // v1.1.0's createNote added insights, so every shape but v1.0.0's own notes has them (#28 slice 3's recordings)
@@ -135,7 +135,7 @@ const nextId = idMaker(SEED);
 
 /** The notes, blocks, and media every richer fixture starts from */
 function profile(shape) {
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10';
   const [a, b, c, d] = [nextId(), nextId(), nextId(), nextId()];
   const f1 = nextId();
   const notes = [
@@ -166,7 +166,7 @@ function auxiliary(shape, base) {
     themes: [{ id: nextId(), name: 'Dusk', properties: { '--bg-primary': '#101820', '--text-primary': '#f2f2f2' }, updatedAt: T0 }],
     vectors: [{ id: first.id, noteId: first.id, vector: [0.125, -0.5, 0.25, 1], updatedAt: T0 }],
   };
-  if (shape === 'v8' || shape === 'v9') {
+  if (shape === 'v8' || shape === 'v9' || shape === 'v10') {
     out.snapshots = [{ id: nextId(), noteId: first.id, timestamp: T0 + 300000, blocks: [block('snap-b1', first.id, 0, 'Milk')], title: first.name }];
   }
   return out;
@@ -386,6 +386,112 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
           { version: 12, extra: [{ name: 'future_store', keyPath: 'id' }] },
         ),
       ],
+    }),
+  );
+}
+
+// After every other fixture, so the ids the seed gives them stay the same
+{
+  const base = profile('v10');
+  const [groceries, reading] = base.notes;
+  // What #17 PR 2a's adapter keeps beside the notes: versions on two of them (the rest read as
+  // 0), a ledger row per commit and one for a conflict, the change log, the conflict's record
+  // with the save that lost, and a deleted note's content-free tombstone
+  const notes = base.notes.map(note => {
+    if (note.id === groceries.id) return { ...note, revision: 3, placementVersion: 1, sourceRevision: 2 };
+    if (note.id === reading.id) return { ...note, revision: 1, placementVersion: 0, sourceRevision: 0 };
+    return note;
+  });
+  const [created, saved, lost] = [nextId(), nextId(), nextId()];
+  const deleted = nextId();
+  /**
+   * A committed outcome as the adapter keeps it
+   * @param {string} code
+   * @param {string} noteId
+   * @param {number} revision
+   * @param {number} commitSeq
+   */
+  const committedRow = (code, noteId, revision, commitSeq) => ({
+    kind: 'committed',
+    code,
+    changedIds: [noteId],
+    revision,
+    commitSeq,
+    messageKey: `committed.${code}`,
+    severity: 'success',
+  });
+  const receipt = (id, from, to) => ({
+    id,
+    from,
+    to,
+    status: 'completed',
+    startedAt: T0,
+    completedAt: T0,
+    recoveryPointId: null,
+    failure: null,
+  });
+  const records = {
+    canvases: notes,
+    elements: base.elements,
+    media: base.media,
+    folders: base.folders,
+    ...auxiliary('v10', base),
+    meta: [
+      { key: 'changes', head: 3, floor: 0 },
+      { key: 'schema', structuralVersion: 10, logicalVersion: 1 },
+    ],
+    migrations: [receipt('structural-10', 9, 10), receipt('structural-9', 8, 9)],
+    // The digest is the SHA-256 of the command's canonical JSON; these stand in for real ones
+    operations: [
+      { opId: created, digest: 'a1'.repeat(32), outcome: committedRow('note-created', reading.id, 1, 1), at: T0 + 1000 },
+      { opId: saved, digest: 'b2'.repeat(32), outcome: committedRow('content-saved', groceries.id, 3, 3), at: T0 + 3000 },
+      {
+        opId: lost,
+        digest: 'c3'.repeat(32),
+        outcome: {
+          kind: 'conflict',
+          code: 'revision-conflict',
+          currentRevision: 3,
+          messageKey: 'conflict.revision-conflict',
+          severity: 'warning',
+        },
+        at: T0 + 4000,
+      },
+    ],
+    changes: [
+      { seq: 1, entityType: 'note', entityId: reading.id, revision: 1, opId: created, ops: [] },
+      { seq: 2, entityType: 'note', entityId: groceries.id, revision: 2, opId: nextId(), ops: [] },
+      { seq: 3, entityType: 'note', entityId: groceries.id, revision: 3, opId: saved, ops: [] },
+    ],
+    conflicts: [
+      {
+        id: lost,
+        noteId: groceries.id,
+        scope: 'content',
+        expected: 2,
+        current: 3,
+        at: T0 + 4000,
+        command: {
+          type: 'saveNoteContent',
+          commandId: lost,
+          noteId: groceries.id,
+          blocks: [block('stale-b1', groceries.id, 0, 'A stale draft')],
+          expectedRevision: 2,
+        },
+      },
+    ],
+    tombstones: [
+      { entityType: 'note', id: deleted, deletedAt: T0 + 2000, lastRevision: 2, seq: null, reason: 'deleted' },
+    ],
+  };
+  add(
+    fixture({
+      id: 'v10.basic',
+      purpose:
+        'Already at structural version 10 with its receipts, holding a ledger, a change log, a conflict, and a tombstone: a run finds nothing to do and writes nothing.',
+      shape: 'v10',
+      schema: { idbVersion: 10, structuralVersion: 10, logicalVersion: 1 },
+      databases: [database('v10', records)],
     }),
   );
 }

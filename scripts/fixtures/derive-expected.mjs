@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Writes test/fixtures/storage/expected/<fixture-id>.v9.json from each synthesized fixture, and
+// Writes test/fixtures/storage/expected/<fixture-id>.v10.json from each synthesized fixture, and
 // each fixture #28 slice 3 recorded from a release (recorded/, record-release.mjs), by
 // #17's rules as the plan states them, with code of its own: it imports nothing from
 // js/kernel/, so test/kernel/storage-migrate.test.mjs compares the runner against an
@@ -8,14 +8,18 @@
 //
 //   node scripts/fixtures/derive-expected.mjs
 //
-// The rules (#17 plan section 3, the lead's answers of 2026-10-30):
-// - No database, or an empty one: CanvasTabDB at 9 with every v9 store, `meta.schema` at 9/1,
-//   and a `structural-9` completion receipt with no recovery point (there's nothing to copy).
+// The rules (#17 plan section 3, the lead's answers of 2026-10-30, and #17 PR 2a's step 10):
+// - No database, or an empty one: CanvasTabDB at 10 with every v10 store, `meta.schema` at
+//   10/1, the change log's empty head in `meta`, and `structural-9` and `structural-10`
+//   completion receipts with no recovery point (there's nothing to copy).
 // - A legacy shape (any subset of the ten stores, with canvases and elements): one verified,
 //   pinned `pre-migration` point of every store but `settings`, made before the upgrade, then
-//   CanvasTabDB at 9 with the stores it lacked (empty, version-8 indexes), meta, and the
-//   receipt naming the point. No record changes.
-// - Already at 9 with its receipt: nothing changes, and no recovery database appears.
+//   CanvasTabDB at 10 with the stores it lacked (empty, version-8 indexes), step 10's empty
+//   stores, meta, and both receipts naming the point. No record changes.
+// - At 9 with its receipt: a pinned point before 10 (of every store but `settings`, `meta` and
+//   `migrations` included), then step 10's empty stores, `meta.schema` at 10 with the logical
+//   version it had, the change log's head, and a `structural-10` receipt naming the point.
+// - Already at 10 with its receipts: nothing changes, and no recovery database appears.
 // - A point's manifest gives each store its count, ID-set hash (the sum of its keys' hashes
 //   mod 2^256), content hash (the sum of SHA-256([store, key hash, value hash]) per record),
 //   key path, and an empty purge list.
@@ -81,11 +85,12 @@ const storeDef = (shape, name) => {
   return { name, keyPath, autoIncrement, indexes: indexes.map(({ name: n, keyPath: k, unique, multiEntry }) => ({ name: n, keyPath: k, unique, multiEntry })), records: [] };
 };
 
-/** What happens to a fixture: `migrate` (with or without a point), `none`, or `refuse` */
+/** What happens to a fixture: `migrate` (from a legacy shape, from 9, or from none), `current`, or `refuse` */
 function fate(fixture) {
   const { shape, degraded } = fixture.header;
   if (shape === 'none') return 'migrate-empty';
-  if (shape === 'v9' && degraded.length === 0) return 'current';
+  if (shape === 'v10' && degraded.length === 0) return 'current';
+  if (shape === 'v9' && degraded.length === 0) return 'migrate-from-9';
   if (degraded.some(item => item.startsWith('extra-store:') || item.startsWith('idb-version:') || item === 'missing-store:canvases' || item === 'missing-store:elements')) {
     return 'refuse';
   }
@@ -94,14 +99,18 @@ function fate(fixture) {
 
 const SOURCE_SHAPE = fixture => {
   const { degraded } = fixture.header;
-  if (degraded.some(item => item.startsWith('idb-version:') && Number(item.split(':')[1]) > 9)) return 'newer';
+  if (degraded.some(item => item.startsWith('idb-version:') && Number(item.split(':')[1]) > 10)) return 'newer';
+  if (fixture.header.shape === 'v9' && degraded.length === 0) return 'current';
   if (degraded.some(item => item.startsWith('extra-store:'))) return 'unknown';
   if (degraded.some(item => item === 'missing-store:canvases' || item === 'missing-store:elements')) return 'missing-core';
   return 'legacy';
 };
 
-/** The recovery database holding the one point of `db` (the input database, encoded) */
-function recoveryOf(fixture, db, target) {
+/**
+ * The recovery database holding the one point of `db` (the input database, encoded), made
+ * before structural version `target` (null for none) from a database at `schema`'s versions
+ */
+function recoveryOf(fixture, db, target, schema = { structuralVersion: null, logicalVersion: null }) {
   const filled = fillCanaries(db);
   const stores = db.stores.map(store => store.name).filter(name => name !== 'settings').sort();
   const manifest = {};
@@ -133,8 +142,8 @@ function recoveryOf(fixture, db, target) {
     status: 'verified',
     sourceShape: SOURCE_SHAPE(fixture),
     sourceVersion: db.version,
-    structuralVersion: null,
-    logicalVersion: null,
+    structuralVersion: schema.structuralVersion,
+    logicalVersion: schema.logicalVersion,
     target,
     stores,
     createdAt: NOW,
@@ -152,20 +161,31 @@ function recoveryOf(fixture, db, target) {
   };
 }
 
-/** CanvasTabDB after step 9: the stores it had, the ones it lacked, meta, and the receipt */
-function upgraded(db, recoveryPointId) {
+/** A completion receipt, as migrate.js writes one per step */
+const receipt = (id, from, to, recoveryPointId) => ({
+  key: [id, 'completed'],
+  value: { id, from, to, status: 'completed', startedAt: NOW, completedAt: NOW, recoveryPointId, failure: null },
+});
+
+/**
+ * CanvasTabDB after the steps a database needs to reach 10: the stores it had, the ones it
+ * lacked, step 10's empty stores, meta at 10 with the change log's head, and a receipt per step
+ * it ran, each naming the point made before them. A database at 9 keeps its own step-9 receipt.
+ */
+function upgraded(db, recoveryPointId, { from = 8, logicalVersion = 1 } = {}) {
   const had = new Map((db ? db.stores : []).map(store => [store.name, structuredClone(store)]));
-  const stores = SHAPES.shapes.v9.stores.map(store => had.get(store.name) || storeDef('v9', store.name));
+  const stores = SHAPES.shapes.v10.stores.map(store => had.get(store.name) || storeDef('v10', store.name));
   const meta = stores.find(store => store.name === 'meta');
-  meta.records = [{ key: 'schema', value: { key: 'schema', structuralVersion: 9, logicalVersion: 1 } }];
-  const migrations = stores.find(store => store.name === 'migrations');
-  migrations.records = [
-    {
-      key: ['structural-9', 'completed'],
-      value: { id: 'structural-9', from: 8, to: 9, status: 'completed', startedAt: NOW, completedAt: NOW, recoveryPointId, failure: null },
-    },
+  meta.records = [
+    { key: 'changes', value: { key: 'changes', head: 0, floor: 0 } },
+    { key: 'schema', value: { key: 'schema', structuralVersion: 10, logicalVersion } },
   ];
-  return { name: 'CanvasTabDB', version: 9, stores };
+  const migrations = stores.find(store => store.name === 'migrations');
+  const ran = from === 8
+    ? [receipt('structural-9', 8, 9, recoveryPointId), receipt('structural-10', 9, 10, recoveryPointId)]
+    : [receipt('structural-10', 9, 10, recoveryPointId)];
+  migrations.records = [...migrations.records, ...ran].sort((a, b) => compareKeys(a.key, b.key));
+  return { name: 'CanvasTabDB', version: 10, stores };
 }
 
 const files = ['synthesized', 'recorded'].flatMap(kind =>
@@ -179,7 +199,8 @@ for (const file of files) {
   const db = fixture.databases.find(database => database.name === 'CanvasTabDB');
   const others = fixture.databases.filter(database => database.name !== 'CanvasTabDB');
   const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  const header = { ...fixture.header, id: `${fixture.header.id}.v9`, purpose: `After the registry runs to 9 on ${fixture.header.id}.` };
+  const header = { ...fixture.header, id: `${fixture.header.id}.v10`, purpose: `After the registry runs to 10 on ${fixture.header.id}.` };
+  const at10 = { shape: 'v10', degraded: [], schema: { idbVersion: 10, structuralVersion: 10, logicalVersion: 1 } };
   let databases;
   switch (fate(fixture)) {
     case 'current':
@@ -187,17 +208,27 @@ for (const file of files) {
       break;
     case 'migrate-empty':
       databases = [...others, upgraded(null, null)].sort(byName);
-      Object.assign(header, { shape: 'v9', degraded: [], schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 } });
+      Object.assign(header, at10);
       break;
     case 'migrate':
-      databases = [...others, upgraded(db, POINT_ID), recoveryOf(fixture, db, 9)].sort(byName);
-      Object.assign(header, { shape: 'v9', degraded: [], schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 } });
+      databases = [...others, upgraded(db, POINT_ID), recoveryOf(fixture, db, 10)].sort(byName);
+      Object.assign(header, at10);
       break;
+    case 'migrate-from-9': {
+      const schema = { structuralVersion: 9, logicalVersion: fixture.header.schema.logicalVersion };
+      databases = [
+        ...others,
+        upgraded(db, POINT_ID, { from: 9, logicalVersion: schema.logicalVersion }),
+        recoveryOf(fixture, db, 10, schema),
+      ].sort(byName);
+      Object.assign(header, at10);
+      break;
+    }
     case 'refuse':
       databases = [...others, db, recoveryOf(fixture, db, null)].sort(byName);
       break;
   }
   const expected = { format: fixture.format, header, databases, chromeStorageLocal: fixture.chromeStorageLocal || {} };
-  fs.writeFileSync(path.join(DIR, 'expected', `${fixture.header.id}.v9.json`), `${JSON.stringify(expected, null, 2)}\n`);
+  fs.writeFileSync(path.join(DIR, 'expected', `${fixture.header.id}.v10.json`), `${JSON.stringify(expected, null, 2)}\n`);
 }
 console.log(`wrote ${files.length} expected files`);

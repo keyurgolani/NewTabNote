@@ -188,18 +188,28 @@ function upgrade({ indexedDB, version, steps, logicalVersion, onBlocked }) {
 }
 
 /**
- * The verified pre-migration point made before structural version `target`, if any, without
- * making the recovery database
+ * The verified pre-migration point made before the step that reaches structural version `to`,
+ * if any, without making the recovery database. One run makes one point for every step it
+ * runs, with the last step's version as its target, so a run from 8 to 10 made its point for
+ * 10, and that point came before step 9 too: the point is the one with the nearest target at
+ * or above `to`, the newest of those.
  * @param {IDBFactory} indexedDB
- * @param {number} target
+ * @param {number} to
  * @returns {Promise<Point | null>}
  */
-async function pointBefore(indexedDB, target) {
+async function pointBefore(indexedDB, to) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) return null;
   try {
-    const points = await listPoints(recovery);
-    return points.filter(point => point.status === 'verified' && point.target === target).pop() || null;
+    const later = (await listPoints(recovery)).filter(
+      point =>
+        point.kind === 'pre-migration' &&
+        point.status === 'verified' &&
+        typeof point.target === 'number' &&
+        point.target >= to,
+    );
+    const nearest = Math.min(...later.map(point => /** @type {number} */ (point.target)));
+    return later.filter(point => point.target === nearest).pop() || null;
   } finally {
     recovery.close();
   }

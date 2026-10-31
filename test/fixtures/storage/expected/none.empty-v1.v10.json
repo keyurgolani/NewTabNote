@@ -1,9 +1,9 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "none.basic.v9",
-    "purpose": "After the registry runs to 9 on none.basic.",
-    "shape": "v9",
+    "id": "none.empty-v1.v10",
+    "purpose": "After the registry runs to 10 on none.empty-v1.",
+    "shape": "v10",
     "releases": [],
     "provenance": "synthesized",
     "source": {
@@ -11,8 +11,8 @@
       "seed": 1
     },
     "schema": {
-      "idbVersion": 9,
-      "structuralVersion": 9,
+      "idbVersion": 10,
+      "structuralVersion": 10,
       "logicalVersion": 1
     },
     "degraded": [],
@@ -21,7 +21,7 @@
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 9,
+      "version": 10,
       "stores": [
         {
           "name": "canvases",
@@ -37,6 +37,41 @@
             {
               "name": "updatedAt",
               "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "changes",
+          "keyPath": [
+            "seq",
+            "entityType",
+            "entityId"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "entity",
+              "keyPath": [
+                "entityType",
+                "entityId"
+              ],
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "conflicts",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
               "unique": false,
               "multiEntry": false
             }
@@ -124,10 +159,18 @@
           "indexes": [],
           "records": [
             {
+              "key": "changes",
+              "value": {
+                "key": "changes",
+                "head": 0,
+                "floor": 0
+              }
+            },
+            {
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 9,
+                "structuralVersion": 10,
                 "logicalVersion": 1
               }
             }
@@ -142,6 +185,22 @@
           "autoIncrement": false,
           "indexes": [],
           "records": [
+            {
+              "key": [
+                "structural-10",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-10",
+                "from": 9,
+                "to": 10,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
             {
               "key": [
                 "structural-9",
@@ -159,6 +218,20 @@
               }
             }
           ]
+        },
+        {
+          "name": "operations",
+          "keyPath": "opId",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "at",
+              "keyPath": "at",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
         },
         {
           "name": "search_index",
@@ -208,6 +281,23 @@
             {
               "name": "updatedAt",
               "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "tombstones",
+          "keyPath": [
+            "entityType",
+            "id"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "purge",
+              "keyPath": "purge",
               "unique": false,
               "multiEntry": false
             }

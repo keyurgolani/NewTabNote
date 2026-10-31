@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { legacySchema, schemaAt } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { LATEST_STRUCTURAL, legacySchema, schemaAt } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { FORMAT, compareKeys, dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import { FIXTURES, newProfile } from './migration-support.mjs';
 
@@ -38,7 +38,8 @@ const ALL = [...filesOf('synthesized'), ...filesOf('recorded'), ...filesOf('expe
 
 /**
  * What's wrong with a set of expected files: each must be `<fixture-id>.v<target>` for a
- * synthesized or recorded fixture, and every synthesized fixture needs its `.v9`
+ * synthesized or recorded fixture, and every synthesized fixture needs one for this build's newest
+ * structural version (`.v10` since #17 PR 2a)
  * @param {string[]} expected
  * @param {string[]} synthesized
  * @param {string[]} recorded
@@ -52,7 +53,9 @@ function expectedProblems(expected, synthesized, recorded) {
     if (!match) problems.push(`${id} isn't <fixture-id>.v<target>`);
     else if (!fixtures.has(match[1])) problems.push(`${id} names no fixture under synthesized/ or recorded/`);
   }
-  for (const id of synthesized) if (!expected.includes(`${id}.v9`)) problems.push(`${id} has no expected file`);
+  for (const id of synthesized) {
+    if (!expected.includes(`${id}.v${LATEST_STRUCTURAL}`)) problems.push(`${id} has no expected file`);
+  }
   return problems;
 }
 
@@ -208,9 +211,10 @@ describe('every fixture file', () => {
   });
 
   it("that check takes an expected file for a recorded fixture (#28 slice 3's), and refuses one for no fixture", () => {
-    assert.deepStrictEqual(expectedProblems(['v8.basic.v9', 'v8.v1.4.0.v9'], ['v8.basic'], ['v8.v1.4.0']), []);
-    assert.deepStrictEqual(expectedProblems(['v8.basic.v9', 'v8.gone.v9'], ['v8.basic'], []), [
-      'v8.gone.v9 names no fixture under synthesized/ or recorded/',
+    const v = `.v${LATEST_STRUCTURAL}`;
+    assert.deepStrictEqual(expectedProblems([`v8.basic${v}`, `v8.v1.4.0${v}`], ['v8.basic'], ['v8.v1.4.0']), []);
+    assert.deepStrictEqual(expectedProblems([`v8.basic${v}`, `v8.gone${v}`], ['v8.basic'], []), [
+      `v8.gone${v} names no fixture under synthesized/ or recorded/`,
     ]);
     assert.deepStrictEqual(expectedProblems([], ['v8.basic'], []), ['v8.basic has no expected file']);
   });
@@ -335,12 +339,13 @@ describe('the loader and the dumper', () => {
 });
 
 describe('the registry and the catalog', () => {
-  it("step 9's stores are shapes.json's v9, and the legacy stores its v8", () => {
+  it("step 9's stores are shapes.json's v9, step 10's its v10, and the legacy stores its v8", () => {
     /** @param {string} shape */
     const catalog = shape =>
       Object.fromEntries(SHAPES[shape].stores.map((/** @type {any} */ s) => [s.name, shapeOf(s)]));
     assert.deepStrictEqual(legacySchema(), catalog('v8'));
     assert.deepStrictEqual(schemaAt(9), catalog('v9'));
+    assert.deepStrictEqual(schemaAt(10), catalog('v10'));
     assert.deepStrictEqual(schemaAt(8), catalog('v8'));
   });
 

@@ -51,7 +51,7 @@ class PreUpdateCopySection {
    * @param {Object} deps
    * @param {PreUpdateCopyPort} deps.copy
    * @param {() => Promise<*>} deps.readUpgrade - the worker's recorded run (Storage.readSetting('storageUpgrade'))
-   * @param {() => boolean} [deps.isUpgraded] - Storage.isUpgraded: whether the tab's database is at 9
+   * @param {() => boolean} [deps.isUpgraded] - Storage.isUpgraded: whether the tab's database is at this build's version
    */
   constructor({ copy, readUpgrade, isUpgraded = () => false }) {
     this.copy = copy;
@@ -112,7 +112,7 @@ class PreUpdateCopySection {
     let point = null;
     try {
       const record = await this.readUpgrade();
-      // A record a full disk kept from being replaced says nothing once the database is at 9 (review R79)
+      // A record a full disk kept from being replaced says nothing once the database is at this build's version (review R79)
       if (record && typeof record === 'object' && record.status === 'space-blocked' && !this.isUpgraded()) {
         state = 'waiting';
       } else {

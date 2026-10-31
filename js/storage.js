@@ -76,9 +76,9 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
-    // The newest version this build opens, #17's structural version 9, which only the service
-    // worker upgrades to (js/kernel/adapters/indexeddb/schema.js's DB_VERSION)
-    this.dbVersion = 9;
+    // The newest version this build opens, #17's structural version 10 since #17 PR 2a, which
+    // only the service worker upgrades to (js/kernel/adapters/indexeddb/schema.js's DB_VERSION)
+    this.dbVersion = 10;
     /** How long a page waits on the worker's migration run before it opens what's there (#17, Q12) */
     this.workerUpgradeWaitMs = 5000;
     this.db = null;
@@ -197,9 +197,9 @@ class DatabaseManager {
    *
    * Since #17 PR 1b only the service worker upgrades the database, through
    * #17's migration runner after a verified recovery point, so this opens it at
-   * whatever version is on disk, up to this build's (9), and aborts any
+   * whatever version is on disk, up to this build's (10), and aborts any
    * upgrade: on a profile with no database it makes none and rejects with code
-   * NO_DATABASE. A page that finds no database, or one below 9, first wakes the
+   * NO_DATABASE. A page that finds no database, or one below 10, first wakes the
    * worker and waits up to 5 seconds for its run (#17, Q12), then opens what's
    * there: a version-8 database (the run was short of space, say) runs as it
    * is, and an older one runs with the stores it lacks off.
