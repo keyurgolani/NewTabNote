@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { createRecoveryReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { MIGRATE_LOCK } from '../../js/kernel/adapters/indexeddb/migrate.js';
 import { OWNERS, purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
@@ -462,6 +463,33 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
       file.elements.concat(file.orphanElements).some((/** @type {any} */ block) => block.canvasId === DOOMED),
       false,
     );
+  });
+
+  it("#20's recovery reader verifies under the lock shared too, so a purge never fails its check halfway", async () => {
+    const { of } = await deletedProfile();
+    const locks = legacyEnv.createLockManager();
+    const [pinned] = await points(of);
+    const reader = createRecoveryReader({ indexedDB: of.real, keyRange: KeyRange, crypto, locks });
+    /** @type {string[]} */
+    const order = [];
+    /** @type {Promise<unknown> | null} */
+    let verifying = null;
+    const purged = await purge(of, {
+      locks,
+      hooks: {
+        between: label => {
+          if (label !== 'batch-written' || verifying) return;
+          verifying = reader.verify(pinned.id).then(verdict => {
+            order.push('verified');
+            return verdict;
+          });
+        },
+      },
+    });
+    order.push('purged');
+    assert.equal(purged.status, 'purged');
+    assert.deepEqual(await verifying, { ok: true });
+    assert.deepEqual(order, ['purged', 'verified']);
   });
 
   it('with nothing pending, or no database, it does nothing, and without Web Locks it purges nothing', async () => {
