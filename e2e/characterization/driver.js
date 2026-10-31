@@ -260,7 +260,8 @@ async function createNote(page) {
 
 /**
  * Show the sidebar's Notes list. At 1.4.x a start that restores no saved tab leaves the
- * list empty until something refreshes it, as choosing Notes does.
+ * list empty until something refreshes it, as choosing Notes does. #12 lists them on such a
+ * start (e2e/sidebar-start.spec.js), and choosing Notes then changes nothing.
  */
 async function showNotes(page) {
   await page.locator('#sidebar-tab-notes').click();
