@@ -81,6 +81,22 @@ const COMMAND_SAMPLES = {
     replaceAll: false,
   },
   saveVector: { noteId: 'n1', vector: [0.25, 0.5], sourceRevision: 1 },
+  applyRemoteChanges: {
+    changes: [
+      {
+        note: { id: 'r1', name: 'From afar', createdAt: NOW, updatedAt: NOW, pinned: true, folderId: null },
+        blocks: [{ id: 'rb1', type: 'text', content: 'Line', order: 0 }],
+      },
+      {
+        note: { id: 'n1', name: 'Plan 4', pinned: false },
+        blocks: [],
+        expectedRevision: 9,
+        expectedPlacementVersion: 9,
+      },
+    ],
+  },
+  applyRemoteContent: { noteId: 'r2', note: { id: 'r2', name: 'Remote' }, blocks: [], expectedRevision: 0 },
+  applyRemotePlacement: { noteId: 'r2', placement: { pinned: true, folderId: null }, expectedPlacementVersion: 0 },
   saveSnapshot: {
     noteId: 'n1',
     snapshotId: 's1',

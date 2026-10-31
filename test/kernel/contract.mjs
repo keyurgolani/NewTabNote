@@ -3518,6 +3518,9 @@ export function runContractSuite(fixture) {
       it('every catalog command is one this suite runs', () => {
         assert.deepEqual([...COMMAND_TYPES].sort(), [
           'applyDerivedTitle',
+          'applyRemoteChanges',
+          'applyRemoteContent',
+          'applyRemotePlacement',
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
@@ -3898,6 +3901,431 @@ export function runContractSuite(fixture) {
           { id: 'n2', noteId: 'n2', vector: [0.5], updatedAt: NOW },
         ]);
       });
+    });
+
+    describe("applyRemoteChanges, another profile's notes for #19's sync (#17 PR 4b)", () => {
+      /**
+       * A note as another profile stores it
+       * @param {string} id
+       * @param {Record<string, unknown>} [fields]
+       */
+      const remoteNote = (id, fields = {}) => ({ ...storageNote(id, 'Remote', NOW - 1000), ...fields });
+
+      /**
+       * @param {string} noteId
+       * @param {string} content
+       */
+      const textBlock = (noteId, content) => ({ id: `${noteId}-block-0`, type: 'text', content, order: 0 });
+
+      /** @param {Array<Record<string, unknown>>} changes */
+      const apply = async changes =>
+        bulkOf(await kernel.execute(cmd('applyRemoteChanges', /** @type {any} */ ({ changes }))));
+
+      /** @param {BulkOutcome} outcome */
+      const itemsOf = outcome => outcome.items.map(({ id, outcome: item }) => [id, item.kind, item.code]);
+
+      /** The commands the adapter kept when they conflicted, as its `conflicts` store holds them */
+      const keptConflicts = () => ctx.adapter.read(['conflicts'], tx => tx.getAll('conflicts'));
+
+      /**
+       * The versions a note has now, as a remote change made from it says them: none on an
+       * adapter without revisions
+       * @param {string} noteId
+       * @returns {Promise<{expectedRevision?: number, expectedPlacementVersion?: number}>}
+       */
+      const madeFrom = async noteId => {
+        const state = await kernel.query({ type: 'getNote', noteId });
+        if (state.kind !== 'ready' || state.data.revision === undefined) return {};
+        return { expectedRevision: state.data.revision, expectedPlacementVersion: state.data.placementVersion };
+      };
+
+      it("makes a note this profile lacks as the remote has it, with its blocks, search entry, links, and group, filed at the root when its folder isn't here", async () => {
+        await createNote({ noteId: 'n2', name: 'Other' });
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        const linking = { id: 'rb1', canvasId: 'r1', type: 'text', content: 'See [[Other]]', order: 0 };
+        const outcome = await apply([
+          { note: remoteNote('r1', { name: 'From afar', pinned: true, folderId: 'not-here' }), blocks: [linking] },
+          { note: remoteNote('r2', { name: 'Filed', folderId: 'f1', revision: 9, placementVersion: 4 }), blocks: [] },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['r1', 'committed', 'remote-note-created'],
+          ['r2', 'committed', 'remote-note-created'],
+        ]);
+        assert.deepEqual(outcome.committedIds, ['r1', 'r2']);
+        assert.deepEqual(await noteOf('r1'), {
+          ...remoteNote('r1', { name: 'From afar', pinned: true }),
+          ...group(UNFILED),
+        });
+        assert.deepEqual(await noteOf('r2'), {
+          ...remoteNote('r2', { name: 'Filed', folderId: 'f1' }),
+          ...group({ kind: 'collection', folderId: 'f1' }),
+        });
+        // Its versions are this profile's, whatever the remote's record said
+        const stored = await storedNoteOf('r2');
+        assert.deepEqual([stored?.revision === 9, stored?.placementVersion === 4], [false, false]);
+        const made = await madeFrom('r2');
+        assert.deepEqual(made, flags.revisions ? { expectedRevision: 1, expectedPlacementVersion: 0 } : {});
+        assert.deepEqual(await blocksOf('r1'), [linking]);
+        assert.deepEqual(await searchEntryOf('r1'), { noteId: 'r1', name: 'From afar', content: '', updatedAt: NOW });
+        const links = await kernel.query({ type: 'listLinks' });
+        assert.deepEqual(links.kind === 'ready' && links.data.map(link => [link.fromNoteId, link.toNoteId]), [
+          ['r1', 'n2'],
+        ]);
+      });
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote text over a newer local edit keeps the local note, and the remote title and blocks in conflicts'
+          : 'no revisions: a remote text lands over a newer local edit (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          // An edit here, after the remote's copy was made
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const local = [await noteOf('n1'), await blocksOf('n1')];
+          const command = cmd('applyRemoteChanges', {
+            changes: [
+              { note: remoteNote('n1', { name: 'Their title' }), blocks: [textBlock('n1', 'Theirs')], ...base },
+            ],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          if (!flags.revisions) {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+            assert.deepEqual(
+              [(await noteOf('n1'))?.name, (await blocksOf('n1'))[0].content],
+              ['Their title', 'Theirs'],
+            );
+            return;
+          }
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['revision-conflict', 2]);
+          assert.deepEqual([await noteOf('n1'), await blocksOf('n1')], local);
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => [record.id, record.noteId, record.scope, record.expected, record.current]),
+            [[`${command.commandId}:n1:content`, 'n1', 'content', 1, 2]],
+          );
+          const theirs = /** @type {any} */ (kept[0].command);
+          assert.deepEqual(
+            [theirs.type, theirs.note.name, theirs.blocks[0].content],
+            ['applyRemoteContent', 'Their title', 'Theirs'],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote text that lands first makes the stale local save the conflict, its text kept'
+          : 'no revisions: a local save after a remote text lands over it (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          // The editor and the remote both have the note as it is now
+          const base = await madeFrom('n1');
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Their title' }), blocks: [textBlock('n1', 'Theirs')], ...base },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+          assert.deepEqual([(await noteOf('n1'))?.name, (await blocksOf('n1'))[0].content], ['Their title', 'Theirs']);
+          const save = cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [textBlock('n1', 'Mine')],
+            ...(base.expectedRevision === undefined ? {} : { expectedRevision: base.expectedRevision }),
+          });
+          const saved = await kernel.execute(save);
+          if (!flags.revisions) {
+            committedOf(saved);
+            assert.equal((await blocksOf('n1'))[0].content, 'Mine');
+            return;
+          }
+          assert.deepEqual(saved.kind === 'conflict' && [saved.code, saved.currentRevision], ['revision-conflict', 2]);
+          assert.equal((await blocksOf('n1'))[0].content, 'Theirs');
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => record.id),
+            [save.commandId],
+          );
+          assert.equal(/** @type {any} */ (kept[0].command).blocks[0].content, 'Mine');
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote placement over a newer local one keeps the note where it is, and the remote placement in conflicts'
+          : 'no revisions: a remote placement lands over a newer local one (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          const base = await madeFrom('n1');
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const local = await noteOf('n1');
+          const remote = remoteNote('n1', { name: 'Plan', archived: true, archivedAt: NOW - 500 });
+          const outcome = await apply([{ note: remote, blocks: someBlocks('n1', 1), ...base }]);
+          if (!flags.revisions) {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-placement-applied']]);
+            assert.deepEqual([(await noteOf('n1'))?.pinned, (await noteOf('n1'))?.archived], [false, true]);
+            return;
+          }
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['placement-conflict', 1]);
+          assert.deepEqual(await noteOf('n1'), local);
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => [record.noteId, record.scope, record.expected, record.current]),
+            [['n1', 'placement', 0, 1]],
+          );
+          const theirs = /** @type {any} */ (kept[0].command);
+          assert.deepEqual(
+            [theirs.type, theirs.placement.pinned, theirs.placement.archived],
+            ['applyRemotePlacement', false, true],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote placement that lands first makes the stale local placement command the conflict, and files the note at the root when its folder is gone'
+          : 'no revisions: a local placement command after a remote placement lands over it (the last write wins)',
+        async () => {
+          await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+          await createNote({ noteId: 'n1', name: 'Plan', folderId: 'f1' });
+          const base = await madeFrom('n1');
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Plan', archived: true, folderId: 'gone' }), blocks: [], ...base },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-placement-applied']]);
+          const placed = await noteOf('n1');
+          assert.deepEqual(
+            [placed?.archived, placed?.folderId, placed?.placement, placed?.lifecycle],
+            [true, null, UNFILED, 'archived'],
+          );
+          const pin = cmd('setPinned', {
+            noteId: 'n1',
+            pinned: true,
+            ...(base.expectedPlacementVersion === undefined
+              ? {}
+              : { expectedPlacementVersion: base.expectedPlacementVersion }),
+          });
+          const pinned = await kernel.execute(pin);
+          if (!flags.revisions) {
+            committedOf(pinned);
+            return;
+          }
+          assert.deepEqual(pinned.kind === 'conflict' && [pinned.code, pinned.currentRevision], [
+            'placement-conflict',
+            1,
+          ]);
+          assert.equal((await noteOf('n1'))?.pinned, false);
+          assert.deepEqual(
+            (await keptConflicts()).map(record => record.id),
+            [pin.commandId],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a change that says nothing it was made from counts as made from version 0, so it never lands over an edit made here'
+          : 'no revisions: a change that says nothing it was made from lands',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          const outcome = await apply([{ note: remoteNote('n1', { name: 'Theirs' }), blocks: [] }]);
+          if (flags.revisions) {
+            const [{ outcome: item }] = outcome.items;
+            assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['revision-conflict', 1]);
+            assert.equal((await noteOf('n1'))?.name, 'Plan');
+          } else {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+          }
+          // A note as 1.4.x stored it, which nothing here has moved, is at version 0, so one lands on it
+          await seed('notes', [storageNote('old', 'Old', NOW)]);
+          const landed = await apply([{ note: remoteNote('old', { name: 'Theirs', pinned: true }), blocks: [] }]);
+          assert.deepEqual(itemsOf(landed), [['old', 'committed', 'remote-placement-applied']]);
+          assert.deepEqual([(await noteOf('old'))?.name, (await noteOf('old'))?.pinned], ['Theirs', true]);
+        },
+      );
+
+      it('a note that already has the remote title, blocks, and placement changes in nothing, whatever versions the change says, and keeps no conflict', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2) }));
+        await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+        const before = await storedNoteOf('n1');
+        const outcome = await apply([
+          {
+            note: { ...(await noteOf('n1')) },
+            blocks: someBlocks('n1', 2),
+            expectedRevision: 0,
+            expectedPlacementVersion: 0,
+          },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-unchanged']]);
+        assert.deepEqual(outcome.items[0].outcome.kind === 'committed' && outcome.items[0].outcome.changedIds, []);
+        assert.deepEqual(await storedNoteOf('n1'), before);
+        assert.deepEqual(await keptConflicts(), []);
+      });
+
+      it(
+        'never brings back a note deleted here for good, and keeps nothing of it, conflict included',
+        { skip: flags.revisions ? false : 'only an adapter with revisions keeps tombstones' },
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Plan' }), blocks: someBlocks('n1', 1), expectedRevision: 1 },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'rejected', 'note-deleted']]);
+          assert.deepEqual(
+            [await noteOf('n1'), await blocksOf('n1'), await searchEntryOf('n1')],
+            [undefined, [], undefined],
+          );
+          assert.deepEqual(await keptConflicts(), []);
+        },
+      );
+
+      it('deletes no note: one the changes leave out stays as it is, and only the blocks a replaced note no longer has go', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 3) });
+        await createNote({ noteId: 'n2', name: 'Other', blocks: someBlocks('n2', 1) });
+        const other = [await noteOf('n2'), await blocksOf('n2')];
+        const base = await madeFrom('n1');
+        const outcome = await apply([
+          { note: remoteNote('n1', { name: 'Plan' }), blocks: someBlocks('n1', 3).slice(1), ...base },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.id),
+          ['n1-block-1', 'n1-block-2'],
+        );
+        assert.deepEqual((await noteOf('n1'))?.preview, 'Line 1');
+        assert.deepEqual([await noteOf('n2'), await blocksOf('n2')], other);
+      });
+
+      it(
+        flags.revisions
+          ? "revisions: each note and each part is guarded on its own: one note's conflict leaves the others to land, and a text conflict leaves the remote's pin to land"
+          : 'no revisions: every note and part lands',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          await createNote({ noteId: 'n2', name: 'Other', blocks: [textBlock('n2', 'Line')] });
+          const bases = { n1: await madeFrom('n1'), n2: await madeFrom('n2') };
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const outcome = await apply([
+            {
+              note: remoteNote('n1', { name: 'Plan', pinned: true }),
+              blocks: [textBlock('n1', 'Theirs')],
+              ...bases.n1,
+            },
+            { note: remoteNote('n2', { name: 'Other' }), blocks: [textBlock('n2', 'Theirs')], ...bases.n2 },
+          ]);
+          if (!flags.revisions) {
+            assert.deepEqual(outcome.committedIds, ['n1', 'n2']);
+            return;
+          }
+          assert.deepEqual(itemsOf(outcome), [
+            ['n1', 'conflict', 'revision-conflict'],
+            ['n2', 'committed', 'remote-content-applied'],
+          ]);
+          assert.deepEqual(outcome.committedIds, ['n2']);
+          assert.deepEqual([(await noteOf('n1'))?.pinned, (await blocksOf('n1'))[0].content], [true, 'Mine']);
+          assert.equal((await blocksOf('n2'))[0].content, 'Theirs');
+        },
+      );
+
+      it('is refused before anything runs, leaving no record, for changes that are no list of notes or name a note twice', async () => {
+        const commandId = ctx.ids.next();
+        for (const [changes, code] of /** @type {Array<[unknown, string]>} */ ([
+          [[], 'invalid-command'],
+          [[{ blocks: [] }], 'invalid-command'],
+          [
+            [
+              { note: remoteNote('r1'), blocks: [] },
+              { note: remoteNote('r1'), blocks: [] },
+            ],
+            'duplicate-note',
+          ],
+        ])) {
+          assertRejected(
+            await kernel.execute(/** @type {any} */ ({ type: 'applyRemoteChanges', commandId, changes })),
+            'validation',
+            code,
+          );
+        }
+        // Nothing reserved its commandId, so the corrected command runs under it
+        const outcome = bulkOf(
+          await kernel.execute(
+            /** @type {any} */ ({
+              type: 'applyRemoteChanges',
+              commandId,
+              changes: [{ note: remoteNote('r1'), blocks: [] }],
+            }),
+          ),
+        );
+        assert.deepEqual(itemsOf(outcome), [['r1', 'committed', 'remote-note-created']]);
+      });
+
+      it("refuses a note whose placement or blocks aren't ones, writing nothing of it, and applies the others", async () => {
+        const outcome = await apply([
+          { note: remoteNote('r1', { pinned: 'yes' }), blocks: [] },
+          { note: remoteNote('r2'), blocks: [{ id: 'b1', canvasId: 'elsewhere' }] },
+          { note: remoteNote('r3'), blocks: [] },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['r1', 'rejected', 'invalid-command'],
+          ['r2', 'rejected', 'block-of-another-note'],
+          ['r3', 'committed', 'remote-note-created'],
+        ]);
+        assert.deepEqual([await noteOf('r1'), await noteOf('r2')], [undefined, undefined]);
+        // A block of a note here keeps its note
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        const taken = await apply([
+          { note: remoteNote('r4'), blocks: [{ ...someBlocks('n1', 1)[0], canvasId: 'r4' }] },
+        ]);
+        assert.deepEqual(itemsOf(taken), [['r4', 'rejected', 'block-of-another-note']]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.canvasId),
+          ['n1'],
+        );
+      });
+
+      it('each part takes the version it was made from, and a part without one, or of another note, is refused', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        for (const command of /** @type {any[]} */ ([
+          cmd('applyRemoteContent', /** @type {any} */ ({ noteId: 'n1', note: remoteNote('n1'), blocks: [] })),
+          cmd('applyRemoteContent', { noteId: 'n1', note: remoteNote('n2'), blocks: [], expectedRevision: 0 }),
+          cmd('applyRemotePlacement', /** @type {any} */ ({ noteId: 'n1', placement: { pinned: true } })),
+          cmd(
+            'applyRemotePlacement',
+            /** @type {any} */ ({ noteId: 'n1', placement: { name: 'x' }, expectedPlacementVersion: 0 }),
+          ),
+        ])) {
+          assertRejected(await kernel.execute(command), 'validation', 'invalid-command');
+        }
+        assertRejected(
+          await kernel.execute(
+            cmd('applyRemotePlacement', { noteId: 'gone', placement: { pinned: true }, expectedPlacementVersion: 0 }),
+          ),
+          'not-found',
+          'note-not-found',
+        );
+      });
+
+      it(
+        flags.idempotency
+          ? 'idempotency: sent again, each note answers from its own records, and nothing moves again'
+          : 'no idempotency: sent again, each note runs again and finds it has the remote change',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          const base = await madeFrom('n1');
+          const command = cmd('applyRemoteChanges', {
+            changes: [{ note: remoteNote('n1', { name: 'Theirs', pinned: true }), blocks: [], ...base }],
+          });
+          const first = bulkOf(await kernel.execute(command));
+          assert.deepEqual(itemsOf(first), [['n1', 'committed', 'remote-placement-applied']]);
+          const after = await storedNoteOf('n1');
+          const second = bulkOf(await kernel.execute(command));
+          if (flags.idempotency) assert.deepEqual(second.items, first.items);
+          else assert.deepEqual(itemsOf(second), [['n1', 'committed', 'remote-content-unchanged']]);
+          assert.deepEqual(await storedNoteOf('n1'), after);
+        },
+      );
     });
 
     describe(`adapter flags: ${JSON.stringify(flags)}`, () => {
