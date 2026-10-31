@@ -24,7 +24,10 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js') }
   const pending = new Set();
 
   const ready = () => {
-    if (!events) events = Promise.resolve().then(load).then(module => module.createFailureEvents({ surface }));
+    if (!events)
+      events = Promise.resolve()
+        .then(load)
+        .then(module => module.createFailureEvents({ surface }));
     return events;
   };
 

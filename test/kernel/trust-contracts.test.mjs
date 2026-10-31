@@ -262,7 +262,10 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), FAILURE_EVENTS_GRAPH);
     const events = path.join(ROOT, 'js', 'kernel', 'composition', 'trust.js');
     assert.deepEqual(
-      [...importGraph(events)].map(file => path.relative(ROOT, file)).filter(isTrust).sort(),
+      [...importGraph(events)]
+        .map(file => path.relative(ROOT, file))
+        .filter(isTrust)
+        .sort(),
       FAILURE_EVENTS_GRAPH,
     );
   });
