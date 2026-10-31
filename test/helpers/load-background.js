@@ -197,7 +197,10 @@ async function loadBackground({ mutate, setup, opens = true } = {}) {
 async function readTodaysDailyNote(worker) {
   await drain();
   const dump = await dumpDatabase(worker.indexedDB);
-  const today = new Date().toISOString().slice(0, 10);
+  // The host's local date, which the worker's kernel keys today's Daily Note by (#17 PR 3b)
+  const now = new Date();
+  const pad = (/** @type {number} */ value) => String(value).padStart(2, '0');
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const notes = Object.values(recordsOf(dump, 'canvases')).filter(note => note.isDaily && note.dateStr === today && !note.trashed);
   if (notes.length === 0) return null;
   if (notes.length > 1) throw new Error(`${notes.length} Daily Notes for ${today}`);
