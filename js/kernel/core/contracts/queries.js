@@ -36,6 +36,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/get-job-runs.js').GetJobRuns} GetJobRuns */
 /** @typedef {import('./operations/list-snapshots.js').ListSnapshots} ListSnapshots */
 /** @typedef {import('./operations/get-snapshot.js').GetSnapshot} GetSnapshot */
+/** @typedef {import('./operations/find-daily-note.js').FindDailyNote} FindDailyNote */
 /** @typedef {import('../domain/snapshot.js').SnapshotRecord} SnapshotRecord */
 /** @typedef {import('../domain/snapshot.js').SnapshotSummary} SnapshotSummary */
 
@@ -43,7 +44,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | GetNoteList | GetNotesByIds | ListSearchEntries
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
- *   | ListSnapshots | GetSnapshot} Query
+ *   | ListSnapshots | GetSnapshot | FindDailyNote} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -71,6 +72,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {{lastAutoTitleRun: number, lastInsightsRun: number}} getJobRuns
  * @property {SnapshotSummary[]} listSnapshots
  * @property {SnapshotRecord} getSnapshot
+ * @property {{note: NoteRecord}} findDailyNote
  */
 
 /**
@@ -144,6 +146,8 @@ export const QUERIES = Object.freeze({
   // Only the new tab's editor has shown version history
   listSnapshots: entry('list-snapshots', ['note'], NEW_TAB),
   getSnapshot: entry('get-snapshot', ['snapshot'], NEW_TAB),
+  // The new tab reads the Daily Note it opens after ensureDailyNote
+  findDailyNote: entry('find-daily-note', [], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */

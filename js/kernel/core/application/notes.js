@@ -16,12 +16,15 @@ import {
   captureBlock,
   dailyDateStr,
   dailyNoteName,
-  findDailyNote,
+  dailyNoteNameFor,
+  findDailyNoteFor,
   inBlockOrder,
   insertLinkText,
+  isDateStr,
   isEmpty,
   isUntitled,
   linkTargets,
+  newDailyNoteRecord,
   newNoteRecord,
   newSearchEntry,
   noteSaveMetadata,
@@ -37,6 +40,7 @@ import { contentChanged, unitsWork } from './work.js';
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').BulkItem} BulkItem */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
+/** @typedef {import('../ports/repository.js').Tx} Tx */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
 
 /**
@@ -52,12 +56,12 @@ import { contentChanged, unitsWork } from './work.js';
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
  *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'insertBlocks' | 'applyDerivedTitle' | 'attachInsights'
- *   | 'captureToDailyNote' | 'runBulkAction'} NoteCommandType
+ *   | 'captureToDailyNote' | 'ensureDailyNote' | 'runBulkAction'} NoteCommandType
  */
 
 /**
  * @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks' | 'getNoteList' | 'getNotesByIds'
- *   | 'listSearchEntries'}
+ *   | 'listSearchEntries' | 'findDailyNote'}
  *   NoteQueryType
  */
 
@@ -200,6 +204,39 @@ function isCapture(value) {
 }
 
 /**
+ * The Daily Note for `dateStr`, found or made in `tx`, which spans the notes store: the one
+ * Storage.ensureDailyNote and ensureDailyNoteForDate would find, or else a new one with id
+ * `noteId`, `isDaily`, and `dateStr` in one put. Two of these at once can't both make one,
+ * since each transaction that writes the notes store waits for the one before it to finish,
+ * and the later one finds the note the earlier one made. Capture and ensureDailyNote both
+ * find their Daily Note here.
+ * @param {Tx} tx
+ * @param {{noteId: string, dateStr: string, name: string, now: number}} daily
+ * @returns {Promise<{dailyId: string, created: boolean} | Rejected>}
+ */
+async function findOrMakeDailyNote(tx, { noteId, dateStr, name, now }) {
+  const found = findDailyNoteFor(await tx.getAll('notes'), dateStr);
+  if (found) return { dailyId: found.id, created: false };
+  if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
+  tx.put('notes', newDailyNoteRecord({ id: noteId, name, dateStr, now }));
+  return { dailyId: noteId, created: true };
+}
+
+/**
+ * A new Daily Note's first blocks: copies of the Daily Note template's, as
+ * Storage.applyTemplateToNote made them, read in `tx`, which spans the blocks store. None
+ * when no template is set.
+ * @param {Tx} tx
+ * @param {unknown} templateId - the `dailyNoteTemplate` preference
+ * @param {{noteId: string, title: string, now: number, nextId: () => string}} target
+ * @returns {Promise<BlockRecord[]>}
+ */
+async function dailyTemplateBlocks(tx, templateId, target) {
+  if (!isId(templateId)) return [];
+  return blocksFromTemplate(await tx.getAllByIndex('blocks', 'canvasId', templateId), target);
+}
+
+/**
  * A command that sets placement fields on one note (pinned, archived, trashed), so the
  * note's content revision stays where it was.
  * @param {import('../contracts/commands.js').Command & {noteId: unknown}} command
@@ -232,35 +269,29 @@ export const noteCommands = {
     if (!Array.isArray(records)) return records;
     const now = clock.now();
     const note = newNoteRecord({ id: noteId, name, now, folderId, pinned, titleManuallySet });
-    /** @type {Unit[]} */
-    const units = [];
-    if (folderId !== null) {
-      units.push({
-        stores: ['folders'],
-        mode: 'readonly',
-        async run(tx) {
-          if (!(await tx.get('folders', folderId))) return rejected('not-found', 'folder-not-found');
-        },
-      });
-    }
-    // One transaction for the note and its search entry, as Storage.createNote writes them
-    units.push({
-      stores: ['notes', 'searchIndex'],
+    /** @type {StoreName[]} */
+    const stores = ['notes', 'searchIndex'];
+    if (folderId !== null) stores.push('folders');
+    if (records.length > 0) stores.push('blocks');
+    // One transaction checks the folder and writes the note, its search entry, and its first
+    // blocks, so on every adapter a new note lands whole or not at all: an import, a note made
+    // from a dragged block, or the welcome note never stays behind without its blocks, and a
+    // folder deleted meanwhile can't leave it filed nowhere. Storage.createNote wrote the note
+    // and its entry together, and its callers saved the blocks one by one after it.
+    /** @type {Unit} */
+    const create = {
+      stores,
       async run(tx) {
+        if (folderId !== null && !(await tx.get('folders', folderId))) {
+          return rejected('not-found', 'folder-not-found');
+        }
         if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
         tx.put('notes', note);
         tx.put('searchIndex', newSearchEntry(note, now));
+        for (const block of records) tx.put('blocks', block);
       },
-    });
-    if (records.length > 0) {
-      units.push({
-        stores: ['blocks'],
-        async run(tx) {
-          for (const block of records) tx.put('blocks', block);
-        },
-      });
-    }
-    return unitsWork(command, units, () => committed('note-created', [noteId]), {
+    };
+    return unitsWork(command, [create], () => committed('note-created', [noteId]), {
       primary: noteRecord(noteId),
       revised: contentChanged,
     });
@@ -553,8 +584,9 @@ export const noteCommands = {
     // The template setting lives outside the note stores, so it's read before any unit runs
     const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
     const now = clock.now();
+    // Today's, keyed by the UTC date and named with the local one, as background.js always had it
+    const dailyName = dailyNoteName(now);
     let dailyId = noteId;
-    let dailyName = '';
     let created = false;
     /** @type {Unit[]} */
     const units = [
@@ -564,21 +596,10 @@ export const noteCommands = {
           // The later units follow what this one decides, and each run decides afresh, since
           // an adapter may run the units again (ports/repository.js, Unit)
           dailyId = noteId;
-          dailyName = '';
           created = false;
-          const daily = findDailyNote(await tx.getAll('notes'), now);
-          if (daily) {
-            dailyId = daily.id;
-            return;
-          }
-          if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
-          dailyName = dailyNoteName(now);
-          created = true;
-          tx.put('notes', {
-            ...newNoteRecord({ id: noteId, name: dailyName, now }),
-            isDaily: true,
-            dateStr: dailyDateStr(now),
-          });
+          const daily = await findOrMakeDailyNote(tx, { noteId, dateStr: dailyDateStr(now), name: dailyName, now });
+          if ('kind' in daily) return daily;
+          ({ dailyId, created } = daily);
         },
       },
       {
@@ -592,9 +613,13 @@ export const noteCommands = {
         stores: ['blocks'],
         async run(tx) {
           // A new Daily Note starts with the Daily Note template's blocks, as in Storage.ensureDailyNote
-          if (created && isId(templateId)) {
-            const template = await tx.getAllByIndex('blocks', 'canvasId', templateId);
-            const copies = blocksFromTemplate(template, { noteId, title: dailyName, now, nextId: () => ids.next() });
+          if (created) {
+            const copies = await dailyTemplateBlocks(tx, templateId, {
+              noteId,
+              title: dailyName,
+              now,
+              nextId: () => ids.next(),
+            });
             for (const block of copies) tx.put('blocks', block);
           }
           tx.put('blocks', captureBlock({ id: blockId, noteId: dailyId, capture, now }));
@@ -605,6 +630,58 @@ export const noteCommands = {
       primary: () => ({ store: 'notes', key: dailyId }),
       revised: contentChanged,
     });
+  },
+
+  async ensureDailyNote(command, { adapter, clock, ids }) {
+    const { noteId, dateStr, at } = command;
+    if (!isId(noteId) || (dateStr !== undefined && !isDateStr(dateStr))) return invalid();
+    // An instant decides today; a calendar day needs none
+    if (at !== undefined && (dateStr !== undefined || !Number.isSafeInteger(at) || at < 0)) return invalid();
+    // The template setting lives outside the note stores, so it's read before the unit runs
+    const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
+    const now = clock.now();
+    // With no day, today's: keyed by the UTC date and named with the local one, as
+    // Storage.ensureDailyNote has it. A calendar day's is keyed and named by that day, as
+    // Storage.ensureDailyNoteForDate has it.
+    const today = at === undefined ? now : at;
+    const day = dateStr === undefined ? dailyDateStr(today) : dateStr;
+    const name = dateStr === undefined ? dailyNoteName(today) : dailyNoteNameFor(dateStr);
+    let dailyId = noteId;
+    let created = false;
+    // One transaction finds the Daily Note or makes it whole: the record with its isDaily and
+    // dateStr, its search entry, and the template's blocks, which 1.4.x wrote in four steps, so
+    // a note never stays half made and two calls at once make one Daily Note
+    /** @type {Unit} */
+    const ensure = {
+      stores: ['notes', 'searchIndex', 'blocks'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        dailyId = noteId;
+        created = false;
+        const daily = await findOrMakeDailyNote(tx, { noteId, dateStr: day, name, now });
+        if ('kind' in daily) return daily;
+        ({ dailyId, created } = daily);
+        if (!created) return;
+        tx.put('searchIndex', newSearchEntry({ id: noteId, name }, now));
+        const copies = await dailyTemplateBlocks(tx, templateId, {
+          noteId,
+          title: name,
+          now,
+          nextId: () => ids.next(),
+        });
+        for (const block of copies) tx.put('blocks', block);
+      },
+    };
+    // Only a Daily Note it made changed anything. One it found changes nothing, so it names no
+    // id, writes no change entry, and moves no revision: the caller reads the Daily Note with
+    // findDailyNote either way
+    return unitsWork(
+      command,
+      [ensure],
+      () =>
+        created ? committed('daily-note-created', [dailyId]) : committed('daily-note-exists', [], { severity: 'info' }),
+      { primary: () => ({ store: 'notes', key: dailyId }), revised: () => created },
+    );
   },
 
   async runBulkAction(command, { run }) {
@@ -696,6 +773,13 @@ export const noteQueries = {
       if (entry) searchEntries.push(entry);
     }
     return notes.length > 0 ? ready(clock.now(), { notes, searchEntries }) : empty(clock.now());
+  },
+
+  async findDailyNote({ dateStr }, { adapter, clock }) {
+    if (!isDateStr(dateStr)) return failed('validation', 'invalid-query');
+    // The first in the withArchived list with that day, as ensureDailyNote finds it
+    const note = findDailyNoteFor(await adapter.read(['notes'], tx => tx.getAll('notes')), dateStr);
+    return note ? ready(clock.now(), { note }) : empty(clock.now());
   },
 
   async listSearchEntries(query, { adapter, clock }) {

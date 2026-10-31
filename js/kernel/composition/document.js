@@ -5,7 +5,8 @@
  * blocks, the notes that link to it, the names a wiki link can take, the templates) are
  * queries, and its writes are commands. The note jobs (auto-title and insights, in
  * NotesManager, the editor, and AI chat) read and write through it too: each write names the
- * note it means, and none takes a note record.
+ * note it means, and none takes a note record. So do the note-list writes App and its
+ * controllers make: new notes and imports, the Daily Note, pin, archive, and unarchive.
  *
  * A read rejects when its query fails, as the Storage call it replaces rejected, so the
  * editor fails where it always has. A write answers the command's outcome and never rejects,
@@ -40,6 +41,16 @@
  * @property {(save: Fields<'saveNoteContent'>) => Promise<Outcome>} saveContent
  * @property {(noteId: string, blockIds: string[]) => Promise<Outcome>} deleteBlocks
  * @property {(note: Fields<'createNote'>) => Promise<Outcome>} createNote
+ *   A new note, under the id in `noteId` (newId), with its first blocks, in one unit
+ * @property {(dateStr?: string) => Promise<{outcome: Outcome, note: NoteRecord | null}>} ensureDailyNote
+ *   The Daily Note for `dateStr` (`YYYY-MM-DD`), or today's: ensureDailyNote makes it under an
+ *   id taken now when there's none (`daily-note-exists` when there was one, which changes
+ *   nothing), then findDailyNote reads it. Today's day is decided once, before the ensure, and
+ *   both take that one day, so they agree across midnight. `note` is null when the ensure
+ *   didn't commit or the read found nothing.
+ * @property {(noteId: string, pinned: boolean) => Promise<Outcome>} setPinned
+ * @property {(noteId: string) => Promise<Outcome>} archiveNote - writes the note's placement fields and nothing else
+ * @property {(noteId: string) => Promise<Outcome>} unarchiveNote - writes the note's placement fields and nothing else
  * @property {(noteId: string) => Promise<NoteRecord | null>} readNote - the note as stored, or null when it isn't
  * @property {(noteId: string) => Promise<NoteRecord[]>} backlinks - the notes that link to it
  * @property {() => Promise<string[]>} noteNames - the names a wiki link can take, as Storage.getNoteNames lists them
@@ -87,13 +98,14 @@
  * @param {{
  *   beforeConnectionCloses?: DocumentClient['beforeConnectionCloses'],
  *   connectionOpen?: DocumentClient['connectionOpen'],
+ *   now?: () => number,
  * }} [connection] What the page's connection runs before it closes for another context's
- *   upgrade, and whether it's open
+ *   upgrade, and whether it's open, and the page's clock, which decides today's Daily Note
  * @returns {DocumentClient}
  */
 export function createDocumentClient(
   client,
-  { beforeConnectionCloses = () => () => {}, connectionOpen = () => true } = {},
+  { beforeConnectionCloses = () => () => {}, connectionOpen = () => true, now = () => Date.now() } = {},
 ) {
   /**
    * A query's data, or `none` when it found nothing. Its kernel is ready once the page has
@@ -126,6 +138,28 @@ export function createDocumentClient(
       client.execute({ type: 'deleteBlocks', commandId: client.ids.next(), noteId, blockIds }),
 
     createNote: note => client.execute({ ...note, type: 'createNote', commandId: client.ids.next() }),
+
+    async ensureDailyNote(dateStr) {
+      // Today's is decided once, here: the ensure gets the instant, which keys it by the UTC date
+      // and names it with the local one as 1.4.x did, and the read gets that instant's UTC date
+      const at = now();
+      const day = dateStr === undefined ? new Date(at).toISOString().split('T')[0] : dateStr;
+      const outcome = await client.execute({
+        type: 'ensureDailyNote',
+        commandId: client.ids.next(),
+        noteId: client.ids.next(),
+        ...(dateStr === undefined ? { at } : { dateStr }),
+      });
+      if (outcome.kind !== 'committed') return { outcome, note: null };
+      const found = await read({ type: 'findDailyNote', dateStr: day }, null).catch(() => null);
+      return { outcome, note: found ? found.note : null };
+    },
+
+    setPinned: (noteId, pinned) => client.execute({ type: 'setPinned', commandId: client.ids.next(), noteId, pinned }),
+
+    archiveNote: noteId => client.execute({ type: 'archiveNote', commandId: client.ids.next(), noteId }),
+
+    unarchiveNote: noteId => client.execute({ type: 'unarchiveNote', commandId: client.ids.next(), noteId }),
 
     async readNote(noteId) {
       const found = await read({ type: 'getNote', noteId }, null);

@@ -32,8 +32,9 @@ class ShortcutsManager {
     this.onOpenSettingsModal = null;
     this.onCloseAllModals = null;
     this.onToggleShortcutsModal = null;
+    // App's, through the kernel: the note list and the empty state show the Daily Note once
+    // it's there, with no refresh
     this.onEnsureDailyNote = null;
-    this.onRefreshNotesList = null;
     this.onCycleTab = null;
     this.onCloseCurrentTab = null;
     this.getEditor = null;
@@ -134,7 +135,6 @@ class ShortcutsManager {
           e.preventDefault();
           if (this.onEnsureDailyNote) {
             const note = await this.onEnsureDailyNote();
-            if (note && this.onRefreshNotesList) await this.onRefreshNotesList();
             if (note && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
           }
           return;
@@ -481,7 +481,6 @@ class ShortcutsManager {
       case 'open-daily-note':
         if (this.onEnsureDailyNote) {
           const note = await this.onEnsureDailyNote();
-          if (note && this.onRefreshNotesList) await this.onRefreshNotesList();
           if (note && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
         }
         break;

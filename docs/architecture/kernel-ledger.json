@@ -18,7 +18,7 @@
     {
       "file": "js/app.js",
       "rule": "Storage",
-      "count": 96,
+      "count": 90,
       "owner": 12,
       "removeWhen": "#12 slices 4 to 7 route App's reads and writes through kernel commands and queries; search index, vector, and sync calls left are re-pointed to #22 and #19",
       "verify": "npm run check:boundaries"
@@ -50,7 +50,7 @@
     {
       "file": "js/controllers/ai-chat-controller.js",
       "rule": "this.storage",
-      "count": 27,
+      "count": 26,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -82,7 +82,7 @@
     {
       "file": "js/controllers/notes-manager.js",
       "rule": "this.storage",
-      "count": 35,
+      "count": 29,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -106,7 +106,7 @@
     {
       "file": "js/controllers/sidebar-controller.js",
       "rule": "this.storage",
-      "count": 33,
+      "count": 21,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"

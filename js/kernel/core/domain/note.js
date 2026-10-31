@@ -394,6 +394,41 @@ export function dailyNoteName(now) {
 }
 
 /**
+ * Whether `value` is a `dateStr` as a Daily Note holds one: `YYYY-MM-DD`, a day the calendar
+ * can name
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+export function isDateStr(value) {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(new Date(`${value}T00:00:00`).getTime())
+  );
+}
+
+/**
+ * The name of the Daily Note for the calendar day `dateStr`, as Storage.ensureDailyNoteForDate
+ * names it: the day's local midnight, in dailyNoteName's format.
+ * @param {string} dateStr
+ * @returns {string}
+ */
+export function dailyNoteNameFor(dateStr) {
+  return dailyNoteName(new Date(`${dateStr}T00:00:00`).getTime());
+}
+
+/**
+ * The Daily Note for `dateStr` among `notes`, as Storage.ensureDailyNoteForDate finds it: the
+ * first in the `withArchived` list with that `dateStr`.
+ * @param {NoteRecord[]} notes
+ * @param {string} dateStr
+ * @returns {NoteRecord | undefined}
+ */
+export function findDailyNoteFor(notes, dateStr) {
+  return notesInView(notes, 'withArchived').find(note => note.isDaily && note.dateStr === dateStr);
+}
+
+/**
  * Today's Daily Note among `notes`, as Storage.getTodayNote finds it: the first in the
  * `withArchived` list whose `dateStr` is today's.
  * @param {NoteRecord[]} notes
@@ -401,8 +436,17 @@ export function dailyNoteName(now) {
  * @returns {NoteRecord | undefined}
  */
 export function findDailyNote(notes, now) {
-  const today = dailyDateStr(now);
-  return notesInView(notes, 'withArchived').find(note => note.isDaily && note.dateStr === today);
+  return findDailyNoteFor(notes, dailyDateStr(now));
+}
+
+/**
+ * A new Daily Note: the record Storage.createNote writes, with the `isDaily` and `dateStr` that
+ * 1.4.x's ensureDailyNote wrote over it in a second write, here in the first.
+ * @param {{id: string, name: string, dateStr: string, now: number}} fields
+ * @returns {NoteRecord}
+ */
+export function newDailyNoteRecord({ id, name, dateStr, now }) {
+  return { ...newNoteRecord({ id, name, now }), isDaily: true, dateStr };
 }
 
 /**

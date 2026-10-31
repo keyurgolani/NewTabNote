@@ -34,6 +34,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/apply-derived-title.js').ApplyDerivedTitle} ApplyDerivedTitle */
 /** @typedef {import('./operations/attach-insights.js').AttachInsights} AttachInsights */
 /** @typedef {import('./operations/capture-to-daily-note.js').CaptureToDailyNote} CaptureToDailyNote */
+/** @typedef {import('./operations/ensure-daily-note.js').EnsureDailyNote} EnsureDailyNote */
 /** @typedef {import('./operations/run-bulk-action.js').RunBulkAction} RunBulkAction */
 /** @typedef {import('./operations/create-folder.js').CreateFolder} CreateFolder */
 /** @typedef {import('./operations/move-folder.js').MoveFolder} MoveFolder */
@@ -50,8 +51,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * @typedef {CreateNote | RenameNote | SetPinned | ArchiveNote | UnarchiveNote | TrashNote | RestoreNote
- *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | RunBulkAction
- *   | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance
+ *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | EnsureDailyNote
+ *   | RunBulkAction | CreateFolder | MoveFolder | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance
  *   | SetInsightsPending | RecordJobRun | SaveSnapshot | RestoreSnapshot | InsertBlocks} Command
  */
 
@@ -146,6 +147,8 @@ export const COMMANDS = Object.freeze({
     entityTypes: ['note', 'block'],
     maxBytes: LARGE,
   }),
+  // The sidebar's Daily Note button and calendar, the palette, and AI chat's Alt+D, all in the new tab
+  ensureDailyNote: entry('ensure-daily-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   runBulkAction: entry('run-bulk-action', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE, bulk: true }),
   createFolder: entry('create-folder', 'folder', ['newtab'], { entityTypes: ['folder'], maxBytes: LARGE }),
   moveFolder: entry('move-folder', 'folder', ['newtab'], { entityTypes: ['folder'] }),

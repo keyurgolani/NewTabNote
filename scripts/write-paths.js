@@ -129,8 +129,8 @@ const WEB_STORAGE_WRITES = new Set(['setItem', 'removeItem', 'clear']);
 const COMMANDS = {
   // Slice 4: notes and blocks
   runStartupMaintenance: { slice: 4 },
+  // An imported note is a new note with its first blocks (#12 slice 4c2), so createNote takes import's rows
   createNote: { slice: 4 },
-  importNote: { slice: 4 },
   ensureDailyNote: { slice: 4 },
   captureToDailyNote: { slice: 4 },
   saveNoteContent: { slice: 4 },
@@ -201,9 +201,8 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
  */
 const RULES = [
   { command: 'ensureDailyNote', op: ['ensureDailyNote', 'ensureDailyNoteForDate'] },
-  { command: 'importNote', method: /\.importNote$/, op: ['createNote', 'saveElement'] },
-  // A new note and its first blocks are one intent
-  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock)$/, op: ['createNote', 'saveElement', 'saveElements'] },
+  // A new note and its first blocks are one intent, an imported one's included
+  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock|importNote)$/, op: ['createNote', 'saveElement', 'saveElements'] },
   { command: 'createNote', op: 'createNote' },
   { command: 'convertNoteToTemplate', method: /\.convertNoteToTemplate$/, op: 'updateNote' },
   { command: 'convertTemplateToNote', method: /\.convertTemplateToNote$/, op: 'updateNote' },
@@ -988,6 +987,8 @@ function renderDoc(rows) {
     }),
     '',
     'Rows marked "deleted in slice 7" or "no live caller" are counted under the command the call would become.',
+    '',
+    "Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.",
     '',
     '## Calls',
     '',

@@ -56,6 +56,7 @@ class AIChatController {
     this.onOpenNoteById = null;      // (noteId) => Promise<void>
     this.onRefreshNotesList = null;  // () => Promise<void>
     this.onRenderNotesList = null;   // () => Promise<void>
+    this.onEnsureDailyNote = null;   // () => Promise<{id: string}|null>, the Daily Note through the kernel
     this.onOpenNewTab = null;        // () => Promise<void>
     this.onOpenSettingsModal = null;  // () => Promise<void>
     this.onCloseAllModals = null;    // () => void
@@ -157,9 +158,9 @@ class AIChatController {
       // Daily Note shortcut (Alt + D)
       if (e.altKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
-        const note = await this.storage.ensureDailyNote();
-        if (this.onRefreshNotesList) await this.onRefreshNotesList();
-        if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
+        // App's, which the note list and the empty state show once it's there, with no refresh
+        const note = this.onEnsureDailyNote ? await this.onEnsureDailyNote() : null;
+        if (note && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
       }
     });
 
