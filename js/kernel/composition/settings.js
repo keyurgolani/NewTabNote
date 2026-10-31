@@ -34,6 +34,16 @@ export class SettingsWriteError extends Error {
     this.name = 'SettingsWriteError';
     /** @type {Outcome} */
     this.outcome = outcome;
+    // The outcome's code, cause, and whether a retry can work, which #20's failure events read
+    // as evidence; codes only, never what was being saved
+    /** @type {string} */
+    this.code = outcome.code;
+    if (outcome.kind === 'unavailable') {
+      /** @type {string | undefined} */
+      this.unavailableCause = outcome.cause;
+      /** @type {boolean | undefined} */
+      this.retryable = outcome.retryable;
+    }
   }
 }
 

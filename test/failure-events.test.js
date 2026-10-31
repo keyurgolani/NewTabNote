@@ -14,7 +14,7 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
-const { createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient } = require('./helpers/legacy-env');
 const { loadBackground } = require('./helpers/load-background');
 
 const TITLE = 'Canary title: plans for the divorce lawyer';
@@ -522,8 +522,15 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
   async function failedBackup(events) {
     const { env, Storage } = await page();
     await Storage.setSetting('autoBackupEnabled', true);
+    // The page's settings port, which runs the auto-backup command (#12 slice 6)
+    await startEditorClient(env);
     const SettingsController = env.get('SettingsController');
-    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: loggerWith(events) });
+    const settings = new SettingsController({
+      storage: Storage,
+      settings: env.settingsClient,
+      domRefs: null,
+      logger: loggerWith(events),
+    });
     env.chrome.failNextSet(canaryError());
     await settings.checkBackupStatus();
     if (events) await events.flush();
@@ -534,8 +541,9 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
     const { host, working } = variants();
     await failedBackup(working);
     const seen = await inspect(host.indexedDB, host.settings.items);
-    // chrome.runtime.lastError holds only a message, so the event has no evidence beyond its code
-    assert.deepEqual(failures(seen.events), [['backup.auto-failed', {}]]);
+    // chrome.runtime.lastError holds only a message; the createAutoBackup outcome the event
+    // reads it through carries its cause and whether a retry can work, and nothing of the message
+    assert.deepEqual(failures(seen.events), [['backup.auto-failed', { cause: 'storage', errorCode: 'transaction-failed', retryable: true }]]);
     assert.deepEqual(incidentsOf(seen.incidents), [['backup', 'auto-backup-failed', null, 'data-risk', 1]]);
     assertNoCanary(seen.text, 'NewTabNoteTrust, the settings area, or the export');
   });
