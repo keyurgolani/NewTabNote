@@ -182,6 +182,7 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
         triggers: ['open'],
         core: true,
         fixtures: ['truthful-receipt'],
+        observes: ['scan-findings'],
         implementation: {
           check: () => ({
             status: 'degraded',

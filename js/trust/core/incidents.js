@@ -117,22 +117,23 @@ export function directAt(record, kind, now) {
  * remembered by its lineage in `appliedOps`, and adds only what that lineage hasn't yet.
  * @param {Incident | undefined} record
  * @param {IncidentOp} op
- * @param {{track?: boolean}} [options]
+ * @param {{track?: boolean, unseen?: boolean}} [options]
  * @returns {Incident | undefined}
  */
-export function applyOp(record, op, { track = false } = {}) {
+export function applyOp(record, op, { track = false, unseen = false } = {}) {
   if (op.kind === 'resolve') return applyResolve(record, op);
   if (op.kind === 'dismiss') return applyDismiss(record, op);
-  return applyRaise(record, op, { track });
+  return applyRaise(record, op, { track, unseen });
 }
 
 /**
  * @param {Incident | undefined} record
  * @param {RaiseOp} op
- * @param {{track?: boolean}} [options]
+ * @param {{track?: boolean, unseen?: boolean}} [options] - `unseen`: a held sighting, which
+ *   no write has counted yet (a copy entry's new count, or what one context's memory holds)
  * @returns {Incident}
  */
-export function applyRaise(record, op, { track = false } = {}) {
+export function applyRaise(record, op, { track = false, unseen = false } = {}) {
   const { sighting, at } = op;
   const remembered = { lineage: op.lineage, count: op.count };
   if (!record) {
@@ -164,11 +165,13 @@ export function applyRaise(record, op, { track = false } = {}) {
     if (added === 0) return record;
   }
   const newest = at >= record.lastSeenAt;
-  // A copy entry's unseen count reopens whatever the clocks say: a resolve replays the copy
-  // first, under its lock, so what it hadn't seen was added after it
-  const reopens = record.state === 'resolved' && added > 0 && (track || at >= (record.resolvedAt ?? 0));
+  // A held sighting's new count reopens and undismisses whatever the clocks say: a resolve or
+  // a dismiss replays what's held first, under the copy's lock, so what it hadn't counted came
+  // after it. Memory clears what it replayed once the write commits.
+  const late = track || unseen;
+  const reopens = record.state === 'resolved' && added > 0 && (late || at >= (record.resolvedAt ?? 0));
   const staysResolved = record.state === 'resolved' && !reopens;
-  const undismisses = record.dismissed && added > 0 && at >= (record.dismissChangedAt ?? 0);
+  const undismisses = record.dismissed && added > 0 && (late || at >= (record.dismissChangedAt ?? 0));
   return {
     ...record,
     severity: reopens ? sighting.severity : staysResolved ? record.severity : worseSeverity(record.severity, sighting.severity),

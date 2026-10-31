@@ -1,10 +1,14 @@
 /**
  * The Trust Center's two registry families on #15's kit (#20, "Contracts"):
  * - `health`: a HealthProvider, `{id, group, owner, operation, costClass, timeoutMs,
- *   freshnessMs, triggers, check(), remediations}`. Its descriptor is the static data, and its
- *   implementation (a static `implementation` or a lazy `load`) holds `check()`, which answers
- *   a CheckResult (checks.js). `core` marks the providers capture depends on, the only ones
- *   that set a receipt's `capture`.
+ *   freshnessMs, triggers, observes, check(), remediations}`. Its descriptor is the static
+ *   data, and its implementation (a static `implementation` or a lazy `load`) holds `check()`,
+ *   which answers a CheckResult (checks.js). `core` marks the providers capture depends on, the
+ *   only ones that set a receipt's `capture`. `observes` lists the faults (codes.js) its check
+ *   can see, possibly none: a check that answers, whatever its status, resolves the provider's
+ *   open incidents for those faults that it no longer reports, and its check reports no other
+ *   fault. An incident for a fault no check observes (a failure event's) resolves through a
+ *   remediation's verify step or a later success event from the same site.
  * - `remediation`: a RemediationCommand, `{id, owner, class, appliesTo, preview(), apply(),
  *   verify()}`, whose implementation holds the three steps. Slice 3 runs them through the
  *   pipeline its class sets.
@@ -17,6 +21,7 @@
 
 import { defineFamily } from '../../kernel/registry/family.js';
 import { isId } from '../../kernel/registry/ids.js';
+import { FAULT_CODES } from './codes.js';
 import { COST_CLASSES, HEALTH_GROUPS, REMEDIATION_CLASSES, REMEDIATION_GROUPS, TRIGGERS } from './vocabulary.js';
 
 /** The longest a check may be given, and the longest a receipt stays fresh */
@@ -59,6 +64,8 @@ export const health = defineFamily({
     timeoutMs: value => isPositiveInteger(value, MAX_TIMEOUT_MS),
     freshnessMs: value => isPositiveInteger(value, MAX_FRESHNESS_MS),
     triggers: value => isList(value, item => typeof item === 'string' && /** @type {readonly string[]} */ (TRIGGERS).includes(item), 1),
+    observes: value =>
+      isList(value, item => typeof item === 'string' && /** @type {readonly string[]} */ (FAULT_CODES).includes(item)),
     remediations: value => value === undefined || isList(value, item => isId(item)),
     core: value => value === undefined || typeof value === 'boolean',
   },

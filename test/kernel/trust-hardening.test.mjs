@@ -184,7 +184,8 @@ describe("#68's review round", () => {
     assert.deepEqual(
       (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
       [
-        ['storage/open-failed/NewTabNoteTrust', 1],
+        // The failed open() and each of the 60 writes (part 2)
+        ['storage/open-failed/NewTabNoteTrust', 61],
         ['storage/write-failed/-', 60],
       ],
     );

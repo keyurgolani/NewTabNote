@@ -137,6 +137,7 @@ const provider = (id, check, extra = {}) => ({
   freshnessMs: 60_000,
   triggers: ['verify-now'],
   fixtures: ['truthful-receipt'],
+  observes: [],
   implementation: { check },
   ...extra,
 });

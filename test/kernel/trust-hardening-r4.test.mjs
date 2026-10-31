@@ -112,9 +112,10 @@ const storedAt = async (store, key) =>
  * A provider whose check answers `answer`
  * @param {string} id
  * @param {() => unknown} check
+ * @param {Record<string, unknown>} [extra]
  * @returns {Descriptor}
  */
-const provider = (id, check) => ({
+const provider = (id, check, extra = {}) => ({
   id,
   version: 1,
   apiVersion: 1,
@@ -129,7 +130,9 @@ const provider = (id, check) => ({
   freshnessMs: 60_000,
   triggers: ['verify-now'],
   fixtures: ['truthful-receipt'],
+  observes: [],
   implementation: { check },
+  ...extra,
 });
 
 describe("#68's fourth review round", () => {
@@ -287,7 +290,9 @@ describe("#68's fourth review round", () => {
     const { records, clock } = await recordsOn(store, profile);
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
     clock.advance(10);
-    const { trust } = await useCases(records, clock, [provider('index', () => ({ status: 'verified' }))]);
+    const { trust } = await useCases(records, clock, [
+      provider('index', () => ({ status: 'verified' }), { observes: ['lagging'] }),
+    ]);
     failNext(1, 'unreadable', { after: 1 });
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
     assert.equal(outcome.kind, 'unavailable');
