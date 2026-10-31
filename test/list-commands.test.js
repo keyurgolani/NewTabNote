@@ -36,7 +36,7 @@ async function createProfile(factory) {
  * A new tab with A open, the sidebar and NotesManager wired as App wires them, and a count
  * of every refresh and reload of the lists, which none of these writes should need
  */
-async function openPage({ kernelNow, pageNow } = {}) {
+async function openPage({ kernelNow, pageNow, zone } = {}) {
   const env = createLegacyEnv();
   await createProfile(env.indexedDB);
   const listQueries = [];
@@ -45,6 +45,7 @@ async function openPage({ kernelNow, pageNow } = {}) {
     onListQuery: (query) => listQueries.push(query.type),
     kernelNow,
     pageNow,
+    zone,
   });
   const page = { ...booted, noteList: booted.page.noteList, get refreshes() { return booted.page.refreshes; } };
   await page.tabs.openNoteInNewTab('A');
@@ -179,7 +180,10 @@ describe("the sidebar's new notes and Daily Notes", () => {
     const daily = Object.values(notes).filter((n) => n.isDaily);
     assert.equal(daily.length, 1);
     const today = new Date();
-    assert.equal(daily[0].dateStr, today.toISOString().split('T')[0], "keyed by the UTC date, as 1.4.x's");
+    // The host's local date, as #1's localDateKey gives it, where 1.4.x keyed it by the UTC date (#17 PR 3b)
+    const pad = (n) => String(n).padStart(2, '0');
+    const localDate = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    assert.equal(daily[0].dateStr, localDate, 'keyed by the local date');
     assert.equal(
       daily[0].name,
       `Daily Note - ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
@@ -191,22 +195,34 @@ describe("the sidebar's new notes and Daily Notes", () => {
     assertNoRefresh(reloads);
   });
 
-  it("today's Daily Note asked for just before UTC midnight opens, though the kernel runs just after", async () => {
-    // The page decides the day at 23:59:59.900 UTC; its kernel's clock already reads the next day
+  it("today's Daily Note asked for just before midnight opens, though the kernel runs just after", async () => {
+    // The page decides the day at 23:59:59.900 in UTC; its kernel's clock already reads the next day
     const asked = Date.UTC(2026, 9, 30, 23, 59, 59, 900);
-    const { env, page, sidebar, toasts } = await openPage({ pageNow: () => asked, kernelNow: () => asked + 200 });
+    const { env, page, sidebar, toasts } = await openPage({ pageNow: () => asked, kernelNow: () => asked + 200, zone: 'UTC' });
     const noteId = await runUntil(env, sidebar.ensureDailyNote());
     assert.ok(noteId, 'the ensure and the read agree on the day');
     await runUntil(env, sidebar.onOpenNoteInNewTab(noteId));
     assert.equal(page.tabs.editor.noteId, noteId, 'it opens');
     const daily = Object.values((await stored(env)).notes).filter((n) => n.isDaily);
-    const name = `Daily Note - ${new Date(asked).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', name]],
-      'keyed by the UTC date and named with the local one, both of the moment it was asked for');
+    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', 'Daily Note - Oct 30, 2026']],
+      'keyed and named by the date of the moment it was asked for');
     assert.deepEqual(plain(toasts), [], 'no failure toast');
     // Asked again a moment later, still from before midnight, it finds that note
     assert.equal(await runUntil(env, sidebar.ensureDailyNote()), noteId);
     assert.deepEqual(plain(toasts), []);
+  });
+
+  it("after 5 PM in Los Angeles, today's Daily Note is the one named for today, keyed by the local date (#17 PR 3b)", async () => {
+    // 18:30 on Oct 30 in Los Angeles is 01:30 on Oct 31 in UTC, which 1.4.x took for today
+    const evening = Date.UTC(2026, 9, 31, 1, 30);
+    const { env, sidebar } = await openPage({ pageNow: () => evening, kernelNow: () => evening, zone: 'America/Los_Angeles' });
+    const noteId = await runUntil(env, sidebar.ensureDailyNote());
+    assert.ok(noteId);
+    // This profile is at version 8, so the note's key fields wait for the run (review R88)
+    const daily = Object.values((await stored(env)).notes).filter((n) => n.isDaily);
+    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', 'Daily Note - Oct 30, 2026']]);
+    // A capture or a second click that evening finds the same note
+    assert.equal(await runUntil(env, sidebar.ensureDailyNote()), noteId);
   });
 
   it("a calendar day's Daily Note is keyed and named by that day, and clicking it twice opens one note", async () => {

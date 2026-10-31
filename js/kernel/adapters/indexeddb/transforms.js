@@ -37,10 +37,21 @@
  * (KD-011), and a trashed note its time in the trash, which retention counts from. It writes no
  * change entry and moves no version: it adds what the flags already say. Its receipt counts the
  * notes it read and filled, and #1's findings (placementFindingsOf), never content.
+ *
+ * Logical 3 (#17 PR 3b) gives each Daily Note its local key, by #17's rules (domain/daily.js,
+ * assignDailyKeys), and fills step 11's daily index. The rules weigh every Daily Note at once,
+ * so the run reads them all first, in bounded readonly batches, and keeps the answer in `meta`
+ * (TRANSFORM_DAILY_KEY) until the step's receipt, so a cut-off run picks up with the same answer
+ * whatever its batches wrote. A batch claims each key in the index as it writes the note that
+ * holds it, so an entry a command wrote since the run read the notes, for a Daily Note it made,
+ * goes to the earlier made of the two. Its receipt counts the notes it read and filled, the
+ * ones it moved to their local date, and the ones it marked as duplicates, never content.
  */
 
+import { assignDailyKeys, canHoldKey, holdsKey, madeBefore, withAssignedKey } from '../../core/domain/daily.js';
 import { filledUpdatedAt, hasIndexedTime, hasTrashTime } from '../../core/domain/note.js';
-import { hasPlacementGroup, placementFindingsOf, placementGroupOf } from '../../core/domain/placement.js';
+import { hasPlacementGroup, isDateKey, placementFindingsOf, placementGroupOf } from '../../core/domain/placement.js';
+import { zoneOf } from '../../core/ports/runtime.js';
 import { failureOf } from './failures.js';
 import { approximateBytes } from './records.js';
 import {
@@ -61,7 +72,14 @@ import {
   storesToCopy,
   verifyPoint,
 } from './recovery-points.js';
-import { LATEST_LOGICAL, META_STORE, MIGRATIONS_STORE, SCHEMA_KEY, pendingTransforms } from './registry.js';
+import {
+  DAILY_INDEX_STORE,
+  LATEST_LOGICAL,
+  META_STORE,
+  MIGRATIONS_STORE,
+  SCHEMA_KEY,
+  pendingTransforms,
+} from './registry.js';
 import { result } from './requests.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
@@ -75,6 +93,7 @@ import { checkSpace } from './space.js';
 /** @typedef {import('./space.js').Estimate} Estimate */
 /** @typedef {import('./shapes.js').Receipt} Receipt */
 /** @typedef {import('../../core/domain/note.js').NoteRecord} NoteRecord */
+/** @typedef {import('../../core/domain/daily.js').DailyAssignment} DailyAssignment */
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
 
@@ -84,12 +103,23 @@ export const TRANSFORM_KEY = 'transform';
 /** `meta`'s record of a run that read every store and then stopped (see the top of this file) */
 export const TRANSFORM_STOP_KEY = 'transform-stop';
 
+/** `meta`'s record of logical 3's answer while its batches run (see the top of this file) */
+export const TRANSFORM_DAILY_KEY = 'transform-daily';
+
 /** How long such a stop stands, as the worker's RETRY_AFTER_MS for the runner */
 export const TRANSFORM_RETRY_AFTER_MS = 30 * 60 * 1000;
 
 /**
- * What a receipt counts: the notes read and filled, and #1's findings among those read
- * @typedef {{read: number, filled: number, staleFolder: number, dailyWithoutDate: number}} TransformCounts
+ * What a receipt counts (COUNTED): the notes read and filled, and for logical 2 #1's findings
+ * among those read, for logical 3 the notes moved to their local date and those marked as
+ * duplicates
+ * @typedef {Record<string, number>} TransformCounts
+ */
+
+/**
+ * Logical 3's answer, as `meta` keeps it: each Daily Note's id, key, holder when another holds
+ * it, and whether it moves to its local date, and the zone the run took local dates in
+ * @typedef {{key: typeof TRANSFORM_DAILY_KEY, zone: string, assignments: Array<[string, string, string | null, boolean]>}} TransformDaily
  */
 
 /**
@@ -101,8 +131,18 @@ export const TRANSFORM_RETRY_AFTER_MS = 30 * 60 * 1000;
  * @typedef {{key: typeof TRANSFORM_STOP_KEY, status: 'space-blocked' | 'failed', code: string, at: number, target: number}} TransformStop
  */
 
-/** The stores logical 2 rewrites, which a reused point must still hold as they are */
+/**
+ * The stores the transforms rewrite that a reused point must still hold as they are. Logical 3
+ * also writes the daily index, which is derived from the notes, so a point that holds them as
+ * they were holds what it needs.
+ */
 const REWRITTEN = Object.freeze(['canvases']);
+
+/** What each step's receipt counts */
+const COUNTED = Object.freeze({
+  'logical-2': Object.freeze(['read', 'filled', 'staleFolder', 'dailyWithoutDate']),
+  'logical-3': Object.freeze(['read', 'filled', 'rekeyed', 'duplicates']),
+});
 
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
@@ -162,8 +202,12 @@ const outcome = fields => ({
   ...fields,
 });
 
-/** @returns {TransformCounts} */
-const noCounts = () => ({ read: 0, filled: 0, staleFolder: 0, dailyWithoutDate: 0 });
+/**
+ * @param {TransformStep} step
+ * @returns {TransformCounts}
+ */
+const noCounts = step =>
+  Object.fromEntries((COUNTED[/** @type {keyof typeof COUNTED} */ (step.id)] || ['read', 'filled']).map(name => [name, 0]));
 
 /**
  * Whether logical 2 has something to fill on `note`. A note without its placement gets the
@@ -175,6 +219,27 @@ const noCounts = () => ({ read: 0, filled: 0, staleFolder: 0, dailyWithoutDate: 
  */
 export const needsLogical2 = note =>
   !hasPlacementGroup(note) || !hasIndexedTime(note) || (Boolean(note.trashed) && !hasTrashTime(note));
+
+/**
+ * Whether logical 3 has something to fill on `note`: a Daily Note with a valid `dateStr` and no
+ * key yet. A Daily Note without a valid `dateStr` gets none, as #1's `daily-without-date`.
+ * @param {NoteRecord} note
+ */
+export const needsLogical3 = note => Boolean(note.isDaily) && isDateKey(note.dateStr) && !isDateKey(note.dailyKey);
+
+/** What each step has to fill */
+const NEEDS = Object.freeze({ 'logical-2': needsLogical2, 'logical-3': needsLogical3 });
+
+/**
+ * Whether a pending step has something to fill on `note`
+ * @param {readonly TransformStep[]} steps
+ * @param {NoteRecord} note
+ */
+const needsAny = (steps, note) =>
+  steps.some(step => {
+    const needs = NEEDS[/** @type {keyof typeof NEEDS} */ (step.id)];
+    return needs !== undefined && needs(note);
+  });
 
 /**
  * A note with what logical 2 fills, or null when it has it all:
@@ -199,13 +264,14 @@ export function filledByLogical2(note, { liveFolderIds, blocks, runStart }) {
 }
 
 /**
- * Adds one note read to `counts`: it, and #1's findings on it
+ * Adds one note read to `counts`: it, and for logical 2 #1's findings on it
  * @param {TransformCounts} counts
  * @param {NoteRecord} note
  * @param {ReadonlySet<string>} liveFolderIds
  */
 function tally(counts, note, liveFolderIds) {
   counts.read += 1;
+  if (!('staleFolder' in counts)) return;
   for (const finding of placementFindingsOf(note, liveFolderIds)) {
     if (finding === 'stale-folder') counts.staleFolder += 1;
     else counts.dailyWithoutDate += 1;
@@ -223,44 +289,99 @@ async function folderIdsOf(request) {
 }
 
 /**
- * `meta`'s schema record, the progress of a cut-off run, and a recorded stop
+ * `meta`'s schema record, the progress of a cut-off run, a recorded stop, and logical 3's answer
  * @param {IDBDatabase} db
- * @returns {Promise<{schema: Record<string, unknown> | undefined, progress: TransformProgress | undefined, stop: TransformStop | undefined}>}
+ * @returns {Promise<{schema: Record<string, unknown> | undefined, progress: TransformProgress | undefined, stop: TransformStop | undefined, daily: TransformDaily | undefined}>}
  */
 async function readState(db) {
   const tx = db.transaction(META_STORE, 'readonly');
   const meta = tx.objectStore(META_STORE);
-  const [schema, progress, stop] = await Promise.all([
+  const [schema, progress, stop, daily] = await Promise.all([
     result(meta.get(SCHEMA_KEY)),
     result(meta.get(TRANSFORM_KEY)),
     result(meta.get(TRANSFORM_STOP_KEY)),
+    result(meta.get(TRANSFORM_DAILY_KEY)),
   ]);
-  return { schema, progress, stop };
+  return { schema, progress, stop, daily };
 }
 
 /**
- * Reads the notes in bounded readonly batches until one needs logical 2, counting those before
- * it. Writes nothing.
+ * Reads the notes in bounded readonly batches until one needs a pending step, counting those
+ * before it for each step. Writes nothing.
  * @param {IDBDatabase} db
  * @param {Io} io
- * @returns {Promise<{needed: boolean, counts: TransformCounts}>}
+ * @param {readonly TransformStep[]} steps
+ * @returns {Promise<{needed: boolean, counts: TransformCounts[]}>}
  */
-async function scanNotes(db, io) {
+async function scanNotes(db, io, steps) {
   const liveFolderIds = db.objectStoreNames.contains('folders')
     ? await folderIdsOf(db.transaction('folders', 'readonly').objectStore('folders').getAllKeys())
     : new Set();
-  const counts = noCounts();
+  const counts = steps.map(noCounts);
   /** @type {IDBValidKey | null} */
   let after = null;
   for (;;) {
     const batch = await readBatch(db, 'canvases', after, null, io);
     for (const { value } of batch.entries) {
-      if (needsLogical2(value)) return { needed: true, counts };
-      tally(counts, value, liveFolderIds);
+      if (needsAny(steps, value)) return { needed: true, counts };
+      for (const each of counts) tally(each, value, liveFolderIds);
     }
     if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
     if (batch.end || batch.entries.length === 0) return { needed: false, counts };
   }
+}
+
+/**
+ * Logical 3's answer for the notes as they are now: the fields assignDailyKeys weighs of every
+ * Daily Note, read in bounded readonly batches, then each one's key
+ * @param {IDBDatabase} db
+ * @param {Io} io
+ * @param {string} zone
+ * @returns {Promise<Map<string, DailyAssignment>>}
+ */
+async function assignedNow(db, io, zone) {
+  /** @type {Array<Record<string, unknown> & {id: string}>} */
+  const daily = [];
+  /** @type {IDBValidKey | null} */
+  let after = null;
+  for (;;) {
+    const batch = await readBatch(db, 'canvases', after, null, io);
+    for (const { value } of batch.entries) {
+      if (!value || !value.isDaily) continue;
+      const { id, isDaily, dateStr, dailyKey, createdAt, name, trashed, isTemplate } = value;
+      daily.push({ id, isDaily, dateStr, dailyKey, createdAt, name, trashed, isTemplate });
+    }
+    if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
+    if (batch.end || batch.entries.length === 0) return assignDailyKeys(daily, zone);
+  }
+}
+
+/**
+ * Logical 3's answer for this run: the one `meta` kept for a cut-off run of it, else the notes'
+ * now, which `meta` then keeps until the step's receipt
+ * @param {IDBDatabase} db
+ * @param {Io} io
+ * @param {{zone: string, kept: TransformDaily | null}} options
+ * @returns {Promise<Map<string, DailyAssignment>>}
+ */
+async function dailyAnswer(db, io, { zone, kept }) {
+  if (kept && Array.isArray(kept.assignments)) {
+    return new Map(
+      kept.assignments.map(([id, dailyKey, duplicateOf, rekeyed]) => [id, { dailyKey, duplicateOf, rekeyed }]),
+    );
+  }
+  const assigned = await assignedNow(db, io, zone);
+  const tx = db.transaction(META_STORE, 'readwrite', STRICT);
+  const done = committed(tx);
+  /** @type {TransformDaily} */
+  const record = {
+    key: TRANSFORM_DAILY_KEY,
+    zone,
+    assignments: [...assigned].map(([id, { dailyKey, duplicateOf, rekeyed }]) => [id, dailyKey, duplicateOf, rekeyed]),
+  };
+  tx.objectStore(META_STORE).put(record);
+  await done;
+  return assigned;
 }
 
 /**
@@ -372,7 +493,7 @@ async function fillBatch({ db, step, after, keyRange, limits, runStart, progress
   const found = /** @type {NoteRecord[]} */ (
     await result(notes.getAll(after === null ? null : keyRange.lowerBound(after, true), limits.records))
   );
-  const counts = noCounts();
+  const counts = noCounts(step);
   let last = after;
   let bytes = 0;
   for (const note of found) {
@@ -402,16 +523,99 @@ async function fillBatch({ db, step, after, keyRange, limits, runStart, progress
 }
 
 /**
+ * `a`'s counts, each with `b`'s added
  * @param {TransformCounts} a
  * @param {TransformCounts} b
  * @returns {TransformCounts}
  */
-const added = (a, b) => ({
-  read: a.read + b.read,
-  filled: a.filled + b.filled,
-  staleFolder: a.staleFolder + b.staleFolder,
-  dailyWithoutDate: a.dailyWithoutDate + b.dailyWithoutDate,
-});
+const added = (a, b) => Object.fromEntries(Object.entries(a).map(([name, count]) => [name, count + (b[name] || 0)]));
+
+/**
+ * Puts `note`'s entry for `key` in the daily index, and answers `note` as it then is. An entry
+ * for another note that still holds the key, which a command made or keyed since the run read
+ * the notes, stays when that note was made first, and `note` becomes its duplicate. Otherwise
+ * `note` takes the key, and the other note becomes its duplicate, in the same transaction.
+ * @param {IDBObjectStore} notes
+ * @param {IDBObjectStore} index
+ * @param {NoteRecord} note
+ * @param {string} key
+ * @returns {Promise<{note: NoteRecord, displaced: NoteRecord | null}>}
+ */
+async function claimKey(notes, index, note, key) {
+  const entry = /** @type {{noteId?: unknown} | undefined} */ (await result(index.get(key)));
+  if (entry && entry.noteId === note.id) return { note, displaced: null };
+  /** @type {NoteRecord | null} */
+  let displaced = null;
+  if (entry && typeof entry.noteId === 'string') {
+    const holder = /** @type {NoteRecord | undefined} */ (await result(notes.get(entry.noteId)));
+    if (holder && holdsKey(holder, key)) {
+      if (!madeBefore(note, holder)) return { note: { ...note, dailyDuplicateOf: holder.id }, displaced: null };
+      if (holder.dailyDuplicateOf !== note.id) displaced = { ...holder, dailyDuplicateOf: note.id };
+    }
+  }
+  index.put({ dailyKey: key, noteId: note.id });
+  return { note, displaced };
+}
+
+/**
+ * One batch of logical 3 after `after`, as fillBatch has one of logical 2: at most
+ * `limits.records` notes, and no more than `limits.bytes` of them unless one is bigger, in one
+ * strict transaction over the notes, the daily index, and `meta`. Each Daily Note `assigned`
+ * names gets its key (withAssignedKey), unless a command keyed it otherwise since, and the
+ * index its entry when it holds the key (claimKey).
+ * @param {{db: IDBDatabase, step: TransformStep, after: IDBValidKey | null, keyRange: typeof IDBKeyRange, limits: Limits, assigned: ReadonlyMap<string, DailyAssignment>, progress: Omit<TransformProgress, 'after'>}} options
+ * @returns {Promise<{after: IDBValidKey | null, end: boolean, counts: TransformCounts}>}
+ */
+async function fillDailyBatch({ db, step, after, keyRange, limits, assigned, progress }) {
+  const tx = db.transaction(['canvases', DAILY_INDEX_STORE, META_STORE], 'readwrite', STRICT);
+  const done = committed(tx);
+  const notes = tx.objectStore('canvases');
+  const index = tx.objectStore(DAILY_INDEX_STORE);
+  const found = /** @type {NoteRecord[]} */ (
+    await result(notes.getAll(after === null ? null : keyRange.lowerBound(after, true), limits.records))
+  );
+  const counts = noCounts(step);
+  /** @type {Map<string, NoteRecord>} */
+  const displaced = new Map();
+  let last = after;
+  let bytes = 0;
+  for (const read of found) {
+    const size = approximateBytes(read);
+    if (counts.read > 0 && bytes + size > limits.bytes) break;
+    bytes += size;
+    last = read.id;
+    counts.read += 1;
+    // As an earlier note's claim in this batch may have left it
+    const note = displaced.get(read.id) || read;
+    const assignment = assigned.get(note.id);
+    if (!assignment || !note.isDaily) continue;
+    // A Daily Note a command keyed otherwise since the run read the notes keeps its key
+    if (isDateKey(note.dailyKey) && note.dailyKey !== assignment.dailyKey) continue;
+    let next = withAssignedKey(note, assignment);
+    if (assignment.duplicateOf === null && canHoldKey(next)) {
+      const claimed = await claimKey(notes, index, next, assignment.dailyKey);
+      next = claimed.note;
+      if (claimed.displaced) {
+        notes.put(claimed.displaced);
+        displaced.set(claimed.displaced.id, claimed.displaced);
+        counts.filled += 1;
+        counts.duplicates += 1;
+      }
+    }
+    if (next === note) continue;
+    notes.put(next);
+    counts.filled += 1;
+    if (next.dateStr !== note.dateStr) counts.rekeyed += 1;
+    if (typeof next.dailyDuplicateOf === 'string' && next.dailyDuplicateOf !== note.dailyDuplicateOf) {
+      counts.duplicates += 1;
+    }
+  }
+  /** @type {TransformProgress} */
+  const record = { ...progress, key: TRANSFORM_KEY, id: step.id, after: last, counts: added(progress.counts, counts) };
+  tx.objectStore(META_STORE).put(record);
+  await done;
+  return { after: last, end: counts.read === found.length && found.length < limits.records, counts };
+}
 
 /**
  * The step's receipt, `meta.schema` at its logical version, and neither progress nor a stop, in
@@ -428,6 +632,7 @@ async function finishStep(db, step, { from, startedAt, completedAt, recoveryPoin
   meta.put({ ...schema, logicalVersion: step.to });
   meta.delete(TRANSFORM_KEY);
   meta.delete(TRANSFORM_STOP_KEY);
+  meta.delete(TRANSFORM_DAILY_KEY);
   /** @type {Receipt} */
   const receipt = {
     id: step.id,
@@ -513,7 +718,7 @@ async function transform(options) {
     await between('pending-read');
 
     const runStart = clock.now();
-    const scan = progress ? null : await scanNotes(db, io);
+    const scan = progress ? null : await scanNotes(db, io, steps);
     await between('scanned');
     if (scan && !scan.needed) {
       // Nothing to fill, so no point: each step's receipt, with what the scan counted
@@ -523,7 +728,7 @@ async function transform(options) {
           startedAt: runStart,
           completedAt: clock.now(),
           recoveryPointId: null,
-          counts: scan.counts,
+          counts: scan.counts[i],
         });
       }
       return outcome({ status: 'transformed', steps: steps.map(step => step.id), previous });
@@ -544,18 +749,21 @@ async function transform(options) {
     for (const step of steps) {
       const resumed = progress && progress.id === step.id ? progress : null;
       const startedAt = resumed ? resumed.startedAt : runStart;
-      let counts = resumed && resumed.counts ? added(noCounts(), resumed.counts) : noCounts();
+      let counts = resumed && resumed.counts ? added(noCounts(step), resumed.counts) : noCounts(step);
       let after = resumed ? resumed.after : null;
+      // Logical 3 weighs every Daily Note before its first batch, or picks up the answer it kept
+      const assigned =
+        step.id === 'logical-3'
+          ? await dailyAnswer(db, io, { zone: zoneOf(clock), kept: resumed ? state.daily || null : null })
+          : null;
+      if (assigned) await between('daily-assigned');
       for (;;) {
-        const batch = await fillBatch({
-          db,
-          step,
-          after,
-          keyRange,
-          limits,
-          runStart,
-          progress: { key: TRANSFORM_KEY, id: step.id, recoveryPointId, startedAt, counts },
-        });
+        const fields = { db, step, after, keyRange, limits };
+        /** @type {Omit<TransformProgress, 'after'>} */
+        const batchProgress = { key: TRANSFORM_KEY, id: step.id, recoveryPointId, startedAt, counts };
+        const batch = assigned
+          ? await fillDailyBatch({ ...fields, assigned, progress: batchProgress })
+          : await fillBatch({ ...fields, runStart, progress: batchProgress });
         counts = added(counts, batch.counts);
         filled += batch.counts.filled;
         after = batch.after;
