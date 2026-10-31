@@ -194,12 +194,14 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     const failing = createFailureEvents({ surface: 'newtab', host });
     failing.event('indexer.start-failed', {}, new DOMException('m', 'SecurityError'));
     await failing.flush();
-    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), ['indexer.start-failed']);
+    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {
+      'indexer.start-failed': { 'index/indexer-start-failed/-': 1 },
+    });
     // Another tab's indexer starts
     const other = createFailureEvents({ surface: 'newtab', host });
     other.event('indexer.started', {});
     await other.flush();
-    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), []);
+    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {});
     const store = databaseFor(profile);
     const { records } = await recordsOn(store, profile, { prefix: 'cccc' });
     assert.equal((await at(records, 'index/indexer-start-failed/-'))?.state, 'resolved');
@@ -271,7 +273,7 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
 
   it('loads it for a success at a marked site, and for a reconcile when the copy holds entries', async () => {
     const items = new Map([
-      [SETTINGS_KEYS.openSites, ['indexer.start-failed']],
+      [SETTINGS_KEYS.openSites, { 'indexer.start-failed': { 'index/indexer-start-failed/-': 1 } }],
       [SETTINGS_KEYS.lastStorageIncident, { entries: [{}] }],
     ]);
     const page = lazyOver(items);
@@ -294,5 +296,167 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
         .map(([code, entry]) => [code, /** @type {any} */ (entry).resolves]),
     );
     assert.deepEqual({ ...SUCCESS_SITES }, registered);
+  });
+});
+
+describe("#87's review: a success counts only what was sighted at its own moment", () => {
+  /** Lets queued promise callbacks run */
+  const tick = async (rounds = 20) => {
+    for (let n = 0; n < rounds; n++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  /**
+   * A host whose `trust.openSites` reads a test can hold
+   * @param {Profile} profile
+   */
+  const gatedHost = profile => {
+    const gate = { armed: 0, /** @type {(() => void)[]} */ waiting: [] };
+    const settings = {
+      /** @param {string[]} keys */
+      get: async keys => {
+        if (gate.armed > 0 && keys.includes(SETTINGS_KEYS.openSites)) {
+          gate.armed--;
+          await new Promise(resolve => gate.waiting.push(() => resolve(undefined)));
+        }
+        return profile.settings.get(keys);
+      },
+      /** @param {Record<string, unknown>} items */
+      set: items => profile.settings.set(items),
+    };
+    const host = () => ({
+      indexedDB: profile.real,
+      keyRange: fakeKeyRange,
+      settings,
+      locks: profile.locks,
+      clock: { now: () => Date.now() },
+      ids: { next: () => crypto.randomUUID() },
+    });
+    return { host, gate, release: () => gate.waiting.splice(0).forEach(go => go()) };
+  };
+
+  /**
+   * The incident under `key`, read in a fresh context
+   * @param {Profile} profile
+   * @param {string} key
+   */
+  const incidentIn = async (profile, key) => {
+    const { records } = await recordsOn(databaseFor(profile), profile, { prefix: 'ffff' });
+    return at(records, key);
+  };
+
+  it('P1: in one context, a failure after a success waits for it, so the success never counts it', async () => {
+    const profile = trustProfile();
+    const gated = gatedHost(profile);
+    const events = createFailureEvents({ surface: 'worker-internal', host: gated.host });
+    events.event('capture.failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await events.flush();
+    gated.gate.armed = 1;
+    events.event('capture.committed', { commandId: '1730000000001-abc' });
+    await tick();
+    assert.equal(gated.gate.waiting.length, 1, 'the success is held at its mark read');
+    events.event('capture.failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await tick();
+    gated.release();
+    await events.flush();
+    const incident = await incidentIn(profile, 'capture/capture-failed/-');
+    assert.deepEqual(
+      [incident?.state, incident?.occurrences],
+      ['open', 2],
+      'the last capture failed, and it reads resolved',
+    );
+  });
+
+  it("P2: a tab's success resolves only the count it read, not another context's failure while it loaded", async () => {
+    const profile = trustProfile();
+    const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    /** @type {() => void} */
+    let releaseLoad = () => {};
+    const loaded = new Promise(resolve => {
+      releaseLoad = () => resolve(undefined);
+    });
+    const ha = gatedHost(profile);
+    const a = lazyFailureEvents({
+      surface: 'newtab',
+      read: keys => profile.settings.get(keys),
+      load: async () => {
+        await loaded;
+        return {
+          createFailureEvents: (/** @type {any} */ options) => createFailureEvents({ ...options, host: ha.host }),
+        };
+      },
+    });
+    a.event('backup.auto-succeeded', {});
+    await tick();
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    releaseLoad();
+    await a.flush();
+    const incident = await incidentIn(profile, 'backup/auto-backup-failed/-');
+    assert.deepEqual([incident?.state, incident?.occurrences], ['open', 2], "B's newer failure read resolved");
+  });
+
+  it('a success that read the count before resolves, in another context, once nothing came since', async () => {
+    const profile = trustProfile();
+    const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
+    b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
+    await b.flush();
+    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {
+      'backup.auto-failed': { 'backup/auto-backup-failed/-': 1 },
+    });
+    const a = lazyFailureEvents({
+      surface: 'newtab',
+      read: keys => profile.settings.get(keys),
+      load: async () => ({
+        createFailureEvents: (/** @type {any} */ options) =>
+          createFailureEvents({ ...options, host: gatedHost(profile).host }),
+      }),
+    });
+    a.event('backup.auto-succeeded', {});
+    await a.flush();
+    assert.equal((await incidentIn(profile, 'backup/auto-backup-failed/-'))?.state, 'resolved');
+    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {});
+  });
+
+  it('P4: a storage.open-failed with a new cause while open is journaled again', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const { records } = await recordsOn(databaseFor(profile), profile, { clock });
+    const journal = createDiagnosticJournal({ records, clock, strict: true });
+    for (const errorCode of ['version-too-new', 'version-too-new', 'quota', 'quota']) {
+      journal.event('storage.open-failed', { subjectId: 'CanvasTabDB', errorCode });
+      await journal.flush();
+      clock.advance(1000);
+    }
+    const journaled = (await records.events()).map(event => event.fields.errorCode);
+    assert.deepEqual(journaled, ['version-too-new', 'quota']);
+    assert.equal((await at(records, 'storage/open-failed/CanvasTabDB'))?.occurrences, 4);
+  });
+
+  it("nit 3: a reconcile within the retry window of a context's failed open tries nothing", async () => {
+    const profile = trustProfile();
+    const down = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, {
+      clock: manualClock(Date.now()),
+      prefix: 'aaaa',
+    });
+    assert.ok(down.records);
+    const fresh = hostOf(profile);
+    await createFailureEvents({ surface: 'worker-internal', host: fresh.host }).reconcile();
+    assert.equal(fresh.counted.opens, 0, 'tried to open while another context just failed to');
+    // The lazy page skips it too, loading nothing
+    let loads = 0;
+    const page = lazyFailureEvents({
+      surface: 'newtab',
+      read: keys => profile.settings.get(keys),
+      load: async () => {
+        loads++;
+        return {
+          createFailureEvents: (/** @type {any} */ options) => createFailureEvents({ ...options, host: fresh.host }),
+        };
+      },
+    });
+    await page.reconcile();
+    assert.equal(loads, 0);
   });
 });
