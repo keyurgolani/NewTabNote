@@ -123,6 +123,10 @@ export const FAULT_CODES = Object.freeze([
   'grant-missing',
   'permission-changed',
   'legacy-secret',
+  // Recovery readiness, messaging, and the registry's resolution report (slice 2's providers)
+  'point-unverified',
+  'unreachable',
+  'contribution-unavailable',
   // A write to NewTabNoteTrust that failed, counted while the store won't take writes
   'write-failed',
 ]);

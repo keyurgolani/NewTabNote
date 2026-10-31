@@ -453,6 +453,62 @@ describe('a check resolves what it observes (6b)', () => {
     assert.equal((await at(records, 'index/indexer-start-failed/-'))?.state, 'open');
   });
 
+  for (const status of ['not-configured', 'unverified', 'degraded', 'failed']) {
+    it(`a check that answers ${status} still resolves the faults it observes and no longer reports`, async () => {
+      const profile = trustProfile();
+      const db = databaseOn(profile);
+      opened.push(db);
+      const { records, clock } = await recordsOn(db, profile);
+      const providers = [provider('sync', () => ({ status }), { observes: ['conflict', 'stale-backup'] })];
+      const { trust } = await useCases(records, clock, providers);
+      await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
+      clock.advance(1000);
+      await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+      assert.equal((await at(records, 'sync/conflict/-'))?.state, 'resolved');
+    });
+  }
+
+  it("#78's recovery readiness: degraded, then unverified once the point is discarded, resolves point-unverified", async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    let answer = /** @type {unknown} */ ({
+      status: 'degraded',
+      faults: [{ faultCode: 'point-unverified', severity: 'data-risk' }],
+    });
+    const providers = [provider('recovery-readiness', () => answer, { observes: ['point-unverified'] })];
+    const { trust } = await useCases(records, clock, providers);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'recovery-readiness/point-unverified/-'))?.state, 'open');
+    clock.advance(1000);
+    answer = { status: 'unverified' };
+    await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+    assert.equal((await at(records, 'recovery-readiness/point-unverified/-'))?.state, 'resolved');
+  });
+
+  it("#78's local inference: a check that observes load-failed resolves the incident 1b's failure event raised", async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    const journal = createDiagnosticJournal({ records, clock, strict: true });
+    journal.event('embeddings.load-failed', { errorCode: 'quota' });
+    await journal.flush();
+    assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'open');
+    clock.advance(1000);
+    // A provider that can't observe it leaves it open; one that can, and finds it gone, resolves it
+    const blind = await useCases(records, clock, [provider('local-inference', () => ({ status: 'verified' }))]);
+    await blind.trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'open');
+    clock.advance(1000);
+    const seeing = await useCases(records, clock, [
+      provider('local-inference', () => ({ status: 'unverified' }), { observes: ['load-failed'] }),
+    ]);
+    await seeing.trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+    assert.equal((await at(records, 'local-inference/load-failed/-'))?.state, 'resolved');
+  });
+
   it('a check that times out or throws resolves nothing', async () => {
     const profile = trustProfile();
     const db = databaseOn(profile);
