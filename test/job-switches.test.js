@@ -73,8 +73,6 @@ async function setup({ name = 'Untitled', text } = {}) {
     },
   });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   // After the first run's defaults, which switch both off
   Object.assign(env.chrome.local, {
     setting_autoTitleEnabled: true,
@@ -101,7 +99,8 @@ async function setup({ name = 'Untitled', text } = {}) {
 
   const ai = heldAI();
   const manager = new (env.get('NotesManager'))({
-    storage: Storage,
+    // The search index handle App gives it (#17 PR 4b)
+    storage: env.stores.searchIndex,
     domRefs: null,
     logger: quietLogger,
     llm: ai.port,
@@ -119,7 +118,7 @@ async function setup({ name = 'Untitled', text } = {}) {
   });
   settings.setupJobSettings();
   settings.setupSettingsSync();
-  return { env, Storage, ai, manager, controls };
+  return { env, ai, manager, controls };
 }
 
 /** Keep the page's timers and promises moving for `ms` of page time, half a second a step */

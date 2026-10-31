@@ -46,9 +46,10 @@ async function openPage(env, { open = ['A'], split = false, ready = true } = {})
   return page;
 }
 
-// Each with what App gives it of the page (bootNewTab's wire adds the rest)
+// Each with what App gives it of the page (bootNewTab's wire adds the rest): NotesManager's
+// storage is the search index handle (#17 PR 4b)
 const controllers = {
-  notes: (env, Storage) => new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null }),
+  notes: (env, storage) => new (env.get('NotesManager'))({ storage, domRefs: null, logger: null, llm: null }),
   sidebar: (env) => new (env.get('SidebarController'))({
     settings: env.settingsClient,
     storageState: env.storageState,
@@ -66,7 +67,7 @@ const controllers = {
 /** The sidebar over the page's note list, with the view tab and the list it renders into. */
 function sidebarOf(env, page) {
   if (!env.document.getElementById('sidebar-tab-notes')) env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
-  return page.wire(controllers.sidebar(env, page.Storage));
+  return page.wire(controllers.sidebar(env));
 }
 
 function type(editor, text) {
@@ -92,7 +93,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env);
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     type(page.tabs.editor, 'typed before trashing');
     await runUntil(env, notes.trashNoteById('A'));
@@ -111,8 +112,8 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env);
-    const notes = page.wire(controllers.notes(env, page.Storage));
-    const untitled = await page.Storage.createNote('Untitled');
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
+    const untitled = await page.release.createNote('Untitled');
     await page.tabs.openNoteInNewTab(untitled.id);
 
     type(page.tabs.editor, 'typed into a new note');
@@ -130,7 +131,7 @@ describe('a note leaving the active set, in this new tab', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { split: true });
     assert.equal(page.tabs.secondaryEditor.noteId, 'B');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('B'));
 
@@ -145,7 +146,7 @@ describe('a note leaving the active set, in this new tab', () => {
     await createProfile(env.indexedDB, ['A', 'B']);
     const page = await openPage(env, { split: true });
     page.tabs.setActiveEditorSide('right');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('B'));
 
@@ -168,7 +169,7 @@ describe('a note leaving the active set, in this new tab', () => {
     right.pushUndo({ type: 'content', blockId: 'b1', before, after: right.snapshotBlock(right.blocks[0]) });
     right.scheduleSave();
     await runUntil(env, right.flushSave());
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('A'));
     assert.equal(page.tabs.splitViewEnabled, false);
@@ -192,7 +193,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const page = await openPage(env, { split: true });
     const { editor: left, secondaryEditor: right } = page.tabs;
     type(right, 'typed on the right');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('A'));
     assert.equal(left.noteId, 'B');
@@ -239,7 +240,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { split: true });
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.archiveNote('A'));
 
@@ -257,7 +258,7 @@ describe('a note leaving the active set, in this new tab', () => {
     // Clicking into the right pane leaves the active tab on the left pane's note
     page.tabs.setActiveEditorSide('right');
     assert.equal(page.tabs.secondaryEditor.noteId, 'A');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('A'));
 
@@ -271,7 +272,7 @@ describe('a note leaving the active set, in this new tab', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'], split: true });
     page.tabs.setActiveEditorSide('right');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('A'));
 
@@ -293,8 +294,8 @@ describe('a note leaving the active set, in this new tab', () => {
       assert.equal(page.tabs.editor.noteId, 'B');
       assert.equal(page.tabs.secondaryEditor.noteId, 'A');
       if (trashedFirst) {
-        await page.Storage.trashNote('A');
-        await page.Storage.trashNote('B');
+        await page.release.trashNote('A');
+        await page.release.trashNote('B');
         await page.page.noteList.reload();
       }
       const sidebar = sidebarOf(env, page);
@@ -318,7 +319,7 @@ describe('a note leaving the active set, in this new tab', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A', 'TR'] });
     assert.equal(page.tabs.editor.noteId, 'TR', 'a note in trash opens when picked');
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     const done = notes.permanentlyDeleteNoteById('TR');
     await confirmIn(env, 'Delete Permanently');
@@ -333,7 +334,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['B', 'A'] });
-    const settings = page.wire(controllers.settings(env, page.Storage));
+    const settings = page.wire(controllers.settings(env));
 
     const done = settings.deleteCurrentNote();
     await confirmIn(env, 'Trash Note');
@@ -348,8 +349,8 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env);
-    await page.Storage.trashNote('A');
-    await page.Storage.trashNote('B');
+    await page.release.trashNote('A');
+    await page.release.trashNote('B');
 
     await runUntil(env, Promise.all([page.tabs.forgetNotes(['A']), page.tabs.forgetNotes(['B'])]));
 
@@ -363,8 +364,8 @@ describe('a note leaving the active set, in this new tab', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { split: true });
     assert.deepEqual([page.tabs.editor.noteId, page.tabs.secondaryEditor.noteId], ['A', 'B']);
-    await page.Storage.trashNote('A');
-    await page.Storage.trashNote('B');
+    await page.release.trashNote('A');
+    await page.release.trashNote('B');
 
     await runUntil(env, Promise.all([page.tabs.forgetNotes(['A']), page.tabs.forgetNotes(['B'])]));
 
@@ -381,7 +382,7 @@ describe('a note leaving the active set, in this new tab', () => {
       const page = await openPage(env, { split: true });
       const right = page.tabs.secondaryEditor;
       type(right, 'typed into B');
-      await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+      await page.release.permanentlyDeleteNote('B'); // another tab, before its message arrives
       if (noticedFirst) await runUntil(env, right.flushSave());
 
       await runUntil(env, page.tabs.toggleSplitView());
@@ -400,9 +401,9 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['B', 'A'] });
-    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), isTemplate: true });
+    await page.release.updateNote({ ...(await page.release.getNote('B')), isTemplate: true });
 
-    await runUntil(env, page.wire(controllers.notes(env, page.Storage)).trashNoteById('A'));
+    await runUntil(env, page.wire(controllers.notes(env, page.stores.searchIndex)).trashNoteById('A'));
 
     assert.equal(page.tabs.editor.noteId, 'B');
     assert.deepEqual(tabIds(page.tabs), ['B']);
@@ -415,10 +416,10 @@ describe('a note leaving the active set, in this new tab', () => {
     page.tabs.setActiveEditorSide('right');
     const right = page.tabs.secondaryEditor;
     type(right, 'typed into B');
-    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await page.release.permanentlyDeleteNote('B'); // another tab
     await runUntil(env, right.flushSave());
     assert.equal(right.noteGone, true);
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.trashNoteById('A'));
 
@@ -438,7 +439,7 @@ describe('a note leaving the active set, in this new tab', () => {
     await runUntil(env, page.tabs.switchToTab(1));
     const editor = page.tabs.editor;
     type(editor, 'typed into B');
-    await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+    await page.release.permanentlyDeleteNote('B'); // another tab, before its message arrives
 
     await runUntil(env, page.tabs.closeTab(1));
     assert.equal(editor.noteId, 'B', 'the text stays on screen');
@@ -462,7 +463,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const page = await openPage(env, { open: ['A', 'B'] });
     const editor = page.tabs.editor;
     type(editor, 'typed into B');
-    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await page.release.permanentlyDeleteNote('B'); // another tab
     await runUntil(env, page.tabs.forgetNotes(['B'])); // its message
     assert.equal(editor.noteGone, true);
     assert.deepEqual(tabIds(page.tabs), ['A', 'B'], 'B keeps its tab while its notice shows');
@@ -480,7 +481,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const page = await openPage(env, { split: true });
     assert.equal(page.tabs.secondaryEditor.noteId, 'B');
     await runUntil(env, page.tabs.toggleSplitView()); // off: the hidden right pane has B
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
 
     await runUntil(env, notes.archiveNote('B'));
     assert.equal(page.tabs.secondaryEditor.noteId, null);
@@ -496,12 +497,12 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await bootNewTab(env);
-    const folder = await page.Storage.createFolder('Work');
-    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), folderId: folder.id, pinned: true });
+    const folder = await page.release.createFolder('Work');
+    await page.release.updateNote({ ...(await page.release.getNote('B')), folderId: folder.id, pinned: true });
     await runUntil(env, page.tabs.openNoteInNewTab('B'));
     const editor = page.tabs.editor;
     type(editor, 'typed into B');
-    await page.Storage.permanentlyDeleteNote('B'); // another tab
+    await page.release.permanentlyDeleteNote('B'); // another tab
     await runUntil(env, editor.flushSave());
     assert.equal(editor.noteGone, true);
 
@@ -520,14 +521,14 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await bootNewTab(env);
-    const folder = await page.Storage.createFolder('Work');
-    await page.Storage.updateNote({ ...(await page.Storage.getNote('B')), folderId: folder.id });
+    const folder = await page.release.createFolder('Work');
+    await page.release.updateNote({ ...(await page.release.getNote('B')), folderId: folder.id });
     await runUntil(env, page.tabs.openNoteInNewTab('B'));
     const editor = page.tabs.editor;
     type(editor, 'typed into B');
     // Another tab takes the note and its folder, as Replace all does
-    await page.Storage.permanentlyDeleteNote('B');
-    await page.Storage.deleteFolder(folder.id);
+    await page.release.permanentlyDeleteNote('B');
+    await page.release.deleteFolder(folder.id);
     await runUntil(env, editor.flushSave());
     assert.equal(editor.noteGone, true);
 
@@ -560,7 +561,7 @@ describe('a note leaving the active set, in this new tab', () => {
       const page = await openPage(env, { open: ['A', 'B'] });
       const editor = page.tabs.editor;
       type(editor, 'typed into B');
-      await page.Storage.permanentlyDeleteNote('B'); // another tab, before its message arrives
+      await page.release.permanentlyDeleteNote('B'); // another tab, before its message arrives
 
       await runUntil(env, pick(page.tabs));
 
@@ -578,7 +579,7 @@ describe('a note leaving the active set, in this new tab', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { split: true });
-    const notes = page.wire(controllers.notes(env, page.Storage));
+    const notes = page.wire(controllers.notes(env, page.stores.searchIndex));
     const sidebar = sidebarOf(env, page);
 
     await runUntil(env, notes.trashNoteById('B'));
@@ -619,8 +620,8 @@ describe('a note leaving the active set in another new tab', () => {
 
   /** Ways another tab moves Alpha out of the active set while keeping it, and the flag Alpha's saves then keep */
   const KEPT = [
-    ['trashes it', 'trashed', (one, first) => one.wire(controllers.notes(first, one.Storage)).trashNoteById('A')],
-    ['archives it', 'archived', (one, first) => one.wire(controllers.notes(first, one.Storage)).archiveNote('A')],
+    ['trashes it', 'trashed', (one, first) => one.wire(controllers.notes(first, one.stores.searchIndex)).trashNoteById('A')],
+    ['archives it', 'archived', (one, first) => one.wire(controllers.notes(first, one.stores.searchIndex)).archiveNote('A')],
     ['runs Replace all', 'trashed', async (one, first) => {
       const backup = { version: 1, exportedAt: 1, canvases: [note('R', { name: 'Imported' })], elements: [block('r1', 'R', 0, 'imported')] };
       await one.tabs.flushEditorsForImport();
@@ -664,12 +665,12 @@ describe('a note leaving the active set in another new tab', () => {
       await emptied;
     }],
     ['deletes it for good', async (one, first) => {
-      const deleted = one.wire(controllers.notes(first, one.Storage)).permanentlyDeleteNoteById('TR');
+      const deleted = one.wire(controllers.notes(first, one.stores.searchIndex)).permanentlyDeleteNoteById('TR');
       await confirmIn(first, 'Delete Permanently');
       await deleted;
     }],
     ['runs trash retention', async (one, first) => {
-      const sidebar = one.wire(controllers.sidebar(first, one.Storage));
+      const sidebar = one.wire(controllers.sidebar(first));
       sidebar.logger = { info() {} };
       sidebar.refreshNotesList = async () => {};
       await sidebar.runTrashCleanup();
@@ -706,7 +707,7 @@ describe('a note leaving the active set in another new tab', () => {
     const two = await openPage(second, { open: ['C', 'B'] });
     const editor = two.tabs.editor;
     type(editor, 'typed in the other tab');
-    const notes = one.wire(controllers.notes(first, one.Storage));
+    const notes = one.wire(controllers.notes(first, one.stores.searchIndex));
     const sidebar = sidebarOf(first, one);
 
     // The first tab trashes B and empties trash before the second one saves
@@ -744,10 +745,10 @@ describe('a note leaving the active set in another new tab', () => {
     const { first, second } = await twoPages({ channel: false });
     const two = await openPage(second, { open: ['A'], split: true }); // Alpha left, Beta right
     const one = await openPage(first, { open: ['C'] });
-    const notes = one.wire(controllers.notes(first, one.Storage));
+    const notes = one.wire(controllers.notes(first, one.stores.searchIndex));
 
     await runUntil(first, notes.trashNoteById('A'));
-    await one.Storage.permanentlyDeleteNote('B');
+    await one.release.permanentlyDeleteNote('B');
     await runUntil(second, settle(40));
     assert.equal(first.channels.sent.length, 1, 'the first tab posts');
     assert.equal(two.page.refreshes, 0, 'and the second never hears');
@@ -769,7 +770,7 @@ describe('a note leaving the active set in another new tab', () => {
     const one = await openPage(first, { open: ['D'] });
     const editor = two.tabs.editor;
     const gamma = (await stored(first)).notes.C;
-    await one.Storage.permanentlyDeleteNote('A');
+    await one.release.permanentlyDeleteNote('A');
 
     await runUntil(second, two.tabs.switchToTab(0));
     assert.equal(editor.noteId, 'C', 'the pane stays');
@@ -784,9 +785,9 @@ describe('a note leaving the active set in another new tab', () => {
   });
 
   for (const [what, act, kept] of [
-    ['trashed', (one, first) => one.wire(controllers.notes(first, one.Storage)).trashNoteById('A'), ['A', 'B']],
-    ['archived', (one, first) => one.wire(controllers.notes(first, one.Storage)).archiveNote('A'), ['A', 'B']],
-    ['deleted for good', (one) => one.Storage.permanentlyDeleteNote('A'), ['B']],
+    ['trashed', (one, first) => one.wire(controllers.notes(first, one.stores.searchIndex)).trashNoteById('A'), ['A', 'B']],
+    ['archived', (one, first) => one.wire(controllers.notes(first, one.stores.searchIndex)).archiveNote('A'), ['A', 'B']],
+    ['deleted for good', (one) => one.release.permanentlyDeleteNote('A'), ['B']],
   ]) {
     it(`trashing the open note never moves the pane onto the tab of a note another tab ${what}: it goes to the newest active note`, async () => {
       const { first, second } = await twoPages();
@@ -795,7 +796,7 @@ describe('a note leaving the active set in another new tab', () => {
       await runUntil(first, act(one, first));
       await runUntil(second, settle(40)); // its message, if any, reaches this tab
 
-      await runUntil(second, two.wire(controllers.notes(second, two.Storage)).trashNoteById('C'));
+      await runUntil(second, two.wire(controllers.notes(second, two.stores.searchIndex)).trashNoteById('C'));
 
       const editor = two.tabs.editor;
       assert.equal(editor.noteId, 'B', 'Beta, the newest active note');
@@ -811,7 +812,7 @@ describe('a note leaving the active set in another new tab', () => {
     const two = await openPage(second, { open: ['A', 'B', 'C'] });
     await runUntil(second, two.tabs.switchToTab(0)); // Alpha on screen, Beta's tab next to it
     const one = await openPage(first, { open: ['D'] });
-    await one.Storage.permanentlyDeleteNote('B');
+    await one.release.permanentlyDeleteNote('B');
 
     await runUntil(second, two.tabs.closeTab(0));
 
@@ -825,7 +826,7 @@ describe('a note leaving the active set in another new tab', () => {
     const { first, second } = await twoPages();
     const two = await openPage(second, { open: ['A', 'B', 'C'] }); // Gamma on screen
     const one = await openPage(first, { open: ['D'] });
-    const notes = one.wire(controllers.notes(first, one.Storage));
+    const notes = one.wire(controllers.notes(first, one.stores.searchIndex));
     await runUntil(first, notes.trashNoteById('A'));
     await runUntil(first, notes.archiveNote('B'));
     await runUntil(second, waitFor(() => two.page.refreshes === 2, { message: 'both refreshes' }));
@@ -846,7 +847,7 @@ describe('a note leaving the active set in another new tab', () => {
     const { first, second } = await twoPages();
     const two = await openPage(second, { open: ['C'] });
     const one = await openPage(first, { open: ['A', 'B'] }); // the tab in use, saved last
-    const notes = one.wire(controllers.notes(first, one.Storage));
+    const notes = one.wire(controllers.notes(first, one.stores.searchIndex));
 
     await runUntil(first, notes.trashNoteById('D'));
     await runUntil(second, waitFor(() => two.page.refreshes === 1, { message: 'the other tab to hear of it' }));
@@ -861,7 +862,7 @@ describe('a note leaving the active set in another new tab', () => {
     const { first, second } = await twoPages();
     const one = await openPage(first, { open: ['A', 'B'] });
     const two = await bootNewTab(second, { ready: false });
-    const notes = one.wire(controllers.notes(first, one.Storage));
+    const notes = one.wire(controllers.notes(first, one.stores.searchIndex));
 
     await runUntil(first, notes.trashNoteById('B'));
     await runUntil(second, settle(40)); // the message reaches the second tab

@@ -1144,7 +1144,7 @@ function testDocumentClient(client) {
 async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
-  const { kernel, documentClient, noteList, removalFor, settingsClient, storageState, recovery, validateBackup } = pageClientsFor({
+  const { kernel, documentClient, noteList, removalFor, settingsClient, storageState, recovery, validateBackup, stores } = pageClientsFor({
     settings: env.chrome.api.storage.local,
     onListQuery,
     kernelNow,
@@ -1166,7 +1166,39 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
   env.storageState = storageState;
   env.recovery = recovery;
   env.validateBackup = validateBackup;
+  // The narrow handles App gives NotesManager, GraphView and SyncService, on the same kernel (#17 PR 4b)
+  env.stores = stores;
   return env.documentClient;
+}
+
+/** Where the frozen 1.4.1 Storage is (test/fixtures/storage/releases/) */
+const RELEASE_141_STORAGE = 'test/fixtures/storage/releases/v1.4.1/js/storage.js';
+
+/**
+ * A test's hand on the database `env`'s page uses, to put records as another writer would and
+ * read them back: the frozen 1.4.1 Storage, in a context of its own that shares the page's
+ * IndexedDB and chrome.*, open at whatever version the database has. What it writes is in
+ * 1.4.1's own shapes, by 1.4.1's own code (the lead's condition on #17 PR 4's Q8), and it never
+ * upgrades the database. Its connection closes when another context upgrades it. Open it once
+ * the page's kernel has started, so the worker's run has made the database.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<Object>} the frozen release's DatabaseManager, open
+ */
+async function releaseStorage(env) {
+  // An open without a version would make an empty database where there's none
+  if (!(await env.indexedDB.databases()).some((db) => db.name === DB_NAME)) {
+    throw new Error('releaseStorage: there is no database to open yet; start the page first');
+  }
+  const release = createLegacyEnv({ context: 'page', indexedDB: env.indexedDB, chrome: env.chrome, worker: false, document: null });
+  release.load('js/utils.js', RELEASE_141_STORAGE);
+  const storage = release.get('Storage');
+  const db = await storage._openUnversioned();
+  if (!db) throw new Error("releaseStorage: the page's database wouldn't open");
+  db.onversionchange = () => db.close();
+  storage.db = db;
+  storage.missingStores = storage.requiredStores.filter((name) => !db.objectStoreNames.contains(name));
+  storage.openState = 'open';
+  return storage;
 }
 
 /**
@@ -1216,7 +1248,7 @@ function makeEditor(env, doc = env.document, {
   navigation = quietNavigation(),
   documentClient = env.documentClient,
 } = {}) {
-  if (!documentClient) throw new Error('makeEditor: await startEditorClient(env) first, once Storage has started');
+  if (!documentClient) throw new Error('makeEditor: await startEditorClient(env) first');
   const BlockEditor = env.get('BlockEditor');
   const editor = Object.create(BlockEditor.prototype);
   const root = pane || doc.createElement('div');
@@ -1291,9 +1323,11 @@ const NEW_TAB_FILES = [
 ];
 
 /**
- * A new tab's note workspace without App: Storage started, the elements the tab
+ * A new tab's note workspace without App: its kernel started, the elements the tab
  * bar and split view touch, and a TabController with both panes, wired the way
- * App wires it. `page.noteList` is the page's note list, as App's, and
+ * App wires it. `release` is the test's hand on the database (releaseStorage), and
+ * `stores` the narrow handles App gives NotesManager, GraphView and SyncService
+ * (#17 PR 4b). `page.noteList` is the page's note list, as App's, and
  * `page.notes` its active notes. `wire(controller)` gives a controller that takes
  * notes out of the active set App's hooks for it, removeNotes
  * (js/kernel/composition/removal.js) over this page's tabs as App builds it, the page's
@@ -1309,9 +1343,9 @@ const NEW_TAB_FILES = [
  */
 async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuery, kernelNow, pageNow, zone } = {}) {
   env.load(...files);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env, { onListQuery, kernelNow, pageNow, zone });
+  const release = await releaseStorage(env);
+  env.release = release;
   const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',
@@ -1381,7 +1415,7 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
     onOpenImportedNote: (noteId) => tabs.openImportedNote(noteId),
     getEditor: () => tabs.getEditor(),
   });
-  return { Storage, tabs, page, wire };
+  return { release, stores: env.stores, tabs, page, wire };
 }
 
 /** The tab names the tab bar shows, in order. */
@@ -1407,6 +1441,7 @@ module.exports = {
   quietNavigation,
   runUntil,
   bootNewTab,
+  releaseStorage,
   shownTabs,
   createDatabase,
   workerRun,
