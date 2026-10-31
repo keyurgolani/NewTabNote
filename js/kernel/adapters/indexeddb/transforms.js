@@ -325,7 +325,9 @@ async function scanNotes(db, io, steps) {
 
 /**
  * Logical 3's answer for the notes as they are now: the fields assignDailyKeys weighs of every
- * Daily Note, read in bounded readonly batches, then each one's key
+ * Daily Note, read in bounded readonly batches, then each one's key. `dailyDuplicateOf` is one,
+ * so a note marked as another's duplicate never claims its date here either, and the answer
+ * goes by the rule a lookup goes by (review R88).
  * @param {IDBDatabase} db
  * @param {Io} io
  * @param {string} zone
@@ -340,8 +342,8 @@ async function assignedNow(db, io, zone) {
     const batch = await readBatch(db, 'canvases', after, null, io);
     for (const { value } of batch.entries) {
       if (!value || !value.isDaily) continue;
-      const { id, isDaily, dateStr, dailyKey, createdAt, name, trashed, isTemplate } = value;
-      daily.push({ id, isDaily, dateStr, dailyKey, createdAt, name, trashed, isTemplate });
+      const { id, isDaily, dateStr, dailyKey, dailyDuplicateOf, createdAt, name, trashed, isTemplate } = value;
+      daily.push({ id, isDaily, dateStr, dailyKey, dailyDuplicateOf, createdAt, name, trashed, isTemplate });
     }
     if (batch.entries.length > 0) after = batch.entries[batch.entries.length - 1].key;
     if (batch.end || batch.entries.length === 0) return assignDailyKeys(daily, zone);
