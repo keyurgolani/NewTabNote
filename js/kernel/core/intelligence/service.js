@@ -134,8 +134,11 @@ import { addLocalDays, isTimeZone, startOfLocalDay } from './time.js';
  * @property {Logger} [logger]
  * @property {import('../ports/runtime.js').Timers} timers - the host's, which bound every note
  *   command and producer derive
- * @property {number} [noteCommandTimeoutMs] - how long a note command or a derive may take, #12's
- *   command deadline by default
+ * @property {number} [noteCommandTimeoutMs] - how long a note command may take, #12's command
+ *   deadline by default
+ * @property {number} [deriveTimeoutMs] - how long a producer's derive or the note side's
+ *   source check may take, DERIVE_DEADLINE_MS by default. A derive runs in the signal's queue,
+ *   so this is the longest a lifecycle command waits behind a hung producer.
  */
 
 /**
@@ -169,6 +172,19 @@ export function decisionStateOf(signal, decision, now) {
     checked: signal.checked,
   };
 }
+
+/**
+ * How long a producer's derive, or the note side's source check, may take before it counts as
+ * failed: a local read of one note, so a few seconds is plenty, and it bounds how long a
+ * lifecycle command waits behind a hung producer in the signal's queue
+ */
+export const DERIVE_DEADLINE_MS = 3000;
+
+/** The causes a signal stays invalidated under, whatever a producer or a retry offers again */
+const FOR_GOOD = Object.freeze(['anchor-deleted', 'source-deleted']);
+
+/** The states the note side may answer for a source */
+const SOURCE_STATES = Object.freeze(['available', 'missing', 'note-trashed', 'note-archived', 'template']);
 
 /** @type {Readonly<Record<IntelligenceCommand['type'], LifecycleAction>>} */
 const ACTION_OF = Object.freeze({
@@ -229,6 +245,7 @@ export function createIntelligence({
   logger = silentLogger,
   timers,
   noteCommandTimeoutMs = COMMAND_DEADLINE_MS,
+  deriveTimeoutMs = DERIVE_DEADLINE_MS,
 }) {
   if (!isTimeZone(timeZone)) throw new TypeError('the intelligence domain needs an IANA time zone');
   if (typeof noteCommands?.setTodoChecked !== 'function' || typeof noteCommands.sourceStates !== 'function') {
@@ -521,8 +538,12 @@ export function createIntelligence({
         // The anchor's revision only moves forward: a newer write to the note already reached
         // the signal, so this one's `checked` no longer stands. Nothing is written, and the
         // answer is the state that does.
-        const overtaken = revision !== undefined && stored !== null && revision < stored;
-        if (overtaken && signal.checked !== checked) {
+        // A signal whose anchor was deleted takes no `checked`: the note write landed, so the
+        // decision still gets its entry, tombstoned like the signal's other decisions
+        const gone =
+          signal.freshness.state === 'invalidated' && FOR_GOOD.includes(/** @type {string} */ (signal.freshness.cause));
+        const overtaken = gone || (revision !== undefined && stored !== null && revision < stored);
+        if (!gone && overtaken && signal.checked !== checked) {
           const outcome = signalConflict('note-revision-conflict', decisionStateOf(signal, decision, now));
           tx.keep(command.commandId, fingerprint, () => outcome);
           return outcome;
@@ -555,7 +576,9 @@ export function createIntelligence({
             : { action: checked ? 'complete' : 'reopen', status: 'active' },
           { signalId: signal.id, identity: signal.identity, now, commandId: command.commandId },
         );
-        tx.putDecision(next);
+        tx.putDecision(
+          gone && next.tombstone === null ? { ...next, tombstone: { at: now, cause: 'anchor-deleted' } } : next,
+        );
         const code = checked ? 'signal-completed' : 'signal-reopened';
         /** @param {number | null} seq */
         const build = seq =>
@@ -604,19 +627,20 @@ export function createIntelligence({
   };
 
   /**
-   * What `pending` answers, or what `onTimeout` makes once noteCommandTimeoutMs passes without
-   * an answer, so a hung note command or producer never holds a signal's queue. A note command
+   * What `pending` answers, or what `onTimeout` makes once `ms` passes without an answer, so a
+   * hung note command, source check, or producer never holds a signal's queue for longer. A note command
    * answers `unknown` then, as #13's client answers a command whose reply never came: the write
    * may still land, and a retry sends the same note command, which the note kernel answers from
    * its own record.
    * @template T
    * @param {Promise<T>} pending
    * @param {() => T} onTimeout
+   * @param {number} ms
    * @returns {Promise<T>}
    */
-  const bounded = (pending, onTimeout) =>
+  const bounded = (pending, onTimeout, ms) =>
     new Promise((resolve, reject) => {
-      const handle = timers.set(() => resolve(onTimeout()), noteCommandTimeoutMs);
+      const handle = timers.set(() => resolve(onTimeout()), ms);
       pending.then(
         outcome => {
           timers.clear(handle);
@@ -629,7 +653,12 @@ export function createIntelligence({
       );
     });
 
-  /** @type {Map<string, Promise<unknown>>} the last command running for each signal, here */
+  /** @param {string} signalId */
+  const signalKey = signalId => `sig:${signalId}`;
+  /** @param {string} noteId */
+  const noteKey = noteId => `note:${noteId}`;
+
+  /** @type {Map<string, Promise<unknown>>} the last task running for each key, here */
   const running = new Map();
 
   /**
@@ -642,20 +671,23 @@ export function createIntelligence({
    * @param {() => Promise<T>} task
    * @returns {Promise<T>}
    */
-  const oneAtATime = (signalId, task) => oneAtATimeAll([signalId], task);
+  const oneAtATime = (signalId, task) => oneAtATimeAll([signalKey(signalId)], task);
 
   /**
-   * Runs `task` after every task this context started for any of `signalIds` before it, and
-   * holds each of their queues until it's done, as a note-wide change does for every signal it
-   * writes. Every writer of a signal goes through here: lifecycle commands, producer upserts,
-   * re-derives, the invalidation table, and the hook.
+   * Runs `task` after every task this context started for any of `keys` before it, and holds
+   * each of their queues until it's done. A key is a signal's (`sig:<id>`) or a note's
+   * (`note:<id>`): a note-side change takes its note's key and every signal it writes, and an
+   * upsert takes its signal's and every note it cites, so a new signal and a note change never
+   * miss each other. Every writer of a signal goes through here: lifecycle commands, producer
+   * upserts, re-derives, the invalidation table, and the hook. Keys are taken in one sorted
+   * order. This orders one context; across contexts it's #35's coordinator.
    * @template T
-   * @param {readonly string[]} signalIds
+   * @param {readonly string[]} keys
    * @param {() => Promise<T>} task
    * @returns {Promise<T>}
    */
-  const oneAtATimeAll = (signalIds, task) => {
-    const ids = [...new Set(signalIds)];
+  const oneAtATimeAll = (keys, task) => {
+    const ids = [...new Set(keys)].sort();
     const previous = Promise.all(ids.map(id => running.get(id) ?? Promise.resolve()));
     const result = previous.then(task, task);
     const settled = result.then(
@@ -688,8 +720,10 @@ export function createIntelligence({
         const { signal, checked, current, noteCommand } = first.note;
         let noteOutcome;
         try {
-          noteOutcome = await bounded(noteCommands.setTodoChecked({ ...noteCommand }), () =>
-            unknown('note-command-timeout', command.commandId),
+          noteOutcome = await bounded(
+            noteCommands.setTodoChecked({ ...noteCommand }),
+            () => unknown('note-command-timeout', command.commandId),
+            noteCommandTimeoutMs,
           );
         } catch (error) {
           return unavailableFrom(error);
@@ -762,7 +796,7 @@ export function createIntelligence({
 
   /**
    * What the note side says of a draft's sources, or null when it can't say: the read threw,
-   * timed out, or answered something other than one state per source. Null refuses the draft,
+   * timed out, or answered something other than one known state per source. Null refuses the draft,
    * so a signal never starts citing what's gone or trashed as available.
    * @param {SignalDraft} draft
    * @returns {Promise<SourceState[] | null>}
@@ -770,8 +804,13 @@ export function createIntelligence({
   const statesOf = async draft => {
     const sourceRefs = Array.isArray(draft?.sourceRefs) ? draft.sourceRefs : [];
     try {
-      const states = await bounded(noteCommands.sourceStates(sourceRefs), () => null);
-      return Array.isArray(states) && states.length === sourceRefs.length ? states : null;
+      const states = await bounded(noteCommands.sourceStates(sourceRefs), () => null, deriveTimeoutMs);
+      // One known state per source, or the check counts as failed
+      return Array.isArray(states) &&
+        states.length === sourceRefs.length &&
+        states.every(state => SOURCE_STATES.includes(state))
+        ? states
+        : null;
     } catch (error) {
       logger.warn('source-states-failed', { error });
       return null;
@@ -812,9 +851,6 @@ export function createIntelligence({
     return { draft: { ...draft, sourceRefs }, unavailableNotes };
   };
 
-  /** The causes a signal stays invalidated under, whatever a producer offers again */
-  const FOR_GOOD = Object.freeze(['anchor-deleted', 'source-deleted']);
-
   /**
    * Whether `signal`, offered to replace `existing`, should be written: not over a signal whose
    * anchor or sources were deleted, not with an anchor revision older than the one it has (a
@@ -834,7 +870,7 @@ export function createIntelligence({
     }
     const offered = anchorRevisionOf(signal);
     const stored = anchorRevisionOf(existing);
-    if (offered !== null && stored !== null && offered < stored) return 'older-revision';
+    if (stored !== null && (offered === null || offered < stored)) return 'older-revision';
     if (meaningOf(signal) === meaningOf({ ...existing, freshness: signal.freshness })) return 'unchanged';
     return null;
   };
@@ -863,7 +899,13 @@ export function createIntelligence({
           return { refused: 'invalid-identity' };
         }
         const signalId = id;
-        return oneAtATime(signalId, async () => {
+        const cited = [
+          offered.identity.noteId,
+          ...(Array.isArray(offered.sourceRefs) ? offered.sourceRefs : [])
+            .map(source => source?.noteId)
+            .filter(noteId => typeof noteId === 'string'),
+        ];
+        return oneAtATimeAll([signalKey(signalId), ...cited.map(noteKey)], async () => {
           const checked = checkedDraft(offered, await statesOf(offered));
           if ('refused' in checked) return { refused: checked.refused };
           const now = clock.now();
@@ -924,7 +966,7 @@ export function createIntelligence({
         const derived = /** @type {Promise<SignalDraft | null | 'timed-out'>} */ (
           producer.derive({ ...signal.identity })
         );
-        const draft = await bounded(derived, () => /** @type {const} */ ('timed-out'));
+        const draft = await bounded(derived, () => /** @type {const} */ ('timed-out'), deriveTimeoutMs);
         if (draft === 'timed-out') {
           logger.warn('producer-derive-timed-out', { producerId: producer.id });
           drafts.set(signal.id, 'failed');
@@ -987,8 +1029,8 @@ export function createIntelligence({
   };
 
   /**
-   * Re-derives each signal and writes the result in its own turn of the signal's queue, so the
-   * write never interleaves with a lifecycle command for the same signal in this context
+   * Re-derives each signal, and writes the result, in its own turn of the signal's queue, so
+   * neither interleaves with another writer of the same signal in this context
    * @param {IntelligenceSignal[]} signals
    * @returns {Promise<{changed: string[], failed: string[], commitSeq: number | null}>}
    */
@@ -1000,18 +1042,17 @@ export function createIntelligence({
     /** @type {number | null} */
     let commitSeq = null;
     await Promise.all(
-      signals.map(async signal => {
-        // The derive runs outside the queue, so a slow or hung producer never holds the
-        // signal's lifecycle commands; its write waits in the queue, and one that read an older
-        // revision than the signal has by then is skipped (applyRederived)
-        const drafts = await rederive([signal]);
-        await oneAtATime(signal.id, async () => {
+      signals.map(signal =>
+        // The derive runs in the signal's queue, bounded by deriveTimeoutMs, so its read and
+        // its write never straddle another writer's; one that ran out counts as failed
+        oneAtATime(signal.id, async () => {
+          const drafts = await rederive([signal]);
           const now = clock.now();
           const committedAt = await repository.transact(tx => applyRederived(tx, drafts, now, changed, failed));
           publish(committedAt.events);
           if (committedAt.commitSeq !== null) commitSeq = Math.max(commitSeq ?? 0, committedAt.commitSeq);
-        });
-      }),
+        }),
+      ),
     );
     return { changed, failed, commitSeq };
   };
@@ -1129,25 +1170,22 @@ export function createIntelligence({
         result: requests,
         commitSeq,
         events: made,
-      } = await oneAtATimeAll(
-        anchoredHere.map(signal => signal.id),
-        () => {
-          const now = clock.now();
-          return repository.transact(tx => {
-            // An inference read at the edit's revision already saw it, as when an edit is heard twice
-            const sawEdit = (/** @type {IntelligenceSignal} */ signal) =>
-              change.revision !== null &&
-              signal.sourceRefs.some(
-                source =>
-                  source.kind === 'block' && source.blockId === change.blockId && source.revision === change.revision,
-              );
-            const inferred = anchoredHere
-              .map(signal => tx.signal(signal.id))
-              .filter(/** @returns {signal is IntelligenceSignal} */ signal => signal !== null && !sawEdit(signal));
-            return staleAll(tx, inferred, 'source-edited', now, changed);
-          });
-        },
-      );
+      } = await oneAtATimeAll([noteKey(change.noteId), ...anchoredHere.map(signal => signalKey(signal.id))], () => {
+        const now = clock.now();
+        return repository.transact(tx => {
+          // An inference read at the edit's revision already saw it, as when an edit is heard twice
+          const sawEdit = (/** @type {IntelligenceSignal} */ signal) =>
+            change.revision !== null &&
+            signal.sourceRefs.some(
+              source =>
+                source.kind === 'block' && source.blockId === change.blockId && source.revision === change.revision,
+            );
+          const inferred = anchoredHere
+            .map(signal => tx.signal(signal.id))
+            .filter(/** @returns {signal is IntelligenceSignal} */ signal => signal !== null && !sawEdit(signal));
+          return staleAll(tx, inferred, 'source-edited', now, changed);
+        });
+      });
       publish(made);
       send(requests);
       return {
@@ -1164,7 +1202,7 @@ export function createIntelligence({
       result: requests,
       commitSeq,
       events: made,
-    } = await oneAtATimeAll(await idsTouchedBy(change), () => {
+    } = await oneAtATimeAll([noteKey(change.noteId), ...(await idsTouchedBy(change)).map(signalKey)], () => {
       const now = clock.now();
       return repository.transact(
         /** @returns {RegenerationRequest[]} */ tx => {
@@ -1273,7 +1311,7 @@ export function createIntelligence({
       result: requests,
       commitSeq,
       events: made,
-    } = await oneAtATimeAll(inferredIds, () => {
+    } = await oneAtATimeAll(inferredIds.map(signalKey), () => {
       const now = clock.now();
       return repository.transact(tx => {
         const inferred = inferredIds
