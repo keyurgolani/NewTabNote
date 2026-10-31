@@ -161,3 +161,79 @@ describe("the note menu's two sites place it after measuring it", () => {
     }
   });
 });
+
+// The folder menu's size, four items
+const FOLDER_MENU = { width: 160, height: 150 };
+
+/**
+ * A document for the folder menu, which each site builds and appends to the body: the menu
+ * lays out at `size` where its style puts it, once it's in the body
+ */
+function folderDocument(size) {
+  const element = (tag) => {
+    const node = {
+      tagName: tag.toUpperCase(),
+      style: {},
+      className: '',
+      innerHTML: '',
+      children: [],
+      classList: { add() {}, remove() {}, contains: () => false },
+      appendChild(child) { node.children.push(child); return child; },
+      addEventListener() {},
+      contains: (other) => other === node,
+      getBoundingClientRect() {
+        const left = parseFloat(node.style.left) || 0;
+        const top = parseFloat(node.style.top) || 0;
+        return { left, top, right: left + size.width, bottom: top + size.height, width: size.width, height: size.height };
+      },
+    };
+    return node;
+  };
+  const appended = [];
+  return {
+    appended,
+    createElement: element,
+    getElementById: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+    body: {
+      appendChild: (child) => { appended.push(child); return child; },
+      removeChild: (child) => { appended.splice(appended.indexOf(child), 1); },
+      contains: (child) => appended.includes(child),
+    },
+  };
+}
+
+describe("the folder menu's two sites place it after measuring it", () => {
+  for (const { site, files, open } of [
+    {
+      site: 'SidebarController.showFolderContextMenu',
+      files: ['js/controllers/sidebar-controller.js'],
+      open: (env, event) => {
+        const SidebarController = env.get('SidebarController');
+        const sidebar = new SidebarController({ storage: {}, settings: {}, domRefs: {}, logger: { warn() {} } });
+        return sidebar.showFolderContextMenu(event, { id: 'F', name: 'Folder' });
+      },
+    },
+    {
+      site: 'App.showFolderContextMenu, without a sidebar controller',
+      files: ['js/core/storage-error.js', 'js/storage.js', 'js/app.js'],
+      open: (env, event) => env.get('App').prototype.showFolderContextMenu.call({ sidebarController: null }, event, { id: 'F', name: 'Folder' }),
+    },
+  ]) {
+    it(`${site}: a low folder's menu opens above the pointer, and one near the right edge comes in from it`, async () => {
+      for (const [x, y] of [[240, 860], [1435, 120]]) {
+        const doc = folderDocument(FOLDER_MENU);
+        const env = page(doc, files);
+        // pageX and pageY as on a page scrolled by 400 px, which a fixed menu mustn't follow
+        await open(env, { ...pointer(x, y), pageX: x, pageY: y + 400 });
+        const [menu] = doc.appended;
+        assert.ok(menu, 'the menu is in the page');
+        assert.notEqual(menu.style.visibility, 'hidden', 'the menu is visible');
+        const position = { left: parseFloat(menu.style.left), top: parseFloat(menu.style.top) };
+        assert.ok(inside(position, FOLDER_MENU, VIEWPORT), `${x}, ${y}: ${JSON.stringify(position)}`);
+        if (y === 860) assert.equal(position.top, 860 - FOLDER_MENU.height);
+      }
+    });
+  }
+});
