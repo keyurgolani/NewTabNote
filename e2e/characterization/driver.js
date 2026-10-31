@@ -22,30 +22,6 @@ const SETTLE_TIMEOUT_MS = 10_000;
 const trackedContexts = new WeakSet();
 
 /**
- * Keep each new tab's App.init() promise as window.__ntnAppInit. app.js starts the app with
- * `window.app = app; app.init()`, so wrapping init as window.app is set catches the call.
- * Runs in every page of the session before the page's own scripts.
- */
-function recordAppInit() {
-  let app;
-  Object.defineProperty(window, 'app', {
-    configurable: true,
-    enumerable: true,
-    get: () => app,
-    set(value) {
-      app = value;
-      const init = value && value.init;
-      if (typeof init !== 'function') return;
-      value.init = function recordedInit(...args) {
-        const started = init.apply(this, args);
-        window.__ntnAppInit = Promise.resolve(started).then(() => 'done', error => `failed: ${error}`);
-        return started;
-      };
-    },
-  });
-}
-
-/**
  * Note in window.__ntnNoticeAtFirstBlock whether the export notice took up space when the
  * note's first block went on the page. Runs in every page before the page's own scripts.
  */
@@ -60,14 +36,14 @@ function recordFirstBlock() {
 }
 
 /**
- * Have every page of the session record its startup (see recordAppInit and
- * recordFirstBlock). openNewTab does this; call it first when a spec opens the new tab
+ * Have every page of the session record its startup: the harness keeps each new tab's
+ * App.init() promise as window.__ntnAppInit in every page (e2e/harness/app-hook.js), and this
+ * adds recordFirstBlock. openNewTab does this; call it first when a spec opens the new tab
  * some other way.
  */
 async function trackStartup(extension) {
   if (trackedContexts.has(extension.context)) return;
   trackedContexts.add(extension.context);
-  await extension.context.addInitScript(recordAppInit);
   await extension.context.addInitScript(recordFirstBlock);
 }
 

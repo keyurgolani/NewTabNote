@@ -70,7 +70,6 @@ import { createNoteRemoval } from './removal.js';
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
  *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
  *   syncStore: LegacyStore}) => NewTabApp} App
- * @property {unknown} [app]
  */
 
 /** Each LegacyStores handle's calls, as its holder makes them */
@@ -240,9 +239,9 @@ export function createNewTabLegacyStores(host) {
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
  * client, its document client, its settings client, its AI port, its note list, its failure
  * events, its removeNotes, its database's state and recovery, its import's backup check, and
- * the narrow legacy stores the search index, the graph view, and sync still go through, and
- * becomes window.app before init runs. The listener answers with init's promise, which a page
- * ignores and a test can wait for.
+ * the narrow legacy stores the search index, the graph view, and sync still go through. Nothing
+ * puts it on the page: no code reads a global App instance (#12 slice 7c). The listener answers
+ * with init's promise, which a page ignores and a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -270,7 +269,6 @@ export function startNewTab() {
       syncStore: stores.sync,
     });
     built = app;
-    page.app = app;
     return app.init().catch(error => {
       console.error('App initialization failed:', error);
     });

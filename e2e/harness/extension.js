@@ -13,13 +13,15 @@
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
  * requests it blocked or that failed. The `extension` fixture (index.js) attaches that log
- * to a failed test.
+ * to a failed test. Every page it opens has the new tab's App as window.app, and its start
+ * as window.__ntnAppInit, which the product doesn't publish (app-hook.js).
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { installWorkerHooks } = require('./worker-hooks');
+const { hookApp } = require('./app-hook');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const SURFACES = ['newtab', 'popup', 'sidepanel'];
@@ -294,6 +296,8 @@ class ExtensionSession {
   async _start() {
     this._watch();
     await this._blockNetwork();
+    // Every page's new tab App as window.app, and its start as window.__ntnAppInit (app-hook.js)
+    await this.context.addInitScript(hookApp);
 
     this.context.serviceWorkers().forEach(worker => this._adoptWorker(worker));
     if (!this._worker) {
