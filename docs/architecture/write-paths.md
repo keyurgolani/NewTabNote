@@ -13,10 +13,12 @@ Written by `npm run check:write-paths -- --write` from `scripts/write-paths.js`,
 | kernel command, slice 4 | 0 | #12 slice 4 (notes and blocks) routes it through the command. |
 | kernel command, slice 5 | 0 | #12 slice 5 (folders, templates, trash) routes it through the command. |
 | kernel command, slice 6 | 0 | #12 slice 6 (preferences and session) routes it through the command. |
+| kernel command, #17 PR 4b | 4 | #17 PR 4b's facade (`js/kernel/composition/storage-facade.js`) runs it as the command on the new tab's kernel, under the name its holder has always called. |
 | no live caller | 0 | Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become. |
+| no live path | 3 | The holder's handle has no such method (`js/kernel/composition/newtab.js`), so the call throws or is skipped and never writes. Sync has never applied a remote note, and its paths stay as they are until #19 wires the command. |
 | ledgered to #11 | 6 | Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows). |
-| ledgered to #19 | 9 | The sync service, which #19's sync engine replaces. |
-| ledgered to #22 | 4 | The search index and vectors, which #22's pipelines own. |
+| ledgered to #19 | 6 | The sync service, which #19's sync engine replaces. |
+| ledgered to #22 | 0 | The search index and vectors, which #22's pipelines own. |
 | UI-only | 0 | Persists nothing a kernel aggregate or the settings port owns. |
 | Total | 19 | |
 
@@ -68,13 +70,13 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | `snoozeSpaceNotice` | kernel command, slice 6 | 0 |
 | `createAutoBackup` | kernel command, slice 6 | 0 |
 | `importBackup` | kernel command, slice 6 | 0 |
+| `updateSearchIndex` | kernel command, #17 PR 4b | 3 |
+| `saveVector` | kernel command, #17 PR 4b | 1 |
 | `saveProviderSettings` | ledgered to #11 | 6 |
 | `saveSyncSettings` | ledgered to #19 | 6 |
 | `applyRemoteChanges` | ledgered to #19 | 3 |
-| `updateSearchIndex` | ledgered to #22 | 3 |
-| `saveVector` | ledgered to #22 | 1 |
 
-Rows marked "no live caller" are counted under the command the call would become.
+Rows marked "no live caller" or "no live path" are counted under the command the call would become.
 
 Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.
 
@@ -84,10 +86,10 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/controllers/notes-manager.js` | [1167](../../js/controllers/notes-manager.js#L1167) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1177](../../js/controllers/notes-manager.js#L1177) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1181](../../js/controllers/notes-manager.js#L1181) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1307](../../js/controllers/notes-manager.js#L1307) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1169](../../js/controllers/notes-manager.js#L1169) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | kernel command, #17 PR 4b |
+| `js/controllers/notes-manager.js` | [1179](../../js/controllers/notes-manager.js#L1179) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | kernel command, #17 PR 4b |
+| `js/controllers/notes-manager.js` | [1183](../../js/controllers/notes-manager.js#L1183) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | kernel command, #17 PR 4b |
+| `js/controllers/notes-manager.js` | [1314](../../js/controllers/notes-manager.js#L1314) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | kernel command, #17 PR 4b |
 | `js/llm.js` | [138](../../js/llm.js#L138) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [756](../../js/llm.js#L756) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [775](../../js/llm.js#L775) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
@@ -99,7 +101,7 @@ Method is the class method or function the call sits in. After `>` comes the ano
 | `js/services/sync-service.js` | [325](../../js/services/sync-service.js#L325) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [326](../../js/services/sync-service.js#L326) | `SyncService.disconnect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [327](../../js/services/sync-service.js#L327) | `SyncService.disconnect` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [417](../../js/services/sync-service.js#L417) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [488](../../js/services/sync-service.js#L488) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [494](../../js/services/sync-service.js#L494) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | ledgered to #19 |
-| `js/services/sync-service.js` | [512](../../js/services/sync-service.js#L512) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | ledgered to #19 |
+| `js/services/sync-service.js` | [397](../../js/services/sync-service.js#L397) | `SyncService.sync` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [468](../../js/services/sync-service.js#L468) | `SyncService._applyResolution` | `this.storage.importNote(…)` | `applyRemoteChanges` | no live path |
+| `js/services/sync-service.js` | [474](../../js/services/sync-service.js#L474) | `SyncService._applyResolution` | `this.storage.saveElement(…)` | `applyRemoteChanges` | no live path |
+| `js/services/sync-service.js` | [492](../../js/services/sync-service.js#L492) | `SyncService._applyRemoteData` | `this.storage.importAll(…)` | `applyRemoteChanges` | no live path |

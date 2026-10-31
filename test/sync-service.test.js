@@ -11,16 +11,15 @@ globalThis.btoa = (s) => Buffer.from(s).toString('base64');
 const { SyncService, GoogleDriveProvider, DropboxProvider, WebDAVProvider } = require('../js/services/sync-service.js');
 const { expectFailure } = require('./helpers/expect-failure');
 
+// Sync's handle as the new tab's root gives it (#17 PR 4b): its settings, and the export, which
+// holds every folder
 function createMockStorage() {
   const settings = new Map();
   return {
     getSetting(key) { return Promise.resolve(settings.get(key) ?? null); },
     setSetting(key, val) { settings.set(key, val); return Promise.resolve(); },
-    getStore() {
-      return { getAll() { return { result: [], onsuccess: null, onerror: null, set onsuccess(fn) { setTimeout(() => { this.result = []; fn(); }, 0); } }; } };
-    },
     exportAll() {
-      return Promise.resolve({ version: 1, exportedAt: Date.now(), canvases: [], elements: [], media: [] });
+      return Promise.resolve({ version: 1, exportedAt: Date.now(), canvases: [], elements: [], media: [], folders: [] });
     },
   };
 }

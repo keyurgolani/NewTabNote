@@ -18,6 +18,7 @@ import {
   createNewTabAdapter,
   createNewTabClient,
   createNewTabLegacyStores,
+  createNewTabStorageState,
   withPurgeWake,
 } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
@@ -276,10 +277,12 @@ describe('each composition root', () => {
     closeAll([tab, profile]);
   });
 
-  it("hands NotesManager, GraphView and SyncService only their own calls on the new tab's Storage", async () => {
+  it("hands NotesManager, GraphView and SyncService only their own calls, each on the new tab's kernel (#17 PR 4b)", async () => {
     const tab = legacyContext();
-    assert.equal(await newTabOf(tab).client.whenReady(), null);
-    const stores = createNewTabLegacyStores(hostOf(tab));
+    const host = hostOf(tab);
+    const { adapter, client } = newTabOf(tab);
+    assert.equal(await client.whenReady(), null);
+    const stores = createNewTabLegacyStores(client, host, createNewTabStorageState(adapter));
     assert.deepEqual(Object.keys(stores.searchIndex).sort(), [
       'getAllVectors',
       'hasStore',
@@ -288,24 +291,39 @@ describe('each composition root', () => {
       'setSearchIndex',
       'setSearchIndexEntry',
     ]);
-    assert.deepEqual(Object.keys(stores.graph).sort(), ['getAllNotes', 'getStore']);
-    // Storage defines no importAll or importNote, so sync finds neither on its handle, as on Storage
-    assert.deepEqual(Object.keys(stores.sync).sort(), [
-      'exportAll',
-      'getSetting',
-      'getStore',
-      'saveElement',
-      'setSetting',
-    ]);
+    assert.deepEqual(Object.keys(stores.graph).sort(), ['getAllNotes', 'listLinks']);
+    // Sync has never applied a remote note: its handle has no importAll, importNote, or saveElement
+    assert.deepEqual(Object.keys(stores.sync).sort(), ['exportAll', 'getSetting', 'setSetting']);
     for (const store of Object.values(stores)) {
       assert.ok(Object.isFrozen(store));
-      for (const name of ['db', 'transaction', 'createNote', 'updateNote', 'deleteNote', 'importData']) {
+      for (const name of [
+        'db',
+        'transaction',
+        'getStore',
+        'createNote',
+        'updateNote',
+        'importData',
+        'importAll',
+        'importNote',
+        'saveElement',
+      ]) {
         assert.equal(/** @type {Record<string, unknown>} */ (store)[name], undefined, name);
       }
     }
-    // Each call is Storage's own
-    assert.deepEqual(await stores.graph.getAllNotes(true), await tab.storage.getAllNotes(true));
-    assert.equal(stores.searchIndex.hasStore('vectors'), tab.storage.hasStore('vectors'));
+    // Each call is the kernel's: the notes are listNotes', and the database is the adapter's
+    const created = await client.execute({
+      type: 'createNote',
+      commandId: client.ids.next(),
+      noteId: client.ids.next(),
+      name: 'Graph',
+    });
+    assert.equal(created.kind, 'committed');
+    const listed = await client.query({ type: 'listNotes', view: 'withArchived' });
+    assert.deepEqual(await stores.graph.getAllNotes(true), listed.kind === 'ready' ? listed.data : null);
+    assert.deepEqual(
+      [stores.searchIndex.hasStore('vectors'), stores.searchIndex.hasStore('no-such-store')],
+      [true, false],
+    );
     closeAll([tab]);
   });
 });

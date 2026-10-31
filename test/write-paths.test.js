@@ -79,15 +79,26 @@ describe('the write-path doc', () => {
     assert.ok(!problems.some(p => / lists getNote,/.test(p)));
   });
 
-  it('every rule names a command, and every command has a slice or a ledger issue', () => {
-    for (const rule of RULES) assert.ok(Object.hasOwn(COMMANDS, rule.command), `${rule.command} isn't in COMMANDS`);
-    for (const [command, entry] of Object.entries(COMMANDS)) {
-      const slice = [4, 5, 6].includes(entry.slice);
-      const ledger = [11, 19, 22].includes(entry.ledger);
-      assert.ok(slice !== ledger, `${command} needs exactly one of slice 4 to 6 or ledger #11, #19, or #22`);
-    }
+  it('every rule names a command, and every command has a slice, a PR, or a ledger issue', () => {
     const statuses = STATUSES.map(([status]) => status);
+    for (const rule of RULES) {
+      assert.ok(Object.hasOwn(COMMANDS, rule.command), `${rule.command} isn't in COMMANDS`);
+      if (rule.status !== undefined) assert.ok(statuses.includes(rule.status), `${rule.command}'s rule has no such status`);
+    }
+    for (const [command, entry] of Object.entries(COMMANDS)) {
+      const routes = [[4, 5, 6].includes(entry.slice), entry.pr === '#17 PR 4b', [11, 19, 22].includes(entry.ledger)];
+      assert.equal(routes.filter(Boolean).length, 1, `${command} needs exactly one of slice 4 to 6, #17 PR 4b, or ledger #11, #19, or #22`);
+    }
     assert.equal(statuses.length, new Set(statuses).size);
+  });
+
+  it("the facade's derived writes are kernel commands, and sync's remote apply has no live path (#17 PR 4b)", () => {
+    const { rows } = collect(ROOT);
+    const status = (op) => [...new Set(rows.filter(row => row.op === op).map(row => row.status))];
+    for (const op of ['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector']) {
+      assert.deepEqual(status(op), ['kernel command, #17 PR 4b'], op);
+    }
+    for (const op of ['importNote', 'importAll', 'saveElement']) assert.deepEqual(status(op), ['no live path'], op);
   });
 
   it('scopes every rule that names a file or a method to the methods it calls', () => {

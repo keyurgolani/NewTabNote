@@ -260,16 +260,8 @@
     },
     {
       "file": "js/services/sync-service.js",
-      "rule": "getStore",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "#17 slice 6 moves sync's store reads to read-only queries, or #19's sync engine replaces js/services/sync-service.js",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/services/sync-service.js",
       "rule": "this.storage",
-      "count": 15,
+      "count": 14,
       "owner": 19,
       "removeWhen": "#19's sync engine replaces js/services/sync-service.js",
       "verify": "npm run check:boundaries"
@@ -296,14 +288,6 @@
       "count": 15,
       "owner": 17,
       "removeWhen": "#17 slice 6: DatabaseManager is a facade over #12's ports backed by #17's IndexedDB adapter",
-      "verify": "npm run check:boundaries"
-    },
-    {
-      "file": "js/ui/graph-view.js",
-      "rule": "getStore",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "#17 slice 6 moves the graph's links read to a read-only query, or #22 builds the graph view from its own pipeline",
       "verify": "npm run check:boundaries"
     },
     {
