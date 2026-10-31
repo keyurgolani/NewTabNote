@@ -33,6 +33,7 @@ import {
   trashRetentionDays,
   wikiLinkNames,
 } from '../domain/note.js';
+import { withPlacementGroup } from '../domain/placement.js';
 import { newTombstone } from '../domain/tombstone.js';
 import { contentChanged, unitsWork } from './work.js';
 
@@ -361,9 +362,11 @@ async function dailyTemplateBlocks(tx, templateId, target) {
 function setFields(command, code, change) {
   const { noteId, expectedPlacementVersion } = command;
   if (!isId(noteId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
+  // The note's placement, kind, and lifecycle follow the flags it sets (#17 PR 3a)
+  const placed = (/** @type {NoteRecord} */ note) => withPlacementGroup(note, change(note));
   return unitsWork(
     command,
-    [changeNote(noteId, change, { expectedPlacementVersion })],
+    [changeNote(noteId, placed, { expectedPlacementVersion })],
     () => committed(code, [noteId]),
     { primary: noteRecord(noteId), scope: 'placement' },
   );
@@ -489,7 +492,17 @@ export const noteCommands = {
           await deleteNoteIn(tx, noteId, { reason: 'empty-note', now, blocks });
           return;
         }
-        tx.put('notes', { ...note, trashed: true, trashedAt: now, archived: false, archivedAt: null, updatedAt: now });
+        tx.put(
+          'notes',
+          withPlacementGroup(note, {
+            ...note,
+            trashed: true,
+            trashedAt: now,
+            archived: false,
+            archivedAt: null,
+            updatedAt: now,
+          }),
+        );
       },
     };
     return unitsWork(command, [trash], () => committed(deleting ? 'note-deleted' : 'note-trashed', [noteId]), {
@@ -518,7 +531,7 @@ export const noteCommands = {
         // Already there: nothing to write
         if ((note.folderId ?? null) === folderId) return;
         moved = true;
-        tx.put('notes', { ...note, folderId, updatedAt: now });
+        tx.put('notes', withPlacementGroup(note, { ...note, folderId, updatedAt: now }));
       },
     };
     return unitsWork(command, [move], () => committed('note-moved', moved ? [noteId] : []), {
