@@ -244,6 +244,10 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
     ]) {
       assert.equal(take(url, options).ok, false, `${url} ${JSON.stringify(options)}`);
     }
+    // A stored server on a host a remote row takes is no stored server
+    for (const server of ['https://api.openai.com', 'https://cdn-lfs.huggingface.co', 'https://huggingface.co']) {
+      assert.equal(take(`${server}/newtabnote-sync.json`, { method: 'PUT', stored: server }).ok, false, server);
+    }
     const remote = registry.destinations.find((entry) => entry.id === 'webdav-remote');
     assert.deepEqual([remote.kind, remote.credential, remote.proxy, remote.removeWhen], ['legacy', 'basic', false, 19]);
   });

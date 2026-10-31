@@ -1,0 +1,13 @@
+{
+  "rule": "the CSP changes with no security/changes.json entry that records it",
+  "expect": [
+    "security/drift"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": " http://localhost:* http://127.0.0.1:*\"",
+      "with": " http://localhost:* http://127.0.0.1:* https://example.test\""
+    }
+  ]
+}
