@@ -38,7 +38,10 @@ const ts = require('typescript');
  * @property {UrlLiteral[]} urls - string and template literals with `//` in them
  * @property {Array<{what: string, name: string | null, at: string}>} environment - process.env and
  *   import.meta.env reads: the variable's name for a read of one, such as NODE_ENV, or null for
- *   any other use, which could read them all. `process.env && ...` reads nothing.
+ *   any other use, which could read them all, process read on its own included. `process.env &&
+ *   ...` reads nothing.
+ * @property {string[]} functionConstructors - where the Function constructor is called or
+ *   constructed some way ESLint's no-new-func doesn't see (isFunctionConstructor)
  */
 
 /** @type {Map<string, ScriptScan>} */
@@ -79,14 +82,56 @@ function memberPath(expression) {
 }
 
 /**
- * Whether `node` is process.env or process['env']
+ * Whether `node` is process.env or process['env'], through the global object or not
+ * (globalThis.process.env)
  * @param {ts.Node} node
  * @returns {boolean}
  */
 function isProcessEnv(node) {
-  if (ts.isPropertyAccessExpression(node)) return node.name.text === 'env' && ts.isIdentifier(node.expression) && node.expression.text === 'process';
-  if (ts.isElementAccessExpression(node)) return ts.isIdentifier(node.expression) && node.expression.text === 'process' && literal(node.argumentExpression) === 'env';
-  return false;
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return false;
+  const names = memberPath(node);
+  return names !== null && names.length === 2 && names[0] === 'process' && names[1] === 'env';
+}
+
+/**
+ * Whether the identifier `node` reads a variable: not a property's or a declaration's name,
+ * and not the operand of typeof, which reads nothing
+ * @param {ts.Identifier} node
+ * @returns {boolean}
+ */
+function isVariableRead(node) {
+  const parent = node.parent;
+  if (!parent) return true;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  if ((ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent)
+    || ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent)) && parent.name === node) return false;
+  if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent)
+    || ts.isClassDeclaration(parent) || ts.isClassExpression(parent) || ts.isBindingElement(parent)) && parent.name === node) return false;
+  if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) return false;
+  if (ts.isLabeledStatement(parent) || ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) return false;
+  if (ts.isTypeOfExpression(parent)) return false;
+  return true;
+}
+
+/**
+ * Whether `node` is the Function constructor reached some way ESLint's no-new-func doesn't
+ * know: through the global object (self.Function, globalThis.Function, window.Function), or as
+ * a function literal's constructor (`(() => {}).constructor`)
+ * @param {ts.Expression} node
+ * @returns {boolean}
+ */
+function isFunctionConstructor(node) {
+  let callee = node;
+  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return false;
+  const names = memberPath(callee);
+  if (names !== null && names.length === 1 && names[0] === 'Function') return true;
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : literal(callee.argumentExpression);
+  if (name !== 'constructor') return false;
+  /** @type {ts.Expression} */
+  let object = callee.expression;
+  while (ts.isParenthesizedExpression(object)) object = object.expression;
+  return ts.isArrowFunction(object) || ts.isFunctionExpression(object);
 }
 
 /**
@@ -109,6 +154,8 @@ function propertyValue(node, name) {
   if (!node || !ts.isObjectLiteralExpression(node)) return undefined;
   for (const property of node.properties) {
     if (ts.isPropertyAssignment(property) && propertyName(property.name) === name) return property.initializer;
+    // `{ url }` passes the variable url, a value known only at run time
+    if (ts.isShorthandPropertyAssignment(property) && property.name.text === name) return property.name;
   }
   return undefined;
 }
@@ -133,14 +180,15 @@ function scanScript(file, text) {
   const cached = cache.get(key);
   if (cached) return cached;
 
-  // ScriptKind.JS detects module syntax itself, so a classic script parses as one
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
+  // ScriptKind.JS detects module syntax itself, so a classic script parses as one. Parents are
+  // set, since whether an identifier is a read depends on what holds it.
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const at = (/** @type {ts.Node} */ node) => {
     const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
     return `${line + 1}:${character + 1}`;
   };
   /** @type {ScriptScan} */
-  const scan = { references: [], urls: [], environment: [] };
+  const scan = { references: [], urls: [], environment: [], functionConstructors: [] };
   const reference = (/** @type {ReferenceKind} */ kind, /** @type {ts.Node | undefined} */ node, /** @type {ts.Node} */ where) => {
     scan.references.push({ kind, value: literal(node), at: at(node || where) });
   };
@@ -192,9 +240,18 @@ function scanScript(file, text) {
       scan.environment.push({ what: 'process.env', name: null, at: at(node) });
       return;
     }
-    if (ts.isPropertyAccessExpression(node) && node.name.text === 'env' && ts.isMetaProperty(node.expression)
-      && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
+    // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all
+    if (ts.isIdentifier(node) && node.text === 'process' && isVariableRead(node)) {
+      scan.environment.push({ what: 'process', name: null, at: at(node) });
+      return;
+    }
+    if ((ts.isPropertyAccessExpression(node) && node.name.text === 'env'
+      || ts.isElementAccessExpression(node) && literal(node.argumentExpression) === 'env')
+      && ts.isMetaProperty(node.expression) && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
       scan.environment.push({ what: 'import.meta.env', name: null, at: at(node) });
+    }
+    if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && isFunctionConstructor(node.expression)) {
+      scan.functionConstructors.push(at(node));
     }
 
     // Each argument of these calls is visited with the call as its context
@@ -208,7 +265,6 @@ function scanScript(file, text) {
         reference('dynamic-import', node.arguments[0], node);
         argumentContext = 'import';
       } else if (name === 'importScripts') {
-        if (node.arguments.length === 0) reference('import-scripts', undefined, node);
         node.arguments.forEach((argument) => reference('import-scripts', argument, argument));
         argumentContext = 'importScripts';
       } else if (name === 'chrome.runtime.getURL') {
@@ -227,6 +283,8 @@ function scanScript(file, text) {
         reference('worker', node.arguments ? node.arguments[0] : undefined, node);
         argumentContext = 'Worker';
       }
+    } else if (ts.isShorthandPropertyAssignment(node) && node.name.text === 'iconUrl') {
+      reference('icon-url', node.name, node.name);
     } else if (ts.isPropertyAssignment(node) && propertyName(node.name) === 'iconUrl' && !ts.isCallExpression(node.initializer)) {
       reference('icon-url', node.initializer, node.initializer);
     }

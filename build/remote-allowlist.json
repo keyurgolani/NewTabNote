@@ -1,5 +1,5 @@
 {
-  "about": "Remote executable URLs reviewed to stay in shipped code (#27 AC6), each with the reason and the issue that removes it. scripts/build/remote-code.js fails on any other one, and on a row the package no longer has. The list only shrinks: test/remote-code.test.js pins the rows it may hold. A template literal's expressions read as ${...}.",
+  "about": "Remote executable URLs reviewed to stay in shipped code (#27 AC6), each with the reason and the issue that removes it. scripts/build/remote-code.js fails on any other one, and on a row the package no longer has. The list only shrinks: test/build-security.test.js pins the rows it may hold. A template literal's expressions read as ${...}.",
   "rows": [
     {
       "file": "js/lib/transformers.js",

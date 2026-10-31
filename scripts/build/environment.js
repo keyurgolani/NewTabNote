@@ -6,7 +6,9 @@
  * NODE_ENV and reviewed allowlist rows"). So shipped first-party code may read
  * process.env.NODE_ENV, behind a `process.env &&` guard or not, and nothing else from
  * process.env or import.meta.env (env/reference): no other name, no computed name, and not the
- * object itself, which could carry every variable. js/core/logger.js's Node fallback is today's
+ * object itself, which could carry every variable, whether it's reached through the global
+ * object (globalThis.process.env) or as import.meta['env']. Neither may process itself be read
+ * on its own, as `const p = process; p.env.X` would. js/core/logger.js's Node fallback is today's
  * one NODE_ENV reader. Vendored code may read more: transformers.js's Node-only process.env
  * reads stay run-time lookups, which find no process in the extension.
  *

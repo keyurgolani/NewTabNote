@@ -198,9 +198,10 @@ jobs:
           name: dist
           path: dist
       # Chromium only, without the headless shell: the harness runs extensions on the
-      # full build (channel: 'chromium')
+      # full build (channel: 'chromium'). The locked Playwright from node_modules/.bin, never
+      # npx, which can fetch another version.
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps --no-shell chromium 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+        run: node_modules/.bin/playwright install --with-deps --no-shell chromium 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run test:extension
         run: npm run test:extension 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
