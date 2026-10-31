@@ -699,7 +699,9 @@ describe('the fields #17 PR 3 writes beside the flags (Q8)', () => {
     }
   });
 
-  it("Export JSON and a note's own export write every note without them (#17 PR 3b)", async () => {
+  // A note's own export is Export Current Note's, below: Storage.exportNote had no caller, and
+  // went with #17 PR 4a
+  it('Export JSON writes every note without them (#17 PR 3b)', async () => {
     const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
     const { env, Storage } = await setup();
     const fields = { placement: { kind: 'daily', dateKey: '2026-10-20' }, kind: 'note', lifecycle: 'active', dailyKey: '2026-10-20', dailyTimeZone: 'UTC', dailyDuplicateOf: null };
@@ -713,8 +715,7 @@ describe('the fields #17 PR 3 writes beside the flags (Q8)', () => {
     });
     const exported = plain(await Storage.exportAll());
     const streamed = JSON.parse(await (await Storage.exportAllAsBlob()).text());
-    const single = plain(await Storage.exportNote('A'));
-    for (const file of [exported, streamed, single]) {
+    for (const file of [exported, streamed]) {
       const note = file.canvases.find((n) => n.id === 'A');
       assert.deepEqual([note.isDaily, note.dateStr], [true, '2026-10-20']);
       for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, field);

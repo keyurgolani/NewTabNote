@@ -151,7 +151,7 @@ describe('the space notice', () => {
 describe('a space-blocked record the worker could not replace (review R79)', () => {
   it('says nothing once the database is at 9: the notice is not due', async () => {
     const { env, Storage } = await setup({ status: 'space-blocked', upgraded: true });
-    assert.equal(Storage.isUpgraded(), true);
+    assert.equal(env.storageState.upgraded(), true);
     assert.equal(await spaceNotice(env, Storage).isDue(), false);
   });
 });
@@ -160,7 +160,7 @@ describe("#47's notice after the upgrade", () => {
   it('is never due on a database the worker has upgraded to 9, and records nothing', async () => {
     const { env, Storage } = await setup({ status: 'migrated', upgraded: true });
     await Storage.createNote('Holds something');
-    assert.equal(Storage.isUpgraded(), true);
+    assert.equal(env.storageState.upgraded(), true);
     const notice = new (env.get('ExportNotice'))({
       settings: env.settingsClient,
       storageState: env.storageState,
