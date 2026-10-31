@@ -474,49 +474,98 @@ const tally = (list, ids) => {
   return list.length;
 };
 
+/** A legacy copy's key in chrome.storage.local, as 1.4.x writes it */
+const LEGACY_COPY_KEY = /^(?:auto|recovery)_backup_[0-9]{10,16}$/;
+
+/**
+ * How many user rows `rows` holds, in USER_STORES only
+ * @param {unknown} rows
+ */
+const userRows = rows => {
+  if (!isObject(rows)) return 0;
+  let count = 0;
+  for (const store of USER_STORES) if (Array.isArray(rows[store])) count += rows[store].length;
+  return count;
+};
+
 /**
  * What a file read: its `unreadable` list; how many of the user's records it holds, in
  * USER_STORES only, wherever they are (CanvasTabDB's, each legacy copy's rows, each point's
- * rows); whether it holds `subjectId` (a legacy copy by its key, a point by its id, or a
- * record by its id); and whether CanvasTabDB read whole, store by store. A file that holds no
- * user record while any source is unreadable saved nothing, whatever else read.
+ * rows); whether it holds the rows of `subjectId`, what an irreversible run destroys; and
+ * whether CanvasTabDB read whole, store by store. A file that holds no user record while any
+ * source is unreadable saved nothing, whatever else read.
+ *
+ * It holds a subject by its rows, never its name (slice 4a; "Before any irreversible
+ * remediation ships"):
+ * - a legacy copy, by its key, only when the file kept at least one of its user rows and left
+ *   out nothing of it as an unknown store or field (`unknown-store`, `unknown-field`
+ *   omissions under its key); its secrets are left out by design;
+ * - a #17 point, by its id, only when no `unreadable` entry names it and the file holds at
+ *   least one of its user rows;
+ * - a record, by its id, only when it's in CanvasTabDB's lists as the file holds them now,
+ *   never because an old copy or point holds it.
+ * No subject (null) is never held: what the run destroys must be named.
  * @param {{[key: string]: unknown}} file
  * @param {string | null} [subjectId]
  * @returns {{unreadable: Unreadable[], held: number, holdsSubject: boolean, readCanvas: boolean}}
  */
 export function readOf(file, subjectId = null) {
   const unreadable = Array.isArray(file.unreadable) ? /** @type {Unreadable[]} */ (file.unreadable) : [];
+  // CanvasTabDB's records now, by id, and every other id the file holds
   /** @type {Set<string>} */
-  const ids = new Set();
+  const current = new Set();
+  /** @type {Set<string>} */
+  const elsewhere = new Set();
   let held = 0;
   // CanvasTabDB's, as the legacy shape split them
   for (const key of ['canvases', 'trashedCanvases', 'elements', 'orphanElements', 'media', 'folders']) {
-    held += tally(file[key], ids);
+    held += tally(file[key], current);
   }
   const unimportable = isObject(file.unimportable) ? file.unimportable : {};
-  for (const list of Object.values(unimportable)) held += tally(list, ids);
+  for (const list of Object.values(unimportable)) held += tally(list, current);
   const stores = isObject(file.stores) ? file.stores : {};
-  for (const store of ['themes', 'snapshots']) held += tally(stores[store], ids);
+  for (const store of ['themes', 'snapshots']) held += tally(stores[store], current);
   // A copy by its rows
   const copies = isObject(file.legacyCopies) ? file.legacyCopies : {};
   for (const copy of Object.values(copies)) {
-    if (isObject(copy)) for (const store of USER_STORES) held += tally(copy[store], ids);
+    if (isObject(copy)) for (const store of USER_STORES) held += tally(copy[store], elsewhere);
   }
   // A point by its rows
-  /** @type {Set<string>} */
-  const points = new Set();
-  for (const point of Array.isArray(file.recoveryPoints) ? file.recoveryPoints : []) {
-    if (!isObject(point)) continue;
-    if (typeof point.id === 'string') points.add(point.id);
+  const points = Array.isArray(file.recoveryPoints) ? file.recoveryPoints.filter(isObject) : [];
+  for (const point of points) {
     const rows = isObject(point.stores) ? point.stores : {};
-    for (const store of USER_STORES) held += tally(rows[store], ids);
+    for (const store of USER_STORES) held += tally(rows[store], elsewhere);
   }
-  const holdsSubject =
-    subjectId === null ||
-    Object.prototype.hasOwnProperty.call(copies, subjectId) ||
-    points.has(subjectId) ||
-    ids.has(subjectId);
-  return { unreadable, held, holdsSubject, readCanvas: !unreadable.some(item => item.origin === 'CanvasTabDB') };
+  return { unreadable, held, holdsSubject: holds(file, subjectId, { copies, points, current, unreadable }), readCanvas: !unreadable.some(item => item.origin === 'CanvasTabDB') };
+}
+
+/**
+ * Whether `file` holds the rows of `subjectId` (see readOf)
+ * @param {{[key: string]: unknown}} file
+ * @param {string | null} subjectId
+ * @param {{copies: Record<string, unknown>, points: Record<string, unknown>[], current: Set<string>, unreadable: Unreadable[]}} read
+ */
+function holds(file, subjectId, { copies, points, current, unreadable }) {
+  if (subjectId === null || subjectId === '') return false;
+  if (LEGACY_COPY_KEY.test(subjectId)) {
+    if (!Object.prototype.hasOwnProperty.call(copies, subjectId)) return false;
+    const at = `legacyCopies.${subjectId}`;
+    const omissions = Array.isArray(file.omissions) ? file.omissions : [];
+    const dropped = omissions.some(
+      omission =>
+        isObject(omission) &&
+        (omission.reason === 'unknown-store' || omission.reason === 'unknown-field') &&
+        typeof omission.at === 'string' &&
+        (omission.at === at || omission.at.startsWith(`${at}.`)),
+    );
+    return !dropped && userRows(copies[subjectId]) > 0;
+  }
+  if (POINT_ID.test(subjectId)) {
+    const point = points.find(candidate => candidate.id === subjectId);
+    if (!point || unreadable.some(item => item.pointId === subjectId)) return false;
+    return userRows(point.stores) > 0;
+  }
+  return current.has(subjectId);
 }
 
 /**

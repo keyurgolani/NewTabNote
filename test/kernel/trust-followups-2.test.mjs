@@ -323,7 +323,7 @@ describe("#75's follow-ups (part 2)", () => {
     assert.deepEqual([stored?.state, stored?.occurrences], ['resolved', 2]);
   });
 
-  it('P4b: a later failing write undismisses write-failed after a clock step back', async () => {
+  it('P4b: a later failing write with another cause undismisses write-failed after a clock step back', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const up = databaseOn(profile);
@@ -338,7 +338,12 @@ describe("#75's follow-ups (part 2)", () => {
     clock.advance(10_000);
     await rb.records.dismiss(incident.id, true);
     clock.advance(-60_000);
+    // The same failure again keeps it dismissed (#20 slice 4a: a dismissal holds until the problem changes)
     await ra.records.append(event(1));
+    assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, true);
+    // Another cause brings it back, whatever the clocks say
+    fa.failNext(1000, 'quota');
+    await ra.records.append(event(2));
     assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, false);
     assert.ok((await summaryOf(rb.records, clock)).actionRequired >= 1);
   });
@@ -763,8 +768,8 @@ describe("#80's review round", () => {
     const { records, clock } = await recordsOn(f.store, profile);
     const { trust } = await useCases(records, clock);
     assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, true);
-    // trust.report reads receipts, runs, then incidents
-    f.failNext(1, 'retries-exhausted', { after: 2 });
+    // trust.report reads receipts, then incidents, then runs
+    f.failNext(1, 'retries-exhausted', { after: 1 });
     assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, false);
     f.failNext(1, 'retries-exhausted');
     assert.equal(/** @type {any} */ (await trust.incidents()).data.recordsRead, false);

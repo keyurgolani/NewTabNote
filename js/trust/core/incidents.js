@@ -15,8 +15,14 @@
  *   (a tie goes to the sighting); an older one leaves it resolved. One at or after the latest
  *   sighting brings its capabilities and evidence; an older one doesn't. While the incident is
  *   open its severity is the worse of the two, since a milder sighting doesn't make an open
- *   fault milder; a reopened one takes the sighting's. One at or after the last dismiss change
- *   clears a dismissal. A remediating incident stays remediating.
+ *   fault milder; a reopened one takes the sighting's. A remediating incident stays
+ *   remediating.
+ * - A dismissal holds until the problem changes: a sighting at or after the last dismiss
+ *   change clears it only when it's worse than the incident's severity, or names a cause
+ *   (`evidence.errorCode`) other than the one it was dismissed with (`dismissedCause`). The
+ *   same fault, subject, cause and severity sighted again keeps it, and so does a sighting
+ *   that names no cause (a check's), so a check on every Trust Center open never undoes it. A
+ *   resolution clears it, so a fault that's fixed and comes back is a problem to see again.
  * - A resolution applies only if it's later than every sighting.
  * - A dismissal or undismissal applies only if it's later than every sighting and than the
  *   last dismiss change (`dismissChangedAt`), so an older one replayed late changes nothing.
@@ -190,15 +196,16 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
     if (added === 0) return record;
   }
   const newest = at >= record.lastSeenAt;
-  // A held sighting's new count reopens and undismisses whatever the clocks say: a resolve or
-  // a dismiss replays what's held first, under the copy's lock, so what it hadn't counted came
-  // after it. Memory clears what it replayed once the write commits.
+  // A held sighting's new count reopens, and undismisses a problem that changed, whatever the
+  // clocks say: a resolve or a dismiss replays what's held first, under the copy's lock, so
+  // what it hadn't counted came after it. Memory clears what it replayed once the write commits.
   const late = track || unseen;
   const reopens = record.state === 'resolved' && added > 0 && (late || at >= (record.resolvedAt ?? 0));
   const staysResolved = record.state === 'resolved' && !reopens;
-  const undismisses = record.dismissed && added > 0 && (late || at >= (record.dismissChangedAt ?? 0));
+  const undismisses =
+    record.dismissed && added > 0 && (late || at >= (record.dismissChangedAt ?? 0)) && changesProblem(record, sighting);
   return {
-    ...record,
+    ...(undismisses ? withoutCause(record) : record),
     severity: reopens ? sighting.severity : staysResolved ? record.severity : worseSeverity(record.severity, sighting.severity),
     state: reopens ? 'open' : record.state,
     resolvedAt: reopens ? null : record.resolvedAt,
@@ -225,13 +232,46 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
 }
 
 /**
+ * The cause an incident's evidence names: its error code, or null
+ * @param {{evidence: Record<string, unknown>}} held
+ * @returns {string | null}
+ */
+const causeOf = held => (typeof held.evidence.errorCode === 'string' ? held.evidence.errorCode : null);
+
+/**
+ * Whether `sighting` is a changed problem for a dismissed `record`: a worse severity, or a
+ * cause other than the one it was dismissed with. A sighting that names no cause says nothing
+ * about it. A record an older build dismissed has no `dismissedCause`; its evidence stands in.
+ * @param {Incident} record
+ * @param {Sighting} sighting
+ */
+export function changesProblem(record, sighting) {
+  if (SEVERITIES.indexOf(sighting.severity) < SEVERITIES.indexOf(record.severity)) return true;
+  const cause = causeOf(sighting);
+  if (cause === null) return false;
+  const dismissedWith = record.dismissedCause !== undefined ? record.dismissedCause : causeOf(record);
+  return cause !== dismissedWith;
+}
+
+/**
+ * `record` without `dismissedCause`, which only a dismissed incident holds
+ * @param {Incident} record
+ * @returns {Incident}
+ */
+function withoutCause(record) {
+  const rest = { ...record };
+  delete rest.dismissedCause;
+  return rest;
+}
+
+/**
  * @param {Incident | undefined} record
  * @param {ResolveOp} op
  * @returns {Incident | undefined}
  */
 export function applyResolve(record, op) {
   if (!record || record.state === 'resolved' || op.at <= record.lastSeenAt) return record;
-  return { ...record, state: 'resolved', resolvedAt: op.at, dismissed: false, sightedBy: [] };
+  return { ...withoutCause(record), state: 'resolved', resolvedAt: op.at, dismissed: false, sightedBy: [] };
 }
 
 /**
@@ -242,7 +282,8 @@ export function applyResolve(record, op) {
 export function applyDismiss(record, op) {
   if (!record || record.state === 'resolved' || op.at <= record.lastSeenAt) return record;
   if (record.dismissChangedAt !== null && op.at <= record.dismissChangedAt) return record;
-  return { ...record, dismissed: op.dismissed, dismissChangedAt: op.at };
+  if (!op.dismissed) return { ...withoutCause(record), dismissed: false, dismissChangedAt: op.at };
+  return { ...record, dismissed: true, dismissChangedAt: op.at, dismissedCause: causeOf(record) };
 }
 
 /**

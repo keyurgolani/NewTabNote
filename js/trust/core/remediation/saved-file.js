@@ -236,6 +236,72 @@ export async function readBack({ files, written }) {
   return { status: 'saved', counts: recounted, characters: written.characters, read: written.read };
 }
 
+/** The most characters one part of a text file's write holds */
+const TEXT_PART = 64 * 1024;
+
+/**
+ * A text file's write, in parts
+ * @param {string} text
+ * @returns {Generator<string>}
+ */
+function* textParts(text) {
+  for (let start = 0; start < text.length; start += TEXT_PART) yield text.slice(start, start + TEXT_PART);
+}
+
+/**
+ * A text file `build` makes, the diagnostic report, saved the same checked way: the picker
+ * first, then the build, the write, and the close. Its read-back (readBackText) holds the
+ * file to every character, not to counts.
+ * @param {{files: FilePort | undefined, suggestedName: string, build: () => Promise<string>}} options
+ * @returns {Promise<{status: 'written', handle: unknown, characters: number, text: string} | {status: 'cancelled'} | {status: 'failed', code: string, picked?: true}>}
+ */
+export async function writeText({ files, suggestedName, build }) {
+  if (!files || !files.available()) return { status: 'failed', code: 'picker-unavailable' };
+  /** @type {unknown} */
+  let handle;
+  try {
+    handle = await files.pick({ suggestedName });
+  } catch {
+    return { status: 'failed', code: 'picker-unavailable' };
+  }
+  if (handle === null || handle === undefined) return { status: 'cancelled' };
+  /** @type {string} */
+  let text;
+  try {
+    const built = await build();
+    if (typeof built !== 'string') throw new TypeError('not a text file');
+    text = built;
+  } catch (error) {
+    return { status: 'failed', code: buildCode(error), picked: true };
+  }
+  try {
+    await files.write(handle, textParts(text));
+  } catch {
+    return { status: 'failed', code: 'file-not-saved', picked: true };
+  }
+  return { status: 'written', handle, characters: text.length, text };
+}
+
+/**
+ * A text file read back from the same handle: saved only when it's what was written, every
+ * character
+ * @param {{files: FilePort | undefined, written: {handle: unknown, characters: number, text: string}}} options
+ * @returns {Promise<{status: 'saved', characters: number} | {status: 'failed', code: 'file-unreadable' | 'file-mismatch'}>}
+ */
+export async function readBackText({ files, written }) {
+  if (!files) return { status: 'failed', code: 'file-unreadable' };
+  /** @type {unknown} */
+  let text;
+  try {
+    text = await files.read(written.handle);
+  } catch {
+    return { status: 'failed', code: 'file-unreadable' };
+  }
+  if (typeof text !== 'string') return { status: 'failed', code: 'file-unreadable' };
+  if (text !== written.text) return { status: 'failed', code: 'file-mismatch' };
+  return { status: 'saved', characters: written.characters };
+}
+
 /**
  * Saves the file `build` makes through the picker, and proves it (see the top of this file):
  * what an irreversible run's recovery file goes through before it may apply

@@ -17,6 +17,10 @@
  * and auto-backup run the same package on the same profile in every tab, and every capture
  * runs in the service worker, on the same profile.
  *
+ * An incident entry may name what its failure breaks and what still works (`affected`,
+ * `preserved`): a database the worker couldn't open breaks reading too. A failed capture says
+ * nothing about reading, so it names only capture.
+ *
  * `quietWhileOpen`: a code whose site repeats while nothing changes (the worker's storage open,
  * at every start) is journaled only when its incident isn't open already with the same error
  * code; each sighting still counts in the incident.
@@ -31,7 +35,7 @@ import { EVIDENCE_FIELDS } from './evidence.js';
 /**
  * @typedef {Readonly<{
  *   fields: readonly string[],
- *   incident?: Readonly<{providerId: string, faultCode: string, severity: Severity}>,
+ *   incident?: Readonly<{providerId: string, faultCode: string, severity: Severity, affected?: readonly string[], preserved?: readonly string[]}>,
  *   resolves?: string,
  *   quietWhileOpen?: boolean,
  * }>} EventCode
@@ -48,11 +52,22 @@ export const EVENT_CODES = Object.freeze({
   // The failure sites #20 slice 1b moves onto logger.event
   'capture.failed': Object.freeze({
     fields: Object.freeze([...ERROR, 'surface', 'commandId', 'subjectId']),
-    incident: Object.freeze({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' }),
+    incident: Object.freeze({
+      providerId: 'capture',
+      faultCode: 'capture-failed',
+      severity: 'capture-risk',
+      affected: Object.freeze(['capture']),
+    }),
   }),
   'storage.open-failed': Object.freeze({
     fields: Object.freeze([...ERROR, 'surface', 'schemaVersion', 'durationMs', 'subjectId']),
-    incident: Object.freeze({ providerId: 'storage', faultCode: 'open-failed', severity: 'capture-risk' }),
+    incident: Object.freeze({
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      severity: 'capture-risk',
+      affected: Object.freeze(['capture', 'editing', 'reading']),
+      preserved: Object.freeze([]),
+    }),
     quietWhileOpen: true,
   }),
   'embeddings.load-failed': Object.freeze({

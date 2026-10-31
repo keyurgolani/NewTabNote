@@ -23,6 +23,11 @@
  * found it won't open reports that incident. The records' own `open-failed` for
  * NewTabNoteTrust is never a check's to resolve.
  *
+ * Every capture-risk fault says whether reading still works (slice 4a, the one `preserved`
+ * list): after a probe that didn't commit, one readonly read of the probe's key tries, and
+ * `reading` goes in the fault's `preserved` when it answered, in its `affected` when it didn't,
+ * and the receipt's `preserved` says the same.
+ *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
  * nothing either way, so it's `unverified` with its code. A record already under the probe's
  * key is never touched: the probe stops, writes nothing, and reports `unverified`, and so does a
@@ -133,6 +138,32 @@ function failureOf(outcome) {
   return { kind: 'unverified', evidence: failureEvidence({ code }), code };
 }
 
+/**
+ * Whether reading still works after a probe that didn't commit: one readonly read of the
+ * probe's key, which no record holds, answered or not
+ * @param {KernelAdapter} adapter
+ */
+async function readsStill(adapter) {
+  const key = /** @type {string} */ (/** @type {unknown} */ ([...PROBE_KEY]));
+  try {
+    await adapter.read(['notes'], tx => tx.get('notes', key));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A capture-risk fault's capabilities: `broken`, and reading in whichever list the read put it
+ * @param {readonly ('capture' | 'editing')[]} broken
+ * @param {boolean} reads
+ * @returns {{affected: ('capture' | 'editing' | 'reading')[], preserved: 'reading'[]}}
+ */
+const riskTo = (broken, reads) => ({
+  affected: reads ? [...broken] : [...broken, 'reading'],
+  preserved: reads ? ['reading'] : [],
+});
+
 /** Capture's check */
 export const capture = Object.freeze({
   /**
@@ -155,12 +186,14 @@ export const capture = Object.freeze({
     if (!failure) return { status: 'verified', capture: 'safe', looked: lookedAll() };
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     const faultCode = failure.code === 'quota' || failure.code === 'version-too-new' ? failure.code : 'probe-failed';
+    const risk = riskTo(['capture'], await readsStill(adapter));
     return {
       status: failure.kind === 'action' ? 'action-required' : 'failed',
       capture: 'at-risk',
       evidence: { ...failure.evidence, subjectId: 'CanvasTabDB' },
       consequenceKey: 'storage.capture-at-risk',
-      faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'capture-risk', affected: ['capture'] }],
+      preserved: risk.preserved,
+      faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'capture-risk', ...risk }],
     };
   },
 });
@@ -199,6 +232,7 @@ export const storage = Object.freeze({
       return { status: 'verified', capture: 'safe', looked: lookedAll(['open-failed']) };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
+    const risk = riskTo(['capture', 'editing'], await readsStill(adapter));
     if (failure.kind === 'action') {
       const faultCode = /** @type {'quota' | 'version-too-new'} */ (failure.code);
       return {
@@ -206,7 +240,8 @@ export const storage = Object.freeze({
         capture: 'at-risk',
         evidence: { ...failure.evidence, subjectId: 'CanvasTabDB' },
         consequenceKey: `storage.${faultCode}`,
-        faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'capture-risk', affected: ['capture', 'editing'] }],
+        preserved: risk.preserved,
+        faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'capture-risk', ...risk }],
       };
     }
     return {
@@ -214,13 +249,14 @@ export const storage = Object.freeze({
       capture: 'at-risk',
       evidence: { ...failure.evidence, subjectId: 'CanvasTabDB' },
       consequenceKey: 'storage.unavailable',
+      preserved: risk.preserved,
       faults: [
         {
           // A database that won't open is the incident slice 1b's worker raises, keyed alike
           faultCode: failure.code !== null && OPEN_CODES.includes(failure.code) ? 'open-failed' : 'probe-failed',
           subjectId: 'CanvasTabDB',
           severity: 'capture-risk',
-          affected: ['capture', 'editing', 'reading'],
+          ...risk,
         },
       ],
     };

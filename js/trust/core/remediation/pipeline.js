@@ -20,16 +20,23 @@
  *   id, the decision, and that digest. The preview is taken again then, and one whose digest
  *   isn't the one confirmed goes back to the user (`preview-changed`) rather than apply what
  *   they didn't see, however often the confirmation is sent.
+ * - What it destroys (`destroys`), checked once the preview is taken: an irreversible run
+ *   must name the one legacy copy, point, or record it destroys, and a secret removal the
+ *   saved-key places it removes, the same its preview lists, while its preview changes nothing
+ *   but deleting those. A run that names nothing, or anything else, fails `destroys-unnamed` or
+ *   `changes-user-records` before anything is saved or changed. No other class touches the
+ *   saved keys.
  * - protect: what the class needs before apply (gates.js): a verified #17 `pre-repair` point
  *   that holds every record the run changes, for a reversible run; a salvage file saved
- *   through the picker, read back verified, and holding all of CanvasTabDB, in this run, for an
- *   irreversible one. Either failing ends the run before apply; a cancelled picker goes back
- *   to the preview.
+ *   through the picker, read back verified, holding all of CanvasTabDB and the rows of what
+ *   the run destroys (salvage-file.js's readOf), in this run, for an irreversible one. Either
+ *   failing ends the run before apply; a cancelled picker goes back to the preview.
  * - apply, then verify: the remediation's own steps. A run is `succeeded` only once verify
  *   passed, `verified`, or `saved-partial` (a warning) for a saved file that couldn't read
  *   every source, which the answer's `unreadable` names; everything else is `failed`,
  *   `cancelled`, or still `awaiting-confirmation`, with its outcome code, and never answers as
- *   committed.
+ *   committed. A saved file's answer says how much it holds (`saved`), and a run that made a
+ *   note names it (`noteId`).
  * - record: the last write, of how it ended, and a `remediation.finished` journal event.
  * A step's record that won't write after apply has begun doesn't stop the run (what it changed
  * is changed), but the answer says `recorded: false`.
@@ -45,8 +52,9 @@
  * at; it cancels a run left awaiting confirmation past PENDING_MS.
  *
  * Nothing here deletes a user-owned record, and no remediation in catalog.js does either. Nor
- * does the pipeline resolve an incident: an incident resolves when its provider's check passes
- * again (trust.verify), as #80's contract has it, never because a remediation ran.
+ * does the pipeline resolve an incident: a verified run never resolves its incident, which
+ * resolves only when its provider's check passes again (recovery.check after a repair, or
+ * trust.verify), as #80's contract has it.
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
@@ -54,9 +62,16 @@ import { rejected, unavailable, unavailableFrom } from '../../../kernel/core/con
 import { effectiveStatus } from '../checks.js';
 import { RUN_OUTCOMES } from '../codes.js';
 import { payload as runPayload } from '../operations/recovery-run.js';
-import { CANCELLED_BY_USER, fileName } from './catalog.js';
+import { CANCELLED_BY_USER, fileName, savedOf } from './catalog.js';
 import { CLASS_PROTECTIONS, checkConsent, checkProtected, needsConfirmation } from './gates.js';
-import { changesUserRecords, deletesUserRecords, digestOf, previewSchema } from './preview.js';
+import {
+  changesUserRecords,
+  deletesUserRecords,
+  digestOf,
+  previewSchema,
+  secretRemovalRefusal,
+  touchesSavedKeys,
+} from './preview.js';
 import { MAX_UNREADABLE, buildSalvage } from './salvage-file.js';
 import { saveVerified } from './saved-file.js';
 
@@ -78,6 +93,7 @@ import { saveVerified } from './saved-file.js';
 /** @typedef {import('./catalog.js').RemediationContext} RemediationContext */
 /** @typedef {import('./catalog.js').Verdict} Verdict */
 /** @typedef {import('./salvage-file.js').Unreadable} Unreadable */
+/** @typedef {import('../records.js').Saved} Saved */
 /** @typedef {import('../operations/recovery-run.js').RecoveryRun} RecoveryRun */
 /** @typedef {import('../operations/recovery-run.js').RemediationAnswer} RemediationAnswer */
 /** @typedef {import('../../../kernel/core/contracts/outcomes.js').Outcome} Outcome */
@@ -245,11 +261,14 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
 
   /**
    * Why `preview` can't run in `remediationClass`, or null: nothing deletes user-owned records
-   * on its own, and a class that takes no recovery point changes none
+   * on its own, a class that takes no recovery point changes none, and only a secret removal
+   * touches the saved keys
    * @param {RemediationClass} remediationClass
    * @param {Preview} preview
    */
   const refusalOf = (remediationClass, preview) => {
+    if (remediationClass === 'secret-removal') return null;
+    if (touchesSavedKeys(preview)) return 'changes-user-records';
     if (remediationClass === 'irreversible') return null;
     if (remediationClass === 'reversible') return deletesUserRecords(preview) ? 'deletes-user-records' : null;
     if (deletesUserRecords(preview)) return 'deletes-user-records';
@@ -276,6 +295,11 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
     let unreadable = first.unreadable ? [...first.unreadable] : [];
     let unreadableCount = first.unreadableCount ?? unreadable.length;
     let fileMayBeEmpty = first.fileMayBeEmpty === true;
+    // How much a file it saved holds, and the note it made, from the stored run too
+    /** @type {Saved | undefined} */
+    let saved = first.saved;
+    /** @type {string | undefined} */
+    let noteId = first.noteId;
     /** @param {readonly Unreadable[]} list */
     const setUnreadable = list => {
       unreadable = list.slice(0, MAX_UNREADABLE);
@@ -307,6 +331,8 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       unreadable,
       unreadableCount,
       fileMayBeEmpty,
+      ...(saved ? { saved: { ...saved } } : {}),
+      ...(noteId ? { noteId } : {}),
       ...(run.recoveryPointId ? { recoveryPointId: run.recoveryPointId } : {}),
       recorded,
       messageKey: `remediation.${run.state}`,
@@ -329,6 +355,8 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
         ...(state === 'succeeded' ? { step: /** @type {RunStep} */ ('record') } : {}),
         ...(unreadableCount > 0 ? { unreadable, unreadableCount } : {}),
         ...(fileMayBeEmpty ? { fileMayBeEmpty } : {}),
+        ...(saved ? { saved } : {}),
+        ...(noteId ? { noteId } : {}),
       });
       note({
         runId: run.id,
@@ -365,9 +393,10 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
     /**
      * What the class needs before apply, made now
      * @param {unknown} plan
+     * @param {unknown} destroyed - what an irreversible run destroys, as its destroys step named it
      * @returns {Promise<{ok: true, pointId?: string, pointVerified?: boolean, fileSavedAt?: number} | {ok: false, code: string, back?: boolean}>}
      */
-    const protect = async plan => {
+    const protect = async (plan, destroyed) => {
       const needs = CLASS_PROTECTIONS[remediationClass];
       if (needs.includes('recovery-point')) {
         const points = ports.recoveryPoints;
@@ -380,30 +409,30 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       if (needs.includes('recovery-file')) {
         const salvage = ports.salvage;
         if (!salvage) return { ok: false, code: 'build-failed' };
-        // What the action destroys, when it names it: the file must hold it
-        const destroyed = steps.destroys ? steps.destroys(/** @type {RemediationContext} */ (context), plan) : null;
-        // The picker first, in the click's activation; the profile is read once it's picked
-        const saved = await saveVerified({
+        // The picker first, in the click's activation; the profile is read once it's picked.
+        // The file must hold the rows of what the action destroys.
+        const file = await saveVerified({
           files: ports.files,
           suggestedName: fileName('salvage', clock.now()),
           build: async () => buildSalvage(await salvage.collect(), { now: clock.now() }),
-          subjectId: destroyed,
+          subjectId: /** @type {string} */ (destroyed),
         });
-        if (saved.status === 'cancelled') return { ok: false, code: 'file-not-saved', back: true };
-        if (saved.status === 'failed') {
+        if (file.status === 'cancelled') return { ok: false, code: 'file-not-saved', back: true };
+        if (file.status === 'failed') {
           // Past the picker, the file the user chose may now be empty
-          if (saved.code !== 'picker-unavailable') fileMayBeEmpty = true;
-          return { ok: false, code: outcomeCode(saved.code, 'file-not-saved') };
+          if (file.code !== 'picker-unavailable') fileMayBeEmpty = true;
+          return { ok: false, code: outcomeCode(file.code, 'file-not-saved') };
         }
-        setUnreadable(saved.read.unreadable);
+        setUnreadable(file.read.unreadable);
+        saved = savedOf(file.counts, file.characters);
         // The save's own rule: no user record held while a source didn't read saved nothing
-        if (saved.read.held === 0 && saved.read.unreadable.length > 0) {
+        if (file.read.held === 0 && file.read.unreadable.length > 0) {
           fileMayBeEmpty = true;
           return { ok: false, code: 'nothing-readable' };
         }
-        // A recovery file that didn't read all of CanvasTabDB, or doesn't hold what the action
-        // destroys, isn't the path back
-        if (!saved.read.readCanvas || !saved.read.holdsSubject) return { ok: false, code: 'salvage-incomplete' };
+        // A recovery file that didn't read all of CanvasTabDB, or doesn't hold the rows of what
+        // the action destroys, isn't the path back
+        if (!file.read.readCanvas || !file.read.holdsSubject) return { ok: false, code: 'salvage-incomplete' };
         return { ok: true, fileSavedAt: clock.now() };
       }
       return { ok: true };
@@ -431,6 +460,23 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       const refused = refusalOf(remediationClass, preview);
       if (refused) return finish('failed', refused);
       if (previewed.nothingToDo === true) return finish('cancelled', 'nothing-to-do');
+      // What it destroys, which an irreversible run and a secret removal must name
+      /** @type {unknown} */
+      let destroyed = null;
+      if (remediationClass === 'irreversible' || remediationClass === 'secret-removal') {
+        try {
+          destroyed = steps.destroys ? steps.destroys(ctx, plan) : null;
+        } catch {
+          destroyed = null;
+        }
+        const unnamed =
+          remediationClass === 'irreversible'
+            ? typeof destroyed === 'string' && destroyed !== ''
+              ? null
+              : 'destroys-unnamed'
+            : secretRemovalRefusal(preview, destroyed);
+        if (unnamed) return finish('failed', unnamed);
+      }
       if (needsConfirmation(remediationClass)) {
         if (given.confirming === null) return hold(preview, null);
         if (given.decision !== 'confirm') return hold(preview, 'not-confirmed');
@@ -445,7 +491,7 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       /** @type {Awaited<ReturnType<typeof protect>>} */
       let made;
       try {
-        made = await protect(plan);
+        made = await protect(plan, destroyed);
       } catch (error) {
         return finish('failed', codeOf(error, 'protect-failed'));
       }
@@ -484,6 +530,8 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       }
       if (verdict && Array.isArray(verdict.unreadable)) setUnreadable(verdict.unreadable);
       if (verdict && verdict.ok === false && verdict.fileMayBeEmpty === true) fileMayBeEmpty = true;
+      if (verdict && verdict.ok === true && verdict.saved) saved = verdict.saved;
+      if (verdict && verdict.ok === true && typeof verdict.noteId === 'string') noteId = verdict.noteId;
       if (!verdict || verdict.ok !== true) {
         return finish('failed', outcomeCode(verdict && /** @type {{code?: unknown}} */ (verdict).code, 'not-verified'));
       }

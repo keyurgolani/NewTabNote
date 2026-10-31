@@ -178,7 +178,7 @@ async function irreversible(read, subject = null) {
 
 describe("#82 round 3, 2: the irreversible gate uses the save's own rule", () => {
   it('refuses a recovery file with no user records while a source is unreadable', async () => {
-    const { answer, applied } = await irreversible(READS.emptyDbCopiesFailed);
+    const { answer, applied } = await irreversible(READS.emptyDbCopiesFailed, 'n1');
     assert.deepEqual([answer.state, answer.step, answer.outcome], ['failed', 'protect', 'nothing-readable']);
     assert.equal(applied, false);
   });
@@ -187,7 +187,20 @@ describe("#82 round 3, 2: the irreversible gate uses the save's own rule", () =>
     const missing = await irreversible(READS.dbReadPointsFailed, 'auto_backup_1000000000000');
     assert.deepEqual([missing.answer.state, missing.answer.outcome], ['failed', 'salvage-incomplete']);
     assert.equal(missing.applied, false);
-    const held = await irreversible(READS.dbReadPointsFailed, 'auto_backup_1793413294678');
+    // A copy is held by its rows, not its name (#20 slice 4a): an empty one holds nothing
+    const empty = await irreversible(READS.dbReadPointsFailed, 'auto_backup_1793413294678');
+    assert.deepEqual([empty.answer.state, empty.answer.outcome], ['failed', 'salvage-incomplete']);
+    assert.equal(empty.applied, false);
+    const held = await irreversible(
+      {
+        ...READS.dbReadPointsFailed,
+        legacyCopies: {
+          status: 'read',
+          copies: [{ key: 'auto_backup_1793413294678', value: { version: 1, canvases: [{ id: 'c1' }], elements: [] } }],
+        },
+      },
+      'auto_backup_1793413294678',
+    );
     assert.equal(held.answer.state, 'succeeded');
     assert.equal(held.applied, true);
     const note = await irreversible(READS.dbReadPointsFailed, 'n1');
@@ -197,7 +210,7 @@ describe("#82 round 3, 2: the irreversible gate uses the save's own rule", () =>
 
 describe('#82 round 3, 3: an irreversible run with an incomplete recovery file says so', () => {
   it('answers saved-partial, a warning, naming what its file missed', async () => {
-    const { answer, applied } = await irreversible(READS.dbReadPointsFailed);
+    const { answer, applied } = await irreversible(READS.dbReadPointsFailed, 'n1');
     assert.equal(applied, true);
     assert.deepEqual([answer.state, answer.outcome, answer.severity], ['succeeded', 'saved-partial', 'warning']);
     assert.equal(answer.unreadable[0].origin, 'recoveryPoints');

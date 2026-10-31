@@ -64,12 +64,13 @@
  *   doesn't) and whether its read of NewTabNoteTrust did, so the summary doesn't call anything
  *   safe that it couldn't read.
  * - A held sighting is unseen by definition: a copy entry's new count, or an occurrence only
- *   this context's memory holds, reopens a resolved incident and undismisses a dismissed one
- *   whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
+ *   this context's memory holds, reopens a resolved incident, and undismisses a dismissed one
+ *   whose problem it changed (incidents.js), whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
  *   a false alarm, never a false all clear.
  * - Known limit: `storage/write-failed` sighted by more than one context stays open, a false
- *   alarm, until a later slice's verify path or a dismissal, even after every one of them
- *   recovered. So does one whose context ended before a write landed there: a closed tab, or
+ *   alarm, until the user dismisses it (recovery.dismiss, which holds while the failures keep
+ *   their cause and severity), even after every one of them recovered: no check observes it,
+ *   so recovery.check answers `not-checked` for it. So does one whose context ended before a write landed there: a closed tab, or
  *   an MV3 service worker that Chrome stopped (after about 30 s idle, the common case).
  * - Known limit, wider since the failure events reconcile at every worker start and tab: a
  *   stuck context's `open-failed` reads resolved after any other context opens the store while
@@ -390,10 +391,22 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     }).catch(() => ({ ok: false, unreadable: false }));
 
   /**
+   * Whether `next` changes the problem `held` describes: a worse severity, or a cause other
+   * than its own
+   * @param {Sighting} held
+   * @param {Sighting} next
+   */
+  const changedSighting = (held, next) =>
+    SEVERITIES.indexOf(next.severity) < SEVERITIES.indexOf(held.severity) ||
+    (typeof next.evidence.errorCode === 'string' && next.evidence.errorCode !== held.evidence.errorCode);
+
+  /**
    * Holds one sighting of storage incident `key`: in the copy, or counted in memory when the
    * copy can't take it. Its time is no earlier than what the store's record holds, when the
-   * store can be read, so a clock that stepped back can't file it behind a resolution. Answers
-   * null when this context already holds HELD_KEYS other keys, besides the records' own.
+   * store can be read, so a clock that stepped back can't file it behind a resolution. The
+   * entry keeps its newest sighting, or a later one that changed the problem (a worse severity
+   * or another cause) whatever the clocks say, so a dismissal sees the change. Answers null
+   * when this context already holds HELD_KEYS other keys, besides the records' own.
    * @param {string} key
    * @param {Sighting} sighting
    * @param {number} at
@@ -416,8 +429,8 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         if (!OWN_KEYS.has(key) && others >= HELD_KEYS) return null;
         entry = { key, incidentId: ids.next(), at: when, sighting, copied: null, remainder: 0, remainderId: ids.next() };
         held.set(key, entry);
-      } else if (when >= entry.at) {
-        entry.at = when;
+      } else if (when >= entry.at || changedSighting(entry.sighting, sighting)) {
+        entry.at = Math.max(entry.at, when);
         entry.sighting = sighting;
       }
       const added = await addToCopy(entry);

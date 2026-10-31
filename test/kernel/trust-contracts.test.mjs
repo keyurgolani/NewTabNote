@@ -56,12 +56,16 @@ const MODULES = await Promise.all(
 );
 
 describe('the trust catalog (#20 slice 1, AC1)', () => {
-  it('lists the seven operations, each at catalog version 1, named apart from every kernel and system operation', () => {
+  it('lists the eleven operations, each at catalog version 1, named apart from every kernel and system operation', () => {
     assert.deepEqual(ENTRIES.map(([name]) => name).sort(), [
       'diagnostics.export',
+      'recovery.check',
+      'recovery.copies',
+      'recovery.dismiss',
       'recovery.incidents',
       'recovery.raise',
       'recovery.run',
+      'recovery.undismiss',
       'trust.report',
       'trust.summary',
       'trust.verify',
@@ -98,6 +102,9 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
         'trust.verify': { trigger: 'verify-now' },
         'recovery.raise': { providerId: 'storage', faultCode: 'open-failed', severity: 'degraded' },
         'recovery.run': { remediationId: 'retry-open', userInitiated: true },
+        'recovery.dismiss': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
+        'recovery.undismiss': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
+        'recovery.check': { incidentId: 'a1b20001-0000-4000-8000-000000000000' },
       }[name];
       assert.ok(v.is(module.payload, { ...base, ...minimal }), name);
       assert.equal(v.is(module.payload, { ...base, ...minimal, type: 'other' }), false, name);

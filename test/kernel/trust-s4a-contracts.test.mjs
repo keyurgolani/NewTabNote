@@ -96,7 +96,11 @@ async function center(answers, { context = {} } = {}) {
   const root = createRegistryRoot({ host: 'workspace' });
   root.register(health, [
     provider('capture', 'storage', answers, { core: true, observes: ['probe-failed', 'quota'] }),
-    provider('storage', 'storage', answers, { core: true, rank: 20, observes: ['open-failed', 'quota', 'scan-findings'] }),
+    provider('storage', 'storage', answers, {
+      core: true,
+      rank: 20,
+      observes: ['open-failed', 'quota', 'scan-findings'],
+    }),
     provider('index', 'indexing', answers, { observes: ['lagging'] }),
     provider('credentials', 'vault', answers, { observes: ['legacy-secret'] }),
     provider('backup', 'backup', answers),
@@ -117,7 +121,10 @@ async function center(answers, { context = {} } = {}) {
   return { clock, records, trust };
 }
 
-/** Every fixture provider passing, nothing found */
+/**
+ * Every fixture provider passing, nothing found
+ * @returns {Record<string, any>}
+ */
 const allPassing = () => ({
   capture: { status: 'verified', capture: 'safe', looked: [{ faultCode: 'probe-failed' }, { faultCode: 'quota' }] },
   storage: { status: 'verified', capture: 'safe', looked: [{ faultCode: 'open-failed' }, { faultCode: 'quota' }] },
@@ -147,7 +154,8 @@ let commands = 0;
 /** @param {string} type @param {Record<string, unknown>} [more] */
 const command = (type, more = {}) => ({ type, commandId: `s4a-${++commands}`, ...more });
 
-const verifyNow = (/** @type {string[]} */ providerIds) => command('trust.verify', { trigger: 'verify-now', providerIds });
+const verifyNow = (/** @type {string[]} */ providerIds) =>
+  command('trust.verify', { trigger: 'verify-now', providerIds });
 
 // ============ 1. Dismissal ============
 
@@ -160,7 +168,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     providerId: 'storage',
     faultCode: 'open-failed',
     subjectId: 'CanvasTabDB',
-    severity: 'degraded',
+    severity: 'data-risk',
     state: 'open',
     dismissed: true,
     dismissChangedAt: 2000,
@@ -189,7 +197,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
       providerId: /** @type {const} */ ('storage'),
       faultCode: /** @type {const} */ ('open-failed'),
       subjectId: /** @type {const} */ ('CanvasTabDB'),
-      severity: /** @type {const} */ ('degraded'),
+      severity: /** @type {const} */ ('data-risk'),
       affected: [],
       preserved: [],
       evidence: { errorCode: /** @type {const} */ ('open-failed') },
@@ -206,7 +214,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const silent = applyRaise(dismissed, sighting({ evidence: {} }));
     assert.equal(silent.dismissed, true);
     // A milder one doesn't change it either
-    const milder = applyRaise(dismissed, sighting({ severity: 'info' }));
+    const milder = applyRaise(dismissed, sighting({ severity: 'degraded' }));
     assert.equal(milder.dismissed, true);
     // A held replay keeps it too, when it's the same problem
     assert.equal(applyRaise(dismissed, sighting({}), { unseen: true }).dismissed, true);
@@ -227,7 +235,10 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
   it('recovery.dismiss and recovery.undismiss are #13 commands for the Trust and Recovery views', () => {
     for (const name of ['recovery.dismiss', 'recovery.undismiss', 'recovery.check']) {
       assert.ok(TRUST_COMMANDS[/** @type {keyof typeof TRUST_COMMANDS} */ (name)], name);
-      assert.deepEqual(TRUST_COMMANDS[/** @type {keyof typeof TRUST_COMMANDS} */ (name)].surfaces, ['newtab', 'recovery']);
+      assert.deepEqual(TRUST_COMMANDS[/** @type {keyof typeof TRUST_COMMANDS} */ (name)].surfaces, [
+        'newtab',
+        'recovery',
+      ]);
     }
     assert.ok(TRUST_QUERIES['recovery.copies']);
   });
@@ -243,7 +254,10 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const { trust, records, clock } = await center(answers);
     await trust.verify(verifyNow(['credentials']));
     const [incident] = await records.incidents();
-    const dismissedAnswer = checked('recovery.dismiss', await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id })));
+    const dismissedAnswer = checked(
+      'recovery.dismiss',
+      await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id })),
+    );
     assert.equal(dismissedAnswer.kind, 'committed');
     assert.deepEqual(dismissedAnswer.changedIds, [incident.id]);
 
@@ -261,7 +275,10 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     assert.equal(listed[0].occurrences, 4);
 
     // Show it again
-    const shown = checked('recovery.undismiss', await trust.undismiss(command('recovery.undismiss', { incidentId: incident.id })));
+    const shown = checked(
+      'recovery.undismiss',
+      await trust.undismiss(command('recovery.undismiss', { incidentId: incident.id })),
+    );
     assert.equal(shown.kind, 'committed');
     assert.equal(dataOf(await trust.summary()).actionRequired, 1);
   });
@@ -271,7 +288,9 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     answers.capture = {
       status: 'failed',
       capture: 'at-risk',
-      faults: [{ faultCode: 'probe-failed', subjectId: 'CanvasTabDB', severity: 'capture-risk', affected: ['capture'] }],
+      faults: [
+        { faultCode: 'probe-failed', subjectId: 'CanvasTabDB', severity: 'capture-risk', affected: ['capture'] },
+      ],
     };
     const { trust, records, clock } = await center(answers);
     await trust.verify(verifyNow(['capture']));
@@ -326,7 +345,11 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
 describe('a check after a repair (#20 slice 4a, item 2)', () => {
   it('only a passing check resolves the incident, and the answer says fixed or still there', async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
-    answers.index = { status: 'degraded', faults: [{ faultCode: 'lagging', severity: 'degraded' }], looked: [{ faultCode: 'lagging' }] };
+    answers.index = {
+      status: 'degraded',
+      faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+      looked: [{ faultCode: 'lagging' }],
+    };
     const { trust, records } = await center(answers);
     await trust.verify(verifyNow(['index']));
     const [incident] = await records.incidents();
@@ -344,7 +367,11 @@ describe('a check after a repair (#20 slice 4a, item 2)', () => {
 
   it("a check that couldn't run says not checked, and resolves nothing", async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
-    answers.index = { status: 'degraded', faults: [{ faultCode: 'lagging', severity: 'degraded' }], looked: [{ faultCode: 'lagging' }] };
+    answers.index = {
+      status: 'degraded',
+      faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+      looked: [{ faultCode: 'lagging' }],
+    };
     const { trust, records } = await center(answers);
     await trust.verify(verifyNow(['index']));
     const [incident] = await records.incidents();
@@ -358,18 +385,30 @@ describe('a check after a repair (#20 slice 4a, item 2)', () => {
 
   it('a verified run never resolves its incident', async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
-    answers.index = { status: 'degraded', faults: [{ faultCode: 'lagging', severity: 'degraded' }], looked: [{ faultCode: 'lagging' }] };
+    answers.index = {
+      status: 'degraded',
+      faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+      looked: [{ faultCode: 'lagging' }],
+    };
     const files = memoryFiles();
     const salvage = { collect: async () => profileRead(), restorePoint: async () => null, has: async () => false };
-    const made = await remediationCenter({ contributions: /** @type {any} */ (REMEDIATIONS), ports: { files, salvage } });
-    const raised = await made.records.raise({ providerId: 'storage', faultCode: 'open-failed', subjectId: 'CanvasTabDB', severity: 'capture-risk' });
+    const made = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files, salvage: /** @type {any} */ (salvage) },
+    });
+    const raised = await made.records.raise({
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      subjectId: 'CanvasTabDB',
+      severity: 'capture-risk',
+    });
     const incidentId = /** @type {Incident} */ (raised.incident).id;
     const done = /** @type {any} */ (await made.pipeline.run(runOf('save-salvage-file', { incidentId })));
     assert.equal(done.state, 'succeeded', JSON.stringify(done));
     assert.equal((await made.records.incidents())[0].state, 'open');
   });
 
-  it("each repair the views offer is for a fault its provider observes, and applies to that provider", () => {
+  it('each repair the views offer is for a fault its provider observes, and applies to that provider', () => {
     assert.ok(REPAIRS.length > 0);
     for (const repair of REPAIRS) {
       const descriptor = PROVIDERS.find(item => item.id === repair.providerId);
@@ -380,9 +419,14 @@ describe('a check after a repair (#20 slice 4a, item 2)', () => {
       );
       const contribution = REMEDIATIONS.find(item => item.id === repair.remediationId);
       assert.ok(contribution, `${repair.remediationId} is registered`);
-      assert.ok(contribution.appliesTo.includes(repair.providerId), `${repair.remediationId} applies to ${repair.providerId}`);
       assert.ok(
-        /** @type {readonly string[]} */ (/** @type {any} */ (descriptor).remediations || []).includes(repair.remediationId),
+        contribution.appliesTo.includes(repair.providerId),
+        `${repair.remediationId} applies to ${repair.providerId}`,
+      );
+      assert.ok(
+        /** @type {readonly string[]} */ (/** @type {any} */ (descriptor).remediations || []).includes(
+          repair.remediationId,
+        ),
         `${repair.providerId} names ${repair.remediationId}`,
       );
     }
@@ -423,9 +467,12 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
   it('previews each place and what stops working, takes the confirmed digest, and removes only those places', async () => {
     const secrets = secretsPort(['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings']);
     const files = memoryFiles();
-    const { pipeline } = await remediationCenter({ contributions: /** @type {any} */ (REMEDIATIONS), ports: { secrets, files } });
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { secrets, files },
+    });
     const first = /** @type {any} */ (await pipeline.run(runOf('remove-saved-key')));
-    assert.ok(v.is(runResult, first), JSON.stringify(first));
+    assert.ok(v.safeParse(runResult, first).success, JSON.stringify(first));
     assert.equal(first.state, 'awaiting-confirmation');
     assert.equal(first.class, 'secret-removal');
     assert.deepEqual(first.needs, ['confirmation']);
@@ -438,7 +485,9 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
     assert.deepEqual(secrets.removed, [], 'nothing removed before the confirmation');
 
     const done = /** @type {any} */ (
-      await pipeline.run(runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }))
+      await pipeline.run(
+        runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }),
+      )
     );
     assert.equal(done.state, 'succeeded', JSON.stringify(done));
     assert.equal(done.outcome, 'verified');
@@ -450,11 +499,16 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
 
   it('goes back to the user when the places changed since the preview they confirmed', async () => {
     const secrets = secretsPort(['setting_llmApiKey']);
-    const { pipeline } = await remediationCenter({ contributions: /** @type {any} */ (REMEDIATIONS), ports: { secrets } });
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { secrets },
+    });
     const first = /** @type {any} */ (await pipeline.run(runOf('remove-saved-key')));
     secrets.held.push('settings');
     const back = /** @type {any} */ (
-      await pipeline.run(runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }))
+      await pipeline.run(
+        runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }),
+      )
     );
     assert.equal(back.state, 'awaiting-confirmation');
     assert.equal(back.outcome, 'preview-changed');
@@ -484,7 +538,9 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
     const first = /** @type {any} */ (await pipeline.run(runOf('remove-saved-key')));
     if (first.state !== 'awaiting-confirmation') return { answer: first, applied };
     const answer = /** @type {any} */ (
-      await pipeline.run(runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }))
+      await pipeline.run(
+        runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }),
+      )
     );
     return { answer, applied };
   };
@@ -516,7 +572,11 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
       changes: [{ target: 'saved-keys', creates: 0, updates: 0, deletes: 1 }],
       places: [{ place: 'setting_llmApiKey', stops: ['ai'] }],
     };
-    const none = await secretRemoval({ async preview() { return { preview, plan: ['setting_llmApiKey'] }; } });
+    const none = await secretRemoval({
+      async preview() {
+        return { preview, plan: ['setting_llmApiKey'] };
+      },
+    });
     assert.equal(none.answer.outcome, 'destroys-unnamed');
     assert.equal(none.applied, false);
     const other = await secretRemoval({
@@ -533,19 +593,29 @@ describe('Remove saved keys, a confirmed removal (#20 slice 4a, item 3)', () => 
     const of = freshProfile();
     await legacyEnv.createDatabase(of.real, {
       records: {
-        settings: [{ key: 'llmApiKey', value: 'synthetic-key-1' }, { key: 'theme', value: 'dark' }],
+        settings: [
+          { key: 'llmApiKey', value: 'synthetic-key-1' },
+          { key: 'theme', value: 'dark' },
+        ],
         canvases: [{ id: 'n1', name: 'kept', updatedAt: 1 }],
       },
     });
     of.chrome.local.setting_llmApiKey = 'synthetic-key-2';
     of.chrome.local.setting_llmProvider = 'openai';
-    of.chrome.local.setting_syncWebdavConfig = { serverUrl: 'https://dav.example.test/files', username: 'synthetic-user', password: 'synthetic-pass' };
+    of.chrome.local.setting_syncWebdavConfig = {
+      serverUrl: 'https://dav.example.test/files',
+      username: 'synthetic-user',
+      password: 'synthetic-pass',
+    };
     const remover = createLegacySecretRemover({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local });
     await remover.remove(['setting_llmApiKey']);
     assert.equal('setting_llmApiKey' in of.chrome.local, false);
     assert.equal(of.chrome.local.setting_llmProvider, 'openai');
     await remover.remove(['setting_syncWebdavConfig', 'settings']);
-    assert.deepEqual(of.chrome.local.setting_syncWebdavConfig, { serverUrl: 'https://dav.example.test/files', username: 'synthetic-user' });
+    assert.deepEqual(of.chrome.local.setting_syncWebdavConfig, {
+      serverUrl: 'https://dav.example.test/files',
+      username: 'synthetic-user',
+    });
     const dump = await legacyEnv.dumpDatabase(of.real);
     assert.deepEqual(Object.keys(legacyEnv.recordsOf(dump, 'settings')), ['theme']);
     assert.deepEqual(Object.keys(legacyEnv.recordsOf(dump, 'canvases')), ['n1']);
@@ -561,7 +631,13 @@ const COPY = 'recovery_backup_1793413294676';
 const POINT = 'pre-repair-1793413294000';
 const empty = { status: 'read', copies: [] };
 const noPoints = { status: 'missing', points: [] };
-const db = { status: 'open', stores: [{ store: 'canvases', values: [{ id: 'n1' }] }, { store: 'elements', values: [] }] };
+const db = {
+  status: 'open',
+  stores: [
+    { store: 'canvases', values: [{ id: 'n1' }] },
+    { store: 'elements', values: [] },
+  ],
+};
 /** @param {unknown[]} stores */
 const point = stores => ({
   status: 'read',
@@ -597,12 +673,20 @@ describe('the irreversible gate holds the rows of what it destroys (#20 slice 4a
       },
     };
     const salvage = { collect: async () => read, restorePoint: async () => null, has: async () => false };
-    const { pipeline } = await remediationCenter({ contributions: /** @type {any} */ ([contribution]), ports: { salvage, files: memoryFiles() } });
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ ([contribution]),
+      ports: { salvage: /** @type {any} */ (salvage), files: memoryFiles() },
+    });
     const first = /** @type {any} */ (await pipeline.run(runOf('rebuild-index')));
     if (first.state !== 'awaiting-confirmation') return { answer: first, applied };
     const answer = /** @type {any} */ (
       await pipeline.run(
-        runOf('rebuild-index', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest, typedPhrase: 'delete it' }),
+        runOf('rebuild-index', {
+          runId: first.runId,
+          decision: 'confirm',
+          previewDigest: first.previewDigest,
+          typedPhrase: 'delete it',
+        }),
       )
     );
     return { answer, applied };
@@ -612,25 +696,49 @@ describe('the irreversible gate holds the rows of what it destroys (#20 slice 4a
 
   const HELD = {
     'a legacy copy the file kept a row of': [
-      { database: db, legacyCopies: { status: 'read', copies: [{ key: COPY, value: { canvases: [{ id: 'c1' }], elements: [] } }] }, recoveryPoints: noPoints },
+      {
+        database: db,
+        legacyCopies: { status: 'read', copies: [{ key: COPY, value: { canvases: [{ id: 'c1' }], elements: [] } }] },
+        recoveryPoints: noPoints,
+      },
       COPY,
     ],
-    'a point whose rows the file holds': [{ database: db, legacyCopies: empty, recoveryPoints: point([{ store: 'canvases', values: [{ id: 'p1' }] }]) }, POINT],
+    'a point whose rows the file holds': [
+      { database: db, legacyCopies: empty, recoveryPoints: point([{ store: 'canvases', values: [{ id: 'p1' }] }]) },
+      POINT,
+    ],
     'a record in the current lists': [profileRead(), 'n1'],
   };
   const NOT_HELD = {
     "a legacy copy whose rows are in a field the file doesn't know": [
-      { database: db, legacyCopies: { status: 'read', copies: [{ key: COPY, value: { recoveryBackup: true, data: { canvases: [{ id: 'c1' }] } } }] }, recoveryPoints: noPoints },
+      {
+        database: db,
+        legacyCopies: {
+          status: 'read',
+          copies: [{ key: COPY, value: { recoveryBackup: true, data: { canvases: [{ id: 'c1' }] } } }],
+        },
+        recoveryPoints: noPoints,
+      },
       COPY,
     ],
     'a legacy copy holding only settings': [
-      { database: db, legacyCopies: { status: 'read', copies: [{ key: COPY, value: { recoveryBackup: true, settings: [{ key: 'theme', value: 'dark' }] } }] }, recoveryPoints: noPoints },
+      {
+        database: db,
+        legacyCopies: {
+          status: 'read',
+          copies: [{ key: COPY, value: { recoveryBackup: true, settings: [{ key: 'theme', value: 'dark' }] } }],
+        },
+        recoveryPoints: noPoints,
+      },
       COPY,
     ],
     'a legacy copy holding a row and a store the file leaves out': [
       {
         database: db,
-        legacyCopies: { status: 'read', copies: [{ key: COPY, value: { canvases: [{ id: 'c1' }], extraStore: [{ id: 'x' }] } }] },
+        legacyCopies: {
+          status: 'read',
+          copies: [{ key: COPY, value: { canvases: [{ id: 'c1' }], extraStore: [{ id: 'x' }] } }],
+        },
         recoveryPoints: noPoints,
       },
       COPY,
@@ -648,7 +756,14 @@ describe('the irreversible gate holds the rows of what it destroys (#20 slice 4a
       POINT,
     ],
     'a point holding only bookkeeping': [
-      { database: db, legacyCopies: empty, recoveryPoints: point([{ store: 'canvases', values: [] }, { store: 'meta', values: [{ key: 'x', value: 1 }] }]) },
+      {
+        database: db,
+        legacyCopies: empty,
+        recoveryPoints: point([
+          { store: 'canvases', values: [] },
+          { store: 'meta', values: [{ key: 'x', value: 1 }] },
+        ]),
+      },
       POINT,
     ],
     'a record only in an old point': [
@@ -697,28 +812,56 @@ describe('what a run answers for the views (#20 slice 4a, item 5)', () => {
         status: 'open',
         stores: [
           { store: 'canvases', values: [{ id: 'n1' }, { id: 'n2', trashed: true }] },
-          { store: 'elements', values: [{ id: 'b1', canvasId: 'n1' }, { id: 'b2', canvasId: 'n1' }, { id: 'b3', canvasId: 'n2' }] },
+          {
+            store: 'elements',
+            values: [
+              { id: 'b1', canvasId: 'n1' },
+              { id: 'b2', canvasId: 'n1' },
+              { id: 'b3', canvasId: 'n2' },
+            ],
+          },
         ],
       },
       legacyCopies: { status: 'read', copies: [{ key: COPY, value: { canvases: [{ id: 'c1' }] } }] },
       recoveryPoints: noPoints,
     };
     const salvage = { collect: async () => read, restorePoint: async () => null, has: async () => false };
-    const { pipeline } = await remediationCenter({ contributions: /** @type {any} */ (REMEDIATIONS), ports: { salvage, files } });
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { salvage: /** @type {any} */ (salvage), files },
+    });
     const done = /** @type {any} */ (await pipeline.run(runOf('save-salvage-file')));
-    assert.ok(v.is(runResult, done), JSON.stringify(done));
+    assert.ok(v.safeParse(runResult, done).success, JSON.stringify(done));
     assert.equal(done.state, 'succeeded');
     const text = [...files.files.values()][0];
-    assert.deepEqual(done.saved, { notes: 2, blocks: 3, media: 0, folders: 0, legacyCopies: 1, recoveryPoints: 0, characters: text.length });
+    assert.deepEqual(done.saved, {
+      notes: 2,
+      blocks: 3,
+      media: 0,
+      folders: 0,
+      legacyCopies: 1,
+      recoveryPoints: 0,
+      characters: text.length,
+    });
   });
 
   it('export-diagnostics saves the report through the picker and reads it back', async () => {
     const files = memoryFiles();
     const serialized = JSON.stringify({ format: 'newtabnote-diagnostics', formatVersion: 1 }, null, 2);
-    const diagnostics = async () => ({ kind: 'diagnostics', filename: 'newtabnote-diagnostics-2026-10-20.json', bytes: serialized.length, fields: [], serialized, notices: [] });
-    const { pipeline } = await remediationCenter({ contributions: /** @type {any} */ (REMEDIATIONS), ports: { files, diagnostics } });
+    const diagnostics = async () => ({
+      kind: 'diagnostics',
+      filename: 'newtabnote-diagnostics-2026-10-20.json',
+      bytes: serialized.length,
+      fields: [],
+      serialized,
+      notices: [],
+    });
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files, diagnostics },
+    });
     const done = /** @type {any} */ (await pipeline.run(runOf('export-diagnostics')));
-    assert.ok(v.is(runResult, done), JSON.stringify(done));
+    assert.ok(v.safeParse(runResult, done).success, JSON.stringify(done));
     assert.equal(done.state, 'succeeded', JSON.stringify(done));
     assert.equal(done.class, 'non-destructive');
     assert.equal([...files.files.values()][0], serialized);
@@ -761,12 +904,21 @@ describe('trust.summary names each group’s time and cause (#20 slice 4a, item 
     const started = clock.now();
     await trust.verify(verifyNow(['capture', 'storage', 'index']));
     const summary = dataOf(await trust.summary());
-    assert.ok(v.is(summarySchema, summary));
+    assert.ok(v.safeParse(summarySchema, summary).success);
     const group = summary.groups.find((/** @type {any} */ item) => item.group === 'storage');
     assert.equal(group.checkedAt, started);
     assert.deepEqual(
       { ...group.cause, incidentId: null },
-      { from: 'incident', providerId: 'storage', faultCode: 'open-failed', errorCode: null, severity: 'capture-risk', consequenceKey: null, incidentId: null, at: started },
+      {
+        from: 'incident',
+        providerId: 'storage',
+        faultCode: 'open-failed',
+        errorCode: null,
+        severity: 'capture-risk',
+        consequenceKey: null,
+        incidentId: null,
+        at: started,
+      },
     );
     const indexing = summary.groups.find((/** @type {any} */ item) => item.group === 'indexing');
     assert.equal(indexing.cause, null);
@@ -791,7 +943,11 @@ describe('trust.summary names each group’s time and cause (#20 slice 4a, item 
 
   it('a group at fault with no incident names its receipt', async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
-    answers.backup = { status: 'degraded', consequenceKey: 'backup.not-verified', evidence: { errorCode: 'timed-out' } };
+    answers.backup = {
+      status: 'degraded',
+      consequenceKey: 'backup.not-verified',
+      evidence: { errorCode: 'timed-out' },
+    };
     const { trust, clock } = await center(answers);
     await trust.verify(verifyNow(['backup']));
     const group = dataOf(await trust.summary()).groups.find((/** @type {any} */ item) => item.group === 'backup');
@@ -812,21 +968,53 @@ describe('trust.summary names each group’s time and cause (#20 slice 4a, item 
 
 describe('one next-action picker for every status (#20 slice 4a, item 7)', () => {
   /** @param {Partial<import('../../js/trust/core/records.js').HealthReceipt>} receipt */
-  const receiptOf = receipt => /** @type {any} */ ({ providerId: 'index', status: 'verified', verifiedAt: 1, freshnessMs: DAY, evidence: {}, nextAction: null, ...receipt });
+  const receiptOf = receipt =>
+    /** @type {any} */ ({
+      providerId: 'index',
+      status: 'verified',
+      verifiedAt: 1,
+      freshnessMs: DAY,
+      evidence: {},
+      nextAction: null,
+      ...receipt,
+    });
 
   it('answers within its schema for every status, with and without a receipt', () => {
     for (const status of PROVIDER_STATUSES) {
-      for (const receipt of [null, receiptOf({ status: /** @type {any} */ (status === 'stale' ? 'verified' : status) })]) {
-        const next = nextActionOf({ providerId: 'index', core: false, status, receipt, incidents: [], captureAtRisk: false });
+      for (const receipt of [
+        null,
+        receiptOf({ status: /** @type {any} */ (status === 'stale' ? 'verified' : status) }),
+      ]) {
+        const next = nextActionOf({
+          providerId: 'index',
+          core: false,
+          status,
+          receipt,
+          incidents: [],
+          captureAtRisk: false,
+        });
         assert.ok(next === null || v.is(nextActionSchema, next), `${status}: ${JSON.stringify(next)}`);
       }
     }
   });
 
   it('picks the repair for the incident, the receipt’s own next action, a check, or the Recovery Center', () => {
-    const lagging = /** @type {any} */ ({ id: 'a1b20001-0000-4000-8000-000000000000', providerId: 'index', faultCode: 'lagging', severity: 'degraded', lastSeenAt: 1 });
+    const lagging = /** @type {any} */ ({
+      id: 'a1b20001-0000-4000-8000-000000000000',
+      providerId: 'index',
+      faultCode: 'lagging',
+      severity: 'degraded',
+      lastSeenAt: 1,
+    });
     assert.deepEqual(
-      nextActionOf({ providerId: 'index', core: false, status: 'degraded', receipt: receiptOf({ status: 'degraded' }), incidents: [lagging], captureAtRisk: false }),
+      nextActionOf({
+        providerId: 'index',
+        core: false,
+        status: 'degraded',
+        receipt: receiptOf({ status: 'degraded' }),
+        incidents: [lagging],
+        captureAtRisk: false,
+      }),
       { kind: 'remediation', remediationId: 'rebuild-index', incidentId: lagging.id },
     );
     assert.deepEqual(
@@ -840,10 +1028,20 @@ describe('one next-action picker for every status (#20 slice 4a, item 7)', () =>
       }),
       { kind: 'remediation', remediationId: 'remove-saved-key', incidentId: null },
     );
-    assert.deepEqual(nextActionOf({ providerId: 'index', core: false, status: 'stale', receipt: receiptOf({}), incidents: [], captureAtRisk: false }), {
-      kind: 'check',
-      providerId: 'index',
-    });
+    assert.deepEqual(
+      nextActionOf({
+        providerId: 'index',
+        core: false,
+        status: 'stale',
+        receipt: receiptOf({}),
+        incidents: [],
+        captureAtRisk: false,
+      }),
+      {
+        kind: 'check',
+        providerId: 'index',
+      },
+    );
     assert.deepEqual(
       nextActionOf({
         providerId: 'index',
@@ -857,20 +1055,48 @@ describe('one next-action picker for every status (#20 slice 4a, item 7)', () =>
     );
     const quota = { ...lagging, providerId: 'storage', faultCode: 'quota', severity: 'capture-risk' };
     assert.deepEqual(
-      nextActionOf({ providerId: 'storage', core: true, status: 'action-required', receipt: receiptOf({ providerId: 'storage', status: 'action-required' }), incidents: [quota], captureAtRisk: true }),
+      nextActionOf({
+        providerId: 'storage',
+        core: true,
+        status: 'action-required',
+        receipt: receiptOf({ providerId: 'storage', status: 'action-required' }),
+        incidents: [quota],
+        captureAtRisk: true,
+      }),
       { kind: 'recovery-center', incidentId: quota.id },
     );
     const missing = { ...lagging, providerId: 'permissions', faultCode: 'grant-missing', severity: 'data-risk' };
     assert.deepEqual(
-      nextActionOf({ providerId: 'permissions', core: false, status: 'failed', receipt: receiptOf({ providerId: 'permissions', status: 'failed' }), incidents: [missing], captureAtRisk: false }),
+      nextActionOf({
+        providerId: 'permissions',
+        core: false,
+        status: 'failed',
+        receipt: receiptOf({ providerId: 'permissions', status: 'failed' }),
+        incidents: [missing],
+        captureAtRisk: false,
+      }),
       { kind: 'site-access' },
     );
-    assert.equal(nextActionOf({ providerId: 'index', core: false, status: 'verified', receipt: receiptOf({}), incidents: [], captureAtRisk: false }), null);
+    assert.equal(
+      nextActionOf({
+        providerId: 'index',
+        core: false,
+        status: 'verified',
+        receipt: receiptOf({}),
+        incidents: [],
+        captureAtRisk: false,
+      }),
+      null,
+    );
   });
 
   it('trust.report and recovery.incidents carry it, so no view picks its own', async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
-    answers.index = { status: 'degraded', faults: [{ faultCode: 'lagging', severity: 'degraded' }], looked: [{ faultCode: 'lagging' }] };
+    answers.index = {
+      status: 'degraded',
+      faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+      looked: [{ faultCode: 'lagging' }],
+    };
     const { trust, records } = await center(answers);
     await trust.verify(verifyNow(['index', 'storage']));
     const report = checked('trust.report', await trust.report()).data;
@@ -881,9 +1107,17 @@ describe('one next-action picker for every status (#20 slice 4a, item 7)', () =>
       incidentId: incident.id,
     });
     assert.equal(report.providers.find((/** @type {any} */ row) => row.providerId === 'storage').next, null);
-    assert.deepEqual(report.providers.find((/** @type {any} */ row) => row.providerId === 'capture').next, { kind: 'check', providerId: 'capture' });
+    assert.deepEqual(report.providers.find((/** @type {any} */ row) => row.providerId === 'capture').next, {
+      kind: 'check',
+      providerId: 'capture',
+    });
     const listed = checked('recovery.incidents', await trust.incidents({})).data;
-    assert.deepEqual(listed.next, [{ incidentId: incident.id, next: { kind: 'remediation', remediationId: 'rebuild-index', incidentId: incident.id } }]);
+    assert.deepEqual(listed.next, [
+      {
+        incidentId: incident.id,
+        next: { kind: 'remediation', remediationId: 'rebuild-index', incidentId: incident.id },
+      },
+    ]);
   });
 });
 
@@ -920,7 +1154,12 @@ describe('one preserved list (#20 slice 4a, item 8)', () => {
     ];
     for (const [code, reads] of cases) {
       for (const check of [capture, storage]) {
-        const result = await check.check({ storage: adapterThat(unavailable('storage', /** @type {string} */ (code), false), /** @type {boolean} */ (reads)) });
+        const result = await check.check({
+          storage: adapterThat(
+            unavailable('storage', /** @type {string} */ (code), false),
+            /** @type {boolean} */ (reads),
+          ),
+        });
         const label = `${check === capture ? 'capture' : 'storage'} ${code}, reads ${reads}`;
         for (const fault of result.faults || []) {
           assert.equal(fault.severity, 'capture-risk', label);
@@ -946,14 +1185,35 @@ describe('one preserved list (#20 slice 4a, item 8)', () => {
 describe('the copies list (#20 slice 4a, item 9)', () => {
   it('lists repair recovery points beside the pre-migration point and the legacy copies, each with Save as file', async () => {
     const points = [
-      { id: 'pre-migration-1760000000000', kind: 'pre-migration', status: 'verified', createdAt: 1760000000000, verifiedAt: 1760000000500 },
-      { id: 'pre-repair-1760000100000', kind: 'pre-repair', status: 'verified', createdAt: 1760000100000, verifiedAt: 1760000100400 },
-      { id: 'pre-repair-1760000200000', kind: 'pre-repair', status: 'partial', createdAt: 1760000200000, verifiedAt: null },
+      {
+        id: 'pre-migration-1760000000000',
+        kind: 'pre-migration',
+        status: 'verified',
+        createdAt: 1760000000000,
+        verifiedAt: 1760000000500,
+      },
+      {
+        id: 'pre-repair-1760000100000',
+        kind: 'pre-repair',
+        status: 'verified',
+        createdAt: 1760000100000,
+        verifiedAt: 1760000100400,
+      },
+      {
+        id: 'pre-repair-1760000200000',
+        kind: 'pre-repair',
+        status: 'partial',
+        createdAt: 1760000200000,
+        verifiedAt: null,
+      },
     ];
     const settings = settingsArea();
     const context = {
       recovery: { points: async () => points, verify: async () => ({ ok: true }) },
-      settings: { ...settings, getKeys: async () => ['setting_theme', 'auto_backup_1759000000000', 'recovery_backup_1759500000000'] },
+      settings: {
+        ...settings,
+        getKeys: async () => ['setting_theme', 'auto_backup_1759000000000', 'recovery_backup_1759500000000'],
+      },
     };
     const { trust, records } = await center(allPassing(), { context });
     const runId = 'a1b2eeee-0000-4000-8000-000000000000';
@@ -999,8 +1259,24 @@ describe('the copies list (#20 slice 4a, item 9)', () => {
         madeBy: null,
         actions: ['save-recovery-file'],
       },
-      { id: 'recovery_backup_1759500000000', kind: 'legacy-copy', pointKind: null, at: 1759500000000, verified: false, madeBy: null, actions: ['save-recovery-file'] },
-      { id: 'auto_backup_1759000000000', kind: 'legacy-copy', pointKind: null, at: 1759000000000, verified: false, madeBy: null, actions: ['save-recovery-file'] },
+      {
+        id: 'recovery_backup_1759500000000',
+        kind: 'legacy-copy',
+        pointKind: null,
+        at: 1759500000000,
+        verified: false,
+        madeBy: null,
+        actions: ['save-recovery-file'],
+      },
+      {
+        id: 'auto_backup_1759000000000',
+        kind: 'legacy-copy',
+        pointKind: null,
+        at: 1759000000000,
+        verified: false,
+        madeBy: null,
+        actions: ['save-recovery-file'],
+      },
     ]);
   });
 

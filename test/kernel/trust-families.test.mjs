@@ -349,7 +349,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     }
   });
 
-  it('a dismissed incident leaves Needs action until the next failing check, and a passing one resolves it', async () => {
+  it('a dismissed incident leaves Needs action until a check finds it worse, and a passing one resolves it', async () => {
     const { trust, records, clock } = await trustCenter();
     storageAnswer.next = {
       status: 'degraded',
@@ -365,9 +365,17 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       assert.equal(summary.groups.find(group => group.group === 'storage')?.needsAction, 0);
       const listed = await trust.incidents();
       assert.equal(/** @type {any} */ (listed).data.incidents.length, 1, 'a dismissed incident stays listed');
-      // The next failing check, later than the dismissal, puts it back in Needs action
+      // The same failing check again keeps it dismissed; one that finds it worse puts it back
       clock.advance(1);
       await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['storage'] });
+      assert.equal((await summaryOf(trust)).actionRequired, 0);
+      storageAnswer.next = {
+        status: 'degraded',
+        capture: 'safe',
+        faults: [{ faultCode: 'scan-findings', severity: 'data-risk' }],
+      };
+      clock.advance(1);
+      await trust.verify({ type: 'trust.verify', commandId: 'c2b', trigger: 'verify-now', providerIds: ['storage'] });
       summary = await summaryOf(trust);
       assert.equal(summary.actionRequired, 1);
       storageAnswer.next = { status: 'verified', capture: 'safe', looked: [{ faultCode: 'scan-findings' }] };

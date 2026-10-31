@@ -164,6 +164,14 @@ const SECRET_SUBJECTS = Object.freeze({
 });
 
 /**
+ * What still works while a legacy secret is kept: everything, since a key kept as plain text
+ * is a risk, not a breakage. The receipt and each of its faults say the same (slice 4a).
+ */
+export const CREDENTIALS_PRESERVED = Object.freeze(
+  /** @type {const} */ (['capture', 'editing', 'reading', 'ai', 'sync']),
+);
+
+/**
  * Credentials: `action-required` with "Remove saved key" when a legacy plaintext secret is
  * kept, one incident per place it's kept, and `not-configured` otherwise, since there's no
  * vault before #21
@@ -185,14 +193,14 @@ export const credentials = interim(async context => {
     status: 'action-required',
     evidence: { count: sources.length },
     consequenceKey: 'vault.legacy-secret',
-    preserved: ['capture', 'editing', 'reading', 'ai', 'sync'],
+    preserved: [...CREDENTIALS_PRESERVED],
     nextAction: 'remove-saved-key',
     looked,
     faults: sources.map(source => ({
       faultCode: /** @type {const} */ ('legacy-secret'),
       subjectId: SECRET_SUBJECTS[source],
       severity: /** @type {const} */ ('data-risk'),
-      preserved: ['capture', 'editing', 'reading'],
+      preserved: [...CREDENTIALS_PRESERVED],
     })),
   };
 });

@@ -15,7 +15,9 @@
  *   included, since a failure anywhere can raise an incident.
  * - `recovery.run` runs only from the `newtab` and `recovery` pages, and its payload's
  *   `userInitiated: true` only from a click handler there.
- * - Everything else is the Trust and Recovery views', on the new tab and recovery.html.
+ * - Everything else is the Trust and Recovery views', on the new tab and recovery.html:
+ *   slice 4a adds `recovery.dismiss` and `recovery.undismiss`, `recovery.check` (the check
+ *   after a repair), and `recovery.copies` (Copies of your notes).
  */
 
 import { COMMAND_DEADLINE_MS, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from '../../kernel/core/contracts/limits.js';
@@ -84,6 +86,7 @@ export const TRUST_QUERIES = Object.freeze({
   'trust.summary': query('trust-summary', STATUS_PAGES),
   'trust.report': query('trust-report', TRUST_PAGES),
   'recovery.incidents': query('recovery-incidents', TRUST_PAGES),
+  'recovery.copies': query('recovery-copies', TRUST_PAGES),
 });
 
 export const TRUST_COMMANDS = Object.freeze({
@@ -91,6 +94,9 @@ export const TRUST_COMMANDS = Object.freeze({
   'recovery.raise': command('recovery-raise', ANY_CONTEXT),
   'recovery.run': command('recovery-run', TRUST_PAGES, LONG_DEADLINE_MS),
   'diagnostics.export': command('diagnostics-export', TRUST_PAGES, LONG_DEADLINE_MS),
+  'recovery.dismiss': command('recovery-dismiss', TRUST_PAGES),
+  'recovery.undismiss': command('recovery-undismiss', TRUST_PAGES),
+  'recovery.check': command('recovery-check', TRUST_PAGES, LONG_DEADLINE_MS),
 });
 
 /** @typedef {keyof typeof TRUST_QUERIES} TrustQueryType */
