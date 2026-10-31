@@ -84,7 +84,6 @@ import { createConnection } from './connection.js';
 import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
-import { checkIntegrity } from './integrity.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
 import { copyMissingStores } from './recovery-copies.js';
 import {
@@ -166,11 +165,9 @@ import { createVersionTracker } from './versions.js';
  *   ledger: IdempotencyLedger,
  *   commitLog: CommitLog,
  *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
- *   checkIntegrity: () => ReturnType<typeof checkIntegrity>,
  * }} IndexedDbAdapter
  *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
- *   `sweepLedger` their retention (ledger.js), which only the worker runs, as it runs
- *   `checkIntegrity`, the read-only check the new tab ran at its start (integrity.js). `beforeClose`,
+ *   `sweepLedger` their retention (ledger.js), which only the worker runs. `beforeClose`,
  *   `openState`, `missingStores`, and `upgraded` are the connection's (connection.js), what
  *   the new tab read of js/storage.js's: a flush before another context's upgrade closes it,
  *   the state App and the export notice read, the legacy stores a degraded database lacks, and
@@ -762,9 +759,11 @@ export function createIndexedDbAdapter({
   /**
    * Startup maintenance: the settings Storage writes on a profile's first run, each one only
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
-   * database is blocked too. #17's read-only integrity scan moves to the worker root, at most
-   * daily, and then to #35's job host. It runs on a `versioned` open, the worker's, and on an
-   * `existing` one that `maintains`, the new tab's (#17 PR 4a).
+   * database is blocked too. The read-only integrity check the new tab ran at its start goes
+   * with #17 PR 4a: the worker runs it after an install or an update, and Trust's Verify on
+   * demand (#111's runIntegrityCheck, which the stack carries from `next` at its next rebase).
+   * It runs on a `versioned` open, the worker's, and on an `existing` one that `maintains`, the
+   * new tab's (#17 PR 4a).
    *
    * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
    * it opens answers every call with maintenance's failure: when chrome.storage fails it, it
@@ -958,6 +957,5 @@ export function createIndexedDbAdapter({
       return commitLog;
     },
     sweepLedger: () => sweepLedger({ database, now: clock.now() }),
-    checkIntegrity: () => checkIntegrity({ database, now: clock.now() }),
   });
 }

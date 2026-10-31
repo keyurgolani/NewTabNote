@@ -15,12 +15,10 @@
  * finished: `versioned`, with startup maintenance, when the database is at that version, and
  * `existing` when the run left it as it was (short of space, refused, or failed), so captures
  * keep working on the shape that's there. Once it's open at this build's version, the worker
- * runs the read-only integrity check the new tab ran at each start until #17 PR 4a, at most
- * once a day (integrity.js, Q9), sweeps the adapter's ledger, at most once a day (ledger.js),
- * runs the data transforms its database still needs (transforms.js, #17 PR 3) at every start,
- * and purges what was deleted for good from the recovery points (purge.js, #17 PR 2b): at every
- * start, after the transforms, and again when a page that deleted something wakes it with
- * `storage.purge`.
+ * sweeps the adapter's ledger, at most once a day (ledger.js), runs the data transforms its
+ * database still needs (transforms.js, #17 PR 3) at every start, and purges what was deleted for good
+ * from the recovery points (purge.js, #17 PR 2b): at every start, after the transforms, and
+ * again when a page that deleted something wakes it with `storage.purge`.
  * PURGE_RECOVERY_POINTS turns the purge off.
  * The run's outcome goes to chrome.storage.local (`setting_storageUpgrade`), which the new tab
  * reads for its space notice and Settings > Data & Backup.
@@ -29,7 +27,6 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { failureOf } from '../adapters/indexeddb/failures.js';
 import { UPGRADE_BLOCKED_KEY } from '../adapters/indexeddb/health.js';
-import { orphansIn } from '../adapters/indexeddb/integrity.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
@@ -624,27 +621,6 @@ export function createWorkerClient(host = workerHost()) {
   };
 
   /**
-   * The read-only integrity check on `opened` (integrity.js), once its kernel is ready, in the
-   * background, at most once a day: the one the new tab ran at each start until #17 PR 4a
-   * (Q9). It changes no record, and logs the records it found that name a note that's gone, as
-   * the new tab did.
-   * @param {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter} opened
-   * @param {Client} built
-   */
-  const checkOnce = (opened, built) => {
-    built
-      .whenReady()
-      .then(failure => (failure ? undefined : opened.checkIntegrity()))
-      .then(checked => {
-        const orphans = checked && checked.checked ? orphansIn(checked.report) : {};
-        if (Object.keys(orphans).length > 0) {
-          console.info('Integrity check (read-only) found orphaned records:', orphans);
-        }
-      })
-      .catch(error => storageLogger.warn('storage-integrity-check-failed', { code: failureOf(error).code }));
-  };
-
-  /**
    * The kernel on the database `outcome` left: versioned at this build's version, as it is
    * otherwise. An outcome
    * kept from a standing record changes nothing, so `keep`, the client before it, stays. Any
@@ -668,12 +644,10 @@ export function createWorkerClient(host = workerHost()) {
       const built = kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
       sweepOnce(adapter, built);
       // At every start, and after every later attempt: the transforms a run cut off or never
-      // reached, then the deletes the worker didn't hear of, or a sweep its stop cut off, and the
-      // integrity check, at most once a day
+      // reached, then the deletes the worker didn't hear of, or a sweep its stop cut off
       if (upgraded) {
         requestTransforms();
         requestPurge();
-        checkOnce(adapter, built);
       }
       return built;
     });
@@ -853,9 +827,7 @@ export function migrationEvents(event) {
     // The record it replaced said the same, so a worker before this one journaled it: Chrome
     // stops an idle worker, and the next start runs again
     const repeated =
-      previous !== null &&
-      previous.status === outcome.status &&
-      previous.code === (outcome.failure ? outcome.failure.code : null);
+      previous !== null && previous.status === outcome.status && previous.code === (outcome.failure ? outcome.failure.code : null);
     if (outcome.status === 'migrated' && outcome.shape !== 'none' && outcome.shape !== null) {
       journaled.clear();
       event('storage.migration-completed', { schemaVersion: outcome.to ?? LATEST_STRUCTURAL });
