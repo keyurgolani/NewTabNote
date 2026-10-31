@@ -35,6 +35,7 @@ import { createTrustRecords } from '../../trust/core/trust-records.js';
 /** @typedef {import('../../trust/core/ports.js').Locks} Locks */
 /** @typedef {import('../../trust/core/ports.js').Clock} Clock */
 /** @typedef {import('../../trust/core/ports.js').Ids} Ids */
+/** @typedef {import('../../trust/core/ports.js').Timers} Timers */
 /** @typedef {import('../../trust/core/journal.js').DiagnosticJournal} DiagnosticJournal */
 /** @typedef {import('../../trust/core/journal.js').RejectionReason} RejectionReason */
 
@@ -47,6 +48,8 @@ import { createTrustRecords } from '../../trust/core/trust-records.js';
  * @property {Locks | null} locks - navigator.locks
  * @property {Clock} clock
  * @property {Ids} ids
+ * @property {Timers} [timers] - setTimeout and clearTimeout, which bound the records' reads of
+ *   the settings copy once they take them (#75); without them a read waits as long as it takes
  */
 
 /**
@@ -76,6 +79,10 @@ export function browserTrustHost() {
     locks: (scope.navigator && scope.navigator.locks) || null,
     clock: systemClock,
     ids: { next: () => crypto.randomUUID() },
+    timers: {
+      set: (callback, ms) => setTimeout(callback, ms),
+      clear: handle => clearTimeout(/** @type {ReturnType<typeof setTimeout>} */ (handle)),
+    },
   };
 }
 
@@ -165,9 +172,12 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   const ready = () => {
     if (!journal) {
       journal = Promise.resolve().then(async () => {
-        const { indexedDB, keyRange, settings, locks, clock, ids } = host();
+        const { indexedDB, keyRange, settings, locks, clock, ids, timers = null } = host();
         const store = createTrustDatabase({ indexedDB, keyRange });
-        const records = createTrustRecords({ store, settings, clock, ids, locks });
+        // `timers` bound the settings copy's reads in the records that take them (#75); records
+        // without that option ignore it
+        const options = { store, settings, clock, ids, locks, timers };
+        const records = createTrustRecords(options);
         await records.open();
         return createDiagnosticJournal({ records, clock });
       });
