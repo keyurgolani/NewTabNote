@@ -137,14 +137,15 @@ test('in the new tab, fetch, XHR, WebSocket, EventSource and sendBeacon to an un
     const xhrDone = event(xhr, 'load', 'error');
     xhr.open('GET', `${base}/xhr`);
     xhr.send();
-    const socket = new WebSocket(`${base.replace('https:', 'wss:')}/socket`);
-    const source = new EventSource(`${base}/events`);
+    // Each listens from the start, as a caller does: a failure fires once the caller's code has run
+    const socketDone = event(new WebSocket(`${base.replace('https:', 'wss:')}/socket`), 'open', 'error');
+    const sourceDone = event(new EventSource(`${base}/events`), 'open', 'error');
     return {
       fetch: await fetch(`${base}/fetch`).then(() => 'sent', failed),
       again: await fetch(`${base}/fetch`, { method: 'POST', body: 'x' }).then(() => 'sent', failed),
       xhr: await xhrDone,
-      websocket: await event(socket, 'open', 'error'),
-      eventsource: await event(source, 'open', 'error'),
+      websocket: await socketDone,
+      eventsource: await sourceDone,
       beacon: navigator.sendBeacon(`${base}/beacon`, 'x'),
     };
   }, UNREGISTERED);
