@@ -794,3 +794,56 @@ describe("#80's review round", () => {
     assert.ok(exported.notices.includes('incidents-incomplete'), JSON.stringify(exported.notices));
   });
 });
+
+describe("1b's failure incidents under observes and looked (#81)", () => {
+  const SITES = [
+    ['capture.failed', 'capture', 'capture-failed'],
+    ['embeddings.load-failed', 'local-inference', 'load-failed'],
+    ['backup.auto-failed', 'backup', 'auto-backup-failed'],
+    ['indexer.start-failed', 'index', 'indexer-start-failed'],
+  ];
+  for (const [code, providerId, faultCode] of SITES) {
+    it(`${code}'s incident stays open for a check that didn't look, and resolves for one that did`, async () => {
+      const profile = trustProfile();
+      const db = databaseOn(profile);
+      opened.push(db);
+      const { records, clock } = await recordsOn(db, profile);
+      const journal = createDiagnosticJournal({ records, clock, strict: true });
+      journal.event(code, { errorCode: 'quota' });
+      await journal.flush();
+      const key = `${providerId}/${faultCode}/-`;
+      assert.equal((await at(records, key))?.state, 'open');
+      clock.advance(1000);
+      const blind = await useCases(records, clock, [
+        provider(providerId, () => ({ status: 'verified' }), { observes: [faultCode] }),
+      ]);
+      await blind.trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+      assert.equal((await at(records, key))?.state, 'open');
+      clock.advance(1000);
+      const looking = await useCases(records, clock, [
+        provider(providerId, () => ({ status: 'verified', looked: [{ faultCode }] }), { observes: [faultCode] }),
+      ]);
+      await looking.trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
+      assert.equal((await at(records, key))?.state, 'resolved');
+    });
+  }
+
+  it("storage.open-failed's incident can't be observed, so no check resolves it", async () => {
+    const profile = trustProfile();
+    const db = databaseOn(profile);
+    opened.push(db);
+    const { records, clock } = await recordsOn(db, profile);
+    const journal = createDiagnosticJournal({ records, clock, strict: true });
+    journal.event('storage.open-failed', { errorCode: 'quota', subjectId: 'CanvasTabDB' });
+    await journal.flush();
+    clock.advance(1000);
+    const { trust } = await useCases(records, clock, [
+      provider('storage', () => ({ status: 'verified', looked: [{ faultCode: 'open-failed' }] }), {
+        group: 'storage',
+        observes: ['open-failed'],
+      }),
+    ]);
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    assert.equal((await at(records, 'storage/open-failed/CanvasTabDB'))?.state, 'open');
+  });
+});
