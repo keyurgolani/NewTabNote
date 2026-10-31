@@ -12,7 +12,10 @@
  *   is, and `not-configured` with no root or no contribution to read. The other states (turned off, doesn't apply here, needs setup or a permission, not
  *   built yet) are each contribution's own, and the report explains them.
  * - Block types reads the same report for #14's block family, and is `not-configured` until a
- *   root registers that family. #14's block-health query joins it in #14's PR.
+ *   root registers that family. Where the root passes #14's block-health query (`blocks`), its
+ *   counts join the report's: a type the kit resolved but whose model the block contract
+ *   refuses is disabled too, so the check counts the types either one disables, and the
+ *   query's own count when that's higher. Both are content-free counts.
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
@@ -126,6 +129,38 @@ export const blockTypes = Object.freeze({
     if (!families.has(BLOCK_FAMILY)) {
       return { status: 'not-configured', evidence: { records: 0 }, looked: [{ faultCode: 'contribution-unavailable', subjectId: null }] };
     }
-    return fromRows(rows, 'platform');
+    const health = blockHealthOf(context);
+    if (health === null) return fromRows(rows, 'platform');
+    const unavailable = rows.filter(row => /** @type {readonly string[]} */ (UNAVAILABLE_STATES).includes(row.state)).length;
+    const records = Math.max(rows.length, health.types);
+    const count = Math.max(unavailable, health.disabled);
+    const looked = [{ faultCode: 'contribution-unavailable', subjectId: null }];
+    if (records === 0) return { status: 'not-configured', evidence: { records: 0 }, looked };
+    if (count === 0) return { status: 'verified', evidence: { records, count }, looked };
+    return {
+      status: 'degraded',
+      evidence: { records, count },
+      consequenceKey: 'platform.contribution-unavailable',
+      faults: [{ faultCode: 'contribution-unavailable', subjectId: null, severity: 'degraded' }],
+      looked,
+    };
   },
 });
+
+/**
+ * The block-health query's counts, or null when the root passes none. An answer that isn't
+ * counts throws, so the check records `unverified`.
+ * @param {Readonly<Record<string, unknown>>} context
+ * @returns {{types: number, disabled: number} | null}
+ */
+function blockHealthOf(context) {
+  const blocks = /** @type {{blocks?: unknown}} */ (context).blocks;
+  if (blocks === undefined) return null;
+  const health = /** @type {{health(): unknown}} */ (portOf(context, 'blocks')).health();
+  const isCount = (/** @type {unknown} */ value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  const answer = /** @type {Record<string, unknown> | null} */ (health !== null && typeof health === 'object' ? health : null);
+  if (!answer || !isCount(answer.types) || !isCount(answer.disabled) || /** @type {number} */ (answer.disabled) > /** @type {number} */ (answer.types)) {
+    throw new TypeError('not a block-health answer');
+  }
+  return { types: /** @type {number} */ (answer.types), disabled: /** @type {number} */ (answer.disabled) };
+}

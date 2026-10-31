@@ -67,6 +67,8 @@ export const PORTS = Object.freeze({
       { module: 'test/kernel/registry-fixtures.mjs', run: 'test/kernel/registry-conformance-fixtures.test.mjs' },
       // #20's health and remediation families
       { module: 'js/trust/core/families.js', run: 'test/kernel/trust-families.test.mjs' },
+      // #14's block family, defined where roots assemble it (kernel core can't import the kit)
+      { module: 'js/kernel/composition/blocks.js', run: 'test/kernel/blocks-registry.test.mjs' },
     ],
   },
   // The stub every legacy test runs on, held to Chromium (#28 slice 2)
@@ -126,6 +128,7 @@ export const WITHOUT_SUITE = Object.freeze({
  */
 export const NOT_IMPLEMENTATIONS = Object.freeze({
   'js/kernel/core/application/': 'the use cases, which the kernel-adapter suite runs on each adapter',
+  'js/kernel/core/blocks/': "#14's block model layer: the contract, the models, the catalog, and the projections",
   'js/kernel/core/contracts/': 'the message catalog, codec, and validators',
   'js/kernel/core/domain/': 'the domain rules',
   'js/kernel/core/intelligence/': "#7's intelligence domain: records, rules, use cases, and the view model",

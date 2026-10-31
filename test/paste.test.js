@@ -92,7 +92,6 @@ async function page() {
   Object.assign(editor, {
     renderBlocks: noop, renderBacklinks: noop, updateTimestampDisplay: noop, updateSaveStatus: noop, clearBlockSelection: noop,
     placeCaretAtEnd: noop, renderInsights: async () => {}, startInsightsPollingIfNeeded: async () => {},
-    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
     insertBlockDOM: noop, rerenderBlock: noop, focusBlock: noop, fetchLinkPreview: async () => {},
     uploadImageAndCreateBlock: async (file) => { uploaded.push(file.name); },
   });

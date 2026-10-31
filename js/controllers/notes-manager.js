@@ -327,69 +327,11 @@ class NotesManager {
   }
 
   /**
-   * Convert a block to markdown format
+   * Convert a block to markdown format: its Markdown codec (#14), as every export writes it
    */
-  /**
-     * Convert a block to markdown format
-     */
-    blockToMarkdown(block) {
-      if (typeof AIResponseUtils !== 'undefined' && AIResponseUtils.blockToMarkdown) {
-        return AIResponseUtils.blockToMarkdown(block);
-      }
-
-      const content = this.htmlToMarkdown(block.content || '');
-
-      switch (block.type) {
-        case 'h1':
-          return `# ${content}\n\n`;
-        case 'h2':
-          return `## ${content}\n\n`;
-        case 'h3':
-          return `### ${content}\n\n`;
-        case 'bullet':
-          return `- ${content}\n`;
-        case 'numbered':
-          return `1. ${content}\n`;
-        case 'todo':
-          const checked = block.checked ? 'x' : ' ';
-          return `- [${checked}] ${content}\n`;
-        case 'quote':
-          return `> ${content}\n\n`;
-        case 'code':
-          return `\`\`\`\n${block.content || ''}\n\`\`\`\n\n`;
-        case 'divider':
-          return `---\n\n`;
-        case 'callout':
-          return `> 💡 ${content}\n\n`;
-        case 'toggle':
-          const childContent = this.htmlToMarkdown(block.children || '');
-          return `<details>\n<summary>${content}</summary>\n\n${childContent}\n</details>\n\n`;
-        case 'table':
-          if (block.tableData && Array.isArray(block.tableData)) {
-            let tableMarkdown = '';
-            block.tableData.forEach((row, index) => {
-              tableMarkdown += '| ' + row.join(' | ') + ' |\n';
-              if (index === 0) {
-                tableMarkdown += '| ' + row.map(() => '---').join(' | ') + ' |\n';
-              }
-            });
-            return tableMarkdown + '\n';
-          }
-          return '';
-        case 'bookmark':
-          return `[${block.title || block.url}](${block.url})\n\n`;
-        case 'image':
-          if (block.src) {
-            return `![${block.caption || 'Image'}](${block.src})\n\n`;
-          }
-          return '';
-        case 'equation':
-          return `$$\n${block.equation || ''}\n$$\n\n`;
-        case 'text':
-        default:
-          return content ? `${content}\n\n` : '';
-      }
-    }
+  blockToMarkdown(block) {
+    return globalThis.BlockProjections.markdownOf(block);
+  }
 
   // ─── Import ───
 
@@ -1397,95 +1339,10 @@ class NotesManager {
   }
 
   /**
-   * Extract text content from a block
+   * Extract text content from a block: its AI context projection (#14)
    */
   extractBlockText(block) {
-    if (!block) return '';
-
-    switch (block.type) {
-      case 'text':
-      case 'h1':
-      case 'h2':
-      case 'h3':
-      case 'bullet':
-      case 'numbered':
-      case 'todo':
-      case 'quote':
-      case 'callout':
-        return this.stripHtml(block.content || '');
-
-      case 'code':
-        return block.content || '';
-
-      case 'toggle':
-        const mainText = this.stripHtml(block.content || '');
-        const childText = this.stripHtml(block.children || '');
-        return [mainText, childText].filter(t => t).join('\n');
-
-      case 'table':
-        if (block.tableData && Array.isArray(block.tableData)) {
-          return block.tableData.map(row => row.join(' ')).join('\n');
-        }
-        return '';
-
-      case 'bookmark':
-        return block.title || block.url || '';
-
-      case 'equation':
-        return block.equation || '';
-
-      default:
-        return '';
-    }
-  }
-
-  /**
-   * Strip HTML tags from string
-   */
-  stripHtml(html) {
-    if (!html) return '';
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    return div.textContent || div.innerText || '';
-  }
-
-  /**
-   * High-fidelity HTML to Markdown converter for simple formatting
-   */
-  htmlToMarkdown(html) {
-    if (!html) return '';
-
-    const div = document.createElement('div');
-    div.innerHTML = html;
-
-    const replacements = [
-      { sel: 'b, strong', tag: '**' },
-      { sel: 'i, em', tag: '*' },
-      { sel: 'u', tag: '__' },
-      { sel: 'code', tag: '`' },
-      { sel: 'del, s, strike', tag: '~~' }
-    ];
-
-    replacements.forEach(({ sel, tag }) => {
-      div.querySelectorAll(sel).forEach(el => {
-        el.textContent = `${tag}${el.textContent}${tag}`;
-      });
-    });
-
-    div.querySelectorAll('a').forEach(el => {
-      const href = el.getAttribute('href') || '';
-      el.textContent = `[${el.textContent}](${href})`;
-    });
-
-    div.querySelectorAll('span').forEach(el => {
-      const color = el.style.color;
-      const bg = el.style.backgroundColor;
-      if (color || bg) {
-        el.outerHTML = el.innerHTML;
-      }
-    });
-
-    return div.textContent || div.innerText || '';
+    return globalThis.BlockProjections.aiContextText(block);
   }
 }
 

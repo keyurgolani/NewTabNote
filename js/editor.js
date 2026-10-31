@@ -955,45 +955,11 @@ class BlockEditor {
   }
 
   /**
-   * Extract text content from a block object (for content detection)
+   * Extract text content from a block object (for content detection): its plain-text
+   * projection (#14), which js/kernel/composition/block-projections.js installs
    */
   extractBlockTextContent(block) {
-    if (!block) return '';
-
-    switch (block.type) {
-      case 'text':
-      case 'h1':
-      case 'h2':
-      case 'h3':
-      case 'bullet':
-      case 'numbered':
-      case 'todo':
-      case 'quote':
-      case 'callout':
-      case 'code':
-        return this.stripHtmlTags(block.content || '');
-      case 'toggle':
-        return this.stripHtmlTags(block.content || '') + ' ' + this.stripHtmlTags(block.children || '');
-      case 'table':
-        if (block.tableData && Array.isArray(block.tableData)) {
-          return block.tableData.map(row => row.join(' ')).join(' ');
-        }
-        return '';
-      default:
-        return '';
-    }
-  }
-
-  /**
-   * Strip HTML tags from a string
-   */
-  stripHtmlTags(html) {
-    if (!html) return '';
-    // Parsed in a document of its own, never an element of the page's
-    const inert = this.doc.implementation.createHTMLDocument('');
-    const div = inert.createElement('div');
-    div.innerHTML = html;
-    return div.textContent || '';
+    return globalThis.BlockProjections.plainText(block);
   }
 
   /**
@@ -5643,8 +5609,10 @@ class BlockEditor {
         const div = this.doc.createElement('div');
         div.className = `snapshot-block snapshot-block-${blockData.type || 'text'}`;
 
+        // Tags dropped through the block model layer's replaceTags (#14), in linear time; the
+        // content's own replace runs first, so content that isn't text throws as it always did
         const text = blockData.content
-          ? blockData.content.replace(/<[^>]*>/g, '')
+          ? globalThis.BlockProjections.replaceTags(String(blockData.content.replace(/(?:)/, '')), '', false)
           : '';
 
         if (blockData.type === 'divider') {

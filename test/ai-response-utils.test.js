@@ -1,13 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// The block projections the legacy scripts read blocks through, as the new tab sets them (#14)
+require('./helpers/block-projections');
 
 const {
   buildAIInsertPreview,
   blockToMarkdown,
-  htmlToMarkdown,
   markdownToBlocks,
   parseAIResponseToBlocks,
 } = require('../js/ai-response-utils.js');
+// What every Markdown export reads inline markup with since #14, in place of htmlToMarkdown
+const { inlineMarkdown } = require('../js/kernel/core/blocks/markup.js');
 
 test('AI response parser converts markdown structure into ordered block payloads', () => {
   const blocks = parseAIResponseToBlocks(`# Plan
@@ -118,19 +121,19 @@ test('blockToMarkdown strips HTML inline formatting to markdown', () => {
   );
 });
 
-// ─── htmlToMarkdown tests ───
+// ─── inline markup as Markdown (the block codec's inlineMarkdown) ───
 
-test('htmlToMarkdown converts inline HTML tags to markdown syntax', () => {
-  assert.equal(htmlToMarkdown('<strong>bold</strong>'), '**bold**');
-  assert.equal(htmlToMarkdown('<em>italic</em>'), '*italic*');
-  assert.equal(htmlToMarkdown('<code>code</code>'), '`code`');
-  assert.equal(htmlToMarkdown('<del>struck</del>'), '~~struck~~');
-  assert.equal(htmlToMarkdown('<a href="https://x.com">link</a>'), '[link](https://x.com)');
+test('inlineMarkdown converts inline HTML tags to markdown syntax', () => {
+  assert.equal(inlineMarkdown('<strong>bold</strong>'), '**bold**');
+  assert.equal(inlineMarkdown('<em>italic</em>'), '*italic*');
+  assert.equal(inlineMarkdown('<code>code</code>'), '`code`');
+  assert.equal(inlineMarkdown('<del>struck</del>'), '~~struck~~');
+  assert.equal(inlineMarkdown('<a href="https://x.com">link</a>'), '[link](https://x.com)');
 });
 
-test('htmlToMarkdown preserves wiki-links from data attributes', () => {
+test('inlineMarkdown preserves wiki-links from data attributes', () => {
   const html = '<a href="#" class="wiki-link" data-note-name="My Note">My Note</a>';
-  assert.equal(htmlToMarkdown(html), '[[My Note]]');
+  assert.equal(inlineMarkdown(html), '[[My Note]]');
 });
 
 // ─── markdownToBlocks wiki-link support ───

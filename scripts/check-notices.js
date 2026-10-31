@@ -46,14 +46,17 @@ const VENDOR_SKIP = new Set(['README.md', 'vendor.json', 'valibot/index.d.mts', 
  * that carries it (#99's review). Valibot's is the vendor of its Standard Schema object and the
  * "~run" its schemas and actions run by; emoji-regex-xs's is the flag sequences of the emoji
  * regex Valibot's build copies from it. The build checks each module against its record and its
- * notice (checkBundledVendor in scripts/build/notices.js).
+ * notice (checkBundledVendor in scripts/build/notices.js). The HTML Standard's named character
+ * references aren't a js/lib module (#14 keeps them in js/kernel/core/blocks/entities.js, so
+ * `module` is null); they're found by a name only that table holds.
  */
 const BUNDLED_CODE = Object.freeze([
   { notice: 'Valibot 1.5.0', module: 'valibot/index.mjs', carries: /\bvendor:\s*["']valibot["']|["']~run["']/ },
   { notice: 'emoji-regex-xs 1.0.0', module: 'valibot/index.mjs', carries: /\\u\{1F3F4\}\[\\u\{E0061\}-\\u\{E007A\}\]\{2\}/i },
+  { notice: 'HTML Standard named character references', module: null, carries: /\bCounterClockwiseContourIntegral\b/ },
 ]);
 /** js/lib modules that ship as code in the bundle and not as files */
-const BUNDLED = new Set(BUNDLED_CODE.map(({ module }) => module));
+const BUNDLED = new Set(BUNDLED_CODE.flatMap(({ module }) => (module === null ? [] : [module])));
 
 /** Network destinations the extension's code can contact, which the policy must name. */
 const REQUIRED_DESTINATIONS = [

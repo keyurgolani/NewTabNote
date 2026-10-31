@@ -5,6 +5,8 @@
  * slice 4), and every function here takes that into account.
  */
 
+import { previewText } from '../blocks/previews.js';
+
 /**
  * @typedef {object} NoteFields
  * @property {string} name
@@ -325,41 +327,6 @@ export function inBlockOrder(blocks) {
 const PREVIEW_LENGTH = 120;
 
 /**
- * Plain text from markup, as SidebarUtils.stripHtml reads it
- * @param {unknown} value
- * @returns {string}
- */
-function stripHtml(value = '') {
-  return String(value)
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * The text a block shows, as SidebarUtils.extractBlockText reads it
- * @param {BlockRecord} block
- * @returns {string}
- */
-function blockText(block) {
-  if (block.type === 'toggle') return [stripHtml(block.content), stripHtml(block.children)].filter(Boolean).join(' ');
-  if (block.type === 'bookmark') return [block.title, block.description, block.url].filter(Boolean).join(' ');
-  if (block.type === 'equation') return stripHtml(block.equation);
-  if (block.type === 'table' && Array.isArray(block.tableData)) {
-    return block.tableData
-      .flat()
-      .map(cell => stripHtml(cell))
-      .filter(Boolean)
-      .join(' ');
-  }
-  if (block.type === 'file') return stripHtml(block.fileName);
-  if (block.type === 'video') return stripHtml(block.videoUrl);
-  return stripHtml(block.content);
-}
-
-/**
  * A note's preview and todo progress from its blocks in note order, as
  * SidebarUtils.buildNoteSaveMetadata makes them: the first text any block shows, cut to 120
  * characters with an ellipsis, and how many of its todos are checked, or null for none
@@ -371,7 +338,7 @@ export function noteSaveMetadata(blocks) {
   let completed = 0;
   let total = 0;
   for (const block of blocks) {
-    const text = blockText(block);
+    const text = previewText(block);
     if (!preview && text) preview = text;
     if (block.type === 'todo') {
       total += 1;

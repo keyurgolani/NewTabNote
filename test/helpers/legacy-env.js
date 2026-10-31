@@ -660,6 +660,11 @@ function createChromeStub() {
 
 // ─── Environment ───
 
+/** The new tab's block projections, made once: the block model layer is pure */
+function newTabBlockProjections() {
+  return require('./block-projections').newTabBlockProjections();
+}
+
 /**
  * @param {Object} [options]
  * @param {'page'|'worker'} [options.context='page'] - page: window, self, document. worker: self and importScripts only.
@@ -708,6 +713,8 @@ function createLegacyEnv(options = {}) {
     BroadcastChannel: channels.BroadcastChannel,
     navigator: { maxTouchPoints: 0, userAgent: 'node-test', locks },
     location: { reload() { sandbox.__reloads = (sandbox.__reloads || 0) + 1; } },
+    // What js/kernel/composition/block-projections.js installs before the new tab's scripts (#14)
+    BlockProjections: newTabBlockProjections(),
   };
 
   let document = null;
@@ -1148,7 +1155,6 @@ function makeEditor(env, doc = env.document, {
     placeCaretAtEnd: noop,
     renderInsights: async () => {},
     startInsightsPollingIfNeeded: async () => {},
-    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
   });
   return editor;
 }

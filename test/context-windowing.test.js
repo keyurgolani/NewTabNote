@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// The block projections the legacy scripts read blocks through, as the new tab sets them (#14)
+require('./helpers/block-projections');
 
 // Minimal stubs so AIChatController can be constructed
 global.document = {
