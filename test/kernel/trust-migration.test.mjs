@@ -30,7 +30,7 @@ import { adapterOn } from './storage-fixture.mjs';
 import { MANIFEST, providerContext } from './trust-provider-support.mjs';
 import { hexIds, lockManager, manualClock, realTimers } from './trust-support.mjs';
 
-/** @type {{IDBKeyRange: typeof globalThis.IDBKeyRange}} */
+/** @type {{IDBKeyRange: typeof globalThis.IDBKeyRange, IDBFactory: typeof globalThis.IDBFactory}} */
 const { IDBKeyRange: KeyRange, IDBFactory } = createRequire(import.meta.url)('fake-indexeddb');
 const FIXTURES = synthesized();
 const MIGRATION_FAULTS = ['migration-pending', 'migration-failed', 'migration-blocked'];
@@ -289,7 +289,7 @@ describe("the migration state storage reads, and the worker's blocked marker (#2
   it("a database that won't open fails storage's check as before, whatever the migration state reads", async () => {
     const factory = brokenFactory();
     const settings = areaOf();
-    const adapter = createIndexedDbAdapter({ indexedDB: factory, settings, mode: 'existing', requireCore: true, keyRange: KeyRange });
+    const adapter = createIndexedDbAdapter({ indexedDB: factory, settings, mode: 'existing', requireCore: true });
     const stored = await checkOf('storage', { storage: adapter, migration: createMigrationReader({ indexedDB: factory, settings }) });
     assert.equal(stored.receipt.status, 'failed');
     assert.equal(stored.receipt.capture, 'at-risk');
@@ -350,7 +350,7 @@ describe("the migration state storage reads, and the worker's blocked marker (#2
     assert.ok(marker && marker.at !== 1, 'the blocked run set its own marker');
     blocker.close();
     assert.equal((await worker.migration.done).status, 'migrated');
-    assert.equal(of.chrome.local[UPGRADE_BLOCKED_KEY], undefined);
+    assert.equal(of.chrome.local[UPGRADE_BLOCKED_KEY] ?? null, null, "the run cleared its marker");
   });
 
   it("an ended run's report carries the record it replaced, and migrationEvents skips a failure that record already held", async () => {
@@ -369,7 +369,7 @@ describe("the migration state storage reads, and the worker's blocked marker (#2
     assert.deepEqual(sent, []);
     report({ kind: 'ended', outcome: failed, previous: { status: 'failed', code: 'schema-mismatch' } });
     report({ kind: 'blocked', standing: false });
-    assert.deepEqual(sent.map(([code]) => code), ['storage.migration-failed', 'storage.migration-blocked']);
+    assert.deepEqual(/** @type {any[]} */ (sent).map(([code]) => code), ['storage.migration-failed', 'storage.migration-blocked']);
   });
 
   it("a refused run journals storage.migration-failed with its code, except a refusal the open journals itself", () => {

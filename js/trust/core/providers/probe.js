@@ -80,12 +80,13 @@ const lookedMigration = () => MIGRATION_FAULTS.map(faultCode => ({ faultCode, su
  */
 function migrationFaultOf(state) {
   if (state === null || typeof state !== 'object') throw new TypeError('not a migration state');
-  const { version, latest, status } = /** @type {Record<string, unknown>} */ (state);
+  const { version, latest, status, blocked } = /** @type {Record<string, unknown>} */ (state);
   if (!Number.isSafeInteger(version) || !Number.isSafeInteger(latest) || (status !== null && typeof status !== 'string')) {
     throw new TypeError('not a migration state');
   }
   if (/** @type {number} */ (version) === 0 || /** @type {number} */ (version) >= /** @type {number} */ (latest)) return null;
-  if (status === 'space-blocked') return 'migration-blocked';
+  // The worker's marker: its run's upgrade waits on another connection now
+  if (blocked === true || status === 'space-blocked') return 'migration-blocked';
   if (status === 'failed' || status === 'refused') return 'migration-failed';
   // No run recorded yet, one in progress or waiting on an open page, or a record from before
   // the database was replaced at an older version
@@ -274,9 +275,20 @@ export const storage = Object.freeze({
    */
   async check(context) {
     const adapter = portOf(context, 'storage');
+    const reader = portOf(context, 'migration');
     // Below the latest version capture works on the database as it is, so a migration that
-    // hasn't happened is storage's own state, never a failed probe
-    const migration = migrationFaultOf(await portOf(context, 'migration').current());
+    // hasn't happened is storage's own state, never a failed probe. A state it can't read is
+    // unknown: it probes anyway, so a database that won't open still fails, and it looks at
+    // no migration fault
+    /** @type {ReturnType<typeof migrationFaultOf>} */
+    let migration = null;
+    let known = true;
+    try {
+      migration = migrationFaultOf(await reader.current());
+    } catch {
+      known = false;
+    }
+    const lookedKnown = () => (known ? lookedMigration() : []);
     /** @type {Outcome} */
     let outcome;
     try {
@@ -302,11 +314,11 @@ export const storage = Object.freeze({
           evidence: { subjectId: 'NewTabNoteTrust' },
           consequenceKey: 'storage.trust-records-unavailable',
           preserved: ['capture', 'editing', 'reading'],
-          looked: [...lookedAll(['open-failed']), ...lookedMigration()],
+          looked: [...lookedAll(['open-failed']), ...lookedKnown()],
         };
       }
       // At the latest version: a migration that stood before is done, so its fault is looked at and gone
-      return { status: 'verified', capture: 'safe', looked: [...lookedAll(['open-failed']), ...lookedMigration()] };
+      return { status: 'verified', capture: 'safe', looked: [...lookedAll(['open-failed']), ...lookedKnown()] };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     const risk = riskTo(['capture', 'editing'], await readsStill(adapter, context));

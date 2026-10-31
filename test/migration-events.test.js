@@ -212,28 +212,29 @@ describe('the migration events across worker starts (#20 slice 4 prerequisites, 
       await profileAt8(env);
       env.chrome.local.storageUpgradeBlocked = { at: 1 };
     });
-    assert.equal(local.storageUpgradeBlocked, undefined);
+    assert.equal(local.storageUpgradeBlocked ?? null, null, "the start cleared the marker");
     assert.equal(local.setting_storageUpgrade.status, 'migrated');
     assert.deepEqual(codes(seen), ['storage.migration-completed']);
   });
 
-  it('an upgrade still blocked on the next start journals storage.migration-blocked once, while its marker stands', async () => {
+  it('a start whose upgrade is still blocked, behind the marker a stopped worker left, journals no second storage.migration-blocked and keeps the marker', async () => {
+    // A worker that stopped while blocked leaves its marker and its journaled event; the next
+    // start finds the same older page still open. (A stopped worker's own pending upgrade
+    // goes with it in Chrome, which one shared fake IndexedDB can't do, so this start is
+    // the first to ask for the upgrade.)
     let blocker;
-    const { seen, local } = await restarts(2, async (env, start) => {
-      if (start === 1) {
-        await profileAt8(env);
-        // An older build's page that stays open across both starts
-        blocker = await new Promise((resolve, reject) => {
-          const request = env.indexedDB.open('CanvasTabDB');
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
-        blocker.onversionchange = () => {};
-      }
+    const { seen, local } = await restarts(1, async env => {
+      await profileAt8(env);
+      env.chrome.local.storageUpgradeBlocked = { at: 1 };
+      blocker = await new Promise((resolve, reject) => {
+        const request = env.indexedDB.open('CanvasTabDB');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      blocker.onversionchange = () => {};
     });
-    assert.equal(seen.events.filter(([code]) => code === 'storage.migration-blocked').length, 1, JSON.stringify(seen.events));
-    assert.ok(local.storageUpgradeBlocked, 'the marker stands while the upgrade waits');
+    assert.deepEqual(seen.events.filter(([code]) => code === 'storage.migration-blocked'), [], JSON.stringify(seen.events));
+    assert.ok(local.storageUpgradeBlocked && local.storageUpgradeBlocked.at !== 1, 'the blocked run set its own marker');
     blocker.close();
   });
 });
-

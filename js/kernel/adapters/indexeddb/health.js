@@ -153,8 +153,16 @@ export function createVectorsReader({ indexedDB }) {
 const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 
 /**
- * Where CanvasTabDB is against the version this build upgrades to
- * @typedef {{version: number, latest: number, status: string | null, code: string | null}} MigrationState
+ * chrome.storage.local key of the marker the worker's run sets while its upgrade waits on
+ * another connection (composition/background.js). It's outside `setting_*`, so no page's
+ * settings listener hears of it, and no copy of the settings takes it.
+ */
+export const UPGRADE_BLOCKED_KEY = 'storageUpgradeBlocked';
+
+/**
+ * Where CanvasTabDB is against the version this build upgrades to, and whether a run's upgrade
+ * is waiting on another connection now
+ * @typedef {{version: number, latest: number, status: string | null, code: string | null, blocked: boolean}} MigrationState
  */
 
 /**
@@ -163,26 +171,27 @@ const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 export function createMigrationReader({ indexedDB, settings }) {
   return Object.freeze({
     /**
-     * CanvasTabDB's version (0 when there's none), the latest, and the recorded run's status and
-     * code, null when there's no record. Opens without upgrading and writes nothing.
+     * CanvasTabDB's version (0 when there's none), the latest, the recorded run's status and
+     * code, null when there's no record, and whether the worker's blocked marker stands. It
+     * reads the version from indexedDB.databases(), which opens no connection, so it never
+     * waits behind an upgrade; a factory without databases() leaves it unknown, and it throws.
+     * It writes nothing.
      * @returns {Promise<MigrationState>}
      */
     async current() {
-      /** @type {IDBDatabase | null} */
-      let db = null;
+      if (typeof indexedDB.databases !== 'function') throw new UnavailableError('storage', 'unreadable', true);
       let version = 0;
       try {
-        db = await openWithoutUpgrade(indexedDB, DB_NAME);
-        if (db) version = db.version;
+        const listed = await indexedDB.databases();
+        const found = listed.find(database => database && database.name === DB_NAME);
+        if (found && Number.isSafeInteger(found.version)) version = /** @type {number} */ (found.version);
       } catch {
         throw new UnavailableError('storage', 'unreadable', true);
-      } finally {
-        if (db) db.close();
       }
       /** @type {unknown} */
       let stored;
       try {
-        stored = await settings.get([UPGRADE_RECORD_KEY]);
+        stored = await settings.get([UPGRADE_RECORD_KEY, UPGRADE_BLOCKED_KEY]);
       } catch {
         throw new UnavailableError('storage', 'settings-read-failed', true);
       }
@@ -194,6 +203,7 @@ export function createMigrationReader({ indexedDB, settings }) {
         latest: LATEST_STRUCTURAL,
         status: typeof fields.status === 'string' ? fields.status : null,
         code: typeof fields.code === 'string' ? fields.code : null,
+        blocked: Boolean(/** @type {Record<string, unknown>} */ (stored)[UPGRADE_BLOCKED_KEY]),
       };
     },
   });
