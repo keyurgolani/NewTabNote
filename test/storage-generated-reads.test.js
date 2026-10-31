@@ -112,18 +112,36 @@ describe('1.4.x reads on the corrupt profiles', () => {
     });
   }
 
-  it('truncated: a block with only its note is among the note\'s blocks; a note with no updatedAt is kept but listed nowhere (the updatedAt index skips it)', async () => {
+  it('truncated: a block with only its note is among the note\'s blocks, and a note with no updatedAt is still stored', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
     const { Storage, settle } = await opened(fixture);
     assert.deepStrictEqual(ids(await value(settle, () => Storage.getElementsByNote('note-a'), 'getElementsByNote')), ['block-a1', roles.truncatedBlock]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(true), 'getAllNotes')), ['note-a', 'note-b']);
     assert.equal((await value(settle, () => Storage.getNote(roles.truncatedNote), 'getNote')).id, roles.truncatedNote);
-    // exportAll reads the same index, so 1.4.x's own backup leaves it out; #17's point export keeps it
-    assert.deepStrictEqual(ids((await value(settle, () => Storage.exportAll(), 'exportAll')).canvases), ['note-a', 'note-b']);
   });
 
-  it('mistyped: archived "no" reads as archived, so the note lists only with archived ones', async () => {
+  // getAllNotes reads the updatedAt index, which skips a note without updatedAt. #17 PR 3's
+  // transform fills a missing updatedAt (from createdAt, else the newest block's time, else the
+  // run's start), and the kernel derives it on read until then; notesInView keeps 1.4.x's
+  // exclusion until that lands.
+  expectFailure('KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)', async () => {
+    const { generate, inputs } = await load();
+    const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
+    const { Storage, settle } = await opened(fixture);
+    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(true), 'getAllNotes')), ['note-a', 'note-b', roles.truncatedNote].sort());
+  });
+
+  // _readExport builds the backup from getAllNotes(true), so the note, its blocks, and its media
+  // go missing from the user's own backup. #17's point export keeps them.
+  expectFailure('KD-005 exportAll includes notes without updatedAt', async () => {
+    const { generate, inputs } = await load();
+    const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
+    const { Storage, settle } = await opened(fixture);
+    const exported = await value(settle, () => Storage.exportAll(), 'exportAll');
+    assert.deepStrictEqual(ids(exported.canvases), ['note-a', 'note-b', roles.truncatedNote].sort());
+  });
+
+  it('mistyped, as 1.4.x reads it (a characterization, not a rule): archived "no" reads as archived, so the note lists only with archived ones', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('mistyped');
     const { Storage, settle } = await opened(fixture);

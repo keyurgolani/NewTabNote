@@ -40,7 +40,8 @@
       "tests": [
         "KD-005 exportAll includes the links between notes",
         "KD-005 exportAll includes custom themes",
-        "KD-005 exportAll includes note snapshots"
+        "KD-005 exportAll includes note snapshots",
+        "KD-005 exportAll includes notes without updatedAt"
       ]
     },
     {
@@ -82,6 +83,14 @@
       "tests": [
         "KD-010 a note whose name isn't text leaves the other notes' names for wiki-link autocomplete",
         "KD-010 a note whose name isn't text doesn't stop another note's wiki links from saving"
+      ]
+    },
+    {
+      "id": "KD-011",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/628bae9563e87dfebe9af0cde1cd8bc61ee215c4/js/storage.js#L1060-L1064",
+      "tests": [
+        "KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)"
       ]
     }
   ]

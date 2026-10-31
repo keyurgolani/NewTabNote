@@ -3,8 +3,11 @@
 // and backup key the production build has, and its check fails when one goes; it loads and
 // dumps back as itself past the copy bounds; it migrates to 9 with a verified point that counts
 // every record; its legacy export holds every note outside trash, every block and media row,
-// and the folders; and that file restores through the frozen v1.4.1 importData, a complete
-// backup round trip. Each corrupt profile (truncated, mistyped, dangling, oversized, duplicate
+// and the folders; and that file restores through the frozen v1.4.1 importData. That restore
+// takes every note outside trash with its blocks, the folders, and the media of those notes;
+// 1.4.1 ignores trashedCanvases and orphanElements and skips media whose note isn't in the
+// file, so trashed notes and their media stay in the file only (the test counts them as
+// skipped). Each corrupt profile (truncated, mistyped, dangling, oversized, duplicate
 // Daily Notes) migrates with a verified point too, and its export restores in 1.4.1. Every
 // expected value is derived from the generator's roles, not read back from the code under test.
 

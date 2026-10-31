@@ -1,14 +1,19 @@
-// #28 slice 3, the fixture loader and dumper cut off (storage-faults.mjs): a load the disk
-// refuses at commit, or one a record's missing key stops partway through a transaction,
-// rejects and leaves that transaction's store as it was, with every earlier transaction whole;
-// loading again ends at the fixture. A load whose upgrade fails leaves no stores. A dump whose
-// read fails rejects, returns no partial fixture, and leaves the database as it was; dumping
-// again reads it whole. Each case says where it was cut.
+// #28 slice 3, the fixture tool itself (load-fixture.mjs) cut off, through storage-faults.mjs.
+// This is the loader and dumper, not production crash recovery (storage-migrate.test.mjs and
+// storage-recorded.test.mjs stop #17's runner at every step). The loader is atomic per
+// transaction, not per store or per fixture: a load the disk refuses at commit, or one a
+// record's missing key stops partway through a transaction, rejects and leaves that one
+// transaction's writes out, while every transaction before it stays committed, earlier
+// batches of the same store included. Loading again ends at the fixture. A load whose upgrade
+// fails leaves no stores. A dump whose read fails rejects, returns no partial fixture, and
+// writes nothing. Each case says where it was cut.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
+import { maximalFixture } from '../fixtures/storage/generate.mjs';
+import { productionInputs } from './generated-inputs.mjs';
 import { newProfile, recordsIn, synthesized } from './migration-support.mjs';
 
 /** @typedef {import('../fixtures/storage/load-fixture.mjs').Fixture} Fixture */
@@ -83,6 +88,24 @@ describe('a load cut off', () => {
     assert.deepStrictEqual(recordsIn(await held(of), 'CanvasTabDB', 'elements'), []);
     const names = storeNames(BASIC);
     assert.deepStrictEqual(await held(of), partly(BASIC, names.slice(0, names.indexOf('elements'))));
+  });
+
+  it("in a store's second batch, by a record with no key: that batch is out, and the first batch of the same store stays committed", async () => {
+    const { fixture } = maximalFixture(await productionInputs());
+    const elements = /** @type {any} */ (fixture.databases[0].stores.find(store => store.name === 'elements'));
+    // The loader writes 100 records per transaction, so record 106 is in the second
+    assert.ok(elements.records.length > 105);
+    delete elements.records[105].value.id;
+    const of = newProfile();
+    await assert.rejects(
+      loadFixture(fixture, { factory: of.real, storage: of.chrome.api.storage.local }),
+      /** @param {any} error */ error => error.name === 'DataError',
+    );
+    const kept = recordsIn(await dumpFixture({ factory: of.real }), 'CanvasTabDB', 'elements');
+    assert.deepStrictEqual(
+      kept.map(record => record.key),
+      elements.records.slice(0, 100).map((/** @type {any} */ record) => record.key),
+    );
   });
 
   it('in its upgrade, by an index it can\'t make: rejects, and leaves no store', async () => {

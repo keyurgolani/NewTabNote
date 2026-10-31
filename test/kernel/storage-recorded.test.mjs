@@ -45,6 +45,37 @@ function tagsHere() {
   }
 }
 
+/** The canary slots every recording holds, whatever the release */
+const ALWAYS = [
+  'note-1-title', 'note-2-title', 'note-3-title', 'note-4-title',
+  'block-1', 'block-2', 'block-3', 'block-4', 'block-5', 'block-6', 'block-7', 'llm-api-key',
+];
+/** The slots each of record-release.mjs's write paths fills, when header.source.writePaths lists it */
+const SLOTS_OF = /** @type {Record<string, string[]>} */ ({
+  'Storage.createFolder': ['folder-1'],
+  'Storage.saveCustomTheme': ['theme-1'],
+  'the Popup quick note': ['popup-note'],
+  'convert a note to a template (updateNote)': ['note-5-title'],
+  'the Daily Note template (setSetting dailyNoteTemplate)': ['daily-template'],
+  'note insights (updateNote)': ['insight'],
+  'the AI chat history (setSetting)': ['chat-message'],
+  'the Ollama URL (setSetting)': ['llm-endpoint'],
+  'the LLM endpoint (setSetting)': ['llm-endpoint'],
+  'a custom AI prompt template (setSetting aiPromptTemplates)': ['prompt-template'],
+  "SyncService.connect's WebDAV settings (setSetting syncWebdavConfig)": ['webdav-username', 'webdav-password'],
+});
+
+/**
+ * The slots `fixture`'s write paths imply that it doesn't hold
+ * @param {any} fixture
+ * @returns {string[]}
+ */
+function missingSlots(fixture) {
+  const held = canarySlots(fixture);
+  const wanted = new Set([...ALWAYS, ...fixture.header.source.writePaths.flatMap((/** @type {string} */ p) => SLOTS_OF[p] || [])]);
+  return [...wanted].filter(slot => !held.includes(slot)).sort();
+}
+
 describe('the recorded release fixtures', () => {
   it('every release from v1.0.0 to v1.4.0 has one, or is a listed fallback', () => {
     assert.deepStrictEqual(
@@ -52,6 +83,14 @@ describe('the recorded release fixtures', () => {
       [],
     );
     assert.deepStrictEqual([...RECORDED.keys()].filter(tag => !RELEASES.includes(tag)), []);
+  });
+
+  it('the slot check fails on a recording that lost a slot its write paths imply', () => {
+    const fixture = /** @type {any} */ (structuredClone(RECORDED.get('v1.4.0')));
+    assert.ok(fixture, 'no v1.4.0 recording');
+    fixture.header.source.writePaths.push("SyncService.connect's WebDAV settings (setSetting syncWebdavConfig)");
+    const text = JSON.stringify(fixture).replaceAll('{{CANARY:webdav-password}}', 'plain').replaceAll('{{CANARY:folder-1}}', 'Home');
+    assert.deepStrictEqual(missingSlots(JSON.parse(text)), ['folder-1', 'webdav-password', 'webdav-username']);
   });
 
   for (const [tag, fixture] of RECORDED) {
@@ -68,10 +107,12 @@ describe('the recorded release fixtures', () => {
       assert.deepStrictEqual(header.degraded, []);
     });
 
-    it(`${header.id}: its commit and tree are ${tag}'s, where the clone has the tags`, t => {
+    it(`${header.id}: its commit and tree are ${tag}'s`, t => {
       const tags = tagsHere();
       if (!tags || !tags.has(tag)) {
-        t.diagnostic('no release tags in this clone: run `git fetch --tags` to check them');
+        // CI's unit job fetches the tags and sets NTN_RELEASE_TAGS, so there a missing tag fails
+        assert.notEqual(process.env.NTN_RELEASE_TAGS, 'required', `${tag} isn't in this clone, and NTN_RELEASE_TAGS requires it`);
+        t.skip(`${tag} isn't in this clone: run \`git fetch --tags\` to check its pins`);
         return;
       }
       const git = (/** @type {string} */ ref) =>
@@ -80,11 +121,8 @@ describe('the recorded release fixtures', () => {
       assert.equal(header.source.tree, git(`${tag}^{tree}`));
     });
 
-    it(`${header.id}: every user-text field the seed wrote is a canary, the AI key among them`, () => {
-      const slots = canarySlots(fixture);
-      for (const slot of ['note-1-title', 'note-2-title', 'block-1', 'block-2', 'llm-api-key']) {
-        assert.ok(slots.includes(slot), `no {{CANARY:${slot}}}`);
-      }
+    it(`${header.id}: every canary slot its write paths imply is there, the AI key among them`, () => {
+      assert.deepStrictEqual(missingSlots(fixture), []);
       assert.doesNotMatch(JSON.stringify(fixture), /ntn-canary-/, 'a filled canary was committed');
     });
 
