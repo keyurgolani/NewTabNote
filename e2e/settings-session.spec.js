@@ -57,6 +57,8 @@ test('a theme saved in the Theme Builder applies, and comes back after a reload'
   await settings.locator('#open-theme-builder-btn').click();
   const builder = page.locator('#theme-builder-modal');
   await expect(builder).toBeVisible();
+  // openThemeBuilder sets the name after its reads, then draws the pickers; fill after that
+  await expect(builder.locator('input[type="color"]').first()).toBeVisible();
   await page.locator('#theme-builder-name').fill('Dusk');
   // The first color picker is --bg-primary's
   await builder.locator('input[type="color"]').first().evaluate(picker => {
@@ -76,7 +78,7 @@ test('a theme saved in the Theme Builder applies, and comes back after a reload'
   await expectNoUncaught(extension, page);
 });
 
-test('split view and its tabs come back after a reload, from one session write', async ({ extension }) => {
+test('turning split view on or off is saved at once: a reload keeps it either way', async ({ extension }) => {
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   await expect.poll(async () => (await stored(page, ['lastOpenedNoteId'])).lastOpenedNoteId || null).not.toBeNull();
@@ -84,20 +86,18 @@ test('split view and its tabs come back after a reload, from one session write',
     const beta = await Storage.createNote('Beta');
     await app.refreshNotesList();
     await app.tabController.openNoteInNewTab(beta.id);
+    // Nothing but the toggle: 1.4.x saved split view only with the next tab change
     await app.tabController.toggleSplitView();
-    // As in 1.4.x, opening split view saves nothing by itself; the next tab change saves it
-    await app.tabController.switchToTab(app.tabController.activeTabIndex);
     return { leftId: app.editor.noteId, rightId: app.secondaryEditor.noteId };
-  });
-  await expect.poll(() => stored(page, ['setting_splitViewEnabled', 'setting_secondaryNoteId', 'lastOpenedNoteId'])).toEqual({
-    setting_splitViewEnabled: true,
-    setting_secondaryNoteId: rightId,
-    lastOpenedNoteId: leftId,
   });
 
   await driver.reload(page);
   await expect.poll(() => page.evaluate(() => [app.editor.noteId, app.tabController.splitViewEnabled, app.secondaryEditor.noteId]))
     .toEqual([leftId, true, rightId]);
+
+  await page.evaluate(() => app.tabController.toggleSplitView());
+  await driver.reload(page);
+  await expect.poll(() => page.evaluate(() => [app.editor.noteId, app.tabController.splitViewEnabled])).toEqual([leftId, false]);
   await expectNoUncaught(extension, page);
 });
 
@@ -108,6 +108,14 @@ test('the auto-title and insights switches save, and switched off stay off in ev
   await expect.poll(() => stored(first, ['setting_autoTitleEnabled', 'setting_insightsEnabled', 'setting_hasCompletedOnboarding']))
     .toEqual({ setting_autoTitleEnabled: true, setting_insightsEnabled: true, setting_hasCompletedOnboarding: true });
   const second = await driver.openNewTab(extension);
+  // A stub provider in the other tab, so its jobs start their timers as with a real one
+  await second.evaluate(async () => {
+    Object.assign(LLM, { isConfigured: () => true, generateTitle: async () => null, extractInsights: async () => null });
+    await app.notesManager.setupAutoTitle();
+    await app.notesManager.setupInsightsExtraction();
+  });
+  expect(await second.evaluate(() => [app.notesManager.autoTitleIntervalId !== null, app.notesManager.insightsIntervalId !== null]))
+    .toEqual([true, true]);
   await first.bringToFront();
 
   // The rows show once a provider is set; the switches are wired either way
@@ -124,10 +132,39 @@ test('the auto-title and insights switches save, and switched off stay off in ev
   });
   const off = { setting_autoTitleEnabled: false, setting_autoTitleInterval: 60, setting_insightsEnabled: false };
   await expect.poll(() => stored(first, Object.keys(off))).toEqual(off);
-  // The other tab has no job timer running
+  // The other tab stopped both timers when it heard of the change
   await expect.poll(() => second.evaluate(() => [app.notesManager.autoTitleIntervalId, app.notesManager.insightsIntervalId]))
     .toEqual([null, null]);
   await expectNoUncaught(extension, first);
+});
+
+test("every interval Settings offers waits in Chromium instead of firing at once, the month included", async ({ extension }) => {
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  const runs = await page.evaluate(async () => {
+    const manager = app.notesManager;
+    const counts = {};
+    const realTitle = manager.runAutoTitle;
+    const realInsights = manager.runInsightsExtraction;
+    for (const [start, run, minutes] of [
+      ...[5, 15, 30, 60, 1440, 7200, 10080, 20160, 43200].map(m => ['startAutoTitleInterval', 'runAutoTitle', m]),
+      ...[60, 360, 720, 1440, 10080].map(m => ['startInsightsInterval', 'runInsightsExtraction', m]),
+    ]) {
+      let count = 0;
+      manager[run] = () => { count += 1; };
+      manager[start](minutes);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      manager.stopAutoTitleInterval();
+      manager.stopInsightsInterval();
+      counts[`${run} ${minutes}`] = count;
+    }
+    manager.runAutoTitle = realTitle;
+    manager.runInsightsExtraction = realInsights;
+    return counts;
+  });
+  // The run as each starts, and nothing more in 300 ms
+  expect(Object.values(runs).every(count => count === 1), JSON.stringify(runs)).toBe(true);
+  await expectNoUncaught(extension, page);
 });
 
 test('auto-backup runs at start when it is due, and keeps its time', async ({ extension }) => {
