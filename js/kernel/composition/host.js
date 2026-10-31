@@ -49,6 +49,21 @@ export function chromeSettings() {
 }
 
 /**
+ * chrome.storage.local as the new tab's backup tasks use it (#17 PR 4a, backups.js): its get,
+ * of every key too, its set, and its remove, which the automatic backup prunes its oldest with,
+ * read when a call reaches it. Popup's and Side Panel's run no backup task, so they get
+ * chromeSettings() alone.
+ * @returns {import('../adapters/indexeddb/backups.js').BackupStore}
+ */
+export function chromeBackupSettings() {
+  return {
+    get: keys => chrome.storage.local.get(keys),
+    set: items => chrome.storage.local.set(items),
+    remove: keys => chrome.storage.local.remove(keys),
+  };
+}
+
+/**
  * #13's settings.changed notice from chrome.storage.onChanged, as js/storage.js's
  * onSettingsChange gave it to the new tab until #17 PR 4a: the keys of each change to
  * chrome.storage.local's `setting_` keys, by name only, so no listener is handed a value, not
