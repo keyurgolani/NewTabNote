@@ -7,8 +7,9 @@
  * the uncaught-exception check.
  *
  * KD-012 (test/known-defects.json): since #17 PR 1b the service worker makes a fresh
- * profile's database at version 9, and the notice never shows on a database the update has
- * upgraded, so its outcome-recording specs no longer hold on any profile the harness can make.
+ * profile's database at this build's version (10 since #17 PR 2a), and the notice never shows
+ * on a database the update has upgraded, so its outcome-recording specs no longer hold on any
+ * profile the harness can make.
  * They stay as expected failures until #18 retires the notice and its specs; the node tier
  * (test/export-notice.test.js) still runs them on a version-8 database. The rules that still
  * ship through its space-blocked variant (SpaceNotice extends ExportNotice) run on that
