@@ -52,6 +52,41 @@ function storageFailure(failure) {
   return error;
 }
 
+/** #27's interaction-ready mark, which `npm run perf:probe` reads (docs/testing.md, "The performance probe") */
+const INTERACTION_READY_MARK = 'ntn:interaction-ready';
+
+/**
+ * `performance.mark('ntn:interaction-ready')`, the first time it's called on the page. Nothing
+ * in the app reads it.
+ * @returns {void}
+ */
+function markInteractionReady() {
+  if (performance.getEntriesByName(INTERACTION_READY_MARK, 'mark').length === 0) performance.mark(INTERACTION_READY_MARK);
+}
+
+/**
+ * Marks the page interaction-ready when the first note one of `editors` loads resolves, while
+ * App.init runs: on whichever path loads it (the welcome note, a first note, the restored or
+ * first listed note). Answers the undo, which init runs after its branch, so no later load marks.
+ * @param {Array<{loadNote: (noteId: string) => Promise<boolean>}>} editors
+ * @returns {() => void}
+ */
+function markOnFirstLoad(editors) {
+  const originals = editors.map((editor) => editor.loadNote);
+  editors.forEach((editor, index) => {
+    editor.loadNote = async (noteId) => {
+      const loaded = await originals[index].call(editor, noteId);
+      if (loaded) markInteractionReady();
+      return loaded;
+    };
+  });
+  return () => {
+    editors.forEach((editor, index) => {
+      editor.loadNote = originals[index];
+    });
+  };
+}
+
 /** Features that are off while an auxiliary store is missing. `settings` has none: settings live in chrome.storage.local. */
 const MISSING_STORE_FEATURES = {
   media: 'imported media',
@@ -279,6 +314,9 @@ class App {
       this.tabController.secondaryEditor = this.secondaryEditor;
       this.tabController.editorPorts = this.editorPorts;
 
+      // #27's interaction-ready mark: the first note either editor loads while the tab starts
+      const stopMarking = markOnFirstLoad([this.editor, this.secondaryEditor]);
+
       // Wire version history button (Req 31.2)
       const versionHistoryBtn = document.getElementById('version-history-btn');
       if (versionHistoryBtn) {
@@ -334,12 +372,16 @@ class App {
         }
         await this.tabController.loadSavedTabs();
       }
+      stopMarking();
       // From here on, another new tab's trash, archive, or delete refreshes this one's lists
       this.tabController.workspaceReady();
       // Trash retention once this tab's panes and tabs can move off what it deletes; the other tabs refresh their lists
       await this.sidebarController.runTrashCleanup().catch((error) => this.logger.error('App', 'Trash cleanup failed', error));
 
       this.updateEmptyState();
+      // A start that loaded no note (only archived notes, or a load that didn't show one) is
+      // interaction-ready once its empty state is up to date
+      markInteractionReady();
       this.updateBadgeCounts();
       // A start that restored no saved tab rendered no list yet, so 1.4.x showed the badge's
       // count over an empty list until something refreshed it
