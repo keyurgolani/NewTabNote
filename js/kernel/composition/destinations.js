@@ -8,16 +8,19 @@
  *   refused, `https` except loopback, the row's origin (a legacy row's `*.` wildcard matches
  *   subdomains only), its path prefix, one of its methods, and how it's reached. Loopback is only
  *   the stored Ollama URL's own origin, which the caller passes.
- * - A path with an encoded separator, or an encoded dot segment, is refused before any prefix
- *   is matched, in any case.
- * - headerProblems(row, headers, url) checks a request's headers in any form (a Headers, a list
- *   of pairs, a record): the row's names only, no line break in a name or value, and no
- *   credential in the URL's query (queryProblems, which the proxy runs too).
- * - requestInit(row, init) is what a request goes with: no cookies, and no redirect followed
- *   when it carries a credential, by its row's scheme or in the headers it sends, or a body. An
- *   uncredentialed GET, such as a model file the Hub answers with a redirect to its CDN, follows
- *   as before.
+ * - A path with an encoded separator, an encoded dot segment, or an encoded percent sign is
+ *   refused before any prefix is matched, in any case.
+ * - headerPairs(headers) reads a request's headers as fetch does, through the platform's own
+ *   `new Headers(value)`: a Headers, a record, or any iterable of pairs, read once.
+ *   headerProblems(row, headers, url) checks them: the row's names only, no line break in a name
+ *   or value, and no credential in the URL's query (queryProblems, which the proxy runs too).
+ * - requestInit(row, init) is what a request goes with: the header pairs it read, never the
+ *   caller's object again, no cookies, and no redirect followed when it carries a credential, by
+ *   its row's scheme or in the headers it sends, or a body. An uncredentialed GET, such as a
+ *   model file the Hub answers with a redirect to its CDN, follows as before.
  * - Each row is checked and frozen, lists and all, as this module loads, and no two rows overlap.
+ *   A registry with a problem doesn't throw: it has no rows, so every request is refused, and
+ *   REGISTRY_PROBLEMS says it, for the network guard to report once (network-guard.js).
  *
  * #94's proxy policy (api-request.js) resolves its destinations here. Loading this module
  * touches no browser API.
@@ -97,13 +100,14 @@ function originParts(origin) {
 }
 
 /**
- * Whether `path` holds an encoded separator (%2F, %5C) or a segment that's an encoded dot run
- * (., .. spelled with %2E), in any case
+ * Whether `path` holds an encoded separator (%2F, %5C), an encoded percent sign (%25), or a
+ * segment that's an encoded dot run (., .. spelled with %2E), in any case
  * @param {string} path
  * @returns {boolean}
  */
 function encodedPathProblem(path) {
-  if (/%(?:2f|5c)/i.test(path)) return true;
+  // An encoded percent sign would decode to another escape, one of these among them
+  if (/%(?:2f|5c|25)/i.test(path)) return true;
   return path.split('/').some(segment => /%2e/i.test(segment) && /^\.{1,2}$/.test(segment.replace(/%2e/gi, '.')));
 }
 
@@ -195,17 +199,37 @@ export function destinationProblems(rows) {
   return problems;
 }
 
-const PROBLEMS = destinationProblems(DESTINATION_ROWS);
-if (PROBLEMS.length > 0) throw new Error(`security/destinations.json: ${PROBLEMS.join('; ')}`);
+/**
+ * `rows` checked and frozen, lists and all, so nothing widens a row after the check; with a
+ * problem, or a check that throws, no rows and the problems. Never throws: the service worker
+ * loads this module before its listeners, which a throw here would take down with it.
+ * @param {unknown} rows
+ * @returns {{destinations: readonly Destination[], problems: readonly string[]}}
+ */
+export function loadRegistry(rows) {
+  try {
+    const problems = destinationProblems(rows);
+    if (problems.length > 0) return { destinations: Object.freeze([]), problems: Object.freeze(problems) };
+    const destinations = /** @type {unknown[]} */ (rows).map(given => {
+      const row = /** @type {Destination} */ (given);
+      return /** @type {Destination} */ (Object.freeze({ ...row, methods: Object.freeze([...row.methods]), headers: Object.freeze([...row.headers]) }));
+    });
+    return { destinations: Object.freeze(destinations), problems: Object.freeze([]) };
+  } catch {
+    return { destinations: Object.freeze([]), problems: Object.freeze(['the registry could not be read']) };
+  }
+}
+
+const REGISTRY = loadRegistry(DESTINATION_ROWS);
+
+/**
+ * Why the registry has no rows, or none when it's sound. With one, every request is refused.
+ * @type {readonly string[]}
+ */
+export const REGISTRY_PROBLEMS = REGISTRY.problems;
 
 /** @type {readonly Destination[]} */
-export const DESTINATIONS = Object.freeze(
-  DESTINATION_ROWS.map(given => {
-    const row = /** @type {Destination} */ (given);
-    // Frozen lists and all, so nothing widens a row after the check above
-    return /** @type {Destination} */ (Object.freeze({ ...row, methods: Object.freeze([...row.methods]), headers: Object.freeze([...row.headers]) }));
-  }),
-);
+export const DESTINATIONS = REGISTRY.destinations;
 
 /**
  * Whether `url`'s host and port are `row`'s origin; a loopback row's only at `loopback`
@@ -258,24 +282,25 @@ export function destinationFor(url, { method = 'GET', loopback = null, reachedBy
 }
 
 /**
- * A request's headers as name and value pairs, whatever form they come in: a Headers (this
- * realm's or another's), a list of pairs, or a record
+ * A request's headers as name and value pairs, read as fetch reads them, through the
+ * platform's own `new Headers(value)`: a Headers, a record, or any iterable of pairs (a list, a
+ * Set, a generator), each read once. Names come lowercased. Null for headers fetch would refuse,
+ * or where the platform has no Headers.
  * @param {unknown} headers
- * @returns {Array<[string, string]>}
+ * @returns {Array<[string, string]> | null}
  */
 export function headerPairs(headers) {
   if (headers === null || headers === undefined) return [];
-  /** @type {Array<[string, string]>} */
-  const pairs = [];
-  const given = /** @type {any} */ (headers);
-  if (typeof given.forEach === 'function' && typeof given.get === 'function' && !Array.isArray(given)) {
-    given.forEach((/** @type {unknown} */ value, /** @type {unknown} */ name) => pairs.push([String(name), String(value)]));
-  } else if (Array.isArray(given)) {
-    for (const pair of given) pairs.push([String(pair && pair[0]), String(pair && pair[1])]);
-  } else if (typeof given === 'object') {
-    for (const [name, value] of Object.entries(given)) pairs.push([name, String(value)]);
+  const Platform = globalThis.Headers;
+  if (typeof Platform !== 'function') return null;
+  try {
+    /** @type {Array<[string, string]>} */
+    const pairs = [];
+    new Platform(/** @type {HeadersInit} */ (headers)).forEach((value, name) => pairs.push([name, value]));
+    return pairs;
+  } catch {
+    return null;
   }
-  return pairs;
 }
 
 /**
@@ -295,7 +320,7 @@ export function queryProblems(url) {
  * The problems with a request to `url` on `row` carrying `headers`: a name the row doesn't
  * list, a line break in a name or value, or a credential in the URL's query
  * @param {Destination} row
- * @param {unknown} headers - a Headers, a list of pairs, or a record
+ * @param {unknown} headers - anything fetch takes as headers (headerPairs)
  * @param {unknown} url
  * @returns {string[]}
  */
@@ -303,7 +328,9 @@ export function headerProblems(row, headers, url) {
   /** @type {string[]} */
   const problems = [];
   const allowed = new Set(row.headers.map(name => name.toLowerCase()));
-  for (const [name, value] of headerPairs(headers)) {
+  const pairs = headerPairs(headers);
+  if (pairs === null) return ['headers fetch would refuse', ...queryProblems(url)];
+  for (const [name, value] of pairs) {
     if (!HEADER_NAME.test(name)) problems.push('a header name that is not a token');
     else if (!allowed.has(name.toLowerCase())) problems.push(`a header ${row.id} doesn't take`);
     if (/[\r\n]/.test(value)) problems.push('a line break in a header value');
@@ -312,8 +339,10 @@ export function headerProblems(row, headers, url) {
 }
 
 /**
- * What a request on `row` goes with: `init`, with no cookies, and no redirect followed when it
- * carries a credential, by the row's scheme or in the headers it sends, or a body
+ * What a request on `row` goes with: `init`, with the header pairs it holds read once
+ * (headerPairs) and sent as read, never the caller's object a second time, no cookies, and no
+ * redirect followed when it carries a credential, by the row's scheme or in the headers it
+ * sends, or a body. A caller that checked `init.headers` passes the pairs it checked.
  * @param {Destination} row
  * @param {RequestInit} init
  * @returns {RequestInit}
@@ -321,7 +350,19 @@ export function headerProblems(row, headers, url) {
 export function requestInit(row, init) {
   /** @type {RequestInit} */
   const built = { ...init, credentials: 'omit' };
-  const credentialSent = headerPairs(init.headers).some(([name]) => CREDENTIAL_CARRIERS.includes(name.toLowerCase()));
+  const pairs = init.headers === undefined ? [] : headerPairs(init.headers);
+  if (pairs === null) throw new TypeError('headers fetch would refuse');
+  if (init.headers !== undefined) built.headers = pairs;
+  const credentialSent = pairs.some(([name]) => CREDENTIAL_CARRIERS.includes(name));
   if (row.credential !== 'none' || credentialSent || init.body !== undefined) built.redirect = 'error';
   return built;
+}
+
+/**
+ * Whether `pairs` (headerPairs) carry a credential
+ * @param {ReadonlyArray<readonly [string, string]>} pairs
+ * @returns {boolean}
+ */
+export function carriesCredential(pairs) {
+  return pairs.some(([name]) => CREDENTIAL_CARRIERS.includes(name.toLowerCase()));
 }
