@@ -26,8 +26,8 @@
       "behavior": "commit waits",
       "protects": "A command on the IndexedDB adapter answers only once its transaction fires complete.",
       "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "      const end = await ended;\n      if (end.committed) return answered(work.done());",
-      "replace": "      const end = { committed: true };\n      if (end.committed) return answered(work.done());",
+      "find": "      const end = await ended;\n      if (end.committed) return answered(first.commit);",
+      "replace": "      const end = { committed: true };\n      if (end.committed) return answered(first.commit);",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a command answers only after its transaction fires complete"
     },
@@ -56,8 +56,8 @@
       "behavior": "commit waits",
       "protects": "A unit that stops its command aborts the transaction, so nothing an earlier unit wrote commits.",
       "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "      if (first.stop) {\n        abort(tx);",
-      "replace": "      if (first.stop) {",
+      "find": "      if ('abort' in first) {\n        abort(open);",
+      "replace": "      if ('abort' in first) {",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a command whose later unit stops it or throws aborts its transaction, so nothing an earlier unit wrote stays"
     },
@@ -66,7 +66,7 @@
       "behavior": "commit waits",
       "protects": "A failed write doesn't run again once this context sent a later write to the same store, so it can't land over it.",
       "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "      if (overtaken) return unavailable('storage', 'transaction-failed', true);\n",
+      "find": "      if (overtaken) return { outcome: unavailable('storage', 'transaction-failed', true), replayed: false };\n",
       "replace": "",
       "test": "test/kernel/storage-failures.test.mjs",
       "name": "doesn't run a failed write again once this context sent a later one, so it can't land over the later one"
@@ -86,7 +86,7 @@
       "behavior": "commit waits",
       "protects": "A unit that throws aborts its command's transaction, so nothing an earlier unit wrote commits.",
       "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "      if ('error' in first) {\n        abort(tx);",
+      "find": "      if ('error' in first) {\n        abort(open);",
       "replace": "      if ('error' in first) {",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a command whose later unit stops it or throws aborts its transaction, so nothing an earlier unit wrote stays"
@@ -466,8 +466,8 @@
       "behavior": "conflict branches",
       "protects": "A save sent with a stale expectedRevision is a conflict, and the newer save stays.",
       "file": "js/kernel/core/application/notes.js",
-      "find": "        if (expectedRevision !== undefined && revision !== undefined && revision !== expectedRevision) {",
-      "replace": "        if (false) {",
+      "find": "  if (expectedRevision !== undefined && versions.revision !== expectedRevision) {",
+      "replace": "  if (false) {",
       "test": "test/kernel/memory.test.mjs",
       "name": "two contexts: when both save one note's blocks from the revision they loaded, the later save is a conflict"
     },
@@ -516,8 +516,8 @@
       "behavior": "conflict branches",
       "protects": "A content save moves its note's revision, so a save from the revision before it is a conflict.",
       "file": "js/kernel/core/memory/adapter.js",
-      "find": "      revisions.set(id, (revisions.get(id) || 0) + 1);",
-      "replace": "      revisions.set(id, revisions.get(id) || 1);",
+      "find": "    revisions.set(id, (revisions.get(id) || 0) + 1);",
+      "replace": "    revisions.set(id, revisions.get(id) || 1);",
       "test": "test/kernel/memory.test.mjs",
       "name": "two contexts: when both save one note's blocks from the revision they loaded, the later save is a conflict"
     },
@@ -546,8 +546,8 @@
       "behavior": "#33 save fixes",
       "protects": "A save of a note deleted since the editor loaded it writes nothing.",
       "file": "js/kernel/core/application/notes.js",
-      "find": "        if (!note) return noteNotFound();\n        const revision = tx.revision('notes', noteId);",
-      "replace": "        if (!note) { tx.put('notes', { id: noteId, updatedAt: now }); return undefined; }\n        const revision = tx.revision('notes', noteId);",
+      "find": "        if (!note) return noteNotFound();\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
+      "replace": "        if (!note) { tx.put('notes', { id: noteId, updatedAt: now }); return undefined; }\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
       "test": "test/kernel/memory.test.mjs",
       "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
     },
