@@ -27,6 +27,12 @@ before(async () => {
   policy = await import('../js/kernel/composition/api-request.js');
 });
 
+/** An answer from the extension's realm as a plain object of this one, for deepEqual */
+const plain = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+
+/** `promise`, or 'no answer' when it hasn't settled within `ms` */
+const within = (promise, ms) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('no answer'), ms))]);
+
 const page = (file = 'newtab.html') => ({ id: 'test-extension', url: `${OWN}/${file}`, origin: OWN });
 
 describe('the packaged destinations (js/kernel/composition/api-request.js)', () => {
@@ -103,7 +109,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     assert.equal(check(null), false);
   });
 
-  it('builds the request with Content-Type only, no cookies, and redirect error when it carries a body', () => {
+  it('builds the request with Content-Type only, no cookies, and no redirect followed', () => {
     const post = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/chat/completions', options: { method: 'POST', body: '{}' } }, { loopback: null });
     assert.deepEqual(policy.fetchInit(post), {
       method: 'POST',
@@ -113,7 +119,63 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
       redirect: 'error',
     });
     const get = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: {} }, { loopback: null });
-    assert.deepEqual(policy.fetchInit(get), { method: 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'omit' });
+    assert.deepEqual(policy.fetchInit(get), { method: 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'omit', redirect: 'error' });
+  });
+
+  it("measures a body's size in UTF-8 bytes", () => {
+    const check = (body) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/chat/completions', options: { method: 'POST', body } }, { loopback: null }).ok;
+    assert.equal(check('x'.repeat(policy.MAX_BODY_BYTES)), true);
+    // Three bytes each in UTF-8, one unit each in UTF-16
+    assert.equal(check('\u20ac'.repeat(Math.floor(policy.MAX_BODY_BYTES / 3) + 1)), false);
+  });
+
+  it('refuses a GET with a body', () => {
+    const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options }, { loopback: null }).ok;
+    assert.equal(check({ method: 'GET', body: '{}' }), false);
+    assert.equal(check({ body: '{}' }), false);
+    assert.equal(check({ method: 'POST', body: '{}' }), true);
+  });
+
+  it('answers no loopback origin when the stored Ollama URL takes too long to read', async () => {
+    assert.equal(await within(policy.storedLoopbackOrigin({ get: () => new Promise(() => {}) }, { timeoutMs: 20 }), 1000), null);
+  });
+
+  it('takes only the service worker as the sender of an offscreen request', () => {
+    const runtime = { id: 'test-extension', getURL: (file) => `${OWN}/${file}`, getManifest: () => ({ background: { service_worker: 'js/background.js' } }) };
+    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: `${OWN}/js/background.js` }, runtime), true);
+    for (const sender of [
+      undefined,
+      page(),
+      page('offscreen.html'),
+      { id: 'test-extension', url: `${OWN}/js/background.js`, tab: { id: 1 } },
+      { id: 'another-extension', url: 'chrome-extension://another-extension/js/background.js' },
+      { id: 'test-extension', url: `${OWN}/js/background.js?x` },
+    ]) {
+      assert.equal(policy.isWorkerSender(sender, runtime), false, JSON.stringify(sender));
+    }
+    assert.equal(policy.isWorkerSender({ id: 'test-extension', url: `${OWN}/js/background.js` }, { id: 'test-extension', getURL: runtime.getURL }), false);
+  });
+
+  it('every file that asks the proxy for a request names only listed origins', () => {
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const file = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (file !== 'js/lib') walk(file);
+        } else if (/\.m?js$/.test(entry.name)) files.push(file);
+      }
+    };
+    walk('js');
+    const proxy = new Set(['js/background.js', 'js/offscreen.js', 'js/kernel/composition/api-request.js']);
+    const callers = files.filter((file) => !proxy.has(file) && /API_REQUEST|fetchViaBackground\(/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
+    assert.ok(callers.includes('js/llm.js'), callers.join());
+    const listed = new Set(policy.DESTINATIONS.map((row) => row.origin));
+    for (const file of callers) {
+      const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      const origins = new Set([...text.matchAll(/https:\/\/[a-z0-9.-]+\.[a-z]{2,}/g)].map(([url]) => new URL(url).origin));
+      assert.deepEqual([...origins].filter((origin) => !listed.has(origin)).sort(), [], file);
+    }
   });
 
   it("takes only this extension's own senders", () => {
@@ -161,7 +223,7 @@ async function worker() {
       for (const listener of env.chrome.api.runtime.onMessage.listeners) {
         const keep = listener(message, sender, (response) => {
           answered = true;
-          resolve(response);
+          resolve(plain(response));
         });
         if (keep === true) return;
       }
@@ -187,6 +249,20 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
     assert.ok((await ask({ type: 'API_REQUEST', url: 'http://localhost.evil.example/', options: {} }, page())).error);
     assert.ok((await ask({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: { headers: { Authorization: 'x' } } }, page())).error);
     assert.deepEqual(fetches, []);
+  });
+
+  it('a GET goes with no redirect followed', async () => {
+    const { fetches, ask } = await worker();
+    assert.equal((await ask({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: { method: 'GET' } }, page())).ok, true);
+    assert.deepEqual(fetches.map(({ init }) => init), [{ method: 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'omit', redirect: 'error' }]);
+  });
+
+  it('answers a loopback request it cannot check in time with request-refused', async () => {
+    const { env, offscreen, ask } = await worker();
+    env.chrome.api.storage.local.get = () => new Promise(() => {});
+    const answer = await within(ask({ type: 'API_REQUEST', url: 'http://localhost:11434/api/tags', options: { method: 'GET' } }, page()), 5000);
+    assert.deepEqual(answer, { error: 'request-refused' });
+    assert.deepEqual(offscreen, []);
   });
 
   it('every provider endpoint, as llm.js names it, still goes, with Content-Type only', async () => {
@@ -223,50 +299,79 @@ describe('OFFSCREEN_API_REQUEST in the offscreen document (js/offscreen.js)', ()
   async function offscreenPage() {
     const env = createLegacyEnv();
     env.global.URL = URL;
-    const opened = [];
+    env.chrome.api.runtime.getManifest = () => ({ background: { service_worker: 'js/background.js' } });
+    const fetches = [];
+    env.global.fetch = async (url, init) => {
+      fetches.push({ url: String(url), init: JSON.parse(JSON.stringify(init || {})) });
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ models: [] }), text: async () => '' };
+    };
     env.global.XMLHttpRequest = class {
       constructor() {
-        this.headers = {};
-        opened.push(this);
-      }
-      open(method, url) {
-        this.method = method;
-        this.url = url;
-      }
-      setRequestHeader(name, value) {
-        this.headers[name] = value;
-      }
-      send(body) {
-        this.body = body;
-        this.status = 200;
-        this.responseText = '{"models":[]}';
-        setImmediate(() => this.onload());
+        throw new Error('the offscreen document sends with fetch');
       }
     };
     await loadPageModule(env, 'js/offscreen.js');
     const ask = (message, sender) =>
       new Promise((resolve) => {
         for (const listener of env.chrome.api.runtime.onMessage.listeners) {
-          if (listener(message, sender, resolve) === true) return;
+          if (listener(message, sender, (response) => resolve(plain(response))) === true) return;
         }
         setImmediate(() => resolve(undefined));
       });
-    return { opened, ask };
+    return { fetches, ask };
   }
 
   const worker = { id: 'test-extension', url: `${OWN}/js/background.js` };
+  const message = { type: 'OFFSCREEN_API_REQUEST', url: 'http://localhost:8080/api/chat', options: { method: 'POST', body: '{}' }, loopbackOrigin: 'http://localhost:8080' };
 
-  it("takes only this extension's senders and the loopback origin the worker checked, and sends Content-Type only", async () => {
-    const { opened, ask } = await offscreenPage();
-    const message = { type: 'OFFSCREEN_API_REQUEST', url: 'http://localhost:8080/api/chat', options: { method: 'POST', body: '{}' }, loopbackOrigin: 'http://localhost:8080' };
-    assert.ok((await ask(message, { id: 'another-extension', url: 'chrome-extension://another-extension/x' })).error);
+  it('takes only the service worker, and only the loopback origin the worker checked', async () => {
+    const { fetches, ask } = await offscreenPage();
+    for (const sender of [{ id: 'another-extension', url: 'chrome-extension://another-extension/x' }, page(), page('popup.html'), { ...worker, tab: { id: 2 } }]) {
+      assert.deepEqual(await ask(message, sender), { error: 'request-refused' }, JSON.stringify(sender));
+    }
     assert.ok((await ask({ ...message, url: 'http://localhost:9999/api/chat' }, worker)).error);
-    assert.ok((await ask({ ...message, url: 'https://evil.example/' }, worker)).error);
+    assert.ok((await ask({ ...message, url: 'https://api.openai.com/v1/models' }, worker)).error);
     assert.ok((await ask({ ...message, loopbackOrigin: 'http://192.168.1.5:8080', url: 'http://192.168.1.5:8080/api/chat' }, worker)).error);
-    assert.equal(opened.length, 0);
-    const answer = await ask(message, worker);
-    assert.equal(answer.ok, true);
-    assert.equal(opened.length, 1);
-    assert.deepEqual([opened[0].method, opened[0].url, opened[0].headers, opened[0].body], ['POST', 'http://localhost:8080/api/chat', { 'Content-Type': 'application/json' }, '{}']);
+    assert.deepEqual(fetches, []);
+  });
+
+  it('sends with fetch: Content-Type only, no cookies, and no redirect followed', async () => {
+    const { fetches, ask } = await offscreenPage();
+    assert.deepEqual(await ask(message, worker), { ok: true, status: 200, data: { models: [] } });
+    assert.deepEqual(fetches, [{
+      url: 'http://localhost:8080/api/chat',
+      init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', credentials: 'omit', redirect: 'error' },
+    }]);
+  });
+});
+
+describe("the page's proxy call (LLMService.fetchViaBackground)", () => {
+  /** The page with LLM loaded, the worker answering `answer`, and its own fetches recorded */
+  function llmWith(answer) {
+    const env = createLegacyEnv();
+    env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
+    const fetches = [];
+    env.global.fetch = async (url) => {
+      fetches.push(String(url));
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}) };
+    };
+    env.chrome.api.runtime.sendMessage = (sent, callback) => answer(callback, env);
+    return { llm: env.get('LLM'), fetches };
+  }
+
+  it('a refused request is final: no direct fetch follows it', async () => {
+    const { llm, fetches } = llmWith((callback) => callback({ error: 'request-refused' }));
+    await assert.rejects(llm.fetchViaBackground('https://api.openai.com/v1/models', { method: 'GET', headers: { Authorization: 'Bearer test' } }));
+    assert.deepEqual(fetches, []);
+  });
+
+  it('a worker that cannot be reached still falls back to a direct fetch', async () => {
+    const { llm, fetches } = llmWith((callback, env) => {
+      env.chrome.api.runtime.lastError = { message: 'Could not establish connection' };
+      callback(undefined);
+      env.chrome.api.runtime.lastError = undefined;
+    });
+    assert.equal((await llm.fetchViaBackground('https://api.openai.com/v1/models', { method: 'GET' })).ok, true);
+    assert.deepEqual(fetches, ['https://api.openai.com/v1/models']);
   });
 });

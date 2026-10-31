@@ -12,7 +12,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createLegacyEnv, createDatabase } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, FakeDocument } = require('./helpers/legacy-env');
 
 const ROOT = path.join(__dirname, '..');
 const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
@@ -155,5 +155,115 @@ describe('the key and Ollama hints (#21 slice 1a, a declared copy fix)', () => {
     const hints = [...html.matchAll(/<p class="setting-hint (?:api-key-warning|llm-ollama-hint)[^"]*">([\s\S]*?)<\/p>/g)].map((match) => match[1]);
     assert.equal(hints.length, 2);
     for (const hint of hints) assert.equal(/[–—]/.test(hint), false);
+  });
+});
+
+/** Let pending promise callbacks run */
+const settle = async () => {
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+};
+
+describe("a key's provider is recorded safely (#21 slice 1a)", () => {
+  it("a failed write of the key's provider at start leaves the start working, the provider held in memory", async () => {
+    const key = canary('owner-write');
+    const { env, storage, llm } = await llmPage();
+    await storage.setSetting('llmProvider', 'openai');
+    await storage.setSetting('llmApiKey', key);
+    await storage.setSetting('llmModel', 'gpt-4o');
+    env.chrome.failNextSet();
+    await llm.init();
+    assert.equal(llm.provider, 'openai');
+    assert.equal(llm.apiKey, key);
+    assert.equal(llm.model, 'gpt-4o');
+    assert.equal(llm.keyProvider, 'openai');
+  });
+
+  it('a key is saved for the provider it was typed for, when the provider changes before the save', async () => {
+    const key = canary('typed-before-switch');
+    const env = createLegacyEnv({ document: new FakeDocument() });
+    env.global.ResizablePanel = class {};
+    env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
+    const storage = env.get('Storage');
+    await storage.init();
+    await storage.setSetting('llmProvider', 'openai');
+    const llm = env.get('LLM');
+    await llm.init();
+    const doc = env.document;
+    const select = doc.createElement('select');
+    select.id = 'llm-provider-select';
+    const input = doc.createElement('input');
+    input.id = 'llm-api-key';
+    doc.body.appendChild(select);
+    doc.body.appendChild(input);
+    const AIChatController = env.get('AIChatController');
+    const chat = new AIChatController({ storage, domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
+    /** @type {Array<[string, string]>} */
+    const listed = [];
+    chat.loadAndPopulateModels = async (provider, apiKey) => { listed.push([provider, apiKey]); };
+    chat.updateLLMSettingsVisibility = () => {};
+    chat.updateAISidebarState = () => {};
+    chat.setupLLMSettings();
+
+    input.value = key;
+    input.dispatchEvent({ type: 'input' });
+    select.value = 'anthropic';
+    select.dispatchEvent({ type: 'change' });
+    await settle();
+    env.clock.tick(800);
+    await settle();
+
+    assert.equal(llm.provider, 'anthropic');
+    assert.equal(llm.apiKey, '', 'the provider shown has no key');
+    assert.equal(env.chrome.local.setting_llmApiKeyProvider, 'openai');
+    assert.equal(listed.some(([provider, apiKey]) => provider === 'anthropic' && apiKey === key), false, 'the key was used for the provider shown');
+    await llm.setProvider('openai');
+    assert.equal(llm.apiKey, key);
+  });
+
+  it('a saved key with no provider yet is given the one its prefix names, before the provider in use', async () => {
+    for (const [prefix, owner, inUse] of [
+      ['sk-ant-', 'anthropic', 'groq'],
+      ['AIza', 'gemini', 'none'],
+      ['sk-or-', 'openrouter', 'openai'],
+      ['gsk_', 'groq', 'none'],
+      ['xai-', 'xai', 'mistral'],
+    ]) {
+      const key = `${prefix}${canary('prefix')}`;
+      const { env, storage, llm } = await llmPage();
+      await storage.setSetting('llmProvider', inUse);
+      await storage.setSetting('llmApiKey', key);
+      await llm.init();
+      assert.equal(llm.keyProvider, owner, prefix);
+      assert.equal(env.chrome.local.setting_llmApiKeyProvider, owner, prefix);
+      assert.equal(llm.apiKey === key, inUse === owner, prefix);
+      await llm.setProvider(owner);
+      assert.equal(llm.apiKey === key, true, `${prefix}: its provider has it`);
+    }
+  });
+
+  it('a saved key no prefix tells apart goes to the provider in use, and stays unowned while none is', async () => {
+    const key = `sk-${canary('plain')}`;
+    {
+      const { storage, llm } = await llmPage();
+      await storage.setSetting('llmProvider', 'deepseek');
+      await storage.setSetting('llmApiKey', key);
+      await llm.init();
+      assert.equal(llm.keyProvider, 'deepseek');
+    }
+    {
+      const { env, storage, llm } = await llmPage();
+      await storage.setSetting('llmProvider', 'none');
+      await storage.setSetting('llmApiKey', key);
+      await llm.init();
+      assert.equal(llm.keyProvider, null);
+      assert.equal(env.chrome.local.setting_llmApiKeyProvider, undefined);
+    }
+  });
+
+  it("another tab reloads its provider settings when the key's provider changes", () => {
+    const source = fs.readFileSync(path.join(ROOT, 'js/controllers/settings-controller.js'), 'utf8');
+    const list = /\[([^\]]*'llmApiKey'[^\]]*)\]\.some/.exec(source);
+    assert.ok(list, 'the provider settings list');
+    assert.match(list[1], /'llmApiKeyProvider'/);
   });
 });
