@@ -25,6 +25,7 @@ import {
   idOf,
   inferredDraft,
   intelligenceWorld,
+  manualTimers,
   pinDraft,
   taskDraft,
   todo,
@@ -697,5 +698,188 @@ describe('keys and snoozes (#71 review)', () => {
       until: nineOnTheDay + 24 * HOUR,
     });
     assertOutcome(late, 'committed', 'signal-snoozed-past-due');
+  });
+});
+
+describe('the anchor revision only moves forward (#71 round 2)', () => {
+  /** A world with tasks t1 and t2 in n5 */
+  async function taskWorld(options = {}) {
+    const w = await intelligenceWorld(options);
+    await w.addNote('n5', [todo('t1', 'Call vendor'), todo('t2', 'Pay invoice')]);
+    let count = 0;
+    /**
+     * @param {string} type
+     * @param {number} expectedDecisionRevision
+     * @param {Record<string, unknown>} [fields]
+     */
+    const command = (type, expectedDecisionRevision, fields = {}) => ({
+      type: `intelligence.${type}`,
+      commandId: `r2-${++count}`,
+      signalId: idOf(taskDraft({ noteId: 'n5', blockId: 't1' })),
+      expectedDecisionRevision,
+      ...fields,
+    });
+    return { w, id: idOf(taskDraft({ noteId: 'n5', blockId: 't1' })), command };
+  }
+
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+
+  /** @param {Awaited<ReturnType<typeof intelligenceWorld>>} w */
+  const checkedOf = async w => (await w.readNote('n5'))?.blocks.find(block => block.id === 't1')?.checked === true;
+
+  it('in one context, a slow re-derive never lands over a complete that came after it', async () => {
+    const { w, id, command } = await taskWorld();
+    let release = () => {};
+    w.tasks.hold = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+    // Let the derive read the note before the complete starts
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const completing = w.intelligence.execute(command('complete', 0));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    w.tasks.hold = null;
+    release();
+    await edited;
+    assertOutcome(await completing, 'committed', 'signal-completed');
+    const read = await stateOf(w, id);
+    assert.equal(await checkedOf(w), true);
+    assert.equal(read.signal.checked, true);
+    assert.equal(read.state.status, 'completed');
+    assert.equal(read.signal.sourceRefs[0].revision, (await w.readNote('n5'))?.revision);
+  });
+
+  it('across contexts, a re-derive that read an older revision is skipped', async () => {
+    const { w, id, command } = await taskWorld();
+    const other = w.anotherContext();
+    let release = () => {};
+    w.tasks.hold = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const slow = other.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    w.tasks.hold = null;
+    assertOutcome(await w.intelligence.execute(command('complete', 0)), 'committed', 'signal-completed');
+    release();
+    await slow;
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.checked, true);
+    assert.equal(read.signal.sourceRefs[0].revision, (await w.readNote('n5'))?.revision);
+  });
+
+  it('across contexts, a phase 2 behind a newer note write answers the state that stands, not a completion', async () => {
+    const { w, id, command } = await taskWorld();
+    const other = w.anotherContext();
+    const race = { reopened: /** @type {Promise<unknown> | null} */ (null) };
+    const racing = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        const outcome = await w.noteCommands.setTodoChecked(note);
+        // The other context hears the write, re-derives, and the user reopens there
+        await other.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+        race.reopened = other.execute(command('reopen', 0));
+        await race.reopened;
+        return outcome;
+      },
+    });
+    const outcome = await racing.execute(command('complete', 0));
+    assert.notEqual(outcome.kind, 'committed');
+    assertOutcome(outcome, 'conflict', 'note-revision-conflict');
+    assert.equal(await checkedOf(w), false);
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.checked, false);
+    assert.equal(read.state.status, 'active');
+    if (outcome.kind === 'conflict' && 'current' in outcome) assert.deepEqual(outcome.current, read.state);
+  });
+
+  it('keeps a decision another context committed while the note write was in flight', async () => {
+    const { w, id, command } = await taskWorld();
+    const other = w.anotherContext();
+    const racing = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        const outcome = await w.noteCommands.setTodoChecked(note);
+        await other.execute(command('dismiss', 0, { reason: 'not-actionable' }));
+        return outcome;
+      },
+    });
+    assertOutcome(await racing.execute(command('complete', 0)), 'committed', 'signal-completed');
+    const read = await stateOf(w, id);
+    assert.equal(read.decision?.status, 'dismissed');
+    assert.equal(read.decision?.dismissReason, 'not-actionable');
+    assert.deepEqual(
+      read.decision?.history.map(entry => entry.action),
+      ['dismiss', 'complete'],
+    );
+    assert.equal(read.state.status, 'completed');
+  });
+
+  it('leaves the note’s tasks as they are when derive throws, and counts it', async () => {
+    const { w, id, command } = await taskWorld();
+    w.tasks.fail = () => true;
+    const failed = await w.intelligence.noteChanged({
+      type: 'block-edited',
+      noteId: 'n5',
+      blockId: 't2',
+      revision: null,
+    });
+    assert.equal(failed.failed.length, 2);
+    for (const signalId of [id, idOf(taskDraft({ noteId: 'n5', blockId: 't2' }))]) {
+      assert.equal((await stateOf(w, signalId)).signal.freshness.state, 'current');
+    }
+    w.tasks.fail = null;
+    assertOutcome(await w.intelligence.execute(command('complete', 0)), 'committed', 'signal-completed');
+  });
+
+  it('bounds the note command, so a hung port leaves the signal’s queue moving', { timeout: 5000 }, async () => {
+    const timers = manualTimers();
+    const { w, id, command } = await taskWorld({ timers });
+    const hung = w.anotherContext({ ...w.noteCommands, setTodoChecked: () => new Promise(() => {}) });
+    const completing = hung.execute(command('complete', 0));
+    const dismissing = hung.execute(command('dismiss', 0));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    timers.fireAll();
+    const outcome = await completing;
+    assertOutcome(outcome, 'unknown', 'note-command-timeout');
+    assertOutcome(await dismissing, 'committed', 'signal-dismissed');
+    assert.equal(timers.size(), 0);
+    assert.equal((await stateOf(w, id)).state.status, 'dismissed');
+  });
+
+  it('writes nothing and publishes nothing for a task an edit left as it was', async () => {
+    const { w, id } = await taskWorld();
+    const before = await stateOf(w, id);
+    w.events.length = 0;
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    const edited = await w.intelligence.noteChanged({
+      type: 'block-edited',
+      noteId: 'n5',
+      blockId: 't2',
+      revision: null,
+    });
+    // t1 moved only in the note revision it cites; t2's title changed
+    assert.ok(edited.changed.includes(idOf(taskDraft({ noteId: 'n5', blockId: 't2' }))));
+    const again = await w.intelligence.noteChanged({
+      type: 'block-edited',
+      noteId: 'n5',
+      blockId: 't2',
+      revision: null,
+    });
+    assert.deepEqual(again.changed, []);
+    assert.ok((await stateOf(w, id)).signal.revision > before.signal.revision);
+    const revisionNow = (await stateOf(w, id)).signal.revision;
+    w.events.length = 0;
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+    assert.deepEqual(w.events, []);
+    assert.equal((await stateOf(w, id)).signal.revision, revisionNow);
   });
 });

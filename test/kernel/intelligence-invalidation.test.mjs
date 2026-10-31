@@ -526,3 +526,98 @@ describe('suspension and cited notes (#71 review)', () => {
     assert.ok(targets.every(noteId => noteId === 'n1'));
   });
 });
+
+describe('cited notes and requests (#71 round 2)', () => {
+  it('counts a source a correction removed when a cited note is trashed', async () => {
+    const { w, ids } = await seeded();
+    const removed = await w.intelligence.execute({
+      type: 'intelligence.correct',
+      commandId: 'r2-remove',
+      signalId: ids.connection,
+      expectedDecisionRevision: 0,
+      entryId: 'r2-entry',
+      change: { field: 'source', sourceRef: { kind: 'note', noteId: 'n2', revision: 0 }, after: false },
+    });
+    assert.equal(removed.kind, 'committed');
+    await w.intelligence.noteChanged({
+      type: 'note-state',
+      noteId: 'n3',
+      trashed: true,
+      archived: false,
+      isTemplate: false,
+    });
+    assert.equal((await read(w, ids.connection)).signal.freshness.state, 'suspended');
+  });
+
+  it('sends no second request on restore for an inference that was stale before its note was trashed', async () => {
+    const { w } = await seeded();
+    await w.editBlock('n1', todo('t2', 'Draft the Q3 report'));
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n1', blockId: 't2', revision: 3 });
+    assert.equal(w.requests.length, 1);
+    await w.intelligence.noteChanged({
+      type: 'note-state',
+      noteId: 'n1',
+      trashed: true,
+      archived: false,
+      isTemplate: false,
+    });
+    const restored = await w.intelligence.noteChanged({
+      type: 'note-state',
+      noteId: 'n1',
+      trashed: false,
+      archived: false,
+      isTemplate: false,
+    });
+    assert.deepEqual(restored.regeneration, []);
+    assert.equal(w.requests.length, 1);
+  });
+
+  it('drops a deleted block another note’s signal cites', async () => {
+    const w = await intelligenceWorld({ checkSources: true });
+    await w.addNote('n1', [todo('t1', 'Call vendor')]);
+    await w.addNote('n2', [{ id: 'x1', type: 'text', content: 'Vendor notes' }]);
+    const draft = {
+      ...inferredDraft({ blockId: 't1', subject: 'cross' }),
+      sourceRefs: [
+        { kind: /** @type {const} */ ('block'), noteId: 'n1', blockId: 't1', revision: 0 },
+        { kind: /** @type {const} */ ('block'), noteId: 'n2', blockId: 'x1', revision: 0 },
+      ],
+    };
+    assert.deepEqual((await w.intelligence.upsertSignals(RECIPE, [draft])).refused, []);
+    const deleted = await w.kernel.execute({
+      type: 'deleteBlocks',
+      commandId: 'del-x1',
+      noteId: 'n2',
+      blockIds: ['x1'],
+    });
+    assert.equal(deleted.kind, 'committed');
+    await w.intelligence.noteChanged({ type: 'block-deleted', noteId: 'n2', blockId: 'x1' });
+    const state = await read(w, idOf(draft));
+    assert.deepEqual(
+      state.signal.sourceRefs.map(source => source.noteId),
+      ['n1'],
+    );
+    assert.equal(state.signal.freshness.state, 'current');
+  });
+
+  it('checks the notes and blocks a new signal cites: a trashed one is unavailable, a missing one dropped', async () => {
+    const w = await intelligenceWorld({ checkSources: true });
+    await w.addNote('n1', [todo('t1', 'Call vendor')]);
+    await w.addNote('n2', []);
+    await w.addNote('n3', []);
+    const trashed = await w.kernel.execute({ type: 'trashNote', commandId: 'trash-n3', noteId: 'n3' });
+    assert.equal(trashed.kind, 'committed');
+    const draft = connectionDraft({ others: ['n2', 'n3', 'n9'] });
+    assert.deepEqual((await w.intelligence.upsertSignals(LINKS, [draft])).refused, []);
+    const state = await read(w, idOf(draft));
+    assert.deepEqual(
+      state.signal.sourceRefs.map(source => source.noteId),
+      ['n1', 'n2', 'n3'],
+    );
+    assert.deepEqual(state.signal.unavailableNotes, [{ noteId: 'n3', cause: 'note-trashed' }]);
+    assert.equal(state.signal.freshness.state, 'current');
+    // A signal whose own anchor is gone isn't made at all
+    const orphan = inferredDraft({ blockId: 'gone', subject: 'orphan' });
+    assert.deepEqual((await w.intelligence.upsertSignals(RECIPE, [orphan])).refused, ['source-missing']);
+  });
+});

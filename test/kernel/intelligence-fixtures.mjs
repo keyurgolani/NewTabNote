@@ -28,6 +28,41 @@ export const PINS = 'pins';
 export const RECIPE = 'actions.extract';
 export const LINKS = 'links';
 
+/**
+ * The host's timers, which a composition root passes in
+ * @type {import('../../js/kernel/core/ports/runtime.js').Timers}
+ */
+export const realTimers = Object.freeze({
+  set: (/** @type {() => void} */ callback, /** @type {number} */ ms) => setTimeout(callback, ms),
+  clear: (/** @type {unknown} */ handle) => clearTimeout(/** @type {ReturnType<typeof setTimeout>} */ (handle)),
+});
+
+/**
+ * Timers a test fires by hand
+ */
+export function manualTimers() {
+  /** @type {Map<number, () => void>} */
+  const pending = new Map();
+  let next = 0;
+  return {
+    set: (/** @type {() => void} */ callback) => {
+      next += 1;
+      pending.set(next, callback);
+      return next;
+    },
+    clear: (/** @type {unknown} */ handle) => {
+      pending.delete(/** @type {number} */ (handle));
+    },
+    /** Fires every timer set so far */
+    fireAll() {
+      const callbacks = [...pending.values()];
+      pending.clear();
+      for (const callback of callbacks) callback();
+    },
+    size: () => pending.size,
+  };
+}
+
 /** A time zone that is neither UTC nor, on most machines, the machine's own */
 export const ZONE = 'America/New_York';
 
@@ -232,9 +267,19 @@ export const todo = (id, text, checked = false) => ({ id, type: 'todo', content:
  * The domain beside a real in-memory kernel, sharing #17's change log: the kernel's block
  * command completes tasks, and a fake `tasks` producer derives task signals from the kernel's
  * blocks. Every regeneration request and event is recorded.
- * @param {{timeZone?: string, start?: number, producers?: ProducerDescriptor[], recipeVersion?: number}} [options]
+ * @param {{timeZone?: string, start?: number, producers?: ProducerDescriptor[], recipeVersion?: number,
+ *   timers?: import('../../js/kernel/core/ports/runtime.js').Timers, noteCommandTimeoutMs?: number, checkSources?: boolean}} [options]
+ *   `checkSources` gives the port `sourceStates`, so an upsert checks the notes and blocks it cites
  */
-export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producers = [], recipeVersion = 1 } = {}) {
+export async function intelligenceWorld({
+  timeZone = ZONE,
+  start = NOW,
+  producers = [],
+  recipeVersion = 1,
+  timers = realTimers,
+  noteCommandTimeoutMs = undefined,
+  checkSources = false,
+} = {}) {
   const clock = testClock(start);
   const ids = testIds('cmd');
   const commitLog = createMemoryCommitLog();
@@ -263,8 +308,23 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
     };
   };
 
+  /** @type {NonNullable<NoteCommandPort['sourceStates']>} */
+  const sourceStates = async sourceRefs =>
+    Promise.all(
+      sourceRefs.map(async source => {
+        const read = await readNote(source.noteId);
+        if (!read) return 'missing';
+        if (source.kind === 'block' && !read.blocks.some(block => block.id === source.blockId)) return 'missing';
+        if (read.note.trashed === true) return 'note-trashed';
+        if (read.note.archived === true) return 'note-archived';
+        if (read.note.isTemplate === true) return 'template';
+        return 'available';
+      }),
+    );
+
   /** @type {NoteCommandPort} */
   const noteCommands = {
+    ...(checkSources ? { sourceStates } : {}),
     async setTodoChecked(command) {
       noteCalls.push({ ...command });
       const read = await readNote(command.noteId);
@@ -288,13 +348,22 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
   };
 
   /** @type {ProducerDescriptor} */
+  /**
+   * The fake `tasks` producer. A test can make it throw (`fail`), or hold its answer after it
+   * has read the note (`hold`), as a slow derive does
+   * @type {ProducerDescriptor & {fail: ((identity: import('../../js/kernel/core/intelligence/identity.js').Identity) => boolean) | null, hold: Promise<unknown> | null}}
+   */
   const tasks = {
     id: TASKS,
     version: 1,
     provenance: 'objective',
     kinds: ['task'],
+    fail: null,
+    hold: null,
     async derive(identity) {
+      if (tasks.fail?.(identity)) throw new Error('derive failed');
       const read = await readNote(identity.noteId);
+      if (tasks.hold) await tasks.hold;
       const block = read?.blocks.find(candidate => candidate.id === identity.anchorBlockId);
       if (!read || !block || block.type !== 'todo') return null;
       return taskDraft({
@@ -333,6 +402,8 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
     noteCommands,
     timeZone,
     clock,
+    timers,
+    ...(noteCommandTimeoutMs === undefined ? {} : { noteCommandTimeoutMs }),
     producers: [tasks, recipe, ...producers],
     events: { publish: event => events.push(event) },
     regeneration: { request: request => requests.push(request) },
@@ -400,6 +471,8 @@ export async function intelligenceWorld({ timeZone = ZONE, start = NOW, producer
       noteCommands: port,
       timeZone,
       clock,
+      timers,
+      ...(noteCommandTimeoutMs === undefined ? {} : { noteCommandTimeoutMs }),
       producers: [tasks, recipe, ...producers],
       events: { publish: event => events.push(event) },
       regeneration: { request: request => requests.push(request) },
