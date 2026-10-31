@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 
 import { runCheck } from '../../js/trust/core/checks.js';
 import { PROBE_KEY, capture, probeCommit, storage } from '../../js/trust/core/providers/probe.js';
-import { dump, legacyEnv } from './migration-support.mjs';
+import { dump, legacyEnv, run as migrate } from './migration-support.mjs';
 import { adapterFor, closeAll, legacyContext } from './legacy-fixture.mjs';
 import { adapterOn } from './storage-fixture.mjs';
 import { freshProfile } from './trust-provider-support.mjs';
@@ -49,6 +49,9 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
     const of = freshProfile();
     await legacyEnv.createDatabase(of.real, { records: { canvases: [NOTE], elements: [BLOCK] } });
     of.chrome.local.setting_dailyNoteTemplate = null;
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
+    // before #17's adapter opens it versioned
+    assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
     const before = JSON.stringify(await dump(of));
@@ -64,6 +67,9 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
     const of = freshProfile();
     const squatter = { id: PROBE_KEY, name: 'Mine' };
     await legacyEnv.createDatabase(of.real, { records: { canvases: [squatter] } });
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
+    // before #17's adapter opens it versioned
+    assert.equal((await migrate(of)).status, 'migrated');
     const adapter = adapterOn(of);
     await adapter.open();
     const before = JSON.stringify(await dump(of));
