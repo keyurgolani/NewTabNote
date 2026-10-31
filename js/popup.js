@@ -3,8 +3,6 @@
  * the client its composition root hands it.
  */
 
-// storage.js puts Storage on window, where Popup's root finds it
-import './storage.js';
 import { createPopupClient } from './kernel/composition/popup.js';
 
 /** @typedef {import('./kernel/composition/host.js').Client} Client */
