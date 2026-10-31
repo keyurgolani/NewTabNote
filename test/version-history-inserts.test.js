@@ -571,7 +571,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     assert.equal(editor._hasPendingSave(), false, 'nothing is left pending');
     assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
   });
-  it('a second revert while one commits is refused, and an append waiting on the first still settles (review R77, P6)', async () => {
+  it('a second revert while one commits is dropped without a word, and an append waiting on the first still settles (review R77, P6)', async () => {
     const { env, Storage, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
@@ -599,13 +599,11 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
       .then(() => { appended = true; });
     await settle();
     env.window.fire('pagehide');
-    // The user confirms a second revert from the panel still open
+    // The user clicks a second revert in the panel still open
+    const toastsBefore = toasts.length;
     await runUntil(env, editor._revertToSnapshot(second));
     assert.equal(releases.length, 1, 'no second restore');
-    assert.deepEqual(toasts.at(-1), {
-      message: 'Failed to revert: another revert is still in progress. Please try again.',
-      kind: 'error',
-    });
+    assert.equal(toasts.length, toastsBefore, 'the second click shows nothing');
     releases[0]();
     await runUntil(env, reverting);
     await runUntil(env, appending);
@@ -622,8 +620,8 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
   });
 
-  it('a revert that throws after its restore still lets the saves waiting on it go on (review R77)', async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+  it('a revert whose render throws once shows the note as stored, and the saves waiting on it go on (review R77)', async () => {
+    const { env, Storage, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -649,13 +647,98 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     type(editor, 'Typed');
     const saving = editor.save();
     release();
-    assert.equal(await runUntil(env, reverting), 'render failed');
+    assert.equal(await runUntil(env, reverting), 'resolved');
     await runUntil(env, saving);
     client.restoreSnapshot = real;
     assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
     await runUntil(env, editor.flushSave());
     assert.equal(editor._hasPendingSave(), false);
     assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
+    assert.ok((await snapshotTexts(env, 'A')).includes('Typed'), 'what was typed is in version history');
+  });
+});
+
+/** The first block's text in each of `noteId`'s snapshots */
+async function snapshotTexts(env, noteId) {
+  const texts = [];
+  for (const { id } of await runUntil(env, env.documentClient.snapshots(noteId))) {
+    const snap = await runUntil(env, env.documentClient.snapshot(id));
+    texts.push(snap.blocks[0] && snap.blocks[0].content);
+  }
+  return texts;
+}
+
+describe("a committed revert whose blocks don't reach the screen (review R77, P8)", () => {
+  /**
+   * A page with note A loaded and a snapshot of it, a revert to that snapshot committing, and
+   * text typed and a save waiting while it commits. `failing` decides when Block.deserialize throws.
+   */
+  async function revertWhileTyping(failing) {
+    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotNow(env, editor);
+    const Block = env.get('Block');
+    const deserialize = Block.deserialize;
+    Block.deserialize = function (data) {
+      if (failing()) throw new Error('deserialize failed');
+      return deserialize.call(this, data);
+    };
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    client.restoreSnapshot = (...args) => {
+      const outcome = real(...args);
+      return held.then(() => outcome);
+    };
+    const reverting = editor._revertToSnapshot(summary).then(() => 'resolved', (error) => error.message);
+    await waitFor(() => editor._revertingNoteId === 'A', { message: 'the revert to start' });
+    type(editor, 'Typed');
+    const saving = editor.save();
+    const done = async () => {
+      const result = await runUntil(env, reverting);
+      await runUntil(env, saving);
+      client.restoreSnapshot = real;
+      Block.deserialize = deserialize;
+      await runUntil(env, editor.flushSave());
+      return result;
+    };
+    return { env, Storage, toasts, editor, release, done };
+  }
+
+  it('a throw before the blocks are replaced shows the note as stored, and no save writes the replaced blocks back', async () => {
+    let throwNext = false;
+    const { env, Storage, toasts, editor, release, done } = await revertWhileTyping(() => {
+      const now = throwNext;
+      throwNext = false;
+      return now;
+    });
+    throwNext = true;
+    release();
+    assert.equal(await done(), 'resolved');
+    assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
+    assert.equal(editor._hasPendingSave(), false);
+    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
+    assert.ok((await snapshotTexts(env, 'A')).includes('Typed'), 'what was typed is in version history');
+  });
+
+  it("when the note as stored can't be shown either, the note goes back to what's on screen and the toast says so", async () => {
+    let failing = false;
+    const { env, Storage, toasts, editor, release, done } = await revertWhileTyping(() => failing);
+    failing = true;
+    release();
+    assert.equal(await done(), 'resolved');
+    assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
+    assert.equal(editor._hasPendingSave(), false);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Typed', 'Eggs']);
+    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Typed', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Failed to revert to snapshot', kind: 'error' });
+    assert.ok((await snapshotTexts(env, 'A')).includes('Milk'), 'the snapshot is still in version history');
   });
 });
 

@@ -5707,6 +5707,44 @@ class BlockEditor {
   }
 
   /**
+   * Put a committed revert's blocks and title on screen. Text typed into the blocks they replace
+   * goes into version history first (_keepEditsOfRevert), so it isn't lost.
+   * @param {Array<Object>} blocksData - The blocks as stored, in order
+   * @param {string} [title]
+   * @returns {void}
+   */
+  _showRevertedBlocks(blocksData, title) {
+    if (this._snapshotDirty) this._keepEditsOfRevert();
+    this.blocks = blocksData.map((data) => Block.deserialize(data));
+    if (title && this.noteData) {
+      this.noteData.name = title;
+      this.titleEl.textContent = title;
+    }
+    this.renderBlocks();
+    this._snapshotDirty = false;
+  }
+
+  /**
+   * After a committed revert whose blocks didn't reach the screen (_runRevert), read the note as
+   * stored and show it, while saves are still held. A lost connection shows the reload notice.
+   * @param {string} noteId
+   * @returns {Promise<boolean>} Whether the screen shows the note as stored now
+   */
+  async _showStoredRevert(noteId) {
+    try {
+      const opened = await this.documentClient.openNote(noteId);
+      if (!opened || noteId !== this.noteId) return false;
+      const blocks = (opened.blocks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      this._showRevertedBlocks(blocks, opened.note && opened.note.name);
+      return true;
+    } catch (error) {
+      if (this._isReloadRequired(error)) this._onReloadRequired();
+      else console.error('Failed to show the reverted note:', error && error.message);
+      return false;
+    }
+  }
+
+  /**
    * Revert current note to a snapshot's content (Req 31.4), with restoreSnapshot: in one unit
    * the note as stored becomes a snapshot, the snapshot's blocks replace the note's, and its
    * title the note's name, while a pin, folder, trash, or hand-set title made elsewhere stays.
@@ -5718,11 +5756,9 @@ class BlockEditor {
    */
   async _revertToSnapshot(summary) {
     // One revert at a time: a second one, from the panel left open, would race the first's
-    // hold and the saves waiting on it
-    if (this._revertInFlight) {
-      Utils.showToast('Failed to revert: another revert is still in progress. Please try again.', 'error');
-      return;
-    }
+    // hold and the saves waiting on it. It's a repeated click, so it's dropped without a word,
+    // and the first revert's own outcome still shows
+    if (this._revertInFlight) return;
     this._revertInFlight = true;
     try {
       await this._runRevert(summary);
@@ -5802,16 +5838,24 @@ class BlockEditor {
       }
 
       if (noteId === this.noteId) {
-        // Text typed while the revert committed went into the blocks it replaced: it goes into
-        // version history, so it isn't lost
-        if (this._snapshotDirty) this._keepEditsOfRevert();
-        this.blocks = (snap.blocks || []).map((data) => Block.deserialize(data));
-        if (snap.title && this.noteData) {
-          this.noteData.name = snap.title;
-          this.titleEl.textContent = snap.title;
+        try {
+          this._showRevertedBlocks(snap.blocks || [], snap.title);
+        } catch (error) {
+          // The restore committed, but its blocks didn't reach the screen, which may still hold
+          // the ones it replaced. Saves are still held, so the note as stored goes on screen
+          // before any of them can write those back
+          console.error('Failed to show the reverted note:', error && error.message);
+          if (!(await this._showStoredRevert(noteId))) {
+            // Nothing shows the revert, so the note goes back to what's on screen, as when a
+            // revert fails. Version history keeps both, and the toast says it didn't revert
+            if (!this.reloadRequired) {
+              this._loadedDue = true;
+              this._heldSaveDue = true;
+              Utils.showToast('Failed to revert to snapshot', 'error');
+            }
+            return;
+          }
         }
-        this.renderBlocks();
-        this._snapshotDirty = false;
       }
     } finally {
       // Whatever happened above, the hold and the saves waiting on this revert go on, the saves
