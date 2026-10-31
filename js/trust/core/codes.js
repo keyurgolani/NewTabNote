@@ -92,7 +92,24 @@ export const ERROR_CODES = Object.freeze([
   'version-too-new',
   'write-in-readonly-transaction',
   'write-outside-scope',
-  // A check that couldn't verify (checks.js)
+  // #17's recovery points (recovery-points.js): a database it refuses, and why a point failed
+  // re-verification
+  'recovery-unavailable',
+  'manifest-mismatch',
+  'row-mismatch',
+  'record-mismatch',
+  'key-mismatch',
+  'purged-row-present',
+  'count-mismatch',
+  'id-set-mismatch',
+  'content-mismatch',
+  // #13's answers that didn't come (contracts/transport-codes.js)
+  'unavailable',
+  'deadline-exceeded',
+  'unauthorized-sender',
+  'forbidden-for-surface',
+  // A check that couldn't verify (checks.js), and the storage probe finding a record under its key
+  'probe-record-present',
   'check-threw',
   'check-timed-out',
   'invalid-check-result',
@@ -208,6 +225,7 @@ export const SUBJECT_NAMES = Object.freeze([
   'CanvasTabDB',
   'NewTabNoteTrust',
   'NewTabNoteJournal',
+  'NewTabNoteRecovery',
   'canvases',
   'elements',
   'settings',
@@ -229,4 +247,8 @@ export const SUBJECT_NAMES = Object.freeze([
   'notifications',
   'activeTab',
   'sidePanel',
+  // Where a legacy plaintext secret is kept (Credentials): the two chrome.storage.local keys,
+  // named, never their values. The legacy IndexedDB one is the `settings` store above.
+  'setting_llmApiKey',
+  'setting_syncWebdavConfig',
 ]);
