@@ -8,6 +8,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Killed, dump, profileWith, recordsIn, run, stringsIn, synthesized } from './migration-support.mjs';
+import { adapterOn, closeAll, kernelOn, profile, recordsOf } from './storage-fixture.mjs';
+import { CALLERS, testClock, testIds } from './support.mjs';
 
 const FIXTURES = synthesized();
 const CANARY = 'canary-llm-api-key';
@@ -100,4 +102,82 @@ describe('no content in receipts, manifests, outcomes, or logs', () => {
       for (const text of said) assert.equal(content.has(text), false, `"${text}" left the notes`);
     });
   }
+});
+
+describe("no note text in #17 PR 2a's ledger, change log, tombstones, or meta", () => {
+  it('commands that carry canaries in titles, blocks, captures, and URLs leave them only in the notes and in conflict records', async () => {
+    const of = profile();
+    try {
+      const adapter = adapterOn(of, { clock: testClock() });
+      await adapter.open();
+      const runtime = { ids: testIds(), clock: testClock() };
+      const tab = kernelOn(adapter, runtime);
+      const worker = kernelOn(adapter, runtime, CALLERS['worker-internal']);
+      const text = (/** @type {string} */ where) => `canary-note-text-${where}`;
+      const block = (/** @type {string} */ id, /** @type {string} */ where) => ({
+        id,
+        type: 'text',
+        content: text(where),
+        order: 0,
+      });
+      /** @type {unknown[]} */
+      const outcomes = [];
+      /** @param {Promise<unknown>} sent */
+      const keep = async sent => outcomes.push(await sent);
+      await keep(
+        tab.execute({
+          type: 'createNote',
+          commandId: 'c1',
+          noteId: 'n1',
+          name: text('title'),
+          blocks: [block('b1', 'block')],
+        }),
+      );
+      await keep(tab.execute({ type: 'renameNote', commandId: 'c2', noteId: 'n1', name: text('renamed') }));
+      await keep(
+        tab.execute({
+          type: 'saveNoteContent',
+          commandId: 'c3',
+          noteId: 'n1',
+          blocks: [block('b1', 'saved')],
+          name: text('saved-title'),
+        }),
+      );
+      await keep(
+        tab.execute({ type: 'attachInsights', commandId: 'c4', noteId: 'n1', insights: { todos: [text('insight')] } }),
+      );
+      await keep(
+        worker.execute({
+          type: 'captureToDailyNote',
+          commandId: 'c5',
+          noteId: 'd1',
+          blockId: 'k1',
+          capture: { type: 'bookmark', url: `https://example.test/${text('url')}`, title: text('page') },
+        }),
+      );
+      await keep(
+        tab.execute({
+          type: 'saveNoteContent',
+          commandId: 'c6',
+          noteId: 'n1',
+          blocks: [block('b1', 'lost')],
+          expectedRevision: 1,
+        }),
+      );
+      await keep(tab.execute({ type: 'createNote', commandId: 'c7', noteId: 'n2' }));
+      await keep(tab.execute({ type: 'trashNote', commandId: 'c8', noteId: 'n2' }));
+      const conflict = /** @type {{kind: string}} */ (outcomes[5]);
+      assert.equal(conflict.kind, 'conflict');
+      for (const store of ['operations', 'changes', 'tombstones', 'meta']) {
+        const kept = JSON.stringify(await recordsOf(of, store));
+        assert.ok(kept.length > 2, `${store} holds rows`);
+        assert.equal(kept.includes('canary-note-text'), false, `${store} holds note text`);
+      }
+      assert.equal(JSON.stringify(outcomes).includes('canary-note-text'), false, 'an outcome holds note text');
+      // The conflict record keeps the save that lost, text and all, by design
+      assert.ok(JSON.stringify(await recordsOf(of, 'conflicts')).includes(text('lost')));
+    } finally {
+      closeAll(of);
+    }
+  });
 });

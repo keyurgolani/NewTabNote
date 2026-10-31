@@ -263,6 +263,23 @@ describe("the in-memory adapter, given #13's ledger and commit log", () => {
     assert.deepEqual(await ledger.read(/** @type {any} */ (folder)), { status: 'committed', outcome: filed });
   });
 
+  it("types each change by the store it wrote, so deleteFolder's notes, filed at the root, go in as notes (#17 PR 2a)", async () => {
+    const { commitLog, execute } = start();
+    await execute({ type: 'createFolder', commandId: 'c1', folderId: 'f1', name: 'Work', parentId: null });
+    await execute({ type: 'createNote', commandId: 'c2', noteId: 'n1', name: 'Filed', folderId: 'f1' });
+    const removed = await execute({ type: 'deleteFolder', commandId: 'c3', folderId: 'f1' });
+    assert.deepEqual(removed.kind === 'committed' && [removed.changedIds, removed.commitSeq], [['f1', 'n1'], 3]);
+    assert.deepEqual(await commitLog.readChangesSince(2, 10), {
+      kind: 'changes',
+      entries: [
+        { commitSeq: 3, entityType: 'folder', entityId: 'f1', revision: 1 },
+        { commitSeq: 3, entityType: 'note', entityId: 'n1', revision: 1 },
+      ],
+      cursor: 3,
+      more: false,
+    });
+  });
+
   it('appends nothing for a resend, which answers the original outcome, commitSeq included', async () => {
     const { commitLog, execute } = start();
     const pin = { type: 'setPinned', commandId: 'c2', noteId: 'n1', pinned: true };

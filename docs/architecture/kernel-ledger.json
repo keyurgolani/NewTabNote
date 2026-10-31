@@ -148,7 +148,7 @@
       "rule": "declared-gap",
       "count": 1,
       "owner": 17,
-      "removeWhen": "#17's IndexedDB adapter passes the idempotency check: a resent commandId gets its first outcome and writes nothing",
+      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the idempotency check (a resent commandId gets its first outcome and writes nothing), so the gap lasts as long as the legacy adapter ships",
       "verify": "npm run test:kernel: the idempotency check in test/kernel/contract.mjs"
     },
     {
@@ -156,7 +156,7 @@
       "rule": "declared-gap",
       "count": 1,
       "owner": 17,
-      "removeWhen": "#17's IndexedDB adapter passes the revisions check: a save from a stale revision is a conflict that writes nothing",
+      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the revisions check (a save from a stale revision is a conflict: nothing changes in the note or its blocks, and it writes only its conflicts record and its operations row, with no change entry), so the gap lasts as long as the legacy adapter ships",
       "verify": "npm run test:kernel: the revisions check in test/kernel/contract.mjs"
     },
     {
@@ -164,7 +164,7 @@
       "rule": "declared-gap",
       "count": 1,
       "owner": 17,
-      "removeWhen": "#17's IndexedDB adapter passes the two contexts check: when two contexts save one note's blocks from the revision they loaded, the later save is a conflict",
+      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the two contexts check (when two contexts save one note's blocks from the revision they loaded, the later save is a conflict), so the gap lasts as long as the legacy adapter ships",
       "verify": "npm run test:kernel: the two contexts check in test/kernel/contract.mjs"
     },
     {

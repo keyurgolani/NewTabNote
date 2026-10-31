@@ -413,7 +413,8 @@ describe('the worker reports background capture and storage init (js/background.
     for (const [code, fields] of captures) {
       assert.equal(code, 'capture.failed');
       assert.equal(fields.surface, 'worker-internal');
-      assert.match(String(fields.commandId), /^[0-9]{13}-[a-z0-9]{0,9}$/);
+      // The worker's commandIds are UUIDs since #17 PR 2a
+      assert.match(String(fields.commandId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       assert.deepEqual(
         Object.keys(fields).filter(name => !['surface', 'commandId', 'cause', 'errorCode', 'retryable', 'exception'].includes(name)),
         [],
@@ -485,7 +486,7 @@ describe('the worker reports background capture and storage init (js/background.
           .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'ID')
           .replace(/pre-migration-[0-9]+/g, 'pre-migration-ID')
           .replace(/"digest":"[0-9a-f]{64}"/g, '"digest":"DIGEST"')
-          .replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order|startedAt|completedAt|at)":[^,}]+/g, '"$1":0'));
+          .replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order|startedAt|completedAt|at|sweptAt|deletedAt)":[^,}]+/g, '"$1":0'));
         // Records come in key order, and keys differ run to run
         for (const { records } of Object.values(shaped.notes.stores)) records.sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1));
         return shaped;

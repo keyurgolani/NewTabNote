@@ -696,6 +696,9 @@ function createLegacyEnv(options = {}) {
     btoa,
     TextEncoder,
     TextDecoder,
+    // Web Crypto, as every extension page and the worker have it: the roots' ids since #17 PR 2a
+    // are crypto.randomUUID()
+    crypto: globalThis.crypto,
     queueMicrotask,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
