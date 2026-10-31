@@ -11,7 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { expect, launchExtension, resolveDist } = require('../harness');
+const { expect, launchExtension, resolveDist, TIME_ZONE } = require('../harness');
 
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
@@ -368,10 +368,11 @@ async function openTodaysDailyNote(page) {
 }
 
 /**
- * Today's Daily Note title as en-US prints it in the browser's time zone, UTC
+ * Today's Daily Note title as en-US prints it in the browser's time zone, the harness's (UTC
+ * unless a run names another)
  */
 function todaysDailyNoteTitle(date = new Date()) {
-  return `Daily Note - ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`;
+  return `Daily Note - ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: TIME_ZONE })}`;
 }
 
 // ─── Service worker ───

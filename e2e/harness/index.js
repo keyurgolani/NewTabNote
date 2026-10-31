@@ -12,7 +12,7 @@
  */
 
 const { test: base, expect } = require('@playwright/test');
-const { launchExtension, resolveDist, SURFACES, VIEWPORT } = require('./extension');
+const { launchExtension, resolveDist, SURFACES, VIEWPORT, TIME_ZONE } = require('./extension');
 const { expectNoUncaught } = require('./uncaught');
 
 const test = base.extend({
@@ -27,4 +27,4 @@ const test = base.extend({
   },
 });
 
-module.exports = { test, expect, expectNoUncaught, launchExtension, resolveDist, SURFACES, VIEWPORT };
+module.exports = { test, expect, expectNoUncaught, launchExtension, resolveDist, SURFACES, VIEWPORT, TIME_ZONE };
