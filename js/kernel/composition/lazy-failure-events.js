@@ -10,12 +10,13 @@
  * later event on that page is dropped too until the page reloads.
  *
  * The page's events run one at a time. A success at a site (SUCCESS_SITES) reads
- * chrome.storage.local's `trust.openSites` at its own moment, imports the trust code only
- * when its site has an entry, and passes that count on, so a failure that lands while the code
- * loads stays open. `reconcile()` imports it only while the settings copy holds sightings and
- * no failed open of NewTabNoteTrust from the last RETRY_OPEN_MS, so a tab with nothing to
- * resolve still loads no trust code. This module
- * names those codes and keys itself, since importing them would load the trust code;
+ * chrome.storage.local's `trust.openSites` at its own moment, when `event()` is called, not
+ * when the page's queue reaches it, imports the trust code only when its site has an entry, and
+ * passes that entry on, so a failure that lands while the code loads, or while an earlier event
+ * holds the queue, stays open. `reconcile()` imports it only while the settings copy holds
+ * sightings and no failed open of NewTabNoteTrust from the last RETRY_OPEN_MS, so a tab with
+ * nothing to resolve still loads no trust code. This module names those codes and keys itself,
+ * since importing them would load the trust code;
  * test/kernel/trust-before-s4.test.mjs holds them equal to js/trust/core/'s.
  */
 
@@ -123,19 +124,21 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
         const site = Object.prototype.hasOwnProperty.call(SUCCESS_SITES, code)
           ? SUCCESS_SITES[/** @type {keyof typeof SUCCESS_SITES} */ (code)]
           : null;
-        /** @param {Record<string, number>} [seen] */
+        /** @param {Record<string, unknown>} [seen] */
         const pass = seen =>
           ready().then(loaded => {
             loaded.event(code, fields, failure, seen ? { seen } : {});
             return loaded.flush();
           });
+        // The count at the success's own moment, which the trust code resolves against: read
+        // now, not when an earlier event lets the page's queue reach it
+        const reading = site === null ? null : readKey(OPEN_SITES_KEY);
         track(async () => {
-          if (site === null) return pass();
-          // The count at the success's own moment, which the trust code resolves against
-          const sites = await readKey(OPEN_SITES_KEY);
+          if (site === null || reading === null) return pass();
+          const sites = await reading;
           const seen = sites && typeof sites === 'object' ? /** @type {Record<string, unknown>} */ (sites)[site] : null;
           if (!seen || typeof seen !== 'object' || Object.keys(seen).length === 0) return undefined;
-          return pass(/** @type {Record<string, number>} */ (seen));
+          return pass(/** @type {Record<string, unknown>} */ (seen));
         });
       } catch {
         // Best effort: a failure site never hears of the journal's

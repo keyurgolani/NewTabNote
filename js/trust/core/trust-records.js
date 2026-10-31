@@ -237,6 +237,19 @@ const stillOpening = error => error instanceof UnavailableError && error.code ==
 const isStorageProvider = provider => /** @type {readonly string[]} */ (STORAGE_PROVIDERS).includes(provider);
 
 /**
+ * Whether `incident` is as `seen` had it: the same occurrences, and with a mark's entry the
+ * same incident id too. Anything else (missing, another shape) is a mismatch.
+ * @param {unknown} seen
+ * @param {Incident} incident
+ */
+function unmoved(seen, incident) {
+  if (typeof seen === 'number') return seen === incident.occurrences;
+  if (!seen || typeof seen !== 'object') return false;
+  const entry = /** @type {{id?: unknown, occurrences?: unknown}} */ (seen);
+  return entry.id === incident.id && entry.occurrences === incident.occurrences;
+}
+
+/**
  * @param {{
  *   store: TrustStore,
  *   settings: SettingsPort,
@@ -888,10 +901,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * `write-failed`), whoever calls it. A check passes `looked`, what it really looked at
    * (checks.js), so only those incidents resolve, and `seen`, each open incident's occurrences
    * before it ran (occurrencesOf()), so only one with no sighting since resolves: an incident
-   * whose count moved, or that wasn't there, stays, whatever the contexts' clocks say.
+   * whose count moved, or that wasn't there, stays, whatever the contexts' clocks say. A success
+   * passes its site's mark instead, each incident's id with its occurrences, so a new incident
+   * under the key of one that's gone stays too.
    * @param {string} provider
    * @param {readonly string[]} still - keys of the faults the check still reports
-   * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seen?: Readonly<Record<string, number>>}} [options]
+   * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seen?: Readonly<Record<string, number | {id: string, occurrences: number}>>}} [options]
    * @returns {Promise<{recorded: true, resolved: Incident[]} | {recorded: false}>}
    */
   const resolve = async (provider, still, { looked, seen } = {}) => {
@@ -905,7 +920,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
           incident.providerId === provider &&
           !still.includes(incident.key) &&
           !OWN_KEYS.has(incident.key) &&
-          (seen === undefined || seen[incident.key] === incident.occurrences) &&
+          (seen === undefined || unmoved(seen[incident.key], incident)) &&
           (!looked ||
             looked.some(
               item =>

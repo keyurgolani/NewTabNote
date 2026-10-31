@@ -23,12 +23,15 @@
  * A context's events run one at a time, each through to its flush, so a success's count is
  * read before any later event in the context is processed. A success at a site
  * (`capture.committed`, `indexer.started`, `backup.auto-succeeded`) reads chrome.storage.local's
- * `trust.openSites` at its own moment: `{failure code: {incident key: occurrences}}`, which a
- * failure there writes once its raise lands. It opens the records only when its site has an
- * entry, and resolves only an incident whose occurrences still equal that count, so another
- * context's failure after the read stays open. A success that leaves nothing open removes the
- * site. It's best effort with no lock across contexts: a lost, stale or cleared entry only
- * mismatches or skips, leaving an incident open (a false alarm), never resolving one.
+ * `trust.openSites` at its own moment, when `event()` is called, not when the queue reaches it:
+ * `{failure code: {incident key: {id, occurrences}}}`, which a failure there writes once its
+ * raise lands. It opens the records only when its site has an entry, and resolves only an
+ * incident whose id and occurrences still equal that entry, so another context's failure after
+ * the read stays open, and so does a new incident under a key whose old one is gone. An
+ * earlier failure in the same context that hasn't written its count yet makes the counts
+ * mismatch. A success that leaves nothing open removes the site. It's best effort with no lock
+ * across contexts: a lost, stale or cleared entry only mismatches or skips, leaving an incident
+ * open (a false alarm), never resolving one.
  *
  * `reconcile()` opens the records when the settings copy holds sightings a context couldn't
  * store, so NewTabNoteTrust's own incidents reconcile at a start, not only at the next
@@ -94,7 +97,7 @@ export function reconcileDue(copy, now) {
 
 /**
  * @typedef {object} FailureEvents
- * @property {(code: string, fields?: Record<string, unknown>, failure?: unknown, options?: {seen?: Readonly<Record<string, number>>}) => void} event
+ * @property {(code: string, fields?: Record<string, unknown>, failure?: unknown, options?: {seen?: Readonly<Record<string, unknown>>}) => void} event
  *   Journals `code` with `fields`, `surface` when the code lists it, and what `failure` (an
  *   Error, a DOMException, or a kernel outcome) gives as value-free evidence. Never throws.
  * @property {() => Promise<void>} flush - resolves once every event so far has been written or dropped
@@ -113,23 +116,39 @@ const SITE_FAILURES = new Set(
     .filter(code => code !== undefined),
 );
 
+/** @typedef {{id: string, occurrences: number}} Sighted - an incident's id and occurrences, as a site's mark keeps them */
+
 /**
- * `trust.openSites` as `{failure code: {incident key: occurrences}}`, dropping anything else
+ * A site's entries, `{incident key: {id, occurrences}}`, dropping any other shape (a count
+ * alone, as the mark held before it kept the id), which then resolves nothing
+ * @param {unknown} counts
+ * @returns {Record<string, Sighted>}
+ */
+function sightedOf(counts) {
+  /** @type {Record<string, Sighted>} */
+  const kept = {};
+  if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return kept;
+  for (const [key, entry] of Object.entries(counts)) {
+    const { id, occurrences } = entry && typeof entry === 'object' ? entry : /** @type {any} */ ({});
+    if (typeof id === 'string' && id !== '' && Number.isSafeInteger(occurrences) && occurrences > 0) {
+      kept[key] = { id, occurrences };
+    }
+  }
+  return kept;
+}
+
+/**
+ * `trust.openSites` as `{failure code: {incident key: {id, occurrences}}}`, dropping anything else
  * @param {unknown} value
- * @returns {Record<string, Record<string, number>>}
+ * @returns {Record<string, Record<string, Sighted>>}
  */
 function openSitesOf(value) {
-  /** @type {Record<string, Record<string, number>>} */
+  /** @type {Record<string, Record<string, Sighted>>} */
   const sites = {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) return sites;
   for (const [site, counts] of Object.entries(value)) {
-    if (!SITE_FAILURES.has(site) || !counts || typeof counts !== 'object' || Array.isArray(counts)) continue;
-    /** @type {Record<string, number>} */
-    const kept = {};
-    for (const [key, occurrences] of Object.entries(counts)) {
-      if (typeof occurrences === 'number' && Number.isSafeInteger(occurrences) && occurrences > 0)
-        kept[key] = occurrences;
-    }
+    if (!SITE_FAILURES.has(site)) continue;
+    const kept = sightedOf(counts);
     if (Object.keys(kept).length > 0) sites[site] = kept;
   }
   return sites;
@@ -273,9 +292,9 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   };
 
   /**
-   * What `trust.openSites` holds, `{failure code: {incident key: occurrences}}`; nothing when
-   * it can't be read, or holds anything else
-   * @returns {Promise<Record<string, Record<string, number>>>}
+   * What `trust.openSites` holds, `{failure code: {incident key: {id, occurrences}}}`; nothing
+   * when it can't be read, or holds anything else
+   * @returns {Promise<Record<string, Record<string, Sighted>>>}
    */
   const marked = async () => {
     try {
@@ -287,13 +306,13 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   };
 
   /**
-   * Sets `site`'s entry for `key` to `occurrences`, or, with `key` null, removes the site.
-   * Best effort: a lost write leaves an incident open.
+   * Sets `site`'s entry for `key` to the incident's id and occurrences, or, with `key` null,
+   * removes the site. Best effort: a lost write leaves an incident open.
    * @param {string} site
    * @param {string | null} key
-   * @param {number} [occurrences]
+   * @param {Sighted} [sighted]
    */
-  const mark = async (site, key, occurrences) => {
+  const mark = async (site, key, sighted) => {
     try {
       const now = await marked();
       const entry = { ...(now[site] || {}) };
@@ -301,8 +320,9 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
         if (!now[site]) return;
         delete now[site];
       } else {
-        if (entry[key] === occurrences) return;
-        entry[key] = /** @type {number} */ (occurrences);
+        const { id, occurrences } = /** @type {Sighted} */ (sighted);
+        if (entry[key] && entry[key].id === id && entry[key].occurrences === occurrences) return;
+        entry[key] = { id, occurrences };
         now[site] = entry;
       }
       await settled(hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: now }));
@@ -324,8 +344,13 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
         const records = createTrustRecords({ store, settings, clock, ids, locks, timers });
         await records.open();
         // A failure at a site with a success writes its incident's count once the raise lands
-        const onRaised = (/** @type {string} */ code, /** @type {{key: string, occurrences: number}} */ incident) =>
-          SITE_FAILURES.has(code) ? mark(code, incident.key, incident.occurrences) : undefined;
+        const onRaised = (
+          /** @type {string} */ code,
+          /** @type {{id: string, key: string, occurrences: number}} */ incident,
+        ) =>
+          SITE_FAILURES.has(code)
+            ? mark(code, incident.key, { id: incident.id, occurrences: incident.occurrences })
+            : undefined;
         return createDiagnosticJournal({ records, clock, onRaised });
       });
     }
@@ -354,11 +379,15 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
         const checked = fieldsOf(code, surface, fields, failure);
         const entry = isEventCode(code) ? EVENT_CODES[code] : null;
         const site = entry && entry.resolves !== undefined ? entry.resolves : null;
+        // The count at the success's own moment: the lazy page's read, or this one, started
+        // now rather than when the queue reaches it
+        const reading = site !== null && !options.seen ? marked() : null;
         const work =
           site !== null
             ? async () => {
-                // The count at the success's own moment: the lazy page's read, or this one
-                const seen = options.seen || (await marked())[site];
+                const seen = options.seen
+                  ? sightedOf(options.seen)
+                  : (await /** @type {Promise<Record<string, Record<string, Sighted>>>} */ (reading))[site];
                 if (!seen || Object.keys(seen).length === 0) return;
                 const events = await ready();
                 events.event(code, checked, { seen });

@@ -46,11 +46,11 @@ export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
 
 /**
  * @typedef {object} DiagnosticJournal
- * @property {(code: string, fields?: Record<string, unknown>, options?: {seen?: Readonly<Record<string, number>>}) => boolean} event
+ * @property {(code: string, fields?: Record<string, unknown>, options?: {seen?: Readonly<Record<string, {id: string, occurrences: number}>>}) => boolean} event
  *   Records an event and answers true, or refuses it: throws when strict, and otherwise
  *   answers false after counting it in memory. A success may pass `seen`, its site's open
- *   incidents' occurrences as read at its own moment, which it resolves only while they hold;
- *   without it the records' snapshot is taken now.
+ *   incidents' ids and occurrences as read at its own moment, which it resolves only while
+ *   both hold; without it the records' snapshot is taken now.
  * @property {() => Readonly<Record<RejectionReason, number>>} rejected - refusals so far, by reason
  * @property {() => Promise<void>} flush - resolves once every write so far has settled
  * @property {(code: string) => Promise<boolean | null>} siteOpen
@@ -142,12 +142,13 @@ export function createDiagnosticJournal({ records, clock, strict = false, onRais
    * when it resolved one. A read that fails resolves nothing.
    * @param {string} failureCode
    * @param {Omit<import('./records.js').JournalEvent, 'seq'>} appended
-   * @param {Readonly<Record<string, number>> | undefined} given - the counts read at the success's moment
+   * @param {Readonly<Record<string, {id: string, occurrences: number}>> | undefined} given - the
+   *   incidents' ids and counts read at the success's moment
    * @returns {Promise<{recorded: boolean}>}
    */
   const succeeded = async (failureCode, appended, given) => {
     const site = /** @type {{providerId: string, faultCode: string}} */ (siteOf(failureCode));
-    /** @type {Readonly<Record<string, number>>} */
+    /** @type {Readonly<Record<string, number | {id: string, occurrences: number}>>} */
     let counts;
     if (given) {
       counts = given;

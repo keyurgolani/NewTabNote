@@ -194,9 +194,12 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     const failing = createFailureEvents({ surface: 'newtab', host });
     failing.event('indexer.start-failed', {}, new DOMException('m', 'SecurityError'));
     await failing.flush();
-    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {
-      'indexer.start-failed': { 'index/indexer-start-failed/-': 1 },
-    });
+    // The mark keeps the incident's id with its count
+    const marked = /** @type {any} */ (profile.settings.items.get(SETTINGS_KEYS.openSites));
+    assert.deepEqual(Object.keys(marked), ['indexer.start-failed']);
+    const sighted = marked['indexer.start-failed']['index/indexer-start-failed/-'];
+    assert.deepEqual(Object.keys(sighted).sort(), ['id', 'occurrences']);
+    assert.equal(sighted.occurrences, 1);
     // Another tab's indexer starts
     const other = createFailureEvents({ surface: 'newtab', host });
     other.event('indexer.started', {});
@@ -204,7 +207,8 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {});
     const store = databaseFor(profile);
     const { records } = await recordsOn(store, profile, { prefix: 'cccc' });
-    assert.equal((await at(records, 'index/indexer-start-failed/-'))?.state, 'resolved');
+    const resolved = await at(records, 'index/indexer-start-failed/-');
+    assert.deepEqual([resolved?.state, resolved?.id], ['resolved', sighted.id]);
   });
 
   it("reconciles the trust store's held failures when the copy holds any, and opens nothing when it doesn't", async () => {
@@ -273,7 +277,10 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
 
   it('loads it for a success at a marked site, and for a reconcile when the copy holds entries', async () => {
     const items = new Map([
-      [SETTINGS_KEYS.openSites, { 'indexer.start-failed': { 'index/indexer-start-failed/-': 1 } }],
+      [
+        SETTINGS_KEYS.openSites,
+        { 'indexer.start-failed': { 'index/indexer-start-failed/-': { id: 'i1', occurrences: 1 } } },
+      ],
       [SETTINGS_KEYS.lastStorageIncident, { entries: [{}] }],
     ]);
     const page = lazyOver(items);
@@ -408,9 +415,8 @@ describe("#87's review: a success counts only what was sighted at its own moment
     const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
     b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
     await b.flush();
-    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {
-      'backup.auto-failed': { 'backup/auto-backup-failed/-': 1 },
-    });
+    const marked = /** @type {any} */ (profile.settings.items.get(SETTINGS_KEYS.openSites));
+    assert.equal(marked['backup.auto-failed']['backup/auto-backup-failed/-'].occurrences, 1);
     const a = lazyFailureEvents({
       surface: 'newtab',
       read: keys => profile.settings.get(keys),
