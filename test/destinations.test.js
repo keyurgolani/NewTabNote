@@ -229,6 +229,25 @@ describe('the destination client (js/kernel/composition/destinations.js)', () =>
     assert.equal(take('http://192.168.1.5:8080/api/tags', { loopback: 'http://192.168.1.5:8080' }).ok, false);
   });
 
+  it("takes the WebDAV rows only at the stored WebDAV server's own origin, remote over https or on loopback, with their four methods", () => {
+    for (const method of ['OPTIONS', 'PUT', 'GET', 'HEAD']) {
+      assert.equal(take('https://dav.example.test/newtabnote-sync.json', { method, stored: 'https://dav.example.test' }).row.id, 'webdav-remote', method);
+    }
+    assert.equal(take('http://localhost:8080/newtabnote-sync.json', { method: 'PUT', stored: 'http://localhost:8080' }).row.id, 'webdav-localhost');
+    assert.equal(take('http://127.0.0.1:8080/newtabnote-sync.json', { method: 'PUT', stored: 'http://127.0.0.1:8080' }).row.id, 'webdav-127');
+    for (const [url, options] of [
+      ['https://dav.example.test/x', {}],
+      ['https://other.example.test/x', { stored: 'https://dav.example.test' }],
+      ['https://dav.example.test/x', { method: 'DELETE', stored: 'https://dav.example.test' }],
+      ['http://dav.example.test/x', { stored: 'http://dav.example.test' }],
+      ['http://localhost:8080/x', { method: 'PUT', loopback: 'http://localhost:8080' }],
+    ]) {
+      assert.equal(take(url, options).ok, false, `${url} ${JSON.stringify(options)}`);
+    }
+    const remote = registry.destinations.find((entry) => entry.id === 'webdav-remote');
+    assert.deepEqual([remote.kind, remote.credential, remote.proxy, remote.removeWhen], ['legacy', 'basic', false, 19]);
+  });
+
   it("checks a request's headers: the row's names only, no line breaks, and no credential in the URL", () => {
     const openai = take('https://api.openai.com/v1/models').row;
     assert.deepEqual(client.headerProblems(openai, { authorization: 'Bearer test', 'Content-Type': 'application/json' }, 'https://api.openai.com/v1/models'), []);

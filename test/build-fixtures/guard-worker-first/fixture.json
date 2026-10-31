@@ -6,13 +6,13 @@
   "edits": [
     {
       "file": "js/background.js",
-      "replace": "import './kernel/composition/network-guard-first.js';\n",
+      "replace": "import { contextGuard } from './kernel/composition/network-guard-first.js';\n",
       "with": ""
     },
     {
       "file": "js/background.js",
       "replace": "import './storage.js';\n",
-      "with": "import './storage.js';\nimport './kernel/composition/network-guard-first.js';\n"
+      "with": "import './storage.js';\nimport { contextGuard } from './kernel/composition/network-guard-first.js';\n"
     }
   ]
 }

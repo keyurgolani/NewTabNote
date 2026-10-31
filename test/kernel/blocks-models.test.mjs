@@ -307,7 +307,8 @@ describe('the model layer is pure, DOM-free, and static (#14, "Projections", cod
     // Each page's scripts, as its HTML names them, and the service worker
     const scriptsOf = (/** @type {string} */ page) =>
       [...fs.readFileSync(path.join(ROOT, page), 'utf8').matchAll(/<script\b[^>]*\bsrc="js\/([^"]+)"/g)].map(match => match[1]);
-    assert.deepEqual(scriptsOf('sidepanel.html').sort(), ['insights-summary.js', 'sidepanel.js']);
+    // The network guard first (#21 slice 1b), which reads no block
+    assert.deepEqual(scriptsOf('sidepanel.html').sort(), ['insights-summary.js', 'network-guard.js', 'sidepanel.js']);
     // The new tab's bridge reads every projection and the codec
     assert.deepEqual(blocksIn(scriptsOf('newtab.html').filter(name => !name.startsWith('lib/'))), sources.map(([name]) => name).sort());
     // The Popup, the Side Panel and the service worker read only previews and wiki-link names,

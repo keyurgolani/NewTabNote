@@ -288,6 +288,14 @@ class SyncService {
 
     if (providerName === 'webdav' && config) {
       /** @type {WebDAVProvider} */ (provider).configure(config);
+      // Kept before the first call to the server, not after it answers: the network guard lets
+      // the WebDAV calls reach the server this config names, and only it (#21 slice 1b)
+      await this.storage.setSetting('syncWebdavConfig', {
+        serverUrl: config.serverUrl,
+        username: config.username,
+        // Note: password stored in IndexedDB — same security model as API keys
+        password: config.password,
+      });
     }
 
     await provider.connect();
@@ -297,14 +305,6 @@ class SyncService {
     this.state.errorMessage = null;
 
     await this.storage.setSetting('syncProvider', providerName);
-    if (providerName === 'webdav' && config) {
-      await this.storage.setSetting('syncWebdavConfig', {
-        serverUrl: config.serverUrl,
-        username: config.username,
-        // Note: password stored in IndexedDB — same security model as API keys
-        password: config.password,
-      });
-    }
 
     this._emitStateChange();
     this.logger.info('SyncService', 'Connected to ' + providerName);

@@ -83,18 +83,18 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/controllers/notes-manager.js` | [1223](../../js/controllers/notes-manager.js#L1223) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1233](../../js/controllers/notes-manager.js#L1233) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1237](../../js/controllers/notes-manager.js#L1237) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1363](../../js/controllers/notes-manager.js#L1363) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1167](../../js/controllers/notes-manager.js#L1167) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1177](../../js/controllers/notes-manager.js#L1177) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1181](../../js/controllers/notes-manager.js#L1181) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1307](../../js/controllers/notes-manager.js#L1307) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
 | `js/llm.js` | [138](../../js/llm.js#L138) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [756](../../js/llm.js#L756) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [775](../../js/llm.js#L775) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [776](../../js/llm.js#L776) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [784](../../js/llm.js#L784) | `LLMService.setModel` | `Storage.setSetting('llmModel', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [789](../../js/llm.js#L789) | `LLMService.setOllamaUrl` | `Storage.setSetting('ollamaUrl', …)` | `saveProviderSettings` | ledgered to #11 |
-| `js/services/sync-service.js` | [299](../../js/services/sync-service.js#L299) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
-| `js/services/sync-service.js` | [301](../../js/services/sync-service.js#L301) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [293](../../js/services/sync-service.js#L293) | `SyncService.connect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
+| `js/services/sync-service.js` | [307](../../js/services/sync-service.js#L307) | `SyncService.connect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [325](../../js/services/sync-service.js#L325) | `SyncService.disconnect` | `this.storage.setSetting('syncProvider', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [326](../../js/services/sync-service.js#L326) | `SyncService.disconnect` | `this.storage.setSetting('syncWebdavConfig', …)` | `saveSyncSettings` | ledgered to #19 |
 | `js/services/sync-service.js` | [327](../../js/services/sync-service.js#L327) | `SyncService.disconnect` | `this.storage.setSetting('syncLastSyncAt', …)` | `saveSyncSettings` | ledgered to #19 |

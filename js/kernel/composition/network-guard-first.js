@@ -8,4 +8,8 @@
 
 import { installContextGuard } from './network-guard-install.js';
 
-installContextGuard(globalThis);
+/**
+ * This context's guard handle, which journals its refusals and can refuse every destination:
+ * the service worker takes it (js/background.js). A page's guard sends its reports itself.
+ */
+export const contextGuard = installContextGuard(globalThis);

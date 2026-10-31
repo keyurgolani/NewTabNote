@@ -41,6 +41,12 @@ const settle = async () => {
 /** A stand-in XMLHttpRequest whose send records what it would have sent */
 function fakeXhr(sent) {
   return class FakeXhr extends EventTarget {
+    get withCredentials() {
+      return Boolean(this.cookies);
+    }
+    set withCredentials(value) {
+      this.cookies = value;
+    }
     open(method, url) {
       this.opened = { method, url, headers: {} };
     }
@@ -72,8 +78,8 @@ function context({ chrome = { runtime: { id: 'test-extension' } }, location = `$
       return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
     XMLHttpRequest: fakeXhr(sent),
-    WebSocket: class FakeSocket { constructor(url) { sent.push({ api: 'websocket', url }); } },
-    EventSource: class FakeSource { constructor(url) { sent.push({ api: 'eventsource', url }); } },
+    WebSocket: class FakeSocket { static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3; constructor(url) { sent.push({ api: 'websocket', url }); } },
+    EventSource: class FakeSource { static CONNECTING = 0; static OPEN = 1; static CLOSED = 2; constructor(url) { sent.push({ api: 'eventsource', url }); } },
     navigator: { sendBeacon: (url) => { sent.push({ api: 'beacon', url }); return true; } },
   };
   return { scope, sent };
@@ -90,13 +96,24 @@ function guarded(options = {}, contextOptions = {}) {
 }
 
 describe('the network guard (js/kernel/composition/network-guard.js)', () => {
-  it('installs once, marks the APIs it wraps, and a second install answers the first', () => {
+  it('installs once, marks the APIs it wraps, and leaves on the context a mark with its surface only: the handle is the installer\'s', () => {
     const { scope, handle } = guarded();
     assert.equal(scope.fetch[guard.GUARD], true);
     assert.equal(scope.XMLHttpRequest.prototype.send[guard.GUARD], true);
     assert.equal(scope.navigator.sendBeacon[guard.GUARD], true);
-    assert.equal(guard.installGuard(scope, { surface: 'newtab' }), handle);
+    assert.equal(guard.installGuard(scope, { surface: 'newtab' }), null);
+    assert.deepEqual({ ...scope[guard.GUARD] }, { surface: 'newtab' });
+    assert.equal(typeof handle.onRefused, 'function');
     assert.throws(() => { scope[guard.GUARD] = null; });
+  });
+
+  it('keeps its one listener: a second one changes nothing', async () => {
+    const { scope, reports, handle } = guarded();
+    const other = [];
+    handle.onRefused((report) => other.push(report));
+    await scope.fetch('https://example.test/x').catch(() => {});
+    assert.equal(reports.length, 1);
+    assert.deepEqual(other, []);
   });
 
   it("lets a registry row, this extension's own origin, blob:, and data: through", async () => {
@@ -136,10 +153,95 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     await scope.fetch('http://localhost:11434/api/chat', { method: 'POST', body: '{}', redirect: 'follow' });
     await scope.fetch('https://huggingface.co/Xenova/model/resolve/main/config.json');
     await scope.fetch(new Request('https://api.openai.com/v1/models', { headers: { Authorization: 'Bearer test' } }));
-    assert.deepEqual(sent.slice(0, 3).map(({ init }) => init.redirect), ['error', 'error', undefined]);
-    assert.ok(sent[3].input instanceof Request);
-    assert.equal(sent[3].init.redirect, 'error');
-    assert.deepEqual(sent[3].init.headers, [['authorization', 'Bearer test']]);
+    assert.deepEqual(sent.map(({ input }) => input.redirect), ['error', 'error', 'follow', 'error']);
+    assert.deepEqual([...sent[3].input.headers], [['authorization', 'Bearer test']]);
+  });
+
+  it('follows the body that goes, and cookies count as a credential', async () => {
+    const { scope, sent } = guarded({ loopback: () => 'http://localhost:11434' });
+    // A Request with a body, its options naming none
+    await scope.fetch(new Request('http://localhost:11434/api/chat', { method: 'POST', body: '{}' }), { body: null });
+    await scope.fetch('https://huggingface.co/x', { credentials: 'include' });
+    assert.deepEqual(sent.map(({ input }) => input.redirect), ['error', 'error']);
+    const xhr = new scope.XMLHttpRequest();
+    xhr.withCredentials = true;
+    xhr.open('GET', 'https://huggingface.co/x');
+    xhr.send();
+    await settle();
+    assert.equal(sent.length, 2, 'an XHR with cookies follows every redirect, so it is refused');
+  });
+
+  it('sends what it checked: the URL it converted once, as the platform\'s Request holds it', async () => {
+    const { scope, sent } = guarded();
+    let reads = 0;
+    const shifting = { toString() { reads += 1; return reads === 1 ? 'https://huggingface.co/x' : 'https://example.test/x'; } };
+    await scope.fetch(shifting);
+    assert.equal(sent.at(-1).input.url, 'https://huggingface.co/x');
+    // A Request whose own properties say another URL than the one it holds
+    class Other extends Request {
+      get url() { return 'https://huggingface.co/x'; }
+    }
+    await assert.rejects(scope.fetch(new Other('https://example.test/x')), TypeError);
+    // The other APIs get the string it checked
+    for (const send of [
+      (url) => { const xhr = new scope.XMLHttpRequest(); xhr.open('GET', url); xhr.send(); },
+    ]) {
+      reads = 0;
+      send(shifting);
+    }
+    // A beacon is a POST, which no uncredentialed row takes: its own origin, then
+    let beacons = 0;
+    assert.equal(scope.navigator.sendBeacon({ toString() { beacons += 1; return beacons === 1 ? `${OWN}/beacon` : 'https://example.test/x'; } }), true);
+    await settle();
+    assert.deepEqual(sent.slice(1).map(({ api, url }) => [api, url]), [['xhr', 'https://huggingface.co/x'], ['beacon', `${OWN}/beacon`]]);
+  });
+
+  it("resolves a relative URL against the document's base URL, and keeps the platform's URL and Request from install", async () => {
+    const { scope, sent } = context();
+    scope.document = { baseURI: `${OWN}/pages/` };
+    guard.installGuard(scope, { surface: 'newtab' });
+    await scope.fetch('notes.json');
+    assert.equal(sent[0].input.url, `${OWN}/pages/notes.json`);
+    // Replaced after install, they change nothing
+    scope.URL = class { constructor() { this.protocol = 'chrome-extension:'; this.host = 'test-extension'; this.href = `${OWN}/x`; } };
+    scope.Request = class extends Request { get url() { return `${OWN}/x`; } };
+    await assert.rejects(scope.fetch('https://example.test/x'), TypeError);
+    assert.equal(sent.length, 1);
+  });
+
+  it('refuses an XHR send with no open it saw', async () => {
+    const { scope, sent, reports } = guarded();
+    const xhr = new scope.XMLHttpRequest();
+    const events = [];
+    xhr.addEventListener('error', () => events.push('error'));
+    xhr.send();
+    await settle();
+    assert.deepEqual(events, ['error']);
+    assert.deepEqual(sent, []);
+    assert.equal(reports.length, 1);
+  });
+
+  it("reaches the stored WebDAV server's origin only, with its four methods and Basic auth, remote or on loopback", async () => {
+    let server = 'https://dav.example.test';
+    const { scope, sent } = guarded({ stored: () => server });
+    const auth = { Authorization: 'Basic dGVzdDp0ZXN0' };
+    for (const [method, extra] of [['OPTIONS', {}], ['PUT', { headers: { ...auth, 'Content-Type': 'application/json' }, body: '{}' }], ['GET', {}], ['HEAD', {}]]) {
+      await scope.fetch(`${server}/newtabnote-sync.json`, { method, headers: auth, ...extra });
+    }
+    assert.deepEqual(sent.map(({ input }) => [input.method, input.redirect]), [['OPTIONS', 'error'], ['PUT', 'error'], ['GET', 'error'], ['HEAD', 'error']]);
+    for (const [url, init] of [
+      ['https://other.example.test/newtabnote-sync.json', { headers: auth }],
+      [`${server}/newtabnote-sync.json`, { method: 'DELETE', headers: auth }],
+      [`${server}/newtabnote-sync.json`, { headers: { 'X-Other': '1' } }],
+      ['http://dav.example.test/newtabnote-sync.json', { headers: auth }],
+    ]) {
+      await assert.rejects(scope.fetch(url, init), TypeError, url);
+    }
+    server = 'http://localhost:8080';
+    await scope.fetch('http://localhost:8080/newtabnote-sync.json', { method: 'PUT', headers: auth, body: '{}' });
+    server = null;
+    await assert.rejects(scope.fetch('http://localhost:8080/newtabnote-sync.json', { headers: auth }), TypeError);
+    assert.equal(sent.length, 5);
   });
 
   it("refuses a header the row doesn't take, and a credential in the query", async () => {
@@ -163,19 +265,19 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
       await scope.fetch('https://api.openai.com/v1/models', { headers });
     }
     assert.equal(sent.length, forms.length);
-    for (const { init } of sent) assert.deepEqual(init.headers, [['authorization', 'Bearer test']]);
+    for (const { input } of sent) assert.deepEqual([...input.headers], [['authorization', 'Bearer test']]);
     // Headers that answer differently each time they're read are read once, and that is what goes
     let reads = 0;
     const shifting = { *[Symbol.iterator]() { reads += 1; yield ['Authorization', 'Bearer test']; if (reads > 1) yield ['X-Other', '1']; } };
     await scope.fetch('https://api.openai.com/v1/models', { headers: shifting });
     assert.equal(reads, 1);
-    assert.deepEqual(sent.at(-1).init.headers, [['authorization', 'Bearer test']]);
+    assert.deepEqual([...sent.at(-1).input.headers], [['authorization', 'Bearer test']]);
     // So are options that do
     let methods = 0;
     const options = { get method() { methods += 1; return methods > 1 ? 'DELETE' : 'GET'; }, headers: { Authorization: 'Bearer test' } };
     await scope.fetch('https://api.openai.com/v1/models', options);
     assert.equal(methods, 1);
-    assert.equal(sent.at(-1).init.method, 'GET');
+    assert.equal(sent.at(-1).input.method, 'GET');
     // Headers fetch would refuse are refused
     await assert.rejects(scope.fetch('https://api.openai.com/v1/models', { headers: [['Authorization']] }), TypeError);
     assert.equal(sent.length, forms.length + 2);
@@ -215,6 +317,9 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     assert.deepEqual(events, ['socket error', 'socket close', 'source error']);
     assert.equal(socket.readyState, 3);
     assert.equal(source.readyState, 2);
+    assert.ok(socket instanceof scope.WebSocket);
+    assert.ok(source instanceof scope.EventSource);
+    assert.deepEqual([scope.WebSocket.CLOSED, scope.EventSource.CLOSED], [3, 2]);
     assert.equal(scope.navigator.sendBeacon('https://example.test/beacon', 'x'), false);
     assert.deepEqual(sent, []);
   });
@@ -274,9 +379,19 @@ describe('the network guard (js/kernel/composition/network-guard.js)', () => {
     // As the build inlines them, a field at its usual value left out, and read back the same
     const { compactRows } = await import('../js/kernel/composition/destination-match.js');
     const compact = compactRows(cut);
-    assert.deepEqual(compact[0], { origin: 'https://api.openai.com', pathPrefix: '/v1/' });
+    assert.deepEqual(compact.compact[0], { origin: 'https://api.openai.com', pathPrefix: '/v1/' });
     assert.ok(JSON.stringify(compact).length < JSON.stringify(cut).length * 0.6);
     assert.deepEqual(guardRows(compact), cut);
+    // Only the build's compact rows are read with the usual values: a full row missing one is refused
+    const { methods, ...noMethods } = cut[0];
+    const { headers, ...noHeaders } = cut[0];
+    assert.ok(methods && headers);
+    assert.equal(guardRows([noMethods]), null);
+    assert.equal(guardRows([noHeaders]), null);
+    assert.deepEqual(guardRows({ compact: [noMethods] })[0].methods, ['GET', 'POST']);
+    const full = guarded({ rows: [noMethods, ...cut.slice(1)] });
+    await assert.rejects(full.scope.fetch('https://huggingface.co/x'), TypeError);
+    assert.deepEqual(full.reports, [{ surface: 'newtab', errorCode: 'registry-unreadable', count: 0 }, { surface: 'newtab', errorCode: 'registry-unreadable', count: 1 }].slice(0, 1));
     for (const bad of [null, {}, [null], [{ ...rows[0], origin: 'https://api.openai.com/v1' }], [{ ...rows[0], location: 'loopback' }], [{ ...rows[0], methods: 'GET' }], [{ ...rows[0], headers: [1] }]]) {
       assert.equal(guardRows(bad), null, JSON.stringify(bad));
     }
@@ -369,6 +484,19 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
     stored = { setting_ollamaUrl: 'http://192.168.1.5:9000' };
     assert.equal(await loopback(), null);
     assert.equal(install.loopbackOf({ chrome: { runtime: { id: 'x' } } }, 'offscreen')(), guard.ANY_LOOPBACK);
+    // The server of the WebDAV config the sync service keeps before it connects: https anywhere, or loopback
+    const dav = install.storedOf({ chrome: { storage } });
+    for (const [serverUrl, origin] of [
+      ['https://dav.example.test/remote.php/dav', 'https://dav.example.test'],
+      ['http://localhost:8080/dav', 'http://localhost:8080'],
+      ['http://dav.example.test/dav', null],
+      ['https://user:secret@dav.example.test/', null],
+      [undefined, null],
+    ]) {
+      stored = { setting_syncWebdavConfig: serverUrl === undefined ? null : { serverUrl, username: 'test', password: 'test' } };
+      assert.equal(await dav(), origin, String(serverUrl));
+    }
+    assert.equal(install.storedOf({})(), null);
     assert.equal(install.loopbackOf({}, 'worker-internal')(), null);
 
     // Installed on a page, a call to a loopback host reads it then
@@ -377,17 +505,21 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
     stored = { setting_ollamaUrl: 'http://localhost:8080' };
     await scope.fetch('http://localhost:8080/api/tags');
     await assert.rejects(scope.fetch('http://localhost:11434/api/tags'), TypeError);
-    assert.deepEqual(sent.map(({ input }) => input), ['http://localhost:8080/api/tags']);
+    assert.deepEqual(sent.map(({ input }) => input.url), ['http://localhost:8080/api/tags']);
   });
 
-  it("hands the guard's refusals to the context's failure events as network.request-refused", async () => {
-    const { scope } = context();
-    guard.installGuard(scope, { surface: 'newtab' });
+  it("sends a page's refusals to the service worker itself, so no later code can take them", async () => {
+    const messages = [];
+    const { scope } = context({ chrome: { runtime: { id: 'test-extension', sendMessage: async (message) => { messages.push(message); } } } });
+    install.installContextGuard(scope);
     await scope.fetch('https://example.test/x').catch(() => {});
-    const journaled = [];
-    assert.equal(refusals.journalRefusals(scope, { event: (code, fields) => journaled.push([code, fields]) }), true);
-    assert.deepEqual(journaled, [['network.request-refused', { surface: 'newtab', errorCode: 'destination-refused', count: 1 }]]);
-    assert.equal(refusals.journalRefusals({}, { event() {} }), false);
+    assert.deepEqual(messages, [{ type: refusals.REFUSAL_MESSAGE, report: { surface: 'newtab', errorCode: 'destination-refused', count: 1 } }]);
+    assert.deepEqual(Object.keys(scope[guard.GUARD]), ['surface']);
+    // The worker journals only a report's own shape
+    assert.deepEqual(refusals.refusalFields({ surface: 'popup', errorCode: 'headers-refused', count: 2 }), { surface: 'popup', errorCode: 'headers-refused', count: 2 });
+    for (const report of [null, {}, { surface: 'worker-internal', errorCode: 'destination-refused', count: 1 }, { surface: 'newtab', errorCode: 'other', count: 1 }, { surface: 'newtab', errorCode: 'destination-refused', count: -1 }, { surface: 'newtab', errorCode: 'destination-refused', count: 1.5 }]) {
+      assert.equal(refusals.refusalFields(report), null, JSON.stringify(report));
+    }
     const { EVENT_CODES } = await import('../js/trust/core/event-codes.js');
     const { checkEvidence } = await import('../js/trust/core/evidence.js');
     const entry = EVENT_CODES['network.request-refused'];
@@ -412,8 +544,10 @@ describe('the service worker, whose first module is the guard (js/background.js)
       setup: (env) => {
         env.global.URL = URL;
         env.global.Headers = Headers;
-        env.global.fetch = async (url) => {
-          fetched.push(String(url));
+        env.global.Request = Request;
+        env.global.Response = Response;
+        env.global.fetch = async (input) => {
+          fetched.push(typeof input === 'string' ? input : input.url);
           return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}), text: async () => '{}' };
         };
         env.chrome.api.offscreen = { createDocument: async () => {} };
@@ -447,6 +581,7 @@ describe('the service worker, whose first module is the guard (js/background.js)
     const started = await worker();
     assert.equal(started.env.global.fetch[guard.GUARD], true);
     assert.equal(started.env.global[guard.GUARD].surface, 'worker-internal');
+    assert.deepEqual(Object.keys(started.env.global[guard.GUARD]), ['surface']);
     assert.equal((await started.ask('https://api.z.ai/api/paas/v4/models', { method: 'GET' })).status, 200);
     assert.deepEqual(started.fetched, ['https://api.z.ai/api/paas/v4/models']);
   });
@@ -464,6 +599,18 @@ describe('the service worker, whose first module is the guard (js/background.js)
     assert.deepEqual(broken.fetched, []);
     const refusals = (await journal(broken.indexedDB)).filter(([code]) => code === 'network.request-refused');
     assert.deepEqual(refusals, [['network.request-refused', { surface: 'worker-internal', errorCode: 'registry-unreadable', count: 0 }]]);
+  });
+
+  it("journals a page's refusal report from this extension, and nothing from anyone else or of another shape", async () => {
+    const started = await worker();
+    const report = { surface: 'popup', errorCode: 'destination-refused', count: 1 };
+    const send = (message, sender) => started.dispatch('runtime.onMessage', message, sender, () => {});
+    await send({ type: 'NETWORK_REFUSED', report }, SENDER);
+    await send({ type: 'NETWORK_REFUSED', report: { ...report, surface: 'sidepanel' } }, { id: 'another', url: 'chrome-extension://another/x.html' });
+    await send({ type: 'NETWORK_REFUSED', report: { ...report, errorCode: 'note text' } }, SENDER);
+    await started.drain();
+    const refusals = (await journal(started.indexedDB)).filter(([code]) => code === 'network.request-refused');
+    assert.deepEqual(refusals, [['network.request-refused', report]]);
   });
 });
 

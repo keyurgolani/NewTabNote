@@ -1,49 +1,33 @@
 /**
- * The network guard's refusals into a context's diagnostic journal (#21 slice 1b, "Guard"):
- * the guard (network-guard.js) installed first in the context counts each call it refuses,
- * and journalRefusals hands its reports to the context's failure events as
- * `network.request-refused` (event-codes.js), the ones it held until now first. This module
- * imports nothing, so the guard's own code stays out of the graph that reads it: a page's
- * guard is a script of its own.
+ * The network guard's refusals on their way to the diagnostic journal (#21 slice 1b, "Guard").
+ * Only the guard's installer holds the handle its reports come through (network-guard.js), so
+ * no later code can take them or keep them out:
+ *
+ * - a page and the offscreen document send each report to the service worker as a
+ *   REFUSAL_MESSAGE, which the worker journals (refusalFields checks it first);
+ * - the service worker journals its own through the handle network-guard-first.js exports.
+ *
+ * This module imports nothing, so the guard's code stays out of the graphs that read it.
  */
 
-/** The guard's mark, where its handle is on the context (network-guard.js's GUARD) */
-const GUARD = Symbol.for('ntn.networkGuard');
+/** The message a context's guard sends the worker with a refusal report */
+export const REFUSAL_MESSAGE = 'NETWORK_REFUSED';
 
-/**
- * Hand the guard's refusal reports on `scope` to `events`. A context without the guard has none
- * to hand. Never throws.
- * @param {any} scope
- * @param {{event(code: string, fields?: Record<string, unknown>): unknown}} events
- * @returns {boolean} whether there was a guard to listen to
- */
-export function journalRefusals(scope, events) {
-  try {
-    const handle = scope && scope[GUARD];
-    if (!handle || typeof handle.onRefused !== 'function') return false;
-    handle.onRefused((/** @type {Record<string, unknown>} */ report) => {
-      try {
-        events.event('network.request-refused', report);
-      } catch {
-        // The journal is best effort
-      }
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
+/** The surfaces that send one: the pages */
+const SURFACES = Object.freeze(['newtab', 'popup', 'sidepanel', 'offscreen']);
+
+/** The error codes a report carries (network-guard.js's RefusalCode) */
+const CODES = Object.freeze(['destination-refused', 'headers-refused', 'redirect-refused', 'registry-unreadable']);
 
 /**
- * Have the guard on `scope` refuse every destination from now on, as the service worker does
- * when the destination client finds a problem with the registry. Reported once. Never throws.
- * @param {any} scope
+ * A page's refusal report as `network.request-refused`'s fields, or null for anything else
+ * @param {unknown} report
+ * @returns {{surface: string, errorCode: string, count: number} | null}
  */
-export function refuseEveryDestination(scope) {
-  try {
-    const handle = scope && scope[GUARD];
-    if (handle && typeof handle.refuseAll === 'function') handle.refuseAll();
-  } catch {
-    // The client refuses every request on its own
-  }
+export function refusalFields(report) {
+  if (report === null || typeof report !== 'object') return null;
+  const { surface, errorCode, count } = /** @type {Record<string, unknown>} */ (report);
+  if (typeof surface !== 'string' || !SURFACES.includes(surface) || typeof errorCode !== 'string' || !CODES.includes(errorCode)) return null;
+  if (!Number.isSafeInteger(count) || /** @type {number} */ (count) < 0) return null;
+  return { surface, errorCode, count: /** @type {number} */ (count) };
 }

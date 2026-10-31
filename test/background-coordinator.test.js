@@ -329,8 +329,9 @@ describe("a worker whose coordinator can't serve", () => {
         // a request with, and a fetch that answers
         env.global.URL = URL;
         env.global.Headers = Headers;
-        env.global.fetch = async (url) => {
-          fetched.push(String(url));
+        env.global.Request = Request;
+        env.global.fetch = async (input) => {
+          fetched.push(typeof input === 'string' ? input : input.url);
           return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}), text: async () => '{}' };
         };
       },

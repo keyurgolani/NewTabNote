@@ -66,8 +66,9 @@ export { carriesCredential, headerPairs };
 
 const KINDS = Object.freeze(['packaged', 'user', 'legacy']);
 const CREDENTIALS = Object.freeze(['none', 'bearer', 'x-api-key', 'x-goog-api-key', 'basic']);
-const METHODS = Object.freeze(['GET', 'POST']);
-const LOCATIONS = Object.freeze(['remote', 'loopback']);
+const METHODS = Object.freeze(['GET', 'POST', 'PUT', 'HEAD', 'OPTIONS']);
+/** remote: its origin; loopback: the stored Ollama URL's origin only; stored: the stored WebDAV server's only */
+const LOCATIONS = Object.freeze(['remote', 'loopback', 'stored']);
 const REACHED_BY = Object.freeze(['fetch', 'image', 'frame']);
 /** The header each credential scheme travels in */
 const CREDENTIAL_HEADERS = Object.freeze({ bearer: 'authorization', 'x-api-key': 'x-api-key', 'x-goog-api-key': 'x-goog-api-key', basic: 'authorization' });
@@ -81,19 +82,21 @@ const DEFAULT_PORTS = Object.freeze({ 'http:': '80', 'https:': '443' });
  * @returns {boolean}
  */
 function wellFormed({ host, port }) {
-  if (!host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return false;
+  if (host !== '*' && !host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return false;
   return port === '' || port === '*' || (Number(port) <= 65535 && String(Number(port)) === port);
 }
 
 /**
- * Whether two rows could take the same request: one origin and way, prefixes where one holds
- * the other, and a method in common
+ * Whether two rows could take the same request: one origin, location and way, prefixes where
+ * one holds the other, and a method in common. A loopback row takes only the stored Ollama
+ * URL's origin and a stored row only the stored WebDAV server's, so the two don't overlap on
+ * the same pattern.
  * @param {Record<string, unknown>} a
  * @param {Record<string, unknown>} b
  * @returns {boolean}
  */
 function overlaps(a, b) {
-  if (a.origin !== b.origin || a.reachedBy !== b.reachedBy) return false;
+  if (a.origin !== b.origin || a.location !== b.location || a.reachedBy !== b.reachedBy) return false;
   const [first, second] = [String(a.pathPrefix), String(b.pathPrefix)];
   if (!first.startsWith(second) && !second.startsWith(first)) return false;
   const methods = Array.isArray(a.methods) ? a.methods : [];
@@ -125,12 +128,15 @@ export function destinationProblems(rows) {
     if (!parts || !wellFormed(parts)) {
       problem('an origin: a scheme and a host, and no path, query, or userinfo');
     } else {
+      const local = parts.protocol === 'http:' && LOOPBACK_HOSTS.includes(parts.host) && !parts.wildcard;
       if (row.location === 'loopback') {
-        if (parts.protocol !== 'http:' || !LOOPBACK_HOSTS.includes(parts.host) || parts.wildcard) problem('loopback is http on localhost or 127.0.0.1');
-      } else if (parts.protocol !== 'https:' || parts.port === '*' || LOOPBACK_HOSTS.includes(parts.host)) {
+        if (!local) problem('loopback is http on localhost or 127.0.0.1');
+      } else if (row.location === 'stored') {
+        if (!local && (parts.protocol !== 'https:' || parts.host !== '*' || parts.port !== '')) problem('a stored row is http on localhost or 127.0.0.1, or https on any host');
+      } else if (parts.protocol !== 'https:' || parts.port === '*' || parts.host === '*' || LOOPBACK_HOSTS.includes(parts.host)) {
         problem('a remote origin is https, on no loopback host or port wildcard');
       }
-      if ((parts.wildcard || parts.port === '*') && row.kind !== 'legacy') problem('only a legacy row has a wildcard');
+      if ((parts.wildcard || parts.port === '*' || parts.host === '*') && row.kind !== 'legacy') problem('only a legacy row has a wildcard');
       if (parts.port === DEFAULT_PORTS[/** @type {keyof typeof DEFAULT_PORTS} */ (parts.protocol)]) problem("an origin names no port its scheme answers on anyway");
     }
     if (typeof row.pathPrefix !== 'string' || !row.pathPrefix.startsWith('/') || /[?#\s\\]/.test(row.pathPrefix)) problem('a path prefix starting with /');

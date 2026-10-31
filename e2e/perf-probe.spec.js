@@ -45,12 +45,16 @@ test("the probe's network-off mode stops requests outside the extension, from a 
   const server = http.createServer((request, response) => response.end('answered'));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const urls = [`http://localhost:${server.address().port}/`, 'https://api.openai.com/v1/models'];
+  // The stand-in is the stored Ollama URL, the one loopback origin the network guard lets a
+  // page and the worker reach (#21 slice 1b), so the network-off mode is what stops it
+  const storeOllamaUrl = page => page.evaluate(url => chrome.storage.local.set({ setting_ollamaUrl: url }), urls[0].replace(/\/$/, ''));
   try {
     // Control: with the route taken off, the page and the worker reach the local server
     const control = await launchExtension({ dist: resolveDist(), chromium: playwright.chromium });
     try {
       await control.context.unrouteAll({ behavior: 'ignoreErrors' });
       const page = await control.openSurface('popup');
+      await storeOllamaUrl(page);
       for (const target of [page, control.worker]) {
         const { results, violations } = await target.evaluate(tryAll, urls.slice(0, 1));
         expect(results).toEqual(['answered 200']);
@@ -64,6 +68,7 @@ test("the probe's network-off mode stops requests outside the extension, from a 
     try {
       const page = await extension.openSurface('popup');
       await expect(page.getByRole('textbox', { name: 'Quick note input' })).toBeVisible();
+      await storeOllamaUrl(page);
       for (const target of [page, extension.worker]) {
         const { results, violations } = await target.evaluate(tryAll, urls);
         expect(results).toEqual(['failed: TypeError', 'failed: TypeError']);

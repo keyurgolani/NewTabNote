@@ -11,8 +11,8 @@
  */
 
 // The network guard first, ahead of every other module (#21 slice 1b): it wraps the worker's
-// fetch before anything else can call it, and never throws
-import './kernel/composition/network-guard-first.js';
+// fetch before anything else can call it, and never throws. Its handle is the worker's alone.
+import { contextGuard } from './kernel/composition/network-guard-first.js';
 // utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
 import './utils.js';
 import './storage.js';
@@ -27,11 +27,11 @@ import {
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 import { REGISTRY_PROBLEMS } from './kernel/composition/destinations.js';
-import { journalRefusals, refuseEveryDestination } from './kernel/composition/network-refusals.js';
+import { REFUSAL_MESSAGE, refusalFields } from './kernel/composition/network-refusals.js';
 
 // A registry the destination client found a problem with: the client refuses every request,
 // and so does the network guard, which reports why once (#21 slice 1b)
-if (REGISTRY_PROBLEMS.length > 0) refuseEveryDestination(self);
+if (REGISTRY_PROBLEMS.length > 0 && contextGuard) contextGuard.refuseAll();
 
 /** This worker instance's id, which #13's router sends in each welcome (#35) */
 const instanceId = coordinatorInstanceId();
@@ -171,11 +171,18 @@ async function ensureOffscreenDocument() {
   await creatingOffscreen;
 }
 
-/** How long the worker waits for the offscreen document's answer before it fetches itself */
-const OFFSCREEN_ANSWER_MS = 30_000;
+/**
+ * How long the worker waits for the offscreen document's answer. Under the page's own 30 s
+ * (js/llm.js's fetchViaBackground), so the worker answers first: with no answer, and the page's
+ * fallback sends the request, which then goes out at most twice, as before.
+ */
+const OFFSCREEN_ANSWER_MS = 25_000;
+
+/** What askOffscreen answers when the document doesn't answer in time */
+const OFFSCREEN_LATE = Symbol('offscreen-late');
 
 /**
- * `message` sent to the offscreen document, and its answer, or undefined when it doesn't
+ * `message` sent to the offscreen document, and its answer, or OFFSCREEN_LATE when it doesn't
  * answer within OFFSCREEN_ANSWER_MS
  * @param {object} message
  * @returns {Promise<unknown>}
@@ -183,7 +190,7 @@ const OFFSCREEN_ANSWER_MS = 30_000;
 async function askOffscreen(message) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
-  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), OFFSCREEN_ANSWER_MS); });
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(OFFSCREEN_LATE), OFFSCREEN_ANSWER_MS); });
   try {
     return await Promise.race([chrome.runtime.sendMessage(message), late]);
   } finally {
@@ -192,6 +199,12 @@ async function askOffscreen(message) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // A page's network guard refused a call (#21 slice 1b): journaled here, from this extension only
+  if (request && request.type === REFUSAL_MESSAGE) {
+    const fields = isOwnSender(sender) ? refusalFields(request.report) : null;
+    if (fields) failureEvents.event('network.request-refused', fields);
+    return false;
+  }
   if (request && request.type === 'API_REQUEST') {
     // Only this extension's own pages and worker (#21): a web page or another extension
     // never gets a request made for it
@@ -201,6 +214,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleApiRequest(request)
       .then(response => {
+        // No answer in time: the page's own fallback sends it, so it goes out at most twice
+        if (response === null) {
+          sendResponse(null);
+          return;
+        }
         if ('error' in response) console.debug('Background: API request failed:', response.error);
         else console.debug('Background: API response status:', response.status, 'ok:', response.ok);
         sendResponse(response);
@@ -218,7 +236,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  * took it (js/kernel/composition/api-request.js): a packaged destination, or the Ollama URL's
  * loopback origin, with Content-Type only
  * @param {{url: string, options: Object}} request - Request details
- * @returns {Promise<{ok: boolean, status: number, data: *} | {error: string}>} Response object
+ * @returns {Promise<{ok: boolean, status: number, data: *} | {error: string} | null>} Response
+ *   object, or null when the offscreen document didn't answer in time
  */
 async function handleApiRequest(request) {
   const checked = checkRequest(request, { loopback: await storedLoopbackOrigin() });
@@ -233,14 +252,16 @@ async function handleApiRequest(request) {
       /** @type {{method: string, body?: string}} */
       const options = { method: checked.method };
       if (checked.body !== undefined) options.body = checked.body;
-      const response = /** @type {{ok: boolean, status: number, data: *} | {error: string} | undefined} */ (await askOffscreen({
+      const response = /** @type {{ok: boolean, status: number, data: *} | {error: string} | undefined | typeof OFFSCREEN_LATE} */ (await askOffscreen({
         type: 'OFFSCREEN_API_REQUEST',
         url: checked.url,
         options,
         loopbackOrigin: new URL(checked.url).origin,
       }));
       // Its answer is final, an error included, so the loopback origin is reached once. The
-      // worker fetches itself only when the document can't be reached or doesn't answer
+      // worker fetches itself only when the document can't be reached or answers nothing; one
+      // that doesn't answer in time leaves it to the page's fallback
+      if (response === OFFSCREEN_LATE) return null;
       if (response) return response;
     } catch (e) {
       console.debug('Background: Offscreen failed, trying direct fetch:', e.message);
@@ -408,7 +429,7 @@ try {
   const events = createFailureEvents({ surface: 'worker-internal' });
   failureEvents = events;
   // The calls the network guard refused, the ones it held since the worker started first
-  journalRefusals(self, events);
+  if (contextGuard) contextGuard.onRefused((report) => events.event('network.request-refused', report));
   // Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
   // reconcile now, not only at the next failure; with none held this reads one key and opens
   // nothing

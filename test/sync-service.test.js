@@ -57,6 +57,18 @@ describe('SyncService', () => {
     assert.equal(state.lastSyncAt, 12345);
   });
 
+  it("keeps the WebDAV config before its first call to the server, which the network guard reads the server's origin from (#21 slice 1b)", async (t) => {
+    const seen = [];
+    t.mock.method(globalThis, 'fetch', async () => {
+      const config = await storage.getSetting('syncWebdavConfig');
+      seen.push(config && config.serverUrl);
+      return { status: 200 };
+    });
+    await service.connect('webdav', { serverUrl: 'https://dav.example.test', username: 'user', password: 'synthetic-test-value' });
+    assert.deepEqual(seen, ['https://dav.example.test']);
+    assert.equal(await storage.getSetting('syncProvider'), 'webdav');
+  });
+
   it('disconnect clears state and settings', async () => {
     await service.init();
     // Manually set provider state

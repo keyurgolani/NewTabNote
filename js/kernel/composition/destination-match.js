@@ -5,12 +5,17 @@
  *
  * - matchDestination: a URL to the row whose origin, path prefix and method take it, `URL`-parsed,
  *   userinfo refused, an encoded separator, dot segment, or percent sign in the path refused
- *   before any prefix is matched; loopback only at the origin the caller passes;
+ *   before any prefix is matched; a loopback row only at the stored Ollama URL's origin, and a
+ *   stored row only at the stored WebDAV server's, which the caller passes;
  * - headerPairs: a request's headers read as fetch reads them, through the platform Headers;
  *   headerRefusal: a name that isn't a token or that the row doesn't list, or a line break;
  *   queryCarriesCredential: a credential in the URL's query; carriesCredential: one in a header;
  * - guardRows: rows cut to what the guard reads, after a structural check, or null;
- * - the stored Ollama URL's loopback origin, the one local origin a request may reach.
+ * - the stored Ollama URL's loopback origin and the stored WebDAV server's origin.
+ *
+ * It parses with the platform's URL and Headers as they were when it loaded, which in each
+ * context is before any other code runs (the network guard imports it first), so code that
+ * runs later can't hand it others.
  *
  * It holds no registry and no problem text: destinations.js validates the registry and says
  * what's wrong with it. Loading this module touches no browser API.
@@ -31,8 +36,13 @@ export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 /** Ollama's URL with nothing stored, as js/llm.js defaults it */
 const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
 
-/** How long a read of the stored Ollama URL may take before it answers no loopback origin */
+/** How long a read of a stored URL may take before it answers none */
 const OLLAMA_URL_READ_MS = 2000;
+
+/** The platform's URL and Headers, as this module loaded */
+const NativeURL = globalThis.URL;
+const NativeHeaders = globalThis.Headers;
+const headersForEach = NativeHeaders && NativeHeaders.prototype.forEach;
 
 /**
  * A row as the rules read it
@@ -48,24 +58,24 @@ const OLLAMA_URL_READ_MS = 2000;
 export function parse(value) {
   if (typeof value !== 'string' || value === '') return null;
   try {
-    return new URL(value);
+    return new (NativeURL || URL)(value);
   } catch {
     return null;
   }
 }
 
 /**
- * A row's origin split into scheme, host (a leading `*.` for subdomains), and port (`*` for
- * any loopback port), or null when it isn't one's shape. Read without `URL`, so a check at load
- * never depends on it. destinations.js's validator holds the host's labels and the port's
- * range to more.
+ * A row's origin split into scheme, host (a leading `*.` for subdomains, or `*` alone for any
+ * host, which only a stored row has), and port (`*` for any loopback port), or null when it
+ * isn't one's shape. Read without `URL`, so a check at load never depends on it.
+ * destinations.js's validator holds the host's labels and the port's range to more.
  * @param {unknown} origin
  * @returns {{protocol: string, host: string, wildcard: boolean, port: string} | null}
  */
 export function originParts(origin) {
-  const match = typeof origin === 'string' ? /^(https?):\/\/(\*\.)?([a-z0-9.-]+)(?::(\*|\d+))?$/.exec(origin) : null;
+  const match = typeof origin === 'string' ? /^(https?):\/\/(?:\*|(\*\.)?([a-z0-9.-]+))(?::(\*|\d+))?$/.exec(origin) : null;
   if (!match) return null;
-  const [, scheme, star, host, port = ''] = match;
+  const [, scheme, star, host = '*', port = ''] = match;
   return { protocol: `${scheme}:`, host, wildcard: Boolean(star), port };
 }
 
@@ -93,16 +103,19 @@ function givenPath(raw) {
 }
 
 /**
- * Whether `url`'s host and port are `row`'s origin; a loopback row's only at `loopback`
+ * Whether `url`'s host and port are `row`'s origin; a loopback row's only at `loopback`, and a
+ * stored row's only at `stored`
  * @param {MatchRow} row
  * @param {URL} url
  * @param {string | null} loopback
+ * @param {string | null} stored
  * @returns {boolean}
  */
-function originMatches(row, url, loopback) {
+function originMatches(row, url, loopback, stored) {
   const parts = originParts(row.origin);
   if (!parts || url.protocol !== parts.protocol) return false;
   if (row.location === 'loopback') return loopback !== null && url.origin === loopback && url.hostname === parts.host;
+  if (row.location === 'stored') return stored !== null && url.origin === stored && (parts.host === '*' || url.hostname === parts.host);
   if (parts.wildcard) return url.hostname.endsWith(`.${parts.host}`) && url.port === parts.port;
   return url.hostname === parts.host && url.port === parts.port;
 }
@@ -125,10 +138,11 @@ function underPrefix(prefix, pathname) {
  * @template {MatchRow} R
  * @param {readonly R[]} rows
  * @param {unknown} url
- * @param {{method?: string, loopback?: string | null, reachedBy?: string}} [options]
+ * @param {{method?: string, loopback?: string | null, stored?: string | null, reachedBy?: string}} [options]
+ *   `loopback` is the stored Ollama URL's origin and `stored` the stored WebDAV server's, or null
  * @returns {{ok: true, row: R, url: URL} | {ok: false, code: 'destination-refused' | 'invalid-method'}}
  */
-export function matchDestination(rows, url, { method = 'GET', loopback = null, reachedBy = 'fetch' } = {}) {
+export function matchDestination(rows, url, { method = 'GET', loopback = null, stored = null, reachedBy = 'fetch' } = {}) {
   const parsed = parse(url);
   if (!parsed || parsed.username !== '' || parsed.password !== '') return { ok: false, code: 'destination-refused' };
   // Before any prefix is matched: what `URL` resolves and what it keeps encoded alike
@@ -136,7 +150,7 @@ export function matchDestination(rows, url, { method = 'GET', loopback = null, r
   const upper = typeof method === 'string' ? method.toUpperCase() : '';
   let methodRefused = false;
   for (const row of rows) {
-    if ((row.reachedBy || 'fetch') !== reachedBy || !originMatches(row, parsed, loopback) || !underPrefix(row.pathPrefix, parsed.pathname)) continue;
+    if ((row.reachedBy || 'fetch') !== reachedBy || !originMatches(row, parsed, loopback, stored) || !underPrefix(row.pathPrefix, parsed.pathname)) continue;
     if (row.methods.includes(upper)) return { ok: true, row, url: parsed };
     methodRefused = true;
   }
@@ -153,12 +167,12 @@ export function matchDestination(rows, url, { method = 'GET', loopback = null, r
  */
 export function headerPairs(headers) {
   if (headers === null || headers === undefined) return [];
-  const Platform = globalThis.Headers;
+  const Platform = NativeHeaders || globalThis.Headers;
   if (typeof Platform !== 'function') return null;
   try {
     /** @type {Array<[string, string]>} */
     const pairs = [];
-    new Platform(/** @type {HeadersInit} */ (headers)).forEach((value, name) => pairs.push([name, value]));
+    (headersForEach || Platform.prototype.forEach).call(new Platform(/** @type {HeadersInit} */ (headers)), (/** @type {string} */ value, /** @type {string} */ name) => pairs.push([name, value]));
     return pairs;
   } catch {
     return null;
@@ -214,34 +228,42 @@ const USUAL = Object.freeze({ methods: Object.freeze(['GET', 'POST']), credentia
 
 /**
  * `rows` (guardRows' cut) with each field that holds its usual value left out, as the build
- * inlines them in the page guard
+ * inlines them in the page guard, marked compact: only such rows are read with the usual values
  * @param {readonly MatchRow[]} rows
- * @returns {Array<Record<string, unknown>>}
+ * @returns {{compact: Array<Record<string, unknown>>}}
  */
 export function compactRows(rows) {
-  return rows.map(row => Object.fromEntries(Object.entries(row).filter(([key, value]) => JSON.stringify(USUAL[/** @type {keyof typeof USUAL} */ (key)]) !== JSON.stringify(value))));
+  return { compact: rows.map(row => Object.fromEntries(Object.entries(row).filter(([key, value]) => JSON.stringify(USUAL[/** @type {keyof typeof USUAL} */ (key)]) !== JSON.stringify(value)))) };
 }
 
 /**
  * `rows`' fetch rows cut to what the guard reads (origin, path prefix, methods, credential,
- * headers, location), copied, a field compactRows left out back at its usual value, or null when
- * one isn't the shape a row has: then the guard refuses every destination. The build cuts the
- * rows it inlines in the page guard this way, once destinations.js has validated them.
+ * headers, location), copied, or null when one isn't the shape a row has: then the guard
+ * refuses every destination. Only rows compactRows marked compact are read with a missing
+ * field at its usual value; a full row missing one is refused. The build cuts the rows it
+ * inlines in the page guard this way, once destinations.js has validated them.
  * @param {unknown} rows
  * @returns {readonly MatchRow[] | null}
  */
 export function guardRows(rows) {
   try {
-    if (!Array.isArray(rows)) return null;
+    const compact = rows !== null && typeof rows === 'object' && !Array.isArray(rows) ? /** @type {{compact?: unknown}} */ (rows).compact : undefined;
+    const list = compact === undefined ? rows : compact;
+    if (!Array.isArray(list)) return null;
+    /** @type {Record<string, unknown>} */
+    const usual = compact === undefined ? {} : USUAL;
     /** @type {MatchRow[]} */
     const cut = [];
-    for (const row of rows) {
+    for (const row of list) {
       if (row === null || typeof row !== 'object') return null;
-      const { origin, pathPrefix, methods = USUAL.methods, credential = USUAL.credential, headers = USUAL.headers, location = USUAL.location, reachedBy = 'fetch' } = row;
+      const { origin, pathPrefix, methods = usual.methods, credential = usual.credential, headers = usual.headers, location = usual.location, reachedBy = 'fetch' } = row;
       const parts = originParts(origin);
-      const local = location === 'loopback';
-      if (!parts || (local ? parts.protocol !== 'http:' || !LOOPBACK_HOSTS.includes(parts.host) : location !== 'remote' || parts.protocol !== 'https:')) return null;
-      if (typeof pathPrefix !== 'string' || !pathPrefix.startsWith('/') || !strings(methods) || typeof credential !== 'string' || !strings(headers)) return null;
+      const local = parts !== null && parts.protocol === 'http:' && LOOPBACK_HOSTS.includes(parts.host);
+      const shaped = parts !== null && (location === 'loopback' ? local
+        : location === 'stored' ? local || (parts.protocol === 'https:' && parts.host === '*')
+          : location === 'remote' && parts.protocol === 'https:' && parts.host !== '*');
+      if (!shaped) return null;
+      if (typeof pathPrefix !== 'string' || !pathPrefix.startsWith('/') || !strings(methods) || methods.length === 0 || typeof credential !== 'string' || !strings(headers)) return null;
       if (reachedBy !== 'fetch') continue;
       // Copies, which only the guard that asked for them holds
       cut.push({ origin, pathPrefix, methods: [...methods], credential, headers: [...headers], location });
@@ -274,16 +296,59 @@ export function loopbackOrigin(ollamaUrl) {
  * @returns {Promise<string | null>}
  */
 export async function storedLoopbackOrigin(settings = { get: keys => chrome.storage.local.get(keys) }, { timeoutMs = OLLAMA_URL_READ_MS } = {}) {
+  const stored = await readStored(settings, 'setting_ollamaUrl', timeoutMs);
+  if (stored === UNREAD) return null;
+  return loopbackOrigin(stored === undefined ? DEFAULT_OLLAMA_URL : stored);
+}
+
+/** What readStored answers for a read that failed or took too long */
+const UNREAD = Symbol('unread');
+
+/**
+ * What chrome.storage.local holds under `key`, undefined when it holds nothing, or UNREAD when
+ * the read fails or takes longer than `timeoutMs`
+ * @param {{get(keys: string[]): Promise<Record<string, unknown>>}} settings
+ * @param {string} key
+ * @param {number} timeoutMs
+ * @returns {Promise<unknown>}
+ */
+async function readStored(settings, key, timeoutMs) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
   try {
     const late = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('read-timeout')), timeoutMs); });
-    const stored = /** @type {Record<string, unknown>} */ (await Promise.race([settings.get(['setting_ollamaUrl']), late]));
-    const url = stored && stored.setting_ollamaUrl !== undefined ? stored.setting_ollamaUrl : DEFAULT_OLLAMA_URL;
-    return loopbackOrigin(url);
+    const stored = /** @type {Record<string, unknown>} */ (await Promise.race([settings.get([key]), late]));
+    return stored ? stored[key] : undefined;
   } catch {
-    return null;
+    return UNREAD;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Where js/services/sync-service.js keeps the WebDAV config, its server's URL in it, before it connects */
+export const WEBDAV_CONFIG_KEY = 'setting_syncWebdavConfig';
+
+/**
+ * The origin of a stored WebDAV server URL: https with no userinfo, or http on loopback, or null
+ * @param {unknown} serverUrl
+ * @returns {string | null}
+ */
+export function webdavOrigin(serverUrl) {
+  const url = parse(serverUrl);
+  if (!url || url.username !== '' || url.password !== '') return null;
+  return url.protocol === 'https:' ? url.origin : loopbackOrigin(serverUrl);
+}
+
+/**
+ * The stored WebDAV server's origin (webdavOrigin), the one origin the WebDAV rows reach, or
+ * null. Read per request, so a server set in Settings applies to the next one.
+ * @param {{get(keys: string[]): Promise<Record<string, unknown>>}} settings - chrome.storage.local
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<string | null>}
+ */
+export async function storedWebdavOrigin(settings, { timeoutMs = OLLAMA_URL_READ_MS } = {}) {
+  const config = await readStored(settings, WEBDAV_CONFIG_KEY, timeoutMs);
+  // The server's URL only: nothing else of the config is read out of it
+  return config !== null && typeof config === 'object' ? webdavOrigin(/** @type {{serverUrl?: unknown}} */ (config).serverUrl) : null;
 }

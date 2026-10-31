@@ -5,8 +5,9 @@
  * new tab a call through any of them to an origin no registry row takes fails as an offline one
  * does, no request is made, and the refusal is journaled once. What the registry takes still
  * goes: a library the loader puts in (transformers.js) reaching the Hub, the Hub's CDN host,
- * the runtime host, a provider's model listing, and Ollama at the stored URL's own port, where a
- * call with a body follows no redirect. Routed responses and stand-ins on 127.0.0.1 answer;
+ * the runtime host, a provider's model listing, Ollama at the stored URL's own port, where a
+ * call with a body follows no redirect, and WebDAV sync to the server the user set. A remote
+ * WebDAV server is the unit tests': today's CSP reaches only localhost of those. Routed responses and stand-ins on 127.0.0.1 answer;
  * nothing reaches the network. A routed response is never a redirect to another host, since
  * Playwright doesn't route the request that follows one: that the guard leaves an uncredentialed
  * GET's redirect alone is test/network-guard.test.js's.
@@ -224,5 +225,44 @@ test("Ollama at the stored URL's own port goes, another loopback port doesn't, a
   } finally {
     await ollama.close();
     await elsewhere.close();
+  }
+});
+
+test("WebDAV sync reaches the server the user set, on loopback, through the sync provider, and refuses it once the user disconnects", async ({ extension }) => {
+  const dav = await standIn((request, response) => {
+    const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': '*', 'Access-Control-Allow-Headers': '*' };
+    if (request.method === 'GET') {
+      response.writeHead(200, { ...headers, 'Content-Type': 'application/json' });
+      response.end('{"syncVersion":1}');
+      return;
+    }
+    response.writeHead(request.method === 'PUT' ? 201 : 200, { ...headers, 'Last-Modified': 'Sat, 31 Oct 2026 12:00:00 GMT' });
+    response.end();
+  });
+  try {
+    await extension.context.route(`${dav.origin}/**`, route => route.continue());
+    await extension.seedOnboarded();
+    const page = await driver.openNewTab(extension);
+    // Made-up credentials, never real ones
+    const outcome = await page.evaluate(async url => {
+      const service = app.syncService;
+      await service.connect('webdav', { serverUrl: url, username: 'ntn-e2e', password: 'ntn-e2e-canary' });
+      const provider = service.providers.webdav;
+      await provider.upload({ syncVersion: 1 });
+      return { connected: provider.connected, downloaded: await provider.download(), modified: typeof (await provider.getLastModified()) };
+    }, dav.origin);
+    expect(outcome).toEqual({ connected: true, downloaded: { syncVersion: 1 }, modified: 'number' });
+    expect(dav.seen).toEqual(['OPTIONS /newtabnote-sync.json', 'PUT /newtabnote-sync.json', 'GET /newtabnote-sync.json', 'HEAD /newtabnote-sync.json']);
+
+    // Disconnected, the server is no longer the one the user set
+    const after = await page.evaluate(async url => {
+      await app.syncService.disconnect();
+      return fetch(`${url}/newtabnote-sync.json`, { headers: { Authorization: `Basic ${btoa('ntn-e2e:ntn-e2e-canary')}` } }).then(response => response.status, error => error.name);
+    }, dav.origin);
+    expect(after).toBe('TypeError');
+    expect(dav.seen).toHaveLength(4);
+    await expectNoUncaught(extension, page);
+  } finally {
+    await dav.close();
   }
 });

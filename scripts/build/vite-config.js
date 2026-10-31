@@ -254,7 +254,7 @@ function workerTerserPlugin() {
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
- * @property {readonly object[]} [guardRows] - for the guard pass: the registry's rows, validated
+ * @property {unknown} [guardRows] - for the guard pass: the registry's rows, validated
  *   and cut to what the guard reads (scripts/build/guard.js's guardRegistry)
  */
 
@@ -427,7 +427,7 @@ function backgroundConfig(options) {
  * A plugin that hands the guard pass `rows` for the registry's rows module, so the page guard
  * carries only what it reads, and no validator: the build validated them first
  * @param {string} root
- * @param {readonly object[]} rows
+ * @param {unknown} rows
  * @returns {Plugin}
  */
 function guardRowsPlugin(root, rows) {
