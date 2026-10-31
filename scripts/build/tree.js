@@ -2,25 +2,16 @@
 
 /**
  * Copies of the source tree for npm run verify:fixtures: the files the build reads
- * (scripts/build.js BUILD_INPUTS and the top-level entries its lists name), with node_modules
- * linked rather than copied, and a way to run the build's scripts in one.
+ * (scripts/build/inputs.js), with node_modules linked rather than copied, and a way to run the
+ * build's scripts in one.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const build = require('../build.js');
+const { buildEntries } = require('./inputs.js');
 
 /** @typedef {{status: number | null, stdout: string, stderr: string}} Run */
-
-/**
- * The top-level entries a build of `root` reads
- * @returns {string[]}
- */
-function buildEntries() {
-  const lists = [build.JS_FILES, build.JS_DIRS, build.CSS_FILES, build.HTML_FILES, build.STATIC_FILES, build.STATIC_DIRS];
-  return [...new Set([...build.BUILD_INPUTS, ...lists.flat().map((entry) => entry.split('/')[0])])].sort();
-}
 
 /**
  * Copy what the build reads from `root` to `dest`, and link node_modules

@@ -74,4 +74,23 @@ function canaryLeaks(canary, { logs = {}, files, zip }) {
   return problems;
 }
 
-module.exports = { ALLOWED, checkEnvironment, canaryLeaks };
+/**
+ * The same rule on the first-party modules the bundle holds, read from the sources. The bundler
+ * replaces process.env with {} and import.meta.env with an object of its own, so the shipped
+ * chunks no longer show a read the sources make (#27 slice 2).
+ * @param {Array<{file: string, text: string}>} modules
+ * @returns {Problem[]}
+ */
+function checkSourceEnvironment(modules) {
+  /** @type {Problem[]} */
+  const problems = [];
+  for (const { file, text } of modules) {
+    for (const { what, name, at } of scanScript(file, text).environment) {
+      if (what.startsWith('process.env') && name !== null && ALLOWED.has(name)) continue;
+      problems.push(problem('env/reference', `${file}:${at}`, `${what} in first-party code the bundle holds. The build gets no secrets and inlines nothing but NODE_ENV; pass the value in another way.`));
+    }
+  }
+  return problems;
+}
+
+module.exports = { ALLOWED, checkEnvironment, checkSourceEnvironment, canaryLeaks };

@@ -8,7 +8,7 @@ How the tests are set up, what they're allowed to fake, and the three records th
 | --- | --- | --- |
 | `npm test` | `test/*.test.js` and `test/kernel/*.test.mjs` under `node --test` | every PR (`pr-checks.yml`) |
 | `npm run test:kernel` | `test/kernel/*.test.mjs` alone | every PR |
-| `npm run test:extension` | the Playwright specs in `e2e/`, on the built extension in Chromium | every PR, and locally only through the machine lock |
+| `npm run test:extension` | the Playwright specs in `e2e/`, on the built extension in Chromium. A self-test that edits a module edits each chunk `dist-report/modules.json` says holds it | every PR, and locally only through the machine lock |
 | `npm run verify:fixtures` | one build per build failure rule, each a copy of the tree with the defect `test/build-fixtures/<rule>/fixture.json` writes, which has to fail with its `[code]` and leave no `dist/` | every PR's build job, and locally only through the machine lock |
 | `npm run verify:reproducible` | two clean builds of `HEAD`, in different directories at different times, which have to package the same zip, `buildId`, and `outputDigest` | every PR's build job, and locally only through the machine lock |
 | `npm run test:mutants` | the mutant catalog, `scripts/mutants.js` | by hand, when reviewing a test PR that touches a protected behavior |
@@ -17,7 +17,7 @@ How the tests are set up, what they're allowed to fake, and the three records th
 
 ## Fixture rules
 
-1. Tests load the production files. No copy of a production method, no reimplementation of what it does. `test/helpers/legacy-env.js` loads the legacy 1.4.x scripts unmodified into a `node:vm` context, the way the extension loads them as classic scripts. Kernel tests import the modules under `js/kernel/` directly.
+1. Tests load the production files. No copy of a production method, no reimplementation of what it does. `test/helpers/legacy-env.js` loads the legacy 1.4.x scripts unmodified into a `node:vm` context, as classic scripts, the way 1.4.x loaded them. The bundler folds them into chunks since #27 slice 2, so a legacy file holds nothing a classic script can't parse, such as `import.meta`, and the composition root hands it what needs one (the indexer's starter, `js/kernel/composition/workers.js`). Kernel tests import the modules under `js/kernel/` directly.
 2. Fakes stand in for the browser only: `fake-indexeddb` (pinned) for IndexedDB, and `legacy-env.js`'s stubs for `chrome.*`, timers, `navigator.locks`, `BroadcastChannel`, and a small DOM. Nothing in `js/` has a test-only branch.
 3. A fake of a browser API is held to the real one. The `chrome.storage.local` stub runs `test/helpers/chrome-storage-suite.js` in Node, and the same suite runs in Chromium in `e2e/chrome-storage.spec.js`. Where they differ, the stub changes.
 4. Databases are built with raw `indexedDB.open` calls (`createDatabase` in `legacy-env.js`), so a test sees what a 1.4.0 or newer build would have left on disk, not what app startup would make of it.

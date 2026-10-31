@@ -89,12 +89,15 @@ The build runs only on the Node version in `.nvmrc` (24.18.0), with npm 11.16.0,
 # Install dependencies
 npm install
 
-# Build for production (minified). Any problem (a type, CSS, terser, or manifest error, a
+# Build for production. Vite bundles the four pages, their module workers, and the service
+# worker (scripts/build/vite-config.js); terser minifies the JavaScript and lightningcss the
+# CSS. Any problem (a bundler error or warning, a type, CSS, terser, or manifest error, a
 # missing input, a file the package names but lacks, remote or inline code) fails it with a
-# [code] per problem, and it leaves no dist/
+# [code] per problem, and it leaves no dist/. dist-report/modules.json, which never ships,
+# maps each source module to the files that hold it.
 npm run build
 
-# Build for development (no minification, the same checks)
+# Build for development (JavaScript unminified, CSS still minified, the same checks)
 npm run build:dev
 
 # Create release package (.zip), the same bytes for the same build
@@ -112,9 +115,9 @@ npm run verify:reproducible
 # Full release build (clean + build + package)
 npm run release
 
-# Extension tests in Playwright's Chromium. They test the build in dist/ (or NTN_DIST)
-# and never build it, so run npm run build first.
-npx playwright install --no-shell chromium   # once
+# Extension tests in Playwright's Chromium. They test the build in dist/ (or NTN_DIST, with
+# its dist-report/ beside it) and never build it, so run npm run build first.
+node_modules/.bin/playwright install --no-shell chromium   # once
 npm run test:extension
 
 # Regenerate css/design-tokens.css and js/design/tokens.generated.js after editing
@@ -129,8 +132,10 @@ npm test
 npm run test:kernel
 npm run typecheck:kernel
 
-# Kernel boundary rules against docs/architecture/kernel-ledger.json, and a check that
-# every script the build in dist/ names resolves (run npm run build first)
+# Kernel boundary rules against docs/architecture/kernel-ledger.json, and the build's own
+# checks on the build in dist/: every path it names is in it and nothing is unnamed, each
+# page preloads what its scripts import, and the service worker is one self-contained module
+# (run npm run build first)
 npm run check:boundaries
 npm run check:dist
 ```

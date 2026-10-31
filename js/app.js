@@ -72,12 +72,14 @@ class App {
    * storage guard's raw export; `validateBackup` an import's check of a backup, which writes
    * nothing; and `legacyStorage` js/storage.js's, which the graph view (#22), the search index
    * and vectors (#22), and sync (#19) still go through until their issues move them.
+   * `startIndexer` starts the search indexer's module worker (js/kernel/composition/workers.js);
+   * without it nothing indexes.
    * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
-   *   storageState?: any, recovery?: any, validateBackup?: any, legacyStorage?: any}} [options]
+   *   storageState?: any, recovery?: any, validateBackup?: any, legacyStorage?: any, startIndexer?: any}} [options]
    */
   constructor({
     kernel, documentClient, settings, ai, noteList, events = null, removal,
-    storageState, recovery, validateBackup, legacyStorage,
+    storageState, recovery, validateBackup, legacyStorage, startIndexer = null,
   } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
@@ -92,6 +94,7 @@ class App {
     this.recovery = recovery;
     this.validateBackup = validateBackup;
     this.legacyStorage = legacyStorage;
+    this.startIndexer = startIndexer;
     this.editor = null;
     this.secondaryEditor = null;
     // Tab management
@@ -802,6 +805,7 @@ class App {
       logger: this.logger,
       llm: this.ai,
       documentClient: this.documentClient,
+      startIndexer: this.startIndexer,
     });
 
     // The note list it reads, and tells when the indexer wrote search entries

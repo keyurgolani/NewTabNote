@@ -6,7 +6,8 @@
  *
  * Fails when:
  * - the zip lacks LICENSE or THIRD_PARTY_NOTICES at its root, or they differ from the repository copies;
- * - a js/lib file that ships, Valibot's under js/lib/valibot/ included, is missing from the zip
+ * - a js/lib file that ships as a file, Valibot's license included, is missing from the zip (the
+ *   bundler folds Valibot's build into the chunks that import it, so that one ships as code)
  *   or differs from its source (headers included);
  * - PRIVACY_POLICY.md's "## Permissions" bullets (`- **<permission>**: <use>`) differ from
  *   manifest.json `permissions`, or a host permission isn't described;
@@ -33,6 +34,12 @@ const NOTICE_FILES = ['LICENSE', 'THIRD_PARTY_NOTICES'];
 const VENDOR_DIR = 'js/lib';
 /** js/lib files that don't ship: this README, the vendor records, and Valibot's type declarations */
 const VENDOR_SKIP = new Set(['README.md', 'vendor.json', 'valibot/index.d.mts', 'valibot/vendor.json']);
+/**
+ * js/lib modules the bundler folds into the chunks that import them (#27 slice 2), so they ship
+ * as code and not as files. The build checks each against its record and its notice
+ * (checkBundledVendor in scripts/build/notices.js).
+ */
+const BUNDLED = new Set(['valibot/index.mjs']);
 
 /** Network destinations the extension's code can contact, which the policy must name. */
 const REQUIRED_DESTINATIONS = [
@@ -184,7 +191,7 @@ async function checkZip(zipBuffer, root = ROOT) {
   for (const name of NOTICE_FILES) {
     await compare(name, path.join(root, name), `${name} at its root`);
   }
-  for (const name of vendoredFiles(root)) {
+  for (const name of shippedFiles(root)) {
     await compare(`${VENDOR_DIR}/${name}`, path.join(root, VENDOR_DIR, name), `${VENDOR_DIR}/${name}`);
   }
   return problems;
@@ -214,10 +221,19 @@ async function main() {
     process.exit(1);
   }
   console.log(`check:notices passed: ${path.relative(ROOT, zipPath)} carries ${NOTICE_FILES.join(' and ')} and `
-    + `${vendoredFiles().length} js/lib files as committed and recorded, with their license banners and no source map; the privacy policy and js/lib/README.md match.`);
+    + `${shippedFiles().length} js/lib files as committed and recorded, with their license banners and no source map; the privacy policy and js/lib/README.md match.`);
 }
 
-module.exports = { REQUIRED_DESTINATIONS, vendoredFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip };
+/**
+ * The js/lib files that ship as files: every vendored file but the ones the bundler folds in
+ * @param {string} [root]
+ * @returns {string[]}
+ */
+function shippedFiles(root = ROOT) {
+  return vendoredFiles(root).filter((name) => !BUNDLED.has(name));
+}
+
+module.exports = { REQUIRED_DESTINATIONS, BUNDLED, vendoredFiles, shippedFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip };
 
 if (require.main === module) {
   main().catch((error) => {

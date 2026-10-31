@@ -22,9 +22,10 @@ const realDir = dir => {
 };
 const ROOT = realDir(import.meta.dirname);
 
-// Parsed as classic scripts, the way they load: sidepanel.html's
-// <script src> without type="module", and the search indexer's new Worker()
-const CLASSIC_SCRIPTS = ['js/insights-summary.js', 'js/workers/indexer.js'];
+// Parsed as a classic script, the way it loads: sidepanel.html's <script vite-ignore src>.
+// offscreen.html loads js/offscreen.js as a module (#21 slice 1a), and the search indexer
+// starts as a module worker (#27 slice 2).
+const CLASSIC_SCRIPTS = ['js/insights-summary.js'];
 
 // The controllers App wires up, whose on* and get* callbacks count under app-callback
 const CONTROLLERS = [
