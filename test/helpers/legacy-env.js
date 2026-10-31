@@ -665,6 +665,11 @@ function newTabBlockProjections() {
   return require('./block-projections').newTabBlockProjections();
 }
 
+/** The new tab's trusted-rendering port, made once: it holds no state */
+function newTabBlockRendering() {
+  return require('./block-rendering').newTabBlockRendering();
+}
+
 /**
  * @param {Object} [options]
  * @param {'page'|'worker'} [options.context='page'] - page: window, self, document. worker: self and importScripts only.
@@ -715,6 +720,8 @@ function createLegacyEnv(options = {}) {
     location: { reload() { sandbox.__reloads = (sandbox.__reloads || 0) + 1; } },
     // What js/kernel/composition/block-projections.js installs before the new tab's scripts (#14)
     BlockProjections: newTabBlockProjections(),
+    // What js/kernel/composition/rendering.js installs beside them (#14 slice 2)
+    BlockRendering: newTabBlockRendering(),
   };
 
   let document = null;

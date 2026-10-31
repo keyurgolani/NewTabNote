@@ -113,6 +113,11 @@ export const WITHOUT_SUITE = Object.freeze({
     implementations: { 'js/kernel/core/ports/policy.js': 'test/kernel/policy.test.mjs' },
     reason: "the baseline policy is the only one until #21 replaces it behind the same port",
   },
+  'js/kernel/core/ports/rendering.js': {
+    types: ['RenderingPort'],
+    implementations: { 'js/kernel/adapters/rendering/legacy.js': 'test/kernel/blocks-rich-text.test.mjs' },
+    reason: "#14's legacy adapter is the only one until #21 slice 2 replaces it behind the same port, with a suite",
+  },
   'js/kernel/core/ports/runtime.js': {
     types: [],
     implementations: {},

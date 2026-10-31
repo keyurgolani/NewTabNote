@@ -19,5 +19,7 @@ function newTabBlockProjections() {
 }
 
 globalThis.BlockProjections = newTabBlockProjections();
+// The trusted-rendering port the new tab installs beside them (#14 slice 2)
+require('./block-rendering');
 
 module.exports = { newTabBlockProjections };
