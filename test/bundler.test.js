@@ -256,15 +256,17 @@ describe('the pages as the bundler reads them', () => {
       assert.ok(tag.attributes.has('vite-ignore'), `${page} loads ${tag.attributes.get('src')} without vite-ignore`);
       return tag.attributes.get('src');
     }));
-    assert.deepEqual(classic.sort(), ['js/entries/boot-guard.js', 'js/insights-summary.js']);
+    assert.deepEqual(classic.sort(), ['js/entries/boot-guard.js', 'js/insights-summary.js', 'js/network-guard.js', 'js/network-guard.js', 'js/network-guard.js', 'js/network-guard.js']);
+    classic.splice(0, classic.length, ...new Set(classic));
     // #27 slice 3: the vendored libraries load at their first use, as classic scripts the loader puts in
     const loaded = [...read(config.LOADER).matchAll(/chrome\.runtime\.getURL\('([^']+)'\)/g)].map(([, file]) => file);
     assert.deepEqual(loaded.sort(), ['js/lib/chart.js', 'js/lib/fuse.js', 'js/lib/jszip.min.js', 'js/lib/transformers.js']);
     assert.deepEqual([...classic, ...loaded].sort(), Object.keys(config.CLASSIC_SCRIPTS).sort());
     const vendor = readVendor();
     for (const [file, how] of Object.entries(config.CLASSIC_SCRIPTS)) {
-      // A vendored library ships byte for byte, as its record pins it; first-party code minified
-      assert.equal(how, file.startsWith('js/lib/') ? 'as-is' : 'minify', file);
+      // A vendored library ships byte for byte, as its record pins it; first-party code minified,
+      // and the network guard, whose source is a module, bundled by a pass of its own (#21 slice 1b)
+      assert.equal(how, file.startsWith('js/lib/') ? 'as-is' : file === config.GUARD_SCRIPT ? 'bundle' : 'minify', file);
       if (how === 'as-is') assert.ok(vendor.has(file), file);
     }
   });

@@ -117,6 +117,10 @@ export const EVENT_CODES = Object.freeze({
   }),
   'diagnostics.rejected': Object.freeze({ fields: Object.freeze(['reason', 'count']) }),
   'diagnostics.exported': Object.freeze({ fields: Object.freeze(['records', 'bytes']) }),
+  // A call the network guard refused (#21 slice 1b, network-guard.js): the context, why, and how
+  // many of that kind so far, the first time and then at most once an hour. No incident: the
+  // call failed as an offline one does, and the caller's own error path showed it.
+  'network.request-refused': Object.freeze({ fields: Object.freeze(['surface', 'errorCode', 'count']) }),
 });
 
 /** Every registered code, sorted */

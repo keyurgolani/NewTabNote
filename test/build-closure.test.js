@@ -39,10 +39,16 @@ describe('the closure check on the sources the bundler reads', () => {
   });
 
   it('loads no module as a classic script, as sidepanel.html would with an import in js/insights-summary.js', () => {
-    assert.deepEqual(checkClassicScripts(sourcePackage()), []);
+    // The network guard's source is a module the guard pass bundles into a classic script, which
+    // the build checks as it wrote it
+    const { CLASSIC_SCRIPTS } = require('../scripts/build/vite-config.js');
+    const bundled = Object.keys(CLASSIC_SCRIPTS).filter((file) => CLASSIC_SCRIPTS[file] === 'bundle');
+    assert.deepEqual(bundled, ['js/network-guard.js']);
+    assert.deepEqual(checkClassicScripts(sourcePackage(), { bundled }), []);
+    assert.deepEqual(checkClassicScripts(sourcePackage()).map(({ code, subject }) => `${code} ${subject}`), Array(4).fill('build/load-mode js/network-guard.js'));
     const file = 'js/insights-summary.js';
     const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-    const problems = checkClassicScripts(sourcePackage({ edits: { [file]: `import './utils.js';\n${text}` } }));
+    const problems = checkClassicScripts(sourcePackage({ edits: { [file]: `import './utils.js';\n${text}` } }), { bundled });
     assert.deepEqual(problems.map(({ code, subject, message }) => `${code} ${subject} ${message.replace(/ at \d+:\d+,/, ',')}`), [
       'build/load-mode js/insights-summary.js sidepanel.html loads it as a classic script, but it has an import or export statement or import.meta at 1:1, which only a module parses',
     ]);

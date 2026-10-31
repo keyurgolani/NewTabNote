@@ -2,13 +2,16 @@
 
 /**
  * The bundler's configuration (#27 slice 2: "Toolchain" and "Entries"). Vite runs in build
- * mode only, never as a dev server, in two passes into the same staging directory:
+ * mode only, never as a dev server, in three passes into the same staging directory:
  *   pages       the four pages, each an HTML entry. Their module scripts and stylesheets become
  *               content-hashed chunks and CSS under assets/, and a module worker one of them
  *               starts with `new Worker(new URL('…', import.meta.url), {type: 'module'})` becomes
  *               an entry of its own.
  *   background  js/background.js, the manifest's module service worker, as one self-contained ES
  *               module at that path: nothing splits off, so nothing loads after the worker starts.
+ *   guard       js/network-guard.js, the network guard each page loads as its first script (#21
+ *               slice 1b), as one self-contained classic script at that path, the destination
+ *               registry inlined, so the page is guarded before its next script runs.
  * A script a page marks vite-ignore, and a vendored library the loader puts in, stays a classic
  * script the bundler leaves alone (CLASSIC_SCRIPTS), and the build copies the files no page or
  * script imports (STATIC_FILES). The pages, js/background.js, the boot guard, the loader, the
@@ -54,13 +57,15 @@ const PAGES = Object.freeze({
 const BACKGROUND_ENTRY = 'js/background.js';
 
 /**
- * The scripts that run as classic scripts, which the bundler leaves alone, and how each ships:
- * 'as-is', byte for byte, for the vendored libraries the loader puts in at their first use
- * (js/runtime/lazy.js, #27 slice 3), their license banners included, which
- * `npm run check:notices` checks; or 'minify', with terser as a classic script, whose
- * top-level names stay the globals other scripts read, for the ones a page loads with
- * <script vite-ignore src>: the new tab's boot guard and the side panel's insights summary.
- * @type {Readonly<Record<string, 'as-is' | 'minify'>>}
+ * The scripts that run as classic scripts, which the pages pass leaves alone, and how each
+ * ships: 'as-is', byte for byte, for the vendored libraries the loader puts in at their first
+ * use (js/runtime/lazy.js, #27 slice 3), their license banners included, which
+ * `npm run check:notices` checks; 'minify', with terser as a classic script, whose top-level
+ * names stay the globals other scripts read, for the ones a page loads with
+ * <script vite-ignore src>: the new tab's boot guard and the side panel's insights summary; or
+ * 'bundle', for the network guard, a module source the guard pass bundles into a classic script
+ * at its own path (#21 slice 1b), which every page loads first.
+ * @type {Readonly<Record<string, 'as-is' | 'minify' | 'bundle'>>}
  */
 const CLASSIC_SCRIPTS = Object.freeze({
   'js/lib/fuse.js': 'as-is',
@@ -69,7 +74,14 @@ const CLASSIC_SCRIPTS = Object.freeze({
   'js/lib/transformers.js': 'as-is',
   'js/entries/boot-guard.js': 'minify',
   'js/insights-summary.js': 'minify',
+  'js/network-guard.js': 'bundle',
 });
+
+/** The network guard each page loads first, which the guard pass bundles (#21 slice 1b) */
+const GUARD_SCRIPT = 'js/network-guard.js';
+
+/** The registry's rows as the sources import them, which the guard pass inlines cut */
+const ROWS_MODULE = 'js/kernel/composition/destination-rows.js';
 
 /**
  * The page's loader (#27 slice 3), which ships at its own path as a chunk of its own, so the
@@ -152,7 +164,7 @@ function assetFileName(asset) {
 
 /**
  * @typedef {object} ChunkReport
- * @property {'pages' | 'worker' | 'background'} pass
+ * @property {'pages' | 'worker' | 'background' | 'guard'} pass
  * @property {string} fileName
  * @property {string} name
  * @property {boolean} isEntry
@@ -242,6 +254,8 @@ function workerTerserPlugin() {
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
+ * @property {unknown} [guardRows] - for the guard pass: the registry's rows, validated
+ *   and cut to what the guard reads (scripts/build/guard.js's guardRegistry)
  */
 
 /**
@@ -409,12 +423,66 @@ function backgroundConfig(options) {
   };
 }
 
+/**
+ * A plugin that hands the guard pass `rows` for the registry's rows module, so the page guard
+ * carries only what it reads, and no validator: the build validated them first
+ * @param {string} root
+ * @param {unknown} rows
+ * @returns {Plugin}
+ */
+function guardRowsPlugin(root, rows) {
+  const ids = new Set([path.join(root, ROWS_MODULE)]);
+  try {
+    ids.add(path.join(fs.realpathSync(root), ROWS_MODULE));
+  } catch {
+    // Sources that aren't there have no real path
+  }
+  return {
+    name: 'ntn:guard-rows',
+    load(id) {
+      return ids.has(id) ? `export const DESTINATION_ROWS = ${JSON.stringify(rows)};\n` : null;
+    },
+  };
+}
+
+/**
+ * The guard pass
+ * @param {PassOptions} options
+ * @returns {InlineConfig}
+ */
+function guardConfig(options) {
+  const { root, report, onLog, guardRows = null } = options;
+  if (guardRows === null) throw new Error('the guard pass needs the registry rows it inlines');
+  return {
+    ...common(options),
+    build: {
+      ...buildOptions(options),
+      modulePreload: false,
+      rolldownOptions: {
+        input: { 'network-guard': path.join(root, GUARD_SCRIPT) },
+        output: {
+          format: 'iife',
+          entryFileNames: GUARD_SCRIPT,
+          assetFileNames: assetFileName,
+          // One classic script: the registry and everything the guard imports are in it
+          codeSplitting: false,
+        },
+        checks: { ...CHECKS },
+        onLog,
+      },
+    },
+    plugins: [guardRowsPlugin(root, guardRows), reportPlugin(report, 'guard')],
+  };
+}
+
 module.exports = {
   MINIMUM_CHROME_VERSION,
   TARGET,
   PAGES,
   BACKGROUND_ENTRY,
   CLASSIC_SCRIPTS,
+  GUARD_SCRIPT,
+  ROWS_MODULE,
   LOADER,
   STATIC_FILES,
   ASSETS_DIR,
@@ -426,4 +494,5 @@ module.exports = {
   chunkFileName,
   pagesConfig,
   backgroundConfig,
+  guardConfig,
 };

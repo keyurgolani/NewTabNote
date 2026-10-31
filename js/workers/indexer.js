@@ -2,7 +2,11 @@
  * Search Indexer Web Worker
  * Processes notes and blocks to build a searchable index without blocking the main thread.
  * Supports full rebuilds (INDEX_NOTES), incremental updates (UPDATE_NOTE), and removals (REMOVE_NOTE).
+ * A module worker (js/kernel/composition/workers.js), whose first import is the network guard
+ * (#21 slice 1b): it reaches no network, and anything that tried would be refused.
  */
+
+import '../kernel/composition/network-guard-first.js';
 
 /** @type {Array<{noteId: string, name: string, content: string, tags: string[], updatedAt: number}>} */
 let currentIndex = [];

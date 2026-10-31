@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Runs the bundler's two passes (scripts/build/vite-config.js) and turns what goes wrong into
+ * Runs the bundler's three passes (scripts/build/vite-config.js) and turns what goes wrong into
  * problems (#27 "Failure rules"). An error from the bundler is `build/bundle` (an import it
  * can't resolve, a file it can't parse), `build/css` from the stylesheet pipeline, or
  * `build/terser` from the minifier. Any warning Vite or the bundler prints is
@@ -17,7 +17,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
-const { pagesConfig, backgroundConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
+const { pagesConfig, backgroundConfig, guardConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
+const { guardOrderProblems, guardRegistry } = require('./guard.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./vite-config.js').BundleReport} BundleReport */
@@ -154,7 +155,8 @@ function chunkNames(report) {
   /** @type {Problem[]} */
   const problems = [];
   const named = report.chunks
-    .filter((chunk) => chunk.isEntry || chunk.isDynamicEntry)
+    // The network guard is no chunk the loader loads: each page's first script is
+    .filter((chunk) => (chunk.isEntry || chunk.isDynamicEntry) && chunk.pass !== 'guard')
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.fileName < b.fileName ? -1 : 1));
   for (const chunk of named) {
     const existing = chunks[chunk.name];
@@ -262,6 +264,10 @@ async function bundle({ root, outDir, mode, buildId }) {
   try {
     await vite.build(pagesConfig(options));
     await vite.build(backgroundConfig(options));
+    // The page guard inlines the registry's rows cut, once they're validated
+    const registry = await guardRegistry(root);
+    if ('problem' in registry) problems.push(registry.problem);
+    else await vite.build(guardConfig({ ...options, guardRows: registry.rows }));
   } catch (error) {
     problems.push(bundlerProblem(error, root));
   }
@@ -274,7 +280,7 @@ async function bundle({ root, outDir, mode, buildId }) {
     named.problems.push(problem('build/bundle', BACKGROUND_ENTRY, `the background pass wrote ${named.chunks.background || 'nothing'} instead`));
   }
   return {
-    problems: [...named.problems, ...commonJsProblems(report, root), ...loaderProblems(report, root, outDir, buildId)],
+    problems: [...named.problems, ...commonJsProblems(report, root), ...loaderProblems(report, root, outDir, buildId), ...guardOrderProblems(report, root, sourcePath)],
     chunks: named.chunks,
     modules,
     graphs,

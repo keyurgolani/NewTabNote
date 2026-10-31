@@ -388,6 +388,75 @@ export const DESTINATION_ROWS = freeze([
     "note": "Only the stored ollamaUrl's own port: the client takes it as the one loopback origin allowed"
   },
   {
+    "id": "webdav-remote",
+    "kind": "legacy",
+    "origin": "https://*",
+    "pathPrefix": "/",
+    "methods": [
+      "OPTIONS",
+      "PUT",
+      "GET",
+      "HEAD"
+    ],
+    "credential": "basic",
+    "headers": [
+      "Authorization",
+      "Content-Type"
+    ],
+    "location": "stored",
+    "reachedBy": "fetch",
+    "proxy": false,
+    "owner": 19,
+    "removeWhen": 19,
+    "note": "Only the stored WebDAV server's own origin (setting_syncWebdavConfig's serverUrl), which js/services/sync-service.js keeps before it connects. Today's CSP reaches only localhost of these, so a remote server waits for #19"
+  },
+  {
+    "id": "webdav-localhost",
+    "kind": "legacy",
+    "origin": "http://localhost:*",
+    "pathPrefix": "/",
+    "methods": [
+      "OPTIONS",
+      "PUT",
+      "GET",
+      "HEAD"
+    ],
+    "credential": "basic",
+    "headers": [
+      "Authorization",
+      "Content-Type"
+    ],
+    "location": "stored",
+    "reachedBy": "fetch",
+    "proxy": false,
+    "owner": 19,
+    "removeWhen": 19,
+    "note": "Only the stored WebDAV server's own origin, on localhost"
+  },
+  {
+    "id": "webdav-127",
+    "kind": "legacy",
+    "origin": "http://127.0.0.1:*",
+    "pathPrefix": "/",
+    "methods": [
+      "OPTIONS",
+      "PUT",
+      "GET",
+      "HEAD"
+    ],
+    "credential": "basic",
+    "headers": [
+      "Authorization",
+      "Content-Type"
+    ],
+    "location": "stored",
+    "reachedBy": "fetch",
+    "proxy": false,
+    "owner": 19,
+    "removeWhen": 19,
+    "note": "Only the stored WebDAV server's own origin, on 127.0.0.1"
+  },
+  {
     "id": "embedding-model",
     "kind": "legacy",
     "origin": "https://huggingface.co",
