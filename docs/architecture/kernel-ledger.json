@@ -181,8 +181,8 @@
       "name": "recovery",
       "count": 2,
       "owner": 18,
-      "removeWhen": "#18's backup engine runs the storage guard's raw export",
-      "verify": "npm run check:boundaries"
+      "removeWhen": "#18's export runs the raw export through its own port, and App holds no exportRawStores handle",
+      "verify": "npm run check:boundaries at 0 for this row, and #18's round-trip test of the raw format"
     },
     {
       "file": "js/app.js",
