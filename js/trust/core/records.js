@@ -148,9 +148,9 @@ export const SALVAGE_ORIGINS = Object.freeze(/** @type {const} */ (['CanvasTabDB
 
 /**
  * The CanvasTabDB stores a salvage file holds: version 8's, but the secret `settings`, #17's
- * `meta` and `migrations`, and the four step 10 adds (#17 PR 2a): the ledger, the change log,
- * the conflict records, which keep the text of a save that lost, and the tombstones. Any other
- * store is left out, since nothing says what it holds.
+ * `meta` and `migrations`, the four step 10 adds (#17 PR 2a): the ledger, the change log, the
+ * conflict records, which keep the text of a save that lost, and the tombstones, and step 11's
+ * daily index (#17 PR 3b). Any other store is left out, since nothing says what it holds.
  */
 export const SALVAGE_STORES = Object.freeze(
   /** @type {const} */ ([
@@ -169,6 +169,7 @@ export const SALVAGE_STORES = Object.freeze(
     'changes',
     'conflicts',
     'tombstones',
+    'daily_index',
   ]),
 );
 
