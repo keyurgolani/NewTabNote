@@ -12,6 +12,9 @@
  * at its first use, through the page's loader (js/runtime/lazy.js).
  */
 
+// The block projections the legacy scripts read blocks through (#14), before any of them
+import './kernel/composition/block-projections.js';
+
 // Core infrastructure
 import './utils.js';
 import './core/storage-error.js';
