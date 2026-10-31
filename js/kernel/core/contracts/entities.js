@@ -79,6 +79,19 @@ export const folderRecord = v.looseObject({
 });
 
 /**
+ * A note's search entry, as IndexedDB's `search_index` store holds it: the note's name, its
+ * text, and the tags #22's indexer finds, so the whole entry is content.
+ */
+export const searchEntryRecord = content(
+  v.looseObject({
+    noteId: entityId('note'),
+    name: v.optional(v.unknown()),
+    content: v.optional(v.unknown()),
+    updatedAt: v.optional(v.unknown()),
+  }),
+);
+
+/**
  * One entry of #17's change log, which #13's CommitFeed reads from a cursor. #17 defines each
  * op (its slice 4), and #19 fills `parentRevisionIds` and `originDeviceId`.
  */
@@ -98,3 +111,4 @@ export const changeRecord = v.looseObject({
 /** @typedef {v.InferOutput<typeof blockInput>} BlockInputEntity */
 /** @typedef {v.InferOutput<typeof folderRecord>} FolderEntity */
 /** @typedef {v.InferOutput<typeof changeRecord>} ChangeEntity */
+/** @typedef {v.InferOutput<typeof searchEntryRecord>} SearchEntryEntity */

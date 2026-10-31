@@ -30,6 +30,7 @@ import { contentChanged, unitsWork } from './work.js';
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../domain/note.js').BlockRecord} BlockRecord */
 /** @typedef {import('../domain/note.js').NoteView} NoteView */
+/** @typedef {import('../domain/note.js').SearchEntry} SearchEntry */
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').BulkItem} BulkItem */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
@@ -51,7 +52,11 @@ import { contentChanged, unitsWork } from './work.js';
  *   | 'captureToDailyNote' | 'runBulkAction'} NoteCommandType
  */
 
-/** @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks'} NoteQueryType */
+/**
+ * @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks' | 'getNoteList' | 'getNotesByIds'
+ *   | 'listSearchEntries'}
+ *   NoteQueryType
+ */
 
 const invalid = () => rejected('validation', 'invalid-command');
 const noteNotFound = () => rejected('not-found', 'note-not-found');
@@ -596,5 +601,46 @@ export const noteQueries = {
       return found;
     });
     return notes.length > 0 ? ready(clock.now(), notes) : empty(clock.now());
+  },
+
+  async getNoteList(query, { adapter, clock }) {
+    // Every note in key order, as each view sorts them itself (domain/note.js notesInView),
+    // with the folders and search entries, in one transaction, so no list is newer than another
+    const list = await adapter.read(['notes', 'folders', 'searchIndex'], async tx => ({
+      notes: await tx.getAll('notes'),
+      folders: await tx.getAll('folders'),
+      searchEntries: await tx.getAll('searchIndex'),
+    }));
+    const found = list.notes.length > 0 || list.folders.length > 0 || list.searchEntries.length > 0;
+    return found ? ready(clock.now(), list) : empty(clock.now());
+  },
+
+  async getNotesByIds({ noteIds }, { adapter, clock }) {
+    if (!isIdList(noteIds)) return failed('validation', 'invalid-query');
+    const wanted = [...new Set(noteIds)];
+    // Each read is asked for before any answers, so a long list costs one round of requests
+    const found = await adapter.read(['notes', 'searchIndex'], tx =>
+      Promise.all(
+        wanted.map(async noteId => ({
+          note: await tx.get('notes', noteId),
+          entry: await tx.get('searchIndex', noteId),
+        })),
+      ),
+    );
+    /** @type {NoteRecord[]} */
+    const notes = [];
+    /** @type {SearchEntry[]} */
+    const searchEntries = [];
+    for (const { note, entry } of found) {
+      if (!note) continue;
+      notes.push(note);
+      if (entry) searchEntries.push(entry);
+    }
+    return notes.length > 0 ? ready(clock.now(), { notes, searchEntries }) : empty(clock.now());
+  },
+
+  async listSearchEntries(query, { adapter, clock }) {
+    const entries = await adapter.read(['searchIndex'], tx => tx.getAll('searchIndex'));
+    return entries.length > 0 ? ready(clock.now(), entries) : empty(clock.now());
   },
 };

@@ -373,6 +373,8 @@ describe('the contract schema lint (#13, AC5)', () => {
       changeRecord: ['ops'],
       folderRecord: ['name'],
       noteRecord: ['insights', 'name', 'preview'],
+      // A search entry holds a note's name and text, and the tags found in it
+      searchEntryRecord: ['(root)'],
       workspaceSession: ['openTabs.[]'],
     });
   });
