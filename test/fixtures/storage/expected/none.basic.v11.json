@@ -1,9 +1,9 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "none.empty-v1.v10",
-    "purpose": "After the registry runs to 10 on none.empty-v1.",
-    "shape": "v10",
+    "id": "none.basic.v11",
+    "purpose": "After the registry runs to 11 on none.basic.",
+    "shape": "v11",
     "releases": [],
     "provenance": "synthesized",
     "source": {
@@ -11,8 +11,8 @@
       "seed": 1
     },
     "schema": {
-      "idbVersion": 10,
-      "structuralVersion": 10,
+      "idbVersion": 11,
+      "structuralVersion": 11,
       "logicalVersion": 1
     },
     "degraded": [],
@@ -21,7 +21,7 @@
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 10,
+      "version": 11,
       "stores": [
         {
           "name": "canvases",
@@ -76,6 +76,13 @@
               "multiEntry": false
             }
           ],
+          "records": []
+        },
+        {
+          "name": "daily_index",
+          "keyPath": "dailyKey",
+          "autoIncrement": false,
+          "indexes": [],
           "records": []
         },
         {
@@ -170,7 +177,7 @@
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 10,
+                "structuralVersion": 11,
                 "logicalVersion": 1
               }
             }
@@ -194,6 +201,22 @@
                 "id": "structural-10",
                 "from": 9,
                 "to": 10,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-11",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-11",
+                "from": 10,
+                "to": 11,
                 "status": "completed",
                 "startedAt": 1792497600000,
                 "completedAt": 1792497600000,

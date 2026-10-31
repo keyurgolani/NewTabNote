@@ -1,0 +1,810 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "v11.basic",
+    "purpose": "Already at structural version 11 and logical 3 with their receipts, holding a keyed Daily Note and its daily index entry: a run finds nothing to do and writes nothing.",
+    "shape": "v11",
+    "releases": [],
+    "provenance": "synthesized",
+    "source": {
+      "generator": "scripts/fixtures/synthesize-storage.mjs",
+      "seed": 1
+    },
+    "schema": {
+      "idbVersion": 11,
+      "structuralVersion": 11,
+      "logicalVersion": 3
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 11,
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000385548-gwo3tunm7",
+              "value": {
+                "id": "1760000385548-gwo3tunm7",
+                "name": "Groceries",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": "1760000391057-gtsnkgyj9",
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "revision": 2,
+                "placementVersion": 0,
+                "sourceRevision": 0
+              }
+            },
+            {
+              "key": "1760000387312-na2vzuxgy",
+              "value": {
+                "id": "1760000387312-na2vzuxgy",
+                "name": "Reading list",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000388884-kjtehbh4m",
+              "value": {
+                "id": "1760000388884-kjtehbh4m",
+                "name": "Old plans",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": true,
+                "archivedAt": 1760000005000,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000389999-uyu9bd6rs",
+              "value": {
+                "id": "1760000389999-uyu9bd6rs",
+                "name": "Thrown away",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "trashed": true,
+                "trashedAt": 1760000006000
+              }
+            },
+            {
+              "key": "1760000392093-ek5pquh48",
+              "value": {
+                "id": "1760000392093-ek5pquh48",
+                "name": "Meeting template",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": true,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000403236-xaoelxuhb",
+              "value": {
+                "id": "1760000403236-xaoelxuhb",
+                "name": "Daily Note - Oct 9, 2025",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": true,
+                "dateStr": "2025-10-09",
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "dailyKey": "2025-10-09",
+                "dailyTimeZone": null,
+                "dailyDuplicateOf": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "changes",
+          "keyPath": [
+            "seq",
+            "entityType",
+            "entityId"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "entity",
+              "keyPath": [
+                "entityType",
+                "entityId"
+              ],
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "conflicts",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "daily_index",
+          "keyPath": "dailyKey",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "2025-10-09",
+              "value": {
+                "dailyKey": "2025-10-09",
+                "noteId": "1760000403236-xaoelxuhb"
+              }
+            }
+          ]
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000393240-2ev2vv0od",
+              "value": {
+                "id": "1760000393240-2ev2vv0od",
+                "type": "text",
+                "content": "Milk and eggs",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000385548-gwo3tunm7",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000395105-gum5dl01b",
+              "value": {
+                "id": "1760000395105-gum5dl01b",
+                "type": "todo",
+                "content": "Bread",
+                "indentLevel": 0,
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000385548-gwo3tunm7",
+                "order": 1
+              }
+            },
+            {
+              "key": "1760000396328-r4bq8370r",
+              "value": {
+                "id": "1760000396328-r4bq8370r",
+                "type": "text",
+                "content": "A long book",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000387312-na2vzuxgy",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000398145-5q7o520v1",
+              "value": {
+                "id": "1760000398145-5q7o520v1",
+                "type": "text",
+                "content": "Ideas from last year",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000388884-kjtehbh4m",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000400059-dqgzcp47m",
+              "value": {
+                "id": "1760000400059-dqgzcp47m",
+                "type": "text",
+                "content": "Not needed",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000389999-uyu9bd6rs",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000405024-aoh398de3",
+              "value": {
+                "id": "1760000405024-aoh398de3",
+                "type": "text",
+                "content": "Morning pages",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000403236-xaoelxuhb",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000391057-gtsnkgyj9",
+              "value": {
+                "id": "1760000391057-gtsnkgyj9",
+                "name": "Home",
+                "parentId": null,
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "color": null,
+                "collapsed": false
+              }
+            }
+          ]
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000406491-kok7t8q3c",
+              "value": {
+                "id": "1760000406491-kok7t8q3c",
+                "fromNoteId": "1760000385548-gwo3tunm7",
+                "toNoteId": "1760000387312-na2vzuxgy",
+                "createdAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000402002-amcjtqvfq",
+              "value": {
+                "id": "1760000402002-amcjtqvfq",
+                "canvasId": "1760000385548-gwo3tunm7",
+                "blob": {
+                  "$type": "Blob",
+                  "mime": "image/png",
+                  "base64": "iVBORw0KGgoAAAANAQIDBA=="
+                },
+                "type": "image/png",
+                "createdAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "meta",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "changes",
+              "value": {
+                "key": "changes",
+                "head": 0,
+                "floor": 0
+              }
+            },
+            {
+              "key": "schema",
+              "value": {
+                "key": "schema",
+                "structuralVersion": 11,
+                "logicalVersion": 3
+              }
+            }
+          ]
+        },
+        {
+          "name": "migrations",
+          "keyPath": [
+            "id",
+            "status"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": [
+                "logical-2",
+                "completed"
+              ],
+              "value": {
+                "id": "logical-2",
+                "from": 1,
+                "to": 2,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "logical-3",
+                "completed"
+              ],
+              "value": {
+                "id": "logical-3",
+                "from": 2,
+                "to": 3,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-10",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-10",
+                "from": 9,
+                "to": 10,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-11",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-11",
+                "from": 10,
+                "to": 11,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-9",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-9",
+                "from": 8,
+                "to": 9,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "operations",
+          "keyPath": "opId",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "at",
+              "keyPath": "at",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1760000385548-gwo3tunm7",
+              "value": {
+                "noteId": "1760000385548-gwo3tunm7",
+                "name": "Groceries",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000387312-na2vzuxgy",
+              "value": {
+                "noteId": "1760000387312-na2vzuxgy",
+                "name": "Reading list",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000388884-kjtehbh4m",
+              "value": {
+                "noteId": "1760000388884-kjtehbh4m",
+                "name": "Old plans",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000389999-uyu9bd6rs",
+              "value": {
+                "noteId": "1760000389999-uyu9bd6rs",
+                "name": "Thrown away",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000392093-ek5pquh48",
+              "value": {
+                "noteId": "1760000392093-ek5pquh48",
+                "name": "Meeting template",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000409829-xbbhxkmbj",
+              "value": {
+                "id": "1760000409829-xbbhxkmbj",
+                "noteId": "1760000385548-gwo3tunm7",
+                "timestamp": 1760000300000,
+                "blocks": [
+                  {
+                    "id": "snap-b1",
+                    "type": "text",
+                    "content": "Milk",
+                    "indentLevel": 0,
+                    "checked": false,
+                    "imageUrl": null,
+                    "calloutIcon": "💡",
+                    "createdAt": 1760000000000,
+                    "updatedAt": 1760000000000,
+                    "canvasId": "1760000385548-gwo3tunm7",
+                    "order": 0
+                  }
+                ],
+                "title": "Groceries"
+              }
+            }
+          ]
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000408370-cqa9i970y",
+              "value": {
+                "id": "1760000408370-cqa9i970y",
+                "name": "Dusk",
+                "properties": {
+                  "--bg-primary": "#101820",
+                  "--text-primary": "#f2f2f2"
+                },
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "tombstones",
+          "keyPath": [
+            "entityType",
+            "id"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "purge",
+              "keyPath": "purge",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1760000385548-gwo3tunm7",
+              "value": {
+                "id": "1760000385548-gwo3tunm7",
+                "noteId": "1760000385548-gwo3tunm7",
+                "vector": [
+                  0.125,
+                  -0.5,
+                  0.25,
+                  1
+                ],
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "chromeStorageLocal": {}
+}

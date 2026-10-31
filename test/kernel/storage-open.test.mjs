@@ -659,8 +659,8 @@ describe('a page that finds no database, or an older one, waits on the worker fi
   });
 });
 
-it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 10 (#17 PR 2a)", () => {
+it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 11 (#17 PR 3b)", () => {
   const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
   env.load('js/utils.js', 'js/storage.js');
-  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [10, 10, 10]);
+  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [11, 11, 11]);
 });
