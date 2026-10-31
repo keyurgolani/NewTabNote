@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { runContractSuite } from './contract.mjs';
+import { importGraph } from './import-graph.mjs';
 import { indexedDbFixture } from './storage-fixture.mjs';
 
 runContractSuite(indexedDbFixture);
@@ -37,8 +38,14 @@ it('only these roots load the IndexedDB adapter: the service worker, Popup, and 
     assert.ok(!modules.has('js/kernel/adapters/legacy/adapter.js'), `${page} is off the legacy adapter`);
   }
   // The new tab stays on the legacy adapter until #12 moves its writers, and reads the
-  // pre-update copy (legacy-export.js) for Settings, but never the adapter or the runner
-  const newtab = modulesOf('newtab.html');
+  // pre-update copy (legacy-export.js) for Settings, but never the adapter or the runner. What
+  // it loads is the boot root's graph and the workspace chunk's, which the root loads at once
+  // through the loader (#27 slice 3)
+  const workspace = [...importGraph(path.join(ROOT, 'js', 'workspace.js'))].map(file =>
+    path.relative(ROOT, file).split(path.sep).join('/'),
+  );
+  const newtab = new Set([...modulesOf('newtab.html'), ...workspace]);
+  assert.ok(newtab.has('js/kernel/composition/newtab.js'), "the new tab's graph reaches its composition root");
   assert.ok(!newtab.has(ADAPTER), 'the new tab is on the legacy adapter');
   assert.ok(!newtab.has(RUNNER), 'the new tab never loads the runner');
   assert.ok(newtab.has('js/kernel/adapters/indexeddb/legacy-export.js'), 'the new tab exports the pre-update copy');
