@@ -2230,6 +2230,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const showKey = (key) => {
       /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#llm-api-key')).forEach(el => { el.value = key; });
     };
+    /** Refill the key field with `key`, unless it says that already or someone is typing in it */
+    const refillKey = (key) => {
+      /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#llm-api-key')).forEach(el => {
+        if (el.value !== key && document.activeElement !== el) el.value = key;
+      });
+    };
 
     providerSelect.addEventListener('change', async (e) => {
       const provider = e.target.value;
@@ -2251,7 +2257,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       await this.llm.setApiKey(value, provider);
       if (provider === this.llm.provider) {
         // Shown again when the provider changed away and back before this landed
-        showKey(this.llm.keyFor(provider));
+        refillKey(this.llm.keyFor(provider));
         if (value && provider !== 'none') await this.loadAndPopulateModels(provider, value);
       }
       this.updateAISidebarState();
@@ -2378,6 +2384,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     try {
       const models = await this.llm.fetchModels(provider, apiKey);
+      // A later provider change took over while this listed: the last change wins the list
+      if (provider !== this.llm.provider) return;
 
       modelSelect.innerHTML = '';
 
