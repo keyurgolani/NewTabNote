@@ -27,7 +27,14 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { withDataUrls } from './data-urls.js';
-import { DEFAULT_LIMITS, POINTS_LOCK, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
+import {
+  DEFAULT_LIMITS,
+  POINTS_LOCK,
+  listPoints,
+  openRecovery,
+  readPointStore,
+  verifyPoint,
+} from './recovery-points.js';
 
 /** @typedef {import('./recovery-points.js').Point} Point */
 /** @typedef {import('./records.js').Digester} Digester */

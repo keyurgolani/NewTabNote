@@ -1,5 +1,6 @@
 // #17 PR 1a, rolling back after step 9 (plan risk 1, review R61's probe F), and after step 10 since
-// #17 PR 2a, with the ledger, change log, conflict, and tombstone rows it keeps: a profile migrated
+// #17 PR 2a, with the ledger, change log, conflict, and tombstone rows it keeps, and since PR 2b
+// with notes deleted for good and the point purged of them: a profile migrated
 // to 10, then opened by the frozen v1.4.0 and v1.4.1 Storage (test/fixtures/storage/releases/,
 // the tags' own files), keeps CanvasTabDB and NewTabNoteRecovery byte for byte, and loses no
 // chrome.storage.local key. v1.4.0 fails with VersionError, since all ten legacy stores are
@@ -17,7 +18,17 @@ import path from 'node:path';
 
 import { maximalFixture } from '../fixtures/storage/generate.mjs';
 import { productionInputs } from './generated-inputs.mjs';
-import { FIXTURES as DIR, dump, legacyEnv, profileWith, run, synthesized, writeHistory } from './migration-support.mjs';
+import {
+  FIXTURES as DIR,
+  deleteAndPurge,
+  dump,
+  legacyEnv,
+  profileWith,
+  recordsIn,
+  run,
+  synthesized,
+  writeHistory,
+} from './migration-support.mjs';
 
 const FIXTURES = synthesized();
 const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic'];
@@ -153,6 +164,22 @@ describe('a profile at 10 holding a ledger, a change log, a conflict, and a tomb
         await refusedUnchanged(of, tag);
       });
     }
+  }
+});
+
+describe('a profile at 10 with a note and a folder deleted for good and its point purged, opened by a 1.4.x build (#17 PR 2b)', () => {
+  for (const tag of ['v1.4.0', 'v1.4.1']) {
+    it(`v8.basic, migrated, deleted, and purged, then ${tag}: refused, and nothing changed or deleted`, async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+      assert.equal((await run(of)).status, 'migrated');
+      const { noteId, folderId, purged } = await deleteAndPurge(of);
+      assert.deepEqual([purged.status, purged.tombstones], ['purged', 2]);
+      assert.ok(purged.rows > 1);
+      const before = await dump(of);
+      const tombstones = recordsIn(before, 'CanvasTabDB', 'tombstones').map(record => record.value.id);
+      assert.deepEqual(tombstones.sort(), [folderId, noteId].sort());
+      await refusedUnchanged(of, tag);
+    });
   }
 });
 

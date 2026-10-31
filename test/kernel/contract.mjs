@@ -2067,7 +2067,7 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await idsIn('templates'), ['n1']);
       });
 
-      it("deleteNotePermanently deletes a trashed note with what Storage.permanentlyDeleteNote deletes, and refuses one that isn't in the trash", async () => {
+      it("deleteNotePermanently deletes a trashed note with what Storage.permanentlyDeleteNote deleted, its search entry and links too, and refuses one that isn't in the trash", async () => {
         await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
         await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
         await seed('media', [
@@ -2095,13 +2095,11 @@ export function runContractSuite(fixture) {
           [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
           [['m-kept'], ['kept'], ['s-kept']],
         );
-        // Its links and search entry stay, as Storage.permanentlyDeleteNote leaves them, until #17's deletion
+        // Its link and search entry go too since #17 PR 2b, which Storage.permanentlyDeleteNote left
         const links = await ctx.adapter.read(['links'], tx => tx.getAll('links'));
-        assert.deepEqual(
-          links.map(link => link.id),
-          ['l1'],
-        );
-        assert.ok(await searchEntryOf('n1'));
+        assert.deepEqual(links, []);
+        assert.equal(await searchEntryOf('n1'), undefined);
+        assert.ok(await searchEntryOf('kept'));
         assertRejected(
           await kernel.execute(cmd('deleteNotePermanently', { noteId: 'n1' })),
           'not-found',
@@ -2192,6 +2190,182 @@ export function runContractSuite(fixture) {
         }
         assert.deepEqual(await idsIn('trashed'), ['t1']);
       });
+    });
+
+    describe('deletion for good leaves tombstones (#17 PR 2b)', () => {
+      /** @returns {Promise<Array<Record<string, unknown>>>} */
+      const tombstones = () => ctx.adapter.read(['tombstones'], tx => tx.getAll('tombstones'));
+
+      /**
+       * A tombstone as this adapter keeps it: on one with revisions, with the note's last
+       * content revision and the commit's change-log seq (null without a log)
+       * @param {Record<string, unknown>} fields
+       * @param {number} [lastRevision]
+       */
+      const tombstoneOf = (fields, lastRevision) => ({
+        purge: 'pending',
+        ...fields,
+        ...(flags.revisions ? { lastRevision, seq: null } : {}),
+      });
+
+      /**
+       * The tombstones, with each seq read as null, so one adapter's log and another's lack of
+       * one compare alike; each seq that's there is checked to be a count first
+       */
+      const storedTombstones = async () =>
+        (await tombstones()).map(tombstone => {
+          if (!flags.revisions) return tombstone;
+          assert.ok(tombstone.seq === null || Number.isSafeInteger(tombstone.seq), JSON.stringify(tombstone));
+          return { ...tombstone, seq: null };
+        });
+
+      /**
+       * @param {string} noteId
+       * @param {number} trashedAt
+       */
+      const inTrash = async (noteId, trashedAt) => {
+        await createNote({ noteId, name: noteId, blocks: someBlocks(noteId, 1) });
+        await seed('notes', [{ ...(await noteOf(noteId)), id: noteId, trashed: true, trashedAt }]);
+      };
+
+      it('a note deleted for good takes every row it owns, its links both ways, and leaves its tombstone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
+        await createNote({ noteId: 'other', name: 'Other' });
+        await seed('media', [
+          { id: 'm1', canvasId: 'n1' },
+          { id: 'm-kept', canvasId: 'kept' },
+        ]);
+        await seed('vectors', [{ id: 'n1' }, { id: 'kept' }]);
+        await seed('snapshots', [
+          { id: 's1', noteId: 'n1', timestamp: NOW },
+          { id: 's-kept', noteId: 'kept', timestamp: NOW },
+        ]);
+        await seed('links', [
+          { id: 'from-n1', fromNoteId: 'n1', toNoteId: 'kept', createdAt: NOW },
+          { id: 'to-n1', fromNoteId: 'kept', toNoteId: 'n1', createdAt: NOW },
+          { id: 'kept-other', fromNoteId: 'kept', toNoteId: 'other', createdAt: NOW },
+        ]);
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        ctx.clock.advance();
+        assert.equal((await run(cmd('deleteNotePermanently', { noteId: 'n1' }))).code, 'note-deleted');
+        assert.deepEqual(
+          [await noteOf('n1'), await blocksOf('n1'), await searchEntryOf('n1')],
+          [undefined, [], undefined],
+        );
+        assert.deepEqual(
+          [await idsInStore('media'), await idsInStore('vectors'), await idsInStore('snapshots')],
+          [['m-kept'], ['kept'], ['s-kept']],
+        );
+        const links = await ctx.adapter.read(['links'], tx => tx.getAll('links'));
+        assert.deepEqual(
+          links.map(link => link.id),
+          ['kept-other'],
+        );
+        assert.ok(await searchEntryOf('kept'));
+        assert.equal((await blocksOf('kept')).length, 1);
+        assert.deepEqual(await storedTombstones(), [
+          tombstoneOf({ entityType: 'note', id: 'n1', deletedAt: NOW + 1000, reason: 'deleted' }, 1),
+        ]);
+      });
+
+      it('each way of deleting a note for good gives its tombstone its reason', async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        await createNote({ noteId: 'empty' });
+        await inTrash('emptied', NOW - DAY);
+        assert.equal((await run(cmd('trashNote', { noteId: 'empty' }))).code, 'note-deleted');
+        assert.deepEqual((await run(cmd('emptyTrash', {}))).changedIds, ['emptied']);
+        await inTrash('expired', NOW - 31 * DAY);
+        assert.deepEqual((await run(cmd('runTrashCleanup', {}))).changedIds, ['expired']);
+        await inTrash('bulk', NOW - DAY);
+        const bulk = bulkOf(await kernel.execute(cmd('runBulkAction', { action: 'delete', noteIds: ['bulk'] })));
+        assert.deepEqual(bulk.committedIds, ['bulk']);
+        const byId = Object.fromEntries((await storedTombstones()).map(tombstone => [tombstone.id, tombstone]));
+        assert.deepEqual(byId, {
+          empty: tombstoneOf({ entityType: 'note', id: 'empty', deletedAt: NOW, reason: 'empty-note' }, 1),
+          emptied: tombstoneOf({ entityType: 'note', id: 'emptied', deletedAt: NOW, reason: 'trash-emptied' }, 1),
+          expired: tombstoneOf({ entityType: 'note', id: 'expired', deletedAt: NOW, reason: 'trash-expired' }, 1),
+          bulk: tombstoneOf({ entityType: 'note', id: 'bulk', deletedAt: NOW, reason: 'deleted' }, 1),
+        });
+      });
+
+      it('a delete that fails to store leaves no tombstone, and a trash leaves none', async () => {
+        await inTrash('t1', NOW - 1000);
+        ctx.failNextWrite('notes');
+        assert.equal((await kernel.execute(cmd('emptyTrash', {}))).kind, 'unavailable');
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        await run(cmd('archiveNote', { noteId: 't1' }));
+        assert.deepEqual(await tombstones(), []);
+      });
+
+      it('deleteFolder leaves a tombstone for each folder it deletes, and none for the notes it files', async () => {
+        await run(cmd('createFolder', { folderId: 'a', name: 'A', parentId: null }));
+        await run(cmd('createFolder', { folderId: 'b', name: 'B', parentId: 'a' }));
+        await run(cmd('createFolder', { folderId: 'kept', name: 'Kept', parentId: null }));
+        await createNote({ noteId: 'filed', name: 'Filed', folderId: 'b' });
+        ctx.clock.advance();
+        assert.equal((await run(cmd('deleteFolder', { folderId: 'a' }))).code, 'folder-deleted');
+        // A folder has no revision, and its tombstone's seq is the commit's where there's a log
+        const stored = (await tombstones()).map(tombstone => {
+          const rest = { ...tombstone };
+          delete rest.seq;
+          return rest;
+        });
+        assert.deepEqual(
+          stored.sort((x, y) => (String(x.id) < String(y.id) ? -1 : 1)),
+          ['a', 'b'].map(id => ({
+            entityType: 'folder',
+            id,
+            deletedAt: NOW + 1000,
+            reason: 'deleted',
+            purge: 'pending',
+          })),
+        );
+        assert.equal((await noteOf('filed'))?.folderId, null);
+      });
+
+      it(
+        'deleting a note drops the conflict records of saves that lost to it, whose text they keep',
+        { skip: flags.revisions ? false : 'only an adapter with revisions keeps conflicts' },
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await createNote({ noteId: 'kept', name: 'Kept', blocks: someBlocks('kept', 1) });
+          for (const noteId of ['n1', 'kept']) {
+            const stale = await kernel.execute(
+              cmd('saveNoteContent', { noteId, blocks: someBlocks(noteId, 2), expectedRevision: 0 }),
+            );
+            assert.equal(stale.kind, 'conflict', JSON.stringify(stale));
+          }
+          assert.ok(ctx.conflicts);
+          assert.equal((await ctx.conflicts()).length, 2);
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+          const left = /** @type {Array<{commandId: string, command: Command}>} */ (await ctx.conflicts());
+          assert.deepEqual(
+            left.map(kept => /** @type {{noteId?: string}} */ (kept.command).noteId),
+            ['kept'],
+          );
+        },
+      );
+
+      it(
+        'a database below version 10 has no tombstones, and a delete there commits without one',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          await ctx.close();
+          ctx = await /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout)([
+            'tombstones',
+          ]);
+          kernel = ctx.kernel();
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          assert.equal((await run(cmd('deleteNotePermanently', { noteId: 'n1' }))).code, 'note-deleted');
+          await run(cmd('createFolder', { folderId: 'f1', name: 'F', parentId: null }));
+          assert.equal((await run(cmd('deleteFolder', { folderId: 'f1' }))).code, 'folder-deleted');
+          assert.deepEqual([await noteOf('n1'), await tombstones()], [undefined, []]);
+        },
+      );
     });
 
     describe('preferences, session, and startup maintenance', () => {
