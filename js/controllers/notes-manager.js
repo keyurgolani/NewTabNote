@@ -97,34 +97,68 @@ class NotesManager {
   // ─── Note CRUD ───
 
   /**
-   * Archive a note by ID
+   * Archive a note by ID, with #46's order: this tab's panes move off it first, so their
+   * edits land before it leaves, then the kernel's archiveNote writes its placement fields and
+   * nothing else, then the other new tabs hear of it. This tab's lists show it from the commit
+   * feed, with no refresh.
    */
   async archiveNote(noteId) {
     if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
-    await this.storage.archiveNote(noteId);
-    await this._afterNotesLeft([noteId]);
+    const outcome = await this.documentClient.archiveNote(noteId);
+    if (!this._committed(outcome, 'Failed to archive note')) return;
+    await this._afterNotesLeft([noteId], { listed: true });
     this.removeNoteIndex(noteId);
     Utils.showToast('Note archived', 'success');
   }
 
   /**
-   * After notes left the active set: tell the other new tabs, then refresh the lists.
-   * Panes moved off them before the write (onNotesLeaving), so their edits landed first.
+   * Whether a kernel write committed. One that didn't is logged by its outcome's kind and
+   * code, never the note's content, and its toast says `action` failed and why
+   * (Utils.writeFailureMessage).
+   * @param {{kind: string, reason?: string, code?: string}} outcome
+   * @param {string} action - such as "Failed to archive note"
+   * @returns {boolean}
+   */
+  _committed(outcome, action) {
+    if (outcome.kind === 'committed') return true;
+    console.error(`${action}:`, outcome.kind, outcome.code);
+    Utils.showToast(Utils.writeFailureMessage(action, outcome), 'error');
+    return false;
+  }
+
+  /**
+   * After notes left the active set: tell the other new tabs, then show the lists. Panes
+   * moved off them before the write (onNotesLeaving), so their edits landed first. A write the
+   * kernel made (`listed`) reaches the lists from the commit feed, so they're waited for, not
+   * read again; one made outside it reads them again.
    * @param {Array<string>} ids
+   * @param {{listed?: boolean}} [options]
    * @returns {Promise<void>}
    */
-  async _afterNotesLeft(ids) {
+  async _afterNotesLeft(ids, { listed = false } = {}) {
     if (this.onNotesLeft) this.onNotesLeft(ids);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    if (listed) await this._listed();
+    else if (this.onRefreshNotesList) await this.onRefreshNotesList();
     if (this.onUpdateEmptyState) this.onUpdateEmptyState();
   }
 
   /**
-   * Unarchive a note by ID
+   * Once the note list has what this tab's last kernel write changed
+   * @returns {Promise<void>}
+   */
+  async _listed() {
+    if (this.noteList) await this.noteList.settled();
+  }
+
+  /**
+   * Unarchive a note by ID, with the kernel's unarchiveNote, which writes its placement fields
+   * and nothing else. The lists show it from the commit feed, with no refresh.
    */
   async unarchiveNote(noteId) {
-    await this.storage.unarchiveNote(noteId);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    const outcome = await this.documentClient.unarchiveNote(noteId);
+    if (!this._committed(outcome, 'Failed to restore note from archive')) return;
+    await this._listed();
+    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     Utils.showToast('Note restored from archive', 'success');
   }
 
@@ -340,24 +374,16 @@ class NotesManager {
         const data = JSON.parse(text);
 
         if (data.exportType === 'single-note' && data.note && data.blocks) {
-          // Single note export format
-          const note = await this.storage.createNote(data.note.name || title);
-
-          // Import blocks with new note ID
+          // Single note export format: its blocks under new ids, in the new note
+          const now = Date.now();
+          const blocks = [];
           for (const block of data.blocks) {
-            const newBlock = {
-              ...block,
-              id: Utils.generateId(),
-              canvasId: note.id,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            };
-            await this.storage.saveElement(newBlock);
+            // The kernel files each block in the new note
+            const { canvasId, ...fields } = block;
+            blocks.push({ ...fields, id: this.documentClient.newId(), createdAt: now, updatedAt: now });
           }
-
-          if (this.onRefreshNotesList) await this.onRefreshNotesList();
-          if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
-          Utils.showToast('Note imported', 'success');
+          const name = typeof data.note.name === 'string' && data.note.name ? data.note.name : title;
+          await this._importAsNote(name, blocks);
         } else if (data.version && data.canvases) {
           // Full backup format - delegate to App-level importFromFile
           throw new Error('Full backup import not supported from NotesManager');
@@ -374,28 +400,38 @@ class NotesManager {
           blocks.shift(); // Remove the H1 since it becomes the note title
         }
 
-        const note = await this.storage.createNote(noteTitle);
-
-        for (let i = 0; i < blocks.length; i++) {
-          const block = {
-            ...blocks[i],
-            id: Utils.generateId(),
-            canvasId: note.id,
-            order: i,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-          await this.storage.saveElement(block);
-        }
-
-        if (this.onRefreshNotesList) await this.onRefreshNotesList();
-        if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
-        Utils.showToast('Note imported', 'success');
+        const now = Date.now();
+        const records = blocks.map((block, i) => ({
+          ...block,
+          id: this.documentClient.newId(),
+          order: i,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        await this._importAsNote(noteTitle, records);
       }
     } catch (error) {
       console.error('Import note failed:', error);
       Utils.showToast('Import failed: ' + error.message, 'error');
     }
+  }
+
+  /**
+   * An imported file's note, made by the kernel's createNote with its blocks in one unit, so
+   * it lands whole or not at all, and only a note that landed opens and counts as imported.
+   * The lists show it from the commit feed, with no refresh.
+   * @param {string} name
+   * @param {Array<Object>} blocks - each with an id taken now
+   * @returns {Promise<void>}
+   */
+  async _importAsNote(name, blocks) {
+    const noteId = this.documentClient.newId();
+    const outcome = await this.documentClient.createNote({ noteId, name, blocks });
+    if (!this._committed(outcome, 'Failed to import note')) return;
+    await this._listed();
+    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
+    if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
+    Utils.showToast('Note imported', 'success');
   }
 
   /**

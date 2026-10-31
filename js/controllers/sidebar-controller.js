@@ -7,12 +7,16 @@
  * @param {DatabaseManager} deps.storage
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
+ * @param {Object} [deps.documentClient] - What the sidebar's note writes go through
+ *   (js/kernel/composition/document.js): new notes, the Daily Note, pins, and a dropped block's
+ *   append, as kernel commands. The note list shows each one from the commit feed, with no refresh.
  */
 class SidebarController {
-  constructor({ storage, domRefs, logger }) {
+  constructor({ storage, domRefs, logger, documentClient = null }) {
     this.storage = storage;
     this.domRefs = domRefs;
     this.logger = logger;
+    this.documentClient = documentClient;
 
     // Sidebar state
     this.sidebarOpen = true;
@@ -236,9 +240,8 @@ class SidebarController {
 
     if (dailyNoteBtn) {
       dailyNoteBtn.addEventListener('click', async () => {
-        const note = await this.storage.ensureDailyNote();
-        await this.refreshNotesList();
-        if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
+        const noteId = await this.ensureDailyNote();
+        if (noteId && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
       });
     }
 
@@ -435,23 +438,21 @@ class SidebarController {
   async _createNoteFromBlock(textContent, blockType, htmlContent) {
     try {
       const title = (textContent || '').substring(0, 60).trim() || 'Untitled';
-      const note = await this.storage.createNote(title);
-
+      const now = Date.now();
+      // The note and its block land together, under ids taken now
       const blockData = {
-        id: typeof Utils !== 'undefined' ? Utils.generateId() : Date.now().toString(36),
+        id: this.documentClient.newId(),
         type: blockType,
         content: htmlContent || textContent || '',
-        canvasId: note.id,
         order: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
         indentLevel: 0,
         checked: false,
       };
-      await this.storage.saveElement(blockData);
-
-      await this.refreshNotesList();
-      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
+      const noteId = await this.createNote({ name: title, blocks: [blockData] });
+      if (!noteId) return;
+      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
       Utils.showToast('Note created from block', 'success');
     } catch (error) {
       console.error('Failed to create note from block:', error);
@@ -460,39 +461,73 @@ class SidebarController {
   }
 
   /**
-   * Append block content to an existing note.
+   * After one of the sidebar's note writes through the kernel: once it committed, the note
+   * list has it, from the commit feed, and the sidebar has rendered it. One that didn't
+   * commit is logged by its outcome's kind and code, never the note's content, and its toast
+   * says `action` failed and why (Utils.writeFailureMessage).
+   * @param {{kind: string, reason?: string, code?: string}} outcome
+   * @param {string} action - such as "Failed to pin note"
+   * @param {string} [gone] - what a note deleted elsewhere reads as
+   * @returns {Promise<boolean>} whether it committed
+   */
+  async _noteWriteDone(outcome, action, gone) {
+    if (outcome.kind !== 'committed') {
+      console.error(`${action}:`, outcome.kind, outcome.code);
+      Utils.showToast(Utils.writeFailureMessage(action, outcome, gone), 'error');
+      return false;
+    }
+    if (this._noteList) await this._noteList.settled();
+    return true;
+  }
+
+  /**
+   * A new note through the kernel's createNote, under an id taken now, with its first blocks
+   * and its folder in one unit
+   * @param {{name: string, blocks?: Array<Object>, folderId?: string}} fields
+   * @returns {Promise<string|null>} its id, or null when it wasn't stored
+   */
+  async createNote(fields) {
+    const noteId = this.documentClient.newId();
+    const outcome = await this.documentClient.createNote({ ...fields, noteId });
+    return (await this._noteWriteDone(outcome, 'Failed to create note')) ? noteId : null;
+  }
+
+  /**
+   * The Daily Note for `dateStr`, or today's: the kernel's ensureDailyNote makes it whole in
+   * one unit when there's none, so two clicks at once make one, and findDailyNote reads it,
+   * whether it was made or found
+   * @param {string} [dateStr] - `YYYY-MM-DD`
+   * @returns {Promise<string|null>} its id, or null when it couldn't be found or made
+   */
+  async ensureDailyNote(dateStr) {
+    const action = 'Failed to open the Daily Note';
+    const { outcome, note } = await this.documentClient.ensureDailyNote(dateStr);
+    if (!(await this._noteWriteDone(outcome, action))) return null;
+    if (note) return note.id;
+    console.error(`${action}:`, 'not-read');
+    Utils.showToast(Utils.writeFailureMessage(action, { kind: 'failed' }), 'error');
+    return null;
+  }
+
+  /**
+   * Append block content to an existing note, with the kernel's insertBlocks: the block goes
+   * after the note's last one, and the note's updatedAt, preview, and todo progress follow, in
+   * one unit that writes no other field of the note. The list shows it from the commit feed.
    * @param {string} noteId - Target note ID
    * @param {string} blockType - Block type
    * @param {string} htmlContent - HTML content
    */
   async _appendBlockToNote(noteId, blockType, htmlContent) {
     try {
-      const existingBlocks = await this.storage.getElementsByNote(noteId);
-      const maxOrder = existingBlocks.length > 0
-        ? Math.max(...existingBlocks.map(b => b.order || 0))
-        : -1;
-
       const blockData = {
-        id: typeof Utils !== 'undefined' ? Utils.generateId() : Date.now().toString(36),
+        id: this.documentClient.newId(),
         type: blockType,
         content: htmlContent || '',
-        canvasId: noteId,
-        order: maxOrder + 1,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
         indentLevel: 0,
         checked: false,
       };
-      await this.storage.saveElement(blockData);
-
-      // Update note's updatedAt
-      const note = await this.storage.getNote(noteId);
-      if (note) {
-        note.updatedAt = Date.now();
-        await this.storage.updateNote(note);
-      }
-
-      await this.refreshNotesList();
+      const outcome = await this.documentClient.insertBlocks(noteId, [blockData]);
+      if (!(await this._noteWriteDone(outcome, 'Failed to append block', 'that note was deleted'))) return;
       Utils.showToast('Block appended to note', 'success');
     } catch (error) {
       console.error('Failed to append block to note:', error);
@@ -697,9 +732,8 @@ class SidebarController {
     el.dataset.date = dateStr;
 
     el.addEventListener('click', async () => {
-      const note = await this.storage.ensureDailyNoteForDate(dateStr);
-      await this.refreshNotesList();
-      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(note.id);
+      const noteId = await this.ensureDailyNote(dateStr);
+      if (noteId && this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
     });
     return el;
   }
@@ -1234,13 +1268,20 @@ class SidebarController {
     return el;
   }
 
+  /**
+   * Pin a note the list shows unpinned, or unpin one it shows pinned, with the kernel's
+   * setPinned, which writes the pin and nothing else, so a save of the open note that's in
+   * flight keeps it, whichever commits first
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
   async toggleNotePin(noteId) {
-    const note = await this.storage.getNote(noteId);
-    if (!note) return;
-    note.pinned = !note.pinned;
-    await this.storage.updateNote(note);
-    await this.refreshNotesList();
-    Utils.showToast(note.pinned ? 'Note pinned' : 'Note unpinned', 'success');
+    const shown = this._noteList ? this._noteList.note(noteId) : undefined;
+    if (!shown) return;
+    const pinned = !shown.pinned;
+    const outcome = await this.documentClient.setPinned(noteId, pinned);
+    if (!(await this._noteWriteDone(outcome, pinned ? 'Failed to pin note' : 'Failed to unpin note'))) return;
+    Utils.showToast(pinned ? 'Note pinned' : 'Note unpinned', 'success');
   }
 
   // ─── Search ───
@@ -1293,11 +1334,9 @@ class SidebarController {
         }
       }},
       { label: 'Add Note to Folder', action: async () => {
-        const note = await this.storage.createNote('New Note');
-        note.folderId = folder.id;
-        await this.storage.updateNote(note);
-        await this.refreshNotesList();
-        if (this.onOpenNoteInNewTab) this.onOpenNoteInNewTab(note.id);
+        // Made in the folder, in the one unit that creates it
+        const noteId = await this.createNote({ name: 'New Note', folderId: folder.id });
+        if (noteId && this.onOpenNoteInNewTab) this.onOpenNoteInNewTab(noteId);
       }},
       { label: 'Move to Root', action: async () => {
         const moved = { ...folder };

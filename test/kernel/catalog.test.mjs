@@ -94,6 +94,7 @@ const COMMAND_SAMPLES = {
     blockId: 'b9',
     capture: { type: 'text', content: 'Quote', source: 'https://example.test/' },
   },
+  ensureDailyNote: { noteId: 'd2', dateStr: '2026-10-19' },
   archiveNote: { noteId: 'n1' },
   unarchiveNote: { noteId: 'n1' },
   runBulkAction: { action: 'trash', noteIds: ['n1', 'gone'] },
@@ -123,6 +124,7 @@ const QUERY_SAMPLES = {
   getJobRuns: {},
   listSnapshots: { noteId: 'n1' },
   getSnapshot: { snapshotId: 's1' },
+  findDailyNote: { dateStr: '2026-10-19' },
 };
 
 /** The coordinator's own queries, which take no field */

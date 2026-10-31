@@ -573,10 +573,77 @@ class App {
    * Create first note from empty state
    */
   async createFirstNote() {
-    const note = await Storage.createNote('Untitled');
-    await this.refreshNotesList();
-    await this.openNoteInNewTab(note.id);
+    const noteId = await this.createListedNote({ name: 'Untitled' });
+    if (!noteId) return;
+    await this.openNoteInNewTab(noteId);
     document.getElementById('page-title').focus();
+  }
+
+  /**
+   * After a note-list write through the kernel (a new note, the Daily Note): once it
+   * committed, the tab's note list has it, from the commit feed with no refresh, and the empty
+   * state follows, as the refresh after the Storage write showed them. A write that didn't
+   * commit is logged by its outcome's kind and code, never the note's content, and its toast
+   * says `action` failed and why (Utils.writeFailureMessage).
+   * @param {{kind: string, reason?: string, code?: string}} outcome
+   * @param {string} action - such as "Failed to create note"
+   * @returns {Promise<boolean>} whether it committed
+   */
+  async listWriteDone(outcome, action) {
+    if (outcome.kind !== 'committed') {
+      console.error(`${action}:`, outcome.kind, outcome.code);
+      Utils.showToast(Utils.writeFailureMessage(action, outcome), 'error');
+      return false;
+    }
+    await this.noteList.settled();
+    this.updateEmptyState();
+    return true;
+  }
+
+  /**
+   * A new note through the kernel's createNote, under an id taken now: `fields` give its name
+   * and first blocks, which land with it in one unit
+   * @param {{name: string, blocks?: Array<Object>}} fields
+   * @returns {Promise<string|null>} its id, or null when it wasn't stored
+   */
+  async createListedNote(fields) {
+    const noteId = this.documentClient.newId();
+    const outcome = await this.documentClient.createNote({ ...fields, noteId });
+    return (await this.listWriteDone(outcome, 'Failed to create note')) ? noteId : null;
+  }
+
+  /**
+   * The Daily Note for `dateStr`, or today's: the kernel's ensureDailyNote makes it whole in
+   * one unit when there's none, so asking twice at once makes one, and findDailyNote reads it,
+   * whether it was made or found
+   * @param {string} [dateStr] - `YYYY-MM-DD`
+   * @returns {Promise<{id: string}|null>} the note, or null when it couldn't be found or made
+   */
+  async ensureDailyNote(dateStr) {
+    const action = 'Failed to open the Daily Note';
+    const { outcome, note } = await this.documentClient.ensureDailyNote(dateStr);
+    if (!(await this.listWriteDone(outcome, action))) return null;
+    if (!note) {
+      console.error(`${action}:`, 'not-read');
+      Utils.showToast(Utils.writeFailureMessage(action, { kind: 'failed' }), 'error');
+    }
+    return note;
+  }
+
+  /**
+   * A new Untitled note for TabController, when a pane has nothing left to show or a new tab
+   * opens. Its caller shows it.
+   * @returns {Promise<{id: string, name: string}|null>} the note, or null when it wasn't stored
+   */
+  async createTabNote() {
+    const noteId = this.documentClient.newId();
+    const outcome = await this.documentClient.createNote({ noteId, name: 'Untitled' });
+    if (outcome.kind !== 'committed') {
+      console.error('Failed to create note:', outcome.kind, outcome.code);
+      Utils.showToast(Utils.writeFailureMessage('Failed to create note', outcome), 'error');
+      return null;
+    }
+    return { id: noteId, name: 'Untitled' };
   }
 
   /**
@@ -586,26 +653,23 @@ class App {
     // 1. Setup default settings
     await Onboarding.setupFirstRun();
 
-    // 2. Create Welcome Note with example blocks
-    const note = await Storage.createNote('Welcome to NewTabNote 🚀');
-    const blocks = Onboarding.getWelcomeNoteContent();
-    for (let i = 0; i < blocks.length; i++) {
-      const blockData = blocks[i];
-      await Storage.saveElement({
-        id: Utils.generateId(),
-        type: blockData.type,
-        content: blockData.content || '',
-        canvasId: note.id,
-        order: i,
-        checked: blockData.checked || false,
-        indentLevel: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-    }
+    // 2. Create Welcome Note with example blocks, which land with it
+    const now = Date.now();
+    const blocks = Onboarding.getWelcomeNoteContent().map((blockData, i) => ({
+      id: this.documentClient.newId(),
+      type: blockData.type,
+      content: blockData.content || '',
+      order: i,
+      checked: blockData.checked || false,
+      indentLevel: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    const noteId = await this.createListedNote({ name: 'Welcome to NewTabNote 🚀', blocks });
+    if (!noteId) return;
+    const note = { id: noteId };
 
     // 3. Load the welcome note so the editor is visible during walkthrough
-    await this.refreshNotesList();
     await this.openNoteInNewTab(note.id);
 
     // 4. Run interactive tooltip walkthrough (dismiss at any step marks complete)
@@ -659,6 +723,7 @@ class App {
       storage: Storage,
       domRefs: this.domRefs,
       logger: this.logger,
+      documentClient: this.documentClient,
     });
 
     // The note list it renders, once per change
@@ -709,7 +774,7 @@ class App {
     this.tabController.editorPorts = this.editorPorts;
 
     // Wire callbacks so the controller can trigger App-level actions
-    this.tabController.onCreateNote = () => Storage.createNote('Untitled');
+    this.tabController.onCreateNote = () => this.createTabNote();
     this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
     this.tabController.noteList = this.noteList;
@@ -746,6 +811,7 @@ class App {
     this.aiChatController.onOpenNoteById = (noteId) => this.openNoteById(noteId);
     this.aiChatController.onRefreshNotesList = () => this.refreshNotesList();
     this.aiChatController.onRenderNotesList = () => this.renderNotesList();
+    this.aiChatController.onEnsureDailyNote = () => this.ensureDailyNote();
     this.aiChatController.onOpenNewTab = () => this.openNewTab();
     this.aiChatController.onOpenSettingsModal = () => this.openSettingsModal();
     this.aiChatController.onCloseAllModals = () => this.closeAllModals();
@@ -1042,8 +1108,8 @@ class App {
     this.shortcutsManager.onOpenSettingsModal = () => this.openSettingsModal();
     this.shortcutsManager.onCloseAllModals = () => this.closeAllModals();
     this.shortcutsManager.onToggleShortcutsModal = () => this.toggleShortcutsModal();
-    this.shortcutsManager.onEnsureDailyNote = () => Storage.ensureDailyNote();
-    this.shortcutsManager.onRefreshNotesList = () => this.refreshNotesList();
+    // The note list and the empty state show the Daily Note once it's there, with no refresh
+    this.shortcutsManager.onEnsureDailyNote = () => this.ensureDailyNote();
     this.shortcutsManager.onCycleTab = (dir) => {
       if (this.tabController) this.tabController.cycleTab(dir);
     };
@@ -3524,9 +3590,8 @@ class App {
     } else {
       // Note doesn't exist - create a new one?
       if (await confirmDialog({ title: 'Create Note', message: `Note "${name}" does not exist. Create it?` })) {
-        const newNote = await Storage.createNote(name);
-        await this.refreshNotesList();
-        await this.openNoteById(newNote.id);
+        const noteId = await this.createListedNote({ name });
+        if (noteId) await this.openNoteById(noteId);
       }
     }
   }

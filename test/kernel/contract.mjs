@@ -275,6 +275,23 @@ export function runContractSuite(fixture) {
         assert.equal((await noteOf('n2'))?.name, 'First');
       });
 
+      it('createNote commits the note, its search entry, and its first blocks together on every adapter', async () => {
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        ctx.failNextWrite('blocks');
+        const outcome = await kernel.execute(
+          cmd('createNote', { noteId: 'n1', name: 'Imported', folderId: 'f1', blocks: someBlocks('n1', 3) }),
+        );
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual(
+          [await noteOf('n1'), await searchEntryOf('n1'), await blocksOf('n1')],
+          [undefined, undefined, []],
+        );
+        // Sent again under a new commandId, it lands whole
+        await run(cmd('createNote', { noteId: 'n1', name: 'Imported', folderId: 'f1', blocks: someBlocks('n1', 3) }));
+        assert.equal((await blocksOf('n1')).length, 3);
+        assert.equal((await searchEntryOf('n1'))?.name, 'Imported');
+      });
+
       it('renameNote marks a typed title as set by hand only when it changes, and the search entry follows', async () => {
         await createNote({ noteId: 'n1', name: 'Draft' });
         ctx.clock.advance();
@@ -1468,6 +1485,226 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe('ensureDailyNote', () => {
+      /** @param {string} noteId */
+      const searchNameOf = async noteId => (await searchEntryOf(noteId))?.name;
+      /** @returns {Promise<NoteRecord[]>} */
+      const dailyNotes = async () => {
+        const state = await kernel.query({ type: 'listNotes', view: 'withArchived' });
+        return state.kind === 'ready' ? state.data.filter(note => note.isDaily) : [];
+      };
+      /**
+       * The Daily Note findDailyNote reads for `dateStr`, as the new tab reads it after an ensure
+       * @param {string} dateStr
+       */
+      const dailyIdOn = async dateStr => {
+        const state = await kernel.query({ type: 'findDailyNote', dateStr });
+        return state.kind === 'ready' ? state.data.note.id : undefined;
+      };
+
+      it("makes today's Daily Note with its search entry, then finds it and makes no other", async () => {
+        const made = await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        assert.deepEqual([made.code, made.changedIds], ['daily-note-created', ['d1']]);
+        assert.deepEqual(await noteOf('d1'), {
+          ...storageNote('d1', 'Daily Note - Oct 20, 2026', NOW),
+          isDaily: true,
+          dateStr: '2026-10-20',
+        });
+        assert.deepEqual(await searchEntryOf('d1'), {
+          noteId: 'd1',
+          name: 'Daily Note - Oct 20, 2026',
+          content: '',
+          updatedAt: NOW,
+        });
+        ctx.clock.advance();
+        const found = await run(cmd('ensureDailyNote', { noteId: 'd2' }));
+        assert.deepEqual([found.code, found.changedIds, found.severity], ['daily-note-exists', [], 'info']);
+        assert.equal(await noteOf('d2'), undefined);
+        assert.equal((await noteOf('d1'))?.updatedAt, NOW, 'finding it writes nothing');
+        assert.equal(await dailyIdOn('2026-10-20'), 'd1', 'findDailyNote reads it');
+      });
+
+      it('a Daily Note it finds changes nothing: no commit-feed event, no commitSeq, and no revision move', async () => {
+        await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        const revisionOf = async () => {
+          const state = await kernel.query({ type: 'getNote', noteId: 'd1' });
+          return state.kind === 'ready' ? state.data.revision : undefined;
+        };
+        const before = await revisionOf();
+        /** @type {CommitEvent[]} */
+        const seen = [];
+        kernel.subscribe(event => {
+          seen.push(event);
+        });
+        const found = await run(cmd('ensureDailyNote', { noteId: 'd2' }));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual([found.code, found.changedIds, found.commitSeq], ['daily-note-exists', [], undefined]);
+        assert.deepEqual(seen, [], 'nothing on the commit feed');
+        assert.equal(await revisionOf(), before, 'the revision stays');
+        if (flags.revisions) assert.equal(before, 1);
+      });
+
+      it('findDailyNote reads the Daily Note for a day, archived included, and nothing for a day without one', async () => {
+        await run(cmd('ensureDailyNote', { noteId: 'd1', dateStr: '2026-10-18' }));
+        await run(cmd('archiveNote', { noteId: 'd1' }));
+        const state = await kernel.query({ type: 'findDailyNote', dateStr: '2026-10-18' });
+        assert.deepEqual(state.kind === 'ready' && [state.data.note.id, state.data.note.archived], ['d1', true]);
+        assert.equal((await kernel.query({ type: 'findDailyNote', dateStr: '2026-10-19' })).kind, 'empty');
+        await run(cmd('trashNote', { noteId: 'd1' }));
+        assert.equal((await kernel.query({ type: 'findDailyNote', dateStr: '2026-10-18' })).kind, 'empty');
+        const bad = await kernel.query({ type: 'findDailyNote', dateStr: '2026-13-40' });
+        assert.deepEqual(bad.kind === 'failed' && [bad.cause, bad.code], ['validation', 'invalid-query']);
+        for (const surface of /** @type {const} */ (['popup', 'sidepanel', 'worker-internal'])) {
+          const refused = await ctx.kernel(CALLERS[surface]).query({ type: 'findDailyNote', dateStr: '2026-10-18' });
+          assert.deepEqual(refused.kind === 'failed' && refused.cause, 'policy', surface);
+        }
+      });
+
+      it("takes today from the instant it's given, so a caller reads that same day back across midnight", async () => {
+        // Asked for at 23:59:59.900 UTC on Oct 20, run after midnight by the kernel's clock
+        const asked = Date.UTC(2026, 9, 20, 23, 59, 59, 900);
+        ctx.clock.advance(asked + 200 - NOW);
+        const made = await run(cmd('ensureDailyNote', { noteId: 'd1', at: asked }));
+        assert.deepEqual(made.changedIds, ['d1']);
+        const note = await noteOf('d1');
+        const day = new Date(asked).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        assert.deepEqual([note?.dateStr, note?.name], ['2026-10-20', `Daily Note - ${day}`]);
+        assert.equal(await dailyIdOn('2026-10-20'), 'd1');
+        // Without an instant, the kernel's own clock says it's Oct 21
+        assert.deepEqual((await run(cmd('ensureDailyNote', { noteId: 'd2' }))).changedIds, ['d2']);
+        assert.equal((await noteOf('d2'))?.dateStr, '2026-10-21');
+      });
+
+      it("keys and names a calendar day's Daily Note by that day, apart from today's", async () => {
+        const day = await run(cmd('ensureDailyNote', { noteId: 'd1', dateStr: '2026-10-18' }));
+        assert.deepEqual(day.changedIds, ['d1']);
+        const note = await noteOf('d1');
+        assert.deepEqual([note?.isDaily, note?.dateStr, note?.name], [true, '2026-10-18', 'Daily Note - Oct 18, 2026']);
+        assert.equal(await searchNameOf('d1'), 'Daily Note - Oct 18, 2026');
+        assert.deepEqual((await run(cmd('ensureDailyNote', { noteId: 'd2', dateStr: '2026-10-18' }))).changedIds, []);
+        assert.equal(await dailyIdOn('2026-10-18'), 'd1');
+        // Today's is another note, and the capture that comes next finds it
+        assert.deepEqual((await run(cmd('ensureDailyNote', { noteId: 'd3' }))).changedIds, ['d3']);
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const page = /** @type {const} */ ({ type: 'bookmark', url: 'https://example.test/page', title: 'Page' });
+        const capture = committedOf(
+          await worker.execute(cmd('captureToDailyNote', { noteId: 'd4', blockId: 'c1', capture: page })),
+        );
+        assert.deepEqual(capture.changedIds, ['d3']);
+        assert.deepEqual((await dailyNotes()).map(daily => daily.id).sort(), ['d1', 'd3']);
+      });
+
+      it('starts a new Daily Note from the Daily Note template, and an archived one still counts', async () => {
+        await createNote({
+          noteId: 'tpl',
+          name: 'Template',
+          blocks: [
+            { id: 't1', type: 'text', content: 'Notes for {{title}}', order: 0 },
+            { id: 't2', type: 'todo', content: 'Review', order: 1 },
+          ],
+        });
+        await run(cmd('setPreferences', { values: { dailyNoteTemplate: 'tpl' } }));
+        await run(cmd('ensureDailyNote', { noteId: 'd1', dateStr: '2026-10-18' }));
+        const blocks = await blocksOf('d1');
+        assert.deepEqual(
+          blocks.map(({ type, content, canvasId }) => ({ type, content, canvasId })),
+          [
+            { type: 'text', content: 'Notes for Daily Note - Oct 18, 2026', canvasId: 'd1' },
+            { type: 'todo', content: 'Review', canvasId: 'd1' },
+          ],
+        );
+        assert.ok(
+          blocks.every(block => block.id !== 't1' && block.id !== 't2'),
+          'copies get ids of their own',
+        );
+        assert.equal((await blocksOf('tpl')).length, 2, 'the template keeps its blocks');
+
+        await run(cmd('archiveNote', { noteId: 'd1' }));
+        const again = await run(cmd('ensureDailyNote', { noteId: 'd2', dateStr: '2026-10-18' }));
+        assert.deepEqual(
+          [again.code, await noteOf('d2'), (await blocksOf('d1')).length],
+          ['daily-note-exists', undefined, 2],
+        );
+      });
+
+      it("doesn't reuse a trashed Daily Note", async () => {
+        await run(cmd('ensureDailyNote', { noteId: 'd1' }));
+        await run(cmd('trashNote', { noteId: 'd1' }));
+        const next = await run(cmd('ensureDailyNote', { noteId: 'd2' }));
+        assert.deepEqual([next.code, next.changedIds], ['daily-note-created', ['d2']]);
+      });
+
+      it('two at once make one Daily Note, and a capture at the same time adds to it', async () => {
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const page = /** @type {const} */ ({ type: 'bookmark', url: 'https://example.test/page', title: 'Page' });
+        const outcomes = await Promise.all([
+          kernel.execute(cmd('ensureDailyNote', { noteId: 'd1' })),
+          kernel.execute(cmd('ensureDailyNote', { noteId: 'd2' })),
+          worker.execute(cmd('captureToDailyNote', { noteId: 'd3', blockId: 'c1', capture: page })),
+        ]);
+        const daily = await dailyNotes();
+        assert.equal(daily.length, 1, JSON.stringify(daily.map(note => note.id)));
+        assert.equal(await dailyIdOn('2026-10-20'), daily[0].id);
+        assert.deepEqual(committedOf(outcomes[2]).changedIds, [daily[0].id], 'the capture added to it');
+        // The capture made it, or exactly one of the two did, and the other found it
+        const codes = outcomes
+          .slice(0, 2)
+          .map(outcome => committedOf(outcome).code)
+          .sort();
+        assert.deepEqual(
+          codes,
+          daily[0].id === 'd3'
+            ? ['daily-note-exists', 'daily-note-exists']
+            : ['daily-note-created', 'daily-note-exists'],
+        );
+        assert.deepEqual(
+          (await blocksOf(daily[0].id)).map(block => block.id),
+          ['c1'],
+        );
+      });
+
+      it('commits the Daily Note, its search entry, and its template blocks together on every adapter', async () => {
+        await createNote({ noteId: 'tpl', name: 'Template', blocks: someBlocks('tpl', 2) });
+        await run(cmd('setPreferences', { values: { dailyNoteTemplate: 'tpl' } }));
+        ctx.failNextWrite('blocks');
+        const outcome = await kernel.execute(cmd('ensureDailyNote', { noteId: 'd1' }));
+        assert.equal(outcome.kind, 'unavailable', JSON.stringify(outcome));
+        assert.deepEqual(
+          [await noteOf('d1'), await searchEntryOf('d1'), await blocksOf('d1')],
+          [undefined, undefined, []],
+        );
+        assert.deepEqual((await run(cmd('ensureDailyNote', { noteId: 'd2' }))).changedIds, ['d2']);
+        assert.equal((await blocksOf('d2')).length, 2);
+      });
+
+      it('refuses a day that is no YYYY-MM-DD, and runs from the new tab only', async () => {
+        assertRejected(
+          await kernel.execute(cmd('ensureDailyNote', { noteId: 'd1', dateStr: '2026-10-18', at: NOW })),
+          'validation',
+          'invalid-command',
+        );
+        assertRejected(
+          await kernel.execute(cmd('ensureDailyNote', { noteId: 'd1', at: -1 })),
+          'validation',
+          'invalid-command',
+        );
+        for (const dateStr of ['2026-13-01', '20261018', 'yesterday', '']) {
+          assertRejected(
+            await kernel.execute(cmd('ensureDailyNote', { noteId: 'd1', dateStr })),
+            'validation',
+            'invalid-command',
+          );
+        }
+        assert.deepEqual(await dailyNotes(), []);
+        for (const surface of /** @type {const} */ (['popup', 'sidepanel', 'worker-internal'])) {
+          const outcome = await ctx.kernel(CALLERS[surface]).execute(cmd('ensureDailyNote', { noteId: 'd1' }));
+          assert.equal(outcome.kind, 'rejected', surface);
+          assert.equal(/** @type {Rejected} */ (outcome).reason, 'policy', surface);
+        }
+        assert.deepEqual(await dailyNotes(), []);
+      });
+    });
+
     describe('runBulkAction', () => {
       it('returns one outcome per note, in order, and counts only the committed ones', async () => {
         await createNote({ noteId: 'a', name: 'A' });
@@ -2180,6 +2417,7 @@ export function runContractSuite(fixture) {
           'createFolder',
           'createNote',
           'deleteBlocks',
+          'ensureDailyNote',
           'insertBlocks',
           'moveFolder',
           'recordJobRun',

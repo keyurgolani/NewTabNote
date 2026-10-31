@@ -323,6 +323,22 @@ const Utils = {
   },
 
   /**
+   * What a toast says when the notes kernel didn't commit a write: `action`, such as "Failed
+   * to archive note", and why. A note or folder deleted elsewhere says so, since trying again
+   * can't help; anything else asks for another try.
+   * @param {string} action
+   * @param {{kind: string, reason?: string, code?: string}} outcome
+   * @param {string} [gone] - what a note deleted elsewhere reads as
+   * @returns {string}
+   */
+  writeFailureMessage(action, outcome, gone = 'it was deleted') {
+    if (outcome && outcome.kind === 'rejected' && outcome.reason === 'not-found') {
+      return `${action}: ${outcome.code === 'folder-not-found' ? 'that folder no longer exists' : gone}.`;
+    }
+    return `${action}. Please try again.`;
+  },
+
+  /**
    * Show toast notification
    * @param {string} message - Toast message text
    * @param {string} [type='info'] - Toast type ('info', 'error', 'success')

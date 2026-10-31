@@ -292,6 +292,30 @@ describe("the in-memory adapter, given #13's ledger and commit log", () => {
     assert.equal(await commitLog.head(), 1);
   });
 
+  it('appends nothing for a Daily Note ensureDailyNote finds, and moves no revision', async () => {
+    const { commitLog, execute } = start();
+    const made = await execute({ type: 'ensureDailyNote', commandId: 'c1', noteId: 'd1' });
+    assert.deepEqual(made.kind === 'committed' && [made.code, made.commitSeq, made.revision], [
+      'daily-note-created',
+      1,
+      1,
+    ]);
+    const found = await execute({ type: 'ensureDailyNote', commandId: 'c2', noteId: 'd2' });
+    assert.deepEqual(found.kind === 'committed' && [found.code, found.changedIds, found.commitSeq, found.revision], [
+      'daily-note-exists',
+      [],
+      undefined,
+      1,
+    ]);
+    assert.equal(await commitLog.head(), 1);
+    assert.deepEqual(await commitLog.readChangesSince(0, 10), {
+      kind: 'changes',
+      entries: [{ commitSeq: 1, entityType: 'note', entityId: 'd1', revision: 1 }],
+      cursor: 1,
+      more: false,
+    });
+  });
+
   it('gives a commit that changes no entity, such as a preference, a record but no commitSeq', async () => {
     const { ledger, commitLog, execute } = start();
     const prefer = { type: 'setPreferences', commandId: 'c1', values: { theme: 'dark' } };

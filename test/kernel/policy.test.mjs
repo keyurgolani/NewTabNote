@@ -30,6 +30,7 @@ const TODAY = {
       'getJobRuns',
       'listSnapshots',
       'getSnapshot',
+      'findDailyNote',
     ],
   },
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },

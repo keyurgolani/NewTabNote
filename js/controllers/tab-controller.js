@@ -744,13 +744,15 @@ class TabController {
   }
 
   /**
-   * Open a new tab with a new note.
+   * Open a new tab with a new note. App makes it through the kernel, so the note list has it
+   * from the commit feed once it settles, with no refresh, and the empty state follows.
    */
   async openNewTab() {
     if (this.onCreateNote) {
       const note = await this.onCreateNote();
       if (note) {
-        if (this.onRefreshNotesList) await this.onRefreshNotesList();
+        if (this.noteList) await this.noteList.settled();
+        if (this.onUpdateEmptyState) this.onUpdateEmptyState();
         await this.openNoteInNewTab(note.id);
         document.getElementById('page-title').focus();
       }

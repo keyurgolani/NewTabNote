@@ -14,22 +14,24 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  * The page's kernel client, the document client over it, and its note list
  * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
  * them, so a commit an editor or a job makes reaches the list's feed
- * @param {{storage: any, settings: any, onListQuery?: (query: any) => void}} host - the page's
- *   Storage and chrome.storage.local, and what to tell of each query the note list makes
+ * @param {{storage: any, settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
+ *   pageNow?: () => number}} host - the page's Storage and chrome.storage.local, what to tell of
+ *   each query the note list makes, and the kernel's and the document client's clocks, the
+ *   system's unless given
  * @returns {{
  *   kernel: import('../../js/kernel/composition/host.js').Client,
  *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient,
  *   noteList: import('../../js/kernel/core/application/note-list.js').NoteList,
  * }}
  */
-export function pageClientsFor({ storage, settings, onListQuery = () => {} }) {
+export function pageClientsFor({ storage, settings, onListQuery = () => {}, kernelNow, pageNow }) {
   const adapter = createLegacyAdapter({ storage, settings, mode: 'versioned' });
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
     caller: Object.freeze({ surface: 'newtab', contextId: 'newtab-test' }),
     ids: legacyIds,
-    clock: systemClock,
+    clock: kernelNow ? { now: kernelNow } : systemClock,
   });
   const client = Object.freeze({
     execute: kernel.execute,
@@ -45,7 +47,7 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {} }) {
   };
   return {
     kernel: client,
-    documentClient: createDocumentClient(client),
+    documentClient: createDocumentClient(client, pageNow ? { now: pageNow } : {}),
     noteList: createNewTabNoteList({ ...client, query: listQuery }),
   };
 }
