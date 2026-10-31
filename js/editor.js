@@ -5336,9 +5336,16 @@ class BlockEditor {
       const result = await ai.chat(messages);
 
       if (result && result.trim()) {
+        // The reply is plain text, written into the block's rich content, and only when the
+        // block decodes as a known block with it (#14 slice 2)
+        const content = globalThis.BlockRendering.escapePlainText(result.trim());
+        if (Utils.blockRefusal([{ ...block.serialize(), content }], this.logger)) {
+          Utils.showToast(`AI ${action} failed`, 'error');
+          return;
+        }
         // Record undo before replacing content (Req 20.3)
         const beforeSnapshot = this.snapshotBlock(block);
-        block.content = result.trim();
+        block.content = content;
         this.pushUndo({
           type: 'content',
           blockId: block.id,
