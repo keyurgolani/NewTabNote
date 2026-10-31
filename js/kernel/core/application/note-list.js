@@ -321,7 +321,10 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
     failure = null;
     reloadFailed = false;
     // The commits it took are in what it read
-    if (takenNotes.length > 0 || takenFolders) changesFailed = false;
+    if (takenNotes.length > 0 || takenFolders) {
+      changesFailed = false;
+      retries = 0;
+    }
     const readNotes = data.notes.filter(isNote);
     const readEntries = data.searchEntries.filter(isEntry);
     if (wasLoaded && sameAsHeld(readNotes, data.folders, readEntries)) return UNCHANGED;

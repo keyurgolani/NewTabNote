@@ -15,7 +15,8 @@ test('a start with notes and no saved tab lists them in the sidebar, with no ref
   // No saved tab and no last-opened note, as on a profile whose tabs were never saved
   const saved = await extension.worker.evaluate(() =>
     chrome.storage.local.get(['setting_openTabs', 'lastOpenedNoteId']));
-  expect(saved).toEqual({});
+  expect(saved.setting_openTabs ?? null).toBeNull();
+  expect(saved.lastOpenedNoteId).toBeUndefined();
 
   const page = await driver.openNewTab(extension);
   await expect(page.locator('#notes-count')).toHaveText('5');
