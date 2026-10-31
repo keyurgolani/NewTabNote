@@ -135,6 +135,21 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
     assert.deepEqual(seen.incidents.filter(incident => incident.providerId === 'storage'), []);
   });
 
+  it("a 1.4.x database with a store this build doesn't know is refused, and journals storage.migration-failed with its code", async () => {
+    const worker = await loadBackground({
+      opens: false,
+      setup: env => createDatabase(env.indexedDB, {
+        extraStores: { strayStore: {} },
+        records: { canvases: [note('n1', { name: 'Groceries' })], elements: [block('b1', 'n1', 0, 'Milk')] },
+      }),
+    });
+    await worker.drain();
+    const seen = await inspect(worker.indexedDB);
+    const failed = seen.events.filter(([code]) => code === 'storage.migration-failed');
+    assert.equal(failed.length, 1, JSON.stringify(seen.events));
+    assert.equal(failed[0][1].errorCode, 'unknown-shape');
+  });
+
   it("a run that never starts, the migration's lock throwing, journals storage.migration-failed once", async () => {
     const worker = await loadBackground({
       opens: false,
