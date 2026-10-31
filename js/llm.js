@@ -121,16 +121,6 @@ class LLMService {
   }
 
   /**
-   * Set the endpoint for the current provider.
-   * @param {string} endpointId - Endpoint identifier
-   * @returns {Promise<void>}
-   */
-  async setEndpoint(endpointId) {
-    this.endpoint = endpointId;
-    await Storage.setSetting('llmEndpoint', endpointId);
-  }
-
-  /**
    * Check if the LLM service is configured with a provider and API key.
    * @returns {boolean} True if configured
    */
