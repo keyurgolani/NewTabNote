@@ -17,6 +17,13 @@ class EmbeddingManager {
         // generateEmbedding tries the load again for every note it embeds, so only the first
         // failure on this page is reported
         this.loadFailureReported = false;
+        /**
+         * The page loader's loadLibrary (js/runtime/lazy.js), which App sets: transformers.js loads
+         * through it at the model's first load (#27 slice 3). Null until set, and then
+         * transformers.js is the global its script defined, as before.
+         * @type {((name: string) => Promise<any>) | null}
+         */
+        this.loadLibrary = null;
     }
 
     /**
@@ -31,7 +38,7 @@ class EmbeddingManager {
         console.debug('Embeddings: Loading model...', this.modelName);
 
         try {
-            const { env, pipeline } = transformers;
+            const { env, pipeline } = await this.transformersLibrary();
 
             // Configure for Chrome extension environment
             env.allowRemoteModels = true;
@@ -50,6 +57,18 @@ class EmbeddingManager {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    /**
+     * transformers.js: through the page's loader, or the global without it. One that didn't load
+     * throws, so the model's load fails as it did before: an embeddings.load-failed event.
+     * @returns {Promise<any>}
+     */
+    async transformersLibrary() {
+        if (!this.loadLibrary) return transformers;
+        const loaded = await this.loadLibrary('transformers');
+        if (loaded.status === 'loaded') return loaded.module;
+        throw new Error(`transformers.js didn't load (${loaded.reason})`);
     }
 
     /**

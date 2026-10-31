@@ -2,8 +2,8 @@
  * The new tab's composition root (#12, docs/adr/0001-kernel-stack.md). It builds the tab's
  * kernel and, in place of the bootstrap at the end of js/app.js, constructs App with its
  * client, the document client its editors read and write through, and the AI port its
- * editors and note jobs call the provider through. js/main.js calls startNewTab() once it has
- * imported app.js.
+ * editors and note jobs call the provider through. js/main.js's boot() calls startNewTab()
+ * with the page's loader, once the boot root has loaded the workspace chunk (#27 slice 3).
  */
 
 import { createAIPort } from '../../services/ai-port.mjs';
@@ -70,7 +70,7 @@ import { startIndexer } from './workers.js';
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
  *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
- *   syncStore: LegacyStore, startIndexer: () => Worker}) => NewTabApp} App
+ *   syncStore: LegacyStore, startIndexer: () => Worker, loader: unknown}) => NewTabApp} App
  */
 
 /** Each LegacyStores handle's calls, as its holder makes them */
@@ -237,17 +237,21 @@ export function createNewTabLegacyStores(host) {
 }
 
 /**
- * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
- * client, its document client, its settings client, its AI port, its note list, its failure
- * events, its removeNotes, its database's state and recovery, its import's backup check, the
- * narrow legacy stores the search index, the graph view, and sync still go through, and the
- * indexer's starter (./workers.js). Nothing puts it on the page: no code reads a global App
- * instance (#12 slice 7c). The listener answers with init's promise, which a page ignores and
- * a test can wait for.
- * @returns {void}
+ * Start the new tab, as app.js's bootstrap did: App gets the tab's client, its document
+ * client, its settings client, its AI port, its note list, its failure events, its
+ * removeNotes, its database's state and recovery, its import's backup check, the narrow
+ * legacy stores the search index, the graph view, and sync still go through, the indexer's
+ * starter (./workers.js), and the page's loader (js/runtime/lazy.js). Nothing puts it on the
+ * page: no code reads a global App instance (#12 slice 7c). A chunk the boot root loads runs
+ * once the document is parsed, after a listener for DOMContentLoaded could hear it, so it
+ * starts now; while the document still loads, as a test's may, it waits for
+ * DOMContentLoaded. It answers init's promise, which a page ignores and a test can wait for,
+ * or null when it waits, and then the listener answers it.
+ * @param {{loader?: unknown}} [options]
+ * @returns {Promise<void> | null}
  */
-export function startNewTab() {
-  document.addEventListener('DOMContentLoaded', () => {
+export function startNewTab({ loader = null } = {}) {
+  const start = () => {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = legacyHost();
     const kernel = createNewTabClient(host);
@@ -270,10 +274,16 @@ export function startNewTab() {
       graphStore: stores.graph,
       syncStore: stores.sync,
       startIndexer,
+      loader,
     });
     built = app;
     return app.init().catch(error => {
       console.error('App initialization failed:', error);
     });
-  });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+    return null;
+  }
+  return start();
 }
