@@ -156,6 +156,17 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     'js/search.js',
     'js/app.js',
   ];
+
+  /** AI chat as App makes it, drawing no message */
+  const chatOf = (env) => {
+    const chat = new (env.get('AIChatController'))({
+      settings: env.settingsClient, domRefs: null, logger: null, llm: null, documentClient: env.documentClient,
+    });
+    chat.addChatMessage = () => {};
+    chat.addGlobalChatMessage = () => {};
+    return chat;
+  };
+
   const SIDEBAR_STEPS = [
     'updateSidebarState', 'applySidebarWidth', 'applySidebarViewMode', '_bindSidebarListeners', 'setupCalendar',
     'setupSidebarResize', 'setupSidebarViewToggle', 'setupNoteContextMenu', '_bindBulkActions', '_bindSidebarDropHandlers',
@@ -170,7 +181,8 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
 
-  // [what reads, what's stored for it, its read, what it read from that, what it reads with nothing there]
+  // [what reads, what's stored for it, its read, what it read from that, what it reads with
+  // nothing there, and which of its chrome.storage reads is the one that fails (the first by default)]
   const READS = [
     ['the sidebar', { sidebarOpen: false, sidebarWidth: 300, sidebarSortMode: 'title', sidebarViewMode: 'cards' }, async (env) => {
       const sidebar = new (env.get('SidebarController'))({
@@ -180,23 +192,23 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
       await sidebar.init();
       return [sidebar.sidebarOpen, sidebar.sidebarWidth, sidebar.sidebarSortMode, sidebar.sidebarViewMode];
     }, [false, 300, 'title', 'cards'], [true, 260, 'updated', 'list']],
-    ["AI chat's conversations", {
+    // Each conversation in its own read, the note chat's first
+    ["AI chat's note conversation", {
       aiChatHistory: [{ role: 'user', content: 'a question' }],
       noteChatMessages: [{ content: 'a question', type: 'user' }],
+    }, async (env) => {
+      const chat = chatOf(env);
+      await chat.loadChatHistory();
+      return plain([chat.aiChatHistory, chat.noteChatMessages]);
+    }, [[{ role: 'user', content: 'a question' }], [{ content: 'a question', type: 'user' }]], [[], []]],
+    ["AI chat's all-notes conversation", {
       globalChatHistory: [{ role: 'user', content: 'another' }],
       globalChatMessages: [{ content: 'another', type: 'user' }],
     }, async (env) => {
-      const chat = new (env.get('AIChatController'))({
-        settings: env.settingsClient, domRefs: null, logger: null, llm: null, documentClient: env.documentClient,
-      });
-      chat.addChatMessage = () => {};
-      chat.addGlobalChatMessage = () => {};
+      const chat = chatOf(env);
       await chat.loadChatHistory();
-      return plain([chat.aiChatHistory, chat.noteChatMessages, chat.globalChatHistory, chat.globalChatMessages]);
-    }, [
-      [{ role: 'user', content: 'a question' }], [{ content: 'a question', type: 'user' }],
-      [{ role: 'user', content: 'another' }], [{ content: 'another', type: 'user' }],
-    ], [[], [], [], []]],
+      return plain([chat.globalChatHistory, chat.globalChatMessages]);
+    }, [[{ role: 'user', content: 'another' }], [{ content: 'another', type: 'user' }]], [[], []], 2],
     ["Settings' font", { font: 'serif' }, async (env) => {
       await settingsOf(env).applyFont();
       return env.document.documentElement.dataset.font;
@@ -243,10 +255,10 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
 
   /**
    * A new tab whose chrome.storage holds `stored` and nothing else of what these reads read:
-   * startup stored some of 1.4.x's first-run values, which go. With `failing`, the next
-   * chrome.storage read fails.
+   * startup stored some of 1.4.x's first-run values, which go. With `failing`, chrome.storage's
+   * read number `failingRead` from now fails, the next one by default.
    */
-  async function tabWith(stored, { failing = false } = {}) {
+  async function tabWith(stored, { failing = false, failingRead = 1 } = {}) {
     const env = createLegacyEnv({ document: new FakeDocument() });
     await createDatabase(env.indexedDB, { records: { canvases: [note('A', { name: 'Alpha' })] } });
     env.load(...READ_FILES);
@@ -259,19 +271,57 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     Themes.connect({ settings: env.settingsClient });
     // The fake document's style can't take custom properties
     Themes.injectProperties = () => {};
-    if (failing) env.chrome.failNextGet();
+    if (failing) {
+      for (let read = 1; read < failingRead; read++) env.chrome.passNextGet();
+      env.chrome.failNextGet();
+    }
     return env;
   }
 
-  for (const [what, stored, read, asStored, byDefault] of READS) {
+  const readFailures = (env) => env.logs.filter(({ level, args }) => level === 'warn' && args[0] === 'Error getting setting:').length;
+
+  for (const [what, stored, read, asStored, byDefault, failingRead = 1] of READS) {
     it(`${what} reads what's stored, and 1.4.x's defaults where nothing is or the read fails`, async () => {
       assert.deepEqual(await read(await tabWith(stored)), asStored, 'as stored');
       assert.deepEqual(await read(await tabWith({})), byDefault, 'nothing stored');
-      const failing = await tabWith(stored, { failing: true });
+      const failing = await tabWith(stored, { failing: true, failingRead });
       assert.deepEqual(await read(failing), byDefault, 'the read fails');
-      assert.equal(failing.logs.filter(({ level, args }) => level === 'warn' && args[0] === 'Error getting setting:').length, 1);
+      assert.equal(readFailures(failing), 1);
     });
   }
+
+  it("a failed read of one AI conversation leaves the other loaded, and nothing writes the failed one over before it's read", async () => {
+    const stored = {
+      aiChatHistory: [{ role: 'user', content: 'a question' }],
+      noteChatMessages: [{ content: 'a question', type: 'user' }],
+      globalChatHistory: [{ role: 'user', content: 'another' }],
+      globalChatMessages: [{ content: 'another', type: 'user' }],
+    };
+    // The note conversation's read is the one that fails
+    const env = await tabWith(stored, { failing: true });
+    const before = env.chrome.writes().length;
+    const chat = chatOf(env);
+    await chat.loadChatHistory();
+    assert.deepEqual(plain([chat.aiChatHistory, chat.noteChatMessages]), [[], []], 'the conversation whose read failed shows empty');
+    assert.deepEqual(plain([chat.globalChatHistory, chat.globalChatMessages]), [stored.globalChatHistory, stored.globalChatMessages],
+      'the other one loaded');
+    assert.equal(readFailures(env), 1);
+
+    // A chat in the conversation that loaded saves that one alone
+    chat.globalChatHistory.push({ role: 'user', content: 'a third' });
+    chat.globalChatMessages.push({ content: 'a third', type: 'user' });
+    await chat.saveGlobalChatHistory();
+    assert.deepEqual(env.chrome.writes().slice(before).map((write) => write.keys.slice().sort()),
+      [['setting_globalChatHistory', 'setting_globalChatMessages']]);
+    assert.deepEqual(plain([env.chrome.local.setting_aiChatHistory, env.chrome.local.setting_noteChatMessages]),
+      [stored.aiChatHistory, stored.noteChatMessages], 'the one that failed is as stored');
+
+    // The next read finds it
+    const again = chatOf(env);
+    await again.loadChatHistory();
+    assert.deepEqual(plain([again.aiChatHistory, again.noteChatMessages]), [stored.aiChatHistory, stored.noteChatMessages]);
+    assert.equal(again.globalChatMessages.length, 2);
+  });
 
   it('a custom theme the page starts on, and the theme options, come from the themes the port lists', async () => {
     const env = await tabWith({});
