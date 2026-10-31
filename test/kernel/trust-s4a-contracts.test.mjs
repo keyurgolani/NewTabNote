@@ -283,7 +283,7 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     assert.equal(dataOf(await trust.summary()).actionRequired, 1);
   });
 
-  it('a dismissed capture-risk problem no longer puts the cards at risk, and a fixed one that comes back is a new problem to see', async () => {
+  it('a dismissed capture-risk problem reads unknown, never safe, until a later probe passes, and a fixed one that comes back is a new problem to see', async () => {
     const answers = /** @type {Record<string, any>} */ (allPassing());
     answers.capture = {
       status: 'failed',
@@ -303,7 +303,8 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     await trust.verify(verifyNow(['capture']));
     assert.equal((await records.incidents())[0].state, 'resolved');
     assert.equal(dataOf(await trust.summary()).capture, 'safe');
-    // A dismissed incident that's only an incident (a one-off failed capture) doesn't hold the cards
+    // A dismissed one-off failed capture leaves Needs action, but capture isn't safe until a
+    // probe passes after it
     clock.advance(1000);
     const raised = await trust.raise(
       command('recovery.raise', { providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' }),
@@ -313,8 +314,11 @@ describe('a dismissal holds until the problem changes (#20 slice 4a, item 1)', (
     const failed = (await records.incidents()).find(item => item.faultCode === 'capture-failed');
     await trust.dismiss(command('recovery.dismiss', { incidentId: /** @type {Incident} */ (failed).id }));
     const summary = dataOf(await trust.summary());
-    assert.equal(summary.capture, 'safe');
+    assert.equal(summary.capture, 'unknown');
     assert.equal(summary.actionRequired, 0);
+    clock.advance(1000);
+    await trust.verify(verifyNow(['capture']));
+    assert.equal(dataOf(await trust.summary()).capture, 'safe');
     // It comes back after it was fixed: a new sighting of a resolved incident isn't dismissed
     answers.capture = {
       status: 'failed',
@@ -1291,5 +1295,397 @@ describe('the copies list (#20 slice 4a, item 9)', () => {
     const { trust } = await center(allPassing(), { context });
     const listed = checked('recovery.copies', await trust.copies()).data;
     assert.deepEqual(listed, { copies: [], pointsRead: false, copiesRead: false });
+  });
+});
+
+// ============ #100's review round ============
+
+describe('capture risk is the exception to a dismissal that holds (#100 review)', () => {
+  /** A failed capture, as the worker raises it */
+  const failedCapture = (errorCode = 'transaction-failed') =>
+    command('recovery.raise', {
+      providerId: 'capture',
+      faultCode: 'capture-failed',
+      severity: 'capture-risk',
+      affected: ['capture'],
+      evidence: { errorCode },
+    });
+  /** A database that won't open, as the worker raises it */
+  const failedOpen = () =>
+    command('recovery.raise', {
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      subjectId: 'CanvasTabDB',
+      severity: 'capture-risk',
+      evidence: { errorCode: 'open-failed' },
+    });
+
+  it('a new failed capture after a dismissal shows the problem again', async () => {
+    const { trust, records, clock } = await center(allPassing());
+    await trust.verify(verifyNow(['capture', 'storage']));
+    await trust.raise(failedCapture());
+    const [incident] = await records.incidents();
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    assert.equal(dataOf(await trust.summary()).capture, 'unknown');
+    for (let n = 0; n < 10; n++) {
+      clock.advance(6 * 60_000);
+      await trust.raise(failedCapture());
+    }
+    const [after] = await records.incidents();
+    assert.equal(after.dismissed, false);
+    assert.equal(after.occurrences, 11);
+    const summary = dataOf(await trust.summary());
+    assert.equal(summary.capture, 'at-risk');
+    assert.equal(summary.actionRequired, 1);
+    assert.equal(summary.route, 'recovery');
+  });
+
+  it('a new failed open after a dismissal shows the problem again', async () => {
+    const { trust, records, clock } = await center(allPassing());
+    await trust.verify(verifyNow(['capture', 'storage']));
+    await trust.raise(failedOpen());
+    const [incident] = await records.incidents();
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    assert.equal(dataOf(await trust.summary()).capture, 'unknown');
+    clock.advance(60_000);
+    await trust.raise(failedOpen());
+    assert.equal((await records.incidents())[0].dismissed, false);
+    const summary = dataOf(await trust.summary());
+    assert.equal(summary.capture, 'at-risk');
+    assert.equal(summary.route, 'recovery');
+  });
+
+  it("a check's re-sighting of a standing capture-risk fault keeps its dismissal", async () => {
+    const answers = /** @type {Record<string, any>} */ (allPassing());
+    answers.capture = {
+      status: 'failed',
+      capture: 'at-risk',
+      faults: [{ faultCode: 'probe-failed', subjectId: 'CanvasTabDB', severity: 'capture-risk' }],
+    };
+    const { trust, records, clock } = await center(answers);
+    await trust.verify(verifyNow(['capture']));
+    const [incident] = await records.incidents();
+    await trust.dismiss(command('recovery.dismiss', { incidentId: incident.id }));
+    for (let open = 0; open < 3; open++) {
+      clock.advance(60_000);
+      await trust.verify(command('trust.verify', { trigger: 'open' }));
+    }
+    const [after] = await records.incidents();
+    assert.equal(after.dismissed, true);
+    // The probe still fails, so capture still reads at risk from its receipt
+    assert.equal(dataOf(await trust.summary()).capture, 'at-risk');
+  });
+
+  it('the reducer ends a capture-risk dismissal on an event sighting, not on a check one', () => {
+    /** @type {any} */
+    const record = {
+      id: 'a1b20001-0000-4000-8000-000000000000',
+      ref: 'A1B200',
+      key: 'capture/capture-failed/-',
+      providerId: 'capture',
+      faultCode: 'capture-failed',
+      subjectId: null,
+      severity: 'capture-risk',
+      state: 'open',
+      dismissed: true,
+      dismissChangedAt: 2000,
+      dismissedCause: 'transaction-failed',
+      firstSeenAt: 1000,
+      lastSeenAt: 1000,
+      resolvedAt: null,
+      occurrences: 1,
+      affected: [],
+      preserved: [],
+      evidence: { errorCode: 'transaction-failed' },
+      appliedOps: [],
+      sightedBy: [],
+    };
+    /** @param {Record<string, unknown>} more */
+    const op = more =>
+      /** @type {any} */ ({
+        opId: 'a1b20003-0000-4000-8000-000000000000',
+        kind: 'raise',
+        at: 3000,
+        key: record.key,
+        incidentId: 'a1b20004-0000-4000-8000-000000000000',
+        sighting: {
+          providerId: 'capture',
+          faultCode: 'capture-failed',
+          subjectId: null,
+          severity: 'capture-risk',
+          affected: [],
+          preserved: [],
+          evidence: { errorCode: 'transaction-failed' },
+          ...more,
+        },
+        count: 1,
+        lineage: 'a1b20003-0000-4000-8000-000000000000',
+      });
+    assert.equal(applyRaise(record, op({})).dismissed, false);
+    assert.equal(applyRaise(record, op({ from: 'check' })).dismissed, true);
+    // A milder fault's events keep the dismissal, as before
+    const milder = { ...record, severity: 'degraded' };
+    assert.equal(applyRaise(milder, op({ severity: 'degraded' })).dismissed, true);
+    // Causes held together count each one
+    const mixed = { ...record, severity: 'data-risk' };
+    assert.equal(
+      applyRaise(mixed, op({ severity: 'data-risk', from: 'check', causes: ['transaction-failed', 'quota'] }))
+        .dismissed,
+      false,
+    );
+  });
+});
+
+describe('recovery.check says still there only when it is (#100 review)', () => {
+  const lagging = () => ({
+    status: 'degraded',
+    faults: [{ faultCode: 'lagging', severity: 'degraded' }],
+    looked: [{ faultCode: 'lagging' }],
+  });
+
+  it('a passing check whose count read before it failed answers not-checked, to try again', async () => {
+    const answers = /** @type {Record<string, any>} */ ({ ...allPassing(), index: lagging() });
+    const { trust, records } = await center(answers);
+    await trust.verify(verifyNow(['index']));
+    const [incident] = await records.incidents();
+    answers.index = allPassing().index;
+    const original = records.occurrencesOf;
+    /** @type {any} */ (records).occurrencesOf = async () => ({ ok: false });
+    try {
+      const answer = checked(
+        'recovery.check',
+        await trust.check(command('recovery.check', { incidentId: incident.id })),
+      );
+      assert.equal(answer.result, 'not-checked');
+      assert.equal(answer.retryable, true);
+    } finally {
+      /** @type {any} */ (records).occurrencesOf = original;
+    }
+    assert.equal((await records.incidents())[0].state, 'open');
+  });
+
+  it('a check that still reports the fault answers still there, and one not observed is not retryable', async () => {
+    const answers = /** @type {Record<string, any>} */ ({ ...allPassing(), index: lagging() });
+    const { trust, records } = await center(answers);
+    await trust.verify(verifyNow(['index']));
+    const [incident] = await records.incidents();
+    const still = checked('recovery.check', await trust.check(command('recovery.check', { incidentId: incident.id })));
+    assert.deepEqual([still.result, still.retryable], ['still-there', false]);
+    await trust.raise(
+      command('recovery.raise', { providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' }),
+    );
+    const failed = /** @type {Incident} */ (
+      (await records.incidents()).find(item => item.faultCode === 'capture-failed')
+    );
+    const unobserved = checked(
+      'recovery.check',
+      await trust.check(command('recovery.check', { incidentId: failed.id })),
+    );
+    assert.deepEqual([unobserved.result, unobserved.retryable], ['not-checked', false]);
+  });
+
+  it("an after-read that couldn't reach the settings copy decides nothing", async () => {
+    const answers = /** @type {Record<string, any>} */ ({ ...allPassing(), index: lagging() });
+    const { trust, records } = await center(answers);
+    await trust.verify(verifyNow(['index']));
+    const [incident] = await records.incidents();
+    answers.index = allPassing().index;
+    const original = records.incidentsRead;
+    let reads = 0;
+    /** @type {any} */ (records).incidentsRead = async () => {
+      const read = await original();
+      return ++reads > 1 ? { ...read, copyRead: false } : read;
+    };
+    try {
+      const answer = checked(
+        'recovery.check',
+        await trust.check(command('recovery.check', { incidentId: incident.id })),
+      );
+      assert.equal(answer.kind, 'unavailable');
+    } finally {
+      /** @type {any} */ (records).incidentsRead = original;
+    }
+  });
+});
+
+describe('Remove saved keys says what it removed and kept (#100 review)', () => {
+  it('a removal that fails partway names the places removed and the places kept, and no value', async () => {
+    const held = ['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings'];
+    const secrets = {
+      async present() {
+        return [...held];
+      },
+      async remove() {
+        held.splice(held.indexOf('setting_llmApiKey'), 1);
+        throw Object.assign(new Error('write failed for synthetic-secret-value'), { code: 'settings-write-failed' });
+      },
+    };
+    const { pipeline, records } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { secrets },
+    });
+    const first = /** @type {any} */ (await pipeline.run(runOf('remove-saved-key')));
+    const done = /** @type {any} */ (
+      await pipeline.run(
+        runOf('remove-saved-key', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest }),
+      )
+    );
+    assert.ok(v.safeParse(runResult, done).success, JSON.stringify(done));
+    assert.equal(done.state, 'failed');
+    assert.equal(done.outcome, 'settings-write-failed');
+    assert.deepEqual(done.removed, ['setting_llmApiKey']);
+    assert.deepEqual(done.kept, ['setting_syncWebdavConfig', 'settings']);
+    const run = (await records.runs()).find(item => item.id === done.runId);
+    assert.deepEqual([run?.removed, run?.kept], [done.removed, done.kept]);
+    assert.equal(JSON.stringify({ done, runs: await records.runs() }).includes('synthetic-secret-value'), false);
+  });
+
+  it('the remover tries every place, takes the key and its owner setting together, and fails with a code only', async () => {
+    const of = freshProfile();
+    await legacyEnv.createDatabase(of.real, {
+      records: {
+        settings: [
+          { key: 'llmApiKey', value: 'synthetic-key-1' },
+          { key: 'theme', value: 'dark' },
+        ],
+      },
+    });
+    of.chrome.local.setting_llmApiKey = 'synthetic-key-2';
+    of.chrome.local.setting_llmApiKeyProvider = 'anthropic';
+    of.chrome.local.setting_syncWebdavConfig = {
+      serverUrl: 'https://dav.example.test',
+      username: 'u',
+      password: 'synthetic-pass',
+    };
+    const api = of.chrome.api.storage.local;
+    const settings = {
+      get: (/** @type {string[]} */ keys) => api.get(keys),
+      set: async () => {
+        throw new Error('write refused synthetic-pass');
+      },
+      remove: (/** @type {string[]} */ keys) => api.remove(keys),
+    };
+    const remover = createLegacySecretRemover({
+      indexedDB: of.faults.factory,
+      settings: /** @type {any} */ (settings),
+    });
+    const error = await remover.remove(['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings']).then(
+      () => null,
+      failure => failure,
+    );
+    assert.equal(error?.code, 'settings-write-failed');
+    assert.equal(String(error?.message).includes('synthetic'), false);
+    assert.equal('setting_llmApiKey' in of.chrome.local, false);
+    assert.equal('setting_llmApiKeyProvider' in of.chrome.local, false);
+    // The WebDAV write failed, and the 1.1 row went anyway
+    assert.deepEqual([...(await remover.present())], ['setting_syncWebdavConfig']);
+  });
+});
+
+describe('the repair table and the diagnostics save (#100 review)', () => {
+  it('an out-of-space problem offers Try again', () => {
+    assert.equal(repairFor({ providerId: 'storage', faultCode: 'quota' }), 'retry-open');
+    assert.equal(repairFor({ providerId: 'capture', faultCode: 'quota' }), 'retry-open');
+  });
+
+  it('export-diagnostics saves the report the user previewed, whatever is built after', async () => {
+    const previewed = { kind: 'diagnostics', serialized: JSON.stringify({ events: 1 }, null, 2) };
+    let held = previewed;
+    const files = memoryFiles();
+    const pick = files.pick;
+    files.pick = async options => {
+      // A newer report replaces the one the view holds once the picker opens
+      held = { kind: 'diagnostics', serialized: JSON.stringify({ events: 2 }, null, 2) };
+      return pick(options);
+    };
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files, diagnostics: async () => held },
+    });
+    const done = /** @type {any} */ (await pipeline.run(runOf('export-diagnostics')));
+    assert.equal(done.state, 'succeeded', JSON.stringify(done));
+    assert.equal([...files.files.values()][0], previewed.serialized);
+  });
+
+  it('runs no export without a previewed report', async () => {
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { files: memoryFiles(), diagnostics: async () => null },
+    });
+    const done = /** @type {any} */ (await pipeline.run(runOf('export-diagnostics')));
+    assert.equal(done.state, 'failed');
+    assert.equal(done.outcome, 'not-applicable');
+  });
+});
+
+describe('#100 review nits', () => {
+  it("a read that never answers after a failed probe doesn't hold up the capture finding", async () => {
+    const adapter = {
+      readSettings: async () => ({}),
+      commit: async () => ({ outcome: unavailable('storage', 'quota', false), replayed: false }),
+      read: () => new Promise(() => {}),
+    };
+    const timers = {
+      set: (/** @type {() => void} */ callback) => setTimeout(callback, 0),
+      clear: (/** @type {any} */ handle) => clearTimeout(handle),
+    };
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let guard;
+    const result = await Promise.race([
+      storage.check({ storage: adapter, timers }),
+      new Promise((resolve, reject) => {
+        guard = setTimeout(() => reject(new Error('the read held the check up')), 2000);
+      }),
+    ]).finally(() => clearTimeout(guard));
+    assert.equal(result.status, 'action-required');
+    assert.ok(result.faults?.[0].affected?.includes('reading'));
+  });
+
+  it('a point the file left a store of out is not held', async () => {
+    let applied = false;
+    const contribution = {
+      ...REMEDIATIONS.find(item => item.id === 'rebuild-index'),
+      class: 'irreversible',
+      implementation: {
+        phrase: 'delete it',
+        destroys: () => POINT,
+        async preview() {
+          return { preview: { changes: [{ target: 'canvases', creates: 0, updates: 0, deletes: 1 }] }, plan: null };
+        },
+        async apply() {
+          applied = true;
+          return null;
+        },
+        async verify() {
+          return { ok: true };
+        },
+      },
+    };
+    const read = {
+      database: db,
+      legacyCopies: empty,
+      recoveryPoints: point([
+        { store: 'canvases', values: [{ id: 'p1' }] },
+        { store: 'extraStore', values: [{ id: 'x' }] },
+      ]),
+    };
+    const salvage = { collect: async () => read, restorePoint: async () => null, has: async () => false };
+    const { pipeline } = await remediationCenter({
+      contributions: /** @type {any} */ ([contribution]),
+      ports: { salvage: /** @type {any} */ (salvage), files: memoryFiles() },
+    });
+    const first = /** @type {any} */ (await pipeline.run(runOf('rebuild-index')));
+    const answer = /** @type {any} */ (
+      await pipeline.run(
+        runOf('rebuild-index', {
+          runId: first.runId,
+          decision: 'confirm',
+          previewDigest: first.previewDigest,
+          typedPhrase: 'delete it',
+        }),
+      )
+    );
+    assert.equal(answer.outcome, 'salvage-incomplete');
+    assert.equal(applied, false);
   });
 });

@@ -348,6 +348,30 @@ describe("#75's follow-ups (part 2)", () => {
     assert.ok((await summaryOf(rb.records, clock)).actionRequired >= 1);
   });
 
+  it('P4c: a held cause change survives a later sighting with the first cause before the replay', async () => {
+    const profile = trustProfile();
+    const clock = manualClock();
+    const up = databaseOn(profile);
+    opened.push(up);
+    const rb = await recordsOn(up, profile, { clock, prefix: 'bbbb' });
+    const fa = flaky(profile);
+    const ra = await recordsOn(fa.store, profile, { clock, prefix: 'aaaa' });
+    fa.failNext(1000);
+    await ra.records.append(event(0));
+    await rb.records.append(event(0));
+    const incident = await storedAt(up, WRITE_FAILED);
+    clock.advance(10_000);
+    await rb.records.dismiss(incident.id, true);
+    clock.advance(1000);
+    // Another cause, then the first again, both held before anything replays them
+    fa.failNext(1000, 'quota');
+    await ra.records.append(event(1));
+    clock.advance(1000);
+    fa.failNext(1000);
+    await ra.records.append(event(2));
+    assert.equal((await at(rb.records, WRITE_FAILED))?.dismissed, false);
+  });
+
   it('N6: an incident event whose append fails while its raise lands still counts the failed write', async () => {
     const profile = trustProfile();
     const clock = manualClock();
