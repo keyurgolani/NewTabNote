@@ -1472,6 +1472,15 @@ export function runContractSuite(fixture) {
             },
           ],
         );
+        // Each carries when it was captured, which a UUID doesn't say, for the readers that go by
+        // when each block was made (#17 PR 2a)
+        assert.deepEqual(
+          (await blocksOf('d1')).map(({ createdAt, updatedAt, order }) => [createdAt, updatedAt, order]),
+          [
+            [NOW, NOW, NOW],
+            [NOW, NOW, NOW],
+          ],
+        );
       });
 
       it('starts a new Daily Note from the Daily Note template, and an archived one still counts', async () => {

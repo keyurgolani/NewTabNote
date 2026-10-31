@@ -514,14 +514,18 @@ export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId 
 }
 
 /**
- * The block a capture adds, as background.js has built it.
+ * The block a capture adds, as background.js has built it, with the time it was captured as its
+ * createdAt and updatedAt too (#17 PR 2a). 1.4.x's capture had neither, and its id began with
+ * that time. A UUID doesn't, and the readers that list a note's blocks in the order they were
+ * made go by createdAt then (Utils.inCreationOrder).
  * @param {{id: string, noteId: string, capture: Capture, now: number}} fields
  * @returns {BlockRecord}
  */
 export function captureBlock({ id, noteId, capture, now }) {
+  const times = { order: now, createdAt: now, updatedAt: now };
   if (capture.type === 'bookmark') {
-    return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, order: now };
+    return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, ...times };
   }
   const source = capture.source ? ` (Source: ${capture.source})` : '';
-  return { id, type: 'text', content: capture.content + source, canvasId: noteId, order: now };
+  return { id, type: 'text', content: capture.content + source, canvasId: noteId, ...times };
 }
