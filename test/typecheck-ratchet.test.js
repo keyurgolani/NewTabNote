@@ -273,4 +273,16 @@ describe('typecheck ratchet', () => {
     // A file that only starts with the same letters is still counted
     assert.equal(run([], "js/kernelish.js(1,1): error TS2304: Cannot find name 'x'.").code, 1);
   });
+
+  it("drops diagnostics in js/entries/ and js/runtime/ too, which typecheck:strict owns (#27 slice 3)", () => {
+    const strict = [
+      "js/entries/boot.js(4,1): error TS2304: Cannot find name 'chrome'.",
+      "js/runtime/lazy.js(9,3): error TS2304: Cannot find name '__NTN_BUILD_ID__'.",
+    ].join('\n');
+    const { code, output } = run(['--init'], `${TODAY}\n${strict}`);
+    assert.equal(code, 0, output);
+    assert.deepEqual(Object.keys(readBaseline()), ['js/a.js', 'js/b.js', 'js/c.js']);
+    assert.equal(run([], `${strict}\n${TODAY}`).code, 0);
+    assert.equal(run([], "js/runtime.js(1,1): error TS2304: Cannot find name 'x'.").code, 1);
+  });
 });

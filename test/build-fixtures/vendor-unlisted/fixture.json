@@ -15,8 +15,8 @@
     },
     {
       "file": "newtab.html",
-      "replace": "  <script vite-ignore src=\"js/lib/fuse.js\"></script>",
-      "with": "  <script vite-ignore src=\"js/lib/ntn-fixture.js\"></script>\n  <script vite-ignore src=\"js/lib/fuse.js\"></script>"
+      "replace": "  <script vite-ignore src=\"js/entries/boot-guard.js\"></script>",
+      "with": "  <script vite-ignore src=\"js/lib/ntn-fixture.js\"></script>\n  <script vite-ignore src=\"js/entries/boot-guard.js\"></script>"
     }
   ]
 }

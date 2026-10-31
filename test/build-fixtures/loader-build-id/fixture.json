@@ -1,0 +1,13 @@
+{
+  "rule": "the loader doesn't carry the build's ID, as a pass without its define leaves it, so it would read an update under an open page as a missing chunk",
+  "expect": [
+    "build/loader"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build/vite-config.js",
+      "replace": "      __NTN_BUILD_ID__: JSON.stringify(buildId),\n",
+      "with": ""
+    }
+  ]
+}

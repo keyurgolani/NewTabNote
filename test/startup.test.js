@@ -369,11 +369,13 @@ describe('startup: version 8 without elements', () => {
   });
 
   it('the new tab shows "Your notes database is incomplete" with Export and Reload', async () => {
-    const { env, app } = await startApp({ omit: ['elements'] });
+    const { env, app, appErrors } = await startApp({ omit: ['elements'] });
     const guard = env.document.querySelector('.storage-guard');
     assert.equal(guard.querySelector('h1').textContent, 'Your notes database is incomplete');
     assert.deepEqual(guard.querySelectorAll('button').map((b) => b.textContent), ['Export', 'Reload']);
     assert.ok(app);
+    // The app owns the page from here (#27 slice 3)
+    assert.deepEqual(appErrors, ['storage-guard']);
   });
 });
 
@@ -404,7 +406,8 @@ describe('a version-9 database (AC7)', () => {
   });
 
   it('the new tab shows the guard, and Export downloads every store except settings', async () => {
-    const { env, before, downloads } = await startApp({ version: 9 });
+    const { env, before, downloads, appErrors } = await startApp({ version: 9 });
+    assert.deepEqual(appErrors, ['storage-guard']);
     const guard = env.document.querySelector('.storage-guard');
     assert.equal(guard.querySelector('h1').textContent, GUARD_TITLE);
     assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
@@ -530,11 +533,12 @@ describe("the new tab when its kernel can't open storage for another reason", ()
       [new DOMException('Internal error opening backing store for indexedDB.open.', 'UnknownError'), "NewTabNote couldn't open your notes."],
       [new DOMException('The quota has been exceeded.', 'QuotaExceededError'), "There's no room left to store your notes."],
     ]) {
-      const { env, before } = await startApp({}, (page) => {
+      const { env, before, appErrors } = await startApp({}, (page) => {
         page.get('Storage').open = async () => { throw failure; };
       });
       const appEl = env.document.getElementById('app');
       assert.equal(appEl.querySelector('h2').textContent, 'Failed to initialize');
+      assert.deepEqual(appErrors, ['error-state']);
       // An outcome carries no error message, so the words are the new tab's own
       assert.equal(appEl.querySelector('p').textContent, words);
       assert.deepEqual(appEl.querySelectorAll('button').map((b) => b.textContent), ['Reload']);
@@ -681,8 +685,8 @@ async function storageStateOf(env) {
 
 /**
  * Start the new tab against a fixture with a stub #app element, after `beforeInit(env)`, as
- * js/main.js starts it: its composition root constructs App with the tab's kernel once the
- * DOM is ready, and runs App.init.
+ * js/main.js's boot() starts it: its composition root constructs App with the tab's kernel at
+ * once, since the stub document isn't loading, and runs App.init, whose promise it answers.
  */
 async function startApp(spec, beforeInit = () => {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
@@ -694,8 +698,10 @@ async function startApp(spec, beforeInit = () => {}) {
   env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
   env.get('Utils').showToast = () => {};
   beforeInit(env);
+  // Each error state App says it ended in, ntn:app-error's
+  const appErrors = [];
+  env.window.addEventListener('ntn:app-error', (event) => appErrors.push(event.detail.state));
   const { startNewTab } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-  startNewTab();
-  await Promise.all(env.document.fire('DOMContentLoaded'));
-  return { env, app: env.global.app, before, downloads };
+  await startNewTab();
+  return { env, app: env.global.app, before, downloads, appErrors };
 }
