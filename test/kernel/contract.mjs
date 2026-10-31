@@ -2987,7 +2987,7 @@ export function runContractSuite(fixture) {
         assert.equal((await kernel.query({ type: 'listNotes', view: 'trashed' })).kind, 'empty');
       });
 
-      it("lists Popup's view by archivedAt and trashedAt, templates included, and Side Panel's with every note", async () => {
+      it("lists Popup's view without what's archived or trashed, by flag or time, templates included, and Side Panel's with every note", async () => {
         await createNote({ noteId: 'kept', name: 'Kept' });
         ctx.clock.advance();
         await createNote({ noteId: 'arch', name: 'Archived' });
@@ -3000,7 +3000,8 @@ export function runContractSuite(fixture) {
           { ...storageNote('template', 'Template', ctx.clock.now()), isTemplate: true },
           { ...storageNote('flags', 'Flags only', ctx.clock.advance()), archived: true, trashed: true },
         ]);
-        assert.deepEqual(await idsIn('popup'), ['flags', 'template', 'kept']);
+        // 1.4.x's Popup listed a note archived and trashed by flag alone (review R88's fix)
+        assert.deepEqual(await idsIn('popup'), ['template', 'kept']);
         assert.deepEqual(await idsIn('sidePanel'), ['flags', 'template', 'gone', 'arch', 'kept']);
         for (const caller of [CALLERS.popup, CALLERS.sidepanel]) {
           const state = await ctx.kernel(caller).query({ type: 'listNotes', view: 'popup' });

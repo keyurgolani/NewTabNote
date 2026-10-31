@@ -107,7 +107,7 @@ describe('notes', () => {
     assert.deepEqual(ids(notesInView(notes, 'templates')), ['templateNoTime', 'template']);
   });
 
-  it('notesInView lists what Popup and Side Panel have always read: no archivedAt or trashedAt, and every note, one without an indexed updatedAt last (#17 PR 3a, KD-011)', () => {
+  it('notesInView lists what Popup and Side Panel read: nothing archived or trashed, by flag or by time, and every note, one without an indexed updatedAt last (#17 PR 3a, KD-011)', () => {
     const notes = [
       note('flags', { updatedAt: NOW + 4, archived: true, trashed: true }),
       note('archived', { updatedAt: NOW + 3, archived: true, archivedAt: NOW + 3 }),
@@ -116,9 +116,13 @@ describe('notes', () => {
       note('b', { updatedAt: NOW }),
       note('a', { updatedAt: NOW }),
       note('noTime', { updatedAt: undefined }),
+      // Never listed by 1.4.x, which had no time to list them by, nor one for the state they're in
+      note('trashedNoTime', { updatedAt: undefined, trashed: true }),
+      note('archivedNoTime', { updatedAt: undefined, archived: true, archivedAt: null }),
     ];
     const ids = /** @param {NoteRecord[]} list */ list => list.map(n => n.id);
-    assert.deepEqual(ids(notesInView(notes, 'popup')), ['flags', 'template', 'b', 'a', 'noTime']);
+    // 1.4.x's Popup listed `flags`, archived and trashed by flag alone: a fix since review R88
+    assert.deepEqual(ids(notesInView(notes, 'popup')), ['template', 'b', 'a', 'noTime']);
     assert.deepEqual(ids(notesInView(notes, 'sidePanel')), [
       'flags',
       'archived',
@@ -126,7 +130,9 @@ describe('notes', () => {
       'trashed',
       'b',
       'a',
+      'trashedNoTime',
       'noTime',
+      'archivedNoTime',
     ]);
   });
 

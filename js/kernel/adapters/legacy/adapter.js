@@ -35,6 +35,7 @@ import {
   unavailable,
   unavailableFrom,
 } from '../../core/contracts/outcomes.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
@@ -152,6 +153,19 @@ function storeIn(tx, name) {
 }
 
 /**
+ * A note as this adapter puts it: as the kernel made it on a database at version 10 or later,
+ * and without #17 PR 3's fields (domain/placement.js) below it, where step 10's stores aren't
+ * there yet. 1.4.1 still opens such a database, and it changes only the flags (a trash, a move),
+ * so a field written beside them there would go stale, and #17's transform, which fills only
+ * what's absent, would keep it (review R88). At 10 and later 1.4.x refuses the database.
+ * @param {LegacyStorage} storage
+ * @param {Record<string, unknown>} note
+ */
+function noteFor(storage, note) {
+  return storage.hasStore(IDB_STORES.tombstones) ? note : withoutPlacement(note);
+}
+
+/**
  * The kernel's view of one transaction over `scope`. A store the database lacks reads as
  * empty, as DatabaseManager's reads of auxiliary stores do.
  * @param {LegacyStorage} storage
@@ -202,9 +216,10 @@ function view(storage, tx, scope) {
     // tombstone a deletion puts (LATER_STORES), so a note deleted there stays in its recovery
     // point (#17 PR 2b's declared gap). At 10 the tombstone goes in the delete's own
     // transaction, without the revision and seq #17's adapter adds, since this one keeps neither.
+    // Below 10 a note goes in without #17 PR 3's fields too (noteFor).
     put: (store, record) => {
       const objectStore = handle(store);
-      if (objectStore) objectStore.put(record);
+      if (objectStore) objectStore.put(store === 'notes' ? noteFor(storage, record) : record);
       else if (!DERIVED_STORES.includes(store) && !LATER_STORES.includes(store)) {
         throw new UnavailableError('storage', 'store-unavailable', false);
       }

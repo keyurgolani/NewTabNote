@@ -226,7 +226,10 @@ export function expiredInTrash(notes, now, days) {
  *
  * And what Popup and Side Panel have read since 1.4.0, which #4 and #5 replace when they
  * rebuild them:
- * - `popup`: no `archivedAt` or `trashedAt`, templates included, latest updated first
+ * - `popup`: no `archivedAt` or `trashedAt`, templates included, latest updated first. Since
+ *   #17 PR 3a lists a note 1.4.x's index left out, one with neither time but trashed or
+ *   archived by flag would show here, so the flags leave a note out too (review R88). That
+ *   also leaves out a flagged note with an `updatedAt` and no time, which 1.4.x listed.
  * - `sidePanel`: every note, latest updated first
  * @typedef {'active' | 'withArchived' | 'archived' | 'trashed' | 'templates' | 'popup' | 'sidePanel'} NoteView
  */
@@ -344,7 +347,7 @@ export function notesInView(notes, view) {
         .filter(note => note.isTemplate && !note.trashed)
         .sort((a, b) => timeOf(listTimeOf(b)) - timeOf(listTimeOf(a)));
     case 'popup':
-      return indexed.reverse().filter(note => !note.archivedAt && !note.trashedAt);
+      return indexed.reverse().filter(note => !note.archivedAt && !note.trashedAt && !note.archived && !note.trashed);
     case 'sidePanel':
       return indexed.reverse();
   }
