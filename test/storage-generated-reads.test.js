@@ -27,14 +27,14 @@ async function load() {
   return modules;
 }
 
+/** When the worker's transform runs in the cases after its run (#17 PR 3a), past every fixture time */
+const TRANSFORMED_AT = Date.UTC(2026, 9, 31);
+
 /**
- * Production Storage on a profile holding `fixture`, opened with init(), and the profile's
- * CanvasTabDB records before it opened
+ * Production Storage on profile `of`, opened with init()
  */
-async function opened(fixture) {
+async function storageOn(of) {
   const { support } = await load();
-  const of = await support.profileWith(fixture);
-  const before = await support.dump(of);
   const env = support.legacyEnv.createLegacyEnv({ indexedDB: of.real, chrome: of.chrome });
   env.load(...FILES);
   const Storage = env.get('Storage');
@@ -45,7 +45,31 @@ async function opened(fixture) {
   ));
   const init = await settle(() => Storage.init());
   assert.equal(init.error, undefined, `init() rejected: ${JSON.stringify(init.error)}`);
+  return { Storage, settle };
+}
+
+/**
+ * Production Storage on a profile holding `fixture`, opened with init(), and the profile's
+ * CanvasTabDB records before it opened
+ */
+async function opened(fixture) {
+  const { support } = await load();
+  const of = await support.profileWith(fixture);
+  const before = await support.dump(of);
+  const { Storage, settle } = await storageOn(of);
   return { of, before, Storage, settle, dump: () => support.dump(of) };
+}
+
+/**
+ * Production Storage on a profile holding `fixture` once the worker's run and its transforms
+ * are in (#17 PR 3a), at this build's version
+ */
+async function transformed(fixture) {
+  const { support } = await load();
+  const of = await support.profileWith(fixture);
+  assert.equal((await support.run(of)).status, 'migrated');
+  assert.equal((await support.transform(of, { clock: { now: () => TRANSFORMED_AT } })).status, 'transformed');
+  return storageOn(of);
 }
 
 /** The value `call` resolves with, failing the test when it rejects */
@@ -120,19 +144,32 @@ describe('1.4.x reads on the corrupt profiles', () => {
     assert.equal((await value(settle, () => Storage.getNote(roles.truncatedNote), 'getNote')).id, roles.truncatedNote);
   });
 
-  // getAllNotes reads the updatedAt index, which skips a note without updatedAt. #17 PR 3's
-  // transform fills a missing updatedAt (from createdAt, else the newest block's time, else the
-  // run's start), and the kernel derives it on read until then; notesInView keeps 1.4.x's
-  // exclusion until that lands.
-  expectFailure('KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)', async () => {
+  // getAllNotes reads the updatedAt index, which skips a note without updatedAt (KD-011). Since
+  // #17 PR 3a the worker's transform fills it (from createdAt, else the newest block's time, else
+  // the run's start), so Storage lists the note once the run is in, and the kernel lists it by
+  // its createdAt, else last, until then (domain/note.js's notesInView).
+  it('a note with no updatedAt is listed with the other notes once the worker\'s run and its transform are in, at the time the transform gave it (#17 PR 3a, KD-011)', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
-    const { Storage, settle } = await opened(fixture);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(true), 'getAllNotes')), ['note-a', 'note-b', roles.truncatedNote].sort());
+    const { Storage, settle } = await transformed(fixture);
+    const notes = await value(settle, () => Storage.getAllNotes(true), 'getAllNotes');
+    assert.deepStrictEqual(ids(notes), ['note-a', 'note-b', roles.truncatedNote].sort());
+    // An id and nothing else: no createdAt and no block, so the run's start, the newest time
+    // here, and the index lists it first
+    assert.deepStrictEqual([notes[0].id, notes[0].updatedAt], [roles.truncatedNote, TRANSFORMED_AT]);
+  });
+
+  it('exportAll includes the note with no updatedAt once the worker\'s run and its transform are in (#17 PR 3a)', async () => {
+    const { generate, inputs } = await load();
+    const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
+    const { Storage, settle } = await transformed(fixture);
+    const exported = await value(settle, () => Storage.exportAll(), 'exportAll');
+    assert.deepStrictEqual(ids(exported.canvases), ['note-a', 'note-b', roles.truncatedNote].sort());
   });
 
   // _readExport builds the backup from getAllNotes(true), so the note, its blocks, and its media
-  // go missing from the user's own backup. #17's point export keeps them.
+  // go missing from the user's own backup on a profile no run has reached. #17's point export
+  // keeps them, and the transform fills the field once the run is in (the case above).
   expectFailure('KD-005 exportAll includes notes without updatedAt', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
