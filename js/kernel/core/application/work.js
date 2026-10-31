@@ -67,12 +67,13 @@ import { derivedOnly } from './scopes.js';
  * @param {Command} command
  * @param {Unit[]} units
  * @param {() => Committed} done
- * @param {{primary?: Work['primary'], revised?: Work['revised'], scope?: WriteScope}} [options]
+ * @param {{primary?: Work['primary'], revised?: Work['revised'], scope?: WriteScope, sourceRevision?: number}} [options]
  *   The record the outcome reports the revision of, whether the command changed its content,
- *   and what it writes (content unless given)
+ *   what it writes (content unless given), and for a derived command the content revision it
+ *   was made from
  * @returns {Work}
  */
-export function unitsWork(command, units, done, { primary, revised, scope = 'content' } = {}) {
+export function unitsWork(command, units, done, { primary, revised, scope = 'content', sourceRevision } = {}) {
   /** @type {Work} */
   const work = {
     commandId: command.commandId,
@@ -83,6 +84,7 @@ export function unitsWork(command, units, done, { primary, revised, scope = 'con
   };
   if (primary) work.primary = primary;
   if (revised) work.revised = revised;
+  if (sourceRevision !== undefined) work.sourceRevision = sourceRevision;
   return work;
 }
 

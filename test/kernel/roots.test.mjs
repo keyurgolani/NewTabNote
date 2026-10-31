@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
 import { createNewTabClient, createNewTabLegacyStores } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
@@ -114,7 +115,7 @@ describe('each composition root', () => {
     closeAll([tab]);
   });
 
-  it('on a fresh profile only the worker makes the database, at 9; Popup and Side Panel wait on it, then make none', async () => {
+  it("on a fresh profile only the worker makes the database, at this build's version; Popup and Side Panel wait on it, then make none", async () => {
     const fresh = legacyContext(undefined, { worker: false });
     // On a profile with no database, Popup and Side Panel wait on the worker first, then make none
     const waits = { count: 0 };
@@ -131,11 +132,11 @@ describe('each composition root', () => {
     assert.deepEqual(refused && [refused.cause, refused.code], ['storage', 'no-database']);
     assert.deepEqual(await fresh.env.indexedDB.databases(), []);
 
-    // The worker's run makes it at 9, then the worker maintains it, and records the run
+    // The worker's run makes it at this build's version, then the worker maintains it, and records the run
     const worker = createWorkerClient(workerHostOf(fresh));
     assert.equal(await worker.whenReady(), null);
     assert.equal((await worker.migration.done).status, 'migrated');
-    assert.deepEqual(await databases(fresh.env.indexedDB), [['CanvasTabDB', 9]]);
+    assert.deepEqual(await databases(fresh.env.indexedDB), [['CanvasTabDB', DB_VERSION]]);
     assert.equal(fresh.env.chrome.local.setting_storageInitialized, true);
     assert.deepEqual(
       { .../** @type {any} */ (fresh.env.chrome.local[UPGRADE_RECORD_KEY]), at: 0 },
@@ -145,7 +146,7 @@ describe('each composition root', () => {
     // And a new tab that wakes it then opens the database as it is, and maintains it
     const next = legacyContext(fresh.env);
     assert.equal(await createNewTabClient(hostOf(next)).whenReady(), null);
-    assert.equal(next.storage.db.version, 9);
+    assert.equal(next.storage.db.version, DB_VERSION);
     closeAll([fresh, next]);
   });
 
@@ -171,7 +172,7 @@ describe('each composition root', () => {
       });
     assert.equal((await capture('first')).kind, 'committed');
     // A newer build's upgrade: nothing blocks it, and the worker's next open finds it too new
-    const upgraded = await legacyEnv.requestToPromise(tab.env.indexedDB.open('CanvasTabDB', 10));
+    const upgraded = await legacyEnv.requestToPromise(tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
     /** @type {IDBDatabase} */ (upgraded).close();
     assert.equal(tab.storage.openState, 'version-changed');
     const refused = await capture('second');

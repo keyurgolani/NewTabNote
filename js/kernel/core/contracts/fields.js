@@ -50,7 +50,7 @@ export const content = schema => v.pipe(schema, v.metadata({ content: true }));
 /** A time, as an integer count of milliseconds since the epoch */
 export const timestamp = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
-/** A content revision (#17): an integer from 0 */
+/** One of a note's versions (#17): its content revision, placement version, or source revision, an integer from 0 */
 export const revision = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
 /** A position in #17's change log, which #13 calls commitSeq: an integer from 1 */

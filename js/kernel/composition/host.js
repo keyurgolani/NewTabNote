@@ -10,7 +10,8 @@
 
 import { createKernel } from '../core/application/kernel.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
-import { legacyIds, systemClock } from '../core/ports/runtime.js';
+import { systemClock } from '../core/ports/runtime.js';
+import { randomIds } from './ids.js';
 
 /** @typedef {import('../adapters/legacy/adapter.js').LegacyStorage} LegacyStorage */
 /** @typedef {import('../adapters/legacy/adapter.js').SettingsStore} SettingsStore */
@@ -121,7 +122,7 @@ const consoleLogger = Object.freeze({
  * One context's kernel on `adapter`, which starts opening now, and its client. Its caller is
  * `surface` with an id of its own, which the policy checks on every command and query.
  * `maintainOnOpen` runs startup maintenance before anything else, as the new tab's and the
- * worker's Storage.init did.
+ * worker's Storage.init did. Every id it and its client make is a UUID (ids.js).
  * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean}} options
  * @returns {Client}
  */
@@ -129,8 +130,8 @@ export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
-    caller: Object.freeze({ surface, contextId: `${surface}-${legacyIds.next()}` }),
-    ids: legacyIds,
+    caller: Object.freeze({ surface, contextId: `${surface}-${randomIds.next()}` }),
+    ids: randomIds,
     clock: systemClock,
     logger: consoleLogger,
     ready: adapter.open(),
@@ -141,6 +142,6 @@ export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
     query: kernel.query,
     subscribe: kernel.subscribe,
     whenReady: kernel.whenReady,
-    ids: legacyIds,
+    ids: randomIds,
   });
 }

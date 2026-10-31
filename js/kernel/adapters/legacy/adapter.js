@@ -6,8 +6,9 @@
  * - atomicMultiStore: false. Each unit commits in its own transaction, as DatabaseManager's
  *   methods always have, so a later unit's failure leaves the earlier units' writes in place.
  *   saveNoteContent is one unit, so its note fields and blocks still commit together.
- * - revisions: false. Records have none, so a save over a newer write wins, and two contexts
- *   saving one note's blocks race until #35's coordinator serializes them.
+ * - revisions: false. It reads no versions and moves none, even on a note #17's adapter gave
+ *   them (#17 PR 2a), so a save over a newer write wins, and two contexts saving one note's
+ *   blocks race until #35's coordinator serializes them.
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  * - backups: true. The legacy import, auto-backup, and export file run here, through
@@ -186,6 +187,12 @@ function view(storage, tx, scope) {
       return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
     },
     revision: store => {
+      handle(store);
+      return undefined;
+    },
+    // No versions (revisions: false). A record #17's adapter gave versions keeps them, since
+    // every unit puts what it read with only its own fields changed.
+    versions: store => {
       handle(store);
       return undefined;
     },

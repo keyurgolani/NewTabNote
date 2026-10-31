@@ -111,7 +111,8 @@ describe('what Popup shows', () => {
 });
 
 describe("Popup's quick note", () => {
-  // #12: Popup's notes take createNote's record and search entry, the one record-shape change it allows
+  // #12: Popup's notes take createNote's record and search entry, the one record-shape change it
+  // allows, and since #17 PR 2a the three versions #17's adapter keeps on every note it writes
   it("saves the record and search entry the new tab's Storage.createNote saves, and lists the note first", async () => {
     const { env, els, recent } = await popup({ canvases: notes() });
     const input = els['quick-note-input'];
@@ -132,7 +133,9 @@ describe("Popup's quick note", () => {
     const saved = Object.values(recordsOf(dump, 'canvases')).find((record) => record.name === 'Call the plumber');
     const reference = recordsOf(dump, 'canvases')[referenceId];
     const fields = ({ id, name, createdAt, updatedAt, ...rest }) => rest;
-    assert.deepEqual(fields(saved), fields(reference));
+    const { revision, placementVersion, sourceRevision, ...own } = saved;
+    assert.deepEqual(fields(own), fields(reference));
+    assert.deepEqual([revision, placementVersion, sourceRevision], [1, 0, 0]);
     assert.equal(typeof saved.createdAt, 'number');
     assert.equal(saved.updatedAt, saved.createdAt);
     assert.deepEqual(recordsOf(dump, 'search_index')[saved.id], {
