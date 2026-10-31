@@ -40,9 +40,15 @@ jobs:
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
+      # The release tags, so test/kernel/storage-recorded.test.mjs checks each recorded
+      # fixture's commit and tree against its tag; NTN_RELEASE_TAGS makes a missing tag fail
+      - name: Fetch the release tags
+        run: git fetch --no-tags --depth=1 origin '+refs/tags/v1.*:refs/tags/v1.*' 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm ci --ignore-scripts
         run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm test
+        env:
+          NTN_RELEASE_TAGS: required
         run: npm test 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt

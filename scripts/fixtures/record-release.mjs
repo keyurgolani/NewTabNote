@@ -11,8 +11,12 @@
 // for the new tab's Storage to open, and writes a synthetic seed through whichever of these
 // the release has: Storage's notes, archive, trash, templates, folders, links, media,
 // settings, themes, vectors, snapshots, auto and recovery backups, the editor's block save
-// (Block.serialize, canvasId, order, saveElement, with the preview SidebarUtils computes), and
-// the Popup's quick note, typed into the Popup. Every user-text field and the AI key hold a
+// (Block.serialize, canvasId, order, saveElement, with the preview SidebarUtils computes), the
+// Daily Note template, note insights, the AI chat history, a custom AI prompt template, the
+// Ollama URL and LLM endpoint, the WebDAV settings SyncService.connect stores (its password in
+// plain text; the harness blocks the network, so this is connect's setSetting call with its
+// shape), and the Popup's quick note, typed into the Popup. Every user-text field, the AI key,
+// and the WebDAV username and password hold a
 // per-run canary, `ntn-canary-<slot>-<hex>`. Then e2e/harness/fixture-host.js dumps every
 // database and chrome.storage.local from the service worker, each canary goes back to its
 // `{{CANARY:<slot>}}` placeholder (a canary left over in any other form fails the run), and
@@ -42,6 +46,7 @@ const SLOTS = [
   'note-1-title', 'note-2-title', 'note-3-title', 'note-4-title', 'note-5-title',
   'block-1', 'block-2', 'block-3', 'block-4', 'block-5', 'block-6', 'block-7',
   'folder-1', 'theme-1', 'popup-note', 'llm-api-key',
+  'webdav-password', 'webdav-username', 'chat-message', 'prompt-template', 'daily-template', 'llm-endpoint', 'insight',
 ];
 const PNG_BASE64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 1, 2, 3, 4]).toString('base64');
 
@@ -63,7 +68,7 @@ const tree = git('rev-parse', `${tag}^{tree}`);
  * @param {{c: Record<string, string>, png: string}} input
  */
 async function seed({ c, png }) {
-  /* global Storage, Block, Utils, SidebarUtils */
+  /* global Block, Utils, SidebarUtils, LLM, AIPromptTemplates, SyncService, chrome */
   const S = window.Storage;
   const ran = [];
   const has = name => typeof S[name] === 'function';
@@ -126,6 +131,13 @@ async function seed({ c, png }) {
     template.folderId = null;
     await S.updateNote(template);
     ran.push('convert a note to a template (updateNote)');
+    // Settings > Daily Notes' template, which ensureDailyNote applies to the new Daily Note
+    const data = new Block({ type: 'text', content: c['daily-template'] }).serialize();
+    data.canvasId = n5.id;
+    data.order = 0;
+    await S.saveElement(data);
+    await S.setSetting('dailyNoteTemplate', n5.id);
+    ran.push('the Daily Note template (setSetting dailyNoteTemplate)');
   }
   if (has('ensureDailyNote')) {
     await S.ensureDailyNote();
@@ -151,6 +163,51 @@ async function seed({ c, png }) {
   await S.setSetting('llmProvider', 'openai');
   await S.setSetting('llmApiKey', c['llm-api-key']);
   ran.push('Storage.setSetting');
+  if ('insights' in n1) {
+    // What LLM.extractInsights returns, as App stores it on the note
+    const note = await S.getNote(n1.id);
+    note.insights = { todos: [c.insight], reminders: [], deadlines: [], highlights: [], tags: [], extractedAt: Date.now() };
+    note.lastInsightsExtractedAt = Date.now();
+    await S.updateNote(note);
+    ran.push('note insights (updateNote)');
+  }
+  // Settings the release's first load wrote, read back to see which this release has
+  const local = await new Promise(resolve => chrome.storage.local.get(null, resolve));
+  if (Object.hasOwn(local, 'setting_noteChatMessages')) {
+    // The AI chat's saveNoteChatHistory and saveGlobalChatHistory
+    await S.setSetting('aiChatHistory', [{ role: 'user', content: c['chat-message'] }]);
+    await S.setSetting('noteChatMessages', [{ content: c['chat-message'], type: 'user' }]);
+    await S.setSetting('globalChatHistory', [{ role: 'user', content: c['chat-message'] }]);
+    await S.setSetting('globalChatMessages', [{ content: c['chat-message'], type: 'user', sourceNotes: [] }]);
+    ran.push('the AI chat history (setSetting)');
+  }
+  if (Object.hasOwn(local, 'setting_ollamaUrl')) {
+    await S.setSetting('ollamaUrl', `http://localhost:11434/${c['llm-endpoint']}`);
+    ran.push('the Ollama URL (setSetting)');
+  }
+  if (typeof LLM !== 'undefined' && typeof LLM.getDefaultEndpointForProvider === 'function') {
+    await S.setSetting('llmEndpoint', c['llm-endpoint']);
+    ran.push('the LLM endpoint (setSetting)');
+  }
+  if (typeof AIPromptTemplates !== 'undefined' && typeof AIPromptTemplates.sanitizeAIPromptTemplates === 'function') {
+    // App.persistAIPromptTemplates: the saved list, sanitized, with a custom one added
+    const saved = (await S.getSetting('aiPromptTemplates', null)) || [];
+    const custom = { id: 'custom-recorded', label: 'Custom prompt', prompt: c['prompt-template'], scope: 'both', behavior: 'send' };
+    await S.setSetting('aiPromptTemplates', AIPromptTemplates.sanitizeAIPromptTemplates([...saved, custom]));
+    ran.push('a custom AI prompt template (setSetting aiPromptTemplates)');
+  }
+  if (typeof SyncService !== 'undefined') {
+    // What SyncService.connect('webdav', config) stores once the server answers, the password
+    // in plain text (#21's KD-006). The harness blocks the network, so connect can't reach that
+    // line itself; this is its setSetting call with its shape.
+    await S.setSetting('syncProvider', 'webdav');
+    await S.setSetting('syncWebdavConfig', {
+      serverUrl: 'https://webdav.example.test/notes',
+      username: c['webdav-username'],
+      password: c['webdav-password'],
+    });
+    ran.push("SyncService.connect's WebDAV settings (setSetting syncWebdavConfig)");
+  }
   if (has('createAutoBackup')) {
     await S.createAutoBackup();
     ran.push('Storage.createAutoBackup');
