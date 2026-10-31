@@ -84,10 +84,14 @@ const idOf = key => (typeof key === 'string' ? `s${key}` : `k${JSON.stringify(ke
  * @property {(notes: IDBObjectStore, record: Record<string, unknown>) => void} putNote
  * @property {(notes: IDBObjectStore, key: IDBValidKey) => void} deleteNote
  * @property {(entityType: 'folder', key: IDBValidKey) => void} touched - a folder put or deleted
+ * @property {(record: TombstoneRecord) => void} tombstone - a tombstone a unit put (#17 PR 2b)
+ * @property {() => TombstoneRecord[]} tombstones - the ones put, each as last put, in order
  * @property {() => void} wrote - any other write
  * @property {() => boolean} written - whether the units wrote anything at all
  * @property {(options: SettleOptions) => Promise<Settled>} settle
  */
+
+/** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
 /**
  * @typedef {object} SettleOptions
@@ -126,6 +130,12 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
    * @type {Map<string, {entityType: 'note' | 'folder', entityId: string}>}
    */
   const entities = new Map();
+  /**
+   * The tombstones the units put, by entity, which the commit puts again with what only the
+   * adapter knows (deletion.js)
+   * @type {Map<string, TombstoneRecord>}
+   */
+  const buried = new Map();
   let any = false;
 
   /**
@@ -200,6 +210,11 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
       notes.set(idOf(key), { key, record: null, carried: null });
     },
     touched: touch,
+    tombstone(record) {
+      any = true;
+      buried.set(`${record.entityType}\0${record.id}`, record);
+    },
+    tombstones: () => [...buried.values()],
     wrote: () => {
       any = true;
     },

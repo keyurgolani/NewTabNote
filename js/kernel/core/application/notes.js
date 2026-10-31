@@ -33,6 +33,7 @@ import {
   trashRetentionDays,
   wikiLinkNames,
 } from '../domain/note.js';
+import { newTombstone } from '../domain/tombstone.js';
 import { contentChanged, unitsWork } from './work.js';
 
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
@@ -44,6 +45,7 @@ import { contentChanged, unitsWork } from './work.js';
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Tx} Tx */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
+/** @typedef {import('../domain/tombstone.js').TombstoneReason} TombstoneReason */
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
@@ -146,34 +148,64 @@ function changeNote(noteId, change, expected = {}) {
   };
 }
 
-/** The stores a note deleted for good is deleted from: what Storage.permanentlyDeleteNote deletes */
-const DELETED_WITH_NOTE = /** @type {StoreName[]} */ (['notes', 'blocks', 'media', 'vectors', 'snapshots']);
+/**
+ * The stores a note deleted for good is deleted from (#17 PR 2b): what
+ * Storage.permanentlyDeleteNote deleted, and its search entry, links, conflict records, and
+ * tombstone
+ */
+const DELETED_WITH_NOTE = /** @type {StoreName[]} */ ([
+  'notes',
+  'blocks',
+  'media',
+  'vectors',
+  'snapshots',
+  'searchIndex',
+  'links',
+  'conflicts',
+  'tombstones',
+]);
 
 /**
- * Delete a note for good in `tx`, with what Storage.permanentlyDeleteNote deletes: its blocks,
- * media, vectors, and snapshots, then the note. Its links and search entry stay, as they
- * always have, until #17's deletion takes them too. `tx` spans DELETED_WITH_NOTE.
+ * Delete a note for good in `tx` (#17 PR 2b, Q16): every row it owns, its blocks, media,
+ * vectors, snapshots, search entry, links both ways, and conflict records, then the note, and
+ * its tombstone in the same transaction, which has the worker purge it from every recovery
+ * point (adapters/indexeddb/purge.js). Nothing on screen reads a gone note's search entry or
+ * links (the sidebar's search lists only listed notes, and backlinks and the graph skip notes
+ * that are gone), so dropping them changes nothing anyone sees. `tx` spans DELETED_WITH_NOTE.
+ * A database below version 10 has no tombstones, and the adapter skips that write there.
  * @param {Tx} tx
  * @param {string} noteId
- * @param {BlockRecord[]} [blocks] - its blocks, when the caller has read them
+ * @param {{reason: TombstoneReason, now: number, blocks?: BlockRecord[]}} deletion - `blocks`
+ *   are its blocks, when the caller has read them
  * @returns {Promise<void>}
  */
-async function deleteNoteIn(tx, noteId, blocks) {
+async function deleteNoteIn(tx, noteId, { reason, now, blocks }) {
   for (const block of blocks || (await tx.getAllByIndex('blocks', 'canvasId', noteId))) tx.delete('blocks', block.id);
   for (const key of await tx.getKeysByIndex('media', 'canvasId', noteId)) tx.delete('media', key);
   tx.delete('vectors', noteId);
   for (const key of await tx.getKeysByIndex('snapshots', 'noteId', noteId)) tx.delete('snapshots', key);
+  tx.delete('searchIndex', noteId);
+  // Both ways: a link to it from a note that stays goes too, as the note it named is gone
+  const links = new Set([
+    ...(await tx.getKeysByIndex('links', 'fromNoteId', noteId)),
+    ...(await tx.getKeysByIndex('links', 'toNoteId', noteId)),
+  ]);
+  for (const key of links) tx.delete('links', key);
+  // A save that lost to a newer revision keeps its text there, so it goes with the note
+  for (const key of await tx.getKeysByIndex('conflicts', 'noteId', noteId)) tx.delete('conflicts', key);
   tx.delete('notes', noteId);
+  tx.put('tombstones', newTombstone('note', noteId, reason, now));
 }
 
 /**
  * Work that deletes, for good and in one transaction, the trashed notes `pick` chooses from
- * every stored note, and commits naming them
+ * every stored note, and commits naming them, each with its tombstone
  * @param {import('../contracts/commands.js').Command} command
  * @param {string} code
+ * @param {{reason: TombstoneReason, now: number}} deletion
  * @param {(notes: NoteRecord[]) => NoteRecord[]} pick
  */
-function deleteTrashed(command, code, pick) {
+function deleteTrashed(command, code, { reason, now }, pick) {
   /** @type {string[]} */
   let deleted = [];
   /** @type {Unit} */
@@ -182,7 +214,7 @@ function deleteTrashed(command, code, pick) {
     async run(tx) {
       // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
       deleted = pick(await tx.getAll('notes')).map(note => note.id);
-      for (const noteId of deleted) await deleteNoteIn(tx, noteId);
+      for (const noteId of deleted) await deleteNoteIn(tx, noteId, { reason, now });
     },
   };
   return unitsWork(command, [remove], () => committed(code, deleted), { scope: 'placement' });
@@ -451,10 +483,10 @@ export const noteCommands = {
         const stale = versionConflict(tx, noteId, { expectedPlacementVersion });
         if (stale) return stale;
         const blocks = isUntitled(note) ? await tx.getAllByIndex('blocks', 'canvasId', noteId) : null;
-        // An untitled note with nothing in it is deleted, with what Storage.permanentlyDeleteNote deletes
+        // An untitled note with nothing in it is deleted for good, with its tombstone
         deleting = blocks !== null && isEmpty(blocks);
         if (deleting && blocks) {
-          await deleteNoteIn(tx, noteId, blocks);
+          await deleteNoteIn(tx, noteId, { reason: 'empty-note', now, blocks });
           return;
         }
         tx.put('notes', { ...note, trashed: true, trashedAt: now, archived: false, archivedAt: null, updatedAt: now });
@@ -511,9 +543,10 @@ export const noteCommands = {
     return setFields(command, 'template-made-note', note => ({ ...note, isTemplate: false, updatedAt: now }));
   },
 
-  deleteNotePermanently(command) {
+  deleteNotePermanently(command, { clock }) {
     const { noteId, expectedPlacementVersion } = command;
     if (!isId(noteId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
+    const now = clock.now();
     /** @type {Unit} */
     const remove = {
       stores: DELETED_WITH_NOTE,
@@ -524,7 +557,7 @@ export const noteCommands = {
         if (stale) return stale;
         // Only a note in the trash, as committed: one restored since the trash view showed it stays
         if (!note.trashed) return rejected('validation', 'note-not-trashed');
-        await deleteNoteIn(tx, noteId);
+        await deleteNoteIn(tx, noteId, { reason: 'deleted', now });
       },
     };
     return unitsWork(command, [remove], () => committed('note-deleted', [noteId]), {
@@ -533,8 +566,11 @@ export const noteCommands = {
     });
   },
 
-  emptyTrash(command) {
-    return deleteTrashed(command, 'trash-emptied', notes => notesInView(notes, 'trashed'));
+  emptyTrash(command, { clock }) {
+    const now = clock.now();
+    return deleteTrashed(command, 'trash-emptied', { reason: 'trash-emptied', now }, notes =>
+      notesInView(notes, 'trashed'),
+    );
   },
 
   async runTrashCleanup(command, { adapter, clock }) {
@@ -543,7 +579,9 @@ export const noteCommands = {
     const days = trashRetentionDays(trashRetention);
     if (days === null) return committed('trash-kept', []);
     const now = clock.now();
-    return deleteTrashed(command, 'trash-cleaned', notes => expiredInTrash(notes, now, days));
+    return deleteTrashed(command, 'trash-cleaned', { reason: 'trash-expired', now }, notes =>
+      expiredInTrash(notes, now, days),
+    );
   },
 
   saveNoteContent(command, { clock, ids }) {
