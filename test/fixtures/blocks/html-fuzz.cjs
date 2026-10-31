@@ -3,7 +3,8 @@
  * tags, references and fragments html-text.js has rules for, which the spec reads both in
  * Chromium and through the page's block projections. The same seed gives the same strings.
  * The declared differences (html-text.js's header) are left out: a `table`, a hex reference
- * with no digits, and a `<` before a NUL.
+ * with no digits, a `<` before a NUL, a `select`, and a `foreignObject` start tag with a
+ * `foreignObject` end tag.
  *
  * Nothing in the extension loads this file. It requires nothing, so the spec can evaluate it in
  * the page.
@@ -30,7 +31,9 @@ const ATTRIBUTES = ['a', 'b', 'color', 'face', 'size', 'encoding', 'href', 'x'];
 const VALUES = ['', '=1', '="v>w"', "='q'", '=text/html', '="text/html"', '=a/', '="application/xhtml+xml"'];
 
 /** A string html-text.js declares it reads differently from Chromium */
-const isDeclared = html => /<table/i.test(html) || /&#[xX](?![0-9a-fA-F])/.test(html) || /<\u0000/.test(html);
+const isDeclared = html =>
+  /<table/i.test(html) || /&#[xX](?![0-9a-fA-F])/.test(html) || /<\u0000/.test(html) || /<select/i.test(html) ||
+  (/<foreignobject/i.test(html) && /<\/foreignobject/i.test(html));
 
 /**
  * `count` strings from `seed`, none of a declared shape

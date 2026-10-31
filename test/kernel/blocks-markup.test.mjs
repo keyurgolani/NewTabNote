@@ -50,6 +50,9 @@ const seededStrings = (/** @type {number} */ count) => {
     '</a>', '</A>', '<b>', '</b>', '<B>', '<strong>', '</strong>', '<i>', '</i>', '<em>', '</em>', '<code>', '</code>',
     '<del>', '</del>', '<s>', '</s>', '<strike>', '</strike>', '<br>', '<br/>', '<BR />', '<br  ', '<', '<>', 'x', ' ',
     '\n', '\r', '\u2028', '\u2029', '\u00a0', '&nbsp;', '&NBSP;', '$1', '$&', '<a class="wiki-link" data-note-name="N">', '<a href="u">',
+    // White space past ASCII after an `<a`, a name right after the class, and letters whose full
+    // lowercasing changes length or turns into an ASCII letter
+    '<a', '\u3000', '<a class="wiki-link"data-note-name="N">', '\u0130', '\u212a', 'class="wi\u212ai-link"', '<stri\u212ae>',
   ];
   let seed = 0x14d00d;
   const random = (/** @type {number} */ n) => {

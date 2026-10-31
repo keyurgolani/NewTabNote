@@ -349,16 +349,9 @@ export function noteSaveMetadata(blocks) {
   return { preview, todoProgress: total > 0 ? { completed, total } : null };
 }
 
-/**
- * The note names `[[wiki links]]` in `text` hold, trimmed, each once, as Utils.extractWikiLinks
- * reads them
- * @param {string} text
- * @returns {string[]}
- */
-export function wikiLinkNames(text) {
-  if (!text) return [];
-  return [...new Set([...text.matchAll(/\[\[([^\]]+)\]\]/g)].map(match => match[1].trim()))];
-}
+// The note names `[[wiki links]]` in a text hold, trimmed, each once, which the editor's save
+// reads too: the model layer's, in linear time
+export { wikiLinkNames } from '../blocks/wiki-links.js';
 
 /**
  * The text an AI insert reads a note's wiki links from: each block's content, or its title or

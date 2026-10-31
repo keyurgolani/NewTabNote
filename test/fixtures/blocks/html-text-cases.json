@@ -103,6 +103,9 @@
     { "rule": "raw text in a select is still raw", "html": "<select><style>&amp;<b>s</b></style></select>", "text": "&amp;<b>s</b>" },
     { "rule": "text outside a table's cells (declared)", "html": "<table>stray<tr><td>x</td></tr>text</table>", "text": "strayxtext", "chromium": "straytextx", "declared": "foster parenting isn't modelled" },
     { "rule": "a hex reference with no digits (declared)", "html": "a&#x;b", "text": "a&#x;b", "chromium": "a�b", "declared": "the standard keeps it as text; Chromium's innerHTML reads it either way" },
-    { "rule": "a < before a NUL (declared)", "html": " </mtext>&#;<\u0000", "text": " &#;<", "chromium": " &#;<�", "declared": "the standard drops the NUL; Chromium keeps U+FFFD" }
+    { "rule": "a < before a NUL (declared)", "html": " </mtext>&#;<\u0000", "text": " &#;<", "chromium": " &#;<�", "declared": "the standard drops the NUL; Chromium keeps U+FFFD" },
+    { "rule": "an end tag for an element opened outside a select closes an svg inside it (declared)", "html": "<div><select><svg></div><![CDATA[x]]>", "text": "", "chromium": "x", "declared": "the select mode isn't modelled; Chromium ignores the end tag there, so the svg stays open" },
+    { "rule": "an end tag for an element opened outside a select closes a math inside it (declared)", "html": "<div><select><math></div><xmp>&amp;</xmp>", "text": "&amp;", "chromium": "&", "declared": "the select mode isn't modelled; Chromium ignores the end tag there, so the math stays open" },
+    { "rule": "a foreignObject end tag in an svg closes an HTML element of that name (declared)", "html": "<foreignObject><svg></foreignObject><xmp>&amp;</xmp>", "text": "&amp;", "chromium": "&", "declared": "an HTML foreignobject opened outside any svg closes, as the standard's end-tag rules close it; Chromium leaves it, and the svg inside it, open" }
   ]
 }

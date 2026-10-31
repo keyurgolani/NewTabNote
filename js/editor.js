@@ -3430,7 +3430,23 @@ class BlockEditor {
    * @returns {boolean}
    */
   isFencedCode(text) {
-    return /^```[\s\S]*```\s*$/m.test(text);
+    // `/^```[\s\S]*```\s*$/m.test(text)` in one pass: a fence at a line's start, then a later
+    // fence after which only white space runs to a line's end or the text's end. `test` read
+    // any value as a string, and so does this.
+    const source = `${text}`;
+    const isLineEnd = (/** @type {string} */ c) => c === '\n' || c === '\r' || c === '\u2028' || c === '\u2029';
+    let open = -1;
+    for (let at = source.indexOf('```'); at !== -1; at = source.indexOf('```', at + 1)) {
+      if (open === -1) {
+        if (at === 0 || isLineEnd(source[at - 1])) open = at;
+        continue;
+      }
+      if (at < open + 3) continue;
+      let end = at + 3;
+      while (end < source.length && !isLineEnd(source[end]) && /\s/.test(source[end])) end++;
+      if (end === source.length || isLineEnd(source[end])) return true;
+    }
+    return false;
   }
 
   /**
@@ -3439,8 +3455,17 @@ class BlockEditor {
    * @returns {string}
    */
   extractFencedCode(text) {
-    const match = text.match(/^```[^\n]*\n?([\s\S]*?)```\s*$/);
-    return match ? match[1].replace(/\n$/, '') : text;
+    // `/^```[^\n]*\n?([\s\S]*?)```\s*$/`'s code, in one pass: the closing fence can only be
+    // the one before the trailing white space, and the code starts after the opening line, or
+    // at that fence when it's on the opening line
+    if (!text.startsWith('```')) return text;
+    let tail = text.length;
+    while (tail > 0 && /\s/.test(text[tail - 1])) tail--;
+    const close = tail - 3;
+    if (close < 3 || !text.startsWith('```', close)) return text;
+    const lineEnd = text.indexOf('\n', 3);
+    const start = Math.min(lineEnd === -1 ? text.length : lineEnd + 1, close);
+    return text.slice(start, close).replace(/\n$/, '');
   }
 
   /**
@@ -4268,7 +4293,7 @@ class BlockEditor {
       blocks: state.blocks,
       preview: meta.preview,
       todoProgress: meta.todoProgress,
-      linkedNames: Utils.extractWikiLinks(meta.text),
+      linkedNames: globalThis.BlockProjections.wikiLinkNames(meta.text),
     };
     if (state.title) Object.assign(save, { name: state.title.name, titleOrigin: state.title.origin });
     // Open now, the command's first transaction opens before this returns
