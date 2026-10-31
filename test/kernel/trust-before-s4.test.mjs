@@ -415,8 +415,10 @@ describe("#87's review: a success counts only what was sighted at its own moment
     const b = createFailureEvents({ surface: 'newtab', host: gatedHost(profile).host });
     b.event('backup.auto-failed', {}, new DOMException('m', 'QuotaExceededError'));
     await b.flush();
-    const marked = /** @type {any} */ (profile.settings.items.get(SETTINGS_KEYS.openSites));
-    assert.equal(marked['backup.auto-failed']['backup/auto-backup-failed/-'].occurrences, 1);
+    const raised = await incidentIn(profile, 'backup/auto-backup-failed/-');
+    assert.deepEqual(profile.settings.items.get(SETTINGS_KEYS.openSites), {
+      'backup.auto-failed': { 'backup/auto-backup-failed/-': { id: raised?.id, occurrences: 1 } },
+    });
     const a = lazyFailureEvents({
       surface: 'newtab',
       read: keys => profile.settings.get(keys),
