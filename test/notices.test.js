@@ -23,8 +23,14 @@ const policy = read('PRIVACY_POLICY.md');
 
 /** Valibot's code as terser leaves it in a chunk: its Standard Schema object and a "~run" call */
 const VALIBOT = 'function $(e){return e["~standard"]={version:1,vendor:"valibot",validate:t=>e["~run"]({value:t},S())},e}';
-/** The chunks the bundler folds Valibot into: the pages' shared trust chunk and the service worker */
-const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";' };
+// A piece of the named character references as #14's entities.js packs them, which only the
+// new tab's workspace chunk carries
+const ENTITIES = 'const k=["ClockwiseContourIntegral:1,CounterClockwiseContourIntegral:1"].join(",");';
+/**
+ * The chunks the bundler folds Valibot into, the pages' shared trust chunk and the service
+ * worker, and the new tab's workspace chunk, which holds #14's table
+ */
+const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";', 'assets/workspace-Q7bL2xVe.js': ENTITIES };
 
 /** A zip laid out like the package, built from the repository files and CHUNKS. */
 async function packageZip({ omit = [], replace = {} } = {}) {
@@ -193,6 +199,15 @@ describe('license notices (AC8)', () => {
       `assets/sidepanel-DgtwzUbD.js carries ${valibot}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
       `assets/sidepanel-DgtwzUbD.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
     ]);
+    // #14's table of character references moves from the new tab's workspace chunk into the popup's
+    const entities = 'HTML Standard named character references';
+    assert.deepEqual(
+      checkBundledNotices(filesOf({ ...CHUNKS, 'assets/workspace-Q7bL2xVe.js': 'export{};', 'assets/popup-LWzkxAKk.js': ENTITIES })),
+      [
+        `assets/popup-LWzkxAKk.js carries ${entities}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+        `the In: line of THIRD_PARTY_NOTICES' ${entities} entry names assets/workspace-*.js, and no shipped script it matches carries its code`,
+      ],
+    );
     // No entry at all
     assert.deepEqual(checkBundledNotices(filesOf(CHUNKS, read('THIRD_PARTY_NOTICES').replace(/^19\. Valibot 1\.5\.0$/m, '19. Valibot'))), [
       `THIRD_PARTY_NOTICES has no "${valibot}" entry with an In: line, and assets/trust-YdWbqFjr.js and js/background.js carry its code`,

@@ -43,7 +43,6 @@ async function editorOnAlpha() {
   Object.assign(editor, {
     renderBlocks: noop, renderBacklinks: noop, updateTimestampDisplay: noop, updateSaveStatus: noop, clearBlockSelection: noop,
     placeCaretAtEnd: noop, renderInsights: async () => {}, startInsightsPollingIfNeeded: async () => {},
-    stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
   });
   await editor.loadNote('A');
   return { env, editor };

@@ -535,7 +535,6 @@ describe('with Settings open, keys pressed outside the note leave it and what is
     Object.assign(editor, {
       renderBlocks: noop, renderBacklinks: noop, updateTimestampDisplay: noop, updateSaveStatus: noop, clearBlockSelection: noop,
       placeCaretAtEnd: noop, renderInsights: async () => {}, startInsightsPollingIfNeeded: async () => {},
-      stripHtmlTags: (html) => String(html || '').replace(/<[^>]*>/g, ''),
     });
     await editor.loadNote('N');
 
