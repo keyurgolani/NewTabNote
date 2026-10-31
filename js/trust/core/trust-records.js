@@ -69,7 +69,8 @@
  *   a false alarm, never a false all clear.
  * - Known limit: `storage/write-failed` sighted by more than one context stays open, a false
  *   alarm, until a later slice's verify path or a dismissal, even after every one of them
- *   recovered.
+ *   recovered. So does one whose context ended before a write landed there: a closed tab, or
+ *   an MV3 service worker that Chrome stopped (after about 30 s idle, the common case).
  * - Known limit: the settings copy is the only channel between contexts. When
  *   chrome.storage.local takes no writes (over its quota, say) while reads still work, a
  *   context's failures stay in its own memory until its store takes a write, so another context
@@ -847,7 +848,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * Raises an incident, or updates the one with its key. When the store won't take it,
    * `recorded` is false, and a storage incident is `held` (in memory and the settings copy).
    * @param {RaiseInput} input
-   * @returns {Promise<{recorded: boolean, held: boolean, incident: Incident | null, created: boolean}>}
+   * @returns {Promise<{recorded: boolean, held: boolean, incident: Incident | null, created: boolean, wasOpen: boolean}>}
    */
   const raise = async input => {
     const sighting = sightingOf(input);
@@ -859,15 +860,17 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       const incident = parseRecord(incidentSchema, applyRaise(existing, op), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
-      return { incident, created: !existing };
+      return { incident, created: !existing, wasOpen: Boolean(existing && existing.state !== 'resolved') };
     });
     if (stored.ok) return { recorded: true, held: false, ...stored.value };
     await failedWrite(errorOf(stored));
-    if (!isStorageProvider(sighting.providerId)) return { recorded: false, held: false, incident: null, created: false };
+    if (!isStorageProvider(sighting.providerId)) {
+      return { recorded: false, held: false, incident: null, created: false, wasOpen: false };
+    }
     const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
     const entry = await holdSighting(key, sighting, now, { counted: true });
     const shown = entry ? (await incidents()).find(item => item.key === key) || null : null;
-    return { recorded: false, held: entry !== null, incident: shown, created: false };
+    return { recorded: false, held: entry !== null, incident: shown, created: false, wasOpen: false };
   };
 
   /**

@@ -13,7 +13,16 @@
  *
  * Nothing opens until the first event: loading this module and creating the events touch no
  * browser API, so the service worker imports it statically (it has no import()) and still
- * registers its listeners first. The first event opens NewTabNoteTrust and, when that fails,
+ * registers its listeners first. That static import adds the trust code (12 modules, about
+ * 118 KB) to every worker start, and a trust file that fails to load or evaluate stops the
+ * worker, which `check:dist` and `test:extension` guard. A records build that rejects (no
+ * IndexedDB global, say) is kept, so later events in that context are dropped. A success at a site (`capture.committed`, `indexer.started`,
+ * `backup.auto-succeeded`) opens the records only while chrome.storage.local's
+ * `trust.openSites` lists that site's failure, which a failure there adds and a success that
+ * left nothing open removes; it's best effort, and a lost mark leaves an incident open (a
+ * false alarm) until the site fails and succeeds again. `reconcile()` opens them when the
+ * settings copy holds sightings a context couldn't store, so NewTabNoteTrust's own incidents
+ * reconcile at a start, not only at the next failure. The first event opens NewTabNoteTrust and, when that fails,
  * the records fall back to chrome.storage.local's `trust.lastStorageIncident`. Both are
  * `diagnostic`: never in a backup or in sync.
  *
@@ -27,6 +36,7 @@ import { systemClock } from '../core/ports/runtime.js';
 import { createTrustDatabase } from '../adapters/indexeddb/trust.js';
 import { ERROR_CODES, EXCEPTION_NAMES } from '../../trust/core/codes.js';
 import { EVENT_CODES, isEventCode } from '../../trust/core/event-codes.js';
+import { SETTINGS_KEYS } from '../../trust/core/ports.js';
 import { createDiagnosticJournal } from '../../trust/core/journal.js';
 import { createTrustRecords } from '../../trust/core/trust-records.js';
 
@@ -58,6 +68,9 @@ import { createTrustRecords } from '../../trust/core/trust-records.js';
  *   Journals `code` with `fields`, `surface` when the code lists it, and what `failure` (an
  *   Error, a DOMException, or a kernel outcome) gives as value-free evidence. Never throws.
  * @property {() => Promise<void>} flush - resolves once every event so far has been written or dropped
+ * @property {() => Promise<void>} reconcile
+ *   Opens the records when the settings copy holds sightings, so they replay and NewTabNoteTrust's
+ *   own incidents resolve by the records' rules. Never rejects.
  * @property {() => Promise<Readonly<Record<RejectionReason, number>> | null>} rejected
  *   The journal's refusals, by reason, or null before the first event or when the records
  *   couldn't be built
@@ -164,6 +177,42 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   let journal = null;
   /** @type {Set<Promise<void>>} */
   const pending = new Set();
+  /** @type {TrustHost | null} */
+  let hosted = null;
+  const hostOnce = () => {
+    if (!hosted) hosted = host();
+    return hosted;
+  };
+
+  /**
+   * The failure codes `trust.openSites` lists; none when it can't be read
+   * @returns {Promise<string[]>}
+   */
+  const marked = async () => {
+    try {
+      const key = SETTINGS_KEYS.openSites;
+      const value = (await hostOnce().settings.get([key]))[key];
+      return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * Adds `site` to `trust.openSites`, or removes it. Best effort.
+   * @param {string} site
+   * @param {boolean} open
+   */
+  const mark = async (site, open) => {
+    try {
+      const now = await marked();
+      if (now.includes(site) === open) return;
+      const next = open ? [...now, site] : now.filter(item => item !== site);
+      await hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: next });
+    } catch {
+      // A lost mark errs toward an incident left open
+    }
+  };
 
   /**
    * The journal, built and its records opened on the first call. Records that won't open
@@ -172,7 +221,7 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   const ready = () => {
     if (!journal) {
       journal = Promise.resolve().then(async () => {
-        const { indexedDB, keyRange, settings, locks, clock, ids, timers = null } = host();
+        const { indexedDB, keyRange, settings, locks, clock, ids, timers = null } = hostOnce();
         const store = createTrustDatabase({ indexedDB, keyRange });
         // `timers` bound the records' reads of the settings copy (COPY_READ_MS)
         const records = createTrustRecords({ store, settings, clock, ids, locks, timers });
@@ -187,12 +236,27 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
     event(code, fields, failure) {
       try {
         const checked = fieldsOf(code, surface, fields, failure);
-        const done = ready()
-          .then(events => {
-            events.event(code, checked);
-            return events.flush();
-          })
-          .catch(() => {});
+        const entry = isEventCode(code) ? EVENT_CODES[code] : null;
+        const site = entry && entry.resolves !== undefined ? entry.resolves : null;
+        const succeeds = isEventCode(code) && Object.values(EVENT_CODES).some(other => other.resolves === code);
+        const done = (
+          site !== null
+            ? // A success opens the records only when its site's failure is marked open
+              marked().then(sites =>
+                sites.includes(site)
+                  ? ready().then(async events => {
+                      events.event(code, checked);
+                      await events.flush();
+                      if ((await events.siteOpen(code)) === false) await mark(site, false);
+                    })
+                  : undefined,
+              )
+            : ready().then(async events => {
+                events.event(code, checked);
+                await events.flush();
+                if (succeeds) await mark(code, true);
+              })
+        ).catch(() => {});
         pending.add(done);
         done.then(() => pending.delete(done));
       } catch {
@@ -202,6 +266,18 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
 
     async flush() {
       while (pending.size > 0) await Promise.all([...pending]);
+    },
+
+    async reconcile() {
+      try {
+        const key = SETTINGS_KEYS.lastStorageIncident;
+        const copy = /** @type {{entries?: unknown}} */ ((await hostOnce().settings.get([key]))[key]);
+        if (!copy || !Array.isArray(copy.entries) || copy.entries.length === 0) return;
+        // Opening replays the copy and applies the records' own rules
+        await ready();
+      } catch {
+        // Best effort, like every event
+      }
     },
 
     async rejected() {

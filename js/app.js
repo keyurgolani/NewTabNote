@@ -261,6 +261,8 @@ class App {
     if (!this.events) return;
     this.logger.event = this.events.event;
     if (typeof Embeddings !== 'undefined') Embeddings.events = this.events;
+    // Sightings held in chrome.storage.local reconcile now; with none it loads no trust code
+    if (typeof this.events.reconcile === 'function') this.events.reconcile();
   }
 
   /**

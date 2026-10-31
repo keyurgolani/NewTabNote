@@ -13,16 +13,7 @@ import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { SETTINGS_KEYS } from '../../js/trust/core/ports.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
-import {
-  brokenFactory,
-  databaseOn,
-  fakeKeyRange,
-  hexIds,
-  lockManager,
-  manualClock,
-  settingsArea,
-  trustProfile,
-} from './trust-support.mjs';
+import { brokenFactory, databaseOn, fakeKeyRange, hexIds, manualClock, trustProfile } from './trust-support.mjs';
 
 /** @typedef {import('../../js/trust/core/ports.js').TrustStore} TrustStore */
 /** @typedef {ReturnType<typeof trustProfile>} Profile */
@@ -165,20 +156,25 @@ describe('a database that stays broken journals one storage.open-failed while it
   });
 });
 
-/** A page's or the worker's trust host over `profile`, counting how often it's asked for */
+/** A page's or the worker's trust host over `profile`, counting the IndexedDB opens it makes */
 function hostOf(/** @type {Profile} */ profile, /** @type {IDBFactory} */ indexedDB = profile.real) {
-  const counted = { asked: 0 };
-  const host = () => {
-    counted.asked++;
-    return {
-      indexedDB,
-      keyRange: fakeKeyRange,
-      settings: profile.settings,
-      locks: profile.locks,
-      clock: { now: () => Date.now() },
-      ids: { next: () => crypto.randomUUID() },
-    };
-  };
+  const counted = { opens: 0 };
+  const factory = /** @type {IDBFactory} */ (
+    /** @type {unknown} */ ({
+      open: (/** @type {string} */ name, /** @type {number} */ version) => {
+        counted.opens++;
+        return indexedDB.open(name, version);
+      },
+    })
+  );
+  const host = () => ({
+    indexedDB: factory,
+    keyRange: fakeKeyRange,
+    settings: profile.settings,
+    locks: profile.locks,
+    clock: { now: () => Date.now() },
+    ids: { next: () => crypto.randomUUID() },
+  });
   return { host, counted };
 }
 
@@ -189,7 +185,7 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     const events = createFailureEvents({ surface: 'newtab', host });
     events.event('indexer.started', {});
     await events.flush();
-    assert.equal(counted.asked, 0);
+    assert.equal(counted.opens, 0);
   });
 
   it('marks a failure at a site, and a success there resolves it and clears the mark', async () => {
@@ -214,9 +210,9 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     const clean = hostOf(profile);
     const idle = createFailureEvents({ surface: 'worker-internal', host: clean.host });
     await idle.reconcile();
-    assert.equal(clean.counted.asked, 0);
+    assert.equal(clean.counted.opens, 0);
     // A context whose NewTabNoteTrust wouldn't open held its own incidents in the copy
-    const clock = manualClock();
+    const clock = manualClock(Date.now() - 60_000);
     const down = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
     await down.records.append({ at: 0, code: 'trust.reconciled', fields: { count: 0 } });
     assert.ok(profile.settings.items.get(SETTINGS_KEYS.lastStorageIncident));
@@ -224,7 +220,7 @@ describe('failure events at a success (js/kernel/composition/trust.js)', () => {
     const { host, counted } = hostOf(profile);
     const worker = createFailureEvents({ surface: 'worker-internal', host });
     await worker.reconcile();
-    assert.equal(counted.asked, 1);
+    assert.ok(counted.opens >= 1);
     assert.equal(profile.settings.items.get(SETTINGS_KEYS.lastStorageIncident), null);
     const { records } = await recordsOn(databaseFor(profile), profile, { prefix: 'cccc' });
     // NewTabNoteTrust opened, so its open-failed resolves; the dead context's write-failed stays
@@ -300,6 +296,3 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
     assert.deepEqual({ ...SUCCESS_SITES }, registered);
   });
 });
-
-// Keeps the helpers this file shares with the others in use under the kernel's lint
-assert.ok(lockManager && settingsArea);

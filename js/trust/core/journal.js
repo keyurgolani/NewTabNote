@@ -51,6 +51,9 @@ export const REJECTION_JOURNAL_MS = 60 * 60 * 1000;
  *   answers false after counting it in memory
  * @property {() => Readonly<Record<RejectionReason, number>>} rejected - refusals so far, by reason
  * @property {() => Promise<void>} flush - resolves once every write so far has settled
+ * @property {(code: string) => Promise<boolean | null>} siteOpen
+ *   Whether `code`'s site (a failure code, or the success that resolves one) has an open
+ *   incident, or null when the store or the settings copy couldn't be read
  */
 
 /**
@@ -114,6 +117,37 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
     return false;
   };
 
+  /**
+   * The incident a failure code raises, or that a success code's failure code does
+   * @param {string} code
+   */
+  const siteOf = code => {
+    if (!isEventCode(code)) return null;
+    const entry = EVENT_CODES[code];
+    const failure = entry.resolves !== undefined ? EVENT_CODES[entry.resolves] : entry;
+    return failure && failure.incident ? failure.incident : null;
+  };
+
+  /**
+   * A success at `failureCode`'s site: resolves the open incidents it raised that had no new
+   * sighting since just before (the records' occurrence snapshot), and journals the success only
+   * when it resolved one. A read that fails resolves nothing.
+   * @param {string} failureCode
+   * @param {Omit<import('./records.js').JournalEvent, 'seq'>} appended
+   * @returns {Promise<{recorded: boolean}>}
+   */
+  const succeeded = async (failureCode, appended) => {
+    const site = /** @type {{providerId: string, faultCode: string}} */ (siteOf(failureCode));
+    const seen = await records.occurrencesOf(site.providerId);
+    if (!seen.ok) return { recorded: true };
+    const { counts } = /** @type {{counts: Record<string, number>}} */ (seen);
+    if (!Object.keys(counts).some(key => key.split('/')[1] === site.faultCode)) return { recorded: true };
+    const done = await records.resolve(site.providerId, [], { looked: [{ faultCode: site.faultCode }], seen: counts });
+    if (!done.recorded) return { recorded: false };
+    if (/** @type {{resolved: unknown[]}} */ (done).resolved.length === 0) return { recorded: true };
+    return records.append(appended);
+  };
+
   return Object.freeze({
     event(code, fields) {
       if (!isEventCode(code)) return refuse('unregistered-code', null);
@@ -125,6 +159,10 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       }
       const at = clock.now();
       const appended = { at, code, fields: checked.value };
+      if (entry.resolves !== undefined) {
+        track(succeeded(entry.resolves, appended));
+        return true;
+      }
       if (!entry.incident) {
         track(records.append(appended));
         return true;
@@ -140,11 +178,31 @@ export function createDiagnosticJournal({ records, clock, strict = false }) {
       track(raised);
       track(
         raised.then(
-          result => records.append(appended, { internal: !result.recorded }),
+          result =>
+            // A site that repeats while nothing changes journals once per open incident
+            entry.quietWhileOpen && result.recorded && result.wasOpen
+              ? { recorded: true }
+              : records.append(appended, { internal: !result.recorded }),
           () => records.append(appended),
         ),
       );
       return true;
+    },
+
+    /**
+     * Whether `code`'s site (a failure code, or the success that resolves one) has an open
+     * incident now, or null when the store or the settings copy couldn't be read
+     * @param {string} code
+     * @returns {Promise<boolean | null>}
+     */
+    async siteOpen(code) {
+      const site = siteOf(code);
+      if (!site) return false;
+      const seen = await records.occurrencesOf(site.providerId);
+      if (!seen.ok) return null;
+      return Object.keys(/** @type {{counts: Record<string, number>}} */ (seen).counts).some(
+        key => key.split('/')[1] === site.faultCode,
+      );
     },
 
     rejected: () => Object.freeze({ ...counts }),

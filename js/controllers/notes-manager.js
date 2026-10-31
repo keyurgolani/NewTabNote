@@ -1195,6 +1195,7 @@ class NotesManager {
       // doesn't call preventDefault, so the browser still reports the error as it did before.
       let started = false;
       let reported = false;
+      let indexed = false;
       this.indexerWorker.onerror = (event) => {
         if (started || reported) return;
         reported = true;
@@ -1205,6 +1206,12 @@ class NotesManager {
         if (e.data.type === 'INDEX_COMPLETE') {
           await this.storage.setSearchIndex(e.data.data);
           await this.searchEntriesWritten('all');
+          // Its first full index is the indexer's start succeeding, which resolves an earlier
+          // start failure (#20)
+          if (!indexed) {
+            indexed = true;
+            this.reportIndexerStarted();
+          }
         } else if (e.data.type === 'INDEX_UPDATED') {
           const { entry } = e.data.data;
           await this.storage.setSearchIndexEntry(entry);
@@ -1230,6 +1237,14 @@ class NotesManager {
    */
   reportIndexerFailure(error) {
     if (this.logger && typeof this.logger.event === 'function') this.logger.event('indexer.start-failed', {}, error);
+  }
+
+  /**
+   * An `indexer.started` event when the logger has failure events (#20); otherwise nothing.
+   * It loads no trust code unless an indexer start failure may be open.
+   */
+  reportIndexerStarted() {
+    if (this.logger && typeof this.logger.event === 'function') this.logger.event('indexer.started', {});
   }
 
   /**

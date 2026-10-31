@@ -30,6 +30,11 @@ const kernel = createWorkerClient();
  */
 const failureEvents = createFailureEvents({ surface: 'worker-internal' });
 
+// Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
+// reconcile now, not only at the next failure; with none held this reads one key and opens
+// nothing
+failureEvents.reconcile();
+
 // The worker's storage init: an open that failed is a storage incident now, not only when a
 // capture finds it
 kernel.whenReady().then(
@@ -359,6 +364,9 @@ async function captureToDailyNote(item) {
       return;
     }
     notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
+    // A capture that committed resolves an earlier capture failure (#20); it opens NewTabNoteTrust
+    // only while one may be open
+    failureEvents.event('capture.committed', { commandId });
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
     notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
