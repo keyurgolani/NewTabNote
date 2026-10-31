@@ -240,8 +240,8 @@ export function runContractSuite(fixture) {
      * Puts records no command writes (media, vectors, snapshots, links no note's text made, and
      * notes in states no command reaches yet, such as a template), through the adapter's own
      * commit, so any adapter can run the cases that need them.
-     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes'} store
-     * @param {Array<{id: string} & Record<string, unknown>>} records
+     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes' | 'searchIndex' | 'tombstones'} store
+     * @param {Array<Record<string, unknown>>} records
      */
     const seed = async (store, records) => {
       const seeding = /** @type {Command} */ ({ type: 'runStartupMaintenance', commandId: ctx.ids.next() });
@@ -249,7 +249,7 @@ export function runContractSuite(fixture) {
         stores: [store],
         /** @param {import('../../js/kernel/core/ports/repository.js').Tx} tx */
         async run(tx) {
-          for (const record of records) tx.put(store, record);
+          for (const record of records) tx.put(store, /** @type {any} */ (record));
         },
       };
       const { outcome } = await ctx.adapter.commit(unitsWork(seeding, [unit], () => committed('seeded', [])));
@@ -3551,6 +3551,7 @@ export function runContractSuite(fixture) {
           'savePromptTemplates',
           'saveSnapshot',
           'saveTheme',
+          'saveVector',
           'saveWorkspaceSession',
           'setFolderCollapsed',
           'setInsightsPending',
@@ -3559,6 +3560,7 @@ export function runContractSuite(fixture) {
           'snoozeSpaceNotice',
           'trashNote',
           'unarchiveNote',
+          'updateSearchIndex',
         ]);
       });
     });
@@ -3732,6 +3734,169 @@ export function runContractSuite(fixture) {
             ['folder-deleted', undefined],
           ],
         );
+      });
+    });
+
+    describe("#22's search index and embeddings, as derived writes (#17 PR 4b)", () => {
+      /**
+       * An entry as js/workers/indexer.js makes one
+       * @param {string} noteId
+       * @param {string} content
+       * @param {Record<string, unknown>} [extra]
+       */
+      const entry = (noteId, content, extra = {}) => ({
+        noteId,
+        name: 'Plan',
+        content,
+        tags: [],
+        updatedAt: NOW,
+        ...extra,
+      });
+
+      /** @param {string} noteId */
+      const vectorOf = noteId => ctx.adapter.read(['vectors'], tx => tx.get('vectors', noteId));
+
+      it('updateSearchIndex stores the entries the indexer made, as they come, removes the ones it names, and touches no note', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'n2', name: 'Other' });
+        const notes = [await noteOf('n1'), await noteOf('n2')];
+        const updated = await run(
+          cmd('updateSearchIndex', { entries: [entry('n1', 'Line'), entry('n2', 'More', { sourceRevision: 1 })] }),
+        );
+        assert.deepEqual([updated.code, updated.changedIds], ['search-index-updated', ['n1', 'n2']]);
+        assert.deepEqual(await searchEntryOf('n1'), entry('n1', 'Line'));
+        assert.deepEqual(await searchEntryOf('n2'), entry('n2', 'More', { sourceRevision: 1 }));
+        const removed = await run(cmd('updateSearchIndex', { entries: [], removed: ['n2', 'never-indexed'] }));
+        assert.deepEqual([removed.code, removed.changedIds], ['search-index-updated', ['n2']]);
+        assert.equal(await searchEntryOf('n2'), undefined);
+        const again = await run(cmd('updateSearchIndex', { entries: [], removed: ['n2'] }));
+        assert.deepEqual([again.code, again.changedIds, again.severity], ['search-index-unchanged', [], 'info']);
+        assert.deepEqual([await noteOf('n1'), await noteOf('n2')], notes);
+      });
+
+      it('updateSearchIndex drops an entry made from an older revision than the stored one, and writes none for a note that is gone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'New', { sourceRevision: 3 })] }));
+        const old = await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Old', { sourceRevision: 2 })] }));
+        assert.deepEqual([old.code, old.changedIds, old.severity], ['search-index-unchanged', [], 'info']);
+        assert.equal((await searchEntryOf('n1'))?.content, 'New');
+        // One made from the same revision lands, and so does one that says none
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Again', { sourceRevision: 3 })] }));
+        assert.equal((await searchEntryOf('n1'))?.content, 'Again');
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Any')] }));
+        assert.equal((await searchEntryOf('n1'))?.content, 'Any');
+        // The indexer read a note that was deleted for good since: its entry went with it
+        const gone = await run(cmd('updateSearchIndex', { entries: [entry('gone', 'Text', { sourceRevision: 1 })] }));
+        assert.deepEqual([gone.code, gone.changedIds], ['search-index-unchanged', []]);
+        assert.equal(await searchEntryOf('gone'), undefined);
+      });
+
+      it("updateSearchIndex's replaceAll keeps a stored entry newer than the batch's, and drops every other entry the batch doesn't name or whose note is gone", async () => {
+        for (const noteId of ['n1', 'n2', 'n3']) await createNote({ noteId, name: noteId });
+        await seed('searchIndex', [entry('ghost', 'Orphan')]);
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Newer', { sourceRevision: 5 })] }));
+        const replaced = await run(
+          cmd('updateSearchIndex', {
+            entries: [entry('n1', 'Older', { sourceRevision: 4 }), entry('n2', 'Two'), entry('ghost', 'Again')],
+            replaceAll: true,
+          }),
+        );
+        assert.deepEqual(replaced.changedIds, ['n2', 'ghost', 'n3']);
+        assert.equal((await searchEntryOf('n1'))?.content, 'Newer');
+        assert.equal((await searchEntryOf('n2'))?.content, 'Two');
+        assert.deepEqual([await searchEntryOf('n3'), await searchEntryOf('ghost')], [undefined, undefined]);
+      });
+
+      it('updateSearchIndex is refused, and writes nothing, for an entry without its note, two entries of one note, or a note it also removes', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await searchEntryOf('n1');
+        for (const [fields, code] of /** @type {Array<[Record<string, unknown>, string]>} */ ([
+          [{ entries: [{ name: 'No note' }] }, 'invalid-command'],
+          [{ entries: [entry('n1', 'A', { sourceRevision: -1 })] }, 'invalid-command'],
+          [{ entries: [entry('n1', 'A'), entry('n1', 'B')] }, 'duplicate-entry'],
+          [{ entries: [entry('n1', 'A')], removed: ['n1'] }, 'invalid-command'],
+          [{ entries: [], replaceAll: 'yes' }, 'invalid-command'],
+        ])) {
+          assertRejected(
+            await kernel.execute(cmd('updateSearchIndex', /** @type {any} */ (fields))),
+            'validation',
+            code,
+          );
+        }
+        assert.deepEqual(await searchEntryOf('n1'), before);
+      });
+
+      it('saveVector stores the embedding as Storage.saveVector did, drops one from an older revision, and is refused for a note that is gone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await noteOf('n1');
+        const saved = await run(cmd('saveVector', { noteId: 'n1', vector: [0.25, 0.5], sourceRevision: 2 }));
+        assert.deepEqual([saved.code, saved.changedIds], ['vector-saved', ['n1']]);
+        assert.deepEqual(await vectorOf('n1'), {
+          id: 'n1',
+          noteId: 'n1',
+          vector: [0.25, 0.5],
+          updatedAt: NOW,
+          sourceRevision: 2,
+        });
+        const old = await run(cmd('saveVector', { noteId: 'n1', vector: [9], sourceRevision: 1 }));
+        assert.deepEqual([old.code, old.changedIds, old.severity], ['vector-unchanged', [], 'info']);
+        assert.deepEqual((await vectorOf('n1'))?.vector, [0.25, 0.5]);
+        // One that says no revision lands, as every embedding did before, and keeps no revision
+        await run(cmd('saveVector', { noteId: 'n1', vector: [1] }));
+        assert.deepEqual(await vectorOf('n1'), { id: 'n1', noteId: 'n1', vector: [1], updatedAt: NOW });
+        assert.deepEqual(await noteOf('n1'), before);
+        assertRejected(
+          await kernel.execute(cmd('saveVector', { noteId: 'gone', vector: [1] })),
+          'not-found',
+          'note-not-found',
+        );
+        assert.equal(await vectorOf('gone'), undefined);
+        // NaN never gets this far: the kernel refuses what JSON can't carry as not-cloneable
+        for (const vector of [[], ['0.5'], null]) {
+          assertRejected(
+            await kernel.execute(cmd('saveVector', /** @type {any} */ ({ noteId: 'n1', vector }))),
+            'validation',
+            'invalid-command',
+          );
+        }
+      });
+
+      it('both commit under the index aggregate, which names the notes whose entries or embedding changed', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        /** @type {CommitEvent[]} */
+        const seen = [];
+        kernel.subscribe(event => {
+          seen.push(event);
+        });
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Line')] }));
+        await run(cmd('saveVector', { noteId: 'n1', vector: [1] }));
+        // A write that changes nothing publishes nothing
+        await run(cmd('updateSearchIndex', { entries: [], removed: ['never-indexed'] }));
+        assert.deepEqual(
+          seen.map(event => ({ ...event, ids: [...event.ids] })),
+          [
+            { aggregate: 'index', ids: ['n1'] },
+            { aggregate: 'index', ids: ['n1'] },
+          ],
+        );
+      });
+
+      it('listLinks reads every link, and listVectors every embedding, as the graph and semantic search read them', async () => {
+        assert.equal((await kernel.query({ type: 'listLinks' })).kind, 'empty');
+        assert.equal((await kernel.query({ type: 'listVectors' })).kind, 'empty');
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'n2', name: 'Other' });
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), linkedNames: ['Other'] }));
+        await run(cmd('saveVector', { noteId: 'n2', vector: [0.5] }));
+        const links = await kernel.query({ type: 'listLinks' });
+        assert.deepEqual(
+          links.kind === 'ready' && links.data.map(link => [link.fromNoteId, link.toNoteId, link.createdAt]),
+          [['n1', 'n2', NOW]],
+        );
+        const vectors = await kernel.query({ type: 'listVectors' });
+        assert.deepEqual(vectors.kind === 'ready' && vectors.data, [
+          { id: 'n2', noteId: 'n2', vector: [0.5], updatedAt: NOW },
+        ]);
       });
     });
 

@@ -107,6 +107,29 @@ export const searchEntryRecord = content(
 );
 
 /**
+ * A wiki link, as IndexedDB's `links` store holds it (domain/note.js, LinkRecord): from the note
+ * whose text names another to that note, and when it was made. Ids and a time, so no content.
+ */
+export const linkRecord = v.looseObject({
+  id,
+  fromNoteId: v.optional(v.unknown()),
+  toNoteId: v.optional(v.unknown()),
+  createdAt: v.optional(v.unknown()),
+});
+
+/**
+ * A note's embedding, as IndexedDB's `vectors` store holds it (domain/note.js, VectorRecord),
+ * under its note's id. The vector is made from the note's title and text, so it's content.
+ */
+export const vectorRecord = v.looseObject({
+  id: entityId('note'),
+  noteId: v.optional(v.unknown()),
+  vector: v.optional(content(v.unknown())),
+  updatedAt: v.optional(v.unknown()),
+  sourceRevision: v.optional(v.unknown()),
+});
+
+/**
  * A snapshot of a note, as IndexedDB's `snapshots` store holds it (domain/snapshot.js): the
  * note's blocks and title at `timestamp`. Its blocks and title are content.
  */
@@ -152,3 +175,5 @@ export const changeRecord = v.looseObject({
 /** @typedef {v.InferOutput<typeof themeRecord>} ThemeEntity */
 /** @typedef {v.InferOutput<typeof changeRecord>} ChangeEntity */
 /** @typedef {v.InferOutput<typeof searchEntryRecord>} SearchEntryEntity */
+/** @typedef {v.InferOutput<typeof linkRecord>} LinkEntity */
+/** @typedef {v.InferOutput<typeof vectorRecord>} VectorEntity */

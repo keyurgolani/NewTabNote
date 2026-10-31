@@ -35,6 +35,8 @@ const TODAY = {
       'listThemes',
       'exportBackup',
       'profileHoldsContent',
+      'listLinks',
+      'listVectors',
     ],
   },
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },

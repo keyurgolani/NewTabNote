@@ -71,6 +71,14 @@ import { withNewPlacement } from './placement.js';
  */
 
 /**
+ * A note's embedding, as Storage.saveVector has stored it in the `vectors` store since 1.2.0,
+ * under the note's id, `{id, noteId, vector, updatedAt}`, and since #17 PR 4b with the content
+ * revision it was made from when its job read one
+ * @typedef {{id: string, noteId?: unknown, vector?: unknown, updatedAt?: unknown, sourceRevision?: unknown}
+ *   & Record<string, unknown>} VectorRecord
+ */
+
+/**
  * What a capture adds to today's Daily Note: a page, or selected text and the page it came
  * from. A tab can lack a URL or title, and the block then lacks it too, as before.
  * @typedef {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} Capture

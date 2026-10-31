@@ -75,6 +75,12 @@ const COMMAND_SAMPLES = {
   deleteBlocks: { noteId: 'n1', blockIds: ['b1', 'never-saved'] },
   applyDerivedTitle: { noteId: 'n1', name: 'Derived', contentHash: 'h1' },
   attachInsights: { noteId: 'n1', insights: { todos: ['Call'] }, contentHash: 'h1' },
+  updateSearchIndex: {
+    entries: [{ noteId: 'n1', name: 'Plan', content: 'Line', tags: ['plan'], updatedAt: NOW, sourceRevision: 1 }],
+    removed: ['gone'],
+    replaceAll: false,
+  },
+  saveVector: { noteId: 'n1', vector: [0.25, 0.5], sourceRevision: 1 },
   saveSnapshot: {
     noteId: 'n1',
     snapshotId: 's1',
@@ -154,6 +160,8 @@ const QUERY_SAMPLES = {
   listThemes: {},
   exportBackup: { backup: true },
   profileHoldsContent: {},
+  listLinks: {},
+  listVectors: {},
 };
 
 /** The coordinator's own queries, which take no field */
