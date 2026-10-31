@@ -627,9 +627,9 @@
               "value": {
                 "id": "1760000208949-2gpfabw0k",
                 "name": "Dusk",
-                "colors": {
-                  "background": "#101820",
-                  "text": "#f2f2f2"
+                "properties": {
+                  "--bg-primary": "#101820",
+                  "--text-primary": "#f2f2f2"
                 },
                 "updatedAt": 1760000000000
               }
@@ -748,7 +748,7 @@
                   "themes": {
                     "count": 1,
                     "idSetHash": "dafe45f029804e4485074b7f298338c0d1266880d5862a139886b8dab869d02f",
-                    "contentHash": "b93104e24404731d39170029b2fbc6dd25930c0364721be24935cee41d9f600e",
+                    "contentHash": "912ee362688f80ccdca8ab6d83104cc79c12d57a2037f9d47b779a3306415d05",
                     "keyPath": "id",
                     "purged": []
                   },
@@ -1412,13 +1412,13 @@
                 "value": {
                   "id": "1760000208949-2gpfabw0k",
                   "name": "Dusk",
-                  "colors": {
-                    "background": "#101820",
-                    "text": "#f2f2f2"
+                  "properties": {
+                    "--bg-primary": "#101820",
+                    "--text-primary": "#f2f2f2"
                   },
                   "updatedAt": 1760000000000
                 },
-                "sha256": "089fa37c11459a09e18921f59751d7bafa65a9c46cc16e450a84a7b9e644bc35"
+                "sha256": "d5a340280987bc30c9b22dd2ef4aa35edee87461879316d9ff0cba506356df7a"
               }
             },
             {

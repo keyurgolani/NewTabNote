@@ -57,7 +57,9 @@ function note(shape, id, name, fields = {}) {
   const v8Fields = shape === 'v8' || shape === 'v9';
   return {
     ...base,
-    ...(later ? { insights: null, lastInsightsExtractedAt: null } : {}),
+    // v1.1.0's createNote added insights, so every shape but v1.0.0's own notes has them (#28 slice 3's recordings)
+    insights: null,
+    lastInsightsExtractedAt: null,
     ...(v8Fields ? { preview: '', pinned: false, todoProgress: null } : {}),
     ...(later ? { isDaily: false, dateStr: null, isTemplate: false, folderId: null } : {}),
     viewport: { scale: 1, offsetX: 0, offsetY: 0 },
@@ -140,7 +142,8 @@ function profile(shape) {
     note(shape, a, 'Groceries', later ? { folderId: f1 } : {}),
     note(shape, b, 'Reading list'),
     note(shape, c, 'Old plans', { archived: true, archivedAt: T0 + 5000 }),
-    note(shape, d, 'Thrown away', later ? { trashed: true, trashedAt: T0 + 6000 } : {}),
+    // trashNote has set trashed and trashedAt since v1.0.0
+    note(shape, d, 'Thrown away', { trashed: true, trashedAt: T0 + 6000 }),
   ];
   if (later) notes.push(note(shape, nextId(), 'Meeting template', { isTemplate: true }));
   const elements = [
@@ -159,7 +162,8 @@ function auxiliary(shape, base) {
   const out = {
     search_index: base.notes.map(n => ({ noteId: n.id, name: n.name, content: '', updatedAt: T0 })),
     links: [{ id: nextId(), fromNoteId: first.id, toNoteId: second.id, createdAt: T0 }],
-    themes: [{ id: nextId(), name: 'Dusk', colors: { background: '#101820', text: '#f2f2f2' }, updatedAt: T0 }],
+    // The theme builder's save: name and CSS properties (every release from v1.2.0)
+    themes: [{ id: nextId(), name: 'Dusk', properties: { '--bg-primary': '#101820', '--text-primary': '#f2f2f2' }, updatedAt: T0 }],
     vectors: [{ id: first.id, noteId: first.id, vector: [0.125, -0.5, 0.25, 1], updatedAt: T0 }],
   };
   if (shape === 'v8' || shape === 'v9') {

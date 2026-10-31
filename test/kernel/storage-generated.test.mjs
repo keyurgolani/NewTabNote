@@ -204,7 +204,7 @@ describe('the maximal profile', () => {
     const after = await dump(of);
     const db = /** @type {any} */ (after.databases.find(candidate => candidate.name === 'CanvasTabDB'));
     assert.equal(db.version, 9);
-    assert.deepStrictEqual(db.stores.map((/** @type {any} */ s) => s.name), Object.keys(schemaAt(9)).sort());
+    assert.deepStrictEqual(db.stores.map((/** @type {any} */ s) => s.name), Object.keys(/** @type {object} */ (schemaAt(9))).sort());
     // The ten legacy stores keep every record as it was
     for (const store of fixture.databases[0].stores) {
       assert.deepStrictEqual(recordsIn(after, 'CanvasTabDB', store.name), fillCanaries(store.records), store.name);
