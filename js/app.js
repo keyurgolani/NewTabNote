@@ -91,42 +91,12 @@ class App {
     this.events = events;
     this.editor = null;
     this.secondaryEditor = null;
-    this.pipWindow = null;
-    this.pipEditor = null;
-    this.activeEditorSide = 'left'; // 'left' or 'right'
-    this.splitViewEnabled = false;
+    // Whether the sidebar and the AI sidebar are open, as Stats, Graph, and the palette read it
     this.sidebarOpen = true;
-    this.sidebarView = 'notes'; // 'notes', 'archive', or 'trash'
-    this.sidebarWidth = 260;
-    this.sidebarSortMode = 'updated';
-    this.sidebarViewMode = 'list'; // 'list' or 'cards'
-    this.searchQuery = '';
-    this.contextMenuNoteId = null;
-    // Calendar
-    const now = new Date();
-    this.calendarMonth = now.getMonth();
-    this.calendarYear = now.getFullYear();
+    this.aiSidebarOpen = false;
     // Tab management
     this._openTabs = []; // Until TabController exists; see the openTabs accessor
-    this.activeTabIndex = 0;
-    // Auto-title
-    this.autoTitleIntervalId = null;
-    this.autoTitleRunning = false;
-    // Insights extraction
-    this.insightsIntervalId = null;
-    this.insightsRunning = false;
-    // AI Chat sidebar
-    this.aiSidebarOpen = false;
-    this.aiSidebarWidth = 360;
-    this.focusMode = false;
-    this.commandPaletteItems = [];
-    this.commandPaletteIndex = 0;
-    this.aiPromptTemplates = [];
-    this.aiInsertPreviewState = null;
-    // Virtual Scroller
-    this.notesScroller = null;
     // Search Indexer
-    this.indexerWorker = null;
     this.searchEngine = new SearchEngine();
     // Sidebar controller
     this.sidebarController = null;
@@ -153,12 +123,6 @@ class App {
     // Core infrastructure
     this.domRefs = null;
     this.logger = null;
-    // Analytics
-    this.statsOpen = false;
-    this.charts = {};
-    // Multi-select
-    this.selectionMode = false;
-    this.selectedNoteIds = new Set();
     this.triggerIndexing = Utils.debounce((noteId) => {
       if (noteId && this.notesManager) {
         this.notesManager.updateNoteIndex(noteId);
@@ -388,7 +352,6 @@ class App {
         await this.initSyncService();
         if (this.notesManager) {
           await this.notesManager.deferredInit();
-          this.indexerWorker = this.notesManager.indexerWorker;
         }
       };
 
@@ -801,26 +764,22 @@ class App {
         this.sidebarOpen = value;
         this.updateSidebarState();
       } else if (key === 'sidebarWidth') {
-        this.sidebarWidth = value;
         this.applySidebarWidth();
       } else if (key === 'sidebarViewMode') {
-        this.sidebarViewMode = value;
         this.applySidebarViewMode();
       } else if (key === 'sidebarSortMode') {
-        this.sidebarSortMode = value;
         const sortSelect = document.getElementById('sidebar-sort');
-        if (sortSelect) sortSelect.value = this.sidebarSortMode;
+        if (sortSelect) sortSelect.value = value;
         this.renderNotesList();
       }
     };
     this.settingsController.onAISidebarWidthChanged = (value) => {
-      this.aiSidebarWidth = value;
       if (this.aiChatController) {
-        this.aiChatController.aiSidebarWidth = this.aiSidebarWidth;
+        this.aiChatController.aiSidebarWidth = value;
       }
       const aiSidebar = document.getElementById('ai-sidebar');
       if (aiSidebar && this.aiSidebarOpen) {
-        aiSidebar.style.width = this.aiSidebarWidth + 'px';
+        aiSidebar.style.width = value + 'px';
       }
     };
     this.settingsController.onLLMSettingsChanged = async () => {
@@ -831,7 +790,6 @@ class App {
       this.aiChatController.aiPromptTemplates = this.aiChatController.sanitizeAIPromptTemplates(newValue);
       this.aiChatController.renderAIPromptSuggestions();
       this.aiChatController.renderAIPromptTemplateSettings();
-      this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
     };
 
     this.notesManager = new NotesManager({
@@ -929,13 +887,8 @@ class App {
     // The note list it renders, once per change
     this.sidebarController.noteList = this.noteList;
     await this.sidebarController.init();
-
-    // Sync state back to App for backward compat
+    // Whether the sidebar is open, which Stats, Graph, and the palette read
     this.sidebarOpen = this.sidebarController.sidebarOpen;
-    this.sidebarView = this.sidebarController.sidebarView;
-    this.sidebarWidth = this.sidebarController.sidebarWidth;
-    this.sidebarSortMode = this.sidebarController.sidebarSortMode;
-    this.sidebarViewMode = this.sidebarController.sidebarViewMode;
   }
 
   /**
@@ -943,13 +896,6 @@ class App {
    */
   async initTabController() {
     await this.tabController.init();
-
-    // Sync state back to App for backward compat (openTabs reads the controller's own array)
-    this.activeTabIndex = this.tabController.activeTabIndex;
-    this.splitViewEnabled = this.tabController.splitViewEnabled;
-    this.activeEditorSide = this.tabController.activeEditorSide;
-    this.pipWindow = this.tabController.pipWindow;
-    this.pipEditor = this.tabController.pipEditor;
   }
 
   /**
@@ -957,12 +903,8 @@ class App {
    */
   async initAIChatController() {
     await this.aiChatController.init();
-
-    // Sync state back to App for backward compat
+    // Whether the AI sidebar is open, which Stats, Graph, and the palette read
     this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
-    this.aiSidebarWidth = this.aiChatController.aiSidebarWidth;
-    this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
-    this.aiInsertPreviewState = this.aiChatController.aiInsertPreviewState;
   }
 
   /**
@@ -987,10 +929,6 @@ class App {
     this.analyticsController.noteList = this.noteList;
     Analytics.connect({ noteList: this.noteList, getNoteBlocks: (noteId) => this.documentClient.blocksOf(noteId) });
     await this.analyticsController.init();
-
-    // Sync state back to App for backward compat
-    this.statsOpen = this.analyticsController.statsOpen;
-    this.charts = this.analyticsController.charts;
   }
 
   async initGraphView() {
@@ -1087,13 +1025,6 @@ class App {
    */
   async initNotesManager() {
     await this.notesManager.init();
-
-    // Sync state back to App for backward compat
-    this.autoTitleIntervalId = this.notesManager.autoTitleIntervalId;
-    this.autoTitleRunning = this.notesManager.autoTitleRunning;
-    this.insightsIntervalId = this.notesManager.insightsIntervalId;
-    this.insightsRunning = this.notesManager.insightsRunning;
-    this.indexerWorker = this.notesManager.indexerWorker;
   }
 
   /**
@@ -1102,11 +1033,6 @@ class App {
   async initShortcutsManager() {
     this.shortcutsManager.noteList = this.noteList;
     await this.shortcutsManager.init();
-
-    // Sync state back to App for backward compat
-    this.focusMode = this.shortcutsManager.focusMode;
-    this.commandPaletteItems = this.shortcutsManager.commandPaletteItems;
-    this.commandPaletteIndex = this.shortcutsManager.commandPaletteIndex;
   }
 
   /**
@@ -1217,7 +1143,6 @@ class App {
 
   toggleFocusMode(force) {
     this.shortcutsManager.toggleFocusMode(force);
-    this.focusMode = this.shortcutsManager.focusMode;
   }
 
   /**
