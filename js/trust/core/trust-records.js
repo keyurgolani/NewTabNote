@@ -37,14 +37,21 @@
  * - `storage/open-failed/NewTabNoteTrust` is the records' own. It's held whenever this context
  *   finds the store won't open: open(), and every failed write while the store isn't open here,
  *   except while the adapter is still connecting, until that has lasted RETRY_OPEN_MS (then
- *   with `errorCode: 'open-pending'`). The first write after the store first opens in this
- *   context resolves the sightings no later than that open (`openedAt`), in the transaction
+ *   with `errorCode: 'open-pending'`), so its occurrences count failed writes while the store
+ *   wasn't open here, not failed opens (each also sets the settings copy once more). The first
+ *   write after the store opens in this context, the first time or after this context held a
+ *   sighting, resolves the sightings no later than that open (`openedAt`), in the transaction
  *   that replays them; a later sighting, from a context that still can't open, stays open. A
- *   storage provider shouldn't list `open-failed` in `observes` unless its check opens
- *   NewTabNoteTrust itself.
- * - Reads give each caller its own answer for the settings copy: `incidentsRead()` says whether
- *   its read of the copy answered (one that fails, or passes COPY_READ_MS when the host passes
- *   timers, doesn't), so the summary doesn't call anything safe that a context may be holding.
+ *   plain reconnect that never failed resolves nothing. No check may observe `open-failed` or
+ *   `write-failed` (families.js).
+ * - Known limit: a fresh context's first open also resolves sightings from a context that's
+ *   still stuck, until that context's next failed write sights it again. On a new-tab page
+ *   fresh contexts are constant, so `open-failed` can read resolved between a stuck context's
+ *   writes.
+ * - Reads give each caller its own answer: `incidentsRead()` says whether its read of the
+ *   settings copy answered (one that fails, or passes COPY_READ_MS when the host passes timers,
+ *   doesn't) and whether its read of NewTabNoteTrust did, so the summary doesn't call anything
+ *   safe that it couldn't read.
  * - A held sighting is unseen by definition: a copy entry's new count, or an occurrence only
  *   this context's memory holds, reopens a resolved incident and undismisses a dismissed one
  *   whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
@@ -243,6 +250,8 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   let openedAt = null;
   /** Set when the store first opens in this context: the next write resolves open-failed */
   let resolveOpenFailed = false;
+  /** Whether this context held an open-failed sighting since the store last opened here */
+  let heldOpenFailed = false;
   /** Since when the adapter has answered that it's still connecting, or null */
   /** @type {number | null} */
   let pendingSince = null;
@@ -446,6 +455,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
    * @param {boolean} counted - the operation already counted its failed write
    */
   const holdOpenFailed = async (error, counted) => {
+    heldOpenFailed = true;
     const errorCode = codeOf(error);
     await holdSighting(
       OPEN_FAILED_KEY,
@@ -552,9 +562,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       await store.open();
       opened = true;
       pendingSince = null;
-      if (openedAt === null) {
+      // The first open here, or one after this context sighted open-failed, vouches for the
+      // sightings before it
+      if (openedAt === null || heldOpenFailed) {
         openedAt = clock.now();
         resolveOpenFailed = true;
+        heldOpenFailed = false;
       }
       return { ok: true };
     } catch (error) {
@@ -804,16 +817,16 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
-   * Resolves the provider's open incidents whose key isn't in `still`, after a check of it
-   * passed. Answers the ones it resolved, or `recorded: false` when the store won't take the
-   * write, which isn't "nothing to resolve". With `faults`, only incidents for those faults
-   * resolve: the ones the provider's check observes.
+   * Resolves the provider's open incidents whose key isn't in `still`. Answers the ones it
+   * resolved, or `recorded: false` when the store won't take the write, which isn't "nothing to
+   * resolve". A check passes `looked`, what it really looked at (checks.js), so only those
+   * incidents resolve, and `seenBy`, when it started, so a sighting from while it ran stays.
    * @param {string} provider
    * @param {readonly string[]} still - keys of the faults the check still reports
-   * @param {{faults?: readonly string[]}} [options]
+   * @param {{looked?: readonly {faultCode: string, subjectId?: string | null}[], seenBy?: number}} [options]
    * @returns {Promise<{recorded: true, resolved: Incident[]} | {recorded: false}>}
    */
-  const resolve = async (provider, still, { faults } = {}) => {
+  const resolve = async (provider, still, { looked, seenBy } = {}) => {
     const now = clock.now();
     const stored = await write(['incidents'], async tx => {
       const open = [
@@ -823,7 +836,13 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         incident =>
           incident.providerId === provider &&
           !still.includes(incident.key) &&
-          (!faults || faults.includes(incident.faultCode)),
+          (seenBy === undefined || incident.lastSeenAt <= seenBy) &&
+          (!looked ||
+            looked.some(
+              item =>
+                item.faultCode === incident.faultCode &&
+                (item.subjectId === undefined || item.subjectId === incident.subjectId),
+            )),
       );
       /** @type {Incident[]} */
       const done = [];
@@ -1009,6 +1028,16 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     return stored.ok ? /** @type {T} */ (copy(stored.value)) : fallback;
   };
 
+  /**
+   * What the store answers for `name`, and whether it answered
+   * @param {TrustStoreName} name
+   * @returns {Promise<{rows: unknown[], ok: boolean}>}
+   */
+  const readRows = async name => {
+    const stored = await run([name], 'readonly', tx => tx.getAll(name));
+    return stored.ok ? { rows: copy(/** @type {unknown[]} */ (stored.value)), ok: true } : { rows: [], ok: false };
+  };
+
   /** @returns {Promise<HealthReceipt[]>} every receipt, oldest first */
   const receipts = async () => /** @type {HealthReceipt[]} */ (await readAll('receipts', [])).sort(byTime('verifiedAt'));
 
@@ -1022,22 +1051,25 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
 
   /**
    * Every incident within its bounds, oldest first: the store's, with the held storage
-   * incidents replayed over them as a write would. `read` says whether this read of the
-   * settings copy answered: when it didn't, what other contexts hold is unknown, so nothing
-   * should be called safe.
-   * @returns {Promise<{incidents: Incident[], read: boolean}>}
+   * incidents replayed over them as a write would. `copyRead` and `recordsRead` say whether this
+   * read of the settings copy, and of NewTabNoteTrust, answered: when either didn't, incidents
+   * may be missing, so nothing should be called safe.
+   * @returns {Promise<{incidents: Incident[], copyRead: boolean, recordsRead: boolean}>}
    */
   async function incidentsRead() {
+    const stored = await readRows('incidents');
     /** @type {Map<string, Incident | undefined>} */
-    const byKey = new Map(
-      /** @type {Incident[]} */ (await readAll('incidents', [])).map(item => [item.key, item]),
-    );
+    const byKey = new Map(/** @type {Incident[]} */ (stored.rows).map(item => [item.key, item]));
     const { ops, tracked, read } = await heldOps();
     for (const op of ops) {
       byKey.set(op.key, applyOp(byKey.get(op.key), op, { track: tracked.has(op.opId), unseen: true }));
     }
     const all = /** @type {Incident[]} */ ([...byKey.values()].filter(Boolean));
-    return { incidents: copy(all.filter(item => !resolvedTooLongAgo(item))).sort(byTime('firstSeenAt')), read };
+    return {
+      incidents: copy(all.filter(item => !resolvedTooLongAgo(item))).sort(byTime('firstSeenAt')),
+      copyRead: read,
+      recordsRead: stored.ok,
+    };
   }
 
   /**

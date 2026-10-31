@@ -76,7 +76,7 @@ const PROVIDERS = [
   ),
   provider('storage', 'storage', 20, () => storageAnswer.next, {
     core: true,
-    observes: ['scan-findings', 'open-failed'],
+    observes: ['scan-findings', 'quota'],
   }),
   // unconfigured
   provider('sync', 'sync', 10, () => ({ status: 'not-configured' })),
@@ -180,6 +180,7 @@ describeRegistryConformance('health (#20)', {
           timeoutMs: data.timeoutMs,
           freshnessMs: data.freshnessMs,
           core: data.core === true,
+          observes: data.observes,
           check: context => /** @type {any} */ (implementation).check(context),
         },
         { clock, timers: realTimers },
@@ -370,7 +371,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     storageAnswer.next = {
       status: 'failed',
       capture: 'at-risk',
-      faults: [{ faultCode: 'open-failed', severity: 'capture-risk' }],
+      faults: [{ faultCode: 'quota', severity: 'capture-risk' }],
     };
     try {
       await trust.verify({
@@ -409,7 +410,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['storage'] });
       summary = await summaryOf(trust);
       assert.equal(summary.actionRequired, 1);
-      storageAnswer.next = { status: 'verified', capture: 'safe' };
+      storageAnswer.next = { status: 'verified', capture: 'safe', looked: [{ faultCode: 'scan-findings' }] };
       await trust.verify({ type: 'trust.verify', commandId: 'c3', trigger: 'verify-now', providerIds: ['storage'] });
       const [resolved] = await records.incidents();
       assert.equal(resolved.state, 'resolved');

@@ -1,9 +1,19 @@
 /**
  * One provider's check, run into a receipt (#20, AC1 and "Where checks run"). A provider's
  * implementation answers `check(context)` with a CheckResult: a status a receipt can store,
- * allowlisted evidence, and the faults it found, each of which becomes an incident. The
- * receipt it makes carries the provider's declared verification operation, when it was
- * verified, how long the check took, and how long the receipt stays fresh.
+ * allowlisted evidence, the faults it found, each of which becomes an incident, and `looked`:
+ * the faults it really looked for, from reads that succeeded. The receipt it makes carries the
+ * provider's declared verification operation, when it was verified, how long the check took,
+ * and how long the receipt stays fresh.
+ *
+ * `looked` is what lets a check resolve: only the provider's open incidents that match an
+ * entry, that the check no longer reports, and that were last seen before it started resolve.
+ * An entry names a fault from the provider's `observes`, and a subject when the check looked
+ * at that subject only (no `subjectId` means every subject; `null` the incident without one).
+ * A check that couldn't read leaves the fault out, and a missing or empty `looked` resolves
+ * nothing, so an `unverified` answer after a failed read never reads as an all clear. A result
+ * whose `faults` or `looked` names a fault outside `observes` is answered as outside the
+ * schema.
  *
  * A check that takes longer than the provider's `timeoutMs` records `unverified`, never
  * `failed`, and so does one that throws or answers something this can't read: nothing was
@@ -34,6 +44,12 @@ export const faultSchema = v.strictObject({
   preserved: v.optional(capabilities),
 });
 
+/** A fault a check looked for: every subject, or the one it names */
+export const lookedSchema = v.strictObject({
+  faultCode,
+  subjectId: v.optional(v.nullable(subjectId)),
+});
+
 /** What a check answers */
 export const checkResultSchema = v.strictObject({
   status: v.picklist(RECEIPT_STATUSES),
@@ -43,7 +59,10 @@ export const checkResultSchema = v.strictObject({
   preserved: v.optional(capabilities),
   nextAction: v.optional(v.nullable(remediationId)),
   faults: v.optional(v.pipe(v.array(faultSchema), v.maxLength(32))),
+  looked: v.optional(v.pipe(v.array(lookedSchema), v.maxLength(64))),
 });
+
+/** @typedef {v.InferOutput<typeof lookedSchema>} Looked */
 
 /** @typedef {v.InferOutput<typeof checkResultSchema>} CheckResult */
 
@@ -56,12 +75,13 @@ export const checkResultSchema = v.strictObject({
  * @property {number} timeoutMs
  * @property {number} freshnessMs
  * @property {boolean} [core]
+ * @property {readonly string[]} [observes] - the faults its check may report or look for
  * @property {(context: Readonly<Record<string, unknown>>) => unknown} check
  */
 
 /**
- * What one check made: its receipt, and the incidents it raises
- * @typedef {{receipt: ReceiptInput, faults: RaiseInput[], outcome: 'answered' | 'timed-out' | 'threw' | 'invalid'}} CheckRun
+ * What one check made: its receipt, the incidents it raises, and what it looked for
+ * @typedef {{receipt: ReceiptInput, faults: RaiseInput[], looked: Looked[], outcome: 'answered' | 'timed-out' | 'threw' | 'invalid'}} CheckRun
  */
 
 /**
@@ -110,16 +130,29 @@ export async function runCheck(provider, { context = {}, clock, timers }) {
     return {
       receipt: { ...base, status: 'unverified', evidence: { errorCode: 'check-timed-out', timeoutMs: provider.timeoutMs } },
       faults: [],
+      looked: [],
       outcome: 'timed-out',
     };
   }
   if (answer.kind === 'threw') {
     const evidence = answer.exception ? { errorCode: 'check-threw', exception: answer.exception } : { errorCode: 'check-threw' };
-    return { receipt: { ...base, status: 'unverified', evidence }, faults: [], outcome: 'threw' };
+    return { receipt: { ...base, status: 'unverified', evidence }, faults: [], looked: [], outcome: 'threw' };
   }
   const parsed = v.safeParse(checkResultSchema, answer.value);
-  if (!parsed.success || (parsed.output.capture !== undefined && provider.core !== true)) {
-    return { receipt: { ...base, status: 'unverified', evidence: { errorCode: 'invalid-check-result' } }, faults: [], outcome: 'invalid' };
+  const observes = provider.observes || [];
+  if (
+    !parsed.success ||
+    (parsed.output.capture !== undefined && provider.core !== true) ||
+    !(parsed.output.faults || []).every(fault => observes.includes(fault.faultCode)) ||
+    !(parsed.output.looked || []).every(item => observes.includes(item.faultCode)) ||
+    !distinct((parsed.output.looked || []).map(item => `${item.faultCode}/${item.subjectId === undefined ? '*' : item.subjectId}`))
+  ) {
+    return {
+      receipt: { ...base, status: 'unverified', evidence: { errorCode: 'invalid-check-result' } },
+      faults: [],
+      looked: [],
+      outcome: 'invalid',
+    };
   }
   const result = parsed.output;
   /** @type {ReceiptInput} */
@@ -141,8 +174,17 @@ export async function runCheck(provider, { context = {}, clock, timers }) {
     preserved: fault.preserved || [],
     evidence: {},
   }));
-  return { receipt, faults, outcome: 'answered' };
+  const looked = (result.looked || []).map(item =>
+    item.subjectId === undefined ? { faultCode: item.faultCode } : { faultCode: item.faultCode, subjectId: item.subjectId },
+  );
+  return { receipt, faults, looked, outcome: 'answered' };
 }
+
+/**
+ * Whether every item is there once
+ * @param {string[]} items
+ */
+const distinct = items => new Set(items).size === items.length;
 
 /**
  * An error's name when it's one of the known Error and DOMException names (codes.js), never

@@ -102,10 +102,10 @@ export function leaves(value, at = '') {
 export async function buildDiagnostics({ records, journal, clock, versions, migrations = async () => [] }) {
   const now = clock.now();
   // The report still builds when chrome.storage.local fails, marked as having no install id
-  const [installId, receipts, incidents, runs, events, migrated] = await Promise.all([
+  const [installId, receipts, held, runs, events, migrated] = await Promise.all([
     records.installId().catch(() => null),
     records.latestReceipts(),
-    records.incidents(),
+    records.incidentsRead(),
     records.runs(),
     records.events(),
     migrations(),
@@ -120,7 +120,7 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     recordsFailure: records.failureCode(),
     migrations: [...migrated],
     receipts,
-    incidents,
+    incidents: held.incidents,
     runs,
     journal: events,
     rejected: journal.rejected(),
@@ -133,6 +133,10 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     bytes: encodedBytes(serialized),
     fields,
     serialized,
-    notices: installId === null ? ['install-id-missing'] : ['install-id-stable'],
+    notices: [
+      installId === null ? 'install-id-missing' : 'install-id-stable',
+      // The store or the settings copy didn't answer, so incidents may be missing from the file
+      ...(held.copyRead && held.recordsRead ? [] : /** @type {const} */ (['incidents-incomplete'])),
+    ],
   };
 }

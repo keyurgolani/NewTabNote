@@ -291,7 +291,7 @@ describe("#68's fourth review round", () => {
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
     clock.advance(10);
     const { trust } = await useCases(records, clock, [
-      provider('index', () => ({ status: 'verified' }), { observes: ['lagging'] }),
+      provider('index', () => ({ status: 'verified', looked: [{ faultCode: 'lagging' }] }), { observes: ['lagging'] }),
     ]);
     failNext(1, 'unreadable', { after: 1 });
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });

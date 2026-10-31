@@ -26,7 +26,7 @@ export const exportedSchema = v.strictObject({
   serialized: v.pipe(v.string(), v.maxLength(16 * 1024 * 1024)),
   // What the preview says beside the fields: the install id links every report from this
   // profile, or there's none because chrome.storage.local failed
-  notices: v.array(v.picklist(['install-id-stable', 'install-id-missing'])),
+  notices: v.array(v.picklist(['install-id-stable', 'install-id-missing', 'incidents-incomplete'])),
 });
 
 export const result = v.variant('kind', [exportedSchema, rejectedSchema, unavailableSchema]);

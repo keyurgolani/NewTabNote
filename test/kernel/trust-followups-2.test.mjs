@@ -410,7 +410,7 @@ describe('a check resolves what it observes (6b)', () => {
     });
   });
 
-  it('a not-configured check resolves the faults it observes and no longer reports, and leaves the rest', async () => {
+  it('a not-configured check resolves the faults it looked at and no longer reports, and leaves the rest', async () => {
     const profile = trustProfile();
     const db = databaseOn(profile);
     opened.push(db);
@@ -425,9 +425,9 @@ describe('a check resolves what it observes (6b)', () => {
     // A failure event this check can't observe
     await records.raise({ providerId: 'credentials', faultCode: 'load-failed', severity: 'degraded' });
     assert.equal((await at(records, 'credentials/legacy-secret/-'))?.state, 'open');
-    // The user clears the key: the check answers not-configured, never verified
+    // The user clears the key: the check answers not-configured, never verified, having looked
     clock.advance(1000);
-    answer = { status: 'not-configured' };
+    answer = { status: 'not-configured', looked: [{ faultCode: 'legacy-secret' }] };
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
     assert.equal(outcome.kind, 'committed');
     assert.equal((await at(records, 'credentials/legacy-secret/-'))?.state, 'resolved');
@@ -443,7 +443,11 @@ describe('a check resolves what it observes (6b)', () => {
     const db = databaseOn(profile);
     opened.push(db);
     const { records, clock } = await recordsOn(db, profile);
-    const providers = [provider('index', () => ({ status: 'verified' }), { observes: ['lagging', 'stalled'] })];
+    const providers = [
+      provider('index', () => ({ status: 'verified', looked: [{ faultCode: 'lagging' }, { faultCode: 'stalled' }] }), {
+        observes: ['lagging', 'stalled'],
+      }),
+    ];
     const { trust } = await useCases(records, clock, providers);
     await records.raise({ providerId: 'index', faultCode: 'indexer-start-failed', severity: 'degraded' });
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
@@ -454,12 +458,16 @@ describe('a check resolves what it observes (6b)', () => {
   });
 
   for (const status of ['not-configured', 'unverified', 'degraded', 'failed']) {
-    it(`a check that answers ${status} still resolves the faults it observes and no longer reports`, async () => {
+    it(`a check that answers ${status} still resolves the faults it looked at and no longer reports`, async () => {
       const profile = trustProfile();
       const db = databaseOn(profile);
       opened.push(db);
       const { records, clock } = await recordsOn(db, profile);
-      const providers = [provider('sync', () => ({ status }), { observes: ['conflict', 'stale-backup'] })];
+      const providers = [
+        provider('sync', () => ({ status, looked: [{ faultCode: 'conflict' }] }), {
+          observes: ['conflict', 'stale-backup'],
+        }),
+      ];
       const { trust } = await useCases(records, clock, providers);
       await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
       clock.advance(1000);
@@ -482,7 +490,8 @@ describe('a check resolves what it observes (6b)', () => {
     await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
     assert.equal((await at(records, 'recovery-readiness/point-unverified/-'))?.state, 'open');
     clock.advance(1000);
-    answer = { status: 'unverified' };
+    // The point is gone, and the check looked: there's nothing left to verify
+    answer = { status: 'unverified', looked: [{ faultCode: 'point-unverified' }] };
     await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now' });
     assert.equal((await at(records, 'recovery-readiness/point-unverified/-'))?.state, 'resolved');
   });
@@ -725,12 +734,12 @@ describe("#80's review round", () => {
     const f = flakyStore(db);
     const { records, clock } = await recordsOn(f.store, profile);
     const { trust } = await useCases(records, clock);
-    assert.equal(/** @type {any} */ (await trust.report()).data.storeRead, true);
+    assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, true);
     // trust.report reads receipts, runs, then incidents
     f.failNext(1, 'retries-exhausted', { after: 2 });
-    assert.equal(/** @type {any} */ (await trust.report()).data.storeRead, false);
+    assert.equal(/** @type {any} */ (await trust.report()).data.recordsRead, false);
     f.failNext(1, 'retries-exhausted');
-    assert.equal(/** @type {any} */ (await trust.incidents()).data.storeRead, false);
+    assert.equal(/** @type {any} */ (await trust.incidents()).data.recordsRead, false);
   });
 
   it('R1a: a context that recovers from a failed reconnect resolves its own open-failed', async () => {
@@ -772,8 +781,16 @@ describe("#80's review round", () => {
     opened.push(db);
     const { records, clock } = await recordsOn(db, profile);
     const { trust } = await useCases(records, clock);
-    profile.settings.failGets = 1;
+    const healthy = /** @type {any} */ (await trust.exportDiagnostics());
+    assert.ok(!healthy.notices.includes('incidents-incomplete'));
+    // Only the settings copy's read fails
+    const get = profile.settings.get;
+    profile.settings.get = async keys => {
+      if (keys.includes(KEY)) throw new Error('settings read failed');
+      return get(keys);
+    };
     const exported = /** @type {any} */ (await trust.exportDiagnostics());
-    assert.ok(exported.data.notices.includes('incidents-incomplete'), JSON.stringify(exported.data.notices));
+    profile.settings.get = get;
+    assert.ok(exported.notices.includes('incidents-incomplete'), JSON.stringify(exported.notices));
   });
 });

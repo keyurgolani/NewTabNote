@@ -35,6 +35,8 @@ export const reportSchema = v.strictObject({
   // Whether this report's read of the settings copy answered: when it didn't, incidents other
   // contexts hold may be missing
   copyRead: v.boolean(),
+  // Whether this report's read of NewTabNoteTrust's incidents answered
+  recordsRead: v.boolean(),
   runs: v.array(runSchema),
 });
 

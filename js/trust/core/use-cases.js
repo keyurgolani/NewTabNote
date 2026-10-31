@@ -62,7 +62,7 @@ import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
  * @property {CostClass} costClass
  * @property {number} timeoutMs
  * @property {number} freshnessMs
- * @property {readonly string[]} observes - the faults its check can observe
+ * @property {readonly string[]} observes - the faults its check may report or look for
  */
 
 /**
@@ -158,9 +158,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
    * Runs one provider's check and stores what it found. Answers its receipt, and whether all
    * of it landed: the receipt, each fault's incident (a held one isn't stored, so it hasn't),
    * and the resolution. A check that answered, whatever its status, resolves the provider's
-   * open incidents for the faults it observes and no longer reports; one that timed out,
-   * threw, or answered outside the schema resolves nothing. What didn't land is counted in the
-   * storage incident.
+   * open incidents it looked at (`looked`), no longer reports, and last saw before it started;
+   * one that timed out, threw, or answered outside the schema resolves nothing. What didn't
+   * land is counted in the storage incident.
    * @param {ProviderInfo} provider
    * @returns {Promise<{receipt: HealthReceipt | null, complete: boolean}>}
    */
@@ -199,9 +199,12 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     }
     if (!recorded.recorded) return { receipt: null, complete: false };
     const { receipt } = recorded;
-    if (run.outcome === 'answered' && provider.observes.length > 0) {
+    if (run.outcome === 'answered' && run.looked.length > 0) {
       const still = run.faults.map(fault => incidentKey(fault.providerId, fault.faultCode, fault.subjectId));
-      const resolved = await records.resolve(provider.id, still, { faults: provider.observes });
+      const resolved = await records.resolve(provider.id, still, {
+        looked: run.looked,
+        seenBy: run.receipt.verifiedAt,
+      });
       if (!resolved.recorded) return { receipt, complete: false };
       for (const incident of resolved.resolved) {
         note('incident.resolved', {
@@ -220,11 +223,11 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       const now = clock.now();
       try {
         const all = await statuses(now);
-        const { incidents: listed, read } = await records.incidentsRead();
+        const { incidents: listed, copyRead, recordsRead } = await records.incidentsRead();
         const open = listed.filter(incident => incident.state !== 'resolved');
-        // Writes failing, or a settings copy this summary couldn't read: another context may
-        // hold something, so nothing is called safe and something needs action
-        const blind = records.state() === 'fallback' || !read;
+        // Writes failing, or a store or settings copy this summary couldn't read: what's held
+        // or stored is unknown, so nothing is called safe and something needs action
+        const blind = records.state() === 'fallback' || !copyRead || !recordsRead;
         const needsAction = open.filter(incident => !incident.dismissed);
         const core = all.filter(({ provider }) => provider.core);
         const fresh = core.filter(({ status }) => status !== 'stale');
@@ -282,11 +285,13 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
           })),
           incidents: [],
           copyRead: true,
+          recordsRead: true,
           runs: await records.runs(),
         };
-        const { incidents: listed, read } = await records.incidentsRead();
+        const { incidents: listed, copyRead, recordsRead } = await records.incidentsRead();
         report.incidents = listed;
-        report.copyRead = read;
+        report.copyRead = copyRead;
+        report.recordsRead = recordsRead;
         return ready(now, report);
       } catch (error) {
         return failedFrom(error);
@@ -300,13 +305,13 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     async incidents({ includeResolved = false } = {}) {
       const now = clock.now();
       try {
-        const { incidents: all, read } = await records.incidentsRead();
+        const { incidents: all, copyRead, recordsRead } = await records.incidentsRead();
         /** @param {Incident} incident */
         const rank = incident => (incident.state === 'resolved' ? SEVERITIES.length : SEVERITIES.indexOf(incident.severity));
         const listed = all
           .filter(incident => includeResolved || incident.state !== 'resolved')
           .sort((a, b) => rank(a) - rank(b) || b.lastSeenAt - a.lastSeenAt);
-        return ready(now, { incidents: listed, copyRead: read });
+        return ready(now, { incidents: listed, copyRead, recordsRead });
       } catch (error) {
         return failedFrom(error);
       }

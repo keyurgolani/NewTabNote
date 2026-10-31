@@ -5,9 +5,9 @@
  *   data, and its implementation (a static `implementation` or a lazy `load`) holds `check()`,
  *   which answers a CheckResult (checks.js). `core` marks the providers capture depends on, the
  *   only ones that set a receipt's `capture`. `observes` lists the faults (codes.js) its check
- *   can see, possibly none: a check that answers, whatever its status, resolves the provider's
- *   open incidents for those faults that it no longer reports, and its check reports no other
- *   fault. An incident for a fault no check observes (a failure event's) resolves through a
+ *   may report or look for, possibly none, never the records' own `open-failed` and
+ *   `write-failed`. A check resolves only what it says it looked at (`looked`, checks.js). An
+ *   incident for a fault no check looks at (a failure event's) resolves through a
  *   remediation's verify step or a later success event from the same site.
  * - `remediation`: a RemediationCommand, `{id, owner, class, appliesTo, preview(), apply(),
  *   verify()}`, whose implementation holds the three steps. Slice 3 runs them through the
@@ -27,6 +27,12 @@ import { COST_CLASSES, HEALTH_GROUPS, REMEDIATION_CLASSES, REMEDIATION_GROUPS, T
 /** The longest a check may be given, and the longest a receipt stays fresh */
 export const MAX_TIMEOUT_MS = 60_000;
 export const MAX_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The faults the trust records raise and resolve themselves (trust-records.js), which no check
+ * may observe: a check in one context can't see that another context's store won't open
+ */
+const RECORDS_OWN_FAULTS = Object.freeze(['open-failed', 'write-failed']);
 
 /** A verification operation's code, as records.js's operationCode takes it */
 const OPERATION = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){0,3}$/;
@@ -65,7 +71,13 @@ export const health = defineFamily({
     freshnessMs: value => isPositiveInteger(value, MAX_FRESHNESS_MS),
     triggers: value => isList(value, item => typeof item === 'string' && /** @type {readonly string[]} */ (TRIGGERS).includes(item), 1),
     observes: value =>
-      isList(value, item => typeof item === 'string' && /** @type {readonly string[]} */ (FAULT_CODES).includes(item)),
+      isList(
+        value,
+        item =>
+          typeof item === 'string' &&
+          /** @type {readonly string[]} */ (FAULT_CODES).includes(item) &&
+          !RECORDS_OWN_FAULTS.includes(item),
+      ),
     remediations: value => value === undefined || isList(value, item => isId(item)),
     core: value => value === undefined || typeof value === 'boolean',
   },
