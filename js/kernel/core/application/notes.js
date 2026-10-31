@@ -72,6 +72,39 @@ export const invalid = () => rejected('validation', 'invalid-command');
 export const noteNotFound = () => rejected('not-found', 'note-not-found');
 
 /**
+ * Whether a command's expected version (or a derived command's source revision) is one it
+ * may carry: absent, or a count from 0
+ * @param {unknown} value
+ * @returns {value is undefined | number}
+ */
+export const isOptionalVersion = value => value === undefined || (Number.isSafeInteger(value) && Number(value) >= 0);
+
+/**
+ * The conflict a note's committed versions give a command that expects others (#17,
+ * "Versions"), asked after a `get` of the note in `tx` and before the unit writes anything: a
+ * content command's `expectedRevision` is a `revision-conflict` with the current revision, and
+ * a placement command's `expectedPlacementVersion` a `placement-conflict`, whose
+ * `currentRevision` holds the current placement version. None on an adapter without revisions,
+ * where the write over a newer one wins, or for a note the get didn't find.
+ * @param {Tx} tx
+ * @param {string} noteId
+ * @param {{expectedRevision?: number, expectedPlacementVersion?: number}} expected
+ * @returns {import('../contracts/outcomes.js').Conflict | undefined}
+ */
+export function versionConflict(tx, noteId, { expectedRevision, expectedPlacementVersion }) {
+  if (expectedRevision === undefined && expectedPlacementVersion === undefined) return undefined;
+  const versions = tx.versions('notes', noteId);
+  if (!versions) return undefined;
+  if (expectedRevision !== undefined && versions.revision !== expectedRevision) {
+    return conflict('revision-conflict', versions.revision);
+  }
+  if (expectedPlacementVersion !== undefined && versions.placementVersion !== expectedPlacementVersion) {
+    return conflict('placement-conflict', versions.placementVersion);
+  }
+  return undefined;
+}
+
+/**
  * What a bulk command is refused for before any of it runs: an action it doesn't know, or
  * notes that aren't a list of ids. The kernel asks before the adapter recalls the command,
  * which reserves a bulk command's key, so a refused one leaves no record and the corrected
@@ -92,17 +125,21 @@ export const noteRecord = noteId => () => ({ store: 'notes', key: noteId });
 
 /**
  * A unit that reads the note and puts what `change` makes of it, in one transaction.
- * `change` returns null to put nothing.
+ * `change` returns null to put nothing. A version the command expects is checked before
+ * anything is put (versionConflict).
  * @param {string} noteId
  * @param {(note: NoteRecord) => NoteRecord | null} change
+ * @param {{expectedRevision?: number, expectedPlacementVersion?: number}} [expected]
  * @returns {Unit}
  */
-function changeNote(noteId, change) {
+function changeNote(noteId, change, expected = {}) {
   return {
     stores: ['notes'],
     async run(tx) {
       const note = await tx.get('notes', noteId);
       if (!note) return noteNotFound();
+      const stale = versionConflict(tx, noteId, expected);
+      if (stale) return stale;
       const next = change(note);
       if (next) tx.put('notes', next);
     },
@@ -283,18 +320,21 @@ async function dailyTemplateBlocks(tx, templateId, target) {
 
 /**
  * A command that sets placement fields on one note (pinned, archived, trashed), so the
- * note's content revision stays where it was.
- * @param {import('../contracts/commands.js').Command & {noteId: unknown}} command
+ * note's content revision stays where it was and its placement version moves. One that
+ * carries `expectedPlacementVersion` is a `placement-conflict` when the note has another.
+ * @param {import('../contracts/commands.js').Command & {noteId: unknown, expectedPlacementVersion?: unknown}} command
  * @param {string} code
  * @param {(note: NoteRecord) => NoteRecord} change
  */
 function setFields(command, code, change) {
-  const { noteId } = command;
-  if (!isId(noteId)) return invalid();
-  return unitsWork(command, [changeNote(noteId, change)], () => committed(code, [noteId]), {
-    primary: noteRecord(noteId),
-    scope: 'placement',
-  });
+  const { noteId, expectedPlacementVersion } = command;
+  if (!isId(noteId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
+  return unitsWork(
+    command,
+    [changeNote(noteId, change, { expectedPlacementVersion })],
+    () => committed(code, [noteId]),
+    { primary: noteRecord(noteId), scope: 'placement' },
+  );
 }
 
 /** @type {{[T in NoteCommandType]: CommandHandler<T>}} */
@@ -343,18 +383,23 @@ export const noteCommands = {
   },
 
   renameNote(command, { clock }) {
-    const { noteId, name, origin = 'typed' } = command;
+    const { noteId, name, origin = 'typed', expectedRevision } = command;
     if (!isId(noteId) || typeof name !== 'string' || (origin !== 'typed' && origin !== 'generated')) return invalid();
+    if (!isOptionalVersion(expectedRevision)) return invalid();
     const now = clock.now();
     // Only a title that changes moves the revision, so renaming to the same title never turns
     // the editor's next save into a conflict
     let renamed = false;
-    const rename = changeNote(noteId, note => {
-      renamed = note.name !== name;
-      return origin === 'typed'
-        ? { ...note, name, titleManuallySet: renamed ? true : note.titleManuallySet, updatedAt: now }
-        : { ...note, name, lastAutoTitleAt: now, updatedAt: now };
-    });
+    const rename = changeNote(
+      noteId,
+      note => {
+        renamed = note.name !== name;
+        return origin === 'typed'
+          ? { ...note, name, titleManuallySet: renamed ? true : note.titleManuallySet, updatedAt: now }
+          : { ...note, name, lastAutoTitleAt: now, updatedAt: now };
+      },
+      { expectedRevision },
+    );
     return unitsWork(
       command,
       [rename, renameSearchEntry(noteId, name, now)],
@@ -391,8 +436,8 @@ export const noteCommands = {
   },
 
   trashNote(command, { clock }) {
-    const { noteId } = command;
-    if (!isId(noteId)) return invalid();
+    const { noteId, expectedPlacementVersion } = command;
+    if (!isId(noteId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
     const now = clock.now();
     let deleting = false;
     // One transaction decides and does it, so a title or a save that commits in between can't
@@ -403,6 +448,8 @@ export const noteCommands = {
       async run(tx) {
         const note = await tx.get('notes', noteId);
         if (!note) return noteNotFound();
+        const stale = versionConflict(tx, noteId, { expectedPlacementVersion });
+        if (stale) return stale;
         const blocks = isUntitled(note) ? await tx.getAllByIndex('blocks', 'canvasId', noteId) : null;
         // An untitled note with nothing in it is deleted, with what Storage.permanentlyDeleteNote deletes
         deleting = blocks !== null && isEmpty(blocks);
@@ -420,8 +467,8 @@ export const noteCommands = {
   },
 
   moveNoteToFolder(command, { clock }) {
-    const { noteId, folderId } = command;
-    if (!isId(noteId) || !isIdOrNull(folderId)) return invalid();
+    const { noteId, folderId, expectedPlacementVersion } = command;
+    if (!isId(noteId) || !isIdOrNull(folderId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
     const now = clock.now();
     let moved = false;
     /** @type {Unit} */
@@ -432,6 +479,8 @@ export const noteCommands = {
         moved = false;
         const note = await tx.get('notes', noteId);
         if (!note) return noteNotFound();
+        const stale = versionConflict(tx, noteId, { expectedPlacementVersion });
+        if (stale) return stale;
         // A folder deleted since the view showed it is refused, so no note is filed out of sight
         if (folderId !== null && !(await tx.get('folders', folderId))) return rejected('not-found', 'folder-not-found');
         // Already there: nothing to write
@@ -463,14 +512,16 @@ export const noteCommands = {
   },
 
   deleteNotePermanently(command) {
-    const { noteId } = command;
-    if (!isId(noteId)) return invalid();
+    const { noteId, expectedPlacementVersion } = command;
+    if (!isId(noteId) || !isOptionalVersion(expectedPlacementVersion)) return invalid();
     /** @type {Unit} */
     const remove = {
       stores: DELETED_WITH_NOTE,
       async run(tx) {
         const note = await tx.get('notes', noteId);
         if (!note) return noteNotFound();
+        const stale = versionConflict(tx, noteId, { expectedPlacementVersion });
+        if (stale) return stale;
         // Only a note in the trash, as committed: one restored since the trash view showed it stays
         if (!note.trashed) return rejected('validation', 'note-not-trashed');
         await deleteNoteIn(tx, noteId);
@@ -509,7 +560,7 @@ export const noteCommands = {
     if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
     if (titleOrigin !== 'typed' && titleOrigin !== 'generated') return invalid();
     if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
-    if (expectedRevision !== undefined && !Number.isInteger(expectedRevision)) return invalid();
+    if (!isOptionalVersion(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
@@ -521,16 +572,18 @@ export const noteCommands = {
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         titleKept = false;
-        // The block puts go out before anything is awaited, as in Storage.saveNoteWithBlocks,
-        // so a page-hide flush still stores them if the page goes before the read returns
-        for (const block of records) tx.put('blocks', block);
+        // Without an expected revision, the block puts go out before anything is awaited, as in
+        // Storage.saveNoteWithBlocks, so a page-hide flush still stores them if the page goes
+        // before the read returns. With one, the revision is checked first, so a conflict
+        // writes nothing of the save (ports/repository.js, WriteScope).
+        const checked = expectedRevision !== undefined;
+        if (!checked) for (const block of records) tx.put('blocks', block);
         const note = await tx.get('notes', noteId);
         // A note deleted since the editor loaded it stays deleted, blocks included
         if (!note) return noteNotFound();
-        const revision = tx.revision('notes', noteId);
-        if (expectedRevision !== undefined && revision !== undefined && revision !== expectedRevision) {
-          return conflict('revision-conflict', revision);
-        }
+        const stale = versionConflict(tx, noteId, { expectedRevision });
+        if (stale) return stale;
+        if (checked) for (const block of records) tx.put('blocks', block);
         /** @type {NoteRecord} */
         const next = { ...note, updatedAt: now };
         if (preview !== undefined) next.preview = preview;
@@ -569,15 +622,23 @@ export const noteCommands = {
   },
 
   deleteBlocks(command) {
-    const { noteId, blockIds } = command;
-    if (!isId(noteId) || !isIdList(blockIds)) return invalid();
+    const { noteId, blockIds, expectedRevision } = command;
+    if (!isId(noteId) || !isIdList(blockIds) || !isOptionalVersion(expectedRevision)) return invalid();
     let deleted = false;
+    // The note is read only to check the revision the command expects, so one without it
+    // reads and writes only blocks, as it always has
+    const checked = expectedRevision !== undefined;
     /** @type {Unit} */
     const remove = {
-      stores: ['blocks'],
+      stores: checked ? ['notes', 'blocks'] : ['blocks'],
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         deleted = false;
+        if (checked) {
+          await tx.get('notes', noteId);
+          const stale = versionConflict(tx, noteId, { expectedRevision });
+          if (stale) return stale;
+        }
         for (const blockId of new Set(blockIds)) {
           const block = await tx.get('blocks', blockId);
           // Never saved, or deleted already
@@ -676,22 +737,36 @@ export const noteCommands = {
   },
 
   attachInsights(command, { clock }) {
-    const { noteId, insights, contentHash } = command;
-    if (!isId(noteId) || !isOptionalString(contentHash)) return invalid();
+    const { noteId, insights, contentHash, sourceRevision } = command;
+    if (!isId(noteId) || !isOptionalString(contentHash) || !isOptionalVersion(sourceRevision)) return invalid();
     const now = clock.now();
+    // Insights made from an older revision than the ones the note has are dropped, so a slow
+    // job never puts older insights over newer ones (#17, "Versions"). Ones made from any
+    // revision at or past it land, so a note being typed in still gets new insights.
+    let stale = false;
+    /** @type {Unit} */
+    const attach = {
+      stores: ['notes'],
+      async run(tx) {
+        // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
+        stale = false;
+        const note = await tx.get('notes', noteId);
+        if (!note) return noteNotFound();
+        const versions = sourceRevision === undefined ? undefined : tx.versions('notes', noteId);
+        stale = versions !== undefined && /** @type {number} */ (sourceRevision) < versions.sourceRevision;
+        if (stale) return;
+        /** @type {NoteRecord} */
+        const next = { ...note, insights, lastInsightsExtractedAt: now };
+        if (contentHash !== undefined) next.lastInsightsContentHash = contentHash;
+        tx.put('notes', next);
+      },
+    };
     return unitsWork(
       command,
-      [
-        changeNote(noteId, note => {
-          /** @type {NoteRecord} */
-          const next = { ...note, insights, lastInsightsExtractedAt: now };
-          if (contentHash !== undefined) next.lastInsightsContentHash = contentHash;
-          return next;
-        }),
-      ],
-      () => committed('insights-attached', [noteId]),
+      [attach],
+      () => (stale ? committed('insights-stale', [], { severity: 'info' }) : committed('insights-attached', [noteId])),
       // Held to the insight fields, so it can't change the note's name, placement, or lifecycle
-      { primary: noteRecord(noteId), scope: 'derived' },
+      { primary: noteRecord(noteId), scope: 'derived', sourceRevision },
     );
   },
 
@@ -826,12 +901,19 @@ export const noteQueries = {
 
   async getNote({ noteId }, { adapter, clock }) {
     if (!isId(noteId)) return failed('validation', 'invalid-query');
-    const { note, revision } = await adapter.read(['notes'], async tx => ({
+    const { note, versions } = await adapter.read(['notes'], async tx => ({
       note: await tx.get('notes', noteId),
-      revision: tx.revision('notes', noteId),
+      versions: tx.versions('notes', noteId),
     }));
     if (!note) return empty(clock.now());
-    return ready(clock.now(), revision === undefined ? { note } : { note, revision });
+    // The versions a later command sends back as what it expects: `revision` for the editor's
+    // save, `placementVersion` for filing, pinning, and the trash (#17, "Versions")
+    return ready(
+      clock.now(),
+      versions === undefined
+        ? { note }
+        : { note, revision: versions.revision, placementVersion: versions.placementVersion },
+    );
   },
 
   async getNoteBlocks({ noteId }, { adapter, clock }) {

@@ -112,6 +112,20 @@ const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
 /** The workspace session keys Storage.initializeDefaultSettings writes on first run */
 const STORAGE_DEFAULT_SESSION = Object.freeze({ openTabs: null, activeTabIndex: 0 });
 
+/** The versions #17's IndexedDB adapter keeps on each note it writes (adapters/indexeddb/versions.js) */
+const VERSION_FIELDS = Object.freeze(['revision', 'placementVersion', 'sourceRevision']);
+
+/**
+ * A note's own fields, without the versions an adapter may keep on its record, which outcomes
+ * and getNote report, so one note compares alike on every adapter
+ * @template {Record<string, unknown> | undefined} T
+ * @param {T} note
+ * @returns {T}
+ */
+const withoutVersions = note =>
+  note &&
+  /** @type {T} */ (Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field))));
+
 /**
  * @param {ContractFixture} fixture
  */
@@ -155,7 +169,14 @@ export function runContractSuite(fixture) {
      * @param {string} noteId
      * @returns {Promise<NoteRecord | undefined>}
      */
-    const noteOf = async noteId => {
+    const noteOf = async noteId => withoutVersions(await storedNoteOf(noteId));
+
+    /**
+     * The note as getNote reads it, versions included, as every other query reads it
+     * @param {string} noteId
+     * @returns {Promise<NoteRecord | undefined>}
+     */
+    const storedNoteOf = async noteId => {
       const state = await kernel.query({ type: 'getNote', noteId });
       return state.kind === 'ready' ? state.data.note : undefined;
     };
@@ -2393,7 +2414,7 @@ export function runContractSuite(fixture) {
           .filter(/** @returns {id is string} */ id => typeof id === 'string' && id !== 'gone');
         assert.deepEqual(state.kind === 'ready' && state.data.map(note => note.id), inLinkOrder);
         assert.deepEqual([...inLinkOrder].sort(), ['archived', 'plain', 'trashed']);
-        assert.deepEqual(state.kind === 'ready' && state.data[0], await noteOf(inLinkOrder[0]));
+        assert.deepEqual(state.kind === 'ready' && state.data[0], await storedNoteOf(inLinkOrder[0]));
         assert.deepEqual(await kernel.query({ type: 'getBacklinks', noteId: 'plain' }), { kind: 'empty', asOf: NOW });
         assert.deepEqual(await kernel.query(/** @type {any} */ ({ type: 'getBacklinks', noteId: '' })), {
           kind: 'failed',
@@ -2421,7 +2442,7 @@ export function runContractSuite(fixture) {
           byId(
             await Promise.all(
               ['archived', 'plain', 'template', 'trashed'].map(
-                async id => /** @type {NoteRecord} */ (await noteOf(id)),
+                async id => /** @type {NoteRecord} */ (await storedNoteOf(id)),
               ),
             ),
           ),
@@ -2445,7 +2466,7 @@ export function runContractSuite(fixture) {
           found.notes.map(note => note.id),
           ['n2', 'n3', 'no-entry'],
         );
-        assert.deepEqual(found.notes[0], await noteOf('n2'));
+        assert.deepEqual(found.notes[0], await storedNoteOf('n2'));
         assert.deepEqual(found.searchEntries, [await searchEntryOf('n2'), await searchEntryOf('n3')]);
         assert.deepEqual(await kernel.query({ type: 'getNotesByIds', noteIds: ['gone'] }), {
           kind: 'empty',

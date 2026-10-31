@@ -1,7 +1,7 @@
 'use strict';
 
 // #17 PR 1b in the shipped service worker (js/background.js): it upgrades a version-8 profile
-// to 9 at start, answers a page's storage.migrate once its run has finished (Q12), and while an
+// to this build's version (10 since #17 PR 2a) at start, answers a page's storage.migrate once its run has finished (Q12), and while an
 // older build's open page blocks the upgrade, a capture says "Not captured" with why, at once,
 // rather than wait or claim it saved.
 
@@ -9,6 +9,9 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, requestToPromise, waitFor, note, plain } = require('./helpers/legacy-env');
 const { startWorker } = require('./helpers/load-background');
+
+// This build's version, which the worker's run brings a profile to (js/storage.js's dbVersion)
+const THIS_VERSION = 10;
 
 const TAB = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
 
@@ -28,13 +31,13 @@ function message(env, request) {
 }
 
 describe('the worker upgrades the database and answers the pages that wait on it', () => {
-  it('upgrades a version-8 profile to 9 at start, every record kept, and answers storage.migrate with the outcome', async () => {
+  it("upgrades a version-8 profile to this build's version at start, every record kept, and answers storage.migrate with the outcome", async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await createDatabase(env.indexedDB, { records: { canvases: [note('n1', { name: 'Kept' })] } });
     await startWorker(env);
     assert.deepEqual(await message(env, { type: 'storage.migrate' }), { status: 'migrated' });
     const dump = await dumpDatabase(env.indexedDB);
-    assert.equal(dump.version, 9);
+    assert.equal(dump.version, THIS_VERSION);
     assert.deepEqual(Object.keys(recordsOf(dump, 'canvases')), ['n1']);
     assert.ok(Object.keys(dump.stores).includes('meta') && Object.keys(dump.stores).includes('migrations'));
     // A second ask on the same worker answers at once, the same way
@@ -63,12 +66,12 @@ describe('the worker upgrades the database and answers the pages that wait on it
       blockerOpen = false;
       assert.deepEqual(await answer, { status: 'migrated' });
       const upgraded = await dumpDatabase(env.indexedDB);
-      assert.equal(upgraded.version, 9);
+      assert.equal(upgraded.version, THIS_VERSION);
       assert.deepEqual(Object.keys(recordsOf(upgraded, 'canvases')), ['n1'], 'nothing was captured while blocked');
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, TAB);
       await waitFor(() => env.chrome.notifications.length === 2, { withinMs: 10000, message: 'the second notification' });
       assert.equal(env.chrome.notifications[1].title, 'Captured to New Tab Note');
-      assert.equal((await dumpDatabase(env.indexedDB)).version, 9);
+      assert.equal((await dumpDatabase(env.indexedDB)).version, THIS_VERSION);
     } finally {
       if (blockerOpen) blocker.close();
     }

@@ -3,7 +3,7 @@
 // AC6: startup never deletes the database or its records, keeps a version-8
 // database with stores missing (one recovery copy, features off), and the
 // integrity check is read-only.
-// AC7: a database a newer build upgraded (since #17 PR 1b, one past version 9)
+// AC7: a database a newer build upgraded (one past this build's version, 10 since #17 PR 2a)
 // stays byte-identical on every surface, with no chrome.storage.local writes but
 // the worker's record of its migration run, and each surface shows the guard.
 
@@ -20,6 +20,8 @@ const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
 const TEST_KEY = 'test-only-api-key';
+// One past this build's version (js/storage.js's dbVersion, 10 since #17 PR 2a), as a newer build upgrades to
+const NEWER_VERSION = 11;
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const APP_FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js',
@@ -386,34 +388,34 @@ describe('startup: version 8 without elements', () => {
   });
 });
 
-describe('a database a newer build upgraded, past version 9 (AC7)', () => {
+describe("a database a newer build upgraded, past this build's version (AC7)", () => {
   it('Storage.init refuses with NEWER_SCHEMA and changes nothing', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 10 });
+    await fixture(env.indexedDB, { version: NEWER_VERSION });
     const before = await dumpDatabase(env.indexedDB);
     const { Storage, error } = await startStorage(env);
 
     assert.equal(error.code, 'NEWER_SCHEMA');
     assert.equal(error.constructor.name, 'Error', 'a plain Error the service worker can build');
     assert.equal(Storage.openState, 'newer-version');
-    assert.equal(Storage.onDiskVersion, 10);
+    assert.equal(Storage.onDiskVersion, NEWER_VERSION);
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     assert.deepEqual(env.chrome.writes(), []);
   });
 
   it('a database a newer build upgrades right after the check is refused the same way', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 10 });
+    await fixture(env.indexedDB, { version: NEWER_VERSION });
     env.load(...STORAGE_FILES);
     const Storage = env.get('Storage');
     Storage.checkAndRepairDatabase = async () => {}; // as if a newer build upgraded right after the check
     await assert.rejects(Storage.init(), { code: 'NEWER_SCHEMA' });
     assert.equal(Storage.openState, 'newer-version');
-    assert.equal(Storage.onDiskVersion, 10);
+    assert.equal(Storage.onDiskVersion, NEWER_VERSION);
   });
 
   it('the new tab shows the guard, and Export downloads every store except settings', async () => {
-    const { env, before, downloads } = await startApp({ version: 10 });
+    const { env, before, downloads } = await startApp({ version: NEWER_VERSION });
     const guard = env.document.querySelector('.storage-guard');
     assert.equal(guard.querySelector('h1').textContent, GUARD_TITLE);
     assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
@@ -424,10 +426,10 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
     buttons[0].click();
     await waitFor(() => downloads.length > 0, { message: 'raw export download' });
     const [{ data, filename }] = downloads;
-    assert.match(filename, /^newtabnote-raw-v10-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$/);
+    assert.match(filename, new RegExp(String.raw`^newtabnote-raw-v${NEWER_VERSION}-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$`));
     const raw = JSON.parse(data);
     assert.equal(raw.rawExport, true);
-    assert.equal(raw.onDiskVersion, 10);
+    assert.equal(raw.onDiskVersion, NEWER_VERSION);
     assert.equal(typeof raw.exportedAt, 'number');
     assert.deepEqual(Object.keys(raw.stores).sort(),
       ['canvases', 'elements', 'folders', 'links', 'media', 'meta', 'search_index', 'snapshots', 'themes', 'vectors']);
@@ -452,7 +454,7 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
 
   it('the popup shows the guard with one Open new tab button and disables quick note', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 10 });
+    await fixture(env.indexedDB, { version: NEWER_VERSION });
     const before = await dumpDatabase(env.indexedDB);
     const els = env.document.stub([
       { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
@@ -479,7 +481,7 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
 
   it('the side panel shows the guard with one Open new tab button', async () => {
     const env = createLegacyEnv();
-    await fixture(env.indexedDB, { version: 10 });
+    await fixture(env.indexedDB, { version: NEWER_VERSION });
     const before = await dumpDatabase(env.indexedDB);
     const els = env.document.stub(['open-notes', 'status', 'status-count', 'sections', 'empty-state']);
     const openButton = env.document.createElement('button');
@@ -503,7 +505,7 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
 
   it('the context menu and keyboard command refuse with a "Not captured" notification', async () => {
     const env = createLegacyEnv({ context: 'worker' });
-    await fixture(env.indexedDB, { version: 10 });
+    await fixture(env.indexedDB, { version: NEWER_VERSION });
     const before = await dumpDatabase(env.indexedDB);
     await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
@@ -564,7 +566,7 @@ describe("the new tab when its kernel can't open storage for another reason", ()
 
 describe('the export notice in the guard states (NTN-18 slice 0)', () => {
   for (const [label, spec, openState] of [
-    ['a database past version 9', { version: 10 }, 'newer-version'],
+    ["a database past this build's version", { version: NEWER_VERSION }, 'newer-version'],
     ['a version-8 database without elements', { omit: ['elements'] }, 'missing-core-stores'],
   ]) {
     it(`${label}: the new tab shows the guard without deciding on the notice, which isn't due there`, async () => {
@@ -663,10 +665,10 @@ describe('background capture on a version-8 database', () => {
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
     await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'capture notification' });
-    // The worker's run brought it to 9. A newer build opens it at 10, which an open connection
+    // The worker's run brought it to this build's version. A newer build opens it one past, which an open connection
     // would block
     const upgraded = await new Promise((resolve, reject) => {
-      const request = env.indexedDB.open('CanvasTabDB', 10);
+      const request = env.indexedDB.open('CanvasTabDB', NEWER_VERSION);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("the worker's connection blocked the upgrade"));
