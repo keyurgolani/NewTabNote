@@ -13,7 +13,9 @@
 export const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
 
 /**
- * @typedef {{now(): number, advance(ms?: number): number}} TestClock
+ * A clock the test moves, in a zone it can change: UTC until it does, so a Daily Note is keyed
+ * by the UTC date unless a test names a zone (#17 PR 3b)
+ * @typedef {{now(): number, advance(ms?: number): number, zone(): string, setZone(zone: string): void}} TestClock
  */
 
 /**
@@ -22,11 +24,16 @@ export const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
  */
 export function testClock(start = NOW) {
   let now = start;
+  let zone = 'UTC';
   return {
     now: () => now,
     advance(ms = 1000) {
       now += ms;
       return now;
+    },
+    zone: () => zone,
+    setZone(next) {
+      zone = next;
     },
   };
 }
