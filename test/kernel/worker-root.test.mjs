@@ -20,6 +20,7 @@ import {
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { INTEGRITY_KEY } from '../../js/kernel/adapters/indexeddb/integrity.js';
 import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import {
@@ -101,6 +102,48 @@ describe("the worker's composition root", () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(await swept(), record);
     assert.equal((await recordsOf(of, 'operations')).length, 1);
+  });
+
+  it('runs the read-only integrity check the new tab ran at its start, logs what it found, and not again within a day (#17 PR 4a, Q9)', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    // A block whose note is gone, which 1.4.x's integrity check logged and never deleted
+    const db = await legacyEnv.requestToPromise(of.real.open('CanvasTabDB'));
+    const seed = db.transaction('elements', 'readwrite');
+    seed.objectStore('elements').put(legacyEnv.block('orphan-1', 'gone-note', 0, 'kept as it is'));
+    await new Promise(resolve => {
+      seed.oncomplete = resolve;
+    });
+    db.close();
+    /** @type {unknown[][]} */
+    const logged = [];
+    const info = console.info;
+    console.info = (...args) => logged.push(args);
+    try {
+      const checked = async () => (await recordsOf(of, 'meta')).find(record => record.key === INTEGRITY_KEY);
+      const worker = createWorkerClient(hostOf(of));
+      assert.equal(await worker.whenReady(), null);
+      assert.equal((await worker.migration.done).status, 'migrated');
+      // The check runs behind the kernel, so the test waits on it in real time
+      const deadline = Date.now() + 10_000;
+      while (!(await checked()) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      const record = await checked();
+      assert.equal(typeof record?.checkedAt, 'number');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.deepEqual(
+        logged.filter(([text]) => String(text).startsWith('Integrity check')),
+        [['Integrity check (read-only) found orphaned records:', { orphanedElements: 1 }]],
+      );
+      // It deleted nothing
+      assert.ok((await recordsOf(of, 'elements')).some(element => element.id === 'orphan-1'));
+      // The next start, within the day, checks nothing
+      const again = createWorkerClient(hostOf(of));
+      assert.equal(await again.whenReady(), null);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.deepEqual(await checked(), record);
+      assert.equal(logged.filter(([text]) => String(text).startsWith('Integrity check')).length, 1);
+    } finally {
+      console.info = info;
+    }
   });
 
   it('short of space: records it, opens the database as it is, and captures still commit on 8', async () => {

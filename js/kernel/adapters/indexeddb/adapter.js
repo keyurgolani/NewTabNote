@@ -83,6 +83,7 @@ import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
+import { checkIntegrity } from './integrity.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
 import { copyMissingStores } from './recovery-copies.js';
 import {
@@ -163,9 +164,11 @@ import { createVersionTracker } from './versions.js';
  *   ledger: IdempotencyLedger,
  *   commitLog: CommitLog,
  *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
+ *   checkIntegrity: () => ReturnType<typeof checkIntegrity>,
  * }} IndexedDbAdapter
  *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
- *   `sweepLedger` their retention (ledger.js), which only the worker runs. `beforeClose`,
+ *   `sweepLedger` their retention (ledger.js), which only the worker runs, as it runs
+ *   `checkIntegrity`, the read-only check the new tab ran at its start (integrity.js). `beforeClose`,
  *   `openState`, `missingStores`, and `upgraded` are the connection's (connection.js), what
  *   the new tab read of js/storage.js's: a flush before another context's upgrade closes it,
  *   the state App and the export notice read, the legacy stores a degraded database lacks, and
@@ -936,5 +939,6 @@ export function createIndexedDbAdapter({
       return commitLog;
     },
     sweepLedger: () => sweepLedger({ database, now: clock.now() }),
+    checkIntegrity: () => checkIntegrity({ database, now: clock.now() }),
   });
 }

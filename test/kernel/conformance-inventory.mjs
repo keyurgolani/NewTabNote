@@ -164,6 +164,8 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
+  // #17 PR 4a: the read-only integrity check the worker runs at its start, through the adapter
+  'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
