@@ -14,11 +14,11 @@
  * records stay, since 1.3.0 and 1.4.0 delete the whole database when one is missing. Transform
  * steps (`kind: 'transform'`, logical versions, #17 PR 3) run in batches outside the upgrade.
  *
- * This build defines structural steps 9 and 10 and transform step logical 2 (#17 PR 3a), and
- * #17 PR 3b adds 11. Since #17 PR 1b the service worker runs the structural steps at start,
- * through migrate.js, and schema.js's DB_VERSION is the newest one's: 10 since #17 PR 2a. A
- * profile at 8 runs both in its one `versionchange`. The worker runs the transform steps after
- * that, through transforms.js.
+ * This build defines structural steps 9, 10, and 11 (#17 PR 3b) and transform steps logical 2
+ * (#17 PR 3a) and 3 (#17 PR 3b). Since #17 PR 1b the service worker runs the structural steps
+ * at start, through migrate.js, and schema.js's DB_VERSION is the newest one's: 11 since #17 PR
+ * 3b. A profile at 8 runs all three in its one `versionchange`. The worker runs the transform
+ * steps after that, through transforms.js.
  */
 
 import { STORE_SCHEMAS } from './schema.js';
@@ -79,6 +79,12 @@ export const OPERATIONS_STORE = 'operations';
 export const CHANGES_STORE = 'changes';
 export const CONFLICTS_STORE = 'conflicts';
 export const TOMBSTONES_STORE = 'tombstones';
+/**
+ * The store step 11 adds (#17 PR 3b): `{dailyKey, noteId}` for each local date, naming the Daily
+ * Note that holds it (domain/daily.js). It's derived from the notes, which the kernel's lookups
+ * repair it from (application/notes.js), and holds ids and dates, never note text.
+ */
+export const DAILY_INDEX_STORE = 'daily_index';
 /** `meta`'s record of the change log's `head` (the last seq) and `floor` (the last one pruned) */
 export const CHANGES_KEY = 'changes';
 
@@ -189,8 +195,35 @@ const STEP_10 = Object.freeze({
   },
 });
 
+/** @type {Readonly<Record<string, StoreShape>>} */
+const STORES_ADDED_AT_11 = Object.freeze({
+  [DAILY_INDEX_STORE]: { keyPath: 'dailyKey', autoIncrement: false, indexes: [] },
+});
+
+/**
+ * Step 11 (#17 PR 3b): the daily index (STORES_ADDED_AT_11), empty, and `meta.schema` at
+ * structural version 11 with the logical version it had. Nothing else changes: logical 3 fills
+ * the index, and each Daily Note's key, after the upgrade (transforms.js).
+ * @type {StructuralStep}
+ */
+const STEP_11 = Object.freeze({
+  id: 'structural-11',
+  kind: /** @type {const} */ ('structural'),
+  to: 11,
+  apply(/** @type {IDBDatabase} */ db, /** @type {IDBTransaction} */ tx, /** @type {StepContext} */ context) {
+    for (const [name, shape] of Object.entries(STORES_ADDED_AT_11)) {
+      if (!db.objectStoreNames.contains(name)) createStore(db, name, shape);
+    }
+    tx.objectStore(META_STORE).put({
+      key: SCHEMA_KEY,
+      structuralVersion: 11,
+      logicalVersion: context.logicalVersion ?? BASE_LOGICAL_VERSION,
+    });
+  },
+});
+
 /** Every step, in order */
-export const STEPS = Object.freeze([STEP_9, STEP_10]);
+export const STEPS = Object.freeze([STEP_9, STEP_10, STEP_11]);
 
 /**
  * A transform step (#17 PR 3a): a logical version that fills fields in place, in resumable
@@ -205,8 +238,16 @@ export const STEPS = Object.freeze([STEP_9, STEP_10]);
  */
 const LOGICAL_2 = Object.freeze({ id: 'logical-2', kind: /** @type {const} */ ('transform'), to: 2 });
 
+/**
+ * Logical 3 (#17 PR 3b): each Daily Note's local key, its zone, and the note that holds the key
+ * when another does, by #17's rules (domain/daily.js), and the daily index's entries
+ * (transforms.js)
+ * @type {TransformStep}
+ */
+const LOGICAL_3 = Object.freeze({ id: 'logical-3', kind: /** @type {const} */ ('transform'), to: 3 });
+
 /** Every transform step, in order */
-export const TRANSFORM_STEPS = Object.freeze([LOGICAL_2]);
+export const TRANSFORM_STEPS = Object.freeze([LOGICAL_2, LOGICAL_3]);
 
 /** The newest logical version this build's transforms reach */
 export const LATEST_LOGICAL = TRANSFORM_STEPS.reduce((latest, step) => Math.max(latest, step.to), 1);
@@ -245,6 +286,14 @@ export function schemaAt(version) {
   if (version === 9) return { ...legacySchema(), ...structuredClone(STORES_ADDED_AT_9) };
   if (version === 10) {
     return { ...legacySchema(), ...structuredClone(STORES_ADDED_AT_9), ...structuredClone(STORES_ADDED_AT_10) };
+  }
+  if (version === 11) {
+    return {
+      ...legacySchema(),
+      ...structuredClone(STORES_ADDED_AT_9),
+      ...structuredClone(STORES_ADDED_AT_10),
+      ...structuredClone(STORES_ADDED_AT_11),
+    };
   }
   return null;
 }
