@@ -442,12 +442,17 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     holding.set(key, (holding.get(key) || 0) + 1);
     try {
       // A store that isn't open here isn't asked again just to time the sighting
+      const risk = sighting.severity === 'capture-risk';
       const stored = opened
-        ? await run(['incidents'], 'readonly', async tx => (await tx.getAllByIndex('incidents', 'key', key))[0])
+        ? await run(risk ? ['incidents', 'receipts'] : ['incidents'], 'readonly', async tx => ({
+            incident: (await tx.getAllByIndex('incidents', 'key', key))[0],
+            floor: risk ? await afterCoreReceipts(tx) : 0,
+          }))
         : { ok: false };
-      const when = stored.ok
-        ? directAt(/** @type {Incident | undefined} */ (/** @type {{value: unknown}} */ (stored).value), 'raise', at)
-        : at;
+      const read = stored.ok
+        ? /** @type {{value: {incident: Incident | undefined, floor: number}}} */ (/** @type {unknown} */ (stored)).value
+        : null;
+      const when = read ? Math.max(directAt(read.incident, 'raise', at), read.floor) : at;
       let entry = held.get(key);
       if (!entry) {
         const others = [...held.keys()].filter(item => !OWN_KEYS.has(item)).length;
@@ -901,6 +906,23 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
+   * The earliest time a capture-risk sighting is recorded at: just after the newest receipt of
+   * a core provider (capture, storage), so a probe that passed before the failure never reads
+   * as after it, however the clock stepped (use-cases.js calls capture safe only on a receipt
+   * newer than every capture-risk sighting). Like directAt after a resolution.
+   * @param {TrustTx} tx
+   */
+  const afterCoreReceipts = async tx => {
+    let newest = -1;
+    for (const provider of STORAGE_PROVIDERS) {
+      for (const receipt of /** @type {HealthReceipt[]} */ (await tx.getAllByIndex('receipts', 'providerId', provider))) {
+        newest = Math.max(newest, receipt.verifiedAt);
+      }
+    }
+    return newest + 1;
+  };
+
+  /**
    * Raises an incident, or updates the one with its key. When the store won't take it,
    * `recorded` is false, and a storage incident is `held` (in memory and the settings copy).
    * @param {RaiseInput} input
@@ -909,10 +931,12 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   const raise = async input => {
     const sighting = sightingOf(input);
     const now = clock.now();
-    const stored = await write(['incidents'], async tx => {
+    const risk = sighting.severity === 'capture-risk';
+    const stored = await write(risk ? ['incidents', 'receipts'] : ['incidents'], async tx => {
       const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
       const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', key));
-      const op = raiseOp(ids, sighting, directAt(existing, 'raise', now), [contextId]);
+      const at = Math.max(directAt(existing, 'raise', now), risk ? await afterCoreReceipts(tx) : 0);
+      const op = raiseOp(ids, sighting, at, [contextId]);
       const incident = parseRecord(incidentSchema, applyRaise(existing, op), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
@@ -990,17 +1014,23 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
-   * Sets or clears an open incident's dismissed flag. Answers the incident, or null when it's
-   * resolved, missing, or the store won't take the write.
+   * Sets or clears an open incident's dismissed flag, in one write. With `seen`, the
+   * occurrences the user saw, a capture-risk incident sighted since isn't dismissed: it answers
+   * `changed` with the incident as it is, since the dismissal would cover a failure they never
+   * saw. `missing` for one that's resolved or gone, `failed` when the store won't take it.
    * @param {string} id
    * @param {boolean} dismissed
-   * @returns {Promise<Incident | null>}
+   * @param {number} [seen]
+   * @returns {Promise<{status: 'done' | 'changed', incident: Incident} | {status: 'missing' | 'failed'}>}
    */
-  const dismiss = async (id, dismissed) => {
+  const dismissSeen = async (id, dismissed, seen) => {
     const now = clock.now();
     const stored = await write(['incidents'], async tx => {
       const incident = /** @type {Incident | undefined} */ (await tx.get('incidents', id));
-      if (!incident) return null;
+      if (!incident) return /** @type {const} */ ({ status: 'missing' });
+      if (dismissed && seen !== undefined && incident.severity === 'capture-risk' && incident.occurrences !== seen) {
+        return /** @type {const} */ ({ status: 'changed', incident });
+      }
       const next = applyDismiss(incident, {
         opId: ids.next(),
         kind: 'dismiss',
@@ -1008,13 +1038,25 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         key: incident.key,
         dismissed,
       });
-      if (!next || next === incident) return null;
+      if (!next || next === incident) return /** @type {const} */ ({ status: 'missing' });
       tx.put('incidents', next);
-      return next;
+      return /** @type {const} */ ({ status: 'done', incident: next });
     });
     if (stored.ok) return stored.value;
     await failedWrite(errorOf(stored));
-    return null;
+    return { status: 'failed' };
+  };
+
+  /**
+   * Sets or clears an open incident's dismissed flag. Answers the incident, or null when it's
+   * resolved, missing, or the store won't take the write.
+   * @param {string} id
+   * @param {boolean} dismissed
+   * @returns {Promise<Incident | null>}
+   */
+  const dismiss = async (id, dismissed) => {
+    const done = await dismissSeen(id, dismissed);
+    return done.status === 'done' ? done.incident : null;
   };
 
   // ============ Receipts, runs, and the journal ============
@@ -1246,6 +1288,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     raise,
     resolve,
     dismiss,
+    dismissSeen,
     putRun,
     append,
     receipts,

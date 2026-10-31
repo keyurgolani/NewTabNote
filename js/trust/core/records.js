@@ -228,6 +228,8 @@ export const runSchema = v.strictObject({
   // What a secret removal took out, and what it found still there after
   removed: v.optional(placesSchema),
   kept: v.optional(placesSchema),
+  // What it couldn't tell went or stayed, when the read after it failed
+  unknown: v.optional(placesSchema),
   outcome: v.nullable(v.picklist(RUN_OUTCOMES)),
   startedAt: timestamp,
   updatedAt: timestamp,

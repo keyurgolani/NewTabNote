@@ -38,6 +38,8 @@
 
 import { UnavailableError, committed, rejected } from '../../../kernel/core/contracts/outcomes.js';
 import { newNoteRecord, newSearchEntry } from '../../../kernel/core/domain/note.js';
+import * as v from '../../../lib/valibot/index.mjs';
+import { reportSchema } from '../diagnostics.js';
 import { PROVIDERS } from '../providers/catalog.js';
 import { SECRET_PLACES, SECRET_STOPS } from './preview.js';
 import { buildRestorePointFile, buildSalvage } from './salvage-file.js';
@@ -91,8 +93,8 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
  * couldn't be read), or failed with its code. A pass may say how much a saved file holds
  * (`saved`), and name the note the run made (`noteId`).
  * A secret removal names the places it removed and kept, either way.
- * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[], saved?: import('../records.js').Saved, noteId?: string, removed?: string[], kept?: string[]}
- *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean, removed?: string[], kept?: string[]}} Verdict
+ * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[], saved?: import('../records.js').Saved, noteId?: string, removed?: string[], kept?: string[], unknown?: string[]}
+ *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean, removed?: string[], kept?: string[], unknown?: string[]}} Verdict
  */
 
 /** What an apply answers when the user closed the picker: not a failure, and nothing changed */
@@ -538,6 +540,16 @@ const exportDiagnostics = {
     if (!exported || exported.kind !== 'diagnostics' || typeof exported.serialized !== 'string') {
       throw new UnavailableError('adapter', 'not-applicable', false);
     }
+    // Only a diagnostic report goes in this file: one that parses, holding its schema's fields
+    // and nothing else
+    /** @type {unknown} */
+    let parsed;
+    try {
+      parsed = JSON.parse(exported.serialized);
+    } catch {
+      parsed = null;
+    }
+    if (!v.is(reportSchema, parsed)) throw new UnavailableError('adapter', 'preview-invalid', false);
     return {
       preview: { changes: [{ target: 'file', creates: 1, updates: 0, deletes: 0 }] },
       plan: exported.serialized,
@@ -609,7 +621,14 @@ const removeSavedKey = {
   },
   async verify(context, applied) {
     const { places, code } = /** @type {{places: string[], code: string | null}} */ (applied);
-    const left = /** @type {readonly string[]} */ (placesOf(await port(context, 'secrets').present()));
+    /** @type {readonly string[]} */
+    let left;
+    try {
+      left = placesOf(await port(context, 'secrets').present());
+    } catch {
+      // The re-read failed: whether each place went is unknown, and says so
+      return { ok: false, code: code || 'verify-failed', removed: [], kept: [], unknown: [...places] };
+    }
     const removed = places.filter(place => !left.includes(place));
     const kept = places.filter(place => left.includes(place));
     if (kept.length > 0) return { ok: false, code: code || 'not-verified', removed, kept };

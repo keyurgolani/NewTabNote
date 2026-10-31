@@ -20,7 +20,8 @@
  * much a file it saved and read back holds (so "Saved and checked" can say how much), and
  * `noteId` is the note a run made (recover-orphans' new Inbox note), for the view to open. A
  * secret removal names the places it removed (`removed`) and the ones still holding a secret
- * after it (`kept`), so one that failed partway says which, by place name only.
+ * after it (`kept`), so one that failed partway says which, by place name only, and the ones
+ * it couldn't tell either way when the read after it failed (`unknown`).
  *
  * It answers a `remediation` outcome for every run it started, whatever state the run is in,
  * so nothing reads a run that didn't verify as committed: `succeeded` only once its verify
@@ -76,6 +77,7 @@ export const remediationSchema = v.strictObject({
   noteId: v.optional(recordId),
   removed: v.optional(placesSchema),
   kept: v.optional(placesSchema),
+  unknown: v.optional(placesSchema),
   recoveryPointId: v.optional(recoveryPointId),
   recorded: v.boolean(),
   messageKey: v.pipe(v.string(), v.regex(/^remediation\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/), v.maxLength(80)),

@@ -964,7 +964,8 @@ describe('trust.summary names each group’s time and cause (#20 slice 4a, item 
         severity: 'capture-risk',
         consequenceKey: null,
         incidentId: null,
-        at: started,
+        // A capture-risk sighting is timed just after the newest core receipt
+        at: started + 1,
       },
     );
     const indexing = summary.groups.find((/** @type {any} */ item) => item.group === 'indexing');

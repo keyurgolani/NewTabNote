@@ -25,6 +25,7 @@
 import * as v from '../../lib/valibot/index.mjs';
 import {
   committed,
+  conflict,
   failedFrom,
   ready,
   rejected,
@@ -285,7 +286,8 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
    * What every status page reads: each provider's status, the incidents, and what they add up
    * to. Dismissed incidents stay listed but leave Needs action and the cards. Capture risk
    * stays strict: capture reads `safe` only on a fresh core receipt verified after the latest
-   * sighting of every open capture-risk incident, dismissed ones included, so a dismissed one
+   * sighting of every open capture-risk incident, dismissed ones included (the records time a
+   * capture-risk sighting after the newest core receipt, whatever the clock), so a dismissed one
    * reads `unknown` until a later probe passes, never `safe`, and a new failure ends its
    * dismissal (incidents.js).
    * @param {number} now
@@ -364,16 +366,20 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
   const dismissal = (schema, dismissed) => async payload => {
     const checked = v.safeParse(schema, payload);
     if (!checked.success) return rejected('validation', 'invalid-payload');
-    const { incidentId } = /** @type {{incidentId: string}} */ (checked.output);
+    const { incidentId, occurrences } = /** @type {{incidentId: string, occurrences?: number}} */ (checked.output);
     try {
       const read = await records.incidentsRead();
       const found = read.incidents.find(incident => incident.id === incidentId);
       // Not found by a read that didn't answer isn't "not there"
       if (!found && !(read.recordsRead && read.copyRead)) return unavailable('storage', 'unreadable', true);
       if (!found || found.state === 'resolved') return rejected('not-found', 'incident-not-found');
-      const changed = await records.dismiss(incidentId, dismissed);
-      if (changed) return committed(dismissed ? 'incident-dismissed' : 'incident-shown', [incidentId]);
-      if (records.state() === 'fallback') return unavailable('storage', 'not-recorded', true);
+      const done = await records.dismissSeen(incidentId, dismissed, occurrences);
+      if (done.status === 'done') return committed(dismissed ? 'incident-dismissed' : 'incident-shown', [incidentId]);
+      // Sighted since the user saw it: they see it again rather than dismiss what they didn't see
+      if (done.status === 'changed') return conflict('incident-changed', done.incident.occurrences);
+      if (done.status === 'failed' || records.state() === 'fallback') {
+        return unavailable('storage', 'not-recorded', true);
+      }
       // Resolved or gone since it was read
       return rejected('not-found', 'incident-not-found');
     } catch (error) {

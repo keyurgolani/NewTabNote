@@ -175,6 +175,18 @@ export function providerChecks({ verify, records, clock, ids }) {
 }
 
 /**
+ * A secret removal's places as an answer and a run record carry them: `unknown` only when
+ * there are some
+ * @param {{removed: string[], kept: string[], unknown: string[]}} places
+ * @returns {any}
+ */
+const placesOf = places => ({
+  removed: [...places.removed],
+  kept: [...places.kept],
+  ...(places.unknown.length > 0 ? { unknown: [...places.unknown] } : {}),
+});
+
+/**
  * @param {{
  *   records: TrustRecords,
  *   journal: DiagnosticJournal,
@@ -301,8 +313,11 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
     /** @type {string | undefined} */
     let noteId = first.noteId;
     // What a secret removal took out and what's still there
-    /** @type {{removed: RemediationRun['removed'], kept: RemediationRun['kept']} | null} */
-    let places = first.removed || first.kept ? { removed: first.removed || [], kept: first.kept || [] } : null;
+    /** @type {{removed: string[], kept: string[], unknown: string[]} | null} */
+    let places =
+      first.removed || first.kept || first.unknown
+        ? { removed: [...(first.removed || [])], kept: [...(first.kept || [])], unknown: [...(first.unknown || [])] }
+        : null;
     /** @param {readonly Unreadable[]} list */
     const setUnreadable = list => {
       unreadable = list.slice(0, MAX_UNREADABLE);
@@ -336,7 +351,7 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       fileMayBeEmpty,
       ...(saved ? { saved: { ...saved } } : {}),
       ...(noteId ? { noteId } : {}),
-      ...(places ? { removed: [...(places.removed || [])], kept: [...(places.kept || [])] } : {}),
+      ...(places ? placesOf(places) : {}),
       ...(run.recoveryPointId ? { recoveryPointId: run.recoveryPointId } : {}),
       recorded,
       messageKey: `remediation.${run.state}`,
@@ -361,7 +376,7 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
         ...(fileMayBeEmpty ? { fileMayBeEmpty } : {}),
         ...(saved ? { saved } : {}),
         ...(noteId ? { noteId } : {}),
-        ...(places ? { removed: places.removed, kept: places.kept } : {}),
+        ...(places ? placesOf(places) : {}),
       });
       note({
         runId: run.id,
@@ -538,7 +553,11 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       if (verdict && verdict.ok === true && verdict.saved) saved = verdict.saved;
       if (verdict && verdict.ok === true && typeof verdict.noteId === 'string') noteId = verdict.noteId;
       if (verdict && Array.isArray(verdict.removed) && Array.isArray(verdict.kept)) {
-        places = { removed: /** @type {any} */ ([...verdict.removed]), kept: /** @type {any} */ ([...verdict.kept]) };
+        places = {
+          removed: [...verdict.removed],
+          kept: [...verdict.kept],
+          unknown: Array.isArray(verdict.unknown) ? [...verdict.unknown] : [],
+        };
       }
       if (!verdict || verdict.ok !== true) {
         return finish('failed', outcomeCode(verdict && /** @type {{code?: unknown}} */ (verdict).code, 'not-verified'));
