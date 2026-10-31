@@ -285,6 +285,37 @@ describe("App's reload guard and the PiP window's stylesheets", () => {
     assert.match(read('js/app.js'), /this\.tabController\.editorPorts = this\.editorPorts;\n {6}this\.guardReloads\(\);/);
   });
 
+  it("doesn't reload while an open editor's save fails twice, answers the failure, and says it once, with no toast", async () => {
+    const { createLoader } = await lazy();
+    const { env, App, tabs, toasts } = await page();
+    let reloads = 0;
+    const loader = createLoader({
+      buildId: 'build-a', getURL: (file) => file, fetchJson: async () => null, importUrl: async () => ({}), document: null, global: {},
+      warn: () => {}, reload: () => { reloads += 1; }, setTimeout: () => 0, clearTimeout: () => {}, libraries: {},
+    });
+    const app = appOf(env, App, { loader });
+    app.tabController = tabs;
+    app.guardReloads();
+    // The kernel answers the next two writes unavailable, as a full disk does
+    const editor = tabs.editor;
+    const real = editor.documentClient.saveContent.bind(editor.documentClient);
+    let failures = 2;
+    editor.documentClient.saveContent = (save) => {
+      if (failures > 0) {
+        failures -= 1;
+        return Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
+      }
+      return real(save);
+    };
+    editor.blocks[0].content = 'typed and never stored';
+    editor.blocks[0].markUpdated();
+    editor.scheduleSave();
+    assert.deepEqual(plain(await runUntil(env, loader.reloadAfterGuards())), { reloaded: false });
+    assert.equal(reloads, 0);
+    assert.deepEqual(toasts, [], 'the call site that asked for the reload says it');
+    assert.equal(await runUntil(env, tabs.saveOpenEditors()), false, 'the edit still is not stored');
+  });
+
   it('the PiP window gets each stylesheet a chunk adds while it is open, until it closes', async () => {
     const { env, tabs } = await page();
     const registered = [];

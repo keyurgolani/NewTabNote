@@ -746,6 +746,84 @@ describe('BlockEditor failed save before a note switch', () => {
   });
 });
 
+describe('BlockEditor flushSave answers whether what it holds is stored (#27 slice 3b)', () => {
+  let env;
+  let editor;
+
+  beforeEach(async () => {
+    ({ env } = await setup());
+    editor = allowDeletes(makeEditor(env));
+    await editor.loadNote('A');
+  });
+
+  /** Type into A while loadNote('B') reads B, so A's last write starts during the switch. */
+  async function switchWhileTyping(text) {
+    const load = editor.loadNote('B');
+    type(editor, text);
+    env.frames();
+    await load;
+    await settle();
+    assert.equal(editor.noteId, 'B');
+  }
+
+  it('answers true with nothing pending, and once a pending edit is written', async () => {
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    type(editor, 'written by the flush');
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'written by the flush' });
+  });
+
+  it('answers true when a write fails and its one-second retry stores it', async () => {
+    failWritesOf(env, 'A', 1);
+    type(editor, 'stored by the retry');
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'stored by the retry' });
+  });
+
+  it('answers false when the retry fails too, and keeps answering false until a later save stores the edit', async () => {
+    const { statuses } = watchFeedback(env, editor);
+    failWritesOf(env, 'A', 2);
+    type(editor, 'not stored');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
+    assert.equal(statuses.at(-1), 'Error saving');
+    assert.equal(await runUntil(env, editor.flushSave()), false, 'nothing is pending, and the edit still is not stored');
+
+    type(editor, 'stored at last');
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'stored at last' });
+  });
+
+  it("answers false for the failed copy of a note the editor left, which isn't stored", async () => {
+    failWritesOf(env, 'A', 2);
+    await switchWhileTyping('left unsaved');
+    env.clock.tick(1000);
+    assert.equal(await runUntil(env, editor.flushSave()), false);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha' });
+  });
+
+  it('answers false while a deleted note keeps its unsaved text on screen', async () => {
+    type(editor, 'typed before the delete');
+    await env.get('Storage').permanentlyDeleteNote('A');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
+    assert.equal(editor.noteGone, true);
+  });
+
+  it('a quiet flush says a failed retry once: the save status, and no toast', async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    failWritesOf(env, 'A', 2);
+    type(editor, 'not stored, said once');
+    assert.equal(await runUntil(env, editor.flushSave({ quiet: true })), false);
+    assert.equal(statuses.at(-1), 'Error saving');
+    assert.deepEqual(toasts, []);
+
+    // A flush that isn't quiet shows the toast as before
+    type(editor, 'still not stored');
+    failWritesOf(env, 'A', 2);
+    assert.equal(await runUntil(env, editor.flushSave()), false);
+    assert.deepEqual(plain(toasts), [{ message: 'Failed to save note. Please try again.', kind: 'error' }]);
+  });
+});
+
 describe('BlockEditor reloading the open note', () => {
   let env;
   let Storage;
@@ -1254,6 +1332,14 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     assert.ok(editor.root.querySelector('.reload-notice'), 'the next edit shows the reload notice');
     assert.equal(editor._retryPending, false, 'and nothing retries');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed just before the upgrade' });
+  });
+
+  it("flushSave answers false once the page has to reload and holds an edit it can't store (#27 slice 3b)", async () => {
+    const { env, editor } = await newTabOnA();
+    await upgradeElsewhere(env);
+    type(editor, 'typed after the upgrade');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
+    assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice says so');
   });
 
   it('a save under way when another context upgrades is reported saved, and the next edit gets the notice', async () => {
