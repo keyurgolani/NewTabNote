@@ -184,7 +184,7 @@ describe('Credentials, end to end with every provider (#20 slice 2, security)', 
       ids: hexIds(),
       locks: lockManager(),
     });
-    const { context } = await providerContext(of, { incidents: () => records.incidents() });
+    const { context } = await providerContext(of, { events: () => records.events() });
     const { value, printed } = await capturingConsole(async () => {
       await records.open();
       const journal = createDiagnosticJournal({ records, clock, strict: true });

@@ -199,24 +199,24 @@ describe('interim providers never record verified (#20 AC5)', () => {
     }
   });
 
-  it('local inference: not-configured, then unverified once vectors are stored, and action-required while a load failure is open', async () => {
+  it('local inference: not-configured, unverified once vectors are stored, and action-required while a journaled failure is newer', async () => {
     const of = freshProfile();
     const { context } = await providerContext(of);
     assert.equal((await checkOf('local-inference', context)).receipt.status, 'not-configured');
-    // The legacy profile's vectors store gets a record, as the embedding model writes one
+    // The vectors store gets a record, as the embedding model writes one
     await context.storage?.commit(/** @type {any} */ ({
       commandId: 'seed',
       command: { type: 'seed', commandId: 'seed' },
-      effect: { kind: 'units', units: [{ stores: ['vectors'], run: async (/** @type {any} */ tx) => tx.put('vectors', { id: 'n1', vector: [0.1] }) }] },
+      effect: { kind: 'units', units: [{ stores: ['vectors'], run: async (/** @type {any} */ tx) => tx.put('vectors', { id: 'n1', vector: [0.1], updatedAt: 1000 }) }] },
       done: () => ({ kind: 'committed', code: 'seeded', changedIds: [], messageKey: 'committed.seeded', severity: 'success' }),
     }));
     assert.equal((await checkOf('local-inference', context)).receipt.status, 'unverified');
-    const loadFailed = { providerId: 'local-inference', faultCode: 'load-failed', state: 'open', occurrences: 2 };
-    const failing = { ...context, trust: { incidents: async () => [/** @type {any} */ (loadFailed)] } };
+    const failure = { seq: 1, code: 'embeddings.load-failed', at: 2000, fields: {} };
+    const failing = { ...context, trust: { events: async () => [failure] } };
     const { receipt } = await checkOf('local-inference', failing);
-    assert.deepEqual([receipt.status, receipt.evidence], ['action-required', { count: 2 }]);
-    const resolved = { ...context, trust: { incidents: async () => [/** @type {any} */ ({ ...loadFailed, state: 'resolved' })] } };
-    assert.equal((await checkOf('local-inference', resolved)).receipt.status, 'unverified');
+    assert.deepEqual([receipt.status, receipt.evidence], ['action-required', { since: 2000 }]);
+    const older = { ...context, trust: { events: async () => [{ ...failure, at: 500 }] } };
+    assert.equal((await checkOf('local-inference', older)).receipt.status, 'unverified');
   });
 });
 

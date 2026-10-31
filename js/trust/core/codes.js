@@ -108,8 +108,11 @@ export const ERROR_CODES = Object.freeze([
   'deadline-exceeded',
   'unauthorized-sender',
   'forbidden-for-surface',
-  // A check that couldn't verify (checks.js), and the storage probe finding a record under its key
+  // A check that couldn't verify (checks.js), and the storage probe finding a record under its
+  // key, reading back another, or answered without running
   'probe-record-present',
+  'probe-readback-mismatch',
+  'probe-not-run',
   'check-threw',
   'check-timed-out',
   'invalid-check-result',

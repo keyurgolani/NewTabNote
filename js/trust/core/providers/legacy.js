@@ -115,25 +115,33 @@ export const aiScopeGrants = interim(() => ({ status: 'not-configured', evidence
 
 /**
  * Local inference: `not-configured` until the model has loaded once, then `unverified`, and
- * `action-required` while a load failure slice 1b journals is open as an incident. #9 and #10
- * verify the runtime and the model library. That the model loaded shows as a non-empty
- * `vectors` store, since nothing journals a load that worked.
+ * `action-required` while slice 1b's latest journaled load failure (`embeddings.load-failed`)
+ * is newer than the newest `vectors` write. Nothing journals a load that worked, so a vector
+ * written after the failure, which only a loaded model makes, is the sign it loads again. It
+ * reads the journal and the store, never its own incidents, and observes `load-failed`: an
+ * answer that no longer reports it resolves 1b's incident. #9 and #10 verify the runtime and
+ * the model library. A failure the journal has dropped (after 14 days) is no longer seen.
  */
 export const localInference = interim(async context => {
-  const incidents = await portOf(context, 'trust').incidents();
-  const failing = incidents.filter(
-    incident => incident.providerId === 'local-inference' && incident.faultCode === 'load-failed' && incident.state !== 'resolved',
-  );
-  if (failing.length > 0) {
+  const events = /** @type {unknown} */ (await portOf(context, 'trust').events());
+  if (!Array.isArray(events)) throw new TypeError('not a journal');
+  const failedAt = events
+    .filter(event => event && event.code === 'embeddings.load-failed' && isTime(event.at))
+    .reduce((latest, event) => Math.max(latest, event.at), -1);
+  const vectors = /** @type {{stored?: unknown, at?: unknown}} */ (await portOf(context, 'vectors').latest());
+  if (vectors === null || typeof vectors !== 'object' || typeof vectors.stored !== 'boolean') throw new TypeError('not a vectors answer');
+  const vectorAt = isTime(vectors.at) ? vectors.at : null;
+  // A failure stands until a vector is written after it; vectors that don't say when can't show that
+  if (failedAt >= 0 && (vectorAt === null || vectorAt <= failedAt)) {
     return {
       status: 'action-required',
-      evidence: { count: failing.reduce((total, incident) => total + incident.occurrences, 0) },
+      evidence: { since: failedAt },
       consequenceKey: 'inference.load-failed',
       preserved: ['capture', 'editing', 'reading'],
+      faults: [{ faultCode: 'load-failed', subjectId: null, severity: 'degraded', affected: ['ai', 'search'], preserved: ['capture', 'editing', 'reading'] }],
     };
   }
-  const loaded = await portOf(context, 'vectors').stored();
-  return loaded ? { status: 'unverified', consequenceKey: 'inference.not-verified' } : { status: 'not-configured' };
+  return vectors.stored ? { status: 'unverified', consequenceKey: 'inference.not-verified' } : { status: 'not-configured' };
 });
 
 /**
@@ -152,9 +160,15 @@ const SECRET_SUBJECTS = Object.freeze({
  * vault before #21
  */
 export const credentials = interim(async context => {
-  const sources = [...new Set(await portOf(context, 'secrets').present())].filter(source =>
-    Object.prototype.hasOwnProperty.call(SECRET_SUBJECTS, source),
-  );
+  const answer = /** @type {unknown} */ (await portOf(context, 'secrets').present());
+  // Anything but a list of the known places verifies nothing, so it's never "no saved keys"
+  if (
+    !Array.isArray(answer) ||
+    !answer.every(source => typeof source === 'string' && Object.prototype.hasOwnProperty.call(SECRET_SUBJECTS, source))
+  ) {
+    throw new TypeError('not a list of secret places');
+  }
+  const sources = /** @type {SecretSource[]} */ ([...new Set(answer)]);
   if (sources.length === 0) return { status: 'not-configured', evidence: { count: 0 } };
   return {
     status: 'action-required',

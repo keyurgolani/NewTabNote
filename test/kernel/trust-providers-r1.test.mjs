@@ -141,7 +141,7 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
     const observed = Object.fromEntries(PROVIDERS.map(descriptor => [descriptor.id, descriptor.observes]));
     assert.deepEqual(observed, {
       capture: ['quota', 'version-too-new', 'probe-failed'],
-      storage: ['quota', 'version-too-new', 'open-failed', 'probe-failed'],
+      storage: ['quota', 'version-too-new', 'probe-failed'],
       'recovery-readiness': ['point-unverified'],
       backup: [],
       sync: [],

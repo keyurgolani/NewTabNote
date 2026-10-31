@@ -8,8 +8,8 @@
  *   capture, editing, and reading don't depend on it.
  * - Contributions reads #15's resolution report over each registry root the context names,
  *   after its probes and loaders answered. `verified` when no contribution is `unresolved` or
- *   `temporarily-unavailable`, and `degraded` with a `contribution-unavailable` incident when
- *   any is. The other states (turned off, doesn't apply here, needs setup or a permission, not
+ *   `temporarily-unavailable`, `degraded` with a `contribution-unavailable` incident when any
+ *   is, and `not-configured` with no root or no contribution to read. The other states (turned off, doesn't apply here, needs setup or a permission, not
  *   built yet) are each contribution's own, and the report explains them.
  * - Block types reads the same report for #14's block family, and is `not-configured` until a
  *   root registers that family. #14's block-health query joins it in #14's PR.
@@ -66,7 +66,8 @@ export const messaging = Object.freeze({
  * @returns {{rows: ReportRow[], families: Set<string>}}
  */
 function reportOf(context, family) {
-  const resolutions = portOf(context, 'resolutions')();
+  const resolutions = /** @type {unknown} */ (portOf(context, 'resolutions')());
+  if (!Array.isArray(resolutions)) throw new TypeError('not a list of resolutions');
   /** @type {ReportRow[]} */
   const rows = [];
   /** @type {Set<string>} */
@@ -85,6 +86,8 @@ function reportOf(context, family) {
  * @returns {CheckResult}
  */
 function fromRows(rows, group) {
+  // No root, or no contribution in any, is nothing to verify
+  if (rows.length === 0) return { status: 'not-configured', evidence: { records: 0 } };
   const unavailable = rows.filter(row => /** @type {readonly string[]} */ (UNAVAILABLE_STATES).includes(row.state));
   const evidence = { records: rows.length, count: unavailable.length };
   if (unavailable.length === 0) return { status: 'verified', evidence };

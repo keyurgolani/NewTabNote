@@ -9,7 +9,10 @@
  * context. Slice 4's Trust page and #35's coordinator are the first roots.
  *
  * Every provider is owned by #20, which builds it; the interim ones name, in INTERIM, the
- * issue whose real provider replaces each.
+ * issue whose real provider replaces each. Each lists in `observes` the faults its check can
+ * see, so an answer that no longer reports one resolves its incident; a provider that only
+ * reads settings observes none, and none observes `open-failed` or `write-failed`, which are
+ * the records' and the failure sites' own.
  */
 
 /** @typedef {import('../../../kernel/registry/validate.js').Descriptor} Descriptor */
@@ -40,6 +43,7 @@ const EXPENSIVE = Object.freeze(['verify-now', 'idle']);
  *   costClass?: CostClass,
  *   freshnessMs: number,
  *   triggers?: readonly Trigger[],
+ *   observes: readonly string[],
  *   remediations?: readonly string[],
  *   core?: boolean,
  *   load: () => Promise<unknown>,
@@ -73,6 +77,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Capture',
     operation: 'capture.probe-commit',
+    observes: ['quota', 'version-too-new', 'probe-failed'],
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open'],
@@ -85,6 +90,7 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'Storage',
     operation: 'storage.probe-readwrite',
+    observes: ['quota', 'version-too-new', 'probe-failed'],
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open', 'save-salvage-file'],
@@ -97,6 +103,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Recovery points',
     operation: 'recovery.verify-newest-points',
+    observes: ['point-unverified'],
     costClass: 'local-expensive',
     freshnessMs: 7 * DAY,
     triggers: [...EXPENSIVE, 'storage-restored'],
@@ -109,6 +116,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Backup',
     operation: 'backup.read-legacy-settings',
+    observes: [],
     freshnessMs: DAY,
     load: async () => (await import('./legacy.js')).backup,
   }),
@@ -118,6 +126,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Sync',
     operation: 'sync.read-legacy-settings',
+    observes: [],
     freshnessMs: DAY,
     load: async () => (await import('./legacy.js')).sync,
   }),
@@ -127,6 +136,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Saved keys',
     operation: 'credentials.find-legacy-secrets',
+    observes: ['legacy-secret'],
     freshnessMs: DAY,
     remediations: ['remove-saved-key'],
     load: async () => (await import('./legacy.js')).credentials,
@@ -138,6 +148,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Permissions and destinations',
     operation: 'permissions.compare-manifest',
+    observes: ['grant-missing', 'permission-changed'],
     freshnessMs: DAY,
     triggers: [...CHEAP, 'permissions-changed'],
     load: async () => (await import('./permissions.js')).permissions,
@@ -148,6 +159,7 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'AI scope grants',
     operation: 'ai-scope-grants.read-grants',
+    observes: [],
     freshnessMs: DAY,
     load: async () => (await import('./legacy.js')).aiScopeGrants,
   }),
@@ -157,6 +169,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Remote AI',
     operation: 'remote-ai.read-legacy-settings',
+    observes: [],
     freshnessMs: DAY,
     load: async () => (await import('./legacy.js')).remoteAi,
   }),
@@ -167,6 +180,8 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'Local model',
     operation: 'local-inference.read-load-history',
+    observes: ['load-failed'],
+    costClass: 'local-expensive',
     freshnessMs: DAY,
     load: async () => (await import('./legacy.js')).localInference,
   }),
@@ -176,6 +191,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Index and derived data',
     operation: 'index.measure-lag',
+    observes: ['lagging', 'stalled'],
     freshnessMs: HOUR,
     remediations: ['rebuild-index'],
     load: async () => (await import('./index-lag.js')).indexLag,
@@ -186,6 +202,7 @@ export const PROVIDERS = Object.freeze([
     rank: 10,
     label: 'Messaging',
     operation: 'messaging.query-health',
+    observes: ['unreachable'],
     freshnessMs: HOUR,
     load: async () => (await import('./platform.js')).messaging,
   }),
@@ -195,6 +212,7 @@ export const PROVIDERS = Object.freeze([
     rank: 20,
     label: 'Contributions',
     operation: 'contributions.read-resolution-report',
+    observes: ['contribution-unavailable'],
     freshnessMs: DAY,
     load: async () => (await import('./platform.js')).contributions,
   }),
@@ -204,6 +222,7 @@ export const PROVIDERS = Object.freeze([
     rank: 30,
     label: 'Block types',
     operation: 'block-types.read-resolution-report',
+    observes: ['contribution-unavailable'],
     freshnessMs: DAY,
     load: async () => (await import('./platform.js')).blockTypes,
   }),
