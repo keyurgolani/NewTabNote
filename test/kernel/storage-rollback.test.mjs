@@ -119,14 +119,22 @@ describe('a profile with backups, migrated to 10, opened by a 1.4.x build', asyn
   }
 });
 
-describe("a profile at 10 holding a ledger, a change log, a conflict, and a tombstone, opened by a 1.4.x build (#17 PR 2a)", () => {
+describe('a profile at 10 holding a ledger, a change log, a conflict, and a tombstone, opened by a 1.4.x build (#17 PR 2a)', () => {
   /** @type {Record<string, () => Promise<import('./migration-support.mjs').Profile>>} */
   const profiles = {
     'v10.basic': () => profileWith(/** @type {any} */ (FIXTURES.get('v10.basic'))),
-    'v8.basic, migrated, then written through #17\'s adapter': async () => {
+    "v8.basic, migrated, then written through #17's adapter": async () => {
       const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
       assert.equal((await run(of)).status, 'migrated');
-      assert.deepEqual(await writeHistory(of), ['committed', 'committed', 'conflict', 'committed', 'committed', 'committed', 'committed']);
+      assert.deepEqual(await writeHistory(of), [
+        'committed',
+        'committed',
+        'conflict',
+        'committed',
+        'committed',
+        'committed',
+        'committed',
+      ]);
       return of;
     },
   };
@@ -137,7 +145,10 @@ describe("a profile at 10 holding a ledger, a change log, a conflict, and a tomb
         const before = await dump(of);
         const stores = before.databases.find(db => db.name === 'CanvasTabDB')?.stores ?? [];
         for (const store of ['operations', 'changes', 'conflicts', 'tombstones']) {
-          assert.ok((stores.find(found => found.name === store)?.records.length ?? 0) > 0, `${name} holds ${store} rows`);
+          assert.ok(
+            (stores.find(found => found.name === store)?.records.length ?? 0) > 0,
+            `${name} holds ${store} rows`,
+          );
         }
         await refusedUnchanged(of, tag);
       });
