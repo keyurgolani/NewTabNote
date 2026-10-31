@@ -621,11 +621,12 @@ describe('a note leaving the active set in another new tab', () => {
   const KEPT = [
     ['trashes it', 'trashed', (one, first) => one.wire(controllers.notes(first, one.Storage)).trashNoteById('A')],
     ['archives it', 'archived', (one, first) => one.wire(controllers.notes(first, one.Storage)).archiveNote('A')],
-    ['runs Replace all', 'trashed', async (one) => {
+    ['runs Replace all', 'trashed', async (one, first) => {
       const backup = { version: 1, exportedAt: 1, canvases: [note('R', { name: 'Imported' })], elements: [block('r1', 'R', 0, 'imported')] };
       await one.tabs.flushEditorsForImport();
-      const result = await one.Storage.importData(backup, 'replace');
-      await one.tabs.reloadEditorsAfterImport(result.trashedIds, result.trashedAt);
+      // As the page runs it since #17 PR 4a: the importBackup command on #17's adapter
+      const result = await first.settingsClient.importBackup(backup, 'replace', first.validateBackup(backup).counts);
+      await one.tabs.reloadEditorsAfterImport(result.trashedIds, null);
     }],
   ];
 
