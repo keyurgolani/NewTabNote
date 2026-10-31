@@ -156,7 +156,8 @@ function boundaries(signal, decision, now, timeZone, windows) {
   const time = signal.time;
   if (time?.dueAt !== undefined) {
     const dueDate = localDateOf(time.dueAt, timeZone);
-    at.push(time.dueAt - windows.nowMs, time.dueAt, startOfLocalDay(dueDate, timeZone));
+    // Overdue starts just past dueAt, since a signal due at `now` is still within the window
+    at.push(time.dueAt - windows.nowMs, time.dueAt + 1, startOfLocalDay(dueDate, timeZone));
     at.push(startOfLocalDay(addLocalDays(dueDate, -windows.soonDays), timeZone));
   } else if (time?.dueDate !== undefined) {
     at.push(startOfLocalDay(time.dueDate, timeZone), startOfLocalDay(addLocalDays(time.dueDate, 1), timeZone));
