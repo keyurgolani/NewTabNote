@@ -66,8 +66,8 @@ class AIChatController {
     this.noteTabs = null;
     /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
     this.noteList = null;
-    this.onTriggerIndexing = null;   // () => void
-    this.onLoadEmbeddingsModel = null; // () => void
+    /** @type {any} NotesManager's indexing, set by App: the search index and the embedding model (#22) */
+    this.indexing = null;
   }
 
   /** Initialize AI chat: load templates, wire DOM listeners, load history. */
@@ -310,9 +310,7 @@ class AIChatController {
     if (this.aiActiveTab === 'smart') this.updateSmartSuggestions(true);
 
     // Lazy-load AI embedding model on first AI sidebar open (Req 27.3)
-    if (this.onLoadEmbeddingsModel) {
-      this.onLoadEmbeddingsModel();
-    }
+    if (this.indexing) this.indexing.loadEmbeddingsModel();
 
     setTimeout(() => {
       document.getElementById('ai-chat-input')?.focus();
@@ -2111,7 +2109,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // Its kind and code, never what the blocks hold
       if (outcome.kind !== 'committed') throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
     }
-    if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
+    if (this.indexing) this.indexing.noteChanged(noteId);
   }
 
   async appendAIResponseToNote(blocksOrContent) {
@@ -2152,7 +2150,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
           throw new Error(`Not stored: blocks (${outcome.kind}: ${outcome.code})`);
         }
       }
-      if (this.onTriggerIndexing) this.onTriggerIndexing(noteId);
+      if (this.indexing) this.indexing.noteChanged(noteId);
       if (this.onRefreshNotesList) await this.onRefreshNotesList();
 
       Utils.showToast(`Added ${parsedBlocks.length} AI block${parsedBlocks.length === 1 ? '' : 's'} to note`, 'success');

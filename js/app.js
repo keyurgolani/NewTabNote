@@ -121,13 +121,6 @@ class App {
     // Core infrastructure
     this.domRefs = null;
     this.logger = null;
-    this.triggerIndexing = Utils.debounce((noteId) => {
-      if (noteId && this.notesManager) {
-        this.notesManager.updateNoteIndex(noteId);
-      } else {
-        this.rebuildSearchIndex();
-      }
-    }, 300);
   }
 
   /**
@@ -709,10 +702,6 @@ class App {
     // A title it applies names the note's tab through TabController; the list shows it from the commit feed
     this.aiChatController.noteTabs = this.tabController.noteTabs;
     this.aiChatController.noteList = this.noteList;
-    this.aiChatController.onTriggerIndexing = () => this.triggerIndexing();
-    this.aiChatController.onLoadEmbeddingsModel = () => {
-      if (this.notesManager) this.notesManager.loadEmbeddingsModel();
-    };
 
     this.settingsController = new SettingsController({
       settings: this.settings,
@@ -786,6 +775,8 @@ class App {
     // Its jobs follow their switches and intervals through the settings port from now on, so
     // one flipped while the later controllers start sets its job up, once
     this.notesManager.followJobSettings();
+    // AI chat's writes index again, and its sidebar loads the embedding model, through NotesManager (#22)
+    this.aiChatController.indexing = this.notesManager.indexing;
 
     // The note list it reads, and tells when the indexer wrote search entries
     this.notesManager.noteList = this.noteList;
@@ -1179,8 +1170,9 @@ class App {
   editorNavigation() {
     return {
       titleChanged: (name) => this.updateCurrentTabName(name),
-      // The sidebar shows the save once the note list reads it from the commit feed
-      noteSaved: (note) => this.triggerIndexing(note.id),
+      // The sidebar shows the save once the note list reads it from the commit feed, and
+      // NotesManager indexes the note again after a pause (#22)
+      noteSaved: (note) => this.notesManager.triggerIndexing(note.id),
       // A backlink opens its note: 1.4.x called an App.openNote that never existed, so it threw
       openNote: (noteId) => this.openNoteById(noteId),
       openNoteByName: (name) => this.openNoteByName(name),
@@ -1336,13 +1328,6 @@ class App {
    */
   getEditor(side = null) {
     return this.tabController.getEditor(side);
-  }
-
-  /**
-   * Rebuild the search index
-   */
-  async rebuildSearchIndex() {
-    await this.notesManager.rebuildSearchIndex();
   }
 
   /**
