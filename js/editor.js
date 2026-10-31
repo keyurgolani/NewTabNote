@@ -3875,6 +3875,10 @@ class BlockEditor {
     this._revertingNoteId = null;
     /** A flush during the revert kept what was on screen as a snapshot */
     this._revertEditsKept = false;
+    /** @type {Promise<void>} Resolves once the revert in progress is done */
+    this._revertDone = Promise.resolve();
+    /** A revert is running, from its confirm to its end; a second one is refused meanwhile */
+    this._revertInFlight = false;
     /** @type {Set<{state: EditorSaveState, promise: Promise<void>}>} */
     this._inFlightSaves = new Set();
     /** Load counter; a load that is no longer the latest drops its result */
@@ -4046,6 +4050,10 @@ class BlockEditor {
     if (loaded && this._isReverting()) {
       this._loadedDue = true;
       this._heldSaveDue = true;
+      // Resolves once the revert is done and the save it lets through has finished, so a caller
+      // that needs the note stored (AI insert, flushSave) waits for that, not for nothing
+      const revert = this._revertDone;
+      work.push(revert.then(() => this.flushSave()));
     } else if (loaded) {
       work.push(this._startSave(loadedIsRetry));
     }
@@ -5699,6 +5707,44 @@ class BlockEditor {
   }
 
   /**
+   * Put a committed revert's blocks and title on screen. Text typed into the blocks they replace
+   * goes into version history first (_keepEditsOfRevert), so it isn't lost.
+   * @param {Array<Object>} blocksData - The blocks as stored, in order
+   * @param {string} [title]
+   * @returns {void}
+   */
+  _showRevertedBlocks(blocksData, title) {
+    if (this._snapshotDirty) this._keepEditsOfRevert();
+    this.blocks = blocksData.map((data) => Block.deserialize(data));
+    if (title && this.noteData) {
+      this.noteData.name = title;
+      this.titleEl.textContent = title;
+    }
+    this.renderBlocks();
+    this._snapshotDirty = false;
+  }
+
+  /**
+   * After a committed revert whose blocks didn't reach the screen (_runRevert), read the note as
+   * stored and show it, while saves are still held. A lost connection shows the reload notice.
+   * @param {string} noteId
+   * @returns {Promise<boolean>} Whether the screen shows the note as stored now
+   */
+  async _showStoredRevert(noteId) {
+    try {
+      const opened = await this.documentClient.openNote(noteId);
+      if (!opened || noteId !== this.noteId) return false;
+      const blocks = (opened.blocks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      this._showRevertedBlocks(blocks, opened.note && opened.note.name);
+      return true;
+    } catch (error) {
+      if (this._isReloadRequired(error)) this._onReloadRequired();
+      else console.error('Failed to show the reverted note:', error && error.message);
+      return false;
+    }
+  }
+
+  /**
    * Revert current note to a snapshot's content (Req 31.4), with restoreSnapshot: in one unit
    * the note as stored becomes a snapshot, the snapshot's blocks replace the note's, and its
    * title the note's name, while a pin, folder, trash, or hand-set title made elsewhere stays.
@@ -5709,6 +5755,24 @@ class BlockEditor {
    * @param {{id: string, timestamp: number}} summary - The snapshot, as version history lists it
    */
   async _revertToSnapshot(summary) {
+    // One revert at a time: a second one, from the panel left open, would race the first's
+    // hold and the saves waiting on it. It's a repeated click, so it's dropped without a word,
+    // and the first revert's own outcome still shows
+    if (this._revertInFlight) return;
+    this._revertInFlight = true;
+    try {
+      await this._runRevert(summary);
+    } finally {
+      this._revertInFlight = false;
+    }
+  }
+
+  /**
+   * The revert itself (see _revertToSnapshot), which only one call runs at a time
+   * @param {{id: string, timestamp: number}} summary
+   * @returns {Promise<void>}
+   */
+  async _runRevert(summary) {
     const noteId = this.noteId;
     let confirmed = true;
     if (typeof confirmDialog === 'function') {
@@ -5736,52 +5800,70 @@ class BlockEditor {
     // Its transaction opens now, with nothing waiting to save
     const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
     this._revertingNoteId = noteId;
+    /** @type {() => void} This revert's own, so nothing else can end it */
+    let endRevert = () => {};
+    this._revertDone = new Promise((resolve) => {
+      endRevert = resolve;
+    });
     this._revertEditsKept = false;
     this._snapshotDirty = false;
     const holding = !this._savesHeld;
     if (holding) this.holdSaves();
-    let outcome;
     try {
-      outcome = await restoring;
-    } catch (error) {
-      outcome = { kind: 'unavailable', code: 'revert-failed' };
-      console.error('Failed to revert:', error && error.message);
-    }
-
-    if (outcome.kind !== 'committed') {
-      this._revertingNoteId = null;
-      // Nothing was reverted: what was typed meanwhile saves to the note as it is, a flush's
-      // snapshot of it included
-      if (this._revertEditsKept || this._snapshotDirty) {
-        this._loadedDue = true;
-        this._heldSaveDue = true;
+      let outcome;
+      try {
+        outcome = await restoring;
+      } catch (error) {
+        outcome = { kind: 'unavailable', code: 'revert-failed' };
+        console.error('Failed to revert:', error && error.message);
       }
-      if (holding) this.releaseSaves();
-      this._versionHistoryGone(outcome);
-      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
-        this._onReloadRequired();
+
+      if (outcome.kind !== 'committed') {
+        this._revertingNoteId = null;
+        // Nothing was reverted: what was typed meanwhile saves to the note as it is, a flush's
+        // snapshot of it included
+        if (this._revertEditsKept || this._snapshotDirty) {
+          this._loadedDue = true;
+          this._heldSaveDue = true;
+        }
+        this._versionHistoryGone(outcome);
+        if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') {
+          this._onReloadRequired();
+          return;
+        }
+        // Its kind and code, never what the note holds
+        console.error('Revert not stored:', outcome.kind, outcome.code);
+        Utils.showToast('Failed to revert to snapshot', 'error');
         return;
       }
-      // Its kind and code, never what the note holds
-      console.error('Revert not stored:', outcome.kind, outcome.code);
-      Utils.showToast('Failed to revert to snapshot', 'error');
-      return;
-    }
 
-    if (noteId === this.noteId) {
-      // Text typed while the revert committed went into the blocks it replaced: it goes into
-      // version history, so it isn't lost
-      if (this._snapshotDirty) this._keepEditsOfRevert();
-      this.blocks = (snap.blocks || []).map((data) => Block.deserialize(data));
-      if (snap.title && this.noteData) {
-        this.noteData.name = snap.title;
-        this.titleEl.textContent = snap.title;
+      if (noteId === this.noteId) {
+        try {
+          this._showRevertedBlocks(snap.blocks || [], snap.title);
+        } catch (error) {
+          // The restore committed, but its blocks didn't reach the screen, which may still hold
+          // the ones it replaced. Saves are still held, so the note as stored goes on screen
+          // before any of them can write those back
+          console.error('Failed to show the reverted note:', error && error.message);
+          if (!(await this._showStoredRevert(noteId))) {
+            // Nothing shows the revert, so the note goes back to what's on screen, as when a
+            // revert fails. Version history keeps both, and the toast says it didn't revert
+            if (!this.reloadRequired) {
+              this._loadedDue = true;
+              this._heldSaveDue = true;
+              Utils.showToast('Failed to revert to snapshot', 'error');
+            }
+            return;
+          }
+        }
       }
-      this.renderBlocks();
-      this._snapshotDirty = false;
+    } finally {
+      // Whatever happened above, the hold and the saves waiting on this revert go on, the saves
+      // once the hold has let the loaded note's save start
+      this._revertingNoteId = null;
+      if (holding) this.releaseSaves();
+      endRevert();
     }
-    this._revertingNoteId = null;
-    if (holding) this.releaseSaves();
 
     // Close version history panel
     const panel = this.doc.getElementById('version-history-panel');

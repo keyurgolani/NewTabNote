@@ -320,8 +320,9 @@ export function createNoteList({ query, subscribe, whenReady, logger = silentLog
     loaded = true;
     failure = null;
     reloadFailed = false;
-    // The commits it took are in what it read
-    if (takenNotes.length > 0 || takenFolders) {
+    // What it took, from commits or the indexer, is in what it read, so a read of changes that
+    // failed on it has nothing left to read
+    if (takenNotes.length > 0 || takenEntries.length > 0 || takenFolders) {
       changesFailed = false;
       retries = 0;
     }
