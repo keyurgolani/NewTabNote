@@ -94,6 +94,11 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @property {(store: StoreName) => boolean} has
  *   Whether the database has `store`, so a write to it lands: false for a LATER_STORES store a
  *   database below its version lacks, or for a store a damaged one lacks
+ * @property {() => Promise<ReadonlyMap<string, import('../domain/daily.js').DailyAssignment> | null>} dailyAnswer
+ *   While #17's logical 3 runs, the answer it keeps for each Daily Note it read, by note id, read
+ *   in this transaction, so a Daily Note lookup between two of its batches finds what it will
+ *   once the run is done (#17 PR 4a, F10); null when no run is going. Only #17's adapter runs
+ *   one, in a transaction over `dailyIndex`; the others answer null.
  */
 
 /**
