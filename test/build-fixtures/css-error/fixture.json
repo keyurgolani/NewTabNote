@@ -1,5 +1,5 @@
 {
-  "rule": "CleanCSS reports an error on a level-2 stylesheet",
+  "rule": "a stylesheet @imports a file that isn't there",
   "expect": [
     "build/css"
   ],

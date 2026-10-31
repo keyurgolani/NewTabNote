@@ -1,5 +1,5 @@
 {
-  "rule": "a page loads a file as a classic script that another loads as an ES module",
+  "rule": "a page loads a script as a classic script that the bundle also holds as a module, so it would run twice",
   "expect": [
     "build/load-mode"
   ],
@@ -7,7 +7,12 @@
     {
       "file": "popup.html",
       "replace": "  <script type=\"module\" src=\"js/popup.js\"></script>",
-      "with": "  <script src=\"js/utils.js\"></script>\n  <script type=\"module\" src=\"js/popup.js\"></script>"
+      "with": "  <script vite-ignore src=\"js/utils.js\"></script>\n  <script type=\"module\" src=\"js/popup.js\"></script>"
+    },
+    {
+      "file": "scripts/build/vite-config.js",
+      "replace": "  'js/insights-summary.js': 'minify',\n",
+      "with": "  'js/insights-summary.js': 'minify',\n  'js/utils.js': 'minify',\n"
     }
   ]
 }

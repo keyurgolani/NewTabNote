@@ -127,15 +127,17 @@ describe('license notices (AC8)', () => {
 
   it('the build copies every js/lib file that ships byte for byte and ships both notice files', () => {
     const build = require('../scripts/build.js');
+    const { BUNDLED } = require('../scripts/check-notices.js');
     for (const name of vendoredFiles()) {
       const file = `js/lib/${name}`;
       // STATIC_FILES are copied as they are
       if (build.STATIC_FILES.includes(file)) continue;
-      const walked = /\.m?js$/.test(file) && build.JS_DIRS.some((dir) => file.startsWith(dir));
-      assert.ok(build.JS_FILES.includes(file) || walked, `${file} isn't in JS_FILES or under a JS_DIRS directory`);
-      assert.ok(build.isCopiedAsIs(file), `${file} isn't in COPY_AS_IS, so terser would strip its header`);
+      // The bundler folds Valibot's build into the chunks that import it, and the build checks
+      // it against its record and its notice (checkBundledVendor)
+      if (BUNDLED.has(name)) continue;
+      assert.equal(build.CLASSIC_SCRIPTS[file], 'as-is', `${file} isn't a classic script the build copies as is, so terser would rewrite it`);
     }
-    assert.ok(build.JS_DIRS.includes('js/lib/valibot/'));
+    assert.deepEqual([...BUNDLED], ['valibot/index.mjs']);
     assert.ok(build.STATIC_FILES.includes('js/lib/valibot/LICENSE.md'));
     assert.ok(build.STATIC_FILES.includes('LICENSE'));
     assert.ok(build.STATIC_FILES.includes('THIRD_PARTY_NOTICES'));

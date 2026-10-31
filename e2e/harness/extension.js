@@ -429,8 +429,11 @@ class ExtensionSession {
  *   dist      the built extension directory (default: resolveDist()); never modified
  *   headless  default true
  *   chromium  the Playwright browser type; the fixture passes its own
+ *   sources   repository paths, files or directories, to copy into the extension copy at their
+ *             own paths, for a spec that imports source modules the bundle doesn't ship there
+ *             (#27 slice 2; default none)
  */
-async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium } = {}) {
+async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium, sources = [] } = {}) {
   if (!fs.existsSync(path.join(dist, 'manifest.json'))) {
     throw new Error(`No built extension at ${dist} (no manifest.json). npm run test:extension tests a build and `
       + 'never makes one: run `npm run build` first, or set NTN_DIST to a built extension directory.');
@@ -441,6 +444,7 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
   let context;
   try {
     prepareExtension(dist, extensionDir);
+    for (const source of sources) fs.cpSync(path.join(REPO_ROOT, source), path.join(extensionDir, source), { recursive: true });
     context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
       // Branded Chrome ignores --load-extension since Chrome 137, and the headless shell
       // can't run extensions, so headless runs use Playwright's own Chromium build

@@ -15,9 +15,10 @@ const { readFixtures, reportedCodes } = require('../scripts/build/verify-fixture
 const ROOT = path.join(__dirname, '..');
 const fixtures = readFixtures();
 
-// Codes no fixture can show: a mistyped argument, no npm ci, a zip write that throws, and
-// the canary, which its own fixture proves absent
-const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary'];
+// Codes no fixture can show: a mistyped argument, no npm ci, a zip write that throws, the
+// canary, which its own fixture proves absent, and a page's preloads, which the bundler writes
+// from the graph it built (test/bundler.test.js covers that rule)
+const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary', 'closure/preload'];
 
 describe('test/build-fixtures/', () => {
   it('has a fixture for every build failure rule, and the canary run', () => {

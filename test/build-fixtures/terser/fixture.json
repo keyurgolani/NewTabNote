@@ -1,11 +1,11 @@
 {
-  "rule": "terser can't minify a JavaScript file",
+  "rule": "terser can't minify a first-party classic script, which the build minifies itself in both modes",
   "expect": [
     "build/terser"
   ],
   "edits": [
     {
-      "file": "js/utils.js",
+      "file": "js/insights-summary.js",
       "append": "\nconst = ;\n"
     }
   ]

@@ -3,7 +3,7 @@
 /**
  * The cascade on the root element, for the design token tests: which value each
  * custom property (and color-scheme) gets for a set of root attributes and media
- * features. Covers what css/design-tokens.css uses, before and after CleanCSS:
+ * features. Covers what css/design-tokens.css uses, before and after lightningcss:
  * :root with attribute and :not() selectors, @media with `and`, specificity,
  * source order, and !important. Anything else throws, so a generator change that
  * outgrows this model fails loudly instead of passing.

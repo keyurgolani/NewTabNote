@@ -1,13 +1,12 @@
 {
-  "rule": "the search indexer leaves JS_FILES, so new Worker('js/workers/indexer.js') names a file the package lacks, as it did before #27",
+  "rule": "a page starts a worker from a page-relative path the bundler doesn't build, so new Worker() names a file the package lacks, as the indexer's did before #27",
   "expect": [
     "closure/missing"
   ],
   "edits": [
     {
-      "file": "scripts/build.js",
-      "replace": "  'js/workers/indexer.js',\n",
-      "with": ""
+      "file": "js/popup.js",
+      "append": "\nwindow.ntnFixtureWorker = new Worker('js/workers/ntn-fixture-missing.js');\n"
     }
   ]
 }

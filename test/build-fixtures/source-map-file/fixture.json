@@ -10,7 +10,7 @@
       "write": "{\"version\":3,\"sources\":[],\"mappings\":\"\"}\n"
     },
     {
-      "file": "scripts/build.js",
+      "file": "scripts/build/vite-config.js",
       "replace": "  'js/lib/valibot/LICENSE.md',\n",
       "with": "  'js/lib/valibot/LICENSE.md',\n  'css/editor.css.map',\n"
     }

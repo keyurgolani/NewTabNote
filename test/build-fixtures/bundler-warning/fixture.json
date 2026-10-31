@@ -1,0 +1,13 @@
+{
+  "rule": "a page loads a classic script without vite-ignore, which Vite warns it can't bundle: no bundler warning is reviewed as allowed",
+  "expect": [
+    "build/bundler-warning"
+  ],
+  "edits": [
+    {
+      "file": "popup.html",
+      "replace": "  <script type=\"module\" src=\"js/popup.js\"></script>",
+      "with": "  <script src=\"js/ntn-fixture-classic.js\"></script>\n  <script type=\"module\" src=\"js/popup.js\"></script>"
+    }
+  ]
+}

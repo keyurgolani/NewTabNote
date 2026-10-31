@@ -1,0 +1,12 @@
+{
+  "rule": "a module the service worker shares with the pages reads document outside a typeof check",
+  "expect": [
+    "background/dom"
+  ],
+  "edits": [
+    {
+      "file": "js/storage.js",
+      "append": "\nglobalThis.ntnFixtureTitle = () => document.title;\n"
+    }
+  ]
+}

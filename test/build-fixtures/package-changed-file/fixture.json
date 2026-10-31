@@ -6,7 +6,7 @@
   ],
   "distEdits": [
     {
-      "file": "dist/js/offscreen.js",
+      "file": "dist/js/background.js",
       "append": "\n// changed after the build\n"
     }
   ]

@@ -1,12 +1,12 @@
 {
-  "rule": "a legacy file gains a type diagnostic ci/baselines/typecheck.json doesn't allow",
+  "rule": "a legacy file gains a type diagnostic ci/baselines/typecheck.json doesn't allow. It reads no page global, since js/utils.js is in the service worker's graph, whose check runs first.",
   "expect": [
     "type/legacy"
   ],
   "edits": [
     {
       "file": "js/utils.js",
-      "append": "\nwindow.ntnFixture = ntnFixtureUndefinedName;\n"
+      "append": "\nconst ntnFixtureLegacy = ntnFixtureUndefinedName;\n"
     }
   ]
 }

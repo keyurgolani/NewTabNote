@@ -1,14 +1,13 @@
 'use strict';
 
-// #27 AC5: the closure check (scripts/build/closure.js) on the package scripts/build.js's lists
-// describe, and on small packages with one thing broken.
+// #27 AC5: the closure check (scripts/build/closure.js) on the sources the bundler reads, on a
+// package laid out as the bundler writes one, and on small packages with one thing broken.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const build = require('../scripts/build.js');
-const { checkClosure, resolve, staticAssets, STATIC_ASSETS } = require('../scripts/build/closure.js');
+const { checkClosure, checkPreloads, checkClassicScripts, resolve, staticAssets, STATIC_ASSETS } = require('../scripts/build/closure.js');
 const { sourcePackage, packageOf } = require('./helpers/source-package.js');
 
 const NO_ASSETS = { files: new Set(), directories: [] };
@@ -19,26 +18,33 @@ function found(problems) {
   return problems.map(({ code, subject }) => `${code} ${subject}`).sort();
 }
 
-describe('the closure check on the package the build lists describe', () => {
-  it('finds every named path in it and nothing unnamed beyond build/static-assets.json', () => {
+describe('the closure check on the sources the bundler reads', () => {
+  // The sources hold modules no entry imports yet, which the bundler leaves out of dist/: those
+  // read as unreferenced here, and every path the sources name has to be there
+  const named = (problems) => problems.filter(({ code }) => code !== 'closure/unreferenced');
+
+  it('finds every path they name, the indexer through its module worker URL included', () => {
     const { problems, referenced } = checkClosure(sourcePackage());
-    assert.deepEqual(problems, []);
-    for (const file of ['js/workers/indexer.js', 'offscreen.html', 'js/offscreen.js', 'popup.html', 'icons/icon48.png', 'css/editor.css']) {
+    assert.deepEqual(named(problems), []);
+    for (const file of ['js/workers/indexer.js', 'js/kernel/composition/workers.js', 'offscreen.html', 'js/offscreen.js', 'popup.html',
+      'css/popup.css', 'css/sidepanel.css', 'icons/icon48.png', 'css/editor.css', 'js/lib/fuse.js', 'js/insights-summary.js']) {
       assert.ok(referenced.has(file), `${file} isn't named`);
     }
   });
 
-  it('would have caught the indexer: without it in JS_FILES, the new Worker() call names a missing file', () => {
-    const jsFiles = build.JS_FILES.filter((file) => file !== 'js/workers/indexer.js');
-    assert.equal(jsFiles.length, build.JS_FILES.length - 1, 'JS_FILES ships the indexer');
-    const { problems } = checkClosure(sourcePackage({ jsFiles }));
-    assert.deepEqual(problems.map(({ code, subject }) => `${code} ${subject}`), [
-      'closure/missing js/workers/indexer.js',
-    ]);
-    // NotesManager's is the one call left; App's unreachable copy went in #12 slice 7a
-    const named = problems.map(({ message }) => message.replace(/ at \d+:\d+/, '')).sort();
-    assert.deepEqual(named, [
-      "new Worker() in js/controllers/notes-manager.js, but the package doesn't have it",
+  it('would have caught the indexer: without it, the worker URL names a missing file', () => {
+    const { problems } = checkClosure(sourcePackage({ edits: { 'js/workers/indexer.js': null } }));
+    assert.deepEqual(found(named(problems)), ['closure/missing js/workers/indexer.js']);
+    assert.match(problems.find(({ code }) => code === 'closure/missing').message, /new Worker\(new URL\(\)\) at \d+:\d+ in js\/kernel\/composition\/workers\.js/);
+  });
+
+  it('loads no module as a classic script, as sidepanel.html would with an import in js/insights-summary.js', () => {
+    assert.deepEqual(checkClassicScripts(sourcePackage()), []);
+    const file = 'js/insights-summary.js';
+    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const problems = checkClassicScripts(sourcePackage({ edits: { [file]: `import './utils.js';\n${text}` } }));
+    assert.deepEqual(problems.map(({ code, subject, message }) => `${code} ${subject} ${message.replace(/ at \d+:\d+,/, ',')}`), [
+      'build/load-mode js/insights-summary.js sidepanel.html loads it as a classic script, but it has an import or export statement or import.meta at 1:1, which only a module parses',
     ]);
   });
 
@@ -47,7 +53,7 @@ describe('the closure check on the package the build lists describe', () => {
     const text = fs.readFileSync(path.join(__dirname, '..', background), 'utf8');
     const edited = text.replace(
       "documentUrls: [chrome.runtime.getURL('offscreen.html')]",
-      "documentUrls: [chrome.runtime.getURL(offscreenUrl)]",
+      'documentUrls: [chrome.runtime.getURL(offscreenUrl)]',
     ).replace("url: 'offscreen.html',", 'url: offscreenUrl,');
     assert.notEqual(edited, text);
     const { problems } = checkClosure(sourcePackage({ edits: { [background]: edited } }));
@@ -56,34 +62,91 @@ describe('the closure check on the package the build lists describe', () => {
     assert.ok(nonLiteral.every(({ subject }) => /^js\/background\.js:\d+:\d+$/.test(subject)));
     assert.match(nonLiteral.map(({ message }) => message).join('\n'), /chrome\.runtime\.getURL gets a path built at run time[\s\S]*createDocument's url gets a path/);
     // And with the paths unknown, nothing names the offscreen document
-    assert.deepEqual(found(problems.filter(({ code }) => code !== 'closure/non-literal')), [
-      'closure/unreferenced js/offscreen.js',
-      'closure/unreferenced offscreen.html',
-    ]);
+    const offscreen = found(problems.filter(({ code }) => code === 'closure/unreferenced')).filter((line) => /offscreen/.test(line));
+    assert.deepEqual(offscreen, ['closure/unreferenced js/offscreen.js', 'closure/unreferenced offscreen.html']);
   });
 });
 
 describe('build/static-assets.json', () => {
   const listed = JSON.parse(fs.readFileSync(STATIC_ASSETS, 'utf8'));
 
-  it('gives every row a reason, and says which change removes each row slice 1 adds for files that ship ahead', () => {
+  it('gives every row a reason, and holds no directory row or icon source, since the bundler ships only what an entry reaches', () => {
     for (const row of [...listed.files, ...listed.directories]) assert.ok(row.why && row.why.length > 10, row.path);
-    for (const file of ['icons/icon16.svg', 'icons/icon48.svg', 'icons/icon128.svg']) {
-      assert.match(listed.files.find((row) => row.path === file).until, /#27 slice 2/, file);
-    }
-    assert.deepEqual(listed.directories.map((row) => row.path), ['js/kernel/', 'js/trust/']);
-    for (const row of listed.directories) assert.match(row.until, /#27 slice 2/, row.path);
+    // #27 slice 2 dropped the js/kernel/ and js/trust/ rows and the three icons/*.svg rows
+    assert.deepEqual(listed.directories, []);
+    assert.deepEqual(listed.files.map((row) => row.path), ['LICENSE', 'THIRD_PARTY_NOTICES', 'js/lib/valibot/LICENSE.md', 'build-info.json', 'asset-manifest.json']);
+    const assets = staticAssets();
+    assert.ok(assets.files.has('build-info.json') && assets.files.has('asset-manifest.json') && assets.files.has('THIRD_PARTY_NOTICES'));
   });
 
-  it('a directory row covers only the scripts under it', () => {
+  it('a directory row would cover only the scripts under it', () => {
     const pkg = (extra) => packageOf({ 'manifest.json': MANIFEST, 'newtab.html': '<p>new tab</p>', ...extra });
-    assert.deepEqual(checkClosure(pkg({ 'js/kernel/later.js': 'export const x = 1;', 'js/trust/later.mjs': '' })).problems, []);
-    assert.deepEqual(found(checkClosure(pkg({ 'js/kernel/notes.json': '{}', 'js/trust/README.md': '' })).problems), [
+    const assets = { files: new Set(), directories: ['js/kernel/', 'js/trust/'] };
+    assert.deepEqual(checkClosure(pkg({ 'js/kernel/later.js': 'export const x = 1;', 'js/trust/later.mjs': '' }), { staticAssets: assets }).problems, []);
+    assert.deepEqual(found(checkClosure(pkg({ 'js/kernel/notes.json': '{}', 'js/trust/README.md': '' }), { staticAssets: assets }).problems), [
       'closure/unreferenced js/kernel/notes.json',
       'closure/unreferenced js/trust/README.md',
     ]);
-    const assets = staticAssets();
-    assert.ok(assets.files.has('build-info.json') && assets.files.has('asset-manifest.json') && assets.files.has('THIRD_PARTY_NOTICES'));
+  });
+});
+
+describe('the closure check on a package laid out as the bundler writes one', () => {
+  // newtab.html loads its entry chunk and preloads the chunk that imports; the entry starts a
+  // module worker as Vite writes one and imports a lazy chunk; the service worker is one file
+  const files = {
+    'manifest.json': JSON.stringify({ manifest_version: 3, name: 'x', version: '1.0.0', chrome_url_overrides: { newtab: 'newtab.html' }, background: { service_worker: 'js/background.js', type: 'module' }, icons: { 48: 'icons/icon48.png' } }),
+    'newtab.html': '<script type="module" crossorigin src="/assets/newtab-A1.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js"><link rel="stylesheet" crossorigin href="/assets/newtab-C3.css"><script src="js/lib/fuse.js"></script>',
+    'assets/newtab-A1.js': 'import{h as e}from"./host-B2.js";new Worker(new URL("/assets/indexer-D4.js",""+import.meta.url),{type:"module"});const t=()=>import("./trust-E5.js");',
+    'assets/host-B2.js': 'export const h=1;',
+    'assets/trust-E5.js': 'import{h as e}from"./host-B2.js";export const t=e;',
+    'assets/indexer-D4.js': 'self.onmessage=()=>{};',
+    'assets/newtab-C3.css': '.a{background:url(/icons/icon48.png)}',
+    'js/lib/fuse.js': 'var Fuse=1;',
+    'js/background.js': "chrome.tabs.create({url:chrome.runtime.getURL('newtab.html')});",
+    'icons/icon48.png': '',
+  };
+  const bundled = (edits = {}) => {
+    const contents = { ...files, ...edits };
+    for (const [file, text] of Object.entries(contents)) if (text === null) delete contents[file];
+    return packageOf(contents);
+  };
+  const options = { staticAssets: NO_ASSETS, vendored: new Set(['js/lib/fuse.js']) };
+
+  it('follows the entry, its preloads and imports, the module worker URL, the lazy chunk, and the stylesheet', () => {
+    const { problems, referenced } = checkClosure(bundled(), options);
+    assert.deepEqual(problems, []);
+    for (const file of ['assets/newtab-A1.js', 'assets/host-B2.js', 'assets/trust-E5.js', 'assets/indexer-D4.js', 'assets/newtab-C3.css', 'icons/icon48.png']) {
+      assert.ok(referenced.has(file), file);
+    }
+    assert.deepEqual(checkPreloads(bundled()), []);
+  });
+
+  it('reports a missing worker chunk, and a worker URL built at run time', () => {
+    assert.deepEqual(found(checkClosure(bundled({ 'assets/indexer-D4.js': null }), options).problems), ['closure/missing assets/indexer-D4.js']);
+    const text = 'new Worker(new URL(e,import.meta.url),{type:"module"});';
+    const computed = bundled({ 'assets/indexer-D4.js': null, 'assets/newtab-A1.js': `import{h}from"./host-B2.js";const t=()=>import("./trust-E5.js");${text}` });
+    const at = `import{h}from"./host-B2.js";const t=()=>import("./trust-E5.js");`.length + 'new Worker(new URL('.length + 1;
+    assert.deepEqual(found(checkClosure(computed, options).problems), [`closure/non-literal assets/newtab-A1.js:1:${at}`]);
+  });
+
+  it('reads a module worker URL against the script itself, not the page', () => {
+    const pkg = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script type="module" src="js/deep/a.js"></script>',
+      'js/deep/a.js': "new Worker(new URL('../workers/w.js', import.meta.url), { type: 'module' });",
+      'js/workers/w.js': "import './helper.js';",
+      'js/workers/helper.js': '',
+    });
+    assert.deepEqual(checkClosure(pkg, { staticAssets: NO_ASSETS, vendored: new Set() }).problems, []);
+  });
+
+  it('fails a page that doesn\'t preload a chunk its module scripts import, or preloads one they don\'t', () => {
+    const page = (links) => `<script type="module" src="/assets/newtab-A1.js"></script>${links}`;
+    assert.deepEqual(checkPreloads(bundled({ 'newtab.html': page('') })).map(({ code, subject, message }) => `${code} ${subject}: ${message}`), [
+      'closure/preload newtab.html: doesn\'t preload assets/host-B2.js, which its module scripts import',
+    ]);
+    const extra = checkPreloads(bundled({ 'newtab.html': page('<link rel="modulepreload" href="/assets/host-B2.js"><link rel="modulepreload" href="/assets/trust-E5.js">') }));
+    assert.deepEqual(extra.map(({ message }) => message), ['preloads assets/trust-E5.js, which its module scripts don\'t import at start']);
   });
 });
 
@@ -127,7 +190,7 @@ describe('how the closure check follows paths', () => {
     const cases = [
       ['const n = "w"; new Worker(`js/${n}.js`);', '`js/'],
       ["const u = 'js/w.js'; new Worker(u);", 'u);'],
-      ["new Worker(new URL('js/w.js', import.meta.url));", 'new URL'],
+      ["const w = 'w.js'; new Worker(new URL(w, import.meta.url));", 'w, import'],
       ["const s = 'w.js'; importScripts(s);", 's);'],
       ["const m = './gone.js'; import(m);", 'm);'],
       ["const page = 'gone.html'; chrome.tabs.create({ url: page });", 'page }'],
