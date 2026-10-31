@@ -409,6 +409,9 @@ class FormattingToolbar {
     this._restoreRange();
 
     if (!url) return;
+    // A link goes to http, https or mailto, or stays inside the extension as a reference with no
+    // scheme does, as 1.4.x's did; any other scheme makes no link (#14 slice 2)
+    if (!globalThis.BlockRendering.isLinkHref(url)) return;
 
     this.doc.execCommand('createLink', false, url);
     this._updateActiveStates();

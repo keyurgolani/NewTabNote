@@ -127,6 +127,8 @@ class BlockEditor {
     this.documentClient = config.documentClient || null;
     /** @type {EditorAI} */
     this.ai = config.ai || NO_AI;
+    /** The tab's logger, whose events a block this editor won't write goes to (Utils.blockRefusal) */
+    this.logger = config.logger || null;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -1335,9 +1337,10 @@ class BlockEditor {
     const beforeSnapshot = this.snapshotBlock(block);
     const oldType = block.type;
 
-    // Extract text content from incompatible block types (Req 12.3)
+    // Extract text content from incompatible block types (Req 12.3): their fields are plain
+    // text, escaped into the new type's rich content (#14 slice 2)
     if (['image', 'video', 'file', 'bookmark', 'equation', 'table'].includes(oldType)) {
-      block.content = this.extractBlockTextContent(block) || '';
+      block.content = globalThis.BlockRendering.escapePlainText(this.extractBlockTextContent(block) || '');
     }
 
     block.type = newType;
@@ -1825,8 +1828,9 @@ class BlockEditor {
       const beforeNode = this.doc.createTextNode(beforeText);
       const afterNode = this.doc.createTextNode(afterText);
 
+      // The link is rich text, so it goes in through the rendering port (#14)
       const tempDiv = this.doc.createElement('div');
-      tempDiv.innerHTML = linkHtml;
+      globalThis.BlockRendering.render(tempDiv, linkHtml);
       const linkNode = tempDiv.firstChild;
       const spaceNode = tempDiv.lastChild;
 
@@ -1881,9 +1885,10 @@ class BlockEditor {
 
     for (const [shortcut, type] of Object.entries(shortcuts)) {
       if (text.startsWith(shortcut)) {
-        // Remove the shortcut text
+        // Remove the shortcut text. What's left is the block's text, plain, so it's escaped into
+        // the block's rich content (#14 slice 2)
         const newContent = text.slice(shortcut.length);
-        block.content = newContent;
+        block.content = globalThis.BlockRendering.escapePlainText(newContent);
         this.changeBlockType(block.id, type);
         return;
       }
@@ -1993,9 +1998,9 @@ class BlockEditor {
       // Clone block data and generate new ID
       const newData = { ...blockData, id: Utils.generateId(), canvasId: this.noteId };
 
-      // Variable replacement
+      // Variable replacement: the values are plain text, escaped into rich content (#14 slice 2)
       if (newData.content) {
-        newData.content = this.processTemplateVariables(newData.content);
+        newData.content = this.processTemplateVariables(newData.content, globalThis.BlockRendering.escapePlainText);
       }
       if (newData.tableData) {
         newData.tableData = newData.tableData.map(row =>
@@ -2028,8 +2033,11 @@ class BlockEditor {
 
   /**
    * Process variables in template content
+   * @param {unknown} text
+   * @param {(value: string) => string} [as] - how a value is written into the field: as it is,
+   *   for plain text, or escaped into rich text
    */
-  processTemplateVariables(text) {
+  processTemplateVariables(text, as = (value) => value) {
     if (typeof text !== 'string') return text;
 
     const now = new Date();
@@ -2042,7 +2050,7 @@ class BlockEditor {
 
     let result = text;
     for (const [key, value] of Object.entries(variables)) {
-      result = result.split(key).join(value);
+      result = result.split(key).join(as(value));
     }
     return result;
   }
@@ -2310,7 +2318,7 @@ class BlockEditor {
 
           if (nextContent && nextBlock.type !== 'divider' && nextBlock.type !== 'image') {
             block.content = content.innerHTML + nextBlock.content;
-            content.innerHTML = block.content;
+            globalThis.BlockRendering.render(content, block.content);
             this.deleteBlock(nextBlock.id);
             this.placeCaretAtEnd(content);
           }
@@ -3359,6 +3367,8 @@ class BlockEditor {
       const parsedBlocks = typeof AIResponseUtils !== 'undefined'
         ? AIResponseUtils.markdownToBlocks(trimmed)
         : null;
+      // Blocks made from pasted text are written only when each decodes as a known block (#14)
+      if (parsedBlocks && Utils.blockRefusal(parsedBlocks, this.logger)) return;
 
       if (parsedBlocks && parsedBlocks.length > 0) {
         let afterId = currentBlock ? currentBlock.id : null;

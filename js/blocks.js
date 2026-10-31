@@ -238,7 +238,7 @@ class Block {
     // Type-specific content
     switch (this.type) {
       case 'divider':
-        block.innerHTML += '<hr>';
+        block.appendChild(document.createElement('hr'));
         break;
 
       case 'image':
@@ -285,7 +285,7 @@ class Block {
         toggleContent.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
           ? BlockPlaceholders.getBlockPlaceholder('toggle', BlockTypes.toggle.placeholder)
           : BlockTypes.toggle.placeholder;
-        toggleContent.innerHTML = this.content;
+        globalThis.BlockRendering.render(toggleContent, this.content);
         block.appendChild(toggleContent);
 
         const toggleChildren = document.createElement('div');
@@ -294,7 +294,7 @@ class Block {
           const childContent = document.createElement('div');
           childContent.className = 'toggle-children-content';
           childContent.contentEditable = true;
-          childContent.innerHTML = this.children;
+          globalThis.BlockRendering.render(childContent, this.children);
           toggleChildren.appendChild(childContent);
         } else {
           const childPlaceholder = document.createElement('div');
@@ -355,7 +355,7 @@ class Block {
         content.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
           ? BlockPlaceholders.getBlockPlaceholder(this.type, BlockTypes[this.type]?.placeholder)
           : (BlockTypes[this.type]?.placeholder || '');
-        content.innerHTML = this.content;
+        globalThis.BlockRendering.render(content, this.content);
         block.appendChild(content);
     }
 

@@ -938,6 +938,26 @@ const Utils = {
   },
 
   /**
+   * Why a page may not write blocks it built from outside text (#14 slice 2, "one way in"): the
+   * first that doesn't decode as a known block, as the code of what decode found, which goes
+   * to a `block.refused` event when the logger has events. Null when it may write them all.
+   * The new tab's BlockProjections decodes them (js/kernel/composition/block-projections.js).
+   * @param {Array<Object>} records
+   * @param {{event?: Function}} [logger]
+   * @returns {string | null}
+   */
+  blockRefusal(records, logger) {
+    for (const record of records) {
+      const code = globalThis.BlockProjections.producedBlockRefusal(record);
+      if (code === null) continue;
+      console.error('Block not written:', code);
+      if (logger && typeof logger.event === 'function') logger.event('block.refused', { errorCode: code });
+      return code;
+    }
+    return null;
+  },
+
+  /**
    * Parse markdown tables into HTML
    * @param {string} text - Text containing potential tables
    * @returns {string} - Text with tables converted to HTML

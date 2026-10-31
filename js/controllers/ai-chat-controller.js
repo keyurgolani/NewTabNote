@@ -2098,6 +2098,17 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   /**
+   * Refuse blocks made from the AI's text that don't each decode as a known block (#14
+   * slice 2), before anything is written: the insert's failure path takes it from there
+   * @param {Array<Object>} blocks
+   * @returns {void}
+   */
+  refuseUnknownBlocks(blocks) {
+    const refused = Utils.blockRefusal(blocks, this.logger);
+    if (refused) throw new Error(`Not stored: blocks (refused: ${refused})`);
+  }
+
+  /**
    * Add blocks to a note with insertBlocks, which moves the note's blocks at or past `atOrder`
    * down, stores the new ones, and sets the note's preview, todo progress, and links from its
    * blocks as stored, as this controller's three writes did after its block writes. Rejects
@@ -2129,6 +2140,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       const parsedBlocks = Array.isArray(blocksOrContent)
         ? blocksOrContent
         : this.buildAIInsertBlocks(blocksOrContent);
+      this.refuseUnknownBlocks(parsedBlocks);
 
       // What the editor holds is stored first, each block at its index, so the cursor's place
       // below is the stored one
@@ -2170,6 +2182,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       const parsedBlocks = Array.isArray(blocksOrContent)
         ? blocksOrContent
         : this.buildAIInsertBlocks(blocksOrContent);
+      this.refuseUnknownBlocks(parsedBlocks);
       // The note's id is taken now, so the blocks name it
       const noteId = this.documentClient.newId();
       const created = await this.documentClient.createNote({ noteId, name: 'AI Generated' });

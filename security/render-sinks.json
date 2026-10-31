@@ -1,0 +1,94 @@
+{
+  "about": "The raw markup sinks block code may have (#14 slice 2, the rendering boundary): each file and function with its count and kind, and the issue that removes it. Block code puts rich text into the DOM only through the trusted-rendering port (js/kernel/core/ports/rendering.js), whose legacy adapter's render is the one dynamic sink here besides packaged icons; every other row is packaged markup. test/render-sinks.test.js scans the files and directories in scope and fails on a sink no row covers, a count that changed, or a row whose sink is gone. A static sink assigns a string or a template with no substitutions; assigning the empty string isn't a sink.",
+  "version": 1,
+  "scope": [
+    "js/blocks.js",
+    "js/editor.js",
+    "js/ui/formatting-toolbar.js",
+    "js/blocks/",
+    "js/kernel/adapters/rendering/"
+  ],
+  "sinks": [
+    {
+      "file": "js/kernel/adapters/rendering/legacy.js",
+      "function": "render",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "Stays as the port's one sink: #21 slice 2 replaces the legacy adapter with the inline schema's renderer",
+      "note": "The trusted-rendering port's legacy adapter, which assigns 1.4.x's markup as it is"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "_pickerItem",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 14,
+      "removeWhen": "#14 slice 4 draws the slash menu and the pickers as views",
+      "note": "A picker item's icon, which is always one of the editor's packaged SVG constants"
+    },
+    {
+      "file": "js/blocks.js",
+      "function": "createElement",
+      "kind": "static",
+      "count": 2,
+      "owner": 14,
+      "removeWhen": "#14 slice 4's block views draw their own handle and to-do checkbox",
+      "note": "The drag handle's and the to-do checkbox's SVG icons"
+    },
+    {
+      "file": "js/blocks.js",
+      "function": "createTableElement",
+      "kind": "static",
+      "count": 1,
+      "owner": 14,
+      "removeWhen": "#14 slice 4's table view draws its own controls",
+      "note": "The table's row and column buttons"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "renderInsights",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The AI Insights header's icon and label"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "showInsightsLoadingInEditor",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The AI Insights loading placeholder"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "renderBacklinks",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "A backlink's icon; the note's name is set as text"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "showBlockActionMenu",
+      "kind": "static",
+      "count": 1,
+      "owner": 14,
+      "removeWhen": "#14 slice 4 draws Turn into as a view over block commands",
+      "note": "The Turn into item's label and arrow"
+    },
+    {
+      "file": "js/editor.js",
+      "function": "toggleVersionHistory",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The version history panel's close icon"
+    }
+  ]
+}

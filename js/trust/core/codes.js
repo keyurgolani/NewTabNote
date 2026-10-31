@@ -128,6 +128,15 @@ export const ERROR_CODES = Object.freeze([
   'headers-refused',
   'redirect-refused',
   'registry-unreadable',
+  // #14's producers: a block one built that doesn't decode as a known block, by what decode
+  // found (js/kernel/core/blocks/index.js, refusalOf)
+  'block-unknown-type',
+  'block-newer-version',
+  'block-not-a-record',
+  'block-invalid-type',
+  'block-invalid-version',
+  'block-upcast-failed',
+  'block-invalid-field',
 ]);
 
 /** Faults an incident can be about, from the failure sites and the providers that report them */

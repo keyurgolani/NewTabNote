@@ -65,14 +65,38 @@ export function projectionsOf(catalog) {
 }
 
 /**
+ * Why a producer may not write a block it built (#14 slice 2, "one way in"), or null when it
+ * may: a block it builds has to decode as a known type, at its model's version or an older
+ * one. The code says what decode found, for the producer's failure path and its
+ * `block.refused` event; it never holds what the block holds.
+ * @param {Decoded} decoded
+ * @returns {string | null}
+ */
+export function refusalOf(decoded) {
+  if (decoded.state === 'invalid') return `block-${decoded.reason}`;
+  if (decoded.state === 'unknown') return 'block-unknown-type';
+  if (decoded.state === 'newer') return 'block-newer-version';
+  return null;
+}
+
+/**
  * What the new tab's legacy scripts read blocks and markup through, as `BlockProjections`
- * (js/kernel/composition/block-projections.js sets it): the projections over a catalog, and
- * the tag stripping in linear time that the note list, AI responses and the editor's version
- * history use, and the wiki-link names the editor's save reads, also in linear time
+ * (js/kernel/composition/block-projections.js sets it): the projections over a catalog, the
+ * tag stripping in linear time that the note list, AI responses and the editor's version
+ * history use, the wiki-link names the editor's save reads, also in linear time, and the
+ * catalog's decode, with the refusal a producer checks a block it built against
  * @param {Catalog} catalog
  */
 export function pageReaders(catalog) {
-  return Object.freeze({ ...projectionsOf(catalog), stripTags, replaceTags, wikiLinkNames });
+  return Object.freeze({
+    ...projectionsOf(catalog),
+    stripTags,
+    replaceTags,
+    wikiLinkNames,
+    decodeBlock: catalog.decode,
+    /** @param {unknown} record */
+    producedBlockRefusal: record => refusalOf(catalog.decode(record)),
+  });
 }
 
 /** @type {ReturnType<typeof projectionsOf> | null} */
@@ -104,6 +128,12 @@ export const decodeBlock = record => builtInCatalog().decode(record);
  * @param {Decoded} decoded
  */
 export const encodeBlock = decoded => builtInCatalog().encode(decoded);
+
+/**
+ * Why a producer may not write `record`, a block it built, or null (refusalOf)
+ * @param {unknown} record
+ */
+export const producedBlockRefusal = record => refusalOf(decodeBlock(record));
 
 /**
  * Make a new block of `type`
