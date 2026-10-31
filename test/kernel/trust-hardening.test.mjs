@@ -314,8 +314,19 @@ describe("#68's review round", () => {
     const store = createTrustDatabase({ indexedDB: slow, openWithinMs: 5 });
     opened.push(store);
     await assert.rejects(store.open(), { code: 'open-pending' });
-    await new Promise(resolve => setTimeout(resolve, 60));
-    await store.open();
+    // Each open() answers open-pending until the connection lands; ask again until it does,
+    // within a deadline far past the 30 ms it takes
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        await store.open();
+        break;
+      } catch (error) {
+        assert.equal(/** @type {any} */ (error).code, 'open-pending');
+        if (Date.now() > deadline) throw error;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
     assert.equal(await store.run(['incidents'], 'readonly', tx => tx.count('incidents')), 0);
   });
 
