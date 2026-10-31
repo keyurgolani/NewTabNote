@@ -194,9 +194,9 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     const stored = await checkOf('storage', probeContext(of, adapter));
     assert.deepEqual([stored.receipt.status, stored.faults], ['verified', []]);
     assert.ok(MIGRATION_FAULTS.every(fault => stored.looked.some(item => item.faultCode === fault)));
-    const broken = { storage: adapter, migration: { read: async () => { throw new Error('no read'); } } };
+    const broken = { storage: adapter, migration: { current: async () => { throw new Error('no read'); } } };
     assert.equal((await checkOf('storage', broken)).receipt.status, 'unverified');
-    const garbage = { storage: adapter, migration: { read: async () => ({ version: 'nine' }) } };
+    const garbage = { storage: adapter, migration: { current: async () => ({ version: 'nine' }) } };
     assert.equal((await checkOf('storage', garbage)).receipt.status, 'unverified');
     adapter.close();
   });

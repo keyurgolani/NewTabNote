@@ -276,7 +276,7 @@ export const storage = Object.freeze({
     const adapter = portOf(context, 'storage');
     // Below the latest version capture works on the database as it is, so a migration that
     // hasn't happened is storage's own state, never a failed probe
-    const migration = migrationFaultOf(await portOf(context, 'migration').read());
+    const migration = migrationFaultOf(await portOf(context, 'migration').current());
     /** @type {Outcome} */
     let outcome;
     try {
