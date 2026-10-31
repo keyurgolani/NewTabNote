@@ -81,7 +81,8 @@ async function openPage() {
   sidebar.getEditor = () => null;
   const palette = new (env.get('ShortcutsManager'))(deps);
   palette.getEditor = () => null;
-  palette.getOpenTabs = () => [];
+  // TabController's noteTabs, with no tab open
+  palette.noteTabs = { openNoteIds: () => [] };
   palette.getSidebarOpen = () => true;
   palette.getAISidebarOpen = () => false;
   palette.onCloseAllModals = () => {};

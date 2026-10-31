@@ -58,14 +58,12 @@ class AIChatController {
     this.onOpenNoteInNewTab = null;  // (noteId) => Promise<void>
     this.onOpenNoteById = null;      // (noteId) => Promise<void>
     this.onRefreshNotesList = null;  // () => Promise<void>
-    this.onRenderNotesList = null;   // () => Promise<void>
     this.onEnsureDailyNote = null;   // () => Promise<{id: string}|null>, the Daily Note through the kernel
     this.onOpenNewTab = null;        // () => Promise<void>
     this.onOpenSettingsModal = null;  // () => Promise<void>
     this.onCloseAllModals = null;    // () => void
-    this.onGetOpenTabs = null;       // () => Array
-    this.onRenderTabs = null;        // () => void
-    this.onSaveTabs = null;          // () => Promise<void>
+    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    this.noteTabs = null;
     /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
     this.noteList = null;
     this.onTriggerIndexing = null;   // () => void
@@ -1903,8 +1901,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   /**
    * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save), in the note's tab, and in the list. A title the
-   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * holds that note (display only, no save) and in the note's tab. The list shows it from the
+   * commit feed. A title the user typed there that no save has stored yet stays, and names
+   * the tab when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
@@ -1914,16 +1913,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const shown = editor && typeof editor.showCommittedTitle === 'function'
       ? editor.showCommittedTitle(noteId, name)
       : 'not-open';
-    if (shown !== 'typed-title-pending') {
-      const openTabs = this.onGetOpenTabs ? this.onGetOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = name;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-    }
-    if (this.onRenderNotesList) await this.onRenderNotesList();
+    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
   }
 
   clearAIChatHistory() {

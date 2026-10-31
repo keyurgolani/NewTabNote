@@ -94,8 +94,6 @@ class App {
     this.legacyStorage = legacyStorage;
     this.editor = null;
     this.secondaryEditor = null;
-    // Tab management
-    this._openTabs = []; // Until TabController exists; see the openTabs accessor
     // Search Indexer
     this.searchEngine = new SearchEngine();
     // Sidebar controller
@@ -145,21 +143,6 @@ class App {
   /** @returns {ReadonlyArray<any>} */
   get archivedNotes() {
     return this.noteList.view('archived');
-  }
-
-  /**
-   * The open tabs. TabController owns them and replaces the array when it
-   * restores the saved tabs, so this reads its current array, never a copy.
-   * @returns {Array<any>}
-   */
-  get openTabs() {
-    return this.tabController ? this.tabController.openTabs : this._openTabs;
-  }
-
-  /** @param {Array<any>} tabs */
-  set openTabs(tabs) {
-    if (this.tabController) this.tabController.openTabs = tabs;
-    else this._openTabs = tabs;
   }
 
   /**
@@ -719,14 +702,12 @@ class App {
     this.aiChatController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.aiChatController.onOpenNoteById = (noteId) => this.openNoteById(noteId);
     this.aiChatController.onRefreshNotesList = () => this.refreshNotesList();
-    this.aiChatController.onRenderNotesList = () => this.renderNotesList();
     this.aiChatController.onEnsureDailyNote = () => this.ensureDailyNote();
     this.aiChatController.onOpenNewTab = () => this.openNewTab();
     this.aiChatController.onOpenSettingsModal = () => this.openSettingsModal();
     this.aiChatController.onCloseAllModals = () => this.closeAllModals();
-    this.aiChatController.onGetOpenTabs = () => this.openTabs;
-    this.aiChatController.onRenderTabs = () => this.renderTabs();
-    this.aiChatController.onSaveTabs = () => this.saveTabs();
+    // A title it applies names the note's tab through TabController; the list shows it from the commit feed
+    this.aiChatController.noteTabs = this.tabController.noteTabs;
     this.aiChatController.noteList = this.noteList;
     this.aiChatController.onTriggerIndexing = () => this.triggerIndexing();
     this.aiChatController.onLoadEmbeddingsModel = () => {
@@ -812,15 +793,13 @@ class App {
 
     // Wire callbacks so the manager can trigger App-level actions
     this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
-    this.notesManager.onRenderNotesList = () => this.renderNotesList();
     this.notesManager.removal = this.removal;
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
     this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
     this.notesManager.getEditor = () => this.getEditor();
-    this.notesManager.getOpenTabs = () => this.openTabs;
-    this.notesManager.onRenderTabs = () => this.renderTabs();
-    this.notesManager.onSaveTabs = () => this.saveTabs();
+    // A title a job derives names the note's tab through TabController, as AI chat's does
+    this.notesManager.noteTabs = this.tabController.noteTabs;
 
     this.shortcutsManager = new ShortcutsManager({
       domRefs: this.domRefs,
@@ -845,7 +824,8 @@ class App {
       if (this.tabController) return this.tabController.closeCurrentTab();
     };
     this.shortcutsManager.getEditor = () => this.getEditor();
-    this.shortcutsManager.getOpenTabs = () => this.openTabs;
+    // The palette marks the notes open in tabs, as TabController has them
+    this.shortcutsManager.noteTabs = this.tabController.noteTabs;
     // The palette's Show and Hide labels say what the sidebars show
     this.shortcutsManager.getSidebarOpen = () => this.sidebarController.sidebarOpen;
     this.shortcutsManager.getAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
@@ -1218,20 +1198,6 @@ class App {
   }
 
   /**
-   * Save tabs to storage
-   */
-  async saveTabs() {
-    await this.tabController.saveTabs();
-  }
-
-  /**
-   * Render tabs in the header
-   */
-  renderTabs() {
-    this.tabController.renderTabs();
-  }
-
-  /**
    * Switch to a specific tab
    */
   async switchToTab(index) {
@@ -1316,7 +1282,7 @@ class App {
    */
   async openNoteById(noteId) {
     // Check if note is already open in a tab
-    const existingTabIndex = this.openTabs.findIndex(t => t.noteId === noteId);
+    const existingTabIndex = this.tabController.noteTabs.openNoteIds().indexOf(noteId);
     if (existingTabIndex !== -1) {
       await this.switchToTab(existingTabIndex);
     } else {
