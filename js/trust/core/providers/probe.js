@@ -45,6 +45,14 @@ export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
 /** The commandId a probe's work carries: neither adapter keeps one (idempotency: false), and a probe isn't a command */
 const PROBE_COMMAND_ID = 'trust-probe';
 
+/**
+ * What a probe that committed looked at: every fault it observes, on CanvasTabDB. One that
+ * failed looked at nothing beyond the fault it reports, and one that verified nothing, at
+ * nothing, so neither resolves anything.
+ * @returns {NonNullable<CheckResult['looked']>}
+ */
+const lookedAll = () => ['quota', 'version-too-new', 'probe-failed'].map(faultCode => ({ faultCode, subjectId: 'CanvasTabDB' }));
+
 /** The failures that need the user, not a retry: a full disk, or a newer build's database */
 const ACTION_CODES = Object.freeze(['quota', 'version-too-new']);
 
@@ -136,7 +144,7 @@ export const capture = Object.freeze({
       outcome = unavailableFrom(error);
     }
     const failure = failureOf(outcome);
-    if (!failure) return { status: 'verified', capture: 'safe' };
+    if (!failure) return { status: 'verified', capture: 'safe', looked: lookedAll() };
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     const faultCode = failure.code === 'quota' || failure.code === 'version-too-new' ? failure.code : 'probe-failed';
     return {
@@ -177,9 +185,10 @@ export const storage = Object.freeze({
           evidence: { subjectId: 'NewTabNoteTrust' },
           consequenceKey: 'storage.trust-records-unavailable',
           preserved: ['capture', 'editing', 'reading'],
+          looked: lookedAll(),
         };
       }
-      return { status: 'verified', capture: 'safe' };
+      return { status: 'verified', capture: 'safe', looked: lookedAll() };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     if (failure.kind === 'action') {

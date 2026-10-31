@@ -199,6 +199,59 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
     return { records, journal, clock, verify, stateOf };
   }
 
+  it('a read that fails looks at nothing, so the incident stays open until a read succeeds', async () => {
+    const of = freshProfile();
+    of.chrome.local.setting_llmApiKey = 'ntn-canary-r1-key';
+    let failing = false;
+    const secrets = {
+      present: async () => {
+        if (failing) throw new Error('the read failed');
+        return of.chrome.local.setting_llmApiKey ? ['setting_llmApiKey'] : [];
+      },
+    };
+    const { clock, verify, stateOf } = await trustOn(of, { secrets });
+    await verify(['credentials']);
+    assert.equal(await stateOf('credentials/legacy-secret/setting_llmApiKey'), 'open');
+    of.chrome.local.setting_llmApiKey = '';
+    failing = true;
+    clock.advance(1000);
+    await verify(['credentials']);
+    assert.equal(await stateOf('credentials/legacy-secret/setting_llmApiKey'), 'open', 'a failed read resolved it');
+    failing = false;
+    clock.advance(1000);
+    await verify(['credentials']);
+    assert.equal(await stateOf('credentials/legacy-secret/setting_llmApiKey'), 'resolved');
+  });
+
+  it('a probe that verified nothing looks at nothing; one that committed looks at every fault it observes', async () => {
+    const retry = { readSettings: async () => ({}), commit: async () => ({ outcome: { kind: 'unavailable', cause: 'storage', code: 'blocked-upgrade', retryable: true }, replayed: false }) };
+    assert.deepEqual((await checkOf('storage', { storage: retry })).looked, []);
+    const of = freshProfile();
+    const adapter = adapterOn(of);
+    await adapter.open();
+    assert.deepEqual((await checkOf('storage', { storage: adapter })).looked, [
+      { faultCode: 'quota', subjectId: 'CanvasTabDB' },
+      { faultCode: 'version-too-new', subjectId: 'CanvasTabDB' },
+      { faultCode: 'probe-failed', subjectId: 'CanvasTabDB' },
+    ]);
+    // A probe the disk refused looked only at what it reports
+    of.faults.abortAfterNextWrite('canvases', 'QuotaExceededError');
+    assert.deepEqual((await checkOf('storage', { storage: adapter })).looked, []);
+    adapter.close();
+  });
+
+  it('on a working profile each provider that observes a fault looked at every one it observes', async () => {
+    const { context } = await providerContext(freshProfile());
+    for (const descriptor of PROVIDERS) {
+      const run = await checkOf(/** @type {string} */ (descriptor.id), context);
+      assert.deepEqual(
+        [...new Set(run.looked.map(item => item.faultCode))].sort(),
+        [.../** @type {string[]} */ (descriptor.observes)].sort(),
+        `${descriptor.id} looked at ${JSON.stringify(run.looked)}`,
+      );
+    }
+  });
+
   it('credentials: the legacy-secret incident resolves once the key is cleared', async () => {
     const of = freshProfile();
     of.chrome.local.setting_llmApiKey = 'ntn-canary-r1-key';

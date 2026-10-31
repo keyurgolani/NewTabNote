@@ -26,6 +26,7 @@ const checkWith = (granted, manifest = MANIFEST) =>
     {
       id: 'permissions',
       operation: 'permissions.compare-manifest',
+      observes: ['grant-missing', 'permission-changed'],
       costClass: 'local-cheap',
       timeoutMs: 5000,
       freshnessMs: 60_000,
@@ -88,6 +89,7 @@ describe('permissions and destinations (#20 slice 2)', () => {
       {
         id: 'permissions',
         operation: 'permissions.compare-manifest',
+      observes: ['grant-missing', 'permission-changed'],
         costClass: 'local-cheap',
         timeoutMs: 5000,
         freshnessMs: 60_000,

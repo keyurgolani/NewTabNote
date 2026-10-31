@@ -55,6 +55,9 @@ export function newestVerified(points) {
   return [...newest.values()];
 }
 
+/** What it looked at once the points were listed and each verified: the point-unverified fault */
+const LOOKED = () => [{ faultCode: 'point-unverified', subjectId: 'NewTabNoteRecovery' }];
+
 /** What the recovery reader answers for a point that's no longer there */
 const DISCARDED = 'point-discarded';
 
@@ -85,7 +88,7 @@ export const recoveryReadiness = Object.freeze({
       }
     }
     if (points.length === 0) {
-      return { status: 'unverified', evidence: { count: 0, ...legacy }, consequenceKey: 'recovery.no-verified-point' };
+      return { status: 'unverified', evidence: { count: 0, ...legacy }, consequenceKey: 'recovery.no-verified-point', looked: LOOKED() };
     }
     const newestAt = Math.max(...points.map(point => /** @type {number} */ (point.verifiedAt)));
     if (failed > 0) {
@@ -98,6 +101,7 @@ export const recoveryReadiness = Object.freeze({
           ...legacy,
         },
         consequenceKey: 'recovery.point-unverified',
+        looked: LOOKED(),
         preserved: ['capture', 'editing', 'reading'],
         faults: [
           {
@@ -110,6 +114,6 @@ export const recoveryReadiness = Object.freeze({
         ],
       };
     }
-    return { status: 'verified', evidence: { count: points.length, verifiedAt: newestAt, ...legacy } };
+    return { status: 'verified', evidence: { count: points.length, verifiedAt: newestAt, ...legacy }, looked: LOOKED() };
   },
 });

@@ -36,6 +36,7 @@ export function truthfulReceipt({ context = {}, answers = false, then } = {}) {
         timeoutMs: data.timeoutMs,
         freshnessMs: data.freshnessMs,
         core: data.core === true,
+        observes: data.observes,
         check: given => /** @type {any} */ (implementation).check(given),
       },
       { context, clock, timers: realTimers },

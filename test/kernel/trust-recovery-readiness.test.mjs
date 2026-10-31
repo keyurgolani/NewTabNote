@@ -31,6 +31,7 @@ const checkOn = of =>
     {
       id: 'recovery-readiness',
       operation: 'recovery.verify-newest-points',
+      observes: ['point-unverified'],
       costClass: 'local-expensive',
       timeoutMs: 60_000,
       freshnessMs: 60_000,
