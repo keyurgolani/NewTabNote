@@ -6,7 +6,7 @@ dist/
 releases/
 # What scripts/build.js writes before its checks pass and it renames it to dist/
 /.dist-staging-*/
-# Build reports, such as #27's chunk graph and source maps, which never ship
+# Build reports, such as #27's chunk graph, source maps and perf:probe's JSON, which never ship
 dist-report/
 # Release files frozen as #17's test fixtures, not build output
 !/test/fixtures/storage/releases/
