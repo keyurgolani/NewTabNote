@@ -71,7 +71,6 @@ import { startIndexer } from './workers.js';
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
  *   recovery: Recovery, validateBackup: ValidateBackup, searchIndexStore: LegacyStore, graphStore: LegacyStore,
  *   syncStore: LegacyStore, startIndexer: () => Worker}) => NewTabApp} App
- * @property {unknown} [app]
  */
 
 /** Each LegacyStores handle's calls, as its holder makes them */
@@ -242,8 +241,9 @@ export function createNewTabLegacyStores(host) {
  * client, its document client, its settings client, its AI port, its note list, its failure
  * events, its removeNotes, its database's state and recovery, its import's backup check, the
  * narrow legacy stores the search index, the graph view, and sync still go through, and the
- * indexer's starter (./workers.js), and becomes window.app before init runs. The listener
- * answers with init's promise, which a page ignores and a test can wait for.
+ * indexer's starter (./workers.js). Nothing puts it on the page: no code reads a global App
+ * instance (#12 slice 7c). The listener answers with init's promise, which a page ignores and
+ * a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -272,7 +272,6 @@ export function startNewTab() {
       startIndexer,
     });
     built = app;
-    page.app = app;
     return app.init().catch(error => {
       console.error('App initialization failed:', error);
     });

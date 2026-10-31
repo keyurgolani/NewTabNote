@@ -16,13 +16,15 @@
  * scripts/perf/timing.js) Chromium itself has no network instead, a dead proxy and no host
  * resolution, so no request waits on a route in this process; the log then has no blocked
  * requests. The `extension` fixture (index.js) attaches that log
- * to a failed test.
+ * to a failed test. Every page it opens has the new tab's App as window.app, and its start
+ * as window.__ntnAppInit, which the product doesn't publish (app-hook.js).
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { installWorkerHooks } = require('./worker-hooks');
+const { hookApp } = require('./app-hook');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const SURFACES = ['newtab', 'popup', 'sidepanel'];
@@ -298,6 +300,8 @@ class ExtensionSession {
   async _start() {
     this._watch();
     if (this._network === 'route') await this._blockNetwork();
+    // Every page's new tab App as window.app, and its start as window.__ntnAppInit (app-hook.js)
+    await this.context.addInitScript(hookApp);
 
     this.context.serviceWorkers().forEach(worker => this._adoptWorker(worker));
     if (!this._worker) {
