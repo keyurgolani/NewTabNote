@@ -20,9 +20,11 @@
  * - A resolution applies only if it's later than every sighting.
  * - A dismissal or undismissal applies only if it's later than every sighting and than the
  *   last dismiss change (`dismissChangedAt`), so an older one replayed late changes nothing.
- * A replayed sighting records its id and count in the incident's `appliedOps`. One already
- * there adds nothing, and one that supersedes it (a later version of the same held sighting,
- * whose count includes it) adds only the difference.
+ * A sighting replayed from the settings copy names its lineage: the operation id of the first
+ * version of its copy entry, which every later version keeps while it adds occurrences. The
+ * incident's `appliedOps` keeps each lineage with the highest count applied, so a version
+ * replayed again, or a later one, adds only what's new. Occurrences only one context's memory
+ * holds aren't tracked: that context clears them right after the commit that replays them.
  */
 
 import * as v from '../../lib/valibot/index.mjs';
@@ -34,14 +36,11 @@ import { SEVERITIES } from './vocabulary.js';
 /** @typedef {import('./records.js').Incident} Incident */
 
 /**
- * How many replayed sightings an incident remembers. Only held storage sightings are
- * replayed: one per key in each context's memory and one in the settings copy, each
- * superseding at most SUPERSEDES before it, so this covers every one that can still arrive.
+ * How many copy lineages an incident remembers. The copy holds one entry, so one live lineage,
+ * per key; a key gets a new lineage only after its entry was replayed and trimmed, so an
+ * evicted lineage is one the copy no longer holds.
  */
 export const APPLIED_OPS = 64;
-
-/** How many earlier versions a held sighting names as superseded */
-export const SUPERSEDES = 8;
 
 /** What a sighting reports */
 export const sightingSchema = v.strictObject({
@@ -58,8 +57,8 @@ export const sightingSchema = v.strictObject({
 
 /**
  * A sighting as an operation: `count` occurrences, the latest at `at`. `incidentId` is the id
- * it gives an incident it creates, and `supersedes` names the held versions of it, newest
- * first, whose occurrences its count includes.
+ * it gives an incident it creates, and `lineage` the copy entry's first operation id, which
+ * every later version of the entry keeps, its count including the earlier ones'.
  */
 export const raiseOpSchema = v.strictObject({
   opId: recordId,
@@ -69,7 +68,7 @@ export const raiseOpSchema = v.strictObject({
   incidentId: recordId,
   sighting: sightingSchema,
   count: v.pipe(count, v.minValue(1)),
-  supersedes: v.pipe(v.array(recordId), v.maxLength(SUPERSEDES)),
+  lineage: recordId,
 });
 
 /** @typedef {v.InferOutput<typeof raiseOpSchema>} RaiseOp */
@@ -85,15 +84,16 @@ export const raiseOpSchema = v.strictObject({
  * @returns {RaiseOp}
  */
 export function raiseOp(ids, sighting, at) {
+  const opId = ids.next();
   return {
-    opId: ids.next(),
+    opId,
     kind: 'raise',
     at,
     key: incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId),
     incidentId: ids.next(),
     sighting,
     count: 1,
-    supersedes: [],
+    lineage: opId,
   };
 }
 
@@ -113,8 +113,8 @@ export function directAt(record, kind, now) {
 }
 
 /**
- * The incident `op` makes of `record`. With `track`, a replayed sighting is remembered in
- * `appliedOps`, and one already applied changes nothing.
+ * The incident `op` makes of `record`. With `track`, a sighting replayed from the copy is
+ * remembered by its lineage in `appliedOps`, and adds only what that lineage hasn't yet.
  * @param {Incident | undefined} record
  * @param {IncidentOp} op
  * @param {{track?: boolean}} [options]
@@ -134,7 +134,7 @@ export function applyOp(record, op, { track = false } = {}) {
  */
 export function applyRaise(record, op, { track = false } = {}) {
   const { sighting, at } = op;
-  const remembered = { opId: op.opId, count: op.count };
+  const remembered = { lineage: op.lineage, count: op.count };
   if (!record) {
     return {
       id: op.incidentId,
@@ -159,15 +159,9 @@ export function applyRaise(record, op, { track = false } = {}) {
   }
   let added = op.count;
   if (track) {
-    if (record.appliedOps.some(item => item.opId === op.opId)) return record;
-    // The newest earlier version already applied is part of this count
-    for (const earlier of op.supersedes) {
-      const applied = record.appliedOps.find(item => item.opId === earlier);
-      if (applied) {
-        added = Math.max(0, op.count - applied.count);
-        break;
-      }
-    }
+    const applied = record.appliedOps.find(item => item.lineage === op.lineage);
+    if (applied) added = Math.max(0, op.count - applied.count);
+    if (added === 0) return record;
   }
   const newest = at >= record.lastSeenAt;
   const reopens = record.state === 'resolved' && added > 0 && at >= (record.resolvedAt ?? 0);
@@ -186,7 +180,9 @@ export function applyRaise(record, op, { track = false } = {}) {
     affected: newest && added > 0 ? [...sighting.affected] : record.affected,
     preserved: newest && added > 0 ? [...sighting.preserved] : record.preserved,
     evidence: newest && added > 0 ? sighting.evidence : record.evidence,
-    appliedOps: track ? [...record.appliedOps, remembered].slice(-APPLIED_OPS) : record.appliedOps,
+    appliedOps: track
+      ? [...record.appliedOps.filter(item => item.lineage !== op.lineage), remembered].slice(-APPLIED_OPS)
+      : record.appliedOps,
   };
 }
 

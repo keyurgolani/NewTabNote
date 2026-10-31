@@ -115,9 +115,9 @@ export const incidentSchema = v.strictObject({
   affected: capabilities,
   preserved: capabilities,
   evidence: evidenceSchema,
-  // The held sightings already replayed into it, with their counts, newest last, so a replay
-  // never counts twice (incidents.js)
-  appliedOps: v.pipe(v.array(v.strictObject({ opId: recordId, count })), v.maxLength(64)),
+  // The copy lineages already replayed into it, each with the highest count applied, newest
+  // last, so a replay never counts twice (incidents.js)
+  appliedOps: v.pipe(v.array(v.strictObject({ lineage: recordId, count })), v.maxLength(64)),
 });
 
 /** @typedef {v.InferOutput<typeof incidentSchema>} Incident */

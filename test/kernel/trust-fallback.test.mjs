@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
-import { HELD_KEYS, WRITE_FAILED_KEY, createTrustRecords } from '../../js/trust/core/trust-records.js';
+import { HELD_KEYS, OPEN_FAILED_KEY, WRITE_FAILED_KEY, createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import {
   brokenFactory,
@@ -56,9 +56,11 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     assert.deepEqual([other.recorded, other.held, other.incident], [false, false, null]);
 
     const copy = /** @type {any} */ (profile.settings.items.get(KEY));
+    // The failed open() holds NewTabNoteTrust's own open-failed incident (round 4)
     assert.deepEqual(copy.entries.map((/** @type {any} */ entry) => [entry.key, entry.count]).sort(), [
       ['capture/capture-failed/-', 1],
       ['storage/open-failed/-', 2],
+      [OPEN_FAILED_KEY, 1],
       [WRITE_FAILED_KEY, 4],
     ]);
     assert.ok(
@@ -68,6 +70,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     assert.deepEqual(shown.map(incident => [incident.key, incident.occurrences]).sort(), [
       ['capture/capture-failed/-', 1],
       ['storage/open-failed/-', 2],
+      [OPEN_FAILED_KEY, 1],
       [WRITE_FAILED_KEY, 4],
     ]);
     assert.deepEqual(await records.events(), []);
@@ -84,6 +87,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     );
     assert.deepEqual((await second.records.incidents()).map(incident => incident.key).sort(), [
       'storage/open-failed/-',
+      OPEN_FAILED_KEY,
       WRITE_FAILED_KEY,
     ]);
   });
@@ -118,7 +122,7 @@ describe('the trust records fallback (#20 slice 1, AC2)', () => {
     assert.equal(replayed?.occurrences, 2);
     assert.equal(replayed?.id, shown?.id, 'the held incident keeps the id it was shown with');
     assert.equal(at(await first.records.incidents(), WRITE_FAILED_KEY)?.occurrences, 2);
-    assert.equal(/** @type {any} */ (profile.settings.items.get(KEY)).entries.length, 2);
+    assert.equal(/** @type {any} */ (profile.settings.items.get(KEY)).entries.length, 3);
     assert.deepEqual(
       (await first.records.events()).map(event => event.code),
       ['trust.reconciled'],

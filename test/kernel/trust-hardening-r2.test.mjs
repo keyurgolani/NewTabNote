@@ -277,7 +277,11 @@ describe("#68's second review round", () => {
     }
     assert.deepEqual(
       (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
-      [['storage/write-failed/-', 260]],
+      [
+        // The failed open() holds NewTabNoteTrust's own incident (round 4)
+        ['storage/open-failed/NewTabNoteTrust', 1],
+        ['storage/write-failed/-', 260],
+      ],
     );
   });
 
