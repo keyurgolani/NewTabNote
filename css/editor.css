@@ -5748,6 +5748,39 @@ kbd {
   min-height: 44px;
 }
 
+/* Settings > Data & Backup: the copy from before the update (js/ui/pre-update-copy.js). Its
+   guidance and status lines take --text-secondary, about 5:1 on the section in the light and
+   dark themes; the setting hint's --text-muted is under 3:1 there (ledgered for #24 and #16). */
+.pre-update-copy-row[hidden] {
+  display: none;
+}
+
+.pre-update-copy-guidance,
+.pre-update-copy-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.pre-update-copy-row:not([hidden]) + .pre-update-copy-guidance {
+  margin-top: -8px;
+}
+
+.pre-update-copy-status:not(:empty) {
+  margin-top: 6px;
+}
+
+/* Busy and damaged: the button keeps focus but does nothing, as #47's notice marks itself busy */
+.pre-update-copy-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pre-update-copy[aria-busy="true"] .pre-update-copy-btn {
+  cursor: progress;
+}
+
 /* A save found the open note deleted (BlockEditor._onNoteGone); stays in view while the pane scrolls */
 .note-gone-notice {
   position: sticky;

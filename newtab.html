@@ -10,22 +10,28 @@
   <link rel="stylesheet" href="css/stats.css">
   <!-- Module preloads, written by `node scripts/module-preloads.js --write` from the module graph -->
   <link rel="modulepreload" href="js/services/ai-port.mjs">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/legacy-export.js">
   <link rel="modulepreload" href="js/kernel/adapters/legacy/adapter.js">
   <link rel="modulepreload" href="js/kernel/core/application/note-list.js">
+  <link rel="modulepreload" href="js/kernel/core/ports/runtime.js">
   <link rel="modulepreload" href="js/kernel/composition/document.js">
   <link rel="modulepreload" href="js/kernel/composition/host.js">
   <link rel="modulepreload" href="js/kernel/composition/lazy-failure-events.js">
   <link rel="modulepreload" href="js/kernel/composition/removal.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/outcomes.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/recovery.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/recovery-points.js">
   <link rel="modulepreload" href="js/kernel/core/ports/repository.js">
   <link rel="modulepreload" href="js/kernel/adapters/indexeddb/requests.js">
   <link rel="modulepreload" href="js/kernel/adapters/indexeddb/schema.js">
   <link rel="modulepreload" href="js/kernel/adapters/indexeddb/settings.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/checks.js">
   <link rel="modulepreload" href="js/kernel/core/domain/note.js">
-  <link rel="modulepreload" href="js/kernel/core/ports/runtime.js">
   <link rel="modulepreload" href="js/kernel/core/application/kernel.js">
   <link rel="modulepreload" href="js/kernel/core/ports/policy.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/failures.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/records.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/shapes.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/clone.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/commands.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/queries.js">
@@ -39,6 +45,8 @@
   <link rel="modulepreload" href="js/kernel/core/application/snapshots.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/surfaces.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/system.js">
+  <link rel="modulepreload" href="js/kernel/core/contracts/codec.js">
+  <link rel="modulepreload" href="js/kernel/adapters/indexeddb/registry.js">
   <link rel="modulepreload" href="js/kernel/core/contracts/limits.js">
   <link rel="modulepreload" href="js/kernel/core/domain/folder.js">
   <link rel="modulepreload" href="js/kernel/core/application/work.js">
@@ -1066,6 +1074,19 @@
                 </div>
                 <!-- Filled from js/ui/export-notice.js, which says the same in the export notice -->
                 <p class="setting-hint" id="export-contents-hint"></p>
+              </div>
+              <!-- The copy the update saved before it changed how notes are stored (#17 PR 1b).
+                   js/ui/pre-update-copy.js fills it each time Settings opens; the status line is
+                   a live region from the start. -->
+              <div class="settings-section pre-update-copy" id="pre-update-copy" data-state="none"
+                data-setting-label="copy from before the update"
+                data-setting-desc="export pre-update copy go back earlier version 1.4.1 restore backup">
+                <h3>Copy From Before the Update</h3>
+                <div class="setting-row pre-update-copy-row" hidden>
+                  <button id="export-pre-update-btn" class="secondary-btn pre-update-copy-btn" type="button">Export Pre-Update Copy</button>
+                </div>
+                <p class="pre-update-copy-guidance"></p>
+                <p class="pre-update-copy-status" role="status" aria-live="polite"></p>
               </div>
               <div class="settings-section" data-setting-label="auto backup" data-setting-desc="automatic backup reminders frequency">
                 <h3>Auto Backup</h3>

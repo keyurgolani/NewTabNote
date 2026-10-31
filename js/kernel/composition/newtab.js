@@ -7,8 +7,10 @@
  */
 
 import { createAIPort } from '../../services/ai-port.mjs';
+import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
 import { createNoteList } from '../core/application/note-list.js';
+import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { kernelClient, legacyHost } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
@@ -33,15 +35,46 @@ import { createNoteRemoval } from './removal.js';
  * The legacy App class app.js puts on window, and the instance the controllers still read as
  * window.app until #12 slice 7 removes it
  * @typedef {object} NewTabPage
- * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval}) => NewTabApp} App
+ * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, preUpdateCopy: PreUpdateCopy}) => NewTabApp} App
  * @property {unknown} [app]
  */
 
 /**
- * The new tab's kernel and its client. It opens the database versioned, as Storage.init did,
- * and runs startup maintenance before any command. Its connection closes when another
- * context upgrades the database, so that upgrade never waits on this tab, and from then on
- * every command answers `reload-required`: the editor keeps its text and asks for a reload.
+ * The pinned pre-migration copy, for Settings > Data & Backup's Export Pre-Update Copy (#17
+ * PR 1b, Q8): `find` names the copy to export, with when it was made, and `export` hands it
+ * over as 1.4.1's import file, once it reads back verified. Both only read, and make no
+ * recovery database on a profile without one.
+ * @typedef {object} PreUpdateCopy
+ * @property {() => Promise<{id: string, createdAt: number} | null>} find
+ * @property {(id: string) => Promise<object>} export
+ */
+
+/**
+ * The new tab's pre-update copy, over the page's IndexedDB
+ * @param {{indexedDB?: IDBFactory, keyRange?: typeof IDBKeyRange, crypto?: import('../adapters/indexeddb/records.js').Digester}} [host]
+ * @returns {PreUpdateCopy}
+ */
+export function createPreUpdateCopy({
+  indexedDB = globalThis.indexedDB,
+  keyRange = globalThis.IDBKeyRange,
+  crypto = /** @type {any} */ (globalThis.crypto),
+} = {}) {
+  return Object.freeze({
+    async find() {
+      const point = await exportablePointRecord({ indexedDB });
+      return point ? { id: point.id, createdAt: point.createdAt } : null;
+    },
+    export: (/** @type {string} */ pointId) => exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId }),
+  });
+}
+
+/**
+ * The new tab's kernel and its client. It opens the database as it is on disk (since #17 PR
+ * 1b only the service worker upgrades it), waiting first on the worker's migration run when it
+ * finds none or an older one, and runs startup maintenance before any command. Its connection
+ * closes when the worker upgrades the database, so that upgrade never waits on this tab, and
+ * from then on every command answers `reload-required`: the editor keeps its text and asks for
+ * a reload.
  * @param {LegacyHost} [host]
  * @returns {Client}
  */
@@ -137,6 +170,7 @@ export function startNewTab() {
       noteList,
       events: createNewTabFailureEvents(),
       removal: createNewTabRemoval(kernel, noteList, () => built),
+      preUpdateCopy: createPreUpdateCopy(),
     });
     built = app;
     page.app = app;

@@ -8,18 +8,20 @@
  * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
  */
 
-// utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
+// utils.js and storage.js put Utils and Storage on self. The worker's kernel no longer runs on
+// Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import { MIGRATE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
 
 /**
- * The worker's kernel. It opens the database and runs startup maintenance now, as
- * Storage.init() did here, and a capture waits for both.
+ * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
+ * after a verified recovery point, then opens the database and runs startup maintenance, and a
+ * capture waits for all of it, except while an older build's open page blocks the upgrade.
  */
 const kernel = createWorkerClient();
 
@@ -60,11 +62,15 @@ installWorkerRouter();
  */
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
+/** The migration run's outcome, for #34's harness, which seeds a profile only once it's in */
+workerGlobal.storageUpgrade = kernel.migration.done;
 
 /** Why a capture can't be saved (the reasons the new tab shows) */
 const CAPTURE_REFUSALS = {
   newerSchema: "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
   missingCoreStores: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+  // #17 PR 1b: the upgrade waits on an open page of an older version, and there's no journal yet
+  blockedUpgrade: 'NewTabNote is updating how your notes are stored, and an open NewTabNote tab or window is holding them. Close or reload it, then try again.',
 };
 
 /**
@@ -76,6 +82,7 @@ const CAPTURE_REFUSALS = {
 function captureRefusal({ cause, code }) {
   if (cause === 'newer-schema') return CAPTURE_REFUSALS.newerSchema;
   if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
+  if (code === 'blocked-upgrade') return CAPTURE_REFUSALS.blockedUpgrade;
   return null;
 }
 
@@ -154,6 +161,15 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // A page that found no database, or an older one, waits on the migration run (#17, Q12).
+  // Only its status goes back, never anything stored.
+  if (request && request.type === MIGRATE_MESSAGE) {
+    kernel.migration.done.then(
+      outcome => sendResponse({ status: outcome.status }),
+      () => sendResponse({ status: 'failed' }),
+    );
+    return true;
+  }
   if (request.type === 'API_REQUEST') {
     console.debug('Background: Received API_REQUEST for', request.url);
     handleApiRequest(request)

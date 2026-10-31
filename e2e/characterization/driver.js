@@ -411,6 +411,15 @@ async function captureFunctionName(extension) {
  * fails asking for an update instead of guessing.
  */
 async function workerStorageSettled(extension) {
+  // Since #17 PR 1b the worker's kernel runs on #17's adapter, after its migration run, and
+  // nothing in the worker opens its Storage global, so the harness opens it, as it is, once the
+  // run is in (a run that upgrades later would close it)
+  if (await extension.worker.evaluate(() => Boolean(self.storageUpgrade) && Boolean(self.Storage))) {
+    await extension.worker.evaluate(async () => {
+      await self.storageUpgrade;
+      if (self.Storage.openState !== 'open') await self.Storage.openExisting();
+    });
+  }
   if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
     await expect.poll(() => extension.worker.evaluate(() => self.Storage.openState), { timeout: SETTLE_TIMEOUT_MS }).not.toBe('closed');
     const state = await extension.worker.evaluate(() => self.Storage.openState);

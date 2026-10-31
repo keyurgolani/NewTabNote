@@ -36,6 +36,8 @@ class SettingsController {
     this.onRenderAIPromptTemplateSettings = null;
     /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
     this.onSaveOpenEditors = null;
+    /** @type {(() => Promise<void>)|null} Settings opened: sections that read their state then do (#17 PR 1b) */
+    this.onSettingsOpened = null;
     /** @type {function|null} */
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */
@@ -408,6 +410,9 @@ class SettingsController {
     this.switchSettingsCategory('general');
 
     await this.updateSettingsUI();
+    if (this.onSettingsOpened) {
+      await this.onSettingsOpened().catch((error) => console.warn('A settings section could not read its state:', error));
+    }
   }
 
   async updateSettingsUI() {

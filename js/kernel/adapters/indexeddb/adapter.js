@@ -33,9 +33,10 @@
  * - idempotency: false. Persisted outcomes live in #17's `operations` store, which the first
  *   schema change (#17 slice 2) creates, so a resent command runs again.
  *
- * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})` where
- * they make the legacy adapter today, `versioned` for the new tab and the service worker and
- * `existing` for Popup and Side Panel (connection.js). No shipped entry point does yet.
+ * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
+ * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
+ * to 9, `existing` when the run left it as it was), Popup's and Side Panel's (`existing`). The
+ * new tab stays on #12's legacy adapter until #12 moves its writers (connection.js).
  */
 
 import { UnavailableError, committed, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
@@ -76,6 +77,10 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
  *   apart, so a root leaves it out.
  * @property {import('./recovery.js').Locks} [locks] - navigator.locks unless given
  * @property {Logger} [logger] - where a recovery copy that failed is reported; silent unless given
+ * @property {boolean} [requireCore] - an `existing` open refuses a database without notes or blocks (connection.js)
+ * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
+ *   What an `existing` open waits on first when there's no database or an older one: a page's
+ *   wait on the worker's migration run (connection.js)
  */
 
 /** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>, close: () => void}} IndexedDbAdapter */
@@ -235,10 +240,12 @@ export function createIndexedDbAdapter({
   pageContext = typeof document !== 'undefined',
   locks = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks : undefined,
   logger = silentLogger,
+  requireCore = false,
+  awaitUpgrade = null,
 }) {
-  // Only a page's versioned open saves the copy, as only the new tab's Storage.open does
+  // Only a page's versioned open saves the copy, as the new tab's Storage.open does
   const recovery = mode === 'versioned' && pageContext ? { settings, locks, logger } : null;
-  const connection = createConnection({ indexedDB, mode, openWithinMs, recovery });
+  const connection = createConnection({ indexedDB, mode, openWithinMs, recovery, requireCore, awaitUpgrade });
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another

@@ -70,13 +70,14 @@ class App {
    * every editor reads and writes its note through (js/kernel/composition/document.js), the
    * AI port every editor and NotesManager call the provider through (js/services/ai-port.mjs),
    * and the tab's note list (js/kernel/core/application/note-list.js), the one copy of the note
-   * lists that App, the controllers, the palette, and analytics read. `events` are the tab's
-   * failure events (js/kernel/composition/lazy-failure-events.js), which init gives the logger
-   * the controllers share, as its `event` method, and Embeddings. `removal` is the tab's
+   * lists that App, the controllers, the palette, and analytics read, and the pinned copy
+   * from before #17's storage upgrade, which Settings > Data & Backup exports. `events` are the
+   * tab's failure events (js/kernel/composition/lazy-failure-events.js), which init gives the
+   * logger the controllers share, as its `event` method, and Embeddings. `removal` is the tab's
    * removeNotes (js/kernel/composition/removal.js).
-   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any, removal?: any}} [options]
+   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any, removal?: any, preUpdateCopy?: any}} [options]
    */
-  constructor({ kernel, documentClient, ai, noteList, events = null, removal } = {}) {
+  constructor({ kernel, documentClient, ai, noteList, events = null, removal, preUpdateCopy } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
     // active set goes through it, and it moves this tab's panes around the write
@@ -85,6 +86,7 @@ class App {
     this.ai = ai;
     this.noteList = noteList;
     this.events = events;
+    this.preUpdateCopy = preUpdateCopy;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -275,17 +277,22 @@ class App {
       this.reportMissingStores();
 
       // The export notice decides now, before any note renders and before a first note exists
-      this.exportNotice = new ExportNotice({
+      const noticeDeps = {
         storage: appStorage(),
         onExport: () => this.settingsController.exportAll(),
         onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
+      };
+      this.exportNotice = new ExportNotice(noticeDeps);
+      // #17 PR 1b: while the upgrade waits for free space, its notice takes the region instead
+      this.spaceNotice = new SpaceNotice(noticeDeps);
+      /** @param {any} notice */
+      const decide = (notice) => notice.isDue().catch((error) => {
+        console.error('Export notice: could not decide whether to show it', error);
+        return false;
       });
       const startupReads = Promise.all([
         Onboarding.hasCompleted(),
-        this.exportNotice.isDue().catch((error) => {
-          console.error('Export notice: could not decide whether to show it', error);
-          return false;
-        }),
+        decide(this.spaceNotice).then((spaceDue) => (spaceDue ? this.spaceNotice : decide(this.exportNotice).then((due) => (due ? this.exportNotice : null)))),
       ]);
 
       // Populate DOM cache after document is ready
@@ -365,10 +372,10 @@ class App {
       await this.initThemeBuilderController();
 
       // Check if we have notes to display
-      const [hasCompletedOnboarding, exportNoticeDue] = await startupReads;
+      const [hasCompletedOnboarding, dueNotice] = await startupReads;
       const runsOnboarding = this.notes.length === 0 && this.archivedNotes.length === 0 && !hasCompletedOnboarding;
       // Before a note loads, so the note lays out once
-      if (exportNoticeDue && !runsOnboarding) this.showExportNotice();
+      if (dueNotice && !runsOnboarding) this.showExportNotice(dueNotice);
       if (runsOnboarding) {
         // First-run: show onboarding walkthrough
         await this.runOnboarding();
@@ -427,13 +434,15 @@ class App {
 
   /**
    * Show the one-time notice to export a copy before the next update changes
-   * how notes are stored (js/ui/export-notice.js), in #export-notice between
-   * the note's title and its blocks. Nothing here stops the new tab from starting.
+   * how notes are stored, or its space-blocked variant (js/ui/export-notice.js),
+   * in #export-notice between the note's title and its blocks. Nothing here
+   * stops the new tab from starting.
+   * @param {any} [notice] - the ExportNotice or SpaceNotice that's due
    * @returns {void}
    */
-  showExportNotice() {
+  showExportNotice(notice = this.exportNotice) {
     try {
-      this.exportNotice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
+      notice.show(/** @type {HTMLElement} */ (document.getElementById('export-notice')));
     } catch (error) {
       console.error('Export notice failed to show:', error);
     }
@@ -849,6 +858,15 @@ class App {
       domRefs: this.domRefs,
       logger: this.logger,
     });
+
+    // Settings > Data & Backup's copy from before the update (#17 PR 1b) reads its state each
+    // time Settings opens
+    const preUpdateSection = document.getElementById('pre-update-copy');
+    if (preUpdateSection && this.preUpdateCopy) {
+      this.preUpdateCopySection = new PreUpdateCopySection({ storage: appStorage(), copy: this.preUpdateCopy });
+      this.preUpdateCopySection.mount(preUpdateSection);
+      this.settingsController.onSettingsOpened = () => this.preUpdateCopySection.refresh();
+    }
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
