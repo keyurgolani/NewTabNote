@@ -136,7 +136,7 @@ test('trash retention at a new tab\'s start leaves another new tab on the note i
     const note = await Storage.createNote('Old trashed');
     await Storage.saveElement({ id: Utils.generateId(), canvasId: note.id, type: 'text', content: 'old body', order: 0 });
     await Storage.updateNote({ ...(await Storage.getNote(note.id)), trashed: true, trashedAt: Date.now() - 40 * 24 * 60 * 60 * 1000 });
-    await app.refreshNotesList();
+    await app.sidebarController.reloadLists();
     await app.openNoteInNewTab(note.id);
     return note.id;
   });

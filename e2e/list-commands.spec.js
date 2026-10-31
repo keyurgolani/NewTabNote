@@ -82,7 +82,7 @@ test('new notes from the sidebar, the header, the palette, and a folder show in 
   const page = await startOn(extension, [{ name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] }]);
   // A folder made the 1.4.x way, then shown, before counting
   const folderId = await page.evaluate(async () => (await Storage.createFolder('Work')).id);
-  await page.evaluate(() => app.refreshNotesList());
+  await page.evaluate(() => app.sidebarController.reloadLists());
   await countReloads(page);
 
   let before = await lastOpened(page);
