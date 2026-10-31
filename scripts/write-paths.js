@@ -79,7 +79,7 @@ const READS = new Set([
   '_readAux', 'getTodayNote', 'getAllNotes', 'getNoteNames', 'getArchivedNotes', 'getTemplates', 'getSearchIndex',
   'isNoteEmpty', 'isNoteUntitled', 'isEmptyTextBlock', 'getTrashedNotes', 'getElements', 'getNote',
   '_keepStoredNoteState', 'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
-  'readSetting', 'getAllSettings', 'onSettingsChange', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
+  'readSetting', 'getAllSettings', 'isUpgraded', 'onSettingsChange', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
   '_getAllMedia', 'exportNote', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
   'getSnapshots',
 ]);

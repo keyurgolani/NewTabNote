@@ -208,11 +208,8 @@ class ExportNotice {
     // settings.changed names the keys only, so the choice another tab recorded is read again,
     // through the settings port the notice came from: none, when the read fails
     this.unsubscribe = this.settings.onChanged(async ({ keys }) => {
-      if (await this._closesOn(keys)) {
-        this.close();
-        return;
-      }
       if (keys.includes(EXPORT_RECEIPT_SETTING)) this._askToConfirm();
+      if (await this._closesOn(keys)) this.close();
     });
   }
 
@@ -414,7 +411,8 @@ function isSpaceBlocked(record) {
  * blocked it shows in every new tab, unless Not now or Done put it off in the last 7 days
  * (`setting_spaceNoticeSnoozedAt` in chrome.storage.local). It wins over #47's notice, and
  * closes once the worker records another outcome. Export JSON works as #47's does: the
- * check step follows, with Done.
+ * check step follows, with Done. It reads the worker's record and its own put-off, and puts
+ * itself off, through the page's settings port, as #47's notice records its outcome.
  */
 class SpaceNotice extends ExportNotice {
   get kind() {
@@ -426,12 +424,12 @@ class SpaceNotice extends ExportNotice {
   }
 
   /**
-   * Whether this new tab shows it: the database opened, the worker's last run stopped short
-   * of space, and nothing put the notice off in the last 7 days. A failed read rejects.
+   * Whether this new tab shows it, which App asks once the tab's storage has opened: the
+   * worker's last run stopped short of space, and nothing put the notice off in the last 7
+   * days. A failed read rejects.
    * @returns {Promise<boolean>}
    */
   async isDue() {
-    if (this.storageState.openState !== 'open') return false;
     const stored = await this.settings.workspaceData([UPGRADE_RECORD_SETTING, SPACE_NOTICE_SETTING]);
     if (!isSpaceBlocked(stored[UPGRADE_RECORD_SETTING])) return false;
     const snoozedAt = Number(stored[SPACE_NOTICE_SETTING]);

@@ -4,27 +4,10 @@
  */
 
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
-import { chromeSettings, kernelClient, waitForWorkerUpgrade } from './host.js';
+import { kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').Client} Client */
-/** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
-
-/**
- * What Popup's and Side Panel's storage runs on, read from the page's globals unless a test
- * passes it
- * @typedef {object} PageHost
- * @property {IDBFactory} indexedDB
- * @property {SettingsStore} settings
- * @property {() => Promise<unknown>} awaitUpgrade - the wait on the worker's migration run (#17, Q12)
- */
-
-/**
- * The page's own storage host
- * @returns {PageHost}
- */
-export function pageHost() {
-  return { indexedDB: globalThis.indexedDB, settings: chromeSettings(), awaitUpgrade: () => waitForWorkerUpgrade() };
-}
+/** @typedef {import('./host.js').PageHost} PageHost */
 
 /**
  * Popup's kernel and its client, on #17's IndexedDB adapter (#17 PR 1b, Q3). It opens the
