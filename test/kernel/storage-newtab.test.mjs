@@ -293,3 +293,145 @@ describe("the new tab's connection on #17's adapter (#17 PR 4a)", () => {
     assert.deepEqual(opened.missingStores(), []);
   });
 });
+
+describe("#33's recovery copy, before the new tab opens a database at 8 that lacks a store (#17 PR 4a)", () => {
+  /** A database 1.4.x left at 8 without themes, holding a note, a block, an image, and a key in settings */
+  const WITHOUT_THEMES = {
+    omit: ['themes'],
+    records: {
+      canvases: [legacyEnv.note('n1', { name: 'Kept' })],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Kept text')],
+      // Versions up to 1.1.2 kept the AI key here in plaintext, so no copy takes it
+      settings: [{ key: 'llmApiKey', value: 'test-key-not-a-secret' }],
+      media: [{ id: 'm1', canvasId: 'n1', blob: new Blob(['png bytes'], { type: 'image/png' }), createdAt: 1 }],
+    },
+  };
+
+  /**
+   * The new tab's adapter as its root makes it, copying first
+   * @param {Profile} of
+   * @param {object} [options]
+   */
+  const copying = (of, options = {}) =>
+    adapterOn(of, { mode: 'existing', maintains: true, requireCore: true, copiesMissingStores: true, ...options });
+
+  /**
+   * Each recovery copy in `of`'s chrome.storage.local, by key
+   * @param {Profile} of
+   * @returns {Array<[string, any]>}
+   */
+  const copiesIn = of =>
+    Object.entries(legacyEnv.plain(of.chrome.local)).filter(([key]) => key.startsWith('recovery_backup_'));
+
+  /** @param {Profile} of */
+  const copyWrites = of =>
+    of.chrome.calls.filter(
+      (/** @type {any} */ call) =>
+        call.method === 'set' && call.keys.some((/** @type {string} */ key) => key.startsWith('recovery_backup_')),
+    );
+
+  it("writes what Storage's page open writes, once, leaving the database as it was, and the page opens", async () => {
+    const ours = await made(WITHOUT_THEMES);
+    const before = await legacyEnv.dumpDatabase(ours.real);
+    const adapter = copying(ours);
+    await adapter.open();
+    assert.deepEqual([adapter.openState(), adapter.missingStores()], ['open', ['themes']]);
+    assert.deepEqual(await legacyEnv.dumpDatabase(ours.real), before);
+
+    const theirs = await made(WITHOUT_THEMES);
+    const { storage, error } = await storageOpened(theirs);
+    assert.equal(error, null);
+    storage.db.close();
+
+    const [mine, storages] = [copiesIn(ours), copiesIn(theirs)];
+    assert.equal(mine.length, 1);
+    assert.equal(storages.length, 1);
+    const [[key, copy]] = mine;
+    assert.match(key, /^recovery_backup_\d+$/);
+    /** @param {any} value */
+    const timeless = value => ({ ...value, timestamp: 0 });
+    assert.deepEqual(timeless(copy), timeless(storages[0][1]));
+    assert.deepEqual(copy.missingStores, ['themes']);
+    assert.equal(copy.settings, undefined, 'settings left out');
+    assert.ok(!JSON.stringify(copy).includes('test-key-not-a-secret'), 'no plaintext key in the copy');
+    assert.equal(copy.media[0].blob, `data:image/png;base64,${Buffer.from('png bytes').toString('base64')}`);
+    // The marker names the copy and the stores it was made for, so the next start reads one value
+    const marker = legacyEnv.plain(ours.chrome.local).recovery_copy_missing_stores;
+    assert.deepEqual(marker, { key, missingStores: ['themes'], timestamp: copy.timestamp });
+    assert.deepEqual(
+      { ...marker, key: '', timestamp: 0 },
+      { ...legacyEnv.plain(theirs.chrome.local).recovery_copy_missing_stores, key: '', timestamp: 0 },
+    );
+  });
+
+  it('a later open writes no second copy for the same missing stores, and no open reads all of chrome.storage.local', async () => {
+    const of = await made(WITHOUT_THEMES);
+    // Backups already stored, which a full read would load into memory before the page renders
+    of.chrome.local.auto_backup_1 = { version: 1, canvases: [], elements: [] };
+    of.chrome.local.recovery_backup_1 = { recoveryBackup: true, reason: 'pre-import-replace', canvases: [] };
+    const first = copying(of);
+    await first.open();
+    first.close();
+    const second = copying(of);
+    await second.open();
+    assert.equal(copyWrites(of).length, 1);
+    assert.equal(copiesIn(of).filter(([, copy]) => copy.reason === 'missing-stores').length, 1);
+    const fullReads = of.chrome.calls.filter(
+      (/** @type {any} */ call) => call.method === 'get' && (call.keys === null || call.keys === undefined),
+    );
+    assert.deepEqual(fullReads, []);
+  });
+
+  it('two tabs opening at once write one copy between them, and without Web Locks an open still writes it', async () => {
+    const of = await made(WITHOUT_THEMES);
+    const locks = legacyEnv.createLockManager();
+    // Each look for the marker waits a little, so without the lock the two would overlap
+    const local = of.chrome.api.storage.local;
+    const realGet = local.get.bind(local);
+    local.get = (/** @type {any} */ keys, /** @type {any} */ callback) =>
+      Array.isArray(keys) && keys.includes('recovery_copy_missing_stores')
+        ? new Promise(resolve => setTimeout(resolve, 20)).then(() => realGet(keys, callback))
+        : realGet(keys, callback);
+    await Promise.all([copying(of, { locks }).open(), copying(of, { locks }).open()]);
+    assert.equal(copyWrites(of).length, 1);
+
+    const unlocked = await made(WITHOUT_THEMES);
+    await copying(unlocked, { locks: null }).open();
+    assert.equal(copiesIn(unlocked).length, 1);
+  });
+
+  it("a database at this version, or at 8 with every store, gets none, and neither does an open that doesn't copy", async () => {
+    for (const [shape, of] of /** @type {const} */ ([
+      ['at this version', await atThisVersion()],
+      ['at 8 with every store', await made(AT_8)],
+    ])) {
+      await copying(of).open();
+      assert.deepEqual(copiesIn(of), [], shape);
+    }
+    const popup = await made(WITHOUT_THEMES);
+    await adapterOn(popup, { mode: 'existing' }).open();
+    assert.deepEqual(copiesIn(popup), []);
+  });
+
+  it("a copy that can't be written leaves the page to open, and the next open writes it", async () => {
+    const of = await made(WITHOUT_THEMES);
+    of.chrome.failNextSet();
+    const first = copying(of);
+    await first.open();
+    assert.equal(first.openState(), 'open');
+    assert.deepEqual(copiesIn(of), []);
+    assert.equal(of.chrome.local.recovery_copy_missing_stores, undefined);
+    first.close();
+    await copying(of).open();
+    assert.equal(copiesIn(of).length, 1);
+  });
+
+  it("is written for a database at 8 without its blocks too, which the page then refuses, as Storage's is", async () => {
+    const of = await made({ omit: ['elements'], records: { canvases: [legacyEnv.note('n1', { name: 'Kept' })] } });
+    const adapter = copying(of);
+    await adapter.open().catch(() => {});
+    assert.equal(adapter.openState(), 'missing-core-stores');
+    const [[, copy]] = copiesIn(of);
+    assert.deepEqual(copy.missingStores, ['elements']);
+  });
+});

@@ -77,6 +77,7 @@ import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { runIntegrityCheck } from './integrity.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
+import { copyMissingStores } from './recovery-copies.js';
 import {
   CHANGES_KEY,
   CHANGES_STORE,
@@ -132,6 +133,12 @@ import { createVersionTracker } from './versions.js';
  *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
  *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
  *   leave it to the new tab and the worker.
+ * @property {boolean} [copiesMissingStores]
+ *   An `existing` open saves #33's recovery copy of a database at 8 that lacks some legacy
+ *   store before it opens it, as js/storage.js's page open did: the new tab's (#17 PR 4a,
+ *   recovery-copies.js)
+ * @property {import('./recovery-copies.js').CopyLocks | null} [locks]
+ *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
  * @property {typeof IDBKeyRange} [keyRange] - for the change log's reads, the global one unless given
  */
@@ -427,10 +434,19 @@ export function createIndexedDbAdapter({
   awaitUpgrade = null,
   integrityLog = contextConsole,
   maintains = false,
+  copiesMissingStores = false,
+  locks = null,
   clock = systemClock,
   keyRange,
 }) {
-  const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
+  const connection = createConnection({
+    indexedDB,
+    mode,
+    openWithinMs,
+    requireCore,
+    awaitUpgrade,
+    beforeOpen: copiesMissingStores ? () => copyMissingStores({ indexedDB, settings, clock, locks }) : null,
+  });
   const database = () => connection.database();
 
   /**
