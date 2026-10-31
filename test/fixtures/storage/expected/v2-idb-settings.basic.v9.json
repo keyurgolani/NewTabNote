@@ -58,6 +58,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -80,6 +82,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -102,6 +106,8 @@
                 "archivedAt": 1760000005000,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -124,6 +130,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -132,7 +140,9 @@
                 "settings": {
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
-                }
+                },
+                "trashed": true,
+                "trashedAt": 1760000006000
               }
             }
           ]
@@ -461,7 +471,7 @@
                   "canvases": {
                     "count": 4,
                     "idSetHash": "5e69480b466289c447d4afb283d0f69e276775a575c2e27aca31ac4b4b5010c5",
-                    "contentHash": "b9a38fef3c8f8da8d286f9f22bb71d99484dbd58bf12a11444e7e827363a54ee",
+                    "contentHash": "3aa7c34948a3cda463396ba0807ce5e672b2e9e2facb4adc6de010379bd0e8e2",
                     "keyPath": "id",
                     "purged": []
                   },
@@ -520,6 +530,8 @@
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -530,7 +542,7 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "01c5b89e124b3f8dc6c38fddd30c8409aac588a91f8943987ecc2fca0ae9421b"
+                "sha256": "9b3514564a11efcdee3ed585296342e78fcb28aaeb7f56d6cdb078b0d576482e"
               }
             },
             {
@@ -552,6 +564,8 @@
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -562,7 +576,7 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "e9e9496cbc30bc01c0de47a58f195e22a7d87673b22ef5522e81cf7ba4956c9a"
+                "sha256": "dce5e716df1f1658003fdc95ed28b66810b5ebc4a69b0083fc45c1de4c91fa7d"
               }
             },
             {
@@ -584,6 +598,8 @@
                   "archivedAt": 1760000005000,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -594,7 +610,7 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "3389f9a8108ef80932bc9e6a317a888b1595bc7c9646280da9e97de1754047a4"
+                "sha256": "b36cd5131e67014a4d69c390685b033e6774e96dd225dc739330cf2f8190c6de"
               }
             },
             {
@@ -616,6 +632,8 @@
                   "archivedAt": null,
                   "titleManuallySet": false,
                   "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -624,9 +642,11 @@
                   "settings": {
                     "gridType": "dots",
                     "backgroundColor": "#fafafa"
-                  }
+                  },
+                  "trashed": true,
+                  "trashedAt": 1760000006000
                 },
-                "sha256": "2747ddad6bc0d5ae5e6467ed628fabef8ab89980be18ccfdea061e99341f7717"
+                "sha256": "805a1b75c28626b8f9d5530735060c2ca8ac0800e7ea5ec2198173d258444206"
               }
             },
             {

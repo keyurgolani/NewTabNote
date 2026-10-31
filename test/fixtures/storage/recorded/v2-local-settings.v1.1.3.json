@@ -1,0 +1,374 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "v2-local-settings.v1.1.3",
+    "purpose": "What v1.1.3's own code writes for a synthetic seed: notes, blocks, media, settings and backups, as far as v1.1.3 has them.",
+    "shape": "v2-local-settings",
+    "releases": [
+      "v1.1.3"
+    ],
+    "provenance": "recorded",
+    "source": {
+      "recorder": "scripts/fixtures/record-release.mjs",
+      "tag": "v1.1.3",
+      "commit": "719f9e1344c17125f51f72ce86e0161f73d415f1",
+      "tree": "dfc144d0b249f16997984a7529c09d16c2046521",
+      "browser": "chromium 156.0.0.0",
+      "writePaths": [
+        "Storage.createNote",
+        "the editor save (Block.serialize, saveElement)",
+        "Storage.saveMedia",
+        "Storage.archiveNote",
+        "Storage.trashNote",
+        "Storage.setSetting"
+      ]
+    },
+    "schema": {
+      "idbVersion": 2,
+      "structuralVersion": null,
+      "logicalVersion": null
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 2,
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793409072160-thjcjqjex",
+              "value": {
+                "id": "1793409072160-thjcjqjex",
+                "name": "Untitled",
+                "createdAt": 1793409072160,
+                "updatedAt": 1793409072160,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793409073641-ehtla0gq8",
+              "value": {
+                "id": "1793409073641-ehtla0gq8",
+                "name": "{{CANARY:note-1-title}}",
+                "createdAt": 1793409073641,
+                "updatedAt": 1793409073641,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793409073641-lnsj41fe5",
+              "value": {
+                "id": "1793409073641-lnsj41fe5",
+                "name": "{{CANARY:note-2-title}}",
+                "createdAt": 1793409073641,
+                "updatedAt": 1793409073641,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793409073641-tkyavoa63",
+              "value": {
+                "id": "1793409073641-tkyavoa63",
+                "name": "{{CANARY:note-3-title}}",
+                "createdAt": 1793409073641,
+                "updatedAt": 1793409073652,
+                "archived": true,
+                "archivedAt": 1793409073652,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793409073642-najfotjg8",
+              "value": {
+                "id": "1793409073642-najfotjg8",
+                "name": "{{CANARY:note-4-title}}",
+                "createdAt": 1793409073642,
+                "updatedAt": 1793409073661,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "trashed": true,
+                "trashedAt": 1793409073661
+              }
+            }
+          ]
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793409073642-cyiy2pst1",
+              "value": {
+                "id": "1793409073642-cyiy2pst1",
+                "type": "todo",
+                "content": "{{CANARY:block-3}}",
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073642,
+                "updatedAt": 1793409073642,
+                "canvasId": "1793409073641-ehtla0gq8",
+                "order": 2
+              }
+            },
+            {
+              "key": "1793409073642-rnabm81hc",
+              "value": {
+                "id": "1793409073642-rnabm81hc",
+                "type": "text",
+                "content": "{{CANARY:block-2}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073642,
+                "updatedAt": 1793409073642,
+                "canvasId": "1793409073641-ehtla0gq8",
+                "order": 1
+              }
+            },
+            {
+              "key": "1793409073642-szuor748w",
+              "value": {
+                "id": "1793409073642-szuor748w",
+                "type": "h1",
+                "content": "{{CANARY:block-1}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073642,
+                "updatedAt": 1793409073642,
+                "canvasId": "1793409073641-ehtla0gq8",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409073642-zgj16ggk2",
+              "value": {
+                "id": "1793409073642-zgj16ggk2",
+                "type": "image",
+                "content": "",
+                "checked": false,
+                "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+                "calloutIcon": "💡",
+                "createdAt": 1793409073642,
+                "updatedAt": 1793409073642,
+                "canvasId": "1793409073641-ehtla0gq8",
+                "order": 3
+              }
+            },
+            {
+              "key": "1793409073645-4w6dxmvvg",
+              "value": {
+                "id": "1793409073645-4w6dxmvvg",
+                "type": "todo",
+                "content": "{{CANARY:block-5}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073645,
+                "updatedAt": 1793409073645,
+                "canvasId": "1793409073641-lnsj41fe5",
+                "order": 1
+              }
+            },
+            {
+              "key": "1793409073645-yd2b4og7v",
+              "value": {
+                "id": "1793409073645-yd2b4og7v",
+                "type": "text",
+                "content": "{{CANARY:block-4}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073645,
+                "updatedAt": 1793409073645,
+                "canvasId": "1793409073641-lnsj41fe5",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409073646-0it5n8k3n",
+              "value": {
+                "id": "1793409073646-0it5n8k3n",
+                "type": "text",
+                "content": "{{CANARY:block-6}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073646,
+                "updatedAt": 1793409073646,
+                "canvasId": "1793409073641-tkyavoa63",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409073646-y6pcfazay",
+              "value": {
+                "id": "1793409073646-y6pcfazay",
+                "type": "text",
+                "content": "{{CANARY:block-7}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409073646,
+                "updatedAt": 1793409073646,
+                "canvasId": "1793409073642-najfotjg8",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793409073647-6k9min1t8",
+              "value": {
+                "id": "1793409073647-6k9min1t8",
+                "canvasId": "1793409073641-ehtla0gq8",
+                "blob": {
+                  "$type": "Blob",
+                  "mime": "image/png",
+                  "base64": "iVBORw0KGgoAAAANAQIDBA=="
+                },
+                "type": "image/png",
+                "createdAt": 1793409073647
+              }
+            }
+          ]
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        }
+      ]
+    }
+  ],
+  "chromeStorageLocal": {
+    "setting_activeTabIndex": 0,
+    "setting_llmApiKey": "{{CANARY:llm-api-key}}",
+    "setting_llmProvider": "openai",
+    "setting_openTabs": [
+      {
+        "name": "Untitled",
+        "noteId": "1793409072160-thjcjqjex"
+      }
+    ],
+    "setting_theme": "dark"
+  }
+}

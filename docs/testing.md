@@ -24,7 +24,32 @@ How the tests are set up, what they're allowed to fake, and the three records th
 7. Test data is synthetic. No real notes, keys, passwords, or tokens. A secret a test needs is a made-up canary, and no assertion message prints it.
 8. The extension harness (`e2e/harness/`) launches the built extension on a fresh profile per test. Characterization specs act through `e2e/characterization/driver.js` and assert on what it returns, never on app state.
 
-#28 slice 3 adds the declarative fixture format, `loadFixture`, and the recorded release fixtures. Until then, the rules above are the fixture rules.
+## Storage fixtures
+
+`test/fixtures/storage/` holds profiles in one declarative format, `ntn-storage-fixture/1`: a header, each IndexedDB database with its stores, indexes, and records, and the `chrome.storage.local` entries. Values JSON can't hold are tagged (`{$type: 'Blob', ...}`), and a secret is only ever a `{{CANARY:<slot>}}` placeholder. #61 (#17 PR 1a) added the format, `loadFixture` and `dumpFixture` in `load-fixture.mjs`, `shapes.json`, the synthesized fixtures, and their expected outputs. #28 slice 3 added the rest.
+
+| Where | What | Made by |
+| --- | --- | --- |
+| `synthesized/` | one fixture per shape and degraded variant in #17's support matrix | `scripts/fixtures/synthesize-storage.mjs` |
+| `recorded/` | what each release from v1.0.0 to v1.4.0 wrote for a synthetic seed, through its own code | `scripts/fixtures/record-release.mjs` |
+| `expected/` | each synthesized and recorded fixture after the registry runs to 9, derived without the runner | `scripts/fixtures/derive-expected.mjs` |
+| `generate.mjs` | the maximal profile and the corrupt ones (truncated, mistyped, dangling, oversized, duplicate Daily Notes), made at test time and never committed | the tests |
+
+`npm test` checks every committed file: the format, under 256 KiB, key order, its shape, no secret outside a canary, an expected file for each, and a recorded fixture's fields covered by the synthesized one of its shape. That last check is how a recording shows a field #17's synthesizer missed. Fix the synthesizer, then rerun both scripts.
+
+`loadFixture` writes a fixture without running app code, 100 records per transaction. It's atomic per transaction, not per store: a load cut off partway leaves the cut transaction's writes out and keeps the ones before it. `dumpFixture` rejects rather than hand back a store it didn't read to the end. Both run in Node and, through `e2e/harness/fixture-host.js`, in an extension page or the service worker with the same options.
+
+The maximal profile takes its block types from `js/blocks.js`, its serializer from production's `Block`, and its settings from `initializeDefaultSettings` (`test/kernel/generated-inputs.mjs`), so a new block type or default setting is covered with no edit. `maximalProblems` fails on a missing store, key, block type, or setting. Expected outcomes for the generated profiles come from the generator's `roles`, never from what the code under test answers. Where production is wrong, the test is an expected failure in the ledger.
+
+To re-record a release, one tag per run (each is a Playwright run, so locally it goes through the machine lock):
+
+```
+git fetch --tags origin
+node scripts/fixtures/record-release.mjs v1.4.0
+node scripts/fixtures/derive-expected.mjs
+```
+
+The recorder `git archive`s the tag into a scratch directory, loads it unpacked in the harness, headless, writes the seed through the release's own `Storage`, Popup, and settings, and dumps it with each canary back to its placeholder. A canary the release changed fails the run. The header pins the tag's commit and tree, and lists the write paths that ran. `test/kernel/storage-recorded.test.mjs` checks those pins against the tags. CI's unit job fetches the tags and sets `NTN_RELEASE_TAGS=required`, so a missing tag fails there; a local clone without them shows the check as skipped. Nothing is downloaded, and a release Chromium won't load falls back to #17's synthesized fixture for its row, listed in the test's `FALLBACKS`.
 
 ## The known-defect ledger
 

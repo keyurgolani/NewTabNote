@@ -40,7 +40,8 @@
       "tests": [
         "KD-005 exportAll includes the links between notes",
         "KD-005 exportAll includes custom themes",
-        "KD-005 exportAll includes note snapshots"
+        "KD-005 exportAll includes note snapshots",
+        "KD-005 exportAll includes notes without updatedAt"
       ]
     },
     {
@@ -73,6 +74,23 @@
       "evidence": "https://github.com/keyurgolani/NewTabNote/blob/ddbc59a7c25523ed754ec39813c3c8204cb64e56/js/services/sync-service.js#L170-L171",
       "tests": [
         "KD-009 WebDAV connect stays disconnected when the server answers 403, 404, or 500"
+      ]
+    },
+    {
+      "id": "KD-010",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/e49e5436a60f61b56b3efeb721ed7b552b1deafb/js/storage.js#L1083-L1088",
+      "tests": [
+        "KD-010 a note whose name isn't text leaves the other notes' names for wiki-link autocomplete",
+        "KD-010 a note whose name isn't text doesn't stop another note's wiki links from saving"
+      ]
+    },
+    {
+      "id": "KD-011",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/628bae9563e87dfebe9af0cde1cd8bc61ee215c4/js/storage.js#L1060-L1064",
+      "tests": [
+        "KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)"
       ]
     }
   ]

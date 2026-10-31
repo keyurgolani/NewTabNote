@@ -4,12 +4,19 @@
 // chrome.storage.local key. v1.4.0 fails with VersionError, since all ten legacy stores are
 // there for its missing-store check to find, and v1.4.1's #33 guard refuses the newer
 // database. Neither deletes anything. #17 PR 1b's test/storage-rollback.test.js repeats this
-// once version 9 ships.
+// once version 9 ships. #28 slice 3 adds the profiles that hold auto_backup_* and
+// recovery_backup_* keys, recorded from v1.3.0 and v1.4.0 and generated (maximal), so that
+// check reads real keys, and a database a later build left at 12, which 1.4.x refuses too.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dump, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { maximalFixture } from '../fixtures/storage/generate.mjs';
+import { productionInputs } from './generated-inputs.mjs';
+import { FIXTURES as DIR, dump, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
 
 const FIXTURES = synthesized();
 const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic'];
@@ -57,5 +64,65 @@ describe('a profile migrated to 9, opened by a 1.4.x build', () => {
         }
       });
     }
+  }
+});
+
+/** The recorded fixtures that hold backups: v1.3.0's and v1.4.0's */
+const WITH_BACKUPS = ['v8.v1.3.0', 'v8.v1.4.0']
+  .map(id => path.join(DIR, 'recorded', `${id}.json`))
+  .filter(file => fs.existsSync(file))
+  .map(file => JSON.parse(fs.readFileSync(file, 'utf8')));
+
+/**
+ * 1.4.x's refusal of a newer database, and nothing changed or deleted
+ * @param {import('./migration-support.mjs').Profile} of
+ * @param {string} tag
+ */
+async function refusedUnchanged(of, tag) {
+  const before = await dump(of);
+  const keys = Object.keys(/** @type {object} */ (before.chromeStorageLocal));
+  const { error, Storage } = await rollBack(of, tag);
+  if (tag === 'v1.4.0') {
+    assert.equal(error && error.name, 'VersionError', String(error));
+  } else {
+    assert.match(String(error && error.message), /newer than this build supports/);
+    assert.equal(Storage.openState, 'newer-version');
+  }
+  const after = await dump(of);
+  assert.deepStrictEqual(after.databases, before.databases);
+  for (const key of keys) {
+    assert.deepStrictEqual(/** @type {any} */ (after.chromeStorageLocal)[key], /** @type {any} */ (before.chromeStorageLocal)[key], key);
+  }
+  return keys;
+}
+
+describe('a profile with backups, migrated to 9, opened by a 1.4.x build', async () => {
+  const maximal = maximalFixture(await productionInputs()).fixture;
+  const cases = [...WITH_BACKUPS, maximal];
+  it('has a fixture recorded from v1.3.0 and one from v1.4.0', () => {
+    assert.deepStrictEqual(
+      WITH_BACKUPS.map(fixture => fixture.header.id),
+      ['v8.v1.3.0', 'v8.v1.4.0'],
+    );
+  });
+  for (const fixture of cases) {
+    for (const tag of ['v1.4.0', 'v1.4.1']) {
+      it(`${fixture.header.id}, then ${tag}: refused, and every auto_backup_* and recovery_backup_* key kept`, async () => {
+        const of = await profileWith(fixture);
+        assert.equal((await run(of)).status, 'migrated');
+        const keys = await refusedUnchanged(of, tag);
+        assert.ok(keys.some(key => key.startsWith('auto_backup_')), 'no auto_backup_* key to keep');
+        assert.ok(keys.some(key => key.startsWith('recovery_backup_')), 'no recovery_backup_* key to keep');
+      });
+    }
+  }
+});
+
+describe('a database a later build left at version 12, opened by a 1.4.x build', () => {
+  for (const tag of ['v1.4.0', 'v1.4.1']) {
+    it(`v9.newer, then ${tag}: refused, and nothing changed or deleted`, async () => {
+      const of = await profileWith(/** @type {any} */ (FIXTURES.get('v9.newer')));
+      await refusedUnchanged(of, tag);
+    });
   }
 });

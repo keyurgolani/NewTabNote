@@ -19,8 +19,9 @@
 // indexes in onupgradeneeded only, writes records in transactions of at most 100, writes
 // chromeStorageLocal with storage.set, and runs no app code. dumpFixture reads every database
 // a factory has, and chrome.storage.local when given, back into the same format, canonical, for
-// deepStrictEqual against expected/. Both run on Node; #28 adds a browser host behind the same
-// signatures.
+// deepStrictEqual against expected/. A load cut off partway leaves the store of the transaction
+// it was in as it was. Both run on Node, and in an extension page or worker through
+// e2e/harness/fixture-host.js (#28 slice 3), with the same signatures.
 
 export const FORMAT = 'ntn-storage-fixture/1';
 
@@ -61,18 +62,27 @@ const VIEWS = /** @type {Record<string, any>} */ ({
   DataView,
 });
 
+// Node has Buffer; a browser page or worker, where e2e/harness/fixture-host.js runs this file,
+// has btoa and atob instead
+const NODE = typeof Buffer === 'function';
+
 /**
  * @param {Uint8Array} bytes
  * @returns {string}
  */
-const base64Of = bytes => Buffer.from(bytes).toString('base64');
+const base64Of = bytes => {
+  if (NODE) return Buffer.from(bytes).toString('base64');
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
 
 /**
  * @param {string} text
  * @returns {Uint8Array<ArrayBuffer>}
  */
 const bytesOf = text => {
-  const decoded = Buffer.from(text, 'base64');
+  const decoded = NODE ? Buffer.from(text, 'base64') : Uint8Array.from(atob(text), char => char.charCodeAt(0));
   const bytes = new Uint8Array(new ArrayBuffer(decoded.length));
   bytes.set(decoded);
   return bytes;
@@ -205,13 +215,16 @@ export function compareKeys(a, b) {
     if (Array.isArray(key)) return [4, key];
     if (key && key[TAG] === 'Number') return [0, decodeValue(key)];
     if (key && key[TAG] === 'Date') return [1, Date.parse(key.iso)];
-    if (key && typeof key.base64 === 'string') return [3, Buffer.from(key.base64, 'base64')];
+    if (key && typeof key.base64 === 'string') return [3, bytesOf(key.base64)];
     throw new Error('not a key');
   };
   const [ta, va] = rank(a);
   const [tb, vb] = rank(b);
   if (ta !== tb) return ta - tb;
-  if (ta === 3) return Buffer.compare(va, vb);
+  if (ta === 3) {
+    for (let i = 0; i < Math.min(va.length, vb.length); i++) if (va[i] !== vb[i]) return va[i] - vb[i];
+    return va.length - vb.length;
+  }
   if (ta === 4) {
     for (let i = 0; i < Math.min(va.length, vb.length); i++) {
       const order = compareKeys(va[i], vb[i]);
@@ -308,10 +321,19 @@ export async function loadFixture(fixture, { factory, names = {}, storage, canar
           const tx = db.transaction(store.name, 'readwrite');
           const ended = committed(tx);
           const target = tx.objectStore(store.name);
-          for (const record of store.records.slice(start, start + BATCH)) {
-            const value = decodeValue(record.value);
-            if (target.keyPath === null) target.put(value, decodeValue(record.key));
-            else target.put(value);
+          try {
+            for (const record of store.records.slice(start, start + BATCH)) {
+              const value = decodeValue(record.value);
+              if (target.keyPath === null) target.put(value, decodeValue(record.key));
+              else target.put(value);
+            }
+          } catch (error) {
+            // A put that throws (a DataError for a value with no key, say) leaves the transaction
+            // active, and it would commit the puts before it: abort it, so a cut-off batch
+            // leaves its store as it was
+            ended.catch(() => {});
+            tx.abort();
+            throw error;
           }
           await ended;
         }
@@ -359,13 +381,20 @@ async function dumpDatabase(factory, name, as) {
       const raw = [];
       await new Promise((resolve, reject) => {
         const cursorRequest = store.openCursor();
+        let read = false;
         cursorRequest.onsuccess = () => {
           const cursor = cursorRequest.result;
-          if (!cursor) return;
+          if (!cursor) {
+            read = true;
+            return;
+          }
           raw.push({ key: cursor.primaryKey, value: cursor.value });
           cursor.continue();
         };
-        tx.oncomplete = () => resolve(undefined);
+        // A failed read rejects the dump itself, whatever its transaction does next, so a dump
+        // never hands back a store its cursor didn't read to the end
+        cursorRequest.onerror = () => reject(cursorRequest.error);
+        tx.oncomplete = () => (read ? resolve(undefined) : reject(new Error(`the read of ${storeName} ended early`)));
         tx.onabort = () => reject(tx.error);
       });
       const records = [];
