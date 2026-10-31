@@ -60,6 +60,12 @@ export const sightingSchema = v.strictObject({
  * it gives an incident it creates, and `lineage` the copy entry's first operation id, which
  * every later version of the entry keeps, its count including the earlier ones'.
  */
+/** How many contexts an incident or a copy entry names as having sighted it */
+export const CONTEXTS = 8;
+
+/** The contexts (each records instance's random id) whose sightings an op or incident counts */
+export const sightedBySchema = v.pipe(v.array(recordId), v.maxLength(CONTEXTS));
+
 export const raiseOpSchema = v.strictObject({
   opId: recordId,
   kind: v.literal('raise'),
@@ -69,7 +75,21 @@ export const raiseOpSchema = v.strictObject({
   sighting: sightingSchema,
   count: v.pipe(count, v.minValue(1)),
   lineage: recordId,
+  // The contexts whose sightings `count` holds; an entry without it (an older build's) reads as
+  // another context's
+  by: v.optional(sightedBySchema),
 });
+
+/**
+ * `a` and `b` together, each once, at most CONTEXTS: past that, the list still names more than
+ * one context, which is all a reader of it asks
+ * @param {readonly string[]} a
+ * @param {readonly string[]} b
+ * @returns {string[]}
+ */
+export function sightedByUnion(a, b) {
+  return [...new Set([...a, ...b])].slice(0, CONTEXTS);
+}
 
 /** @typedef {v.InferOutput<typeof raiseOpSchema>} RaiseOp */
 /** @typedef {{opId: string, kind: 'resolve', at: number, key: string}} ResolveOp */
@@ -81,9 +101,10 @@ export const raiseOpSchema = v.strictObject({
  * @param {{next(): string}} ids
  * @param {Sighting} sighting
  * @param {number} at
+ * @param {readonly string[]} [by] - the context that sighted it
  * @returns {RaiseOp}
  */
-export function raiseOp(ids, sighting, at) {
+export function raiseOp(ids, sighting, at, by) {
   const opId = ids.next();
   return {
     opId,
@@ -94,6 +115,7 @@ export function raiseOp(ids, sighting, at) {
     sighting,
     count: 1,
     lineage: opId,
+    ...(by ? { by: [...by] } : {}),
   };
 }
 
@@ -136,6 +158,8 @@ export function applyOp(record, op, { track = false, unseen = false } = {}) {
 export function applyRaise(record, op, { track = false, unseen = false } = {}) {
   const { sighting, at } = op;
   const remembered = { lineage: op.lineage, count: op.count };
+  // An op that doesn't say whose sightings it holds reads as another context's
+  const by = op.by || [op.lineage];
   if (!record) {
     return {
       id: op.incidentId,
@@ -156,6 +180,7 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
       preserved: [...sighting.preserved],
       evidence: sighting.evidence,
       appliedOps: track ? [remembered] : [],
+      sightedBy: sightedByUnion([], by),
     };
   }
   let added = op.count;
@@ -188,6 +213,14 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
     appliedOps: track
       ? [...record.appliedOps.filter(item => item.lineage !== op.lineage), remembered].slice(-APPLIED_OPS)
       : record.appliedOps,
+    // Who sighted it since it was last resolved; a record from before this field reads as
+    // sighted by contexts unknown
+    sightedBy:
+      added === 0
+        ? record.sightedBy
+        : reopens
+          ? sightedByUnion([], by)
+          : sightedByUnion(record.sightedBy || [record.id], by),
   };
 }
 
@@ -198,7 +231,7 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
  */
 export function applyResolve(record, op) {
   if (!record || record.state === 'resolved' || op.at <= record.lastSeenAt) return record;
-  return { ...record, state: 'resolved', resolvedAt: op.at, dismissed: false };
+  return { ...record, state: 'resolved', resolvedAt: op.at, dismissed: false, sightedBy: [] };
 }
 
 /**

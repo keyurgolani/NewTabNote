@@ -43,14 +43,15 @@
  *   sighting, resolves the sightings no later than that open (`openedAt`), in the transaction
  *   that replays them; a later sighting, from a context that still can't open, stays open. A
  *   plain reconnect that never failed resolves nothing.
- * - `storage/write-failed` resolves by counting, not by clocks. Every write that lands here
- *   notes the incident's stored occurrences as this context's baseline, and the context counts
- *   its own failed writes since (an unreadable copy's extra one included). A write that lands
- *   after this context's failures resolves it, after its replay, only when the occurrences are
- *   exactly the baseline plus this context's own: any other context's failure, replayed by
- *   anyone, makes the count larger, so it stays open until a count matches again. A context
- *   with no baseline yet (no write has landed here) resolves nothing. One that fails later
- *   reopens it, as any held sighting does.
+ * - `storage/write-failed` resolves only when every occurrence it holds came from this
+ *   context. Each records instance has a random context id, and every held sighting, copy
+ *   entry, and incident names the contexts whose sightings it counts (`by`, `sightedBy`,
+ *   since the last resolution). The first write that lands after this context failed, and that
+ *   read the settings copy, resolves it after its replay when `sightedBy` names this context
+ *   alone. A context whose first writes failed before any landed resolves them on its first
+ *   landed write. Any other context's occurrence keeps it open: this context can't tell
+ *   whether that one recovered, since the copy is the only channel between them. One that
+ *   fails later reopens it, as any held sighting does.
  * - Nothing outside the records resolves their own two incidents: `records.resolve` skips them
  *   whoever calls it, a check whatever its `looked` says, and no check may observe
  *   `write-failed` (families.js).
@@ -66,6 +67,9 @@
  *   this context's memory holds, reopens a resolved incident and undismisses a dismissed one
  *   whatever the clocks say. A sighting that reached the lock after a resolve can so reopen it:
  *   a false alarm, never a false all clear.
+ * - Known limit: `storage/write-failed` sighted by more than one context stays open, a false
+ *   alarm, until a later slice's verify path or a dismissal, even after every one of them
+ *   recovered.
  * - Known limit: the settings copy is the only channel between contexts. When
  *   chrome.storage.local takes no writes (over its quota, say) while reads still work, a
  *   context's failures stay in its own memory until its store takes a write, so another context
@@ -93,6 +97,7 @@ import * as v from '../../lib/valibot/index.mjs';
 import { UnavailableError } from '../../kernel/core/contracts/outcomes.js';
 import { capability, checkEvidence, faultCode, providerId, recordId, subjectId } from './evidence.js';
 import {
+  sightedByUnion,
   applyDismiss,
   applyOp,
   applyRaise,
@@ -260,11 +265,10 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   let openedAt = null;
   /** Set when the store first opens in this context: the next write resolves open-failed */
   let resolveOpenFailed = false;
-  /** write-failed's stored occurrences as of this context's last landed write, or null */
-  /** @type {number | null} */
-  let writeFailedBaseline = null;
-  /** This context's own write-failed occurrences since that baseline */
-  let writeFailedOwn = 0;
+  /** This context's id, which its held sightings and the incidents they count name */
+  const contextId = ids.next();
+  /** Whether this context held a write-failed sighting that no write here has resolved yet */
+  let writeFailedMine = false;
   /** Whether this context held an open-failed sighting since the store last opened here */
   let heldOpenFailed = false;
   /** Since when the adapter has answered that it's still connecting, or null */
@@ -358,6 +362,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         sighting: newer ? entry.sighting : /** @type {RaiseOp} */ (current).sighting,
         count: (current ? current.count : 0) + entry.remainder + 1,
         lineage: current ? current.lineage : opId,
+        by: sightedByUnion(current ? current.by || [current.lineage] : [], [contextId]),
       };
       await settings.set({ [SETTINGS_KEYS.lastStorageIncident]: { entries: [...rest, next] } });
       entry.incidentId = next.incidentId;
@@ -404,7 +409,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         const failed = held.get(WRITE_FAILED_KEY);
         if (failed) failed.remainder += 1;
         else held.set(WRITE_FAILED_KEY, { ...writeFailedEntry(when, 'unreadable'), remainder: 1 });
-        writeFailedOwn++;
+        writeFailedMine = true;
       }
       return entry;
     } finally {
@@ -451,9 +456,8 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   const failedWrite = async error => {
     if (state !== 'fallback') failureCode = codeOf(error);
     state = 'fallback';
+    writeFailedMine = true;
     await holdSighting(WRITE_FAILED_KEY, writeFailedSighting(codeOf(error)), clock.now());
-    // Counted once it's held, so a write that reads it held counts it too, or neither does
-    writeFailedOwn++;
     // It failed because the store won't open here: so is NewTabNoteTrust's own incident
     if (openFails(error)) await holdOpenFailed(error, true);
   };
@@ -517,6 +521,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         sighting: entry.sighting,
         count: entry.remainder,
         lineage: entry.remainderId,
+        by: [contextId],
       }));
     return {
       ops: /** @type {RaiseOp[]} */ (inOrder([...copied, ...remainders])),
@@ -647,31 +652,26 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     const go = async () => {
       const { ops, copied, tracked, read } = await heldOps();
       const ending = resolveOpenFailed;
-      const baseline = writeFailedBaseline;
-      const own = writeFailedOwn;
-      // Every write reads write-failed, to keep this context's baseline
+      // Only a write that read the copy has every held sighting in its replay
+      const mine = writeFailedMine && read;
       const names = /** @type {TrustStoreName[]} */ ([
         ...new Set([
           ...stores,
-          'incidents',
-          ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['journal']) : []),
+          ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['incidents', 'journal']) : []),
+          ...(ending || mine ? /** @type {TrustStoreName[]} */ (['incidents']) : []),
         ]),
       ]);
-      /** @type {number} */
-      let after = 0;
+      let resolvedMine = false;
       const done = await run(names, 'readwrite', async tx => {
+        resolvedMine = false;
         if (ops.length > 0) await replay(tx, ops, tracked);
         if (ending) await resolveOwn(tx, OPEN_FAILED_KEY, /** @type {number} */ (openedAt));
-        if (baseline !== null && own > 0) await resolveWriteFailed(tx, baseline + own);
-        const value = await unit(tx);
-        const [failed] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', WRITE_FAILED_KEY));
-        after = failed ? failed.occurrences : 0;
-        return value;
+        if (mine) resolvedMine = await resolveWriteFailed(tx);
+        return unit(tx);
       });
       if (!done.ok) return done;
       if (ending) resolveOpenFailed = false;
-      writeFailedBaseline = after;
-      writeFailedOwn -= own;
+      if (resolvedMine) writeFailedMine = false;
       state = 'open';
       failureCode = null;
       await settle(ops, copied, read);
@@ -684,22 +684,26 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
-   * Resolves `storage/write-failed` when, after this write's replay, its occurrences are exactly
-   * `expected`: this context's baseline plus its own failed writes since, so every occurrence
-   * since the baseline is this context's
+   * Resolves `storage/write-failed` when, after this write's replay, every sighting it counts
+   * since its last resolution is this context's. Answers whether it's resolved now, so this
+   * context stops trying: by this write, or by one before it.
    * @param {TrustTx} tx
-   * @param {number} expected
+   * @returns {Promise<boolean>}
    */
-  const resolveWriteFailed = async (tx, expected) => {
+  const resolveWriteFailed = async tx => {
     const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', WRITE_FAILED_KEY));
-    if (!existing || existing.state === 'resolved' || existing.occurrences !== expected) return;
+    if (!existing || existing.state === 'resolved') return true;
+    const by = existing.sightedBy;
+    if (!by || by.length === 0 || by.some(id => id !== contextId)) return false;
     const next = applyResolve(existing, {
       opId: ids.next(),
       kind: 'resolve',
       at: directAt(existing, 'resolve', clock.now()),
       key: WRITE_FAILED_KEY,
     });
-    if (next && next.state === 'resolved') tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
+    if (!next || next.state !== 'resolved') return false;
+    tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
+    return true;
   };
 
   /**
@@ -851,7 +855,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     const stored = await write(['incidents'], async tx => {
       const key = incidentKey(sighting.providerId, sighting.faultCode, sighting.subjectId);
       const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', key));
-      const op = raiseOp(ids, sighting, directAt(existing, 'raise', now));
+      const op = raiseOp(ids, sighting, directAt(existing, 'raise', now), [contextId]);
       const incident = parseRecord(incidentSchema, applyRaise(existing, op), 'incident');
       tx.put('incidents', incident);
       await pruneIncidents(tx);
