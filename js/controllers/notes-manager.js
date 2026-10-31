@@ -1117,18 +1117,6 @@ class NotesManager {
     }
   }
 
-  /**
-   * Get all notes with their insights for daily summary
-   */
-  async getNotesWithInsights() {
-    const notes = await this.storage.getAllNotes();
-    return notes.filter(note => note.insights && (
-      (note.insights.todos && note.insights.todos.length > 0) ||
-      (note.insights.reminders && note.insights.reminders.length > 0) ||
-      (note.insights.deadlines && note.insights.deadlines.length > 0)
-    ));
-  }
-
   // ─── Note lists ───
 
   /**

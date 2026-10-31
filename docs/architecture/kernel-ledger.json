@@ -42,7 +42,7 @@
     {
       "file": "js/controllers/ai-chat-controller.js",
       "rule": "this.storage",
-      "count": 19,
+      "count": 11,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -74,7 +74,7 @@
     {
       "file": "js/controllers/notes-manager.js",
       "rule": "this.storage",
-      "count": 17,
+      "count": 16,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -106,7 +106,7 @@
     {
       "file": "js/controllers/tab-controller.js",
       "rule": "this.storage",
-      "count": 9,
+      "count": 8,
       "owner": 12,
       "removeWhen": "#12 slice 7: controllers get narrow ports in place of storage: Storage; search index and vector calls left are re-pointed to #22",
       "verify": "npm run check:boundaries"
@@ -178,7 +178,7 @@
     {
       "file": "js/llm.js",
       "rule": "Storage",
-      "count": 10,
+      "count": 9,
       "owner": 11,
       "removeWhen": "#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows",
       "verify": "npm run check:boundaries"

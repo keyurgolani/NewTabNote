@@ -2344,53 +2344,6 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     }
   }
 
-  /**
-   * Populate LLM settings values when settings modal opens.
-   */
-  async updateLLMSettingsUI() {
-    const provider = await this.storage.getSetting('llmProvider', 'none');
-    const apiKey = await this.storage.getSetting('llmApiKey', '');
-    const model = await this.storage.getSetting('llmModel', '');
-    const ollamaUrl = await this.storage.getSetting('ollamaUrl', 'http://localhost:11434');
-
-    const providerSelect = document.getElementById('llm-provider-select');
-    if (providerSelect) providerSelect.value = provider;
-
-    const apiKeyInput = document.getElementById('llm-api-key');
-    if (apiKeyInput) apiKeyInput.value = apiKey;
-
-    const ollamaUrlInput = document.getElementById('ollama-url');
-    if (ollamaUrlInput) ollamaUrlInput.value = ollamaUrl;
-
-    this.updateLLMSettingsVisibility(provider);
-    await this.loadAndPopulateModels(provider, apiKey);
-
-    if (model) {
-      const modelSelect = document.getElementById('llm-model-select');
-      if (modelSelect) modelSelect.value = model;
-    }
-
-    // Auto-title settings
-    const autoTitleEnabled = await this.storage.getSetting('autoTitleEnabled', false);
-    const autoTitleInterval = await this.storage.getSetting('autoTitleInterval', 15);
-
-    const autoTitleEnabledCheckbox = document.getElementById('auto-title-enabled');
-    const autoTitleIntervalSelect = document.getElementById('auto-title-interval');
-
-    if (autoTitleEnabledCheckbox) autoTitleEnabledCheckbox.checked = autoTitleEnabled;
-    if (autoTitleIntervalSelect) autoTitleIntervalSelect.value = autoTitleInterval.toString();
-
-    // Insights extraction settings
-    const insightsEnabled = await this.storage.getSetting('insightsEnabled', false);
-    const insightsInterval = await this.storage.getSetting('insightsInterval', 360);
-
-    const insightsEnabledCheckbox = document.getElementById('insights-enabled');
-    const insightsIntervalSelect = document.getElementById('insights-interval');
-
-    if (insightsEnabledCheckbox) insightsEnabledCheckbox.checked = insightsEnabled;
-    if (insightsIntervalSelect) insightsIntervalSelect.value = insightsInterval.toString();
-  }
-
   async loadAndPopulateModels(provider, apiKey, forceRefresh = false) {
     const modelSelect = document.getElementById('llm-model-select');
     const refreshBtn = document.getElementById('refresh-models-btn');

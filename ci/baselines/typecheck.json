@@ -93,7 +93,7 @@
         "Property 'ChatUIComponents' does not exist on type 'Window & typeof globalThis'.": 2,
         "Property 'ScrollStateMachine' does not exist on type 'Window & typeof globalThis'.": 2,
         "Property 'abort' does not exist on type 'never'.": 1,
-        "Property 'checked' does not exist on type 'HTMLElement'.": 4,
+        "Property 'checked' does not exist on type 'HTMLElement'.": 2,
         "Property 'closest' does not exist on type 'EventTarget'.": 1,
         "Property 'dataset' does not exist on type 'Element'.": 1,
         "Property 'destroy' does not exist on type 'never'.": 1,
@@ -109,7 +109,7 @@
         "Property 'title' does not exist on type 'Element'.": 1,
         "Property 'value' does not exist on type 'Element'.": 1,
         "Property 'value' does not exist on type 'EventTarget'.": 4,
-        "Property 'value' does not exist on type 'HTMLElement'.": 30
+        "Property 'value' does not exist on type 'HTMLElement'.": 24
       }
     },
     "js/controllers/analytics-controller.js": {
@@ -299,7 +299,7 @@
         "Property 'LLM' does not exist on type 'Window & typeof globalThis'.": 1,
         "Property 'error' does not exist on type '{ ok: boolean; status: number; data: any; }'.": 1,
         "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5,
-        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4
       }
     },
     "js/offscreen.js": {

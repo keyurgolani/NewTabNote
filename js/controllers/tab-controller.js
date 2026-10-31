@@ -974,29 +974,6 @@ class TabController {
     }
   }
 
-  /**
-   * Open note in current tab or new tab based on modifier key.
-   */
-  async openNoteWithModifier(noteId, event) {
-    if (event && (event.ctrlKey || event.metaKey)) {
-      // Ctrl/Cmd+click opens in new tab
-      await this.openNoteInNewTab(noteId);
-    } else {
-      // Regular click opens in current tab, once the note is loaded
-      const note = await this.storage.getNote(noteId);
-      if (!note) return;
-
-      const editor = this.getEditor();
-      const goneId = editor.noteGone ? editor.noteId : null;
-      if (!(await editor.loadNote(noteId))) return;
-      this.openTabs[this.activeTabIndex] = { noteId: note.id, name: note.name || 'Untitled' };
-      this._dropGoneTab(goneId);
-      this.renderTabs();
-      if (this.onRenderNotesList) await this.onRenderNotesList();
-      await this.saveTabs();
-    }
-  }
-
   // ─── Split view ───
 
   /**

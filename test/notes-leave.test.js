@@ -542,7 +542,6 @@ describe('a note leaving the active set, in this new tab', () => {
   for (const [label, pick] of [
     ['a click on another tab', (tabs) => tabs.switchToTab(0)],
     ['a note opened in a new tab', (tabs) => tabs.openNoteInNewTab('C')],
-    ['a note opened in this tab', (tabs) => tabs.openNoteWithModifier('C', null)],
   ]) {
     it(`${label} that the editor refuses leaves the tab bar and the saved tabs on the note on screen`, async () => {
       const env = createLegacyEnv();
