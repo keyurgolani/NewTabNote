@@ -280,14 +280,21 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
 
   it('reaches the new tab only through import(), after its first failure', () => {
     const graph = readScriptGraph(ROOT, { pages: [] });
-    const newtab = (graph.pageModules.get('newtab.html') || []).map(({ file }) => file);
+    // What the tab starts with: the boot root's own graph, and the workspace chunk's, which the
+    // root loads at once through the loader (#27 slice 3)
+    const root = (graph.pageModules.get('newtab.html') || []).map(({ file }) => file);
+    assert.deepEqual([...root].sort(), ['js/entries/boot.js', 'js/entries/newtab.js', 'js/runtime/lazy.js']);
+    const workspace = [...importGraph(path.join(ROOT, 'js', 'workspace.js'))].map(file => path.relative(ROOT, file).split(path.sep).join('/'));
+    const newtab = [...root, ...workspace];
     assert.ok(newtab.includes('js/kernel/composition/lazy-failure-events.js'));
     assert.deepEqual(newtab.filter(isTrust), []);
     assert.ok(!newtab.includes('js/kernel/composition/trust.js'));
-    // The one import() in the tab's graph is the failure events' own, of ./trust.js
-    const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)));
-    assert.equal(dynamic.length, 1, dynamic.join('\n'));
-    assert.ok(dynamic[0].startsWith(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js:')));
+    // The tab's import()s: the root's of the workspace chunk, the loader's retry, and the failure
+    // events' own, of ./trust.js
+    const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
+      .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
+      .sort();
+    assert.deepEqual(dynamic, ['js/entries/newtab.js', 'js/kernel/composition/lazy-failure-events.js', 'js/runtime/lazy.js']);
     const source = fs.readFileSync(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js'), 'utf8');
     assert.ok(source.includes("import('./trust.js')"));
   });

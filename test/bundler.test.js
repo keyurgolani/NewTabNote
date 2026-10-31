@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('../scripts/build/vite-config.js');
-const { bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
 const { checkCommonJs } = require('../scripts/build/commonjs.js');
 const { BUILD_INPUTS, SOURCE_DIRS, listedInputs, buildEntries } = require('../scripts/build/inputs.js');
 const { checkBackgroundSources, pageGlobalReads, loadingProblems } = require('../scripts/build/background.js');
@@ -32,7 +32,7 @@ const PAGES = Object.values(config.PAGES);
 
 /** What a pass's configuration takes, reporting into an empty report */
 function passOptions(mode = 'production') {
-  return { root: '/repo', outDir: '/repo/.dist-staging-x', mode, report: { chunks: [], assets: [] }, logger: /** @type {any} */ ({}), onLog: () => {} };
+  return { root: '/repo', outDir: '/repo/.dist-staging-x', mode, buildId: 'build-x', report: { chunks: [], assets: [] }, logger: /** @type {any} */ ({}), onLog: () => {} };
 }
 
 /** A chunk as the report plugin records one */
@@ -148,7 +148,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.deepEqual(pages.build.modulePreload, { polyfill: false });
   });
 
-  it('minifies JavaScript with terser in production only and CSS with lightningcss in both, writes no source map, reads no config or .env file, and inlines NODE_ENV alone, with no CommonJS module', () => {
+  it("minifies JavaScript with terser in production only and CSS with lightningcss in both, writes no source map, reads no config or .env file, and inlines NODE_ENV and the build's ID alone, with no CommonJS module", () => {
     for (const mode of ['production', 'development']) {
       for (const pass of [config.pagesConfig(passOptions(mode)), config.backgroundConfig(passOptions(mode))]) {
         assert.equal(pass.build.minify, mode === 'production' ? 'terser' : false, mode);
@@ -158,7 +158,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
         assert.equal(pass.build.assetsInlineLimit, 0);
         assert.deepEqual([pass.configFile, pass.envDir, pass.publicDir, pass.build.copyPublicDir], [false, false, false, false]);
         assert.equal(pass.mode, mode);
-        assert.deepEqual(pass.define, { 'process.env.NODE_ENV': JSON.stringify(mode), module: 'undefined' });
+        assert.deepEqual(pass.define, { 'process.env.NODE_ENV': JSON.stringify(mode), __NTN_BUILD_ID__: JSON.stringify('build-x'), module: 'undefined' });
       }
     }
   });
@@ -251,12 +251,16 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
 });
 
 describe('the pages as the bundler reads them', () => {
-  it('load each classic script with vite-ignore, which keeps the bundler off it, and each is one CLASSIC_SCRIPTS lists', () => {
+  it("load each classic script with vite-ignore, which keeps the bundler off it, and CLASSIC_SCRIPTS lists those and the libraries the loader puts in", () => {
     const classic = PAGES.flatMap((page) => scripts(page).filter((tag) => !isModule(tag)).map((tag) => {
       assert.ok(tag.attributes.has('vite-ignore'), `${page} loads ${tag.attributes.get('src')} without vite-ignore`);
       return tag.attributes.get('src');
     }));
-    assert.deepEqual(classic.sort(), Object.keys(config.CLASSIC_SCRIPTS).sort());
+    assert.deepEqual(classic.sort(), ['js/entries/boot-guard.js', 'js/insights-summary.js']);
+    // #27 slice 3: the vendored libraries load at their first use, as classic scripts the loader puts in
+    const loaded = [...read(config.LOADER).matchAll(/chrome\.runtime\.getURL\('([^']+)'\)/g)].map(([, file]) => file);
+    assert.deepEqual(loaded.sort(), ['js/lib/chart.js', 'js/lib/fuse.js', 'js/lib/jszip.min.js', 'js/lib/transformers.js']);
+    assert.deepEqual([...classic, ...loaded].sort(), Object.keys(config.CLASSIC_SCRIPTS).sort());
     const vendor = readVendor();
     for (const [file, how] of Object.entries(config.CLASSIC_SCRIPTS)) {
       // A vendored library ships byte for byte, as its record pins it; first-party code minified
@@ -267,7 +271,7 @@ describe('the pages as the bundler reads them', () => {
 
   it("load their own code as module scripts, offscreen.html's included, so what each imports resolves in the pages pass as the worker's does in its own", () => {
     const modules = Object.fromEntries(PAGES.map((page) => [page, scripts(page).filter(isModule).map((tag) => tag.attributes.get('src'))]));
-    assert.deepEqual(modules, { 'newtab.html': ['js/main.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'] });
+    assert.deepEqual(modules, { 'newtab.html': ['js/entries/newtab.js'], 'popup.html': ['js/popup.js'], 'sidepanel.html': ['js/sidepanel.js'], 'offscreen.html': ['js/offscreen.js'] });
     for (const page of PAGES) for (const tag of scripts(page).filter(isModule)) assert.equal(tag.attributes.has('vite-ignore'), false, page);
     assert.equal(Object.hasOwn(config.CLASSIC_SCRIPTS, 'js/offscreen.js'), false);
   });
@@ -634,6 +638,70 @@ describe('the CommonJS checks (scripts/build/commonjs.js, scripts/build/bundle.j
       'build/commonjs js/a.js the bundler wrapped it as CommonJS in assets/newtab-A1.js',
     ]);
     assert.deepEqual(commonJsProblems({ chunks: [chunk('pages', 'newtab', 'assets/newtab-A1.js')], assets: [] }, '/repo'), []);
+  });
+});
+
+describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts/build/bundle.js)", () => {
+  const LOADER_ID = `/repo/${config.LOADER}`;
+
+  it('puts the loader alone in a chunk the pages pass writes at its own path, and every other chunk under assets/, hashed', () => {
+    const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
+    const [group] = output.codeSplitting.groups;
+    assert.equal(output.codeSplitting.groups.length, 1);
+    assert.equal(group.test(LOADER_ID), true);
+    assert.equal(group.test('/repo/js/main.js'), false);
+    const named = (moduleIds) => output.chunkFileNames({ name: 'x', isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds, exports: [] });
+    assert.equal(named([LOADER_ID]), config.LOADER);
+    assert.equal(named([LOADER_ID, '/repo/js/utils.js']), 'assets/[name]-[hash].js');
+    assert.equal(named(['/repo/js/main.js']), 'assets/[name]-[hash].js');
+    assert.equal(output.entryFileNames, 'assets/[name]-[hash].js');
+    // The workers' build and the background pass keep their own names
+    assert.equal(config.pagesConfig(passOptions()).worker.rolldownOptions.output.chunkFileNames, 'assets/[name]-[hash].js');
+    assert.equal(config.backgroundConfig(passOptions()).build.rolldownOptions.output.codeSplitting, false);
+  });
+
+  it("knows the loader's module by the sources' real path too, as a temporary directory's on macOS", () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-loader-'));
+    try {
+      const { output } = config.pagesConfig({ ...passOptions(), root: dir }).build.rolldownOptions;
+      const realId = path.join(fs.realpathSync(dir), config.LOADER);
+      assert.equal(output.codeSplitting.groups[0].test(path.join(dir, config.LOADER)), true);
+      assert.equal(output.codeSplitting.groups[0].test(realId), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a loader merged into another chunk, a loader chunk that holds more, and one without the build ID', () => {
+    const os = require('node:os');
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-loader-'));
+    try {
+      fs.mkdirSync(path.join(outDir, 'js/runtime'), { recursive: true });
+      fs.writeFileSync(path.join(outDir, config.LOADER), 'function i(){try{return"build-x"}catch{return null}}');
+      const report = (chunks) => ({ chunks, assets: [] });
+      const own = chunk('pages', 'loader', config.LOADER, { moduleIds: [LOADER_ID] });
+      assert.deepEqual(loaderProblems(report([own, chunk('pages', 'newtab', 'assets/newtab-A1.js', { moduleIds: ['/repo/js/entries/newtab.js'] })]), '/repo', outDir, 'build-x'), []);
+      const codes = (problems) => problems.map(({ code, subject, message }) => `${code} ${subject}: ${message}`);
+      assert.deepEqual(codes(loaderProblems(report([chunk('pages', 'newtab', 'assets/newtab-A1.js', { moduleIds: ['/repo/js/entries/newtab.js', LOADER_ID] })]), '/repo', outDir, 'build-x')), [
+        'build/loader js/runtime/lazy.js: the bundle writes it into assets/newtab-A1.js, not into a chunk of its own at its path',
+      ]);
+      assert.deepEqual(codes(loaderProblems(report([chunk('pages', 'loader', config.LOADER, { moduleIds: [LOADER_ID, '/repo/js/utils.js', '\0rolldown/runtime.js'] })]), '/repo', outDir, 'build-x')), [
+        'build/loader js/runtime/lazy.js: its chunk holds js/utils.js too',
+      ]);
+      assert.match(codes(loaderProblems(report([own]), '/repo', outDir, 'build-y')).join('\n'), /^build\/loader js\/runtime\/lazy\.js: it doesn't carry the build's ID, build-y,/);
+      assert.match(codes(loaderProblems(report([]), '/repo', outDir, 'build-x')).join('\n'), /into no chunk/);
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('holds the boot root, the loader, and the workspace chunk in the pages graph, and the loader imports nothing', () => {
+    const pages = graphFrom(PAGE_ENTRIES);
+    for (const file of ['js/entries/newtab.js', 'js/entries/boot.js', config.LOADER, 'js/workspace.js', 'js/main.js', 'js/app.js']) {
+      assert.ok(pages.includes(file), file);
+    }
+    assert.deepEqual(scanScript(config.LOADER, read(config.LOADER)).references.filter(({ kind }) => kind === 'import'), []);
   });
 });
 

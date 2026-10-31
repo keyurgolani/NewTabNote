@@ -7,10 +7,12 @@
  * ci/baselines/typecheck.json. Each diagnostic is keyed by file, code, and message, with
  * no line or column, so edits above it don't move it, and repeats are counted.
  *
- * Diagnostics in js/kernel/ are dropped first: `npm run typecheck:kernel` checks those
- * files under tsconfig.kernel.json's strict config and must report none. jsconfig.json
- * still reaches them, through its js/ include and the imports from js/background.js, until
- * #27 lists the legacy files instead (docs/adr/0001-kernel-stack.md, decision 1).
+ * Diagnostics in the strict directories are dropped first: `npm run typecheck:kernel` checks
+ * js/kernel/ under tsconfig.kernel.json's strict config, and `npm run typecheck:strict` checks
+ * the page code #27 slice 3 adds, js/entries/ and js/runtime/, under tsconfig.strict.json's,
+ * and each must report none. jsconfig.json still reaches them, through its js/ include and the
+ * imports from js/background.js, until #27 lists the legacy files instead
+ * (docs/adr/0001-kernel-stack.md, decision 1).
  *
  *   npm run typecheck:ratchet               fail on a new key, a higher count, or a lower
  *                                           count the baseline hasn't recorded yet
@@ -38,8 +40,8 @@ const GLOBAL = /^(error|warning|message) (TS\d+): (.*)$/;
 const DIAGNOSTIC_EXIT_CODES = [1, 2];
 // Node's own warnings, the only stderr a trusted run may have
 const NODE_WARNING = /^\(node:\d+\) |^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the warning was created\)$/;
-// Checked by typecheck:kernel instead (see the top of this file)
-const KERNEL_DIR = 'js/kernel/';
+// Checked by typecheck:kernel and typecheck:strict instead (see the top of this file)
+const STRICT_DIRS = ['js/kernel/', 'js/entries/', 'js/runtime/'];
 
 /**
  * Run tsc from the repository root and return its exit status and output
@@ -119,10 +121,10 @@ function untrustedRun(tsc, diagnostics, unparsed) {
 }
 
 /**
- * The diagnostics the ratchet counts: all but those in js/kernel/
+ * The diagnostics the ratchet counts: all but those in the strict directories
  */
 function legacyDiagnostics(diagnostics) {
-  return diagnostics.filter(({ file }) => !file.startsWith(KERNEL_DIR));
+  return diagnostics.filter(({ file }) => !STRICT_DIRS.some((dir) => file.startsWith(dir)));
 }
 
 function keyOf({ file, code, message }) {

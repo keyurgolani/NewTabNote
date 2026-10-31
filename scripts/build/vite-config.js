@@ -9,16 +9,19 @@
  *               an entry of its own.
  *   background  js/background.js, the manifest's module service worker, as one self-contained ES
  *               module at that path: nothing splits off, so nothing loads after the worker starts.
- * A script a page marks vite-ignore stays a classic script the bundler leaves alone
- * (CLASSIC_SCRIPTS), and the build copies the files no page or script imports (STATIC_FILES).
- * The pages, js/background.js, the icons, build-info.json, and the notices keep their names.
+ * A script a page marks vite-ignore, and a vendored library the loader puts in, stays a classic
+ * script the bundler leaves alone (CLASSIC_SCRIPTS), and the build copies the files no page or
+ * script imports (STATIC_FILES). The pages, js/background.js, the boot guard, the loader, the
+ * icons, build-info.json, and the notices keep their names.
  *
  * Production minifies JavaScript with terser, keeping license comments, and CSS with
  * lightningcss. Development leaves JavaScript as the bundler writes it and still minifies CSS,
  * so a stylesheet lightningcss refuses fails both. Neither writes a source map, reads a .env
- * file, or inlines any environment variable but NODE_ENV, which is the mode.
+ * file, or inlines any environment variable but NODE_ENV, which is the mode. Each inlines the
+ * build's ID, which the loader compares with build-info.json's (#27 slice 3).
  */
 
+const fs = require('node:fs');
 const path = require('node:path');
 
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).InlineConfig} InlineConfig */
@@ -28,6 +31,7 @@ const path = require('node:path');
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Rolldown.RolldownLog} RolldownLog */
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Rolldown.LogLevel} LogLevel */
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Rolldown.PreRenderedAsset} PreRenderedAsset */
+/** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Rolldown.PreRenderedChunk} PreRenderedChunk */
 /** @typedef {'production' | 'development'} Mode */
 
 /**
@@ -50,11 +54,12 @@ const PAGES = Object.freeze({
 const BACKGROUND_ENTRY = 'js/background.js';
 
 /**
- * The scripts the pages load as classic scripts, marked vite-ignore, and how each ships:
- * 'as-is', byte for byte, for the vendored libraries (their license banners included, which
- * `npm run check:notices` checks), or 'minify', with terser as a classic script, whose
- * top-level names stay the globals other scripts read. #27 slice 3 loads the libraries
- * through loadChunk instead.
+ * The scripts that run as classic scripts, which the bundler leaves alone, and how each ships:
+ * 'as-is', byte for byte, for the vendored libraries the loader puts in at their first use
+ * (js/runtime/lazy.js, #27 slice 3), their license banners included, which
+ * `npm run check:notices` checks; or 'minify', with terser as a classic script, whose
+ * top-level names stay the globals other scripts read, for the ones a page loads with
+ * <script vite-ignore src>: the new tab's boot guard and the side panel's insights summary.
  * @type {Readonly<Record<string, 'as-is' | 'minify'>>}
  */
 const CLASSIC_SCRIPTS = Object.freeze({
@@ -62,8 +67,15 @@ const CLASSIC_SCRIPTS = Object.freeze({
   'js/lib/jszip.min.js': 'as-is',
   'js/lib/chart.js': 'as-is',
   'js/lib/transformers.js': 'as-is',
+  'js/entries/boot-guard.js': 'minify',
   'js/insights-summary.js': 'minify',
 });
+
+/**
+ * The page's loader (#27 slice 3), which ships at its own path as a chunk of its own, so the
+ * closure check knows the one file it lets build a path at run time (scripts/build/closure.js)
+ */
+const LOADER = 'js/runtime/lazy.js';
 
 /**
  * Files the build copies byte for byte because no page or script imports them: the manifest,
@@ -221,6 +233,7 @@ function workerTerserPlugin() {
  * @property {string} root - the sources
  * @property {string} outDir - the staging directory both passes write into
  * @property {Mode} mode
+ * @property {string} buildId - the build's, which the loader carries (build-info.js's buildId)
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
@@ -231,7 +244,7 @@ function workerTerserPlugin() {
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
-function common({ root, mode, logger }) {
+function common({ root, mode, buildId, logger }) {
   return {
     configFile: false,
     root,
@@ -243,8 +256,11 @@ function common({ root, mode, logger }) {
     customLogger: logger,
     clearScreen: false,
     define: {
-      // The one value the build inlines, and never the environment's own NODE_ENV
+      // The one environment value the build inlines, and never the environment's own NODE_ENV
       'process.env.NODE_ENV': JSON.stringify(mode),
+      // The build's ID, from its inputs alone: the loader tells an update under the page by a
+      // build-info.json with another (js/runtime/lazy.js)
+      __NTN_BUILD_ID__: JSON.stringify(buildId),
       // A page has no CommonJS module. The legacy files end with `if (typeof module !==
       // 'undefined' && module.exports) {...} else { window.X = X }` for the Node tests that
       // require() them, and a file that names a free `module` the bundler wraps as CommonJS
@@ -291,6 +307,33 @@ function buildOptions({ outDir, mode }) {
 const CHECKS = Object.freeze({ bundlerTimings: false });
 
 /**
+ * The ids the bundler may give the loader's module: its path under the sources, and under their
+ * real path, as a temporary directory's comes on macOS (/var is /private/var)
+ * @param {string} root
+ * @returns {Set<string>}
+ */
+function loaderIds(root) {
+  const ids = new Set([path.join(root, LOADER)]);
+  try {
+    ids.add(path.join(fs.realpathSync(root), LOADER));
+  } catch {
+    // Sources that aren't there, as a test's, have no real path
+  }
+  return ids;
+}
+
+/**
+ * Where the pages pass writes a chunk that's no entry: the loader's at the loader's own path,
+ * any other under assets/, content-hashed
+ * @param {string} root
+ * @returns {(chunk: PreRenderedChunk) => string}
+ */
+function chunkFileName(root) {
+  const ids = loaderIds(root);
+  return (chunk) => (chunk.moduleIds.length === 1 && ids.has(chunk.moduleIds[0]) ? LOADER : `${ASSETS_DIR}/[name]-[hash].js`);
+}
+
+/**
  * The pages pass
  * @param {PassOptions} options
  * @returns {InlineConfig}
@@ -302,6 +345,7 @@ function pagesConfig(options) {
     chunkFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
     assetFileNames: assetFileName,
   };
+  const loader = loaderIds(root);
   return {
     ...common(options),
     build: {
@@ -310,7 +354,12 @@ function pagesConfig(options) {
       modulePreload: { polyfill: false },
       rolldownOptions: {
         input: Object.fromEntries(Object.entries(PAGES).map(([name, file]) => [name, path.join(root, file)])),
-        output: names,
+        output: {
+          ...names,
+          chunkFileNames: chunkFileName(root),
+          // The loader alone in a chunk, whichever chunks import it (#27 slice 3)
+          codeSplitting: { groups: [{ name: 'loader', test: (id) => loader.has(id) }] },
+        },
         checks: { ...CHECKS },
         onLog,
       },
@@ -361,6 +410,7 @@ module.exports = {
   PAGES,
   BACKGROUND_ENTRY,
   CLASSIC_SCRIPTS,
+  LOADER,
   STATIC_FILES,
   ASSETS_DIR,
   LICENSE_COMMENTS,
@@ -368,6 +418,7 @@ module.exports = {
   terserOptions,
   lightningcssTargets,
   assetFileName,
+  chunkFileName,
   pagesConfig,
   backgroundConfig,
 };

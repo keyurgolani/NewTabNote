@@ -9,10 +9,14 @@
  * @param {Logger} deps.logger
  * @param {Object} deps.documentClient - The page's document client
  *   (js/kernel/composition/document.js), which the notes a tab or pane opens are read through
+ * @param {((target: Document) => () => void)|null} [deps.registerExtraDocument] - The page
+ *   loader's (js/runtime/lazy.js): the PiP window gets each stylesheet a chunk adds after it
+ *   opens, since it copies the page's only then (#27 slice 3)
  */
 class TabController {
-  constructor({ settings, domRefs, logger, documentClient }) {
+  constructor({ settings, domRefs, logger, documentClient, registerExtraDocument = null }) {
     this.settings = settings;
+    this.registerExtraDocument = registerExtraDocument;
     /** @type {any} The page's document client (js/kernel/composition/document.js): the notes it reads as stored, other tabs' included */
     this.documentClient = documentClient;
     /** @type {Promise<Object|null>|null} The session as stored, read once for a start (_savedSession) */
@@ -1144,6 +1148,11 @@ class TabController {
           console.error('Could not copy stylesheet to PiP window:', e);
         }
       });
+      // And each one a chunk adds while the window is open (#27 slice 3)
+      if (this.registerExtraDocument) {
+        const stopMirroring = this.registerExtraDocument(this.pipWindow.document);
+        this.pipWindow.addEventListener('pagehide', () => stopMirroring());
+      }
 
       // Add common styles
       const customStyle = document.createElement('style');

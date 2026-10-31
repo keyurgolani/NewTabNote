@@ -13,10 +13,14 @@
  *   import's check of a parsed backup, which writes nothing (js/kernel/composition/newtab.js)
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
+ * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
+ *   (js/runtime/lazy.js), which JSZip loads through at the first Markdown export (#27 slice 3).
+ *   Without it, JSZip is the global its script defined, as before.
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger }) {
+  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null }) {
     this.settings = settings;
+    this.loadLibrary = loadLibrary;
     /** @type {any} */
     this.documentClient = documentClient;
     this.validateBackup = validateBackup;
@@ -768,7 +772,8 @@ class SettingsController {
 
   async exportAllAsMarkdown() {
     try {
-      const zip = new JSZip();
+      const ZipLibrary = await this.zipLibrary();
+      const zip = new ZipLibrary();
       const folder = zip.folder("NewTabNote-Export");
 
       const notes = await this.documentClient.activeNotes();
@@ -809,6 +814,18 @@ class SettingsController {
       console.error('ZIP export failed:', error);
       Utils.showToast('Export failed', 'error');
     }
+  }
+
+  /**
+   * JSZip: through the page's loader, at the first Markdown export, or the global without it.
+   * One that didn't load throws, so the export fails as it did before, with "Export failed".
+   * @returns {Promise<any>}
+   */
+  async zipLibrary() {
+    if (!this.loadLibrary) return JSZip;
+    const loaded = await this.loadLibrary('jszip');
+    if (loaded.status === 'loaded') return loaded.module;
+    throw new Error(`JSZip didn't load (${loaded.reason})`);
   }
 
   async exportCurrentNote() {

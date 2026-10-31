@@ -1,15 +1,15 @@
 /**
- * ES module entry point for New Tab Note.
+ * The new tab's legacy graph, which the workspace chunk holds (js/workspace.js, #27 slice 3).
  *
  * Each source file is loaded as a side-effect import. The files set up
  * their globals (window.Utils, window.Storage, etc.) when they execute.
- * This single entry point replaces the individual <script> tags that
- * were previously listed in newtab.html. Last, the new tab's composition
- * root (#12) starts App.
+ * This graph replaces the individual <script> tags that were previously
+ * listed in newtab.html. boot() then has the new tab's composition root
+ * (#12) start App.
  *
- * Vendored libraries (fuse.js, jszip, chart.js, transformers.js) are
- * loaded via regular <script> tags before this module, since they are
- * not ES modules.
+ * The vendored libraries (fuse.js, jszip, chart.js, transformers.js) aren't
+ * ES modules, and none loads with the page: each loads as a classic script
+ * at its first use, through the page's loader (js/runtime/lazy.js).
  */
 
 // Core infrastructure
@@ -65,8 +65,16 @@ import './controllers/shortcuts-manager.js';
 import './controllers/export-import-service.js';
 
 // App, which the new tab's composition root constructs with the tab's kernel and starts
-// once the DOM is ready
 import './app.js';
 import { startNewTab } from './kernel/composition/newtab.js';
 
-startNewTab();
+/**
+ * Start the new tab with the page's loader: the boot root (js/entries/newtab.js) calls it once
+ * it has loaded this graph as the workspace chunk. js/workspace.d.ts declares it for the strict
+ * projects.
+ * @param {unknown} [loader] - js/runtime/lazy.js's pageLoader()
+ * @returns {Promise<void> | null}
+ */
+export function boot(loader) {
+  return startNewTab({ loader });
+}

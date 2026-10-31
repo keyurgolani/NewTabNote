@@ -110,7 +110,7 @@
     },
     "js/controllers/analytics-controller.js": {
       "TS2304": {
-        "Cannot find name 'Chart'.": 4,
+        "Cannot find name 'Chart'.": 1,
         "Cannot find name 'DomRefs'.": 1,
         "Cannot find name 'Logger'.": 1
       },

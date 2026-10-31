@@ -47,8 +47,8 @@ function storageFailure(failure) {
 const INTERACTION_READY_MARK = 'ntn:interaction-ready';
 
 /**
- * `performance.mark('ntn:interaction-ready')`, the first time it's called on the page. Nothing
- * in the app reads it.
+ * `performance.mark('ntn:interaction-ready')`, the first time it's called on the page. The boot
+ * root lets go of ntn-boot at it (js/entries/boot.js); nothing in the app reads it.
  * @returns {void}
  */
 function markInteractionReady() {
@@ -76,6 +76,17 @@ function markOnFirstLoad(editors) {
       editor.loadNote = originals[index];
     });
   };
+}
+
+/**
+ * Say on window that App's start ended in one of its error states, `ntn:app-error` (#27 slice
+ * 3, "Entries"): the app owns the page from then on. The boot guard's "Still starting", which
+ * waits in #27's backlog, stops at it.
+ * @param {'error-state' | 'storage-guard'} state
+ * @returns {void}
+ */
+function announceAppError(state) {
+  window.dispatchEvent(new CustomEvent('ntn:app-error', { detail: { state } }));
 }
 
 /** Features that are off while an auxiliary store is missing. `settings` has none: settings live in chrome.storage.local. */
@@ -109,15 +120,19 @@ class App {
    * js/storage.js, with only the calls NotesManager's search index and vectors (#22), the
    * graph view (#22), and sync (#19) still make until their issues move them.
    * `startIndexer` starts the search indexer's module worker (js/kernel/composition/workers.js);
-   * without it nothing indexes.
+   * without it nothing indexes. `loader` is the page's loader (js/runtime/lazy.js), which the
+   * boot root hands the composition root (#27 slice 3): the vendored libraries load through it
+   * at their first use, its reload guard writes what the open editors have pending, and it gives
+   * the PiP editor the stylesheets a chunk adds. Without it, as in the unit tests, each library
+   * is the global its script defined, as before.
    * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
    *   storageState?: any, recovery?: any, validateBackup?: any, searchIndexStore?: any, graphStore?: any,
-   *   syncStore?: any, startIndexer?: any}} [options]
+   *   syncStore?: any, startIndexer?: any, loader?: any}} [options]
    */
   constructor({
     kernel, documentClient, settings, ai, noteList, events = null, removal,
     storageState, recovery, validateBackup, searchIndexStore, graphStore, syncStore,
-    startIndexer = null,
+    startIndexer = null, loader = null,
   } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
@@ -135,12 +150,16 @@ class App {
     this.graphStore = graphStore;
     this.syncStore = syncStore;
     this.startIndexer = startIndexer;
+    this.loader = loader;
     this.editor = null;
     this.secondaryEditor = null;
     // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
     this._emptyStateHolds = 0;
-    // Search Indexer
-    this.searchEngine = new SearchEngine();
+    // Search Indexer: Fuse.js loads at the first index, and one that didn't load lands on the toast
+    this.searchEngine = new SearchEngine({}, {
+      loadLibrary: this.libraryLoader(),
+      showUnexpectedError: (context, error) => this.showUnexpectedError(context, error),
+    });
     // Sidebar controller
     this.sidebarController = null;
     // Tab controller
@@ -228,6 +247,41 @@ class App {
   }
 
   /**
+   * The page loader's loadLibrary (js/runtime/lazy.js), for the four places a vendored library
+   * loads at its first use (#27 slice 3): Stats' charts, search, the Markdown export, and the
+   * embedding model. Null without the loader, when each reads its library's global as before.
+   * @returns {((name: string) => Promise<any>) | null}
+   */
+  libraryLoader() {
+    const { loader } = this;
+    return loader ? (name) => loader.loadLibrary(name) : null;
+  }
+
+  /**
+   * "An unexpected error occurred", the toast an unhandled rejection shows, and its line in the
+   * log. Stats' charts and search land here on purpose when their library didn't load, as they
+   * did as an unhandled rejection before the libraries loaded lazily (#27 slice 3); #27 slice
+   * 3b's labelled failure with Retry replaces it there.
+   * @param {string} context
+   * @param {unknown} error
+   * @returns {void}
+   */
+  showUnexpectedError(context, error) {
+    if (this.logger) this.logger.error('App', context, error);
+    Utils.showToast('An unexpected error occurred', 'error');
+  }
+
+  /**
+   * Have a reload through the page's loader wait until every open editor, the PiP one included,
+   * has written what it has pending: the reload guard the update notice's Reload waits on (#27
+   * slice 3; the notice is slice 3b's). Nothing without the loader.
+   * @returns {void}
+   */
+  guardReloads() {
+    if (this.loader) this.loader.registerReloadGuard(() => this.tabController.saveOpenEditors());
+  }
+
+  /**
    * Initialize the application
    */
   async init() {
@@ -235,6 +289,8 @@ class App {
       // Initialize core infrastructure
       this.logger = createLogger();
       this.attachFailureEvents();
+      // transformers.js loads through the page's loader at the model's first load (#27 slice 3)
+      if (typeof Embeddings !== 'undefined') Embeddings.loadLibrary = this.libraryLoader();
       this.domRefs = createDomRefs();
 
       // The tab's kernel opens storage and runs startup maintenance, as Storage.init did here
@@ -273,8 +329,7 @@ class App {
 
       // Global unhandled rejection handler
       window.addEventListener('unhandledrejection', (event) => {
-        this.logger.error('App', 'Unhandled promise rejection', event.reason);
-        Utils.showToast('An unexpected error occurred', 'error');
+        this.showUnexpectedError('Unhandled promise rejection', event.reason);
       });
 
       // The tab's note list read every note, folder, and search entry in one read once the
@@ -305,6 +360,7 @@ class App {
       this.tabController.editor = this.editor;
       this.tabController.secondaryEditor = this.secondaryEditor;
       this.tabController.editorPorts = this.editorPorts;
+      this.guardReloads();
 
       // #27's interaction-ready mark: the first note either editor loads while the tab starts
       const stopMarking = markOnFirstLoad([this.editor, this.secondaryEditor]);
@@ -520,6 +576,7 @@ class App {
     wrapper.appendChild(actions);
     appEl.appendChild(wrapper);
     exportBtn.focus();
+    announceAppError('storage-guard');
   }
 
   /**
@@ -722,6 +779,8 @@ class App {
       domRefs: this.domRefs,
       logger: this.logger,
       documentClient: this.documentClient,
+      // The PiP window gets the stylesheets a chunk adds after it opens (#27 slice 3)
+      registerExtraDocument: this.loader ? (target) => this.loader.registerExtraDocument(target) : null,
     });
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -759,6 +818,8 @@ class App {
       validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
+      // JSZip loads at the first Markdown export (#27 slice 3)
+      loadLibrary: this.libraryLoader(),
     });
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -895,6 +956,9 @@ class App {
     this.analyticsController = new AnalyticsController({
       domRefs: this.domRefs,
       logger: this.logger,
+      // Chart.js loads at the first Stats, and one that didn't load lands on the toast (#27 slice 3)
+      loadLibrary: this.libraryLoader(),
+      showUnexpectedError: (context, error) => this.showUnexpectedError(context, error),
     });
 
     // Closing Stats puts back the sidebars as they are, however they were opened or closed
@@ -1413,6 +1477,7 @@ class App {
     btn.addEventListener('click', () => location.reload());
     wrapper.appendChild(btn);
     appEl.appendChild(wrapper);
+    announceAppError('error-state');
   }
 
   /**
@@ -1452,5 +1517,5 @@ class App {
 }
 
 // The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
-// tab's kernel client and starts it once the DOM is ready
+// tab's kernel client and starts it once the boot root has loaded the workspace chunk (#27 slice 3)
 /** @type {any} */ (window).App = App;

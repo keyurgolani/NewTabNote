@@ -6,7 +6,8 @@
  * from node_modules/.bin:
  *
  *   tsconfig.kernel.json  #12's kernel, strict: no diagnostic at all
- *   tsconfig.strict.json  the build code #27 adds under scripts/build/, strict: none at all
+ *   tsconfig.strict.json  the build code #27 adds under scripts/build/, and the page code under
+ *                         js/entries/ and js/runtime/ (#27 slice 3), strict: none at all
  *   jsconfig.json         the legacy files, held to #34's shrink-only ci/baselines/typecheck.json
  *                         by scripts/typecheck-ratchet.js
  *

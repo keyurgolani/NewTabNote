@@ -6,7 +6,8 @@
  * can't resolve, a file it can't parse), `build/css` from the stylesheet pipeline, or
  * `build/terser` from the minifier. Any warning Vite or the bundler prints is
  * `build/bundler-warning`: no warning is reviewed as allowed, so each one fails the build. A
- * module the bundler wrapped as CommonJS is `build/commonjs` (scripts/build/commonjs.js).
+ * module the bundler wrapped as CommonJS is `build/commonjs` (scripts/build/commonjs.js), and a
+ * loader that isn't alone in its chunk at its own path, or lacks the build's ID, `build/loader`.
  *
  * It reports what the passes wrote: build-info.json's chunks (each loader-addressable chunk's
  * name to its file), the module map for dist-report/modules.json (each source module to the
@@ -16,7 +17,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
-const { pagesConfig, backgroundConfig, BACKGROUND_ENTRY } = require('./vite-config.js');
+const { pagesConfig, backgroundConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./vite-config.js').BundleReport} BundleReport */
@@ -179,6 +180,34 @@ function commonJsProblems(report, root) {
 }
 
 /**
+ * The loader's chunk (#27 slice 3): the loader alone, at its own path, carrying the build's ID,
+ * which it compares with build-info.json's. Held with other modules, the closure check's one
+ * exemption would cover them too; without the ID, an update under an open page would read as
+ * a missing chunk.
+ * @param {BundleReport} report
+ * @param {string} root
+ * @param {string} outDir
+ * @param {string} buildId
+ * @returns {Problem[]}
+ */
+function loaderProblems(report, root, outDir, buildId) {
+  /** @type {Problem[]} */
+  const problems = [];
+  const fail = (/** @type {string} */ message) => problems.push(problem('build/loader', LOADER, message));
+  const holders = report.chunks.filter((chunk) => chunk.moduleIds.some((id) => sourcePath(id, root) === LOADER));
+  if (holders.length !== 1 || holders[0].fileName !== LOADER) {
+    fail(`the bundle writes it into ${holders.map((chunk) => chunk.fileName).join(', ') || 'no chunk'}, not into a chunk of its own at its path`);
+    return problems;
+  }
+  const others = holders[0].moduleIds.filter((id) => !id.includes('\0') && sourcePath(id, root) !== LOADER);
+  if (others.length > 0) fail(`its chunk holds ${others.map((id) => sourcePath(id, root) || id).join(', ')} too`);
+  if (!fs.readFileSync(path.join(outDir, LOADER), 'utf8').includes(buildId)) {
+    fail(`it doesn't carry the build's ID, ${buildId}, so it would read an update under an open page as a missing chunk`);
+  }
+  return problems;
+}
+
+/**
  * Each source module to the files that hold it, and the modules each pass bundled
  * @param {BundleReport} report
  * @param {string} root
@@ -205,11 +234,11 @@ function moduleMap(report, root) {
 }
 
 /**
- * Bundle the pages and the background into `outDir`
- * @param {{root: string, outDir: string, mode: Mode}} options
+ * Bundle the pages and the background into `outDir`, with the build's ID inlined
+ * @param {{root: string, outDir: string, mode: Mode, buildId: string}} options
  * @returns {Promise<Bundled>}
  */
-async function bundle({ root, outDir, mode }) {
+async function bundle({ root, outDir, mode, buildId }) {
   const vite = await import('vite');
   /** @type {string[]} */
   const warnings = [];
@@ -225,7 +254,7 @@ async function bundle({ root, outDir, mode }) {
     if (level === 'info' || level === 'debug') return;
     handler(level, log);
   };
-  const options = { root, outDir, mode, report, logger, onLog };
+  const options = { root, outDir, mode, buildId, report, logger, onLog };
 
   /** @type {Problem[]} */
   const problems = [];
@@ -243,7 +272,12 @@ async function bundle({ root, outDir, mode }) {
   if (!named.chunks.background || named.chunks.background !== BACKGROUND_ENTRY) {
     named.problems.push(problem('build/bundle', BACKGROUND_ENTRY, `the background pass wrote ${named.chunks.background || 'nothing'} instead`));
   }
-  return { problems: [...named.problems, ...commonJsProblems(report, root)], chunks: named.chunks, modules, graphs };
+  return {
+    problems: [...named.problems, ...commonJsProblems(report, root), ...loaderProblems(report, root, outDir, buildId)],
+    chunks: named.chunks,
+    modules,
+    graphs,
+  };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
