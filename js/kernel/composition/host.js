@@ -83,6 +83,28 @@ export const MIGRATE_MESSAGE = 'storage.migrate';
 export const MIGRATE_WAIT_MS = 5000;
 
 /**
+ * What a page sends once it has deleted something for good, to have the service worker purge
+ * it from the recovery points (#17 PR 2b). It carries no ids: the worker goes by the
+ * tombstones the delete left, so the message only says when.
+ */
+export const PURGE_MESSAGE = 'storage.purge';
+
+/**
+ * Wakes the worker to purge, best effort: a worker that can't be reached purges at its next
+ * start, since the tombstones stay pending until it does
+ * @param {{runtime?: {sendMessage?: (message: unknown) => Promise<unknown>} | undefined}} [options]
+ * @returns {void}
+ */
+export function wakeWorkerToPurge({ runtime = globalThis.chrome?.runtime } = {}) {
+  try {
+    if (!runtime || typeof runtime.sendMessage !== 'function') return;
+    Promise.resolve(runtime.sendMessage({ type: PURGE_MESSAGE })).catch(() => {});
+  } catch {
+    // Nothing to do: the next worker start sweeps
+  }
+}
+
+/**
  * A page that finds no database, or one below this build's version, before the worker's run
  * (#17, Q12): wake the worker with MIGRATE_MESSAGE, which it answers once its run has finished,
  * and wait for that answer, at most `waitMs`. Never rejects: a worker that can't be reached, or

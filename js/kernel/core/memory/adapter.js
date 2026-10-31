@@ -21,7 +21,10 @@
  * transactions over the same stores. Everything goes in and out as a copy.
  *
  * The contract suite runs against it, and `beforeWrite` lets a test make a write fail. #17
- * persists what it keeps: revisions, outcomes, and conflicts.
+ * persists what it keeps: revisions, outcomes, and conflicts. A conflict is kept as a record in
+ * its `conflicts` store, and a tombstone a unit puts gets its note's last content revision and
+ * the commit's seq, as on #17's adapter, so deleting a note drops its conflict records (#17
+ * PR 2b).
  *
  * Given #13's in-memory ledger and commit log (memory/ledger.js, memory/commit-log.js), it
  * writes them in the task that commits, as #17 writes its idempotency record and change-log
@@ -57,8 +60,8 @@ import { digestOf } from './fingerprint.js';
 /** @typedef {import('./ledger.js').MemoryLedger} MemoryLedger */
 
 /**
- * A conflict the adapter kept: the command that lost, and the revision it lost to. The
- * record that won is still in its store.
+ * A conflict the adapter kept, as `conflicts()` reads it from its `conflicts` store: the
+ * command that lost, and the revision it lost to. The record that won is still in its store.
  * @typedef {object} KeptConflict
  * @property {string} commandId
  * @property {Command} command
@@ -81,6 +84,39 @@ import { digestOf } from './fingerprint.js';
  * @returns {key is string}
  */
 const isKey = key => typeof key === 'string' && key !== '';
+
+/**
+ * A record's key as the one string its store's map holds it under: the id, or for a store
+ * keyed by several fields (tombstones), their values as JSON. Undefined when a part isn't an id.
+ * @param {StoreName} store
+ * @param {unknown} key - a string, or for such a store the array of its parts
+ * @returns {string | undefined}
+ */
+const keyString = (store, key) => {
+  if (!Array.isArray(STORES[store].keyPath)) return isKey(key) ? key : undefined;
+  return Array.isArray(key) && key.length === STORES[store].keyPath.length && key.every(isKey)
+    ? JSON.stringify(key)
+    : undefined;
+};
+
+/**
+ * The key `record` is stored under in `store`, as keyString makes it
+ * @param {StoreName} store
+ * @param {Record<string, unknown>} record
+ * @returns {string | undefined}
+ */
+const keyOf = (store, record) => {
+  const { keyPath } = STORES[store];
+  return keyString(store, Array.isArray(keyPath) ? keyPath.map(field => record[field]) : record[keyPath]);
+};
+
+/**
+ * A key as a store's records give it: the id, or the array a keyString holds
+ * @param {StoreName} store
+ * @param {string} key
+ * @returns {string}
+ */
+const keyFrom = (store, key) => (Array.isArray(STORES[store].keyPath) ? JSON.parse(key) : key);
 
 /**
  * @param {string} a
@@ -108,8 +144,6 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   const sources = new Map();
   /** @type {Map<string, KeptOutcome>} */
   const outcomes = new Map();
-  /** @type {KeptConflict[]} */
-  const conflicts = [];
   /** @type {Record<ReadableSettingsArea, Map<string, unknown>>} */
   const settings = { preferences: new Map(), session: new Map(), jobs: new Map(), idbSettings: new Map() };
   /** @type {Promise<unknown>} */
@@ -239,14 +273,16 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     };
     return /** @type {Tx} */ ({
       get: async (store, key) => {
-        const record = clone(current(store, key));
+        scoped(store);
+        const stored = keyString(store, key);
+        const record = stored === undefined ? undefined : clone(current(store, stored));
         got.add(revisionKey(store, key));
         return record;
       },
       getAll: async store => clone(records(store)),
       getAllByIndex: async (store, index, value) => clone(byIndex(store, index, value)),
       getKeysByIndex: async (store, index, value) =>
-        byIndex(store, index, value).map(record => /** @type {string} */ (record[STORES[store].keyPath])),
+        byIndex(store, index, value).map(record => keyFrom(store, /** @type {string} */ (keyOf(store, record)))),
       revision: (store, key) => {
         scoped(store);
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
@@ -257,8 +293,9 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
         return committedVersions(store, key);
       },
-      put: (store, record) => write(store, /** @type {string} */ (record[STORES[store].keyPath]), record),
-      delete: (store, key) => write(store, key, undefined),
+      put: (store, record) =>
+        write(store, /** @type {string} */ (keyOf(store, /** @type {Record<string, unknown>} */ (record))), record),
+      delete: (store, key) => write(store, /** @type {string} */ (keyString(store, key)), undefined),
     });
   };
 
@@ -332,8 +369,31 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   };
 
   /**
-   * @typedef {{outcome: Outcome, changed: Array<{store: 'notes' | 'folders', key: string}>}} Applied
+   * What a command's commit did: its outcome, the notes and folders it changed, and the keys of
+   * the tombstones it put, which take the commit's seq once the log has it
+   * @typedef {{outcome: Outcome, changed: Array<{store: 'notes' | 'folders', key: string}>, tombstones: string[]}} Applied
    */
+
+  /**
+   * The conflict record a command that lost is kept as, under its commandId in `conflicts`,
+   * as #17's adapter keeps it (adapters/indexeddb/conflicts.js), so deleting the note drops it
+   * @param {Work} work
+   * @param {import('../contracts/outcomes.js').Conflict} conflict
+   * @returns {Record<string, unknown>}
+   */
+  const conflictRecord = (work, conflict) => {
+    const primary = work.primary && work.primary();
+    const fields = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (work.command));
+    const expected = conflict.code === 'placement-conflict' ? fields.expectedPlacementVersion : fields.expectedRevision;
+    return {
+      id: work.commandId,
+      noteId: primary && primary.store === 'notes' ? primary.key : null,
+      scope: work.scope || 'content',
+      expected: typeof expected === 'number' ? expected : null,
+      current: conflict.currentRevision,
+      command: clone(work.command),
+    };
+  };
 
   /**
    * @param {Work} work
@@ -345,7 +405,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       const entries = Object.entries(effect.values);
       for (const [key] of entries) beforeWrite(effect.area, key);
       for (const [key, value] of entries) settings[effect.area].set(key, clone(value));
-      return { outcome: finish(work), changed: [] };
+      return { outcome: finish(work), changed: [], tombstones: [] };
     }
     if (effect.kind === 'maintenance') {
       /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
@@ -358,7 +418,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
           if (!settings[area].has(key)) settings[area].set(key, clone(value));
         }
       }
-      return { outcome: finish(work), changed: [] };
+      return { outcome: finish(work), changed: [], tombstones: [] };
     }
     /** @type {Pending} */
     const pending = new Map();
@@ -366,14 +426,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       if (unit.when && !unit.when()) continue;
       const stop = await unit.run(transaction(pending, unit.mode || 'readwrite', unit.stores));
       if (stop) {
-        if (stop.kind === 'conflict') {
-          conflicts.push({
-            commandId: work.commandId,
-            command: clone(work.command),
-            currentRevision: stop.currentRevision,
-          });
-        }
-        return { outcome: stop, changed: [] };
+        if (stop.kind === 'conflict') storeOf('conflicts').set(work.commandId, conflictRecord(work, stop));
+        return { outcome: stop, changed: [], tombstones: [] };
       }
     }
     // A deleted record's revision stays, as #17's tombstone keeps `lastRevision`, so a record
@@ -384,7 +438,17 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       else storeOf(store).set(key, record);
     }
     const moved = moveVersions(work, pending);
-    return { outcome: finish(work), changed: changedEntities(pending, moved) };
+    // A note's tombstone gets the content revision it had, as #17's adapter fills it in
+    /** @type {string[]} */
+    const tombstones = [];
+    for (const { store, key, record } of pending.values()) {
+      if (store !== 'tombstones' || !record) continue;
+      const filled = { ...record, seq: null };
+      if (record.entityType === 'note') filled.lastRevision = revisions.get(revisionKey('notes', String(record.id))) ?? 0;
+      storeOf('tombstones').set(key, filled);
+      tombstones.push(key);
+    }
+    return { outcome: finish(work), changed: changedEntities(pending, moved), tombstones };
   };
 
   /**
@@ -415,6 +479,13 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     const { outcome } = applied;
     const changes = commitLog ? changesOf(applied) : [];
     const kept = changes.length > 0 ? { ...outcome, commitSeq: commitLog?.append(changes) } : outcome;
+    // The commit's tombstones carry its seq, as on #17's adapter
+    if ('commitSeq' in kept) {
+      for (const key of applied.tombstones) {
+        const tombstone = storeOf('tombstones').get(key);
+        if (tombstone) storeOf('tombstones').set(key, { ...tombstone, seq: kept.commitSeq });
+      }
+    }
     if (keyed && (kept.kind === 'committed' || kept.kind === 'conflict')) ledger?.record(work.command, kept);
     return kept;
   };
@@ -493,6 +564,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       });
     },
 
-    conflicts: () => clone(conflicts),
+    conflicts: () =>
+      [...storeOf('conflicts').values()].map(record => ({
+        commandId: /** @type {string} */ (record.id),
+        command: /** @type {Command} */ (clone(record.command)),
+        currentRevision: /** @type {number} */ (record.current),
+      })),
   });
 }

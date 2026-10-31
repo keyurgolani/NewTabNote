@@ -15,7 +15,9 @@
  * finished: `versioned`, with startup maintenance, when the database is at that version, and
  * `existing` when the run left it as it was (short of space, refused, or failed), so captures
  * keep working on the shape that's there. Once it's open at version 10, the worker sweeps the
- * adapter's ledger, at most once a day (ledger.js).
+ * adapter's ledger, at most once a day (ledger.js), and purges what was deleted for good from
+ * the recovery points (purge.js, #17 PR 2b): at every start, and again when a page that deleted
+ * something wakes it with `storage.purge`. PURGE_RECOVERY_POINTS turns the purge off.
  * The run's outcome goes to chrome.storage.local (`setting_storageUpgrade`), which the new tab
  * reads for its space notice and Settings > Data & Backup.
  */
@@ -23,12 +25,13 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { failureOf } from '../adapters/indexeddb/failures.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
+import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
-import { MIGRATE_MESSAGE, chromeSettings, kernelClient } from './host.js';
+import { MIGRATE_MESSAGE, PURGE_MESSAGE, chromeSettings, kernelClient } from './host.js';
 import { hostTimers, randomIds } from './messaging.js';
 
 /** @typedef {import('./host.js').Client} Client */
@@ -36,6 +39,7 @@ import { hostTimers, randomIds } from './messaging.js';
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrateLocks} MigrateLocks */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationOutcome} MigrationOutcome */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
+/** @typedef {import('../adapters/indexeddb/purge.js').PurgeOutcome} PurgeOutcome */
 /** @typedef {import('../adapters/indexeddb/space.js').Estimate} Estimate */
 /** @typedef {import('../adapters/indexeddb/records.js').Digester} Digester */
 /** @typedef {import('../core/messaging/router.js').Router} Router */
@@ -67,6 +71,7 @@ import { hostTimers, randomIds } from './messaging.js';
  *   Chrome stops an extension worker that goes 30 seconds without an event or an extension
  *   API call, and IndexedDB work counts as neither
  * @property {KeepaliveTimers} [timers]
+ * @property {boolean} [purgeRecoveryPoints] - PURGE_RECOVERY_POINTS unless a test says otherwise
  */
 
 /**
@@ -81,6 +86,16 @@ export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 
 /** What a page sends to wake the worker and hear its run's status (#17, Q12), from host.js */
 export { MIGRATE_MESSAGE };
+
+/** What a page sends once it has deleted something for good (#17 PR 2b), from host.js */
+export { PURGE_MESSAGE };
+
+/**
+ * The owner's switch for the recovery-point purge (#17 PR 2b, Q16; purge.js). With it off, the
+ * worker never purges, so a note deleted for good stays in every recovery point, and its
+ * tombstone stays pending, so turning it on again purges it then.
+ */
+export const PURGE_RECOVERY_POINTS = true;
 
 /**
  * How long a run that read the stores and then stopped short of space, or failed, stands
@@ -208,8 +223,18 @@ async function record(settings, outcome, stored, now, version, costly) {
  */
 
 /**
- * The worker's client, with the migration behind it
- * @typedef {Client & {migration: WorkerMigration}} WorkerClient
+ * The worker's purge of the recovery points (purge.js), as its client exposes it
+ * @typedef {object} WorkerPurge
+ * @property {() => Promise<PurgeOutcome | null>} request
+ *   What a page's storage.purge gets: a sweep once the latest migration attempt is in, which
+ *   runs once more after the one in progress, so a delete made during it is purged too. Null
+ *   while the database isn't at this build's version, or the switch is off.
+ * @property {Promise<PurgeOutcome | null>} done - the latest sweep's outcome
+ */
+
+/**
+ * The worker's client, with the migration behind it and the purge after it
+ * @typedef {Client & {migration: WorkerMigration, purge: WorkerPurge}} WorkerClient
  */
 
 /**
@@ -347,6 +372,64 @@ export function createWorkerClient(host = workerHost()) {
   /** @type {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter | null} */
   let adapter = null;
 
+  const purgeOn = host.purgeRecoveryPoints ?? PURGE_RECOVERY_POINTS;
+  /** The sweep in progress, if any */
+  /** @type {Promise<PurgeOutcome> | null} */
+  let sweeping = null;
+  /** Whether a wake came while a sweep ran, so another follows it */
+  let sweepAgain = false;
+  /** @type {Promise<PurgeOutcome | null>} */
+  let purged = Promise.resolve(null);
+
+  /**
+   * Sweeps the recovery points of what the pending tombstones name, under the points lock, and
+   * once more when asked again meanwhile. The keepalive spans it.
+   * @returns {Promise<PurgeOutcome>}
+   */
+  const sweepPoints = () => {
+    if (sweeping) {
+      sweepAgain = true;
+      return sweeping;
+    }
+    const running = (async () => {
+      /** @type {PurgeOutcome} */
+      let ended;
+      do {
+        sweepAgain = false;
+        ended = await purgeRecoveryPoints({
+          indexedDB: host.indexedDB,
+          keyRange: host.keyRange,
+          locks: host.locks,
+          crypto: host.crypto,
+          clock: systemClock,
+          logger: storageLogger,
+        });
+      } while (sweepAgain);
+      return ended;
+    })().finally(() => {
+      sweeping = null;
+    });
+    sweeping = running;
+    keepAliveUntil(running);
+    return running;
+  };
+
+  /**
+   * A sweep once the latest attempt is in, when it left the database at this build's version
+   * and the switch is on
+   * @returns {Promise<PurgeOutcome | null>}
+   */
+  const requestPurge = () => {
+    const next = done
+      .then(ended => (purgeOn && (ended.status === 'migrated' || ended.status === 'current') ? sweepPoints() : null))
+      .catch(error => {
+        storageLogger.warn('storage-purge-not-started', { code: failureOf(error).code });
+        return null;
+      });
+    purged = next;
+    return next;
+  };
+
   /**
    * The ledger's retention on `opened`, once its kernel is ready, in the background: it never
    * holds up a command, sweeps at most once a day, and a sweep the worker's stop cuts off
@@ -384,6 +467,9 @@ export function createWorkerClient(host = workerHost()) {
       if (replaced) replaced.close();
       const built = kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
       sweepOnce(adapter, built);
+      // At every start, and after every later attempt: deletes the worker didn't hear of, or
+      // a sweep its stop cut off, are purged then
+      if (upgraded) requestPurge();
       return built;
     });
 
@@ -503,6 +589,12 @@ export function createWorkerClient(host = workerHost()) {
       request,
       blocked,
       running: () => settled < attempts,
+    }),
+    purge: Object.freeze({
+      request: requestPurge,
+      get done() {
+        return purged;
+      },
     }),
   });
 }

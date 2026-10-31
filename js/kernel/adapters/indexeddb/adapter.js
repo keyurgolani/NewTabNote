@@ -3,8 +3,10 @@
  * repository port over CanvasTabDB, with settings in chrome.storage.local. It writes the same
  * records to the same stores as #12's legacy adapter, with three version fields on each note
  * it writes (versions.js), and #17 PR 2a's bookkeeping beside them, in the stores step 10
- * makes (registry.js): the ledger (ledger.js), the change log (changes.js), conflict records
- * (conflicts.js), and a tombstone for each note it deletes.
+ * makes (registry.js): the ledger (ledger.js), the change log (changes.js), and conflict
+ * records (conflicts.js). Core's deletion puts a tombstone for each note and folder it deletes,
+ * in the delete's own transaction, and this adapter fills in the note's last revision and the
+ * commit's seq there (deletion.js, #17 PR 2b).
  *
  * Every command's units run in one transaction, opened in the task that commits it, readwrite
  * with `durability: 'strict'` whenever a unit writes or the database keeps a ledger, over the
@@ -23,8 +25,8 @@
  *   version it expects before it writes anything. One after a write aborts as
  *   `conflict-after-write`, which is a bug in the unit, so no lost update can commit;
  * - a committed command moves its notes' versions, puts a change-log row for each note and
- *   folder it wrote, a tombstone for each note it deleted, and its ledger row with the outcome,
- *   revision and commitSeq included, and commits.
+ *   folder it wrote, completes each tombstone its units put, and puts its ledger row with the
+ *   outcome, revision and commitSeq included, and commits.
  * A database below version 10 (a run that left it as it was) has none of those stores, so
  * commands commit there as they did before, with no ledger row, change, conflict record, or
  * tombstone, and a resend runs again.
@@ -65,11 +67,12 @@
 import { COMMANDS } from '../../core/contracts/commands.js';
 import { UnavailableError, committed, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
-import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
+import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
+import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
 import {
@@ -99,6 +102,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 /** @typedef {import('./versions.js').VersionTracker} VersionTracker */
+/** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
 /**
  * chrome.storage.local, or anything with its promise-returning get and set
@@ -281,7 +285,11 @@ function view(db, tx, scope, writable, tracker) {
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {
-        if (!DERIVED_STORES.includes(store)) throw new UnavailableError('storage', 'store-unavailable', false);
+        // A derived store's writes are skipped where it's missing, and below version 10 a
+        // deletion's tombstone, as commands committed before step 10 (#17 PR 2b's declared gap)
+        if (!DERIVED_STORES.includes(store) && !LATER_STORES.includes(store)) {
+          throw new UnavailableError('storage', 'store-unavailable', false);
+        }
         return;
       }
       if (store === 'notes') {
@@ -290,6 +298,7 @@ function view(db, tx, scope, writable, tracker) {
       }
       objectStore.put(record);
       if (store === 'folders') tracker.touched('folder', /** @type {string} */ (record.id));
+      else if (store === 'tombstones') tracker.tombstone(/** @type {TombstoneRecord} */ (record));
       else tracker.wrote();
     },
     delete: (store, key) => {
@@ -500,19 +509,9 @@ export function createIndexedDbAdapter({
       seq = writeChanges(tx, logHead(head.value), changes, work.commandId);
       outcome = { ...outcome, commitSeq: seq };
     }
-    if (books.tombstones) {
-      const deletedAt = clock.now();
-      for (const { id, lastRevision } of deleted) {
-        tx.objectStore(TOMBSTONES_STORE).put({
-          entityType: 'note',
-          id,
-          deletedAt,
-          lastRevision,
-          seq,
-          reason: 'deleted',
-        });
-      }
-    }
+    // Core's deletion put each tombstone in this transaction (#17 PR 2b); it gets the note's last
+    // revision and this commit's seq here (deletion.js)
+    if (books.tombstones) finishTombstones(tx.objectStore(TOMBSTONES_STORE), tracker.tombstones(), { deleted, seq });
     if (books.ledger && isCatalogCommand(work) && outcome.kind === 'committed') {
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, outcome, clock.now()));
     }
@@ -539,11 +538,16 @@ export function createIndexedDbAdapter({
       /** @type {StoreName[]} */
       const primaryStores = work.primary ? ['notes'] : [];
       const names = present(db, [...unitStores, ...primaryStores]);
-      const unitNames = present(db, unitStores);
+      // A deletion's own rows in step 10's stores aren't counted for a retry, as the
+      // bookkeeping isn't: each command's tombstones and conflict records are its own
+      const unitNames = present(
+        db,
+        unitStores.filter(store => !LATER_STORES.includes(store)),
+      );
       books = booksOf(db);
       const writes = units.some(unit => (unit.mode || 'readwrite') === 'readwrite') || books.ledger;
       if (names.length > 0 && writes) {
-        tx = db.transaction([...names, ...books.names], 'readwrite', STRICT);
+        tx = db.transaction([...new Set([...names, ...books.names])], 'readwrite', STRICT);
         write = { seq: ++writesOpened, names: unitNames };
         for (const name of unitNames) lastWrite.set(name, write.seq);
       } else if (names.length > 0) {

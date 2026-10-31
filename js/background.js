@@ -12,7 +12,7 @@
 // Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { MIGRATE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import { MIGRATE_MESSAGE, PURGE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 
 /** When the worker started opening the database, for how long a failed open took */
@@ -64,6 +64,8 @@ const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
 /** The latest migration attempt's outcome, for #34's harness, which seeds a profile only once it's in */
 Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => kernel.migration.done, configurable: true });
+/** The latest recovery-point purge's outcome (#17 PR 2b), for #34's harness */
+Object.defineProperty(workerGlobal, 'storagePurge', { get: () => kernel.purge.done, configurable: true });
 
 /** Why a capture can't be saved (the reasons the new tab shows) */
 const CAPTURE_REFUSALS = {
@@ -167,6 +169,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.type === MIGRATE_MESSAGE) {
     kernel.migration.request().then(
       outcome => sendResponse({ status: outcome.status }),
+      () => sendResponse({ status: 'failed' }),
+    );
+    return true;
+  }
+  // A page of this extension deleted something for good (#17 PR 2b): purge it from the recovery
+  // points. The message carries nothing; the sweep goes by the tombstones the delete left, and
+  // only the status goes back.
+  if (request && request.type === PURGE_MESSAGE) {
+    if (!sender || sender.id !== chrome.runtime.id) return false;
+    kernel.purge.request().then(
+      outcome => sendResponse({ status: outcome ? outcome.status : 'skipped' }),
       () => sendResponse({ status: 'failed' }),
     );
     return true;

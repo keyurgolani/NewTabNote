@@ -40,7 +40,10 @@ export const STORE_SCHEMAS = Object.freeze({
   snapshots: Object.freeze({ keyPath: 'id', indexes: Object.freeze(['noteId', 'timestamp']) }),
 });
 
-/** Each kernel store's IndexedDB store, under the names 1.4.x has always used */
+/**
+ * Each kernel store's IndexedDB store, under the names 1.4.x has always used, and the two of
+ * step 10's a deletion writes (#17 PR 2b), which only a database at version 10 has
+ */
 export const IDB_STORES = Object.freeze({
   notes: 'canvases',
   blocks: 'elements',
@@ -50,6 +53,8 @@ export const IDB_STORES = Object.freeze({
   vectors: 'vectors',
   snapshots: 'snapshots',
   links: 'links',
+  conflicts: 'conflicts',
+  tombstones: 'tombstones',
 });
 
 /** Without these the notes can't be read, so a versioned open refuses the database, as Storage.open does */

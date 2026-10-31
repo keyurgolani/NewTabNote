@@ -17,12 +17,16 @@
  * Blobs anywhere else become data URLs too, so the file is plain JSON.
  *
  * It exports only a point that is verified and reads back verified now, so a damaged copy is
- * never handed out as a backup. #17 PR 3 writes placement, `kind`, `lifecycle`, and `dailyKey`
- * back as the legacy fields here, once points can hold them.
+ * never handed out as a backup. It reads the point across many transactions, so it holds Web
+ * Lock `storage.migrate` shared while it does (#17 PR 2b): the worker's purge and migration
+ * runner hold it exclusive, so the export never reads a point between two of their batches,
+ * and a note deleted for good is either all there, before its purge, or not there at all.
+ * #17 PR 3 writes placement, `kind`, `lifecycle`, and `dailyKey` back as the legacy fields
+ * here, once points can hold them.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
-import { DEFAULT_LIMITS, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
+import { DEFAULT_LIMITS, POINTS_LOCK, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
 
 /** How deep a value is searched for a Blob, as Storage searches it */
 const MAX_DEPTH = 32;
@@ -108,13 +112,31 @@ async function valuesOf(recovery, point, store, io) {
 }
 
 /**
- * The export of point `pointId`. Rejects with an UnavailableError, `storage`, when there's no
- * such pre-migration point (`no-recovery-point`) or it doesn't verify
- * (`recovery-point-unverified`).
+ * Web Locks, or anything with its request(name, options, callback)
+ * @typedef {{request: (name: string, options: {mode: 'shared'}, callback: () => Promise<any>) => Promise<any>}} SharedLocks
+ */
+
+/**
+ * The export of point `pointId`, read under `locks`' points lock, shared, when there are
+ * locks. Rejects with an UnavailableError, `storage`, when there's no such pre-migration point
+ * (`no-recovery-point`) or it doesn't verify (`recovery-point-unverified`).
+ * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester, clock: Clock, pointId: string, locks?: SharedLocks | null}} options
+ * @returns {Promise<LegacyExport>}
+ */
+export function exportPoint(options) {
+  const { locks } = options;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(POINTS_LOCK, { mode: 'shared' }, () => exportUnlocked(options));
+  }
+  return exportUnlocked(options);
+}
+
+/**
+ * exportPoint's read, under whatever lock its caller holds
  * @param {{indexedDB: IDBFactory, keyRange: typeof IDBKeyRange, crypto: Digester, clock: Clock, pointId: string}} options
  * @returns {Promise<LegacyExport>}
  */
-export async function exportPoint({ indexedDB, keyRange, crypto, clock, pointId }) {
+async function exportUnlocked({ indexedDB, keyRange, crypto, clock, pointId }) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) throw new UnavailableError('storage', 'no-recovery-point', false);
   try {
