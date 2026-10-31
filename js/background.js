@@ -168,8 +168,14 @@ async function ensureOffscreenDocument() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // A page that found no database, or an older one, waits on the migration (#17, Q12): the
   // attempt in progress, or after one that was short of space or failed, a new one. Only its
-  // status goes back, never anything stored.
+  // status goes back, never anything stored. It's accepted only from the extension's own
+  // senders (#21's isOwnSender, as API_REQUEST below), a page in a tab included, since a new
+  // attempt can make another full recovery point.
   if (request && request.type === MIGRATE_MESSAGE) {
+    if (!isOwnSender(sender)) {
+      sendResponse({ status: 'refused' });
+      return false;
+    }
     kernel.migration.request().then(
       outcome => sendResponse({ status: outcome.status }),
       () => sendResponse({ status: 'failed' }),
