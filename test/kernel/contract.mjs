@@ -1433,6 +1433,116 @@ export function runContractSuite(fixture) {
         });
       });
 
+      it('getNoteList reads every note, folder, and search entry, whatever list each note is in', async () => {
+        assert.deepEqual(await kernel.query({ type: 'getNoteList' }), { kind: 'empty', asOf: NOW });
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        for (const noteId of ['plain', 'archived', 'trashed']) await createNote({ noteId, name: `Note ${noteId}` });
+        await run(cmd('archiveNote', { noteId: 'archived' }));
+        await run(cmd('trashNote', { noteId: 'trashed' }));
+        // A template, which no command makes yet, and a note with no search entry
+        await seed('notes', [{ ...storageNote('template', 'Template', NOW), isTemplate: true }]);
+        const state = await kernel.query({ type: 'getNoteList' });
+        assert.equal(state.kind, 'ready', JSON.stringify(state));
+        const list = state.kind === 'ready' ? state.data : { notes: [], folders: [], searchEntries: [] };
+        assert.deepEqual(Object.keys(list).sort(), ['folders', 'notes', 'searchEntries']);
+        const byId = (/** @type {Array<{id: string}>} */ records) =>
+          [...records].sort((a, b) => a.id.localeCompare(b.id));
+        assert.deepEqual(
+          byId(list.notes),
+          byId(
+            await Promise.all(
+              ['archived', 'plain', 'template', 'trashed'].map(
+                async id => /** @type {NoteRecord} */ (await noteOf(id)),
+              ),
+            ),
+          ),
+        );
+        assert.deepEqual(list.folders, await ctx.adapter.read(['folders'], tx => tx.getAll('folders')));
+        assert.deepEqual(list.searchEntries.map(entry => entry.noteId).sort(), ['archived', 'plain', 'trashed']);
+        assert.deepEqual(
+          list.searchEntries.find(entry => entry.noteId === 'plain'),
+          await searchEntryOf('plain'),
+        );
+      });
+
+      it('getNotesByIds reads the stored notes it names and their search entries, and leaves out the gone ones', async () => {
+        for (const noteId of ['n1', 'n2', 'n3']) await createNote({ noteId, name: `Note ${noteId}` });
+        await run(cmd('trashNote', { noteId: 'n3' }));
+        await seed('notes', [storageNote('no-entry', 'No entry', NOW)]);
+        const state = await kernel.query({ type: 'getNotesByIds', noteIds: ['n2', 'gone', 'n3', 'no-entry', 'n2'] });
+        assert.equal(state.kind, 'ready', JSON.stringify(state));
+        const found = state.kind === 'ready' ? state.data : { notes: [], searchEntries: [] };
+        assert.deepEqual(
+          found.notes.map(note => note.id),
+          ['n2', 'n3', 'no-entry'],
+        );
+        assert.deepEqual(found.notes[0], await noteOf('n2'));
+        assert.deepEqual(found.searchEntries, [await searchEntryOf('n2'), await searchEntryOf('n3')]);
+        assert.deepEqual(await kernel.query({ type: 'getNotesByIds', noteIds: ['gone'] }), {
+          kind: 'empty',
+          asOf: NOW,
+        });
+        for (const noteIds of [[], [''], 'n1', null]) {
+          assert.deepEqual(
+            await kernel.query(/** @type {any} */ ({ type: 'getNotesByIds', noteIds })),
+            { kind: 'failed', cause: 'validation', code: 'invalid-query' },
+            JSON.stringify(noteIds),
+          );
+        }
+      });
+
+      it('listSearchEntries reads every search entry and no note', async () => {
+        assert.deepEqual(await kernel.query({ type: 'listSearchEntries' }), { kind: 'empty', asOf: NOW });
+        for (const noteId of ['n1', 'n2']) await createNote({ noteId, name: `Note ${noteId}` });
+        await seed('notes', [storageNote('no-entry', 'No entry', NOW)]);
+        const state = await kernel.query({ type: 'listSearchEntries' });
+        assert.equal(state.kind, 'ready', JSON.stringify(state));
+        const entries = state.kind === 'ready' ? state.data : [];
+        assert.deepEqual(
+          [...entries].sort((a, b) => a.noteId.localeCompare(b.noteId)),
+          [await searchEntryOf('n1'), await searchEntryOf('n2')],
+        );
+      });
+
+      it('getNoteList, getNotesByIds, and listSearchEntries answer only the new tab', async () => {
+        await createNote({ noteId: 'n1' });
+        for (const caller of [CALLERS.popup, CALLERS.sidepanel]) {
+          const other = ctx.kernel(caller);
+          /** @type {Array<import('../../js/kernel/core/contracts/queries.js').QueryOf<'getNoteList' | 'getNotesByIds' | 'listSearchEntries'>>} */
+          const queries = [
+            { type: 'getNoteList' },
+            { type: 'getNotesByIds', noteIds: ['n1'] },
+            { type: 'listSearchEntries' },
+          ];
+          for (const query of queries) {
+            const state = await other.query(query);
+            assert.equal(state.kind, 'failed', `${caller.surface} ${query.type}`);
+            assert.equal(state.kind === 'failed' && state.cause, 'policy');
+          }
+        }
+      });
+
+      it(
+        'getNoteList reads a store an older profile lacks as empty',
+        { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
+        async () => {
+          const startWithout = /** @type {NonNullable<ContractFixture['startWithout']>} */ (fixture.startWithout);
+          const other = await startWithout(['folders', 'searchIndex']);
+          try {
+            const tab = other.kernel();
+            committedOf(await tab.execute(newCommand(other.ids, 'createNote', { noteId: 'n1', name: 'Plan' })));
+            const state = await tab.query({ type: 'getNoteList' });
+            assert.equal(state.kind, 'ready', JSON.stringify(state));
+            const list = state.kind === 'ready' ? state.data : { notes: [], folders: [], searchEntries: [] };
+            assert.deepEqual([list.notes.map(note => note.id), list.folders, list.searchEntries], [['n1'], [], []]);
+            const byIds = await tab.query({ type: 'getNotesByIds', noteIds: ['n1'] });
+            assert.deepEqual(byIds.kind === 'ready' && byIds.data.searchEntries, []);
+          } finally {
+            await other.close();
+          }
+        },
+      );
+
       it('refuses an index read by anything but an id, since IndexedDB reads null as every record', async () => {
         await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
         await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });

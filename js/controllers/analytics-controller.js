@@ -17,13 +17,25 @@ class AnalyticsController {
     this.statsOpen = false;
     this.charts = {};
 
-    // Data arrays (synced from App)
-    this.notes = [];
-    this.folders = [];
+    /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
+    this.noteList = null;
 
     // App-level callbacks (set by App after construction)
     this.onGetSidebarOpen = null;
     this.onGetAISidebarOpen = null;
+  }
+
+  /**
+   * The active notes, as the note list lists them
+   * @returns {ReadonlyArray<any>}
+   */
+  get notes() {
+    return this.noteList ? this.noteList.view('active') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get folders() {
+    return this.noteList ? this.noteList.folders() : [];
   }
 
   /** Initialize: wire DOM listeners for stats dashboard. */
@@ -91,6 +103,10 @@ class AnalyticsController {
    */
   async renderAnalytics() {
     if (typeof Analytics === 'undefined') return;
+
+    // The note list reads every list again first, so the stats count what's stored, other
+    // tabs' notes included, as they did when they read storage
+    if (this.noteList) await this.noteList.reload();
 
     // Show loading state or refresh counts
     const stats = await Analytics.getGlobalStats();

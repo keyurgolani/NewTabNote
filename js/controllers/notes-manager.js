@@ -41,14 +41,9 @@ class NotesManager {
     // Search indexer
     this.indexerWorker = null;
     this.searchEngine = null;
-    this.searchIndexByNoteId = new Map();
 
-    // Data arrays (synced from App)
-    this.notes = [];
-    this.archivedNotes = [];
-    this.trashedNotes = [];
-    this.templates = [];
-    this.folders = [];
+    /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
+    this.noteList = null;
 
     // App-level callbacks (set by App after construction)
     this.onRefreshNotesList = null;
@@ -1083,15 +1078,56 @@ class NotesManager {
     ));
   }
 
+  // ─── Note lists ───
+
+  /**
+   * The lists, from the note list. Each is frozen: nothing here changes a note it lists.
+   * @returns {ReadonlyArray<any>}
+   */
+  get notes() {
+    return this.noteList ? this.noteList.view('active') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get archivedNotes() {
+    return this.noteList ? this.noteList.view('archived') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get trashedNotes() {
+    return this.noteList ? this.noteList.view('trashed') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get templates() {
+    return this.noteList ? this.noteList.view('templates') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get folders() {
+    return this.noteList ? this.noteList.folders() : [];
+  }
+
+  /**
+   * Each note's search entry, by note id
+   * @returns {{get(noteId: string): any, has(noteId: string): boolean}}
+   */
+  get searchIndexByNoteId() {
+    const list = this.noteList;
+    const entry = (noteId) => (list ? list.searchEntry(noteId) : undefined);
+    return { get: entry, has: (noteId) => entry(noteId) !== undefined };
+  }
+
   // ─── Search Index & Embeddings ───
 
   /**
-   * Refresh search index entries from storage
+   * The indexer wrote these notes' search entries, or all of them, outside the kernel (#22):
+   * the note list reads them again
+   * @param {Array<string>|'all'} ids
+   * @returns {Promise<void>}
    */
-  async refreshSearchIndexEntries() {
-    const entries = await this.storage.getSearchIndex();
-    this.searchIndexByNoteId = new Map(entries.map(entry => [entry.noteId, entry]));
-    return entries;
+  async searchEntriesWritten(ids) {
+    if (this.noteList) await this.noteList.searchEntriesChanged(ids);
   }
 
   /**
@@ -1106,15 +1142,15 @@ class NotesManager {
       this.indexerWorker.onmessage = async (e) => {
         if (e.data.type === 'INDEX_COMPLETE') {
           await this.storage.setSearchIndex(e.data.data);
-          await this.refreshSearchIndexEntries();
+          await this.searchEntriesWritten('all');
         } else if (e.data.type === 'INDEX_UPDATED') {
           const { entry } = e.data.data;
           await this.storage.setSearchIndexEntry(entry);
-          this.searchIndexByNoteId.set(entry.noteId, entry);
+          await this.searchEntriesWritten([entry.noteId]);
         } else if (e.data.type === 'INDEX_REMOVED') {
           const { noteId } = e.data.data;
           await this.storage.removeSearchIndexEntry(noteId);
-          this.searchIndexByNoteId.delete(noteId);
+          await this.searchEntriesWritten([noteId]);
         }
       };
 
@@ -1145,8 +1181,9 @@ class NotesManager {
    */
   async updateNoteIndex(noteId) {
     if (!this.indexerWorker) return;
-    const note = this.notes.find(n => n.id === noteId);
-    if (!note) return;
+    // The note as stored, so the index never takes an older name than the note has
+    const note = await this.storage.getNote(noteId);
+    if (!note || note.trashed || note.archived || note.isTemplate) return;
     const blocks = await this.storage.getElementsByNote(noteId);
     this.indexerWorker.postMessage({
       type: 'UPDATE_NOTE',

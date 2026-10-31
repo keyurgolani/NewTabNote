@@ -563,8 +563,8 @@ describe('Replace all (AC4)', () => {
     const restored = new (page.get('TabController'))({ storage: reloaded, domRefs: null, logger: null });
     restored.editor = makeEditor(page, page.document);
     restored.secondaryEditor = makeEditor(page, page.document);
-    const activeNotes = await reloaded.getAllNotes();
-    restored.onGetNotes = () => activeNotes;
+    await page.noteList.settled();
+    restored.noteList = page.noteList;
     await restored.loadSavedTabs();
 
     assert.equal(restored.editor.noteId, first.id);

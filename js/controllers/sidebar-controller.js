@@ -32,13 +32,14 @@ class SidebarController {
     this.selectionMode = false;
     this.selectedNoteIds = new Set();
 
-    // Data arrays (synced from App)
-    this.notes = [];
-    this.archivedNotes = [];
-    this.trashedNotes = [];
-    this.templates = [];
-    this.folders = [];
-    this.searchIndexByNoteId = new Map();
+    // The tab's note list (js/kernel/core/application/note-list.js), set by App: the lists
+    // below read it, and each change to it renders the sidebar once
+    /** @type {any} */
+    this._noteList = null;
+    /** @type {(() => void) | null} */
+    this._unsubscribeNoteList = null;
+    // How many changes the sidebar has rendered, so a reload that changed nothing still renders
+    this._listRenders = 0;
 
     // Resizer instance
     this.sidebarResizer = null;
@@ -70,6 +71,94 @@ class SidebarController {
     this.onNotesLeft = null;
   }
 
+  /**
+   * The note list the sidebar lists. Setting it subscribes the sidebar to its changes.
+   * @returns {any}
+   */
+  get noteList() {
+    return this._noteList;
+  }
+
+  set noteList(list) {
+    if (this._unsubscribeNoteList) this._unsubscribeNoteList();
+    this._noteList = list;
+    this._unsubscribeNoteList = list ? list.subscribe((change) => this._onNoteListChanged(change)) : null;
+  }
+
+  /**
+   * The lists the sidebar shows, from the note list. Each is frozen: nothing here changes a
+   * note or folder it lists.
+   * @returns {ReadonlyArray<any>}
+   */
+  get notes() {
+    return this._noteList ? this._noteList.view('active') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get archivedNotes() {
+    return this._noteList ? this._noteList.view('archived') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get trashedNotes() {
+    return this._noteList ? this._noteList.view('trashed') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get templates() {
+    return this._noteList ? this._noteList.view('templates') : [];
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get folders() {
+    return this._noteList ? this._noteList.folders() : [];
+  }
+
+  /**
+   * Each note's search entry, by note id
+   * @returns {{get(noteId: string): any, has(noteId: string): boolean}}
+   */
+  get searchIndexByNoteId() {
+    const list = this._noteList;
+    const entry = (noteId) => (list ? list.searchEntry(noteId) : undefined);
+    return { get: entry, has: (noteId) => entry(noteId) !== undefined };
+  }
+
+  /**
+   * The note list changed: the counts, the list, the calendar, and the view tabs render once,
+   * and a long flat list keeps its virtual scroller and scroll position. Search entries the
+   * indexer wrote change nothing shown until the next render, as before.
+   * @param {{reason: 'reload' | 'commit' | 'search'}} change
+   * @returns {Promise<void>}
+   */
+  async _onNoteListChanged(change) {
+    if (change.reason === 'search') return;
+    this._listRenders += 1;
+    await this._renderLists();
+  }
+
+  /** @returns {Promise<void>} */
+  async _renderLists() {
+    this.updateBadgeCounts();
+    await this.renderNotesList();
+    this.renderCalendar();
+    this.updateSidebarTabs();
+  }
+
+  /**
+   * Read the note lists again and render them, as a refresh always rendered, even when the
+   * read found nothing new. With `resetScroller`, as the sidebar's own refresh did, the
+   * virtual scroller starts over; App's refresh keeps it.
+   * @param {{resetScroller?: boolean}} [options]
+   * @returns {Promise<void>}
+   */
+  async reloadLists({ resetScroller = false } = {}) {
+    if (resetScroller) this._destroyVirtualScroller();
+    const rendered = this._listRenders;
+    await this._noteList.reload();
+    if (this._listRenders === rendered) await this._renderLists();
+  }
+
   /** Initialize sidebar: load persisted state, wire DOM listeners. */
   async init() {
     const storage = this.storage;
@@ -97,6 +186,7 @@ class SidebarController {
 
   /** Tear down listeners and resizer. */
   destroy() {
+    this.noteList = null;
     if (this.sidebarResizer) {
       this.sidebarResizer.destroy();
       this.sidebarResizer = null;
@@ -831,25 +921,23 @@ class SidebarController {
 
   // ─── Refresh & render ───
 
+  /**
+   * Read the note lists again, after a write made outside the kernel, and render them with the
+   * virtual scroller started over, as this refresh did. Every other reader of the note list
+   * sees it too.
+   * @returns {Promise<void>}
+   */
   async refreshNotesList() {
-    // Destroy virtual scroller on full refresh to ensure clean state
-    this._destroyVirtualScroller();
-    this.notes = await this.storage.getAllNotes();
-    this.archivedNotes = await this.storage.getArchivedNotes();
-    this.trashedNotes = await this.storage.getTrashedNotes();
-    this.templates = await this.storage.getTemplates();
-    this.folders = await this.storage.getAllFolders();
-    await this.refreshSearchIndexEntries();
-    this.updateBadgeCounts();
-    await this.renderNotesList();
-    this.renderCalendar();
-    this.updateSidebarTabs();
+    await this.reloadLists({ resetScroller: true });
   }
 
+  /**
+   * Every note's search entry, read again, as a search reads them
+   * @returns {Promise<ReadonlyArray<any>>}
+   */
   async refreshSearchIndexEntries() {
-    const entries = await this.storage.getSearchIndex();
-    this.searchIndexByNoteId = new Map(entries.map(entry => [entry.noteId, entry]));
-    return entries;
+    await this._noteList.searchEntriesChanged('all');
+    return this._noteList.searchEntries();
   }
 
   /** @private */
@@ -894,6 +982,7 @@ class SidebarController {
     }
 
     // Flat views: archive, trash, templates
+    /** @type {ReadonlyArray<any>} */
     let flatNotes = [];
     if (this.sidebarView === 'archive') {
       flatNotes = this.archivedNotes;
@@ -916,7 +1005,7 @@ class SidebarController {
   /**
    * Render a flat list of notes, using VirtualScroller when count exceeds threshold.
    * @param {HTMLElement} list - The sidebar notes list container
-   * @param {Array<Object>} notes - Flat array of notes to render
+   * @param {ReadonlyArray<Object>} notes - Flat array of notes to render, which it never changes
    * @private
    */
   _renderFlatNoteList(list, notes) {
@@ -968,9 +1057,12 @@ class SidebarController {
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();
-        folder.collapsed = !folder.collapsed;
-        folderEl.classList.toggle('collapsed', folder.collapsed);
-        await this.storage.updateFolder(folder);
+        // The listed folder is frozen, so the write takes a copy, and the lists read it again
+        const toggled = { ...folder };
+        toggled.collapsed = !folderEl.classList.contains('collapsed');
+        folderEl.classList.toggle('collapsed', toggled.collapsed);
+        await this.storage.updateFolder(toggled);
+        await this.refreshNotesList();
       });
 
       header.addEventListener('contextmenu', (e) => {
@@ -990,8 +1082,9 @@ class SidebarController {
           await this.refreshNotesList();
         } else if (draggedFolderId && draggedFolderId !== folder.id) {
           if (!this.isChildFolder(draggedFolderId, folder.id)) {
-            const draggedFolder = this.folders.find(f => f.id === draggedFolderId);
-            if (draggedFolder) {
+            const listed = this.folders.find(f => f.id === draggedFolderId);
+            if (listed) {
+              const draggedFolder = { ...listed };
               draggedFolder.parentId = folder.id;
               await this.storage.updateFolder(draggedFolder);
               await this.refreshNotesList();
@@ -1184,8 +1277,9 @@ class SidebarController {
       { label: 'Rename', action: async () => {
         const newName = await promptDialog({ title: 'Rename Folder', message: 'New folder name:', defaultValue: folder.name });
         if (newName && newName !== folder.name) {
-          folder.name = newName;
-          await this.storage.updateFolder(folder);
+          const renamed = { ...folder };
+          renamed.name = newName;
+          await this.storage.updateFolder(renamed);
           await this.refreshNotesList();
         }
       }},
@@ -1203,8 +1297,9 @@ class SidebarController {
         if (this.onOpenNoteInNewTab) this.onOpenNoteInNewTab(note.id);
       }},
       { label: 'Move to Root', action: async () => {
-        folder.parentId = null;
-        await this.storage.updateFolder(folder);
+        const moved = { ...folder };
+        moved.parentId = null;
+        await this.storage.updateFolder(moved);
         await this.refreshNotesList();
       }}
     ];
@@ -1286,12 +1381,9 @@ class SidebarController {
       await this.storage.bulkNoteAction(ids, action);
       if (leaving && this.onNotesLeft) this.onNotesLeft(ids);
       Utils.showToast(`${ids.length} notes ${action}ed`, 'success');
-      this.notes = await this.storage.getAllNotes();
-      this.archivedNotes = await this.storage.getArchivedNotes();
-      this.trashedNotes = await this.storage.getTrashedNotes();
-      this.templates = await this.storage.getTemplates();
+      // The lists read again, so App, the palette, and every other reader of them see it
+      await this.refreshNotesList();
       this.exitSelectionMode();
-      this.updateBadgeCounts();
     } catch (error) {
       console.error('Bulk action failed:', error);
       Utils.showToast('Bulk action failed', 'error');

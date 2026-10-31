@@ -38,14 +38,35 @@ class ShortcutsManager {
     this.onCloseCurrentTab = null;
     this.getEditor = null;
     this.getOpenTabs = null;
-    this.getNotes = null;
-    this.getArchivedNotes = null;
-    this.getSearchIndexByNoteId = null;
+    // The tab's note list (js/kernel/core/application/note-list.js), set by App: the palette
+    // lists its notes, and shows a change to them while it's open
+    /** @type {any} */
+    this._noteList = null;
+    /** @type {(() => void) | null} */
+    this._unsubscribeNoteList = null;
     this.getSidebarOpen = null;
     this.getAISidebarOpen = null;
 
     /** @type {function|null} */
     this._commandPaletteFocusTrapCleanup = null;
+  }
+
+  /**
+   * The note list the palette lists. Setting it subscribes the palette to its changes.
+   * @returns {any}
+   */
+  get noteList() {
+    return this._noteList;
+  }
+
+  set noteList(list) {
+    if (this._unsubscribeNoteList) this._unsubscribeNoteList();
+    this._noteList = list;
+    this._unsubscribeNoteList = list
+      ? list.subscribe(() => {
+        if (this.isCommandPaletteOpen()) this.refreshCommandPaletteResults();
+      })
+      : null;
   }
 
   /** Initialize shortcuts: wire keydown listener, setup command palette. */
@@ -294,13 +315,13 @@ class ShortcutsManager {
     const activeNoteId = editor?.noteId;
     const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
     const openNoteIds = new Set(openTabs.map(tab => tab.noteId));
-    const notes = this.getNotes ? this.getNotes() : [];
-    const archivedNotes = this.getArchivedNotes ? this.getArchivedNotes() : [];
-    const searchIndexByNoteId = this.getSearchIndexByNoteId ? this.getSearchIndexByNoteId() : new Map();
+    const list = this._noteList;
+    const notes = list ? list.view('active') : [];
+    const archivedNotes = list ? list.view('archived') : [];
     const noteCollections = [...notes, ...archivedNotes];
 
     return noteCollections.map(note => {
-      const searchEntry = searchIndexByNoteId.get(note.id);
+      const searchEntry = list.searchEntry(note.id);
       const previewSource = note.preview || searchEntry?.content || '';
       const preview = previewSource
         .replace(/\s+/g, ' ')
@@ -329,6 +350,8 @@ class ShortcutsManager {
 
     const input = document.getElementById('command-palette-input');
     const nextQuery = query !== undefined ? query : input?.value || '';
+    // The item selected now, so a refresh the lists cause keeps it selected wherever it moves
+    const selected = this.commandPaletteItems[this.commandPaletteIndex];
 
     this.commandPaletteItems = CommandPaletteUtils.buildCommandPaletteItems({
       query: nextQuery,
@@ -337,9 +360,15 @@ class ShortcutsManager {
       limit: 12,
     });
 
+    const kept = query === undefined && selected
+      ? this.commandPaletteItems.findIndex(item => item.id === selected.id)
+      : -1;
     if (query !== undefined) {
       this.commandPaletteIndex = 0;
+    } else if (kept !== -1) {
+      this.commandPaletteIndex = kept;
     } else {
+      // It's gone: the nearest one, where it was
       this.commandPaletteIndex = Math.min(
         this.commandPaletteIndex,
         Math.max(this.commandPaletteItems.length - 1, 0)

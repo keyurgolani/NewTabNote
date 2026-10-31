@@ -10,7 +10,7 @@
  * idempotency key. Each query's type comes from its schema, through JSDoc.
  */
 
-import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
+import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 
 /** @typedef {import('./surfaces.js').Surface} Surface */
 /** @typedef {import('./fields.js').EntityType} EntityType */
@@ -19,11 +19,15 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('../domain/folder.js').FolderRecord} FolderRecord */
 /** @typedef {import('../domain/session.js').WorkspaceSession} WorkspaceSession */
 /** @typedef {import('./settings.js').PreferenceValues} PreferenceValues */
+/** @typedef {import('../domain/note.js').SearchEntry} SearchEntry */
 
 /** @typedef {import('./operations/list-notes.js').ListNotes} ListNotes */
 /** @typedef {import('./operations/get-note.js').GetNote} GetNote */
 /** @typedef {import('./operations/get-note-blocks.js').GetNoteBlocks} GetNoteBlocks */
 /** @typedef {import('./operations/get-backlinks.js').GetBacklinks} GetBacklinks */
+/** @typedef {import('./operations/get-note-list.js').GetNoteList} GetNoteList */
+/** @typedef {import('./operations/get-notes-by-ids.js').GetNotesByIds} GetNotesByIds */
+/** @typedef {import('./operations/list-search-entries.js').ListSearchEntries} ListSearchEntries */
 /** @typedef {import('./operations/list-folders.js').ListFolders} ListFolders */
 /** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
 /** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
@@ -32,8 +36,9 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 /** @typedef {import('./operations/get-job-runs.js').GetJobRuns} GetJobRuns */
 
 /**
- * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | ListFolders | GetPreferences
- *   | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns} Query
+ * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | GetNoteList | GetNotesByIds | ListSearchEntries
+ *   | ListFolders
+ *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -50,6 +55,9 @@ import { QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
  * @property {{note: NoteRecord, revision?: number}} getNote
  * @property {BlockRecord[]} getNoteBlocks
  * @property {NoteRecord[]} getBacklinks
+ * @property {{notes: NoteRecord[], folders: FolderRecord[], searchEntries: SearchEntry[]}} getNoteList
+ * @property {{notes: NoteRecord[], searchEntries: SearchEntry[]}} getNotesByIds
+ * @property {SearchEntry[]} listSearchEntries
  * @property {FolderRecord[]} listFolders
  * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
@@ -90,15 +98,16 @@ const NEW_TAB = Object.freeze(/** @type {Surface[]} */ (['newtab']));
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {EntityType[]} entityTypes
  * @param {readonly Surface[]} [surfaces]
+ * @param {number} [maxBytes] - for a request that carries a list as long as the user makes it
  * @returns {QueryEntry}
  */
-const entry = (module, entityTypes, surfaces = READERS) =>
+const entry = (module, entityTypes, surfaces = READERS, maxBytes = SMALL_MESSAGE_BYTES) =>
   Object.freeze({
     kind: /** @type {const} */ ('query'),
     version: 1,
     schema: `./operations/${module}.js`,
     surfaces,
-    maxBytes: SMALL_MESSAGE_BYTES,
+    maxBytes,
     deadlineMs: QUERY_DEADLINE_MS,
     cancellable: /** @type {const} */ ('any-time'),
     idempotency: /** @type {const} */ ('none'),
@@ -114,6 +123,9 @@ export const QUERIES = Object.freeze({
   getNoteBlocks: entry('get-note-blocks', ['note']),
   // Only the new tab's editor has shown backlinks
   getBacklinks: entry('get-backlinks', ['note'], NEW_TAB),
+  getNoteList: entry('get-note-list', [], NEW_TAB),
+  getNotesByIds: entry('get-notes-by-ids', ['note'], NEW_TAB, MAX_MESSAGE_BYTES),
+  listSearchEntries: entry('list-search-entries', [], NEW_TAB),
   listFolders: entry('list-folders', []),
   getPreferences: entry('get-preferences', []),
   getWorkspaceSession: entry('get-workspace-session', []),

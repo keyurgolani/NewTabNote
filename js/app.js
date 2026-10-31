@@ -67,15 +67,17 @@ class App {
   /**
    * The new-tab composition root (js/kernel/composition/newtab.js) constructs App with the
    * tab's kernel client (js/kernel/composition/host.js describes it), the document client
-   * every editor reads and writes its note through (js/kernel/composition/document.js), and
-   * the AI port every editor and NotesManager call the provider through
-   * (js/services/ai-port.mjs).
-   * @param {{kernel?: any, documentClient?: any, ai?: any}} [options]
+   * every editor reads and writes its note through (js/kernel/composition/document.js), the
+   * AI port every editor and NotesManager call the provider through (js/services/ai-port.mjs),
+   * and the tab's note list (js/kernel/core/application/note-list.js), the one copy of the note
+   * lists that App, the controllers, the palette, and analytics read.
+   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any}} [options]
    */
-  constructor({ kernel, documentClient, ai } = {}) {
+  constructor({ kernel, documentClient, ai, noteList } = {}) {
     this.kernel = kernel;
     this.documentClient = documentClient;
     this.ai = ai;
+    this.noteList = noteList;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -87,12 +89,6 @@ class App {
     this.sidebarWidth = 260;
     this.sidebarSortMode = 'updated';
     this.sidebarViewMode = 'list'; // 'list' or 'cards'
-    this.notes = [];
-    this.archivedNotes = [];
-    this.trashedNotes = [];
-    this.templates = []; // NEW: templates list
-    this.folders = []; // NEW: folders list
-    this.searchIndexByNoteId = new Map();
     this.searchQuery = '';
     this.contextMenuNoteId = null;
     // Calendar
@@ -159,6 +155,45 @@ class App {
         this.rebuildSearchIndex();
       }
     }, 300);
+  }
+
+  /**
+   * The note lists, read from the tab's note list (js/kernel/core/application/note-list.js).
+   * Each is frozen: nothing changes a note or folder it lists, and a change to the lists
+   * arrives as new ones.
+   * @returns {ReadonlyArray<any>}
+   */
+  get notes() {
+    return this.noteList.view('active');
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get archivedNotes() {
+    return this.noteList.view('archived');
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get trashedNotes() {
+    return this.noteList.view('trashed');
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get templates() {
+    return this.noteList.view('templates');
+  }
+
+  /** @returns {ReadonlyArray<any>} */
+  get folders() {
+    return this.noteList.folders();
+  }
+
+  /**
+   * Each note's search entry, by note id
+   * @returns {{get(noteId: string): any, has(noteId: string): boolean}}
+   */
+  get searchIndexByNoteId() {
+    const list = this.noteList;
+    return { get: (noteId) => list.searchEntry(noteId), has: (noteId) => list.searchEntry(noteId) !== undefined };
   }
 
   /**
@@ -245,13 +280,11 @@ class App {
         Utils.showToast('An unexpected error occurred', 'error');
       });
 
-      // Get notes and folders
-      this.notes = await Storage.getAllNotes();
-      this.archivedNotes = await Storage.getArchivedNotes();
-      this.trashedNotes = await Storage.getTrashedNotes();
-      this.templates = await Storage.getTemplates();
-      this.folders = await Storage.getAllFolders();
-      await this.refreshSearchIndexEntries();
+      // The tab's note list read every note, folder, and search entry in one read once the
+      // kernel was ready, and the sidebar's first render needs them
+      await this.noteList.settled();
+      const lists = this.noteList.state();
+      if (lists.kind === 'failed') throw storageFailure({ ...lists, messageKey: `unavailable.${lists.cause}` });
 
       // Initialize editors
       const editorChangeHandler = Utils.debounce(() => {
@@ -609,13 +642,8 @@ class App {
       logger: this.logger,
     });
 
-    // Share data
-    this.sidebarController.notes = this.notes;
-    this.sidebarController.archivedNotes = this.archivedNotes;
-    this.sidebarController.trashedNotes = this.trashedNotes;
-    this.sidebarController.templates = this.templates;
-    this.sidebarController.folders = this.folders;
-    this.sidebarController.searchIndexByNoteId = this.searchIndexByNoteId;
+    // The note list it renders, once per change
+    this.sidebarController.noteList = this.noteList;
     this.sidebarController.searchEngine = this.searchEngine;
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -665,7 +693,7 @@ class App {
     this.tabController.onCreateNote = () => Storage.createNote('Untitled');
     this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
-    this.tabController.onGetNotes = () => this.notes;
+    this.tabController.noteList = this.noteList;
     this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     await this.tabController.init();
@@ -705,7 +733,7 @@ class App {
     this.aiChatController.onGetOpenTabs = () => this.openTabs;
     this.aiChatController.onRenderTabs = () => this.renderTabs();
     this.aiChatController.onSaveTabs = () => this.saveTabs();
-    this.aiChatController.onGetNotes = () => this.notes;
+    this.aiChatController.noteList = this.noteList;
     this.aiChatController.onTriggerIndexing = () => this.triggerIndexing();
     this.aiChatController.onLoadEmbeddingsModel = () => {
       if (this.notesManager) this.notesManager.loadEmbeddingsModel();
@@ -833,9 +861,9 @@ class App {
       logger: this.logger,
     });
 
-    // Share data
-    this.analyticsController.notes = this.notes;
-    this.analyticsController.folders = this.folders;
+    // Analytics counts what the note list lists, and reads blocks through the document client
+    this.analyticsController.noteList = this.noteList;
+    Analytics.connect({ noteList: this.noteList, getNoteBlocks: (noteId) => this.documentClient.blocksOf(noteId) });
 
     // Wire callbacks so the controller can query App-level state
     this.analyticsController.onGetSidebarOpen = () => this.sidebarOpen;
@@ -949,14 +977,9 @@ class App {
       documentClient: this.documentClient,
     });
 
-    // Share data
-    this.notesManager.notes = this.notes;
-    this.notesManager.archivedNotes = this.archivedNotes;
-    this.notesManager.trashedNotes = this.trashedNotes;
-    this.notesManager.templates = this.templates;
-    this.notesManager.folders = this.folders;
+    // The note list it reads, and tells when the indexer wrote search entries
+    this.notesManager.noteList = this.noteList;
     this.notesManager.searchEngine = this.searchEngine;
-    this.notesManager.searchIndexByNoteId = this.searchIndexByNoteId;
 
     // Wire callbacks so the manager can trigger App-level actions
     this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
@@ -1010,9 +1033,7 @@ class App {
     };
     this.shortcutsManager.getEditor = () => this.getEditor();
     this.shortcutsManager.getOpenTabs = () => this.openTabs;
-    this.shortcutsManager.getNotes = () => this.notes;
-    this.shortcutsManager.getArchivedNotes = () => this.archivedNotes;
-    this.shortcutsManager.getSearchIndexByNoteId = () => this.searchIndexByNoteId;
+    this.shortcutsManager.noteList = this.noteList;
     this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
     this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
 
@@ -2064,53 +2085,29 @@ class App {
   }
 
   /**
-   * Refresh notes list from storage. With `listsOnly`, as for another tab's
-   * change, the lists and counts refresh and the editor area stays as it is.
+   * Read the note lists again, after a write made outside the kernel or another tab's change,
+   * and show them, as this refresh always did: the sidebar's lists, counts, calendar, and
+   * tabs, keeping its virtual scroller, the empty state, and the palette while it's open. With
+   * `listsOnly`, as for another tab's change, the lists and counts refresh and the editor
+   * area stays as it is. A reload shim until #12 slice 7: a write routed through a command
+   * reaches the list from the commit feed instead.
    * @param {{listsOnly?: boolean}} [options]
    * @returns {Promise<void>}
    */
   async refreshNotesList({ listsOnly = false } = {}) {
-    this.notes = await Storage.getAllNotes();
-    this.archivedNotes = await Storage.getArchivedNotes();
-    this.trashedNotes = await Storage.getTrashedNotes();
-    this.templates = await Storage.getTemplates();
-    this.folders = await Storage.getAllFolders();
-    await this.refreshSearchIndexEntries();
-
-    // Sync data to sidebar controller
     if (this.sidebarController) {
-      this.sidebarController.notes = this.notes;
-      this.sidebarController.archivedNotes = this.archivedNotes;
-      this.sidebarController.trashedNotes = this.trashedNotes;
-      this.sidebarController.templates = this.templates;
-      this.sidebarController.folders = this.folders;
-      this.sidebarController.searchIndexByNoteId = this.searchIndexByNoteId;
-      this.sidebarController.updateBadgeCounts();
-      await this.sidebarController.renderNotesList();
-      this.sidebarController.renderCalendar();
-      this.sidebarController.updateSidebarTabs();
+      await this.sidebarController.reloadLists();
     } else {
+      await this.noteList.reload();
       this.updateBadgeCounts();
       await this.renderNotesList();
       this.renderCalendar();
       this.updateSidebarTabs();
     }
 
-    // Sync data to notes manager
-    if (this.notesManager) {
-      this.notesManager.notes = this.notes;
-      this.notesManager.archivedNotes = this.archivedNotes;
-      this.notesManager.trashedNotes = this.trashedNotes;
-      this.notesManager.templates = this.templates;
-      this.notesManager.folders = this.folders;
-      this.notesManager.searchIndexByNoteId = this.searchIndexByNoteId;
-    }
-
     if (!listsOnly) this.updateEmptyState();
     if (this.shortcutsManager) {
-      if (this.shortcutsManager.isCommandPaletteOpen()) {
-        this.shortcutsManager.refreshCommandPaletteResults();
-      }
+      if (this.shortcutsManager.isCommandPaletteOpen()) this.shortcutsManager.refreshCommandPaletteResults();
     } else if (this.isCommandPaletteOpen()) {
       this.refreshCommandPaletteResults();
     }
@@ -2146,15 +2143,13 @@ class App {
     }
   }
 
+  /**
+   * Every note's search entry, read again
+   * @returns {Promise<ReadonlyArray<any>>}
+   */
   async refreshSearchIndexEntries() {
-    if (this.notesManager) {
-      const entries = await this.notesManager.refreshSearchIndexEntries();
-      this.searchIndexByNoteId = this.notesManager.searchIndexByNoteId;
-      return entries;
-    }
-    const entries = await Storage.getSearchIndex();
-    this.searchIndexByNoteId = new Map(entries.map(entry => [entry.noteId, entry]));
-    return entries;
+    await this.noteList.searchEntriesChanged('all');
+    return this.noteList.searchEntries();
   }
 
   /**
@@ -2202,10 +2197,8 @@ class App {
   editorNavigation() {
     return {
       titleChanged: (name) => this.updateCurrentTabName(name),
-      noteSaved: (note) => {
-        this.triggerIndexing(note.id);
-        this.updateSidebarNotePreview(note);
-      },
+      // The sidebar shows the save once the note list reads it from the commit feed
+      noteSaved: (note) => this.triggerIndexing(note.id),
       // A backlink opens its note: 1.4.x called an App.openNote that never existed, so it threw
       openNote: (noteId) => this.openNoteById(noteId),
       openNoteByName: (name) => this.openNoteByName(name),
@@ -2213,30 +2206,6 @@ class App {
       // The new tab's, from the PiP window too, since the PiP window closes with it
       reloadPage: () => window.location.reload(),
     };
-  }
-
-  /**
-   * Update a single note's preview data in the sidebar without a full refresh.
-   * Called by the editor after each save so the sidebar stays current.
-   * @param {Object} noteData - The saved note object with updated preview/todoProgress
-   */
-  updateSidebarNotePreview(noteData) {
-    if (!noteData || !noteData.id) return;
-    const lists = [this.notes, this.archivedNotes];
-    if (this.sidebarController) {
-      lists.push(this.sidebarController.notes, this.sidebarController.archivedNotes);
-    }
-    for (const list of lists) {
-      if (!Array.isArray(list)) continue;
-      const note = list.find(n => n.id === noteData.id);
-      if (note) {
-        note.preview = noteData.preview;
-        note.todoProgress = noteData.todoProgress;
-        note.updatedAt = noteData.updatedAt || Date.now();
-        note.name = noteData.name;
-      }
-    }
-    this.renderNotesList();
   }
 
   /**
@@ -2352,9 +2321,12 @@ class App {
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();
-        folder.collapsed = !folder.collapsed;
-        folderEl.classList.toggle('collapsed', folder.collapsed);
-        await Storage.updateFolder(folder);
+        // The listed folder is frozen, so the write takes a copy, and the lists read it again
+        const toggled = { ...folder };
+        toggled.collapsed = !folderEl.classList.contains('collapsed');
+        folderEl.classList.toggle('collapsed', toggled.collapsed);
+        await Storage.updateFolder(toggled);
+        await this.refreshNotesList();
       });
 
       // Context menu for folder
@@ -2383,8 +2355,9 @@ class App {
         } else if (draggedFolderId && draggedFolderId !== folder.id) {
           // Prevent moving a folder into itself or its children
           if (!this.isChildFolder(draggedFolderId, folder.id)) {
-            const draggedFolder = this.folders.find(f => f.id === draggedFolderId);
-            if (draggedFolder) {
+            const listed = this.folders.find(f => f.id === draggedFolderId);
+            if (listed) {
+              const draggedFolder = { ...listed };
               draggedFolder.parentId = folder.id;
               await Storage.updateFolder(draggedFolder);
               await this.refreshNotesList();
@@ -2585,7 +2558,7 @@ class App {
   async renderSearchResults(list) {
     // Sync search index data to SearchEngine
     const searchIndexData = await this.refreshSearchIndexEntries();
-    this.searchEngine.updateIndex(searchIndexData);
+    this.searchEngine.updateIndex(/** @type {any[]} */ (searchIndexData));
     const searchResults = await this.searchEngine.search(this.searchQuery);
 
     // Filter based on current view
@@ -3502,8 +3475,6 @@ class App {
    */
   async toggleStats() {
     if (this.analyticsController) {
-      this.analyticsController.notes = this.notes;
-      this.analyticsController.folders = this.folders;
       await this.analyticsController.toggleStats();
       this.statsOpen = this.analyticsController.statsOpen;
       return;
@@ -3515,8 +3486,6 @@ class App {
    */
   async renderAnalytics() {
     if (this.analyticsController) {
-      this.analyticsController.notes = this.notes;
-      this.analyticsController.folders = this.folders;
       await this.analyticsController.renderAnalytics();
       return;
     }
@@ -3537,7 +3506,6 @@ class App {
       // Note doesn't exist - create a new one?
       if (await confirmDialog({ title: 'Create Note', message: `Note "${name}" does not exist. Create it?` })) {
         const newNote = await Storage.createNote(name);
-        this.notes.unshift(newNote);
         await this.refreshNotesList();
         await this.openNoteById(newNote.id);
       }
@@ -4551,8 +4519,9 @@ class App {
         action: async () => {
           const newName = await promptDialog({ title: 'Rename Folder', message: 'New folder name:', defaultValue: folder.name });
           if (newName && newName !== folder.name) {
-            folder.name = newName;
-            await Storage.updateFolder(folder);
+            const renamed = { ...folder };
+            renamed.name = newName;
+            await Storage.updateFolder(renamed);
             await this.refreshNotesList();
           }
         }
@@ -4582,8 +4551,9 @@ class App {
         label: 'Move to Root',
         icon: 'arrow-up',
         action: async () => {
-          folder.parentId = null;
-          await Storage.updateFolder(folder);
+          const moved = { ...folder };
+          moved.parentId = null;
+          await Storage.updateFolder(moved);
           await this.refreshNotesList();
         }
       }
