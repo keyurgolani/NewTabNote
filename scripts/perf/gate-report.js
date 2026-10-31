@@ -11,6 +11,11 @@
  *
  *   node scripts/perf/gate-report.js <probe.json> [budgets.json]
  *
+ * A profile is invalid when 1.4.0 against itself is off by more than the tolerance, when any
+ * round of any package failed, when the probe reported a problem (a fixture digest that isn't
+ * the recorded one, for one), or when it ran fewer rounds than build/budgets.json takes. An
+ * invalid profile's timing and heap say `invalid`, with the reasons listed under the table.
+ *
  * A row whose mode is `report` never fails this script; one whose mode is `gate` exits 1 when
  * it fails, or when the run is invalid.
  */
@@ -27,7 +32,7 @@ const ms = value => (value === null || value === undefined ? 'n/a' : `${Math.rou
 /**
  * @param {any} probe - the probe's JSON
  * @param {any} budgets - build/budgets.json
- * @returns {{markdown: string, failed: boolean, verdicts: Array<{profile: string, valid: boolean, timing: string, heap: string}>}}
+ * @returns {{markdown: string, failed: boolean, verdicts: Array<{profile: string, valid: boolean, timing: string, heap: string, problems: string[]}>}}
  */
 function gateReport(probe, budgets) {
   const timing = budgets.timing;
@@ -44,7 +49,10 @@ function gateReport(probe, budgets) {
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   const verdicts = [];
+  /** @type {string[]} */
+  const notes = [];
   let failed = false;
+  const probeProblems = [...(probe.problems || []), ...(probe.packages || []).flatMap(entry => entry.problems || [])];
   for (const [name, profile] of Object.entries(probe.timing ? probe.timing.profiles : {})) {
     const ratios = Object.entries(profile.ratios || {});
     const self = ratios.find(([, ratio]) => ratio.self);
@@ -55,21 +63,30 @@ function gateReport(probe, budgets) {
       continue;
     }
     const selfMedian = self[1].interactionReady.median;
-    const valid = Math.abs(selfMedian - 1) * 100 <= timing.tolerancePct;
     const both = candidate[1].againstBoth.interactionReady;
+    // What makes the whole profile's run unusable, timing and heap alike
+    const problems = [];
+    for (const [label, entry] of Object.entries(profile.packages)) {
+      for (const failure of entry.failures || []) problems.push(`${label} round ${failure.round} failed: ${failure.message}`);
+    }
+    for (const item of probeProblems) problems.push(`the probe: ${item}`);
+    const rounds = Math.min(probe.timing.runs ?? Infinity, both.values.length);
+    if (rounds < timing.rounds) problems.push(`${rounds} rounds, fewer than the ${timing.rounds} build/budgets.json takes`);
+    const valid = problems.length === 0 && Math.abs(selfMedian - 1) * 100 <= timing.tolerancePct;
     const timingVerdict = !valid ? 'invalid' : both.median - 1 <= timing.tolerancePct / 100 ? 'pass' : 'fail';
     const heapMiB = profile.packages[candidate[0]].heapBytes.median / MIB;
-    const heapVerdict = heapMiB <= heapCeiling ? 'pass' : 'fail';
+    const heapVerdict = problems.length > 0 ? 'invalid' : heapMiB <= heapCeiling ? 'pass' : 'fail';
+    notes.push(...problems.map(item => `- ${name}: ${item}`));
     if (timing.mode === 'gate' && timingVerdict !== 'pass') failed = true;
     if (heap.mode === 'gate' && heapVerdict !== 'pass') failed = true;
     const labels = Object.keys(profile.packages);
     const absolute = labels.map(label => ms(profile.packages[label].interactionReadyMs && profile.packages[label].interactionReadyMs.median)).join(', ');
     lines.push(`| ${name} | ${both.values.length} | ${pct(selfMedian)} (${pct(self[1].interactionReady.q1)} to ${pct(self[1].interactionReady.q3)}) | ${valid ? 'yes' : '**no**'} | ${pct(both.median)} (${pct(both.q1)} to ${pct(both.q3)}) | ${timingVerdict} | ${heapMiB.toFixed(2)} MiB | ${heapVerdict} | ${absolute} |`);
-    verdicts.push({ profile: name, valid, timing: timingVerdict, heap: heapVerdict });
+    verdicts.push({ profile: name, valid, timing: timingVerdict, heap: heapVerdict, problems });
   }
+  if (notes.length > 0) lines.push('', 'Invalid, so neither row is read:', '', ...notes);
   const environment = probe.environment || {};
   lines.push('', `Machine: ${environment.cpu || 'unknown'}, ${environment.cores || '?'} cores, ${environment.platform || ''}; Chromium ${(probe.timing && probe.timing.browser) || 'unknown'}.`);
-  if ((probe.problems || []).length > 0) lines.push('', ...probe.problems.map(problem => `- ${problem}`));
   return { markdown: `${lines.join('\n')}\n`, failed, verdicts };
 }
 

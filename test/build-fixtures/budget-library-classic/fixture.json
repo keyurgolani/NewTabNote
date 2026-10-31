@@ -1,0 +1,16 @@
+{
+  "rule": "newtab.html loads Fuse.js as a classic script at start, the way 1.4.0 did (#27 AC3)",
+  "expect": [
+    "budget/forbidden"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "newtab.html",
+      "replace": "<script vite-ignore src=\"js/entries/boot-guard.js\"></script>",
+      "with": "<script vite-ignore src=\"js/lib/fuse.js\"></script>\n  <script vite-ignore src=\"js/entries/boot-guard.js\"></script>"
+    }
+  ]
+}

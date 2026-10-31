@@ -9,12 +9,17 @@
  * writes: it changes only by review, and a number over a row goes back to the owner.
  *
  * An entry is a page (`page`), with the loader chunks it loads at its start counted as start
- * (`startChunks`: today's new tab loads the workspace chunk, the whole tab, at boot), or a
- * loader chunk (`chunk`: Moment, once #2 builds it). It fails the build, which then writes no
+ * (`startChunks`: today's new tab loads the workspace chunk, the whole tab, at boot) and the
+ * ones it loads later named as lazy (`lazyChunks`); a loader chunk (`chunk`: Moment, once #2
+ * builds it); or the service worker (`background`), one self-contained module whose start is
+ * the whole of it. It fails the build, which then writes no
  * dist/, on:
  *   budget/entry       a page or the service worker the build has with no row, a row for an
- *                      entry the build doesn't have that isn't `planned`, or a `planned` row
- *                      for an entry the build has (its numbers have to be set first)
+ *                      entry the build doesn't have that isn't `planned`, a `planned` row for
+ *                      an entry the build has (its numbers have to be set first), a
+ *                      `startChunks` or `lazyChunks` name the build doesn't have or the page's
+ *                      start doesn't import(), or a chunk the page's start import()s that the
+ *                      row names in neither, so the row can't fall back to measuring the root
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
  *   budget/forbidden   a module, classic script, or file a forbidden category names on the
@@ -42,6 +47,8 @@ const { PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js')
 const ROOT = path.join(__dirname, '..', '..');
 const BUDGETS_FILE = 'build/budgets.json';
 const FONT = /\.(?:woff2?|ttf|otf)$/i;
+/** The start rows an entry can have */
+const START_TYPES = ['html', 'js', 'css', 'fonts'];
 
 /** @typedef {{raw: number, gzip: number}} Limit */
 /** @typedef {{raw: number, gzip: number, files: number}} Bytes */
@@ -52,6 +59,7 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
  * @property {string} [page] - the HTML entry, for a page
  * @property {string} [chunk] - the loader chunk's name, for a chunk entry
  * @property {string[]} [startChunks] - loader chunks the page loads at its start, counted as start
+ * @property {string[]} [lazyChunks] - loader chunks the page's start loads later, with import()
  * @property {boolean} [planned] - not built yet: the gate refuses a build that has it
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
  * @property {string[]} [forbidden] - categories gated on the start path
@@ -80,9 +88,12 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
  * @property {Part} start
  * @property {Part} lazy
  * @property {Part} workers
- * @property {Array<{chunk: string, file: string | null, from: string | null}>} [boots] - for a page,
- *   each of its row's startChunks: the chunk's file (null: the build has no such loader chunk) and
- *   the start chunk whose import() loads it (null: nothing on the page's start does)
+ * @property {Array<{chunk: string, as: 'start' | 'lazy', file: string | null, from: string | null}>} [boots] -
+ *   for a page, each of its row's startChunks and lazyChunks: the chunk's file (null: the build
+ *   has no such loader chunk) and the chunk on the page's own start whose import() loads it (null:
+ *   nothing there does)
+ * @property {string[]} [unclassified] - for a page, chunks its own start import()s that its row
+ *   names in neither startChunks nor lazyChunks
  */
 
 /**
@@ -164,19 +175,22 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
   const vendored = vendoredPackages(root);
   /** @type {Map<string, ChunkReport>} */
   const byFile = new Map(chunks.filter((chunk) => chunk.pass !== 'background').map((chunk) => [chunk.fileName, chunk]));
+  /** @type {Map<string, ChunkReport>} the service worker's own pass, kept apart from the pages' */
+  const backgroundByFile = new Map(chunks.filter((chunk) => chunk.pass === 'background').map((chunk) => [chunk.fileName, chunk]));
+  const chunkOf = (/** @type {string} */ file) => byFile.get(file) || backgroundByFile.get(file);
   const libraries = Object.entries(CLASSIC_SCRIPTS).filter(([, how]) => how === 'as-is').map(([file]) => file);
   const workerChunks = chunks.filter((chunk) => chunk.pass === 'worker' && chunk.isEntry);
 
-  /** Static imports from `start`, each chunk once */
-  const closure = (/** @type {string[]} */ start) => {
+  /** Static imports from `start`, each chunk once, within one pass's chunks */
+  const closure = (/** @type {string[]} */ start, within = byFile) => {
     /** @type {Set<string>} */
     const seen = new Set();
     const pending = [...start];
     while (pending.length > 0) {
       const file = /** @type {string} */ (pending.pop());
-      if (seen.has(file) || !byFile.has(file)) continue;
+      if (seen.has(file) || !within.has(file)) continue;
       seen.add(file);
-      pending.push(.../** @type {ChunkReport} */ (byFile.get(file)).imports);
+      pending.push(.../** @type {ChunkReport} */ (within.get(file)).imports);
     }
     return seen;
   };
@@ -200,7 +214,7 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
       bucket.raw += raw;
       bucket.gzip += gzip;
       bucket.files += 1;
-      const chunk = byFile.get(file);
+      const chunk = chunkOf(file);
       if (chunk) {
         for (const id of chunk.moduleIds) {
           const source = sourcePath(id, root);
@@ -266,6 +280,8 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
     let at = '';
     /** @type {NonNullable<EntryGraph['boots']>} */
     const boots = [];
+    /** @type {string[]} */
+    let unclassified = [];
     if (entry.page) {
       if (!files.has(entry.page)) continue;
       at = entry.page;
@@ -290,27 +306,42 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
         }
       }
       // What the page loads at once through its loader counts as start: today's root loads the
-      // workspace chunk, the whole tab, at boot. Each one has to be built, and loaded by an
-      // import() on the page's own start, or the row would measure only the root
+      // workspace chunk, the whole tab, at boot. Every chunk the page's own start import()s has
+      // to be named, as start or as lazy, and each one named has to be built and import()ed
+      // there, or the row would measure only the root
       const own = closure(roots);
-      for (const chunk of entry.startChunks || []) {
-        const file = loaderChunks[chunk] || null;
-        const from = file === null ? null : [...own].sort().find((at) => (byFile.get(at)?.dynamicImports || []).includes(file)) || null;
-        boots.push({ chunk, file, from });
-        if (file !== null) roots.push(file);
+      const ownImports = [...new Set([...own].flatMap((file) => byFile.get(file)?.dynamicImports || []))].filter((file) => byFile.has(file)).sort();
+      /** @type {Set<string>} */
+      const named = new Set();
+      for (const [as, list] of /** @type {const} */ ([['start', entry.startChunks], ['lazy', entry.lazyChunks]])) {
+        for (const chunk of list || []) {
+          const file = loaderChunks[chunk] || null;
+          const from = file === null ? null : [...own].sort().find((source) => (byFile.get(source)?.dynamicImports || []).includes(file)) || null;
+          boots.push({ chunk, as, file, from });
+          if (file === null) continue;
+          named.add(file);
+          if (as === 'start') roots.push(file);
+        }
       }
+      unclassified = ownImports.filter((file) => !named.has(file));
       startChunks = closure(roots);
     } else if (entry.chunk) {
       if (!loaderChunks[entry.chunk]) continue;
       kind = 'chunk';
       at = loaderChunks[entry.chunk];
       startChunks = closure([at]);
+    } else if (name === 'background') {
+      // The service worker: one self-contained module (#27 slice 2), its own pass
+      if (!files.has(BACKGROUND_ENTRY)) continue;
+      kind = 'worker';
+      at = BACKGROUND_ENTRY;
+      startChunks = closure([BACKGROUND_ENTRY], backgroundByFile);
     } else {
       continue;
     }
     for (const file of startChunks) {
       start.set(file, 'js');
-      for (const css of /** @type {ChunkReport} */ (byFile.get(file)).importedCss || []) start.set(css, 'css');
+      for (const css of /** @type {ChunkReport} */ (chunkOf(file)).importedCss || []) start.set(css, 'css');
     }
     addFonts(start);
     const { lazy, workers } = beyond(startChunks);
@@ -327,6 +358,7 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
     addFonts(lazyTyped);
     graphs[name] = { kind, at, start: partOf(start), lazy: partOf(lazyTyped), workers: partOf(new Map([...workers].map((file) => [file, 'js']))) };
     if (boots.length > 0) graphs[name].boots = boots;
+    if (unclassified.length > 0) graphs[name].unclassified = unclassified;
   }
   return graphs;
 }
@@ -345,11 +377,21 @@ function fileProblems(budgets) {
     return problems;
   }
   const categories = budgets.forbidden && typeof budgets.forbidden === 'object' ? budgets.forbidden : {};
+  for (const [name, category] of Object.entries(/** @type {Record<string, any>} */ (categories))) {
+    if (!category || !Array.isArray(category.paths) || !category.paths.every((/** @type {unknown} */ glob) => typeof glob === 'string')) fail(`forbidden category ${name}'s paths isn't a list of paths`);
+  }
   for (const [name, entry] of Object.entries(/** @type {Record<string, any>} */ (budgets.entries))) {
+    for (const key of ['startChunks', 'lazyChunks', 'forbidden', 'dependencies']) {
+      if (entry[key] !== undefined && (!Array.isArray(entry[key]) || !entry[key].every((/** @type {unknown} */ item) => typeof item === 'string'))) fail(`entry ${name}'s ${key} isn't a list of names`);
+    }
     if (Boolean(entry.page) === Boolean(entry.chunk) && name !== 'background') fail(`entry ${name} names neither a page nor a chunk, or both`);
     if (typeof entry.reason !== 'string' || entry.reason === '') fail(`entry ${name} has no reason`);
-    for (const category of entry.forbidden || []) if (!categories[category]) fail(`entry ${name} forbids ${category}, which isn't a category`);
+    for (const category of Array.isArray(entry.forbidden) ? entry.forbidden : []) if (!categories[category]) fail(`entry ${name} forbids ${category}, which isn't a category`);
     for (const [type, limit] of Object.entries(entry.start || {})) {
+      if (!START_TYPES.includes(type)) {
+        fail(`entry ${name}'s start has a ${type} row, which isn't one of ${START_TYPES.join(', ')}`);
+        continue;
+      }
       if (limit === null) continue;
       const ok = limit && Number.isSafeInteger(limit.raw) && Number.isSafeInteger(limit.gzip) && limit.raw >= 0 && limit.gzip >= 0;
       if (!ok) fail(`entry ${name}'s ${type} row isn't whole numbers of bytes, raw and gzip`);
@@ -395,9 +437,15 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
   for (const [name, graph] of Object.entries(graphs)) {
     const entry = budgets.entries[name];
     if (!entry || entry.planned) continue;
+    const chunkNames = new Map(Object.entries(loaderChunks).map(([chunk, file]) => [file, chunk]));
     for (const boot of graph.boots || []) {
-      if (boot.file === null) problems.push(problem('budget/entry', name, `its row's startChunks names ${boot.chunk}, and the build has no loader chunk by that name, so its start would leave out what the page loads at boot`));
-      else if (boot.from === null) problems.push(problem('budget/entry', name, `its row's startChunks names ${boot.chunk} (${boot.file}), and nothing on the page's start loads it with import(): the row says the page boots a chunk it doesn't`));
+      const key = boot.as === 'start' ? 'startChunks' : 'lazyChunks';
+      if (boot.file === null) problems.push(problem('budget/entry', name, `its row's ${key} names ${boot.chunk}, and the build has no loader chunk by that name, so its graph would leave out what the page loads`));
+      else if (boot.from === null) problems.push(problem('budget/entry', name, `its row's ${key} names ${boot.chunk} (${boot.file}), and nothing on the page's start loads it with import(): the row says the page loads a chunk it doesn't`));
+    }
+    for (const file of graph.unclassified || []) {
+      const chunk = chunkNames.get(file);
+      problems.push(problem('budget/entry', name, `its page's start loads ${chunk ? `${chunk} (${file})` : file} with import(), and its row names it in neither startChunks nor lazyChunks: say whether it loads at start or later, or the row measures less than the page loads`));
     }
     for (const [type, limit] of Object.entries(entry.start || {})) {
       if (!limit) continue;

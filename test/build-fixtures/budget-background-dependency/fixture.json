@@ -1,0 +1,15 @@
+{
+  "rule": "the service worker bundles an npm package its row doesn't allow (#27 AC3)",
+  "expect": [
+    "budget/dependency"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/background.js",
+      "append": "\nimport { nanoid } from 'nanoid';\nconsole.log('ntn-review', nanoid());\n"
+    }
+  ]
+}

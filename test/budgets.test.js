@@ -77,7 +77,7 @@ function budgetsFor(entries = {}) {
       'chart-library': { about: 'Chart.js', paths: ['js/lib/chart.js'] },
       trust: { about: 'the trust code', paths: ['js/trust/**'] },
       'remote-ai': { about: 'remote AI clients', paths: ['js/llm.js'] },
-      'model-runtime': { about: 'model runtimes', paths: ['js/lib/transformers.js', '**/*.wasm'] },
+      'model-runtime': { about: 'model runtimes', paths: ['js/lib/transformers.js'] },
       'archive-trash': { about: 'none yet', paths: [] },
     },
     entries: {
@@ -129,7 +129,8 @@ describe('the analyzer (scripts/build/budgets.js)', () => {
   it('counts the chunk the root loads at once as start, not lazy, so the row measures the tab and not only its root', () => {
     const { files, chunks, loaderChunks } = bundleFixture();
     const booted = analyze({ chunks, files, loaderChunks, budgets: budgetsFor() }).newtab;
-    assert.deepEqual(booted.boots, [{ chunk: 'workspace', file: 'assets/workspace.js', from: 'assets/newtab.js' }]);
+    assert.deepEqual(booted.boots, [{ chunk: 'workspace', as: 'start', file: 'assets/workspace.js', from: 'assets/newtab.js' }]);
+    assert.equal(booted.unclassified, undefined);
     // Without startChunks the workspace and what it imports would be lazy, the way the byte-mode
     // probe files them, and start JS would be the root, its loader and the boot guard
     const rootOnly = analyze({ chunks, files, loaderChunks, budgets: budgetsFor({ newtab: { ...budgetsFor().entries.newtab, startChunks: undefined } }) }).newtab;
@@ -139,6 +140,18 @@ describe('the analyzer (scripts/build/budgets.js)', () => {
     assert.equal(rootOnly.start.bytes.js.raw, sum(['assets/newtab.js', 'js/entries/boot-guard.js', 'js/runtime/lazy.js']));
     assert.equal(booted.start.bytes.js.raw, rootOnly.start.bytes.js.raw + sum(['assets/workspace.js', 'assets/host.js']));
     assert.ok(booted.start.modules.includes('js/kernel/composition/host.js'));
+    // The root's import() of the workspace is then named nowhere, which the gate refuses
+    assert.deepEqual(rootOnly.unclassified, ['assets/workspace.js']);
+  });
+
+  it("reads the service worker's graph from its own pass", () => {
+    const fixture = bundleFixture();
+    fixture.chunks = fixture.chunks.map(entry => (entry.pass === 'background' ? { ...entry, moduleIds: [...entry.moduleIds, id('js/lib/valibot/index.mjs')] } : entry));
+    const worker = analyze({ ...fixture, budgets: budgetsFor() }).background;
+    assert.equal(worker.kind, 'worker');
+    assert.deepEqual(worker.start.files.map(entry => entry.file), ['js/background.js']);
+    assert.deepEqual(worker.start.modules, ['js/background.js', 'js/lib/valibot/index.mjs']);
+    assert.deepEqual(worker.start.packages, ['valibot']);
   });
 
   it('names a package by node_modules or its vendored record, and matches globs by folder', () => {
@@ -194,20 +207,42 @@ describe('the budget gate', () => {
     const root = graphs.newtab.start.bytes.js.raw - [...graphs.newtab.start.files].filter(entry => entry.file === 'assets/workspace.js' || entry.file === 'assets/host.js').reduce((sum, entry) => sum + entry.raw, 0);
     const between = { ...newtab, start: { ...newtab.start, js: { raw: root + 1, gzip: 100 * KIB } } };
     assert.match(run(budgetsFor({ newtab: between })).join('\n'), /^budget\/bytes newtab: its start JS is \d+ bytes raw/);
-    // Counting only the root, the same row would pass without checking the tab
-    assert.deepEqual(run(budgetsFor({ newtab: { ...between, startChunks: undefined } })), []);
+    // Without the workspace named, or with an empty list, the row can't fall back to the root:
+    // the root's import() of the workspace is named nowhere, and the build fails
+    const unnamed = "budget/entry newtab: its page's start loads workspace (assets/workspace.js) with import(), and its row names it in neither startChunks nor lazyChunks: say whether it loads at start or later, or the row measures less than the page loads";
+    assert.deepEqual(run(budgetsFor({ newtab: { ...between, startChunks: undefined } })), [unnamed]);
+    assert.deepEqual(run(budgetsFor({ newtab: { ...between, startChunks: [] } })), [unnamed]);
   });
 
-  it("fails a startChunks name the build doesn't have, or one nothing on the page's start loads", () => {
+  it("fails a startChunks or lazyChunks name the build doesn't have, or one nothing on the page's start loads", () => {
     const newtab = budgetsFor().entries.newtab;
     assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, startChunks: ['workspace', 'shell'] } })), [
-      "budget/entry newtab: its row's startChunks names shell, and the build has no loader chunk by that name, so its start would leave out what the page loads at boot",
+      "budget/entry newtab: its row's startChunks names shell, and the build has no loader chunk by that name, so its graph would leave out what the page loads",
+    ]);
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, lazyChunks: ['later'] } })), [
+      "budget/entry newtab: its row's lazyChunks names later, and the build has no loader chunk by that name, so its graph would leave out what the page loads",
     ]);
     const fixture = bundleFixture();
     fixture.chunks[0] = { ...fixture.chunks[0], dynamicImports: [] };
     assert.deepEqual(run(budgetsFor(), fixture), [
-      "budget/entry newtab: its row's startChunks names workspace (assets/workspace.js), and nothing on the page's start loads it with import(): the row says the page boots a chunk it doesn't",
+      "budget/entry newtab: its row's startChunks names workspace (assets/workspace.js), and nothing on the page's start loads it with import(): the row says the page loads a chunk it doesn't",
     ]);
+  });
+
+  it('takes a chunk the row names as lazy out of start, and still counts it in the graph', () => {
+    const newtab = budgetsFor().entries.newtab;
+    const budgets = budgetsFor({ newtab: { ...newtab, startChunks: [], lazyChunks: ['workspace'] } });
+    const graph = analyze({ ...bundleFixture(), budgets }).newtab;
+    assert.ok(graph.lazy.files.some(entry => entry.file === 'assets/workspace.js'));
+    assert.ok(!graph.start.files.some(entry => entry.file === 'assets/workspace.js'));
+    assert.deepEqual(run(budgets), []);
+  });
+
+  it("fails a package in the service worker its row doesn't allow", () => {
+    const fixture = bundleFixture();
+    fixture.chunks = fixture.chunks.map(entry => (entry.pass === 'background' ? { ...entry, moduleIds: [...entry.moduleIds, id('node_modules/nanoid/index.js')] } : entry));
+    assert.deepEqual(run(budgetsFor(), fixture), ["budget/dependency background: its graph holds nanoid, which its row doesn't allow"]);
+    assert.deepEqual(run(budgetsFor({ background: { reason: 'the worker', start: {}, dependencies: ['nanoid'] } }), fixture), []);
   });
 
   it('fails a built entry with no row, and a row for an entry the build lacks', () => {
@@ -238,11 +273,15 @@ describe('the budget gate', () => {
 
   it('refuses a budget file it can\'t read as one', () => {
     assert.deepEqual(fileProblems({}).map(({ message }) => message), ['has no entries']);
-    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 } }, forbidden: ['nothing'] } });
+    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 }, jss: { raw: 1, gzip: 1 } }, forbidden: ['nothing'], startChunks: 'workspace' } });
+    bad.forbidden.trust = { about: 'the trust code', paths: 'js/trust/**' };
     assert.deepEqual(fileProblems(bad).map(({ message }) => message), [
+      "forbidden category trust's paths isn't a list of paths",
+      "entry popup's startChunks isn't a list of names",
       'entry popup has no reason',
       "entry popup forbids nothing, which isn't a category",
       "entry popup's js row isn't whole numbers of bytes, raw and gzip",
+      "entry popup's start has a jss row, which isn't one of html, js, css, fonts",
     ]);
   });
 });
@@ -255,6 +294,10 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
   it('holds the approved rows exactly', () => {
     const { entries } = BUDGETS;
     assert.deepEqual(entries.newtab.start, { js: { raw: 700 * KIB, gzip: 200 * KIB }, css: { raw: 100 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    // The workspace loads at boot, so it's start; nothing the root loads is named lazy
+    assert.deepEqual(entries.newtab.startChunks, ['workspace']);
+    assert.equal(entries.newtab.lazyChunks, undefined);
+    assert.deepEqual(entries.background.dependencies, ['valibot']);
     assert.deepEqual(entries.popup.start.js, { raw: 115 * KIB, gzip: 40 * KIB });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
@@ -275,36 +318,57 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 
 describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
   const ratio = (median, extra = {}) => ({ median, q1: median - 0.01, q3: median + 0.01, values: Array(12).fill(median), ...extra });
-  const probe = (self, both, heapMiB) => ({
+  // The candidate's ratio to the first 1.4.0 copy alone is set apart from its ratio to both, so
+  // a summary that read the first would show
+  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12 } = {}) => ({
     environment: { cpu: 'test', cores: 4, platform: 'linux' },
     timing: {
       browser: '156',
+      runs: rounds,
       profiles: {
         typical: {
           packages: {
-            '1.4.0': { interactionReadyMs: ratio(900), heapBytes: ratio(4 * 1048576) },
-            '1.4.0-again': { interactionReadyMs: ratio(905), heapBytes: ratio(4 * 1048576) },
-            candidate: { interactionReadyMs: ratio(950), heapBytes: ratio(heapMiB * 1048576) },
+            '1.4.0': { interactionReadyMs: ratio(900), heapBytes: ratio(4 * 1048576), failures: [] },
+            '1.4.0-again': { interactionReadyMs: ratio(905), heapBytes: ratio(4 * 1048576), failures: [] },
+            candidate: { interactionReadyMs: ratio(950), heapBytes: ratio(heapMiB * 1048576), failures },
           },
           ratios: {
-            '1.4.0-again': { self: true, interactionReady: ratio(self) },
-            candidate: { interactionReady: ratio(both), againstBoth: { interactionReady: ratio(both) } },
+            '1.4.0-again': { self: true, interactionReady: ratio(self, { values: Array(rounds).fill(self) }) },
+            candidate: { interactionReady: ratio(first, { values: Array(rounds).fill(first) }), againstBoth: { interactionReady: ratio(both, { values: Array(rounds).fill(both) }) } },
           },
         },
       },
     },
-    problems: [],
+    problems,
   });
 
   it('says valid, pass or fail for timing and heap, and fails nothing while the rows report', () => {
-    const passing = gateReport(probe(1.01, 1.05, 4.4), BUDGETS);
-    assert.deepEqual(passing.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass' }]);
+    // Against the first copy alone the candidate is +25%: the summary reads both
+    const passing = gateReport(probe(1.01, 1.05, 4.4, { first: 1.25 }), BUDGETS);
+    assert.deepEqual(passing.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }]);
     assert.equal(passing.failed, false);
     assert.match(passing.markdown, /\| typical \| 12 \| \+1\.0% .* \| yes \| \+5\.0% .* \| pass \| 4\.40 MiB \| pass \|/);
-    const failing = gateReport(probe(1.01, 1.09, 4.7), BUDGETS);
-    assert.deepEqual(failing.verdicts, [{ profile: 'typical', valid: true, timing: 'fail', heap: 'fail' }]);
+    // Against the first copy alone it's +1%: the summary reads both
+    const failing = gateReport(probe(1.01, 1.09, 4.7, { first: 1.01 }), BUDGETS);
+    assert.deepEqual(failing.verdicts, [{ profile: 'typical', valid: true, timing: 'fail', heap: 'fail', problems: [] }]);
     assert.equal(failing.failed, false, 'report-only rows fail nothing');
-    assert.deepEqual(gateReport(probe(1.09, 1.0, 4.4), BUDGETS).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass' });
+    assert.deepEqual(gateReport(probe(1.09, 1.0, 4.4), BUDGETS).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
+  });
+
+  it('calls a profile invalid when a round failed, the probe reported a problem, or rounds fall short', () => {
+    const gated = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'gate' }, heap: { ...BUDGETS.heap, mode: 'gate' } };
+    const cases = [
+      [{ failures: [{ round: 3, message: 'the page never marked ready' }] }, 'candidate round 3 failed: the page never marked ready'],
+      [{ problems: ["the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"] }, "the probe: the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"],
+      [{ rounds: 9 }, '9 rounds, fewer than the 12 build/budgets.json takes'],
+    ];
+    for (const [options, reason] of cases) {
+      const reported = gateReport(probe(1.01, 1.05, 4.4, options), BUDGETS);
+      assert.deepEqual(reported.verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'invalid', problems: [reason] }, reason);
+      assert.equal(reported.failed, false, 'report mode fails nothing');
+      assert.ok(reported.markdown.includes(`- typical: ${reason}`), reason);
+      assert.equal(gateReport(probe(1.01, 1.05, 4.4, options), gated).failed, true, reason);
+    }
   });
 
   it('fails once a row is a gate', () => {
@@ -312,6 +376,18 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gateReport(probe(1.01, 1.09, 4.4), gated).failed, true);
     assert.equal(gateReport(probe(1.09, 1.0, 4.4), gated).failed, true, 'an invalid run fails a gate');
     assert.equal(gateReport(probe(1.01, 1.05, 4.4), gated).failed, false);
+  });
+
+  it("writes the summary when the probe exits 1, and stays out of pr-gate's needs while the rows report", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/perf.yml'), 'utf8');
+    const step = name => workflow.slice(workflow.indexOf(`- name: ${name}`), workflow.indexOf('- name:', workflow.indexOf(`- name: ${name}`) + 1));
+    // The runner's shell has -e: the probe's exit is caught with ||, not read after the command
+    assert.match(step('Time 1.4.0'), /--out dist-report\/perf\.json \|\| code=\$\?/);
+    assert.match(step('Time 1.4.0'), /if \[ "\$code" -ge 2 \]; then exit "\$code"; fi/);
+    assert.match(step('Summarize'), /if: always\(\)/);
+    assert.match(step('Summarize'), /set -o pipefail\n\s+node scripts\/perf\/gate-report\.js .* \| tee -a "\$GITHUB_STEP_SUMMARY"/);
+    const gate = fs.readFileSync(path.join(ROOT, '.github/workflows/pr-checks.yml'), 'utf8');
+    assert.match(gate, /needs: \[unit, typecheck, kernel, build, extension\]/, "timing blocks a merge only once pr-gate needs it, or a ruleset requires it: the owner's call");
   });
 
   it('lets npm run perf:probe --baseline read build/budgets.json', () => {
