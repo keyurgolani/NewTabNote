@@ -215,7 +215,7 @@ describe('every fixture file', () => {
     assert.deepStrictEqual(expectedProblems([], ['v8.basic'], []), ['v8.basic has no expected file']);
   });
 
-  it("a recorded fixture's fields are covered by the synthesized fixture of its shape (none recorded yet: #28 slice 3)", () => {
+  it("a recorded fixture's fields are covered by the synthesized fixture of its shape", () => {
     /** @param {any} fixture */
     const fieldsOf = fixture => {
       /** @type {Map<string, Set<string>>} */
