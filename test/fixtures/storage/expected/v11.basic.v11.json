@@ -1,9 +1,9 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v10.basic.v10",
-    "purpose": "After the registry runs to 10 on v10.basic.",
-    "shape": "v10",
+    "id": "v11.basic.v11",
+    "purpose": "After the registry runs to 11 on v11.basic.",
+    "shape": "v11",
     "releases": [],
     "provenance": "synthesized",
     "source": {
@@ -11,9 +11,9 @@
       "seed": 1
     },
     "schema": {
-      "idbVersion": 10,
-      "structuralVersion": 10,
-      "logicalVersion": 1
+      "idbVersion": 11,
+      "structuralVersion": 11,
+      "logicalVersion": 3
     },
     "degraded": [],
     "privacy": "synthetic"
@@ -21,7 +21,7 @@
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 10,
+      "version": 11,
       "stores": [
         {
           "name": "canvases",
@@ -43,9 +43,9 @@
           ],
           "records": [
             {
-              "key": "1760000357297-1uesyo3ar",
+              "key": "1760000385548-gwo3tunm7",
               "value": {
-                "id": "1760000357297-1uesyo3ar",
+                "id": "1760000385548-gwo3tunm7",
                 "name": "Groceries",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -61,7 +61,7 @@
                 "isDaily": false,
                 "dateStr": null,
                 "isTemplate": false,
-                "folderId": "1760000362332-semporsn8",
+                "folderId": "1760000391057-gtsnkgyj9",
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -71,15 +71,15 @@
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
                 },
-                "revision": 3,
-                "placementVersion": 1,
-                "sourceRevision": 2
+                "revision": 2,
+                "placementVersion": 0,
+                "sourceRevision": 0
               }
             },
             {
-              "key": "1760000358419-zqjyo9c6r",
+              "key": "1760000387312-na2vzuxgy",
               "value": {
-                "id": "1760000358419-zqjyo9c6r",
+                "id": "1760000387312-na2vzuxgy",
                 "name": "Reading list",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -104,16 +104,13 @@
                 "settings": {
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
-                },
-                "revision": 1,
-                "placementVersion": 0,
-                "sourceRevision": 0
+                }
               }
             },
             {
-              "key": "1760000359881-j60k7q8k8",
+              "key": "1760000388884-kjtehbh4m",
               "value": {
-                "id": "1760000359881-j60k7q8k8",
+                "id": "1760000388884-kjtehbh4m",
                 "name": "Old plans",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -142,9 +139,9 @@
               }
             },
             {
-              "key": "1760000361210-umiouxtkd",
+              "key": "1760000389999-uyu9bd6rs",
               "value": {
-                "id": "1760000361210-umiouxtkd",
+                "id": "1760000389999-uyu9bd6rs",
                 "name": "Thrown away",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -175,9 +172,9 @@
               }
             },
             {
-              "key": "1760000363357-1bbf26lvk",
+              "key": "1760000392093-ek5pquh48",
               "value": {
-                "id": "1760000363357-1bbf26lvk",
+                "id": "1760000392093-ek5pquh48",
                 "name": "Meeting template",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -204,6 +201,40 @@
                   "backgroundColor": "#fafafa"
                 }
               }
+            },
+            {
+              "key": "1760000403236-xaoelxuhb",
+              "value": {
+                "id": "1760000403236-xaoelxuhb",
+                "name": "Daily Note - Oct 9, 2025",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": true,
+                "dateStr": "2025-10-09",
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "dailyKey": "2025-10-09",
+                "dailyTimeZone": null,
+                "dailyDuplicateOf": null
+              }
             }
           ]
         },
@@ -226,53 +257,7 @@
               "multiEntry": false
             }
           ],
-          "records": [
-            {
-              "key": [
-                1,
-                "note",
-                "1760000358419-zqjyo9c6r"
-              ],
-              "value": {
-                "seq": 1,
-                "entityType": "note",
-                "entityId": "1760000358419-zqjyo9c6r",
-                "revision": 1,
-                "opId": "1760000373584-ghd9fsr5j",
-                "ops": []
-              }
-            },
-            {
-              "key": [
-                2,
-                "note",
-                "1760000357297-1uesyo3ar"
-              ],
-              "value": {
-                "seq": 2,
-                "entityType": "note",
-                "entityId": "1760000357297-1uesyo3ar",
-                "revision": 2,
-                "opId": "1760000383900-e7r7ki2ug",
-                "ops": []
-              }
-            },
-            {
-              "key": [
-                3,
-                "note",
-                "1760000357297-1uesyo3ar"
-              ],
-              "value": {
-                "seq": 3,
-                "entityType": "note",
-                "entityId": "1760000357297-1uesyo3ar",
-                "revision": 3,
-                "opId": "1760000375237-3k04c9ln7",
-                "ops": []
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "conflicts",
@@ -286,37 +271,19 @@
               "multiEntry": false
             }
           ],
+          "records": []
+        },
+        {
+          "name": "daily_index",
+          "keyPath": "dailyKey",
+          "autoIncrement": false,
+          "indexes": [],
           "records": [
             {
-              "key": "1760000376673-v9jvn1ktb",
+              "key": "2025-10-09",
               "value": {
-                "id": "1760000376673-v9jvn1ktb",
-                "noteId": "1760000357297-1uesyo3ar",
-                "scope": "content",
-                "expected": 2,
-                "current": 3,
-                "at": 1760000004000,
-                "command": {
-                  "type": "saveNoteContent",
-                  "commandId": "1760000376673-v9jvn1ktb",
-                  "noteId": "1760000357297-1uesyo3ar",
-                  "blocks": [
-                    {
-                      "id": "stale-b1",
-                      "type": "text",
-                      "content": "A stale draft",
-                      "indentLevel": 0,
-                      "checked": false,
-                      "imageUrl": null,
-                      "calloutIcon": "💡",
-                      "createdAt": 1760000000000,
-                      "updatedAt": 1760000000000,
-                      "canvasId": "1760000357297-1uesyo3ar",
-                      "order": 0
-                    }
-                  ],
-                  "expectedRevision": 2
-                }
+                "dailyKey": "2025-10-09",
+                "noteId": "1760000403236-xaoelxuhb"
               }
             }
           ]
@@ -341,9 +308,9 @@
           ],
           "records": [
             {
-              "key": "1760000364590-wcddf5dlb",
+              "key": "1760000393240-2ev2vv0od",
               "value": {
-                "id": "1760000364590-wcddf5dlb",
+                "id": "1760000393240-2ev2vv0od",
                 "type": "text",
                 "content": "Milk and eggs",
                 "indentLevel": 0,
@@ -352,14 +319,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000357297-1uesyo3ar",
+                "canvasId": "1760000385548-gwo3tunm7",
                 "order": 0
               }
             },
             {
-              "key": "1760000365961-ss233kbyh",
+              "key": "1760000395105-gum5dl01b",
               "value": {
-                "id": "1760000365961-ss233kbyh",
+                "id": "1760000395105-gum5dl01b",
                 "type": "todo",
                 "content": "Bread",
                 "indentLevel": 0,
@@ -368,14 +335,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000357297-1uesyo3ar",
+                "canvasId": "1760000385548-gwo3tunm7",
                 "order": 1
               }
             },
             {
-              "key": "1760000367516-q2de42d3u",
+              "key": "1760000396328-r4bq8370r",
               "value": {
-                "id": "1760000367516-q2de42d3u",
+                "id": "1760000396328-r4bq8370r",
                 "type": "text",
                 "content": "A long book",
                 "indentLevel": 0,
@@ -384,14 +351,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000358419-zqjyo9c6r",
+                "canvasId": "1760000387312-na2vzuxgy",
                 "order": 0
               }
             },
             {
-              "key": "1760000368640-7yrnuzpon",
+              "key": "1760000398145-5q7o520v1",
               "value": {
-                "id": "1760000368640-7yrnuzpon",
+                "id": "1760000398145-5q7o520v1",
                 "type": "text",
                 "content": "Ideas from last year",
                 "indentLevel": 0,
@@ -400,14 +367,14 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000359881-j60k7q8k8",
+                "canvasId": "1760000388884-kjtehbh4m",
                 "order": 0
               }
             },
             {
-              "key": "1760000370579-m8u2vqasc",
+              "key": "1760000400059-dqgzcp47m",
               "value": {
-                "id": "1760000370579-m8u2vqasc",
+                "id": "1760000400059-dqgzcp47m",
                 "type": "text",
                 "content": "Not needed",
                 "indentLevel": 0,
@@ -416,7 +383,23 @@
                 "calloutIcon": "💡",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
-                "canvasId": "1760000361210-umiouxtkd",
+                "canvasId": "1760000389999-uyu9bd6rs",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000405024-aoh398de3",
+              "value": {
+                "id": "1760000405024-aoh398de3",
+                "type": "text",
+                "content": "Morning pages",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000403236-xaoelxuhb",
                 "order": 0
               }
             }
@@ -442,9 +425,9 @@
           ],
           "records": [
             {
-              "key": "1760000362332-semporsn8",
+              "key": "1760000391057-gtsnkgyj9",
               "value": {
-                "id": "1760000362332-semporsn8",
+                "id": "1760000391057-gtsnkgyj9",
                 "name": "Home",
                 "parentId": null,
                 "createdAt": 1760000000000,
@@ -475,11 +458,11 @@
           ],
           "records": [
             {
-              "key": "1760000379709-fow66ua61",
+              "key": "1760000406491-kok7t8q3c",
               "value": {
-                "id": "1760000379709-fow66ua61",
-                "fromNoteId": "1760000357297-1uesyo3ar",
-                "toNoteId": "1760000358419-zqjyo9c6r",
+                "id": "1760000406491-kok7t8q3c",
+                "fromNoteId": "1760000385548-gwo3tunm7",
+                "toNoteId": "1760000387312-na2vzuxgy",
                 "createdAt": 1760000000000
               }
             }
@@ -499,10 +482,10 @@
           ],
           "records": [
             {
-              "key": "1760000372038-mm07pfopv",
+              "key": "1760000402002-amcjtqvfq",
               "value": {
-                "id": "1760000372038-mm07pfopv",
-                "canvasId": "1760000357297-1uesyo3ar",
+                "id": "1760000402002-amcjtqvfq",
+                "canvasId": "1760000385548-gwo3tunm7",
                 "blob": {
                   "$type": "Blob",
                   "mime": "image/png",
@@ -524,7 +507,7 @@
               "key": "changes",
               "value": {
                 "key": "changes",
-                "head": 3,
+                "head": 0,
                 "floor": 0
               }
             },
@@ -532,8 +515,8 @@
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 10,
-                "logicalVersion": 1
+                "structuralVersion": 11,
+                "logicalVersion": 3
               }
             }
           ]
@@ -549,6 +532,38 @@
           "records": [
             {
               "key": [
+                "logical-2",
+                "completed"
+              ],
+              "value": {
+                "id": "logical-2",
+                "from": 1,
+                "to": 2,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "logical-3",
+                "completed"
+              ],
+              "value": {
+                "id": "logical-3",
+                "from": 2,
+                "to": 3,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
                 "structural-10",
                 "completed"
               ],
@@ -556,6 +571,22 @@
                 "id": "structural-10",
                 "from": 9,
                 "to": 10,
+                "status": "completed",
+                "startedAt": 1760000000000,
+                "completedAt": 1760000000000,
+                "recoveryPointId": null,
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-11",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-11",
+                "from": 10,
+                "to": 11,
                 "status": "completed",
                 "startedAt": 1760000000000,
                 "completedAt": 1760000000000,
@@ -593,61 +624,7 @@
               "multiEntry": false
             }
           ],
-          "records": [
-            {
-              "key": "1760000373584-ghd9fsr5j",
-              "value": {
-                "opId": "1760000373584-ghd9fsr5j",
-                "digest": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-                "outcome": {
-                  "kind": "committed",
-                  "code": "note-created",
-                  "changedIds": [
-                    "1760000358419-zqjyo9c6r"
-                  ],
-                  "revision": 1,
-                  "commitSeq": 1,
-                  "messageKey": "committed.note-created",
-                  "severity": "success"
-                },
-                "at": 1760000001000
-              }
-            },
-            {
-              "key": "1760000375237-3k04c9ln7",
-              "value": {
-                "opId": "1760000375237-3k04c9ln7",
-                "digest": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-                "outcome": {
-                  "kind": "committed",
-                  "code": "content-saved",
-                  "changedIds": [
-                    "1760000357297-1uesyo3ar"
-                  ],
-                  "revision": 3,
-                  "commitSeq": 3,
-                  "messageKey": "committed.content-saved",
-                  "severity": "success"
-                },
-                "at": 1760000003000
-              }
-            },
-            {
-              "key": "1760000376673-v9jvn1ktb",
-              "value": {
-                "opId": "1760000376673-v9jvn1ktb",
-                "digest": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
-                "outcome": {
-                  "kind": "conflict",
-                  "code": "revision-conflict",
-                  "currentRevision": 3,
-                  "messageKey": "conflict.revision-conflict",
-                  "severity": "warning"
-                },
-                "at": 1760000004000
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "search_index",
@@ -656,45 +633,45 @@
           "indexes": [],
           "records": [
             {
-              "key": "1760000357297-1uesyo3ar",
+              "key": "1760000385548-gwo3tunm7",
               "value": {
-                "noteId": "1760000357297-1uesyo3ar",
+                "noteId": "1760000385548-gwo3tunm7",
                 "name": "Groceries",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000358419-zqjyo9c6r",
+              "key": "1760000387312-na2vzuxgy",
               "value": {
-                "noteId": "1760000358419-zqjyo9c6r",
+                "noteId": "1760000387312-na2vzuxgy",
                 "name": "Reading list",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000359881-j60k7q8k8",
+              "key": "1760000388884-kjtehbh4m",
               "value": {
-                "noteId": "1760000359881-j60k7q8k8",
+                "noteId": "1760000388884-kjtehbh4m",
                 "name": "Old plans",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000361210-umiouxtkd",
+              "key": "1760000389999-uyu9bd6rs",
               "value": {
-                "noteId": "1760000361210-umiouxtkd",
+                "noteId": "1760000389999-uyu9bd6rs",
                 "name": "Thrown away",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000363357-1bbf26lvk",
+              "key": "1760000392093-ek5pquh48",
               "value": {
-                "noteId": "1760000363357-1bbf26lvk",
+                "noteId": "1760000392093-ek5pquh48",
                 "name": "Meeting template",
                 "content": "",
                 "updatedAt": 1760000000000
@@ -729,10 +706,10 @@
           ],
           "records": [
             {
-              "key": "1760000382187-8i9wv81ck",
+              "key": "1760000409829-xbbhxkmbj",
               "value": {
-                "id": "1760000382187-8i9wv81ck",
-                "noteId": "1760000357297-1uesyo3ar",
+                "id": "1760000409829-xbbhxkmbj",
+                "noteId": "1760000385548-gwo3tunm7",
                 "timestamp": 1760000300000,
                 "blocks": [
                   {
@@ -745,7 +722,7 @@
                     "calloutIcon": "💡",
                     "createdAt": 1760000000000,
                     "updatedAt": 1760000000000,
-                    "canvasId": "1760000357297-1uesyo3ar",
+                    "canvasId": "1760000385548-gwo3tunm7",
                     "order": 0
                   }
                 ],
@@ -774,9 +751,9 @@
           ],
           "records": [
             {
-              "key": "1760000381089-4tnw1jqer",
+              "key": "1760000408370-cqa9i970y",
               "value": {
-                "id": "1760000381089-4tnw1jqer",
+                "id": "1760000408370-cqa9i970y",
                 "name": "Dusk",
                 "properties": {
                   "--bg-primary": "#101820",
@@ -802,22 +779,7 @@
               "multiEntry": false
             }
           ],
-          "records": [
-            {
-              "key": [
-                "note",
-                "1760000377808-2k5trwxxk"
-              ],
-              "value": {
-                "entityType": "note",
-                "id": "1760000377808-2k5trwxxk",
-                "deletedAt": 1760000002000,
-                "lastRevision": 2,
-                "seq": null,
-                "reason": "deleted"
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "vectors",
@@ -826,10 +788,10 @@
           "indexes": [],
           "records": [
             {
-              "key": "1760000357297-1uesyo3ar",
+              "key": "1760000385548-gwo3tunm7",
               "value": {
-                "id": "1760000357297-1uesyo3ar",
-                "noteId": "1760000357297-1uesyo3ar",
+                "id": "1760000385548-gwo3tunm7",
+                "noteId": "1760000385548-gwo3tunm7",
                 "vector": [
                   0.125,
                   -0.5,
