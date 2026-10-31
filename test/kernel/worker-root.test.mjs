@@ -115,3 +115,25 @@ describe("the worker's composition root", () => {
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).status, 'refused');
   });
 });
+
+describe('a run that stands is one this build ran', () => {
+  it('an update tries at once, past a run of the build before that stopped short of space', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    await createWorkerClient({ ...hostOf(of, { estimate: CRAMPED }), version: '1.5.0' }).migration.done;
+    assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).version, '1.5.0');
+    // The same build again, minutes later: it stands
+    const same = createWorkerClient({ ...hostOf(of), version: '1.5.0' });
+    assert.equal((await same.migration.done).status, 'space-blocked');
+    assert.equal((await inspect(of.real)).version, 8);
+    // An update: it runs now
+    const updated = createWorkerClient({ ...hostOf(of), version: '1.5.1' });
+    assert.equal((await updated.migration.done).status, 'migrated');
+    assert.deepStrictEqual(
+      [
+        /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).status,
+        /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).version,
+      ],
+      ['migrated', '1.5.1'],
+    );
+  });
+});
