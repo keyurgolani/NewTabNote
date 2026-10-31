@@ -621,20 +621,20 @@ export function createIntelligence({
    * way the first send may well have landed, so this re-derives the task and answers from the
    * `checked` that stands, as a note conflict does: `committed`, with its history entry, when
    * it's the one asked for, and `note-revision-conflict` otherwise. Either answer is kept under
-   * the commandId. When the producer can't say (its derive failed), a committed answer is
-   * followed as a first send's is.
+   * the commandId. When the producer can't say (its derive failed or is still taken as hung),
+   * the answer is `unknown` again, nothing is kept, and the pending note command stays, so a
+   * later retry decides from a real derive rather than from a replayed answer.
    * @param {IntelligenceCommand} command
    * @param {string} fingerprint
    * @param {IntelligenceSignal} signal
    * @param {boolean} checked
-   * @param {Outcome | null} noteOutcome - the note side's committed answer, or null for a refusal
    * @returns {Promise<IntelligenceOutcome>}
    */
-  const afterResend = async (command, fingerprint, signal, checked, noteOutcome) => {
-    const drafts = await rederive([signal]);
-    if (drafts.get(signal.id) === 'failed' && noteOutcome) {
-      return followNote(command, fingerprint, signal, checked, noteOutcome);
-    }
+  const afterResend = async (command, fingerprint, signal, checked) => {
+    const drafts = await rederive([signal], { skipIfHung: true });
+    // The producer can't say what stands, so neither can this: the answer is unknown again,
+    // nothing is kept, and the pending note command stays for a later retry to decide from
+    if (drafts.get(signal.id) === 'failed') return unknown('note-state-unconfirmed', command.commandId);
     const now = clock.now();
     /** @type {string[]} */
     const changed = [];
@@ -677,7 +677,7 @@ export function createIntelligence({
    * @returns {Promise<IntelligenceOutcome>}
    */
   const afterNoteConflict = async (command, fingerprint, signal, current) => {
-    const drafts = await rederive([signal]);
+    const drafts = await rederive([signal], { skipIfHung: true });
     const now = clock.now();
     /** @type {string[]} */
     const changed = [];
@@ -803,12 +803,12 @@ export function createIntelligence({
         // The note changed since the signal read it: nothing of this command was written
         if (noteOutcome.kind === 'conflict') return afterNoteConflict(command, fingerprint, signal, current);
         if (noteOutcome.kind === 'rejected' && noteOutcome.code === 'idempotency-key-reuse') {
-          return afterResend(command, fingerprint, signal, checked, null);
+          return afterResend(command, fingerprint, signal, checked);
         }
         if (noteOutcome.kind !== 'committed') return noteOutcome;
         // A resend's committed answer can be the note side's record of the first send, from
         // before edits the signal hasn't heard, so it's answered from the checked that stands
-        if (resent) return afterResend(command, fingerprint, signal, checked, noteOutcome);
+        if (resent) return afterResend(command, fingerprint, signal, checked);
         return await followNote(command, fingerprint, signal, checked, noteOutcome);
       } catch (error) {
         return unavailableFrom(error);
@@ -949,7 +949,9 @@ export function createIntelligence({
     const offered = anchorRevisionOf(signal);
     const stored = anchorRevisionOf(existing);
     if (stored !== null && (offered === null || offered < stored)) return 'older-revision';
-    if (meaningOf(signal) === meaningOf({ ...existing, freshness: signal.freshness })) return 'unchanged';
+    // A signal the producer stopped finding comes back even on a draft the same as before
+    const stopped = existing.freshness.state === 'invalidated' && existing.freshness.cause === 'not-reproduced';
+    if (!stopped && meaningOf(signal) === meaningOf({ ...existing, freshness: signal.freshness })) return 'unchanged';
     return null;
   };
 
@@ -1030,11 +1032,15 @@ export function createIntelligence({
    * Re-derives `signals` through their producers: a draft, null when the producer says the
    * source no longer gives one (the signal is then invalidated as `not-reproduced`), or
    * `failed` when the producer has no `derive`, threw, or ran past the deadline (the signal is
-   * then left as it is)
+   * then left as it is). `skipIfHung` is for a note conflict's and a resend's own re-derive,
+   * which run inside a lifecycle command: a producer that ran out within the last deadline is
+   * taken as still hung there, and counts as failed without a deadline of its own. A hint's
+   * re-derive always runs, so no edit is dropped.
    * @param {IntelligenceSignal[]} signals
+   * @param {{skipIfHung?: boolean}} [options]
    * @returns {Promise<Map<string, SignalDraft | null | 'failed'>>}
    */
-  const rederive = async signals => {
+  const rederive = async (signals, { skipIfHung = false } = {}) => {
     /** @type {Map<string, SignalDraft | null | 'failed'>} */
     const drafts = new Map();
     for (const signal of signals) {
@@ -1043,10 +1049,8 @@ export function createIntelligence({
         drafts.set(signal.id, 'failed');
         continue;
       }
-      // A producer that ran out within the last deadline is taken as still hung, so the next
-      // re-derive in the queue, and a note conflict's, don't wait out a deadline of their own
       const lastTimeout = timedOutAt.get(producer.id);
-      if (lastTimeout !== undefined && clock.now() - lastTimeout < deriveTimeoutMs) {
+      if (skipIfHung && lastTimeout !== undefined && clock.now() - lastTimeout < deriveTimeoutMs) {
         drafts.set(signal.id, 'failed');
         continue;
       }
