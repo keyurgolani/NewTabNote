@@ -6,7 +6,8 @@
  *
  * - `verified` when the newest verified point of every kind re-verifies;
  * - `degraded` when one doesn't, with a `point-unverified` incident: the point is still kept,
- *   since only #17's own run discards a point, and the Recovery Center decides what to do;
+ *   since a check never discards one (#17's migration run does, and `keepVerified` drops an
+ *   older `pre-repair` point once slice 3 makes a newer one), and the Recovery Center decides;
  * - `unverified` with no verified point, whatever 1.4.x's legacy copies (`auto_backup_*` and
  *   `recovery_backup_*` in chrome.storage.local) hold: they're counted as `records`, labelled
  *   as kept in this browser profile, and never verified.
@@ -98,7 +99,8 @@ export const recoveryReadiness = Object.freeze({
       if (verdict === null || typeof verdict !== 'object' || (verdict.ok !== true && verdict.ok !== false)) {
         throw new TypeError('not a verdict');
       }
-      // Discarded since it was listed, by #17's run after its own verification: it's gone, not failed
+      // Discarded since it was listed (by #17's migration run, or keepVerified replacing an older
+      // pre-repair point): it's gone, not failed
       if (verdict.ok === false && verdict.code === DISCARDED) continue;
       points.push(point);
       if (verdict.ok === false) {
