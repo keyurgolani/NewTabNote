@@ -51,11 +51,13 @@ class OnboardingManager {
   }
 
   /**
-   * Check whether onboarding has already been completed.
+   * Check whether onboarding has already been completed, through the page's settings port: not
+   * when the read fails, as before.
+   * @param {{workspaceDataOr: (defaults: {hasCompletedOnboarding: boolean}) => Promise<{hasCompletedOnboarding: unknown}>}} settings
    * @returns {Promise<boolean>}
    */
-  static async hasCompleted() {
-    return !!(await Storage.getSetting('hasCompletedOnboarding', false));
+  static async hasCompleted(settings) {
+    return !!(await settings.workspaceDataOr({ hasCompletedOnboarding: false })).hasCompletedOnboarding;
   }
 
   /**

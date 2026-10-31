@@ -4,19 +4,23 @@
  * context menus, and multi-select.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+ *   which its preferences are read and saved through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} [deps.documentClient] - What the sidebar's note writes go through
  *   (js/kernel/composition/document.js): new notes, the Daily Note, pins, a dropped block's
  *   append, folders, and moving a note into one, as kernel commands. The note list shows each
  *   one from the commit feed, with no refresh.
+ * @param {{missingStores: readonly string[]}} deps.storageState - What the page knows of its
+ *   database outside the kernel (js/kernel/composition/newtab.js): the stores it lacks
  */
 class SidebarController {
-  constructor({ storage, settings, domRefs, logger, documentClient = null }) {
-    this.storage = storage;
-    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are saved through */
+  constructor({ settings, domRefs, logger, documentClient = null, storageState }) {
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are read and saved through */
     this.settings = settings;
+    /** @type {{missingStores: readonly string[]}} The stores the page's database lacks, read when asked */
+    this.storageState = storageState;
     this.domRefs = domRefs;
     this.logger = logger;
     this.documentClient = documentClient;
@@ -172,12 +176,17 @@ class SidebarController {
 
   /** Initialize sidebar: load persisted state, wire DOM listeners. */
   async init() {
-    const storage = this.storage;
-
-    this.sidebarOpen = await storage.getSetting('sidebarOpen', true);
-    this.sidebarWidth = await storage.getSetting('sidebarWidth', 260);
-    this.sidebarSortMode = await storage.getSetting('sidebarSortMode', 'updated');
-    this.sidebarViewMode = await storage.getSetting('sidebarViewMode', 'list');
+    // Each as stored, or its default where nothing is or the read fails
+    const stored = await this.settings.preferencesOr({
+      sidebarOpen: true,
+      sidebarWidth: 260,
+      sidebarSortMode: 'updated',
+      sidebarViewMode: 'list',
+    });
+    this.sidebarOpen = stored.sidebarOpen;
+    this.sidebarWidth = stored.sidebarWidth;
+    this.sidebarSortMode = stored.sidebarSortMode;
+    this.sidebarViewMode = stored.sidebarViewMode;
 
     const sortSelect = document.getElementById('sidebar-sort');
     if (sortSelect) sortSelect.value = this.sidebarSortMode;
@@ -918,7 +927,8 @@ class SidebarController {
   async runTrashCleanup() {
     // Skipped while any store is missing, as it always was: nothing is deleted for good on a
     // database an older build left damaged
-    if (this.storage.missingStores && this.storage.missingStores.length > 0) return;
+    const { missingStores } = this.storageState;
+    if (missingStores && missingStores.length > 0) return;
     const outcome = await this.removal.removeNotes({ type: 'runTrashCleanup' });
     if (outcome.kind !== 'committed') {
       this.logger.warn('SidebarController', `Trash cleanup didn't run (${outcome.kind}: ${outcome.code})`);

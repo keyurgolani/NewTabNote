@@ -5,7 +5,12 @@
 
 import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
-import { createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
+import {
+  createNewTabBackupCheck,
+  createNewTabNoteList,
+  createNewTabRecovery,
+  createNewTabStorageState,
+} from '../../js/kernel/composition/newtab.js';
 import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
@@ -15,7 +20,9 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 /**
  * The page's kernel client, the document client over it, and its note list
  * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
- * them, so a commit an editor or a job makes reaches the list's feed
+ * them, so a commit an editor or a job makes reaches the list's feed. The database's state, the
+ * storage guard's raw export, and an import's backup check come from the page's Storage, as
+ * the root gives them to App.
  * @param {{storage: any, settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
  *   pageNow?: () => number}} host - the page's Storage and chrome.storage.local, what to tell of
  *   each query the note list makes, and the kernel's and the document client's clocks, the
@@ -27,6 +34,9 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   removalFor: (ports: Omit<import('../../js/kernel/composition/removal.js').RemovalPorts, 'settled'>) =>
  *     import('../../js/kernel/composition/removal.js').NoteRemoval,
  *   settingsClient: import('../../js/kernel/composition/settings.js').SettingsClient,
+ *   storageState: import('../../js/kernel/composition/newtab.js').StorageState,
+ *   recovery: import('../../js/kernel/composition/newtab.js').Recovery,
+ *   validateBackup: import('../../js/kernel/composition/newtab.js').ValidateBackup,
  * }}
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
@@ -58,7 +68,11 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     documentClient: createDocumentClient(client, pageNow ? { now: pageNow } : {}),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
-    settingsClient: createSettingsClient(client),
+    // It hears of settings changes as the new tab's does, through the page's Storage
+    settingsClient: createSettingsClient(client, { onSettingsChange: listener => storage.onSettingsChange(listener) }),
+    storageState: createNewTabStorageState({ storage, settings }),
+    recovery: createNewTabRecovery({ storage, settings }),
+    validateBackup: createNewTabBackupCheck({ storage, settings }),
   };
 }
 

@@ -1049,7 +1049,6 @@ describe("the kernel's copies of production rules, run both ways", () => {
     // chrome.storage.local set under 1.4.x's keys, and the kernel reads
     await storage.setSetting('font', 'serif');
     const tabs = new TabController({
-      storage,
       settings: createSettingsClient({ ...kernel, ids: testIds('s') }),
       domRefs: null,
       logger: null,

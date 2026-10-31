@@ -46,9 +46,19 @@ async function openPage(env, { open = ['A'], split = false } = {}) {
   env.get('Utils').showToast = (message, kind) => { page.toasts.push({ message, kind }); };
   if (!env.document.getElementById('sidebar-tab-notes')) env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
   page.notes = page.wire(new (env.get('NotesManager'))({ storage: page.Storage, domRefs: null, logger: null, llm: null }));
-  page.sidebar = page.wire(new (env.get('SidebarController'))({ storage: page.Storage, domRefs: null, logger: null }));
+  page.sidebar = page.wire(new (env.get('SidebarController'))({
+    settings: env.settingsClient,
+    storageState: env.storageState,
+    domRefs: null,
+    logger: null,
+  }));
   page.sidebar.getEditor = () => page.tabs.getEditor();
-  page.settings = page.wire(new (env.get('SettingsController'))({ storage: page.Storage, domRefs: null, logger: null }));
+  page.settings = page.wire(new (env.get('SettingsController'))({
+    settings: env.settingsClient,
+    validateBackup: env.validateBackup,
+    domRefs: null,
+    logger: null,
+  }));
   return page;
 }
 

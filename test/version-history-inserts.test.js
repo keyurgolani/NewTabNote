@@ -210,10 +210,9 @@ describe('version history over a database without the snapshots store', () => {
 });
 
 /** AIChatController as App wires it, with the editor as the one getEditor answers */
-function aiChat(env, Storage, editor) {
+function aiChat(env, editor) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
-    storage: Storage,
     settings: env.settingsClient,
     eventBus: null,
     domRefs: null,
@@ -243,7 +242,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = 'a1';
-    const chat = aiChat(env, Storage, editor);
+    const chat = aiChat(env, editor);
     await runUntil(env, chat.appendAIResponseToNote(REPLY));
 
     assert.deepEqual(await storedBlocks(Storage, 'A'), [
@@ -265,7 +264,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = null;
-    await runUntil(env, aiChat(env, Storage, editor).appendAIResponseToNote(REPLY));
+    await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
     assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), [
       'Milk', 'Eggs', 'See [[Work]]', 'Call the bakery',
     ]);
@@ -277,7 +276,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     await editor.loadNote('A');
     editor.activeBlock = 'a1';
     type(editor, 'Oat milk');
-    await runUntil(env, aiChat(env, Storage, editor).appendAIResponseToNote(REPLY));
+    await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
     assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), [
       'Oat milk', 'See [[Work]]', 'Call the bakery', 'Eggs',
     ]);
@@ -295,7 +294,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
       editorA.activeBlock = 'a1';
       // The other tab still shows the note as it was before the insert
       type(editorB, 'Brown eggs', 1);
-      const chat = aiChat(tabA.env, tabA.Storage, editorA);
+      const chat = aiChat(tabA.env, editorA);
       // This tab's editor writes what it holds first, as it always has, and the other tab's save
       // runs once it has: before the insert, or while the insert commits. (Two editors saving
       // one note's blocks race until #35, a declared gap of the legacy adapter.)
@@ -320,7 +319,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     const { env, Storage, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
-    const chat = aiChat(env, Storage, editor);
+    const chat = aiChat(env, editor);
     const sent = [];
     const client = env.documentClient;
     const realCreate = client.createNote;
@@ -344,7 +343,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     const { env, Storage, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
-    const chat = aiChat(env, Storage, editor);
+    const chat = aiChat(env, editor);
     editor.save = async () => { await Storage.permanentlyDeleteNote('A'); };
     await runUntil(env, chat.appendAIResponseToNote(REPLY));
     assert.equal(await Storage.getNote('A'), undefined);
@@ -529,7 +528,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     // The cursor is in the block the revert takes away
     editor.activeBlock = '0-c';
     let appended = false;
-    const appending = aiChat(env, Storage, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
+    const appending = aiChat(env, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
       .then(() => { appended = true; });
     await settle();
     assert.equal(appended, false, 'the append waits for the revert');
@@ -596,7 +595,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     type(editor, 'Typed');
     editor.activeBlock = null;
     let appended = false;
-    const appending = aiChat(env, Storage, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
+    const appending = aiChat(env, editor).appendAIResponseToNote([{ type: 'text', content: 'New1' }])
       .then(() => { appended = true; });
     await settle();
     env.window.fire('pagehide');
@@ -754,7 +753,7 @@ describe('typing while an AI insert commits (review R70, 1.4.x misplaced the blo
       const editor = makeEditor(env);
       await editor.loadNote('A');
       editor.activeBlock = '0-a';
-      const chat = aiChat(env, Storage, editor);
+      const chat = aiChat(env, editor);
       const client = env.documentClient;
       const real = client.insertBlocks;
       let release;
@@ -788,7 +787,7 @@ describe('typing while an AI insert commits (review R70, 1.4.x misplaced the blo
     const client = env.documentClient;
     const real = client.insertBlocks;
     client.insertBlocks = () => Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
-    await runUntil(env, aiChat(env, Storage, editor).appendAIResponseToNote(REPLY));
+    await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
     client.insertBlocks = real;
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
     assert.deepEqual(toasts.at(-1), { message: 'Failed to add content', kind: 'error' });

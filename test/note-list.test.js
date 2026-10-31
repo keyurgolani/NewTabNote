@@ -76,7 +76,7 @@ async function openPage() {
     'command-palette-modal', { id: 'command-palette-input', tag: 'input' }, 'command-palette-results',
   ]);
   env.document.getElementById('command-palette-modal').classList.add('hidden');
-  const deps = { storage: Storage, eventBus: null, domRefs: null, logger: null };
+  const deps = { eventBus: null, domRefs: null, logger: null };
   const sidebar = new (env.get('SidebarController'))(deps);
   sidebar.getEditor = () => null;
   const palette = new (env.get('ShortcutsManager'))(deps);

@@ -274,7 +274,7 @@ describe('startup: version 8 without themes (AC6)', () => {
     await env.get('Storage').init();
     const toasts = [];
     env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
-    env.get('App').prototype.reportMissingStores.call({});
+    env.get('App').prototype.reportMissingStores.call({ storageState: await storageStateOf(env) });
     assert.deepEqual(toasts, [{
       message: 'Your notes database is incomplete, so these are off: custom themes. Export a copy from Settings > Data & Backup.',
       kind: 'error',
@@ -288,7 +288,7 @@ describe('startup: version 8 without themes (AC6)', () => {
     await env.get('Storage').init();
     const toasts = [];
     env.get('Utils').showToast = (message) => toasts.push(message);
-    env.get('App').prototype.reportMissingStores.call({});
+    env.get('App').prototype.reportMissingStores.call({ storageState: await storageStateOf(env) });
     assert.deepEqual(toasts, []);
   });
 });
@@ -304,7 +304,7 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
   }
 
   it('skips trash cleanup in SidebarController, so the expired note keeps its blocks', async () => {
-    const { env, Storage } = await start();
+    const { env } = await start();
     const before = await dumpDatabase(env.indexedDB);
     const logger = { info() {}, warn() {}, error() {}, debug() {} };
     const removed = [];
@@ -312,7 +312,7 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
     assert.equal(env.get('App').prototype.runTrashCleanup, undefined);
     const SidebarController = env.get('SidebarController');
     const removal = { removeNotes: async (removal) => { removed.push(removal); return { kind: 'committed', changedIds: [] }; } };
-    await SidebarController.prototype.runTrashCleanup.call({ storage: Storage, logger, removal });
+    await SidebarController.prototype.runTrashCleanup.call({ storageState: await storageStateOf(env), logger, removal });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     assert.deepEqual(removed, []);
   });
@@ -558,7 +558,7 @@ describe('the export notice in the guard states (NTN-18 slice 0)', () => {
   ]) {
     it(`${label}: the new tab shows the guard without deciding on the notice, which isn't due there`, async () => {
       const decided = [];
-      const { env } = await startApp(spec, (page) => {
+      const { env, app } = await startApp(spec, (page) => {
         const { prototype } = page.get('ExportNotice');
         const isDue = prototype.isDue;
         prototype.isDue = function recordedIsDue(...args) {
@@ -572,7 +572,12 @@ describe('the export notice in the guard states (NTN-18 slice 0)', () => {
       const Storage = env.get('Storage');
       assert.equal(Storage.openState, openState);
       const writes = env.chrome.writes().length;
-      const notice = new (env.get('ExportNotice'))({ storage: Storage, onExport: async () => true });
+      // On the ports App has
+      const notice = new (env.get('ExportNotice'))({
+        storageState: app.storageState,
+        settings: app.settings,
+        onExport: async () => true,
+      });
       assert.equal(await notice.isDue(), false);
       assert.equal(env.chrome.writes().length, writes, 'and records nothing');
       assert.equal(env.chrome.local.setting_preMigrationNotice, undefined);
@@ -664,6 +669,15 @@ describe('background capture on a version-8 database', () => {
     assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
   });
 });
+
+/**
+ * The database's state App reads, as the new tab's root makes it from the page's Storage
+ * @returns {Promise<{openState: string, missingStores: readonly string[]}>}
+ */
+async function storageStateOf(env) {
+  const { createNewTabStorageState } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  return createNewTabStorageState({ storage: env.get('Storage') });
+}
 
 /**
  * Start the new tab against a fixture with a stub #app element, after `beforeInit(env)`, as
