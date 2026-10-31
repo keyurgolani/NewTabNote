@@ -23,14 +23,15 @@ const profiles = [];
 after(() => profiles.forEach(closeAll));
 
 /**
- * A profile, with a database made from `spec` first when given
+ * A profile, with a database made from `spec` first when given, which opens as it is, since
+ * only the migration runner upgrades one (review R79)
  * @param {object} [spec] - for legacyEnv.createDatabase
  */
 async function opened(spec) {
   const of = profile();
   profiles.push(of);
   if (spec) await legacyEnv.createDatabase(of.real, spec);
-  const adapter = adapterOn(of);
+  const adapter = adapterOn(of, spec ? { mode: 'existing' } : {});
   await adapter.open();
   const runtime = { ids: testIds(), clock: testClock() };
   return { of, adapter, runtime, tab: kernelOn(adapter, runtime) };
