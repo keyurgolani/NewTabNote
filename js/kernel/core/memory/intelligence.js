@@ -25,6 +25,7 @@ import * as v from '../../../lib/valibot/index.mjs';
 /** @typedef {import('../intelligence/repository.js').IntelligenceRepository} IntelligenceRepository */
 /** @typedef {import('../intelligence/repository.js').IntelligenceTx} IntelligenceTx */
 /** @typedef {import('../intelligence/repository.js').KeptOutcome} KeptOutcome */
+/** @typedef {import('../intelligence/repository.js').PendingNote} PendingNote */
 /** @typedef {import('../intelligence/operations.js').IntelligenceOutcome} IntelligenceOutcome */
 /** @typedef {import('../intelligence/events.js').IntelligenceEvent} IntelligenceEvent */
 /** @typedef {import('../intelligence/events.js').EventType} EventType */
@@ -67,6 +68,8 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
   const corrections = new Map();
   /** @type {Map<string, KeptOutcome>} */
   const outcomes = new Map();
+  /** @type {Map<string, PendingNote>} */
+  const pendingNotes = new Map();
   /** @type {Map<string, number>} each signal id's entity revision, which its hints carry */
   const entityRevisions = new Map();
   const quarantine = {
@@ -165,6 +168,8 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
         const clearedCorrections = new Set();
         /** @type {Map<string, {fingerprint: string, outcome: (commitSeq: number | null) => IntelligenceOutcome}>} */
         const stagedOutcomes = new Map();
+        /** @type {Map<string, PendingNote>} */
+        const stagedPending = new Map();
         /** @type {Map<string, Set<EventType>>} */
         const touched = new Map();
         /**
@@ -260,6 +265,13 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
             appended.delete(signalId);
             touch(signalId, 'intelligence.correctionsRemoved');
           },
+          pendingNote: commandId => {
+            const pending = stagedPending.get(commandId) ?? pendingNotes.get(commandId);
+            return pending ? clone(pending) : null;
+          },
+          keepPendingNote: (commandId, pending) => {
+            if (!pendingNotes.has(commandId)) stagedPending.set(commandId, clone(pending));
+          },
           keep: (commandId, fingerprint, outcome) => {
             if (!outcomes.has(commandId) && !stagedOutcomes.has(commandId)) {
               stagedOutcomes.set(commandId, { fingerprint, outcome });
@@ -268,7 +280,7 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
         };
 
         const result = work(tx);
-        if (touched.size === 0 && stagedOutcomes.size === 0)
+        if (touched.size === 0 && stagedOutcomes.size === 0 && stagedPending.size === 0)
           return { result, commitSeq: null, asOf: lastSeq, events: [] };
 
         /** @type {number | null} */
@@ -302,6 +314,7 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
         for (const [key, list] of appended) corrections.set(key, [...(corrections.get(key) ?? []), ...list]);
         for (const [commandId, record] of kept)
           outcomes.set(/** @type {string} */ (commandId), /** @type {KeptOutcome} */ (record));
+        for (const [commandId, pending] of stagedPending) pendingNotes.set(commandId, pending);
         for (const [signalId, revision] of revisions) entityRevisions.set(signalId, revision);
         if (commitSeq !== null) lastSeq = commitSeq;
 

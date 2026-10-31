@@ -596,6 +596,7 @@ describe('the objective-task path under races (#71 review)', () => {
     const other = w.anotherContext();
     // The other context dismisses while this one's note command is in flight
     const racing = w.anotherContext({
+      ...w.noteCommands,
       async setTodoChecked(command) {
         const outcome = await w.noteCommands.setTodoChecked(command);
         race.dismissed = other.execute(w.command('dismiss', id, 0));
@@ -743,7 +744,7 @@ describe('the anchor revision only moves forward (#71 round 2)', () => {
     w.tasks.hold = new Promise(resolve => {
       release = () => resolve(undefined);
     });
-    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    // A hint heard again: the derive reads the note as it stands, and lands after the complete
     const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
     // Let the derive read the note before the complete starts
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -1041,14 +1042,16 @@ describe('every writer goes through the signal’s queue (#71 round 3)', () => {
     assert.equal(await checkedOf(w), true);
   });
 
-  it('bounds derive with the same deadline, so a hung derive leaves the queue moving', { timeout: 5000 }, async () => {
+  it('never holds the queue for a hung derive, and bounds it with the same deadline', { timeout: 5000 }, async () => {
     const timers = manualTimers();
     const { w, command } = await taskWorld({ timers });
     w.tasks.hold = new Promise(() => {});
     const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
     await tick();
+    // The derive is still hung, and a dismiss on the same signal commits anyway
     const dismissing = w.intelligence.execute(command('dismiss', 0));
-    await tick();
+    const raced = await Promise.race([dismissing.then(outcome => outcome.kind), tick(200).then(() => 'still-waiting')]);
+    assert.equal(raced, 'committed');
     timers.fireAll();
     w.tasks.hold = null;
     const result = await edited;
@@ -1156,7 +1159,7 @@ describe('every writer goes through the signal’s queue (#71 round 3)', () => {
       () =>
         createIntelligence({
           repository,
-          noteCommands: { setTodoChecked: port.setTodoChecked },
+          noteCommands: /** @type {any} */ ({ setTodoChecked: port.setTodoChecked }),
           timeZone: ZONE,
           timers: realTimers,
         }),

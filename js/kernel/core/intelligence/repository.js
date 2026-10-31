@@ -29,6 +29,12 @@ export {};
  */
 
 /**
+ * The note command a task's complete or reopen sent, keyed by its commandId, with the digest
+ * of the lifecycle command. It names ids, a revision, and a boolean, never content.
+ * @typedef {{fingerprint: string, noteCommand: {commandId: string, noteId: string, blockId: string, checked: boolean, expectedRevision: number | null}}} PendingNote
+ */
+
+/**
  * One transaction's view. Reads see the transaction's own staged writes.
  * @typedef {object} IntelligenceTx
  * @property {(signalId: string) => IntelligenceSignal | null} signal
@@ -40,6 +46,9 @@ export {};
  * @property {(signalId: string) => SignalCorrection[]} corrections - in the order appended
  * @property {(noteId: string) => string[]} correctedSignalsOfNote - the ids with corrections
  * @property {(commandId: string) => KeptOutcome | null} kept
+ * @property {(commandId: string) => PendingNote | null} pendingNote - the note command a task's
+ *   complete or reopen sent under this commandId, which a retry sends again unchanged
+ * @property {(commandId: string, pending: PendingNote) => void} keepPendingNote
  * @property {(signal: IntelligenceSignal) => void} putSignal
  * @property {(signalId: string) => void} deleteSignal
  * @property {(decision: SignalDecision) => void} putDecision
