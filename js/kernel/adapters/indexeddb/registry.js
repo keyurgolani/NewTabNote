@@ -190,6 +190,34 @@ const STEP_10 = Object.freeze({
 /** Every step, in order */
 export const STEPS = Object.freeze([STEP_9, STEP_10]);
 
+/**
+ * A transform step (#17 PR 3a): a logical version that fills fields in place, in resumable
+ * batches, outside any upgrade, which the worker runs once its run is in (transforms.js)
+ * @typedef {{id: string, kind: 'transform', to: number}} TransformStep
+ */
+
+/**
+ * Logical 2: each note's placement, kind, and lifecycle from its flags, and an `updatedAt` for
+ * a note an index can't list (transforms.js)
+ * @type {TransformStep}
+ */
+const LOGICAL_2 = Object.freeze({ id: 'logical-2', kind: /** @type {const} */ ('transform'), to: 2 });
+
+/** Every transform step, in order */
+export const TRANSFORM_STEPS = Object.freeze([LOGICAL_2]);
+
+/** The newest logical version this build's transforms reach */
+export const LATEST_LOGICAL = TRANSFORM_STEPS.reduce((latest, step) => Math.max(latest, step.to), 1);
+
+/**
+ * The transform steps a database at logical version `from` still needs, in order
+ * @param {number} from
+ * @returns {TransformStep[]}
+ */
+export function pendingTransforms(from) {
+  return TRANSFORM_STEPS.filter(step => step.to > from);
+}
+
 /** The newest structural version this registry reaches, which this build opens CanvasTabDB at */
 export const LATEST_STRUCTURAL = STEPS.reduce((latest, step) => Math.max(latest, step.to), 8);
 

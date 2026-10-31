@@ -112,6 +112,8 @@ const STRICT = Object.freeze({ durability: 'strict' });
  * @property {number | null} structuralVersion - its `meta.schema`, null before 9
  * @property {number | null} logicalVersion
  * @property {number | null} target - the structural version the point comes before, null when none follows it
+ * @property {number | null} [logicalTarget] - the logical version a transform run it comes before
+ *   leaves (#17 PR 3a, transforms.js), absent on a structural run's
  * @property {string[]} stores - the stores it copies, sorted
  * @property {number} createdAt
  * @property {number | null} verifiedAt
@@ -317,7 +319,7 @@ export function storesToCopy(db) {
 
 /**
  * A new point's record, before its first batch
- * @param {{id: string, kind: PointKind, sourceShape: string, sourceVersion: number, structuralVersion: number | null, logicalVersion: number | null, target: number | null, stores: string[], createdAt: number}} fields
+ * @param {{id: string, kind: PointKind, sourceShape: string, sourceVersion: number, structuralVersion: number | null, logicalVersion: number | null, target: number | null, logicalTarget?: number | null, stores: string[], createdAt: number}} fields
  * @returns {Point}
  */
 function newPoint(fields) {
@@ -512,13 +514,15 @@ export async function verifyPoint({ recovery, point, io }) {
  * Whether `source` still holds what `point` copied: each store's count, ID set, and content
  * hash, read now in the same bounded readonly batches, against the manifest (purged keys
  * accounted for). Writes nothing. A point that doesn't match is older than the data it stands
- * for, and a run makes a new one instead of reusing it (review R61, Q3).
- * @param {{source: IDBDatabase, point: Point, io: Io}} options
+ * for, and a run makes a new one instead of reusing it (review R61, Q3). `stores` narrows it to
+ * the ones a transform rewrites (#17 PR 3a, transforms.js), each of which the point must hold.
+ * @param {{source: IDBDatabase, point: Point, io: Io, stores?: readonly string[]}} options
  * @returns {Promise<boolean>}
  */
-export async function matchesSource({ source, point, io }) {
+export async function matchesSource({ source, point, io, stores = point.stores }) {
   const { crypto } = io;
-  for (const store of point.stores) {
+  for (const store of stores) {
+    if (!point.stores.includes(store)) return false;
     if (!source.objectStoreNames.contains(store)) return false;
     const expected = point.manifest[store];
     const purged = await purgedOf(expected, crypto);
