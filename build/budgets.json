@@ -1,0 +1,110 @@
+{
+  "about": "#27's budgets (AC3), with the numbers the owner approved on 2026-10-31 from docs/performance/baseline-1.4.0.md. No script writes this file: it changes only by review, and a number over a row goes back to the owner through the lead, never raised by the lane. docs/performance/budgets.md says how each gate runs and what fails it.",
+  "reference": {
+    "label": "1.4.0",
+    "tag": "v1.4.0",
+    "packageDigest": "50d8ddc57945dc129ddabda2304f45b9354db79eff608017da49d5b845ab554d",
+    "about": "The frozen package the timing and heap runs measure against, twice a round: v1.4.0 built with its own lockfile and build (npm run perf:reference). The digest is a SHA-256 over its files sorted by path (scripts/perf-probe.js packageDigest), and npm run perf:probe --baseline refuses a run whose first or second package isn't it."
+  },
+  "fixtureDigests": {
+    "typical": "7060d7b19e9357c5c1778d401f04d3c409abe55ed632e2bf09d01735ca7b2cc9",
+    "maximal": "7eac2192becb6faff4bf074e10e935a3fe040cb58f97b360c682ad93c4092431",
+    "first-run": null
+  },
+  "timing": {
+    "entry": "newtab",
+    "rule": "Paired and interleaved: each run times the frozen 1.4.0 package twice and the candidate once a round, rotated, at least 12 rounds per profile and a multiple of the package count. It fails when the candidate's median ratio to the mean of the two 1.4.0 runs is over 1 + tolerancePct / 100, and it's invalid when 1.4.0 against itself is more than tolerancePct off. Absolute ms are recorded beside it, not gated.",
+    "tolerancePct": 7,
+    "profiles": ["typical", "maximal"],
+    "rounds": 12,
+    "mode": "report",
+    "modeAbout": "report: CI's perf job measures it on every PR and every push to next and writes the numbers to its summary, failing no merge. It becomes gate after 10 CI runs if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed; otherwise the timing gate becomes a release gate on ref-desktop, through the machine lock (docs/performance/budgets.md)."
+  },
+  "heap": {
+    "entry": "newtab",
+    "limitMiB": 4.45,
+    "tolerancePct": 3,
+    "profiles": ["typical", "maximal"],
+    "mode": "report",
+    "modeAbout": "report, like timing: 4.45 MiB was measured on the Mac, and a Linux Chromium's heap can differ. It becomes gate once CI's runs sit within 3% of a stable value."
+  },
+  "forbidden": {
+    "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },
+    "search-library": { "about": "Fuse.js", "paths": ["js/lib/fuse.js"] },
+    "zip-library": { "about": "JSZip", "paths": ["js/lib/jszip.min.js"] },
+    "model-runtime": { "about": "transformers.js. The package ships no .wasm, and the analyzer lists only chunks, classic scripts, stylesheets and fonts, so a .wasm path here would guard nothing: one gets a path with the analyzer support to see it", "paths": ["js/lib/transformers.js"] },
+    "trust": { "about": "#20's Trust and Recovery code", "paths": ["js/trust/**"] },
+    "charting-analytics": { "about": "charting and analytics", "paths": ["js/analytics.js", "js/controllers/analytics-controller.js"] },
+    "graph-view": { "about": "the graph view", "paths": ["js/ui/graph-view.js"] },
+    "search-indexing": { "about": "search and indexing", "paths": ["js/search.js", "js/workers/indexer.js"] },
+    "import-export": { "about": "import, export, and ZIP", "paths": ["js/controllers/export-import-service.js"] },
+    "archive-trash": { "about": "archive and trash administration, which has no module of its own until #3 splits it out of the sidebar", "paths": [] },
+    "settings": { "about": "settings and the Theme Builder", "paths": ["js/controllers/settings-controller.js", "js/controllers/theme-builder-controller.js"] },
+    "sync": { "about": "sync", "paths": ["js/services/sync-service.js"] },
+    "remote-ai": { "about": "remote AI clients", "paths": ["js/llm.js"] },
+    "recipes": { "about": "#8's prompt recipes, none yet", "paths": [] },
+    "embeddings": { "about": "embeddings", "paths": ["js/embeddings.js"] },
+    "ai-policy": { "about": "#21's AI scope and destination policy, none yet", "paths": [] },
+    "onboarding-walkthrough": { "about": "the legacy onboarding walkthrough", "paths": ["js/onboarding.js"] },
+    "workspace": { "about": "the workspace chunk and every Workspace route", "paths": ["js/workspace.js"] }
+  },
+  "entries": {
+    "newtab": {
+      "page": "newtab.html",
+      "startChunks": ["workspace"],
+      "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row.",
+      "start": {
+        "js": { "raw": 716800, "gzip": 204800 },
+        "css": { "raw": 102400, "gzip": 19456 },
+        "html": { "raw": 73728, "gzip": 12288 },
+        "fonts": null
+      },
+      "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "trust"],
+      "dependencies": ["@xenova/transformers", "chart.js", "fuse.js", "jszip", "valibot"]
+    },
+    "popup": {
+      "page": "popup.html",
+      "reason": "The Popup's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
+      "start": {
+        "js": { "raw": 117760, "gzip": 40960 },
+        "css": null,
+        "html": null,
+        "fonts": null
+      },
+      "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "trust", "charting-analytics", "graph-view", "search-indexing", "import-export", "archive-trash", "settings", "sync", "remote-ai", "recipes", "embeddings", "ai-policy", "onboarding-walkthrough", "workspace"],
+      "dependencies": []
+    },
+    "sidepanel": {
+      "page": "sidepanel.html",
+      "reason": "The Side Panel's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
+      "start": {
+        "js": { "raw": 114688, "gzip": 40960 },
+        "css": null,
+        "html": null,
+        "fonts": null
+      },
+      "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "trust", "charting-analytics", "graph-view", "search-indexing", "import-export", "archive-trash", "settings", "sync", "remote-ai", "recipes", "embeddings", "ai-policy", "onboarding-walkthrough", "workspace"],
+      "dependencies": []
+    },
+    "offscreen": {
+      "page": "offscreen.html",
+      "reason": "The offscreen document, which runs AI requests for the service worker. It has no approved numbers yet: each row stays null until the owner sets one.",
+      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "forbidden": [],
+      "dependencies": []
+    },
+    "background": {
+      "reason": "The service worker. Its cold-start time is #35's, and stays null until #35 sets it; its graph is one self-contained module (#27 slice 2), and its third-party packages are checked like a page's.",
+      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "dependencies": ["valibot"]
+    },
+    "moment": {
+      "chunk": "moment",
+      "planned": true,
+      "reason": "#2's Moment, a loader chunk the new tab will boot instead of the workspace. The full forbidden list holds from its first build. Its numbers come from the owner before #2 builds it: a built planned row fails (AC3).",
+      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "trust", "charting-analytics", "graph-view", "search-indexing", "import-export", "archive-trash", "settings", "sync", "remote-ai", "recipes", "embeddings", "ai-policy", "onboarding-walkthrough", "workspace"],
+      "dependencies": []
+    }
+  }
+}

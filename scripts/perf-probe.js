@@ -8,7 +8,9 @@
  *
  * - always: for each package's new tab, Popup and Side Panel, the JS, CSS, HTML and font
  *   bytes (raw and gzip) each page loads before it runs, its module count, and what its lazy
- *   chunks and workers would add (scripts/perf/package-bytes.js);
+ *   chunks and workers would add (scripts/perf/package-bytes.js). It reads a package from the
+ *   outside, so a chunk the page's loader boots at once, like today's workspace chunk, is
+ *   lazy here; the build's budget check counts it as start (scripts/build/budgets.js);
  * - with --timing: on `ref-desktop`, for each fixture profile, the install-cold
  *   interaction-ready time and the JS heap at it, over --runs rounds, each run on a fresh
  *   profile (scripts/perf/timing.js). With two or more packages the runs interleave: every
@@ -223,7 +225,8 @@ async function measureTiming({ packages, runs, profiles, log }) {
 }
 
 /**
- * What makes a run against `file` (a baseline, such as docs/performance/baseline-1.4.0.json)
+ * What makes a run against `file` (build/budgets.json, or a baseline report such as
+ * docs/performance/baseline-1.4.0.json)
  * not a valid gate run, before any timing: the first package isn't the baseline's reference
  * (by its digest), the second isn't the reference again, or the rounds are fewer than 12 or
  * not a multiple of the package count (12, 15, 18 for three), which leaves the rotation
@@ -259,7 +262,9 @@ function gateProblems(run, file) {
 function fixtureProblems(timing, file) {
   const baseline = JSON.parse(fs.readFileSync(file, 'utf8'));
   const recorded = baseline.fixtureDigests || {};
-  const tolerancePct = baseline.proposed && baseline.proposed.timing ? baseline.proposed.timing.tolerancePct : undefined;
+  // build/budgets.json's timing row, or a baseline report's proposed one
+  const row = baseline.timing || (baseline.proposed && baseline.proposed.timing) || {};
+  const tolerancePct = typeof row.tolerancePct === 'number' ? row.tolerancePct : undefined;
   const problems = [];
   for (const [name, profile] of Object.entries(timing.profiles)) {
     if (!(name in recorded)) {

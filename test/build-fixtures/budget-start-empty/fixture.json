@@ -1,0 +1,16 @@
+{
+  "rule": "the new tab's row empties startChunks, so its start would be the root alone: the root's import() of the workspace is named nowhere (#27 AC3)",
+  "expect": [
+    "budget/entry"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"startChunks\": [\"workspace\"]",
+      "with": "\"startChunks\": []"
+    }
+  ]
+}

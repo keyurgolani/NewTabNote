@@ -160,6 +160,8 @@ function assetFileName(asset) {
  * @property {string | null} facadeModuleId
  * @property {string[]} moduleIds
  * @property {string[]} imports
+ * @property {string[]} dynamicImports - the chunks its import() calls load
+ * @property {string[]} importedCss - the stylesheets Vite loads with it
  * @property {string[]} commonJs - the modules the bundler wrapped as CommonJS, by id
  */
 
@@ -198,6 +200,9 @@ function reportPlugin(report, pass) {
             facadeModuleId: output.facadeModuleId,
             moduleIds: [...output.moduleIds],
             imports: [...output.imports],
+            dynamicImports: [...(output.dynamicImports || [])],
+            // Vite's metadata on the chunk: the CSS it injects with it (#27 slice 4b's analyzer)
+            importedCss: [.../** @type {{viteMetadata?: {importedCss?: Set<string>}}} */ (/** @type {unknown} */ (output)).viteMetadata?.importedCss ?? []],
             // The bundler's own runtime module defines the wrapper; a module it wraps calls it
             commonJs: Object.entries(output.modules || {})
               .filter(([id, rendered]) => !id.includes('\0') && COMMONJS_WRAPPER.test((rendered && rendered.code) || ''))
