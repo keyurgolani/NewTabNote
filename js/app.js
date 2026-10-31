@@ -340,13 +340,8 @@ class App {
       };
       this.exportNotice = new ExportNotice(noticeDeps);
       // #17 PR 1b: while the upgrade waits for free space, its notice takes the region instead
-      this.spaceNotice = new SpaceNotice({
-        ...noticeDeps,
-        settings: {
-          read: (key) => appStorage().readSetting(key),
-          snooze: () => appStorage().setSetting('spaceNoticeSnoozedAt', Date.now()),
-        },
-      });
+      // It reads the worker's record and puts itself off through the same settings port
+      this.spaceNotice = new SpaceNotice(noticeDeps);
       /** @param {any} notice */
       const decide = (notice) => notice.isDue().catch((error) => {
         console.error('Export notice: could not decide whether to show it', error);
