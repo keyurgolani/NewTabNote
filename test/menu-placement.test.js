@@ -79,34 +79,36 @@ const pointer = (clientX, clientY) => ({ clientX, clientY, preventDefault() {}, 
 
 describe('Utils.menuPosition', () => {
   const utils = page(menuDocument(MENU), []).get('Utils');
+  // A plain object of this realm, for deepEqual
+  const place = (...args) => ({ ...utils.menuPosition(...args) });
 
   it('opens at the pointer when the menu fits there', () => {
-    assert.deepEqual(utils.menuPosition(200, 150, MENU, VIEWPORT), { left: 200, top: 150 });
+    assert.deepEqual(place(200, 150, MENU, VIEWPORT), { left: 200, top: 150 });
   });
 
   it('opens above the pointer near the bottom', () => {
-    const position = utils.menuPosition(200, 850, MENU, VIEWPORT);
+    const position = place(200, 850, MENU, VIEWPORT);
     assert.deepEqual(position, { left: 200, top: 850 - MENU.height });
     assert.ok(inside(position, MENU, VIEWPORT));
   });
 
   it('comes in from the right edge near it', () => {
-    const position = utils.menuPosition(1430, 150, MENU, VIEWPORT);
+    const position = place(1430, 150, MENU, VIEWPORT);
     assert.deepEqual(position, { left: VIEWPORT.width - MENU.width - MARGIN, top: 150 });
     assert.ok(inside(position, MENU, VIEWPORT));
   });
 
   it('stays inside a window shorter than the space it needs below and above the pointer', () => {
     const short = { width: 1440, height: 400 };
-    const position = utils.menuPosition(200, 200, MENU, short);
+    const position = place(200, 200, MENU, short);
     assert.ok(inside(position, MENU, short), JSON.stringify(position));
     // Taller than the window: its top stays in view, so its first items can be clicked
     const tiny = { width: 1440, height: 300 };
-    assert.equal(utils.menuPosition(200, 200, MENU, tiny).top, MARGIN);
+    assert.equal(place(200, 200, MENU, tiny).top, MARGIN);
   });
 
   it('keeps the margin at the top left corner', () => {
-    assert.deepEqual(utils.menuPosition(2, 3, MENU, VIEWPORT), { left: MARGIN, top: MARGIN });
+    assert.deepEqual(place(2, 3, MENU, VIEWPORT), { left: MARGIN, top: MARGIN });
   });
 });
 
