@@ -199,6 +199,15 @@ export function createMemoryIntelligenceRepository({ commitLog, initial = {}, be
                 /** @returns {signal is IntelligenceSignal} */ signal =>
                   signal !== null && signal.identity.noteId === noteId,
               ),
+          signalsCiting: noteId =>
+            signalKeys()
+              .map(signalNow)
+              .filter(
+                /** @returns {signal is IntelligenceSignal} */ signal =>
+                  signal !== null &&
+                  signal.identity.noteId !== noteId &&
+                  signal.sourceRefs.some(source => source.noteId === noteId),
+              ),
           everySignal: () =>
             signalKeys()
               .map(signalNow)

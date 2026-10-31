@@ -127,8 +127,11 @@ function placeByTime(signal, override, now, timeZone, windows) {
     if (resurfaceAt !== null && now >= resurfaceAt) {
       placed = {
         category: 'resurface',
+        // The rule that applied: a stored resurfaceAt is the producer's own, so its reason
         rule:
-          lastEditAt === null ? { code: 'stored' } : { code: 'not-edited', date: localDateOf(lastEditAt, timeZone) },
+          time?.resurfaceAt !== undefined || lastEditAt === null
+            ? { code: 'stored' }
+            : { code: 'not-edited', date: localDateOf(lastEditAt, timeZone) },
         inWindow: true,
         activeFrom: null,
       };

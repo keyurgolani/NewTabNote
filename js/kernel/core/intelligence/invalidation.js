@@ -17,6 +17,8 @@
  * | Producer or recipe version    | Re-derived                | `stale`, regenerated     | Kept                  |
  * | Model, runtime, or route      | n/a                       | `stale`, regenerated     | Kept                  |
  * | Scope grant revoked           | n/a                       | `invalidated`, cleared   | Kept                  |
+ * | A cited note trashed, etc.    | `suspended` once fewer notes than it needs are left (a connection needs two), restored after |  | Kept |
+ * | A cited note deleted for good | Its sources dropped; `invalidated` (`source-deleted`) once too few are left |  | Kept |
  *
  * A signal never writes a note record, a note revision, or `updatedAt`: these records live in
  * their own repository.
@@ -24,7 +26,7 @@
 
 import * as v from '../../../lib/valibot/index.mjs';
 import { count, entityId, id, revision } from '../contracts/fields.js';
-import { EXECUTION_CLASSES, signalId } from './records.js';
+import { EXECUTION_CLASSES, signalId, slug } from './records.js';
 
 /** @typedef {import('./records.js').IntelligenceSignal} IntelligenceSignal */
 /** @typedef {import('./records.js').FreshnessCause} FreshnessCause */
@@ -71,12 +73,12 @@ export const HOOK_CAUSES = Object.freeze(
  * grant, optionally within one note
  */
 export const matchSchema = v.strictObject({
-  producerId: v.optional(id),
+  producerId: v.optional(slug),
   version: v.optional(count),
-  modelId: v.optional(id),
+  modelId: v.optional(slug),
   executionClass: v.optional(v.picklist(EXECUTION_CLASSES)),
-  providerId: v.optional(id),
-  scopeId: v.optional(id),
+  providerId: v.optional(slug),
+  scopeId: v.optional(slug),
   noteId: v.optional(entityId('note')),
 });
 
@@ -212,9 +214,9 @@ export function resumed(signal, now) {
 }
 
 /**
- * Why a note's signals are suspended, from the note's state, or null when they aren't
+ * Why a note is unavailable to the signals that cite it, from its state, or null when it isn't
  * @param {{trashed: boolean, archived: boolean, isTemplate: boolean}} note
- * @returns {FreshnessCause | null}
+ * @returns {'note-trashed' | 'note-archived' | 'template' | null}
  */
 export function suspensionOf({ trashed, archived, isTemplate }) {
   if (trashed) return 'note-trashed';
@@ -303,3 +305,73 @@ export const noteChangeSchema = v.variant('type', [
 ]);
 
 /** @typedef {v.InferOutput<typeof noteChangeSchema>} NoteChange */
+
+/**
+ * The fewest available notes a kind needs among what it cites: a connection links two
+ * @param {IntelligenceSignal} signal
+ */
+const minimumNotes = signal => (signal.kind === 'connection' ? 2 : 1);
+
+/**
+ * Why `signal` is suspended by the notes it cites, or null when it isn't: its own note's
+ * cause when that note is trashed, archived, or a template, and otherwise the first cited
+ * note's when what's left available is under its minimum
+ * @param {IntelligenceSignal} signal
+ * @returns {FreshnessCause | null}
+ */
+export function suspensionCauseOf(signal) {
+  const own = signal.unavailableNotes.find(entry => entry.noteId === signal.identity.noteId);
+  if (own) return own.cause;
+  const unavailable = new Set(signal.unavailableNotes.map(entry => entry.noteId));
+  const available = new Set(signal.sourceRefs.map(source => source.noteId).filter(noteId => !unavailable.has(noteId)));
+  if (available.size < minimumNotes(signal)) return signal.unavailableNotes[0]?.cause ?? null;
+  return null;
+}
+
+/**
+ * `signal` suspended or resumed as the notes it cites now allow
+ * @param {IntelligenceSignal} signal
+ * @param {number} now
+ * @returns {IntelligenceSignal}
+ */
+export function withAvailability(signal, now) {
+  const cause = suspensionCauseOf(signal);
+  return cause ? suspended(signal, cause, now) : resumed(signal, now);
+}
+
+/**
+ * `signal` after a note it cites, its own included, changed state: `cause` says why the note
+ * is unavailable now, or null when it's available again
+ * @param {IntelligenceSignal} signal
+ * @param {string} noteId
+ * @param {import('./records.js').IntelligenceSignal['unavailableNotes'][number]['cause'] | null} cause
+ * @param {number} now
+ * @returns {IntelligenceSignal}
+ */
+export function withNoteState(signal, noteId, cause, now) {
+  const others = signal.unavailableNotes.filter(entry => entry.noteId !== noteId);
+  const unavailableNotes = cause ? [...others, { noteId, cause }] : others;
+  const same = JSON.stringify(unavailableNotes) === JSON.stringify(signal.unavailableNotes);
+  const next = same ? signal : { ...signal, unavailableNotes, revision: signal.revision + 1 };
+  return withAvailability(next, now);
+}
+
+/**
+ * `signal` after a note it cites, not its own, was deleted for good: the note's sources go,
+ * and with fewer notes left than it needs the signal is invalidated as `source-deleted`
+ * @param {IntelligenceSignal} signal
+ * @param {string} noteId
+ * @param {number} now
+ * @returns {IntelligenceSignal}
+ */
+export function withoutNote(signal, noteId, now) {
+  const next = {
+    ...signal,
+    sourceRefs: signal.sourceRefs.filter(source => source.noteId !== noteId),
+    unavailableNotes: signal.unavailableNotes.filter(entry => entry.noteId !== noteId),
+    revision: signal.revision + 1,
+  };
+  const left = new Set(next.sourceRefs.map(source => source.noteId));
+  if (left.size < minimumNotes(signal)) return invalidated(next, 'source-deleted', now);
+  return withAvailability(next, now);
+}
