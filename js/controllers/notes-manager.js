@@ -1139,7 +1139,18 @@ class NotesManager {
     if (!this.storage.hasStore('search_index')) return;
     try {
       this.indexerWorker = new Worker('js/workers/indexer.js');
+      // A worker that won't load, or throws before its first answer, fires `error` here (#20,
+      // "Diagnostic journal"): the first such error is an `indexer.start-failed` event. It
+      // doesn't call preventDefault, so the browser still reports the error as it did before.
+      let started = false;
+      let reported = false;
+      this.indexerWorker.onerror = (event) => {
+        if (started || reported) return;
+        reported = true;
+        this.reportIndexerFailure(event && event.error);
+      };
       this.indexerWorker.onmessage = async (e) => {
+        started = true;
         if (e.data.type === 'INDEX_COMPLETE') {
           await this.storage.setSearchIndex(e.data.data);
           await this.searchEntriesWritten('all');
@@ -1157,7 +1168,17 @@ class NotesManager {
       this.rebuildSearchIndex();
     } catch (e) {
       console.warn('Failed to start indexer worker:', e);
+      this.reportIndexerFailure(e);
     }
+  }
+
+  /**
+   * An `indexer.start-failed` event, with the error's name at most, when the logger has
+   * failure events (#20); otherwise nothing
+   * @param {unknown} error
+   */
+  reportIndexerFailure(error) {
+    if (this.logger && typeof this.logger.event === 'function') this.logger.event('indexer.start-failed', {}, error);
   }
 
   /**

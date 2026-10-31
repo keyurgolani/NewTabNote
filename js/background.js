@@ -12,12 +12,37 @@
 import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import { createFailureEvents } from './kernel/composition/trust.js';
+
+/** When the worker started opening the database, for how long a failed open took */
+const openStartedAt = Date.now();
 
 /**
  * The worker's kernel. It opens the database and runs startup maintenance now, as
  * Storage.init() did here, and a capture waits for both.
  */
 const kernel = createWorkerClient();
+
+/**
+ * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
+ * go to the diagnostic journal and raise their incidents in NewTabNoteTrust, which opens only
+ * when the first one happens. Best effort: nothing here changes what the worker does or logs.
+ */
+const failureEvents = createFailureEvents({ surface: 'worker-internal' });
+
+// The worker's storage init: an open that failed is a storage incident now, not only when a
+// capture finds it
+kernel.whenReady().then(
+  failure => {
+    if (!failure) return;
+    failureEvents.event(
+      'storage.open-failed',
+      { subjectId: 'CanvasTabDB', durationMs: Math.max(0, Date.now() - openStartedAt) },
+      failure,
+    );
+  },
+  () => {},
+);
 
 /**
  * #13's router, which takes each port this extension's pages open by its name. It's installed
@@ -297,7 +322,8 @@ function notifyCapture(title, message) {
 /**
  * Capture a page, or selected text and the page it came from, to today's Daily Note with the
  * kernel's captureToDailyNote command. Saved, refused (the database can't be opened safely),
- * and failed captures each end with a notification.
+ * and failed captures each end with a notification, and a refused or failed one also with a
+ * `capture.failed` event, which holds the outcome's cause and code and never what was captured.
  * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
  * @returns {Promise<void>}
  */
@@ -309,11 +335,13 @@ async function captureToDailyNote(item) {
       // Its cause and code: a refusal warns, as 1.4.x did at open, and any other failure is an error
       (refusal ? console.warn : console.error)('Storage not opened in background:', failure);
       notifyCapture('Not captured', refusal || "NewTabNote couldn't open your notes, so nothing was saved.");
+      failureEvents.event('capture.failed', {}, failure);
       return;
     }
+    const commandId = kernel.ids.next();
     const outcome = await kernel.execute({
       type: 'captureToDailyNote',
-      commandId: kernel.ids.next(),
+      commandId,
       // The Daily Note's id if this capture makes it, and the captured block's
       noteId: kernel.ids.next(),
       blockId: kernel.ids.next(),
@@ -327,11 +355,13 @@ async function captureToDailyNote(item) {
       (refusal ? console.warn : console.error)('Failed to capture to daily note:', outcome);
       const reason = CAPTURE_FAILURES[outcome.messageKey] || CAPTURE_FAILED;
       notifyCapture('Not captured', refusal || `Saving to today's note failed: ${reason}`);
+      failureEvents.event('capture.failed', { commandId }, outcome);
       return;
     }
     notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
     notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
+    failureEvents.event('capture.failed', {}, error);
   }
 }
