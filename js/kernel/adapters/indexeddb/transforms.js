@@ -618,19 +618,26 @@ async function fillDailyBatch({ db, step, after, keyRange, limits, assigned, pro
 }
 
 /**
- * The step's receipt, `meta.schema` at its logical version, and neither progress nor a stop, in
- * one transaction
+ * The step's receipt, `meta.schema` at its logical version, and no stop, in one transaction,
+ * with the progress at the start of `next`, the run's next step, under the same point, so a run
+ * cut off between the two picks up there with it, or no progress when none comes next
  * @param {IDBDatabase} db
  * @param {TransformStep} step
- * @param {{from: number, startedAt: number, completedAt: number, recoveryPointId: string | null, counts: TransformCounts}} done
+ * @param {{from: number, startedAt: number, completedAt: number, recoveryPointId: string | null, counts: TransformCounts, next?: TransformStep | null}} done
  */
-async function finishStep(db, step, { from, startedAt, completedAt, recoveryPointId, counts }) {
+async function finishStep(db, step, { from, startedAt, completedAt, recoveryPointId, counts, next = null }) {
   const tx = db.transaction([META_STORE, MIGRATIONS_STORE], 'readwrite', STRICT);
   const finished = committed(tx);
   const meta = tx.objectStore(META_STORE);
   const schema = /** @type {Record<string, unknown>} */ (await result(meta.get(SCHEMA_KEY)));
   meta.put({ ...schema, logicalVersion: step.to });
-  meta.delete(TRANSFORM_KEY);
+  if (next) {
+    /** @type {TransformProgress} */
+    const progress = { key: TRANSFORM_KEY, id: next.id, after: null, recoveryPointId, startedAt, counts: noCounts(next) };
+    meta.put(progress);
+  } else {
+    meta.delete(TRANSFORM_KEY);
+  }
   meta.delete(TRANSFORM_STOP_KEY);
   meta.delete(TRANSFORM_DAILY_KEY);
   /** @type {Receipt} */
@@ -771,7 +778,8 @@ async function transform(options) {
         if (batch.end) break;
         await yieldBetween();
       }
-      await finishStep(db, step, { from: at, startedAt, completedAt: clock.now(), recoveryPointId, counts });
+      const next = steps[steps.indexOf(step) + 1] || null;
+      await finishStep(db, step, { from: at, startedAt, completedAt: clock.now(), recoveryPointId, counts, next });
       recorded.push(step.id);
       at = step.to;
       await between('step-done');

@@ -1556,11 +1556,15 @@ export function runContractSuite(fixture) {
       it("makes today's Daily Note with its search entry, then finds it and makes no other", async () => {
         const made = await run(cmd('ensureDailyNote', { noteId: 'd1' }));
         assert.deepEqual([made.code, made.changedIds], ['daily-note-created', ['d1']]);
+        // With #17 PR 3b's key beside dateStr, in the clock's zone: UTC's for this clock
         assert.deepEqual(await noteOf('d1'), {
           ...storageNote('d1', 'Daily Note - Oct 20, 2026', NOW),
           isDaily: true,
           dateStr: '2026-10-20',
           ...group({ kind: 'daily', dateKey: '2026-10-20' }),
+          dailyKey: '2026-10-20',
+          dailyTimeZone: 'UTC',
+          dailyDuplicateOf: null,
         });
         assert.deepEqual(await searchEntryOf('d1'), {
           noteId: 'd1',
