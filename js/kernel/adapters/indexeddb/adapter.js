@@ -214,6 +214,14 @@ function booksOf(db) {
 }
 
 /**
+ * Whether `work` is a catalog command, which the ledger keys by its commandId. Work that isn't,
+ * such as #20's storage probe, which writes and deletes a record of its own, keeps no ledger
+ * row and never replays one, so each run of it runs, and it leaves CanvasTabDB as it found it.
+ * @param {Work} work
+ */
+const isCatalogCommand = work => Object.hasOwn(COMMANDS, /** @type {{type?: unknown}} */ (work.command).type ?? '');
+
+/**
  * A unit's view of its command's transaction: only the stores it named, and no writes when
  * it only reads. A store the database lacks reads as empty, as DatabaseManager's reads of
  * auxiliary stores do. Notes come back as stored, versions included, and every note read or
@@ -465,7 +473,8 @@ export function createIndexedDbAdapter({
   const keepConflict = (tx, books, work, conflict) => {
     const at = clock.now();
     if (books.conflicts) tx.objectStore(CONFLICTS_STORE).put(conflictRecord(work, conflict, at));
-    if (books.ledger) tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
+    if (books.ledger && isCatalogCommand(work))
+      tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
   };
 
   /**
@@ -516,7 +525,7 @@ export function createIndexedDbAdapter({
         });
       }
     }
-    if (books.ledger && outcome.kind === 'committed') {
+    if (books.ledger && isCatalogCommand(work) && outcome.kind === 'committed') {
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, outcome, clock.now()));
     }
     return outcome;
@@ -562,7 +571,9 @@ export function createIndexedDbAdapter({
     // Asked for before any unit runs, so the units' requests still go out in the calling task
     /** @type {Promise<{value: unknown} | {error: unknown} | null>} */
     const kept =
-      tx && books.ledger ? settled(tx.objectStore(OPERATIONS_STORE).get(work.commandId)) : Promise.resolve(null);
+      tx && books.ledger && isCatalogCommand(work)
+        ? settled(tx.objectStore(OPERATIONS_STORE).get(work.commandId))
+        : Promise.resolve(null);
     const headRead =
       tx && books.log ? settled(tx.objectStore(META_STORE).get(CHANGES_KEY)) : Promise.resolve({ value: undefined });
     /** @type {Promise<{stop: Outcome | void} | {error: unknown}>} */

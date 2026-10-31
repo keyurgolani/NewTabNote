@@ -61,6 +61,14 @@ const same = (a, b) =>
 const NONE = Object.freeze({ revision: 0, placementVersion: 0, sourceRevision: 0 });
 
 /**
+ * A key as one string, so two copies of one array key, as #20's storage probe writes under,
+ * are one record, and a string key never reads as another key's form
+ * @param {IDBValidKey} key
+ * @returns {string}
+ */
+const idOf = key => (typeof key === 'string' ? `s${key}` : `k${JSON.stringify(key)}`);
+
+/**
  * What a commit changed, once `settle` has moved its versions
  * @typedef {object} Settled
  * @property {number | undefined} revision - the primary note's content revision, for the outcome
@@ -70,12 +78,12 @@ const NONE = Object.freeze({ revision: 0, placementVersion: 0, sourceRevision: 0
 
 /**
  * @typedef {object} VersionTracker
- * @property {(key: string, record: Record<string, unknown> | undefined) => void} saw
+ * @property {(key: IDBValidKey, record: Record<string, unknown> | undefined) => void} saw
  *   Notes what a read found for the note `key`, the first time the transaction reads it
- * @property {(key: string) => Versions | undefined} versions
+ * @property {(key: IDBValidKey) => Versions | undefined} versions
  * @property {(notes: IDBObjectStore, record: Record<string, unknown>) => void} putNote
- * @property {(notes: IDBObjectStore, key: string) => void} deleteNote
- * @property {(entityType: 'folder', key: string) => void} touched - a folder put or deleted
+ * @property {(notes: IDBObjectStore, key: IDBValidKey) => void} deleteNote
+ * @property {(entityType: 'folder', key: IDBValidKey) => void} touched - a folder put or deleted
  * @property {() => void} wrote - any other write
  * @property {() => boolean} written - whether the units wrote anything at all
  * @property {(options: SettleOptions) => Promise<Settled>} settle
@@ -96,7 +104,7 @@ const NONE = Object.freeze({ revision: 0, placementVersion: 0, sourceRevision: 0
  */
 export function createVersionTracker({ scope = 'content', sourceRevision } = {}) {
   /**
-   * Each note's versions as committed, or null for one the transaction found none of
+   * Each note's versions as committed, or null for one the transaction found none of, by idOf
    * @type {Map<string, Versions | null>}
    */
   const known = new Map();
@@ -106,13 +114,15 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
    */
   const lookups = [];
   /**
-   * Each note the transaction wrote: the record as last put, with the versions it carries,
-   * or null for a delete. Versions are null for a note put before anything said what it had.
-   * @type {Map<string, {record: Record<string, unknown> | null, carried: Versions | null}>}
+   * Each note the transaction wrote, by idOf: its key, the record as last put with the
+   * versions it carries, or null for a delete. Versions are null for a note put before
+   * anything said what it had.
+   * @type {Map<string, {key: IDBValidKey, record: Record<string, unknown> | null, carried: Versions | null}>}
    */
   const notes = new Map();
   /**
-   * Every note and folder written, in the order first written, for the change log
+   * Every note and folder written, in the order first written, for the change log. A key
+   * that isn't an id, as #20's storage probe writes under, is no entity.
    * @type {Map<string, {entityType: 'note' | 'folder', entityId: string}>}
    */
   const entities = new Map();
@@ -120,20 +130,22 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
 
   /**
    * @param {'note' | 'folder'} entityType
-   * @param {string} entityId
+   * @param {IDBValidKey} entityId
    */
   const touch = (entityType, entityId) => {
     any = true;
+    if (typeof entityId !== 'string') return;
     const id = `${entityType}\0${entityId}`;
     if (!entities.has(id)) entities.set(id, { entityType, entityId });
   };
 
   /**
-   * @param {string} key
+   * @param {IDBValidKey} key
    * @param {Record<string, unknown> | undefined} record
    */
   const saw = (key, record) => {
-    if (!known.has(key)) known.set(key, record ? versionsOf(record) : null);
+    const id = idOf(key);
+    if (!known.has(id)) known.set(id, record ? versionsOf(record) : null);
   };
 
   /**
@@ -153,10 +165,10 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
    * learns what it had. IndexedDB answers a store's requests in order, so the read finds the
    * note as it was before the write.
    * @param {IDBObjectStore} store
-   * @param {string} key
+   * @param {IDBValidKey} key
    */
   const lookUp = (store, key) => {
-    if (known.has(key)) return;
+    if (known.has(idOf(key))) return;
     const read = result(store.get(key)).then(
       record => saw(key, /** @type {Record<string, unknown> | undefined} */ (record)),
       () => undefined,
@@ -167,24 +179,25 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
   return {
     saw,
     versions: key => {
-      if (!known.has(key)) throw new UnavailableError('adapter', 'revision-before-get', false);
-      return known.get(key) ?? undefined;
+      const id = idOf(key);
+      if (!known.has(id)) throw new UnavailableError('adapter', 'revision-before-get', false);
+      return known.get(id) ?? undefined;
     },
     putNote(store, record) {
-      const key = /** @type {string} */ (record.id);
+      const key = /** @type {IDBValidKey} */ (record.id);
       touch('note', key);
       lookUp(store, key);
-      const had = known.get(key);
+      const had = known.get(idOf(key));
       const versions = had === undefined ? null : carried(had ?? NONE);
       const stored = versions ? { ...record, ...versions } : record;
       store.put(stored);
-      notes.set(key, { record: stored, carried: versions });
+      notes.set(idOf(key), { key, record: stored, carried: versions });
     },
     deleteNote(store, key) {
       touch('note', key);
       lookUp(store, key);
       store.delete(key);
-      notes.set(key, { record: null, carried: null });
+      notes.set(idOf(key), { key, record: null, carried: null });
     },
     touched: touch,
     wrote: () => {
@@ -195,10 +208,11 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
     async settle({ notes: store, tombstones, primary, revised }) {
       await Promise.all(lookups);
       const primaryKey = primary && primary.store === 'notes' ? primary.key : undefined;
+      const primaryId = primaryKey === undefined ? undefined : idOf(primaryKey);
       // A note the transaction neither read nor wrote, whose revision the outcome reports
       /** @type {Record<string, unknown> | undefined} */
       let primaryRecord;
-      if (primaryKey !== undefined && !known.has(primaryKey) && !notes.has(primaryKey)) {
+      if (primaryKey !== undefined && primaryId !== undefined && !known.has(primaryId) && !notes.has(primaryId)) {
         primaryRecord = /** @type {Record<string, unknown> | undefined} */ (await result(store.get(primaryKey)));
         saw(primaryKey, primaryRecord);
       }
@@ -206,51 +220,54 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
       /** @type {Map<string, number>} */
       const bases = new Map();
       if (tombstones) {
-        const made = [...notes].filter(([key, write]) => write.record && known.get(key) === null).map(([key]) => key);
-        const found = await Promise.all(made.map(key => result(tombstones.get(['note', key]))));
-        made.forEach((key, index) => {
+        const made = [...notes].filter(
+          ([id, write]) => write.record && known.get(id) === null && typeof write.key === 'string',
+        );
+        const found = await Promise.all(made.map(([, write]) => result(tombstones.get(['note', write.key]))));
+        made.forEach(([id], index) => {
           const tombstone = /** @type {{lastRevision?: unknown} | undefined} */ (found[index]);
-          if (tombstone) bases.set(key, count(tombstone.lastRevision));
+          if (tombstone) bases.set(id, count(tombstone.lastRevision));
         });
       }
       /** @type {Map<string, number>} */
       const revisions = new Map();
-      for (const [key, write] of notes) {
+      for (const [id, write] of notes) {
         if (!write.record) continue;
-        const had = known.get(key) ?? { ...NONE, revision: bases.get(key) ?? 0 };
+        const had = known.get(id) ?? { ...NONE, revision: bases.get(id) ?? 0 };
         const next = carried(had);
-        if (key === primaryKey && revised) next.revision += 1;
-        revisions.set(key, next.revision);
+        if (id === primaryId && revised) next.revision += 1;
+        revisions.set(id, next.revision);
         if (!same(next, write.carried)) store.put({ ...write.record, ...next });
       }
       // A content command that changed the primary note without putting it, as deleting its
       // blocks or capturing into it does, moves its revision all the same
-      const stored = primaryKey !== undefined && !notes.has(primaryKey) ? known.get(primaryKey) : undefined;
-      if (primaryKey !== undefined && stored && revised) {
+      const stored = primaryId !== undefined && !notes.has(primaryId) ? known.get(primaryId) : undefined;
+      if (primaryKey !== undefined && primaryId !== undefined && stored && revised) {
         const record =
           primaryRecord ?? /** @type {Record<string, unknown> | undefined} */ (await result(store.get(primaryKey)));
         if (record) {
           const next = { ...stored, revision: stored.revision + 1 };
           store.put({ ...record, ...next });
           touch('note', primaryKey);
-          revisions.set(primaryKey, next.revision);
+          revisions.set(primaryId, next.revision);
         }
       }
       /** @type {Array<{id: string, lastRevision: number}>} */
       const deleted = [];
-      for (const [key, write] of notes) {
-        const had = known.get(key);
-        if (!write.record && had) deleted.push({ id: key, lastRevision: had.revision });
+      for (const [id, write] of notes) {
+        const had = known.get(id);
+        if (!write.record && had && typeof write.key === 'string')
+          deleted.push({ id: write.key, lastRevision: had.revision });
       }
       /**
-       * @param {string} key
+       * @param {string} id
        * @returns {number | undefined}
        */
-      const revisionOf = key => {
-        const write = notes.get(key);
-        if (write) return write.record ? revisions.get(key) : undefined;
-        if (revisions.has(key)) return revisions.get(key);
-        const had = known.get(key);
+      const revisionOf = id => {
+        const write = notes.get(id);
+        if (write) return write.record ? revisions.get(id) : undefined;
+        if (revisions.has(id)) return revisions.get(id);
+        const had = known.get(id);
         return had ? had.revision : undefined;
       };
       /** @type {Change[]} */
@@ -260,17 +277,18 @@ export function createVersionTracker({ scope = 'content', sourceRevision } = {})
           changes.push({ entityType, entityId, revision: 0 });
           continue;
         }
-        const write = notes.get(entityId);
-        const had = known.get(entityId);
+        const id = idOf(entityId);
+        const write = notes.get(id);
+        const had = known.get(id);
         // A delete of a note that wasn't stored changed nothing
         if (write && !write.record && !had) continue;
         changes.push({
           entityType,
           entityId,
-          revision: (write && !write.record ? had?.revision : revisionOf(entityId)) ?? 0,
+          revision: (write && !write.record ? had?.revision : revisionOf(id)) ?? 0,
         });
       }
-      return { revision: primaryKey === undefined ? undefined : revisionOf(primaryKey), changes, deleted };
+      return { revision: primaryId === undefined ? undefined : revisionOf(primaryId), changes, deleted };
     },
   };
 }
