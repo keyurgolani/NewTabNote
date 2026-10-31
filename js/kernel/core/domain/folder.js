@@ -43,3 +43,21 @@ export function createsCycle(folders, folderId, parentId) {
   }
   return false;
 }
+
+/**
+ * The folder and every folder inside it, from the committed list, in the order
+ * Storage.deleteFolder walks them: the folder, then each one's children, level by level. A
+ * parent chain that loops is walked once.
+ * @param {FolderRecord[]} folders
+ * @param {string} folderId
+ * @returns {string[]}
+ */
+export function folderSubtree(folders, folderId) {
+  const subtree = [folderId];
+  for (let i = 0; i < subtree.length; i++) {
+    for (const folder of folders) {
+      if ((folder.parentId ?? null) === subtree[i] && !subtree.includes(folder.id)) subtree.push(folder.id);
+    }
+  }
+  return subtree;
+}

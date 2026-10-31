@@ -26,10 +26,8 @@ class SettingsController {
     this.onFlushEditors = null;
     /** @type {((trashedIds: Array<string>, trashedAt: number|null) => Promise<void>)|null} After an import: release the hold and move panes off trashed notes */
     this.onReloadEditors = null;
-    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
-    this.onNotesLeaving = null;
-    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
-    this.onNotesLeft = null;
+    /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: Trash Note goes through it */
+    this.removal = null;
     this.onSetupAutoTitle = null;
     this.onSetupInsightsExtraction = null;
     this.onUpdateAISidebarState = null;
@@ -922,13 +920,20 @@ class SettingsController {
     if (!editor) return;
 
     const currentId = editor.noteId;
-    if (this.onNotesLeaving) await this.onNotesLeaving([currentId]);
-    await this.storage.deleteNote(currentId);
-    if (this.onNotesLeft) this.onNotesLeft([currentId]);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    // Through removeNotes, as the sidebar's Trash: panes move off it, the kernel's trashNote
+    // writes it, and the lists and the other new tabs follow. A write that fails puts the panes
+    // back and says so.
+    const outcome = await this.removal.removeNotes({ type: 'trashNote', noteId: currentId });
 
     document.getElementById('settings-modal').classList.add('hidden');
-    Utils.showToast('Note moved to trash', 'success');
+    // A note another tab already deleted has left all the same
+    const gone = outcome.kind === 'rejected' && outcome.reason === 'not-found';
+    if (outcome.kind !== 'committed' && !gone) {
+      console.error('Failed to move note to trash:', outcome.kind, outcome.code);
+      Utils.showToast(Utils.writeFailureMessage('Failed to move note to trash', outcome), 'error');
+      return;
+    }
+    Utils.showToast(outcome.code === 'note-deleted' ? 'Empty note deleted' : 'Note moved to trash', 'success');
   }
 
   // ─── Block to markdown (for export) ───

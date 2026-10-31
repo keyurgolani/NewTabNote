@@ -10,7 +10,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, note, block } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, note, block, startEditorClient,
+} = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/notes-manager.js'];
 
@@ -61,6 +63,17 @@ async function setup(blocks, fields = {}) {
   return { env, Storage, toasts, stored };
 }
 
+/**
+ * NotesManager as App makes it: its trash goes through the page's removeNotes, here with no
+ * panes to move
+ */
+async function notesManager(env, Storage) {
+  await startEditorClient(env);
+  const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
+  notes.removal = env.removalFor({ leave: () => null, announce: () => {} });
+  return notes;
+}
+
 describe('trashing an untitled note', () => {
   for (const [what, blocks] of HOLDING) {
     it(`with only ${what} moves it to trash, blocks and all`, async () => {
@@ -78,7 +91,7 @@ describe('trashing an untitled note', () => {
 
   it('from the sidebar or the note menu says it moved to trash', async () => {
     const { env, Storage, toasts, stored } = await setup(HOLDING[0][1]);
-    const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
+    const notes = await notesManager(env, Storage);
 
     await notes.trashNoteById('N');
 
@@ -129,7 +142,7 @@ describe('trashing an untitled note', () => {
 
   it('that holds nothing, from the sidebar, says the empty note was deleted, as before', async () => {
     const { env, Storage, toasts } = await setup([]);
-    const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null });
+    const notes = await notesManager(env, Storage);
     await notes.trashNoteById('N');
     assert.deepEqual(toasts, [{ message: 'Empty note deleted', kind: 'success' }]);
   });

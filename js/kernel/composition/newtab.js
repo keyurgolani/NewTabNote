@@ -12,6 +12,7 @@ import { createNoteList } from '../core/application/note-list.js';
 import { createDocumentClient } from './document.js';
 import { kernelClient, legacyHost } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
+import { createNoteRemoval } from './removal.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./host.js').LegacyHost} LegacyHost */
@@ -19,12 +20,20 @@ import { lazyFailureEvents } from './lazy-failure-events.js';
 /** @typedef {import('../../services/ai-port.mjs').AIPort} AIPort */
 /** @typedef {import('../core/application/note-list.js').NoteList} NoteList */
 /** @typedef {ReturnType<typeof lazyFailureEvents>} PageFailureEvents */
+/** @typedef {import('./removal.js').NoteRemoval} NoteRemoval */
+/** @typedef {import('./removal.js').RemovalPorts} RemovalPorts */
+
+/**
+ * What the root needs of App: init, and the pane moves and message to the other new tabs that
+ * removeNotes runs around its write
+ * @typedef {{init(): Promise<void>, leaveNotes: RemovalPorts['leave'], notesLeft: RemovalPorts['announce']}} NewTabApp
+ */
 
 /**
  * The legacy App class app.js puts on window, and the instance the controllers still read as
  * window.app until #12 slice 7 removes it
  * @typedef {object} NewTabPage
- * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents}) => {init(): Promise<void>}} App
+ * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval}) => NewTabApp} App
  * @property {unknown} [app]
  */
 
@@ -84,10 +93,33 @@ export function createNewTabFailureEvents() {
 }
 
 /**
+ * The tab's removeNotes on `kernel`. `page` is the App that moves its panes and tells the other
+ * new tabs, asked for when a removal runs, since App makes its controllers after it's built.
+ * @param {Client} kernel
+ * @param {NoteList} noteList
+ * @param {() => NewTabApp | null} page
+ * @returns {NoteRemoval}
+ */
+export function createNewTabRemoval(kernel, noteList, page) {
+  return createNoteRemoval(kernel, {
+    leave: ids => {
+      const app = page();
+      return app ? app.leaveNotes(ids) : null;
+    },
+    announce: ids => {
+      const app = page();
+      if (app) app.notesLeft(ids);
+    },
+    settled: () => noteList.settled(),
+    logger: { warn: (event, detail) => console.warn(`NewTabNote removeNotes: ${event}`, detail) },
+  });
+}
+
+/**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
- * client, its document client, its AI port, its note list, and its failure events, and
- * becomes window.app before init runs. The listener answers with init's promise, which a page
- * ignores and a test can wait for.
+ * client, its document client, its AI port, its note list, its failure events, and its
+ * removeNotes, and becomes window.app before init runs. The listener answers with init's
+ * promise, which a page ignores and a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -95,13 +127,18 @@ export function startNewTab() {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = legacyHost();
     const kernel = createNewTabClient(host);
+    const noteList = createNewTabNoteList(kernel);
+    /** @type {NewTabApp | null} */
+    let built = null;
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
       ai: createAIPort(),
-      noteList: createNewTabNoteList(kernel),
+      noteList,
       events: createNewTabFailureEvents(),
+      removal: createNewTabRemoval(kernel, noteList, () => built),
     });
+    built = app;
     page.app = app;
     return app.init().catch(error => {
       console.error('App initialization failed:', error);

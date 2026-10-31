@@ -303,16 +303,18 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
     return { env, Storage };
   }
 
-  it('skips trash cleanup in App and SidebarController, so the expired note keeps its blocks', async () => {
+  it('skips trash cleanup in SidebarController, so the expired note keeps its blocks', async () => {
     const { env, Storage } = await start();
     const before = await dumpDatabase(env.indexedDB);
     const logger = { info() {}, warn() {}, error() {}, debug() {} };
-    const refreshed = [];
-    await env.get('App').prototype.runTrashCleanup.call({ logger, refreshNotesList: async () => refreshed.push('app') });
+    const removed = [];
+    // App.init runs the sidebar's; App's own copy had no caller, and slice 5 deleted it
+    assert.equal(env.get('App').prototype.runTrashCleanup, undefined);
     const SidebarController = env.get('SidebarController');
-    await SidebarController.prototype.runTrashCleanup.call({ storage: Storage, logger, refreshNotesList: async () => refreshed.push('sidebar') });
+    const removal = { removeNotes: async (removal) => { removed.push(removal); return { kind: 'committed', changedIds: [] }; } };
+    await SidebarController.prototype.runTrashCleanup.call({ storage: Storage, logger, removal });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    assert.deepEqual(refreshed, []);
+    assert.deepEqual(removed, []);
   });
 
   it('runs: export works without media, and media imports are refused before any change', async () => {

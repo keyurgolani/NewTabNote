@@ -325,13 +325,17 @@ const Utils = {
   /**
    * What a toast says when the notes kernel didn't commit a write: `action`, such as "Failed
    * to archive note", and why. A note or folder deleted elsewhere says so, since trying again
-   * can't help; anything else asks for another try.
+   * can't help; so does a refusal `reasons` names by its code; anything else asks for another
+   * try.
    * @param {string} action
    * @param {{kind: string, reason?: string, code?: string}} outcome
    * @param {string} [gone] - what a note deleted elsewhere reads as
+   * @param {Object<string, string>} [reasons] - what a refusal reads as, by its code
    * @returns {string}
    */
-  writeFailureMessage(action, outcome, gone = 'it was deleted') {
+  writeFailureMessage(action, outcome, gone = 'it was deleted', reasons = {}) {
+    const code = outcome && outcome.kind === 'rejected' ? outcome.code : undefined;
+    if (code && Object.prototype.hasOwnProperty.call(reasons, code)) return `${action}: ${reasons[code]}.`;
     if (outcome && outcome.kind === 'rejected' && outcome.reason === 'not-found') {
       return `${action}: ${outcome.code === 'folder-not-found' ? 'that folder no longer exists' : gone}.`;
     }

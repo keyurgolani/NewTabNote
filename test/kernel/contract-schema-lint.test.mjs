@@ -366,6 +366,7 @@ describe('the contract schema lint (#13, AC5)', () => {
       attachInsights: ['insights'],
       captureToDailyNote: ['capture.content', 'capture.source', 'capture.title', 'capture.url'],
       createFolder: ['name'],
+      renameFolder: ['name'],
       saveWorkspaceSession: ['session.openTabs.[]'],
       saveSnapshot: ['blocks.[]', 'title'],
       restoreSnapshot: ['blocks.[]', 'name'],

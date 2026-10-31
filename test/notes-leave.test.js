@@ -269,10 +269,11 @@ describe('a note leaving the active set, in this new tab', () => {
     assert.deepEqual(tabIds(page.tabs), ['B'], 'the tab bar keeps a tab for the note in use');
   });
 
-  for (const [action, check] of [
-    ['trash', (record) => assert.equal(record.trashed, true)],
-    ['archive', (record) => assert.equal(record.archived, true)],
-    ['delete', (record) => assert.equal(record, undefined)],
+  for (const [action, check, trashedFirst] of [
+    ['trash', (record) => assert.equal(record.trashed, true), false],
+    ['archive', (record) => assert.equal(record.archived, true), false],
+    // Delete takes only notes in the trash (deleteNotePermanently), so these were trashed in another tab
+    ['delete', (record) => assert.equal(record, undefined), true],
   ]) {
     it(`bulk ${action} of the open note and the split note moves both panes`, async () => {
       const env = createLegacyEnv();
@@ -280,6 +281,11 @@ describe('a note leaving the active set, in this new tab', () => {
       const page = await openPage(env, { open: ['A', 'B'], split: true });
       assert.equal(page.tabs.editor.noteId, 'B');
       assert.equal(page.tabs.secondaryEditor.noteId, 'A');
+      if (trashedFirst) {
+        await page.Storage.trashNote('A');
+        await page.Storage.trashNote('B');
+        await page.page.noteList.reload();
+      }
       const sidebar = sidebarOf(env, page);
       sidebar.selectedNoteIds = new Set(['A', 'B']);
 

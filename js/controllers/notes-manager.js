@@ -48,10 +48,8 @@ class NotesManager {
     // App-level callbacks (set by App after construction)
     this.onRefreshNotesList = null;
     this.onRenderNotesList = null;
-    /** @type {((ids: Array<string>) => Promise<void>)|null} Panes move off notes about to leave the active set */
-    this.onNotesLeaving = null;
-    /** @type {((ids: Array<string>) => void)|null} Notes left the active set: the other new tabs hear of it */
-    this.onNotesLeft = null;
+    /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: archive, trash, and delete go through it */
+    this.removal = null;
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
     this.onUpdateEmptyState = null;
@@ -97,16 +95,14 @@ class NotesManager {
   // ─── Note CRUD ───
 
   /**
-   * Archive a note by ID, with #46's order: this tab's panes move off it first, so their
-   * edits land before it leaves, then the kernel's archiveNote writes its placement fields and
-   * nothing else, then the other new tabs hear of it. This tab's lists show it from the commit
-   * feed, with no refresh.
+   * Archive a note by ID, through removeNotes, with #46's order: this tab's panes move off it
+   * first, so their edits land before it leaves, then the kernel's archiveNote writes its
+   * placement fields and nothing else, then the other new tabs hear of it, and the lists show
+   * it from the commit feed. A write that fails puts the panes back and says so.
    */
   async archiveNote(noteId) {
-    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
-    const outcome = await this.documentClient.archiveNote(noteId);
-    if (!this._committed(outcome, 'Failed to archive note')) return;
-    await this._afterNotesLeft([noteId], { listed: true });
+    const outcome = await this.removal.removeNotes({ type: 'archiveNote', noteId });
+    if (!this._removed(outcome, 'Failed to archive note')) return;
     this.removeNoteIndex(noteId);
     Utils.showToast('Note archived', 'success');
   }
@@ -124,22 +120,6 @@ class NotesManager {
     console.error(`${action}:`, outcome.kind, outcome.code);
     Utils.showToast(Utils.writeFailureMessage(action, outcome), 'error');
     return false;
-  }
-
-  /**
-   * After notes left the active set: tell the other new tabs, then show the lists. Panes
-   * moved off them before the write (onNotesLeaving), so their edits landed first. A write the
-   * kernel made (`listed`) reaches the lists from the commit feed, so they're waited for, not
-   * read again; one made outside it reads them again.
-   * @param {Array<string>} ids
-   * @param {{listed?: boolean}} [options]
-   * @returns {Promise<void>}
-   */
-  async _afterNotesLeft(ids, { listed = false } = {}) {
-    if (this.onNotesLeft) this.onNotesLeft(ids);
-    if (listed) await this._listed();
-    else if (this.onRefreshNotesList) await this.onRefreshNotesList();
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
   }
 
   /**
@@ -163,41 +143,61 @@ class NotesManager {
   }
 
   /**
-   * Move note to trash by ID
+   * Move note to trash by ID, through removeNotes: panes move off it, the kernel's trashNote
+   * writes its trash fields (or deletes it, when it's untitled with nothing in it), then the
+   * other new tabs hear of it, and the lists show it. A write that fails puts the panes back
+   * and says so.
    */
   async trashNoteById(noteId) {
-    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
-    const result = await this.storage.trashNote(noteId);
-    await this._afterNotesLeft([noteId]);
+    const outcome = await this.removal.removeNotes({ type: 'trashNote', noteId });
+    if (!this._removed(outcome, 'Failed to move note to trash', { removing: true })) return;
     this.removeNoteIndex(noteId);
-
-    if (result && result.permanentlyDeleted) {
-      Utils.showToast('Empty note deleted', 'success');
-    } else {
-      Utils.showToast('Note moved to trash', 'success');
-    }
+    Utils.showToast(outcome.code === 'note-deleted' ? 'Empty note deleted' : 'Note moved to trash', 'success');
   }
 
   /**
-   * Restore note from trash by ID
+   * Whether a removal or filing write committed. One that didn't is logged by its outcome's
+   * kind and code, never the note's content, and its toast says `action` failed and why
+   * (Utils.writeFailureMessage, with `reasons` for a refusal's code). For a trash or a delete
+   * (`removing`), a note another tab already deleted has left all the same, so it counts as
+   * done, as 1.4.x said. The empty state follows the lists either way.
+   * @param {{kind: string, code?: string, reason?: string}} outcome
+   * @param {string} action - such as "Failed to move note to trash"
+   * @param {{removing?: boolean, reasons?: Object<string, string>}} [options]
+   * @returns {boolean}
+   */
+  _removed(outcome, action, { removing = false, reasons } = {}) {
+    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
+    if (outcome.kind === 'committed') return true;
+    if (removing && outcome.kind === 'rejected' && outcome.reason === 'not-found') return true;
+    console.error(`${action}:`, outcome.kind, outcome.code);
+    Utils.showToast(Utils.writeFailureMessage(action, outcome, undefined, reasons), 'error');
+    return false;
+  }
+
+  /**
+   * Restore note from trash by ID, with the kernel's restoreNote, which writes its trash fields
+   * and nothing else. The lists show it from the commit feed.
    */
   async restoreNoteById(noteId) {
-    await this.storage.restoreNote(noteId);
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
+    const outcome = await this.documentClient.restoreNote(noteId);
+    if (this.noteList) await this.noteList.settled();
+    if (!this._removed(outcome, 'Failed to restore note')) return;
     Utils.showToast('Note restored from trash', 'success');
   }
 
   /**
-   * Permanently delete note by ID
+   * Permanently delete note by ID, through removeNotes, with the kernel's
+   * deleteNotePermanently, which deletes only a note that's still in the trash
    */
   async permanentlyDeleteNoteById(noteId) {
     if (!await confirmDialog({ title: 'Delete Permanently', message: 'Delete this note permanently? This cannot be undone.', confirmText: 'Delete', danger: true })) {
       return;
     }
 
-    if (this.onNotesLeaving) await this.onNotesLeaving([noteId]);
-    await this.storage.permanentlyDeleteNote(noteId);
-    await this._afterNotesLeft([noteId]);
+    const outcome = await this.removal.removeNotes({ type: 'deleteNotePermanently', noteId });
+    const reasons = { 'note-not-trashed': "it's no longer in the trash" };
+    if (!this._removed(outcome, 'Failed to delete note', { removing: true, reasons })) return;
     Utils.showToast('Note permanently deleted', 'success');
   }
 
@@ -209,46 +209,25 @@ class NotesManager {
   }
 
   /**
-   * Convert a note to a template
+   * Convert a note to a template, with the kernel's convertNoteToTemplate, which writes its
+   * template flag and takes it out of its folder, and never its content, so an open editor's
+   * next save keeps it a template. The lists show it from the commit feed.
    */
   async convertNoteToTemplate(noteId) {
-    const note = await this.storage.getNote(noteId);
-    if (!note) return;
-
-    note.isTemplate = true;
-    note.folderId = null; // Templates don't live in folders
-    await this.storage.updateNote(note);
+    const outcome = await this.documentClient.convertNoteToTemplate(noteId);
+    if (this.noteList) await this.noteList.settled();
+    if (!this._removed(outcome, 'Failed to convert note to template')) return;
     Utils.showToast('Note converted to template', 'success');
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
   }
 
   /**
-   * Convert a template back to a note
+   * Convert a template back to a note, with the kernel's convertTemplateToNote
    */
   async convertTemplateToNote(noteId) {
-    const note = await this.storage.getNote(noteId);
-    if (!note) return;
-
-    note.isTemplate = false;
-    await this.storage.updateNote(note);
+    const outcome = await this.documentClient.convertTemplateToNote(noteId);
+    if (this.noteList) await this.noteList.settled();
+    if (!this._removed(outcome, 'Failed to convert template to note')) return;
     Utils.showToast('Template converted to note', 'success');
-    if (this.onRefreshNotesList) await this.onRefreshNotesList();
-  }
-
-  /**
-   * Handle when a note is removed (archived/trashed) - create new note or load another
-   */
-  async handleNoteRemoved(noteId) {
-    const notes = await this.storage.getAllNotes();
-    const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-
-    if (notes.length === 0) {
-      if (this.onCreateFirstNote) await this.onCreateFirstNote();
-    } else if (openTabs.length === 0) {
-      if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(notes[0].id);
-    }
-
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
   }
 
   // ─── Export ───

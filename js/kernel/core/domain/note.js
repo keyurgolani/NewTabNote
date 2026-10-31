@@ -159,6 +159,40 @@ export function isEmpty(blocks) {
   return blocks.every(isEmptyTextBlock);
 }
 
+// ============ Trash retention ============
+
+/** A day, in milliseconds, as Storage.cleanupTrash counts trash retention */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many days a note stays in the trash, from the stored trashRetention preference, as
+ * Storage.cleanupTrash used it: 30 with nothing stored, and null, never cleaned up, for 0 or
+ * anything else that isn't above 0. Settings stores a number, and a numeric string counts
+ * as Storage's arithmetic read it.
+ * @param {unknown} stored
+ * @returns {number | null}
+ */
+export function trashRetentionDays(stored) {
+  if (stored === undefined) return 30;
+  const days = typeof stored === 'string' && stored.trim() !== '' ? Number(stored) : stored;
+  return typeof days === 'number' && Number.isFinite(days) && days > 0 ? days : null;
+}
+
+/**
+ * The trashed notes trash retention deletes at `now`: in the trash since before `days` days
+ * ago, as Storage.cleanupTrash picks them from getTrashedNotes, latest trashed first
+ * @param {NoteRecord[]} notes - every stored note
+ * @param {number} now
+ * @param {number} days
+ * @returns {NoteRecord[]}
+ */
+export function expiredInTrash(notes, now, days) {
+  const cutoff = now - days * DAY_MS;
+  return notesInView(notes, 'trashed').filter(
+    note => typeof note.trashedAt === 'number' && note.trashedAt !== 0 && note.trashedAt < cutoff,
+  );
+}
+
 // ============ Lists ============
 
 /**

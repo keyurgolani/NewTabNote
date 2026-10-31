@@ -630,3 +630,30 @@ describe('the note-list projection', () => {
     assert.deepEqual(list.state(), { kind: 'ready', asOf: NOW });
   });
 });
+
+describe('a note filed in a folder that is gone', () => {
+  it('lists at the root, in every view, while a note in a stored folder keeps it', async () => {
+    // As 1.4.x left a trashed note on a folder its deleteFolder deleted
+    const { list, run } = start({
+      around: async (query, read) => {
+        const state = await read(query);
+        if (query.type !== 'getNoteList' || state.kind !== 'ready') return state;
+        const data = /** @type {any} */ (state).data;
+        return {
+          ...state,
+          data: {
+            ...data,
+            notes: data.notes.map((/** @type {any} */ n) => (n.id === 'lost' ? { ...n, folderId: 'gone' } : n)),
+          },
+        };
+      },
+    });
+    await run('createFolder', { folderId: 'f1', name: 'Work', parentId: null });
+    await run('createNote', { noteId: 'filed', name: 'Filed', folderId: 'f1' });
+    await run('createNote', { noteId: 'lost', name: 'Lost' });
+    await list.reload();
+    assert.deepEqual([list.note('lost')?.folderId, list.note('filed')?.folderId], [null, 'f1']);
+    assert.equal(list.view('active').find(note => note.id === 'lost')?.folderId, null);
+    assert.ok(Object.isFrozen(list.note('lost')));
+  });
+});

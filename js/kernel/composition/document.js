@@ -6,7 +6,10 @@
  * queries, and its writes are commands. The note jobs (auto-title and insights, in
  * NotesManager, the editor, and AI chat) read and write through it too: each write names the
  * note it means, and none takes a note record. So do the note-list writes App and its
- * controllers make: new notes and imports, the Daily Note, pin, archive, and unarchive.
+ * controllers make: new notes and imports, the Daily Note, pin, archive, and unarchive, and the
+ * sidebar's and NotesManager's filing writes: folders, moving a note into one, template
+ * conversion, and restoring from the trash. Taking notes out of the active set goes through
+ * removeNotes (removal.js) instead, which moves the panes around the write.
  *
  * A read rejects when its query fails, as the Storage call it replaces rejected, so the
  * editor fails where it always has. A write answers the command's outcome and never rejects,
@@ -51,6 +54,19 @@
  * @property {(noteId: string, pinned: boolean) => Promise<Outcome>} setPinned
  * @property {(noteId: string) => Promise<Outcome>} archiveNote - writes the note's placement fields and nothing else
  * @property {(noteId: string) => Promise<Outcome>} unarchiveNote - writes the note's placement fields and nothing else
+ * @property {(noteId: string) => Promise<Outcome>} restoreNote - out of the trash, its placement fields and nothing else
+ * @property {(noteId: string) => Promise<Outcome>} convertNoteToTemplate - its placement fields, never its content
+ * @property {(noteId: string) => Promise<Outcome>} convertTemplateToNote - its placement fields, never its content
+ * @property {(noteId: string, folderId: string | null) => Promise<Outcome>} moveNoteToFolder
+ *   Files the note, or puts it at the root with null: its folderId, and nothing else
+ * @property {(folderId: string, name: string, parentId: string | null) => Promise<Outcome>} createFolder
+ *   A folder under the id in `folderId` (newId)
+ * @property {(folderId: string, name: string) => Promise<Outcome>} renameFolder
+ * @property {(folderId: string, parentId: string | null) => Promise<Outcome>} moveFolder
+ *   Refused, `folder-into-itself`, for a parent inside the folder as committed
+ * @property {(folderId: string, collapsed: boolean) => Promise<Outcome>} setFolderCollapsed
+ * @property {(folderId: string) => Promise<Outcome>} deleteFolder
+ *   The folder and the folders inside it, with their notes filed at the root
  * @property {(noteId: string) => Promise<NoteRecord | null>} readNote - the note as stored, or null when it isn't
  * @property {(noteId: string) => Promise<NoteRecord[]>} backlinks - the notes that link to it
  * @property {() => Promise<string[]>} noteNames - the names a wiki link can take, as Storage.getNoteNames lists them
@@ -160,6 +176,30 @@ export function createDocumentClient(
     archiveNote: noteId => client.execute({ type: 'archiveNote', commandId: client.ids.next(), noteId }),
 
     unarchiveNote: noteId => client.execute({ type: 'unarchiveNote', commandId: client.ids.next(), noteId }),
+    restoreNote: noteId => client.execute({ type: 'restoreNote', commandId: client.ids.next(), noteId }),
+
+    convertNoteToTemplate: noteId =>
+      client.execute({ type: 'convertNoteToTemplate', commandId: client.ids.next(), noteId }),
+
+    convertTemplateToNote: noteId =>
+      client.execute({ type: 'convertTemplateToNote', commandId: client.ids.next(), noteId }),
+
+    moveNoteToFolder: (noteId, folderId) =>
+      client.execute({ type: 'moveNoteToFolder', commandId: client.ids.next(), noteId, folderId }),
+
+    createFolder: (folderId, name, parentId) =>
+      client.execute({ type: 'createFolder', commandId: client.ids.next(), folderId, name, parentId }),
+
+    renameFolder: (folderId, name) =>
+      client.execute({ type: 'renameFolder', commandId: client.ids.next(), folderId, name }),
+
+    moveFolder: (folderId, parentId) =>
+      client.execute({ type: 'moveFolder', commandId: client.ids.next(), folderId, parentId }),
+
+    setFolderCollapsed: (folderId, collapsed) =>
+      client.execute({ type: 'setFolderCollapsed', commandId: client.ids.next(), folderId, collapsed }),
+
+    deleteFolder: folderId => client.execute({ type: 'deleteFolder', commandId: client.ids.next(), folderId }),
 
     async readNote(noteId) {
       const found = await read({ type: 'getNote', noteId }, null);

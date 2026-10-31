@@ -6,6 +6,7 @@
 import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
+import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
@@ -22,7 +23,11 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   kernel: import('../../js/kernel/composition/host.js').Client,
  *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient,
  *   noteList: import('../../js/kernel/core/application/note-list.js').NoteList,
+ *   removalFor: (ports: Omit<import('../../js/kernel/composition/removal.js').RemovalPorts, 'settled'>) =>
+ *     import('../../js/kernel/composition/removal.js').NoteRemoval,
  * }}
+ *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
+ *   page has, settled by its note list
  */
 export function pageClientsFor({ storage, settings, onListQuery = () => {}, kernelNow, pageNow }) {
   const adapter = createLegacyAdapter({ storage, settings, mode: 'versioned' });
@@ -45,10 +50,12 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     onListQuery(query);
     return kernel.query(query);
   };
+  const noteList = createNewTabNoteList({ ...client, query: listQuery });
   return {
     kernel: client,
     documentClient: createDocumentClient(client, pageNow ? { now: pageNow } : {}),
-    noteList: createNewTabNoteList({ ...client, query: listQuery }),
+    noteList,
+    removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
   };
 }
 
