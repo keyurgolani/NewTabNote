@@ -73,6 +73,8 @@ class SearchEngine {
         if (this.fuse) {
             keywordResults = this.fuse.search(query).map(result => ({
                 ...result.item,
+                // Search entries name their note as noteId, as the indexer writes them
+                id: result.item.noteId,
                 keywordScore: 1 - result.score, // Convert 0 (perfect) to 1 (perfect)
                 matches: result.matches
             }));
