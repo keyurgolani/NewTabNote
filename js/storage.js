@@ -346,14 +346,22 @@ class DatabaseManager {
   /**
    * Startup maintenance, which init() runs once the database is open: default
    * settings in chrome.storage.local on first load, then the integrity check,
-   * which reports orphaned records and deletes nothing.
+   * which reports orphaned records and deletes nothing. The service worker passes
+   * `integrityCheck: false` and runs the check after an install or an update (#35).
+   * @param {{integrityCheck?: boolean}} [options]
    * @returns {Promise<void>}
    */
-  async runStartupMaintenance() {
+  async runStartupMaintenance({ integrityCheck = true } = {}) {
     // Initialize default settings in chrome.storage.local on first load
     await this.initializeDefaultSettings();
+    if (integrityCheck) await this.runIntegrityCheck();
+  }
 
-    // Read-only integrity check: reports orphans, deletes nothing
+  /**
+   * The read-only integrity check: reports orphaned records, deletes nothing
+   * @returns {Promise<void>}
+   */
+  async runIntegrityCheck() {
     try {
       const report = await this.validateDatabase();
       const orphans = Object.entries(report)

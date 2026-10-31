@@ -19,7 +19,8 @@ const READS = ['listNotes', 'getNote', 'getNoteBlocks', 'listFolders', 'getPrefe
 /** @type {Record<Surface, {commands: string[] | 'all', queries: string[] | 'all'}>} */
 const TODAY = {
   newtab: {
-    commands: 'all',
+    // Every command but the integrity check, which only the service worker runs (#35)
+    commands: COMMAND_TYPES.filter(type => type !== 'runIntegrityCheck'),
     queries: [
       ...READS,
       'getBacklinks',
@@ -40,7 +41,7 @@ const TODAY = {
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },
   sidepanel: { commands: [], queries: READS },
   offscreen: { commands: [], queries: [] },
-  'worker-internal': { commands: ['captureToDailyNote', 'runStartupMaintenance'], queries: [] },
+  'worker-internal': { commands: ['captureToDailyNote', 'runStartupMaintenance', 'runIntegrityCheck'], queries: [] },
   recovery: { commands: [], queries: [] },
 };
 
