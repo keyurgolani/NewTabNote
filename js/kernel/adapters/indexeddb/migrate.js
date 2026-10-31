@@ -1,7 +1,7 @@
 /**
- * The migration runner (#17, "Hosting" and "Steps"). #17 PR 1b has the service worker's
- * composition root call it at worker start, before maintenance; no shipped file does yet.
- * Under Web Lock `storage.migrate` (exclusive), so one runner at a time:
+ * The migration runner (#17, "Hosting" and "Steps"). The service worker's composition root
+ * (js/kernel/composition/background.js) starts it at worker start, before maintenance, and no
+ * page runs it (#17 PR 1b). Under Web Lock `storage.migrate` (exclusive), so one runner at a time:
  * 1. Open CanvasTabDB without upgrading it and read its shape (shapes.js).
  * 2. Make the `pre-migration` recovery point (recovery-points.js), or reuse the verified one
  *    an interrupted run made, after the space check (space.js). Short of space: no point, no
@@ -19,9 +19,11 @@ import { OPEN_WITHIN_MS } from './connection.js';
 import { failureOf } from './failures.js';
 import {
   DEFAULT_LIMITS,
+  POINTS_LOCK,
   committed,
   copyPoint,
   discardPoint,
+  dropOlderCopies,
   isQuota,
   keepVerified,
   listPoints,
@@ -51,8 +53,8 @@ import { checkSpace } from './space.js';
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/ports/runtime.js').Logger} Logger */
 
-/** The Web Lock every runner takes (#17, "Hosting") */
-export const MIGRATE_LOCK = 'storage.migrate';
+/** The Web Lock every runner takes (#17, "Hosting"), which the purge and the readers of points share */
+export const MIGRATE_LOCK = POINTS_LOCK;
 
 /**
  * Web Locks, or anything with its request(name, options, callback)
@@ -187,18 +189,28 @@ function upgrade({ indexedDB, version, steps, logicalVersion, onBlocked }) {
 }
 
 /**
- * The verified pre-migration point made before structural version `target`, if any, without
- * making the recovery database
+ * The verified pre-migration point made before the step that reaches structural version `to`,
+ * if any, without making the recovery database. One run makes one point for every step it
+ * runs, with the last step's version as its target, so a run from 8 to 10 made its point for
+ * 10, and that point came before step 9 too: the point is the one with the nearest target at
+ * or above `to`, the newest of those.
  * @param {IDBFactory} indexedDB
- * @param {number} target
+ * @param {number} to
  * @returns {Promise<Point | null>}
  */
-async function pointBefore(indexedDB, target) {
+async function pointBefore(indexedDB, to) {
   const recovery = await openRecovery(indexedDB, { create: false });
   if (!recovery) return null;
   try {
-    const points = await listPoints(recovery);
-    return points.filter(point => point.status === 'verified' && point.target === target).pop() || null;
+    const later = (await listPoints(recovery)).filter(
+      point =>
+        point.kind === 'pre-migration' &&
+        point.status === 'verified' &&
+        typeof point.target === 'number' &&
+        point.target >= to,
+    );
+    const nearest = Math.min(...later.map(point => /** @type {number} */ (point.target)));
+    return later.filter(point => point.target === nearest).pop() || null;
   } finally {
     recovery.close();
   }
@@ -233,9 +245,17 @@ async function ensurePoint(options) {
         point.sourceVersion === inspection.version &&
         sameNames(point.stores, stores);
       const reusable = points.filter(point => point.status === 'verified' && matches(point)).pop();
-      // Reused only while it still holds what the database holds, read now (review R61, Q3)
-      if (reusable && (await matchesSource({ source, point: reusable, io }))) {
-        return { status: 'ready', point: reusable };
+      // Reused only while it still holds what the database holds, read now (review R61, Q3).
+      // Nothing writes to a database this build refuses (a newer or a missing-core one), so
+      // its point is never re-read against it (carry-over 3). An unknown shape is still
+      // checked: the new tab runs on it.
+      const unwritten = target === null && (shape.kind === 'newer' || shape.kind === 'missing-core');
+      if (reusable && (unwritten || (await matchesSource({ source, point: reusable, io })))) {
+        // A run cut off after the newer copy saved can leave an older one too (carry-over 1)
+        return {
+          status: 'ready',
+          point: await dropOlderCopies({ recovery: /** @type {IDBDatabase} */ (recovery), point: reusable, io }),
+        };
       }
       if (reusable) logger.warn('storage-recovery-point-stale', { pointId: reusable.id });
 

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 
 import { createSavePicker } from '../../js/kernel/adapters/files/save-picker.js';
+import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { createSalvageReader } from '../../js/kernel/adapters/indexeddb/salvage-reader.js';
 import { REMEDIATIONS } from '../../js/trust/core/remediation/catalog.js';
 import { buildRestorePointFile, buildSalvage, countFile } from '../../js/trust/core/remediation/salvage-file.js';
@@ -32,6 +33,27 @@ const crypto = /** @type {any} */ (webcrypto);
 const SYNTHESIZED = synthesized();
 const RELEASE = 'test/fixtures/storage/releases/v1.4.1/js';
 const SECRETS = ['canary-llm-api-key', 'canary-webdav-password', 'canary-idb-llm-key', 'canary-copy-key'];
+
+/**
+ * A row in each store step 10 adds (#17 PR 2a), as the ledger, the change log, a save that
+ * lost, and a deletion write them
+ */
+const STEP_10_ROWS = Object.freeze({
+  operations: [{ opId: 'op-1', digest: 'digest-1', outcome: 'committed', at: NOW }],
+  changes: [{ seq: 1, entityType: 'note', entityId: 'n1', revision: 2, opId: 'op-1', ops: [], position: 0 }],
+  conflicts: [
+    {
+      id: 'command-lost',
+      noteId: 'n1',
+      scope: 'note',
+      expected: 1,
+      current: 2,
+      at: NOW,
+      command: { type: 'saveBlocks', blocks: [{ id: 'b1', content: 'The words that lost' }] },
+    },
+  ],
+  tombstones: [{ entityType: 'note', id: 'n-gone', deletedAt: NOW, lastRevision: 3, seq: 1, reason: 'deleted' }],
+});
 
 /**
  * The v1.4.1 Storage on a fresh 1.4.1 profile, as a user who reinstalled 1.4.1 has it
@@ -154,14 +176,18 @@ describe('the salvage file (#20 slice 3)', () => {
     assert.equal(file.media.length, 2);
     assert.match(file.media[0].blob, /^data:image\/png;base64,/);
     assert.equal(file.folders.length, 1);
-    // Every other store under its own name, settings never
+    // Every other store under its own name, step 10's four included (#17 PR 2a), settings never
     assert.deepEqual(Object.keys(file.stores).sort(), [
+      'changes',
+      'conflicts',
       'links',
       'meta',
       'migrations',
+      'operations',
       'search_index',
       'snapshots',
       'themes',
+      'tombstones',
       'vectors',
     ]);
     assert.equal('settings' in file.stores, false);
@@ -196,6 +222,76 @@ describe('the salvage file (#20 slice 3)', () => {
     // The run says it read back verified
     const stored = (await records.runs()).find(item => item.id === done.runId);
     assert.equal(stored?.state, 'succeeded');
+  });
+
+  it("holds each of step 10's stores (#17 PR 2a), and names one that won't read, in the file, the run, and its record", async () => {
+    const of = await postMigrationProfile();
+    const rows = STEP_10_ROWS;
+    for (const [store, list] of Object.entries(rows)) await putRaw(of.real, store, list);
+    const files = memoryFiles();
+    const { pipeline } = await centerOn(of, files);
+    const done = asRun(await pipeline.run(runOf('save-salvage-file')));
+    assert.equal(done.state, 'succeeded', JSON.stringify(done));
+    const file = files.last();
+    for (const [store, list] of Object.entries(rows)) {
+      assert.deepEqual(file.stores[store], list, store);
+      assert.equal(file.counts[`stores.${store}`], list.length, store);
+    }
+    assert.ok(JSON.stringify(file.stores.conflicts).includes('The words that lost'));
+    assert.deepEqual(
+      file.omissions.filter((/** @type {any} */ o) =>
+        /^CanvasTabDB\.(?:operations|changes|conflicts|tombstones)$/.test(o.at),
+      ),
+      [],
+    );
+
+    // The conflict records won't read: the file holds them as [], and says so where they were
+    const reader = readerOn(of);
+    const failing = {
+      ...reader,
+      async collect() {
+        const read = await reader.collect();
+        const stores = read.database.stores.map(store =>
+          store.store === 'conflicts' ? { store: 'conflicts', values: [], errorCode: 'unreadable' } : store,
+        );
+        return { ...read, database: { ...read.database, stores } };
+      },
+    };
+    const saved = memoryFiles();
+    const center = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { salvage: /** @type {any} */ (failing), files: saved },
+    });
+    const partial = asRun(await center.pipeline.run(runOf('save-salvage-file')));
+    assert.equal(partial.state, 'succeeded', JSON.stringify(partial));
+    assert.equal(partial.outcome, 'saved-partial');
+    const named = [{ origin: 'CanvasTabDB', part: 'conflicts', pointId: null, code: 'unreadable' }];
+    assert.deepEqual(partial.unreadable, named);
+    assert.deepEqual(saved.last().unreadable, named);
+    assert.deepEqual(saved.last().stores.conflicts, []);
+    const stored = (await center.records.runs()).find(item => item.id === partial.runId);
+    assert.deepEqual(stored?.unreadable, named);
+  });
+
+  it("imports into the frozen v1.4.1 with step 10's four stores in it, which 1.4.1 doesn't read", async () => {
+    const of = await postMigrationProfile();
+    for (const [store, list] of Object.entries(STEP_10_ROWS)) await putRaw(of.real, store, list);
+    const files = memoryFiles();
+    const { pipeline } = await centerOn(of, files);
+    asRun(await pipeline.run(runOf('save-salvage-file')));
+    const file = files.last();
+    for (const [store, list] of Object.entries(STEP_10_ROWS)) assert.deepEqual(file.stores[store], list, store);
+
+    const { env, Storage } = await release141();
+    const check = Storage.validateImport(file);
+    assert.equal(check.ok, true, check.reason);
+    const result = await Storage.importData(file, 'merge');
+    assert.equal(result.notes, file.canvases.length);
+    assert.equal(result.blocks, file.elements.length);
+    // Its own ten stores, and nothing of the four in them
+    const dumped = await legacyEnv.dumpDatabase(env.indexedDB);
+    assert.deepEqual(Object.keys(dumped.stores).sort(), [...LEGACY_STORE_NAMES]);
+    assert.equal(JSON.stringify(dumped).includes('The words that lost'), false);
   });
 
   it('holds no secret: not the IndexedDB settings, not chrome.storage.local, not one inside a legacy copy (AC14 canary)', async () => {

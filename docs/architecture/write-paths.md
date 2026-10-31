@@ -65,6 +65,7 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | `completeOnboarding` | kernel command, slice 6 | 0 |
 | `recordBackup` | kernel command, slice 6 | 0 |
 | `recordExportNotice` | kernel command, slice 6 | 0 |
+| `snoozeSpaceNotice` | kernel command, slice 6 | 0 |
 | `createAutoBackup` | kernel command, slice 6 | 0 |
 | `importBackup` | kernel command, slice 6 | 0 |
 | `saveProviderSettings` | ledgered to #11 | 6 |
@@ -83,10 +84,10 @@ Method is the class method or function the call sits in. After `>` comes the ano
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |
-| `js/controllers/notes-manager.js` | [1223](../../js/controllers/notes-manager.js#L1223) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1233](../../js/controllers/notes-manager.js#L1233) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1237](../../js/controllers/notes-manager.js#L1237) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
-| `js/controllers/notes-manager.js` | [1363](../../js/controllers/notes-manager.js#L1363) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1225](../../js/controllers/notes-manager.js#L1225) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndex(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1235](../../js/controllers/notes-manager.js#L1235) | `NotesManager.initIndexer > onmessage` | `this.storage.setSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1239](../../js/controllers/notes-manager.js#L1239) | `NotesManager.initIndexer > onmessage` | `this.storage.removeSearchIndexEntry(…)` | `updateSearchIndex` | ledgered to #22 |
+| `js/controllers/notes-manager.js` | [1365](../../js/controllers/notes-manager.js#L1365) | `NotesManager.updateMissingEmbeddings` | `this.storage.saveVector(…)` | `saveVector` | ledgered to #22 |
 | `js/llm.js` | [138](../../js/llm.js#L138) | `LLMService.init` | `Storage.setSetting('llmApiKeyProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [756](../../js/llm.js#L756) | `LLMService.setProvider` | `Storage.setSetting('llmProvider', …)` | `saveProviderSettings` | ledgered to #11 |
 | `js/llm.js` | [775](../../js/llm.js#L775) | `LLMService.setApiKey` | `Storage.setSetting('llmApiKey', …)` | `saveProviderSettings` | ledgered to #11 |

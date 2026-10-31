@@ -29,23 +29,34 @@
  * `pre-migration` point is pinned while the legacy stores exist, which is as long as #17 runs;
  * otherwise the newest verified point of each kind is kept.
  *
- * Permanent deletion (#17 PR 2, Q16) will purge a note's rows from every point, the pinned one
- * included: in one transaction, delete each row, add its key to that store's `purged` list, and
- * take its contentEntry out of `contentHash` (records.js's subtractHashes). Verification counts
- * them: a store's rows plus its purged keys must give the count and the ID set the copy
- * recorded, its rows alone the content hash, and a purged key mustn't still be there.
+ * Permanent deletion purges a deleted note's or folder's rows from every point, the pinned one
+ * included (#17 PR 2b, Q16; purge.js): each batch, in one transaction, deletes its rows, adds
+ * their keys to their store's `purged` list, and takes their contentEntry out of `contentHash`
+ * (records.js's subtractHashes), with the point's record (purgeRows). Verification counts them:
+ * a store's rows plus its purged keys must give the count and the ID set the copy recorded,
+ * its rows alone the content hash, and a purged key mustn't still be there. A purged key is
+ * an id, never content.
  *
  * Before a run reuses a verified point, matchesSource reads the live stores the same way and
  * compares them with the manifest, so a point older than the data it stands for is remade.
  *
- * Only migrate.js and #20's repair-points.js write points, both under Web Lock
- * `storage.migrate`, so each point is changed by one writer at a time and its record is kept
- * in memory between batches.
+ * Only migrate.js, #20's repair-points.js and the purge (purge.js) write points, all under Web
+ * Lock `storage.migrate` held exclusive, so each point is changed by one writer at a time and
+ * its record is kept in memory between batches. A reader across transactions (the pre-update
+ * export) takes the lock shared, so it never reads a point between two batches.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf } from './failures.js';
-import { EMPTY_SET_HASH, addHashes, approximateBytes, contentEntry, keyAt, recordSha256 } from './records.js';
+import {
+  EMPTY_SET_HASH,
+  addHashes,
+  approximateBytes,
+  contentEntry,
+  keyAt,
+  recordSha256,
+  subtractHashes,
+} from './records.js';
 import { result } from './requests.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -53,6 +64,13 @@ import { openWithoutUpgrade } from './shapes.js';
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 
 export const RECOVERY_DB_NAME = 'NewTabNoteRecovery';
+
+/**
+ * The Web Lock every writer of points holds exclusive, the migration runner (migrate.js's
+ * MIGRATE_LOCK) and the purge (purge.js), and a reader across transactions holds shared
+ * (legacy-export.js)
+ */
+export const POINTS_LOCK = 'storage.migrate';
 export const RECOVERY_DB_VERSION = 1;
 export const POINTS_STORE = 'points';
 export const ROWS_STORE = 'rows';
@@ -207,7 +225,7 @@ export async function listPoints(recovery) {
  * @param {string} [store]
  * @returns {IDBKeyRange}
  */
-function rowRange(keyRange, pointId, store) {
+export function rowRange(keyRange, pointId, store) {
   const lower = store === undefined ? [pointId] : [pointId, store];
   const upper = store === undefined ? [`${pointId}\u0000`] : [pointId, `${store}\u0000`];
   return keyRange.bound(lower, upper, false, true);
@@ -602,6 +620,86 @@ export async function keepVerified({ recovery, point, clock, io }) {
     if (other.target === point.target || !other.pinned) await discardPoint(recovery, other.id, io);
   }
   return verified;
+}
+
+/**
+ * A run reuses verified `point`: any other verified point of its kind made before the same
+ * target is an older copy of what it holds, left by a run cut off after keepVerified saved the
+ * newer one and before it dropped the older (review B6 carry-over 1). Those go, as keepVerified
+ * would have dropped them, and when one of them was pinned the pin moves to `point` first, so a
+ * run cut off in between never leaves fewer pinned points.
+ * @param {{recovery: IDBDatabase, point: Point, io: Pick<Io, 'keyRange' | 'limits'>}} options
+ * @returns {Promise<Point>} `point`, pinned when it took a pin over
+ */
+export async function dropOlderCopies({ recovery, point, io }) {
+  const older = (await listPoints(recovery)).filter(
+    other =>
+      other.id !== point.id &&
+      other.kind === point.kind &&
+      other.status === 'verified' &&
+      other.target === point.target,
+  );
+  if (older.length === 0) return point;
+  let kept = point;
+  if (!point.pinned && older.some(other => other.pinned)) {
+    kept = { ...point, pinned: true };
+    await savePoint(recovery, kept, null);
+  }
+  for (const other of older) await discardPoint(recovery, other.id, io);
+  return kept;
+}
+
+/**
+ * A row as `rows` holds it
+ * @typedef {{pointId: string, store: string, key: IDBValidKey, value: unknown, sha256: string}} PointRow
+ */
+
+/**
+ * Purges `rows`, which `point` holds, from it (#17 PR 2b, purge.js), in one strict transaction
+ * over its rows and its record: each row goes, its key joins its store's `purged` list, and its
+ * contentEntry leaves the store's content hash, so the point verifies after as it did before.
+ * The hashes are taken before the transaction opens. Answers the point's record as written.
+ * @param {{recovery: IDBDatabase, point: Point, rows: readonly PointRow[], io: Pick<Io, 'crypto'>}} options
+ * @returns {Promise<Point>}
+ */
+export async function purgeRows({ recovery, point, rows, io }) {
+  /** @type {Record<string, StoreManifest>} */
+  const manifest = { ...point.manifest };
+  for (const row of rows) {
+    const store = manifest[row.store];
+    if (!store || row.pointId !== point.id) throw new UnavailableError('storage', 'row-mismatch', false);
+    const keyHash = await recordSha256(row.key, io.crypto);
+    const entry = await contentEntry(row.store, keyHash, row.sha256, io.crypto);
+    manifest[row.store] = {
+      ...store,
+      purged: [...(store.purged || []), row.key],
+      contentHash: subtractHashes(store.contentHash, entry),
+    };
+  }
+  /** @type {Point} */
+  const next = { ...point, manifest };
+  const tx = recovery.transaction([POINTS_STORE, ROWS_STORE], 'readwrite', STRICT);
+  const done = committed(tx);
+  const rowStore = tx.objectStore(ROWS_STORE);
+  for (const row of rows) rowStore.delete([point.id, row.store, row.key]);
+  tx.objectStore(POINTS_STORE).put(next);
+  await done;
+  return next;
+}
+
+/**
+ * Puts `rows` back, and the point's record back as `before`, in one strict transaction: a purge
+ * batch undone, since the point didn't verify after it (purge.js)
+ * @param {{recovery: IDBDatabase, before: Point, rows: readonly PointRow[]}} options
+ * @returns {Promise<void>}
+ */
+export async function restoreRows({ recovery, before, rows }) {
+  const tx = recovery.transaction([POINTS_STORE, ROWS_STORE], 'readwrite', STRICT);
+  const done = committed(tx);
+  const rowStore = tx.objectStore(ROWS_STORE);
+  for (const row of rows) rowStore.put(row);
+  tx.objectStore(POINTS_STORE).put(before);
+  await done;
 }
 
 /**

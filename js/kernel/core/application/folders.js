@@ -7,6 +7,7 @@
 import { isId, isIdOrNull } from '../contracts/checks.js';
 import { committed, empty, ready, rejected } from '../contracts/outcomes.js';
 import { createsCycle, folderSubtree, newFolderRecord } from '../domain/folder.js';
+import { newTombstone } from '../domain/tombstone.js';
 import { contentChanged, unitsWork } from './work.js';
 
 /**
@@ -142,7 +143,7 @@ export const folderCommands = {
     let filed = [];
     /** @type {Unit} */
     const remove = {
-      stores: ['folders', 'notes'],
+      stores: ['folders', 'notes', 'tombstones'],
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         const folders = await tx.getAll('folders');
@@ -156,7 +157,12 @@ export const folderCommands = {
           note => typeof note.folderId === 'string' && inside.has(note.folderId),
         );
         filed = notes.map(note => note.id);
-        for (const id of deleted) tx.delete('folders', id);
+        // Each folder with its tombstone, so the worker purges its name from every recovery
+        // point too (#17 PR 2b), as it does a deleted note's rows
+        for (const id of deleted) {
+          tx.delete('folders', id);
+          tx.put('tombstones', newTombstone('folder', id, 'deleted', now));
+        }
         for (const note of notes) tx.put('notes', { ...note, folderId: null, updatedAt: now });
       },
     };

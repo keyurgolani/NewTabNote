@@ -263,7 +263,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
         );
       }
       // Each side gives its blocks its own ids and orders them by the time they landed, which
-      // two captures in one millisecond share, so they line up by type
+      // two captures in one millisecond share, so they line up by type. Since #17 PR 2a that
+      // time is each block's createdAt and updatedAt too, read as 'written' on both sides.
       /** @param {any[]} list */
       const blocks = list =>
         list
@@ -271,7 +272,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           .sort((a, b) => (a.type < b.type ? -1 : 1));
       const { elements } = await recordsIn(viaKernel, ['elements']);
       assert.equal(day && day.blocks.length, 2);
-      assert.deepEqual(blocks(Object.values(elements)), blocks(legacyEnv.plain(day.blocks)));
+      assert.deepEqual(blocks(Object.values(elements)), blocks(stamped(legacyEnv.plain(day.blocks))));
     },
   );
 
@@ -309,7 +310,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     }
   });
 
-  it('trashNote deletes an untitled empty note with what Storage.trashNote deletes, and trashes the others', async () => {
+  it('trashNote deletes an untitled empty note with what Storage.trashNote deletes and its search entry, and trashes the others', async () => {
     const notes = ['u-empty', 'u-markup', 'u-divider', 'kept'].map(id =>
       legacyEnv.note(id, { name: id === 'kept' ? 'Kept' : 'Untitled' }),
     );
@@ -339,7 +340,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
     }
     const stores = ['canvases', 'elements', 'media', 'vectors', 'snapshots'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
-    assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
+    // Since #17 PR 2b the kernel's deletion takes the note's search entry too, which Storage left
+    const { 'u-empty': leftByStorage, ...kept } = await searchNames(viaStorage);
+    assert.equal(leftByStorage, 'Untitled');
+    assert.deepEqual(await searchNames(viaKernel), kept);
   });
 
   it("SidebarController's pin toggle, through setPinned, leaves the note 1.4.x's toggle left", async () => {
@@ -748,7 +752,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
   });
 
-  it('deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes, and keep the same notes', async () => {
+  it("deleteNotePermanently, emptyTrash, and runTrashCleanup delete what Storage deletes and the notes' search entries and links too, and keep the same notes", async () => {
     const day = 24 * 60 * 60 * 1000;
     const recently = Date.now() - 2 * day;
     const lastWeek = Date.now() - 8 * day;
@@ -788,8 +792,21 @@ describe("the kernel's copies of production rules, run both ways", () => {
       await viaStorageRun(viaStorage.storage);
       const outcome = await viaKernelRun(kernel);
       assertCommitted(outcome);
-      assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores), name);
-      return outcome.kind === 'committed' ? [...outcome.changedIds].sort() : [];
+      const deleted = new Set(outcome.kind === 'committed' ? outcome.changedIds : []);
+      // Since #17 PR 2b the kernel's deletion also takes each note's search entry and its links
+      // both ways, which Storage left
+      const left = await recordsIn(viaStorage, stores);
+      const expected = {
+        ...left,
+        search_index: Object.fromEntries(Object.entries(left.search_index).filter(([key]) => !deleted.has(key))),
+        links: Object.fromEntries(
+          Object.entries(left.links).filter(
+            ([, /** @type {any} */ link]) => !deleted.has(link.fromNoteId) && !deleted.has(link.toNoteId),
+          ),
+        ),
+      };
+      assert.deepEqual(await recordsIn(viaKernel, stores), expected, name);
+      return [...deleted].sort();
     };
     assert.deepEqual(
       await both(

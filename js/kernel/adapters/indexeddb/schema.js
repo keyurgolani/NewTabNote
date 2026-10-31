@@ -1,20 +1,29 @@
 /**
- * CanvasTabDB as 1.4.x has stored it since version 8 (#17, "Data and migration"). #17 slice 1
- * changes nothing in it: the adapter opens the same database at the same version, with the
- * same ten stores and indexes, and writes the same records. A database an older version left
- * gets each store it lacks, with the indexes js/storage.js gives it, as Storage.open always
- * has. #17 slice 2's migration registry replaces that upgrade.
+ * CanvasTabDB's ten legacy stores, as 1.4.x has stored them since version 8 (#17, "Data and
+ * migration"), and the version this build opens it at: structural version 10 since #17 PR 2a
+ * (registry.js's step 9: every legacy store, then `meta` and `migrations`; step 10: the
+ * `operations`, `changes`, `conflicts`, and `tombstones` stores), which only the service worker
+ * upgrades to, through the migration runner (migrate.js) after a verified recovery point.
+ * Every legacy store, index, and record stays as it was, since 1.3.0 and 1.4.0 delete the
+ * whole database when one is missing.
  */
 
 /** @typedef {import('../../core/ports/repository.js').StoreName} StoreName */
 
 export const DB_NAME = 'CanvasTabDB';
 
-/** The version this build reads and writes, js/storage.js's dbVersion */
-export const DB_VERSION = 8;
+/**
+ * The newest IndexedDB version this build opens CanvasTabDB at, registry.js's
+ * LATEST_STRUCTURAL and js/storage.js's dbVersion (test/kernel/storage-open.test.mjs keeps the
+ * three equal). A database at a later one was upgraded by a newer build and is refused.
+ */
+export const DB_VERSION = 10;
+
+/** The last version before `meta`, which every release from 1.3.0 to 1.4.1 opens at */
+export const LEGACY_VERSION = 8;
 
 /**
- * Each store of version 8, with its key path and its indexes. Every index is named after the
+ * Each legacy store, as version 8 has it, with its key path and its indexes. Every index is named after the
  * field it indexes, and none is unique.
  * @type {Readonly<Record<string, Readonly<{keyPath: string, indexes: readonly string[]}>>>}
  */
@@ -31,7 +40,10 @@ export const STORE_SCHEMAS = Object.freeze({
   snapshots: Object.freeze({ keyPath: 'id', indexes: Object.freeze(['noteId', 'timestamp']) }),
 });
 
-/** Each kernel store's IndexedDB store, under the names 1.4.x has always used */
+/**
+ * Each kernel store's IndexedDB store, under the names 1.4.x has always used, and the two of
+ * step 10's a deletion writes (#17 PR 2b), which only a database at version 10 has
+ */
 export const IDB_STORES = Object.freeze({
   notes: 'canvases',
   blocks: 'elements',
@@ -42,6 +54,8 @@ export const IDB_STORES = Object.freeze({
   snapshots: 'snapshots',
   links: 'links',
   themes: 'themes',
+  conflicts: 'conflicts',
+  tombstones: 'tombstones',
 });
 
 /** Without these the notes can't be read, so a versioned open refuses the database, as Storage.open does */
@@ -54,16 +68,3 @@ export const CORE_STORES = Object.freeze(['canvases', 'elements']);
  * @type {readonly StoreName[]}
  */
 export const DERIVED_STORES = Object.freeze(['searchIndex', 'links']);
-
-/**
- * Creates each version-8 store `db` lacks, with its indexes. Runs only inside the upgrade, and
- * makes only synchronous calls, since anything awaited would commit the upgrade (#17, step 2).
- * @param {IDBDatabase} db
- */
-export function createMissingStores(db) {
-  for (const [name, { keyPath, indexes }] of Object.entries(STORE_SCHEMAS)) {
-    if (db.objectStoreNames.contains(name)) continue;
-    const store = db.createObjectStore(name, { keyPath });
-    for (const index of indexes) store.createIndex(index, index, { unique: false });
-  }
-}

@@ -38,6 +38,9 @@ import { legacyEnv } from './migration-support.mjs';
 import { freshProfile } from './trust-provider-support.mjs';
 import { hexIds, lockManager, manualClock, realTimers, settingsArea } from './trust-support.mjs';
 
+// Storage's check reads the migration state first (#90); these cases are at the latest version
+const AT_LATEST = Object.freeze({ current: async () => ({ version: 9, latest: 9, status: 'migrated', code: null }) });
+
 /** @typedef {import('../../js/kernel/registry/validate.js').Descriptor} Descriptor */
 /** @typedef {import('../../js/trust/core/checks.js').CheckResult} CheckResult */
 /** @typedef {import('../../js/trust/core/records.js').Incident} Incident */
@@ -1203,6 +1206,7 @@ describe('one preserved list (#20 slice 4a, item 8)', () => {
     for (const [code, reads] of cases) {
       for (const check of [capture, storage]) {
         const result = await check.check({
+          migration: AT_LATEST,
           storage: adapterThat(
             unavailable('storage', /** @type {string} */ (code), false),
             /** @type {boolean} */ (reads),
@@ -1662,7 +1666,7 @@ describe('#100 review nits', () => {
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let guard;
     const result = await Promise.race([
-      storage.check({ storage: adapter, timers }),
+      storage.check({ migration: AT_LATEST, storage: adapter, timers }),
       new Promise((resolve, reject) => {
         guard = setTimeout(() => reject(new Error('the read held the check up')), 2000);
       }),

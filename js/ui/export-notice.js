@@ -15,8 +15,12 @@
  * and a tab opened after one starts there. Not now records `dismissed`. A profile with nothing of its own to export when
  * this version first decides records `not-needed`. The record is
  * `setting_preMigrationNotice` ({version, outcome, at}) in
- * chrome.storage.local, and once it exists no tab shows the notice. Nothing
- * here changes a note.
+ * chrome.storage.local, and once it exists no tab shows the notice. Since #17
+ * PR 1b it never shows on a database the update has upgraded, either.
+ *
+ * SpaceNotice, at the end, is its variant for a profile whose upgrade stopped
+ * short of space (#17 PR 1b, Q9), in the same region and form. Nothing here
+ * changes a note.
  */
 
 /** The settings key of the recorded outcome */
@@ -55,6 +59,19 @@ const EXPORT_NOTICE_TEXT = Object.freeze({
 });
 
 /**
+ * The words a notice in #export-notice shows, #47's and its space-blocked variant's
+ * @typedef {Object} NoticeText
+ * @property {string} title
+ * @property {string} body
+ * @property {string} confirm - the check step's body
+ * @property {string} export
+ * @property {string} exportAgain
+ * @property {string} done
+ * @property {string} dismiss
+ * @property {string} recordFailed
+ */
+
+/**
  * @typedef {Object} ReturnFocus
  * @property {Element|null} element - What had focus before it moved into the notice
  * @property {Range|null} range - The selection then, to put the caret back
@@ -63,9 +80,9 @@ const EXPORT_NOTICE_TEXT = Object.freeze({
 class ExportNotice {
   /**
    * @param {Object} deps
-   * @param {{openState: string, missingStores: readonly string[]}} deps.storageState - What the
-   *   page knows of its database outside the kernel (js/kernel/composition/newtab.js): whether
-   *   it's open, and the stores it lacks
+   * @param {{openState: string, missingStores: readonly string[], upgraded: () => boolean}} deps.storageState
+   *   What the page knows of its database outside the kernel (js/kernel/composition/newtab.js):
+   *   whether it's open, the stores it lacks, and whether it's at this build's version
    * @param {any} deps.settings - The page's settings port (js/kernel/composition/settings.js),
    *   which the record and the export receipt are read through, and the outcome recorded
    * @param {() => Promise<boolean>} deps.onExport - Export JSON; resolves true once the browser has the file
@@ -107,6 +124,8 @@ class ExportNotice {
   async isDue() {
     const { openState, missingStores } = this.storageState;
     if (openState !== 'open') return false;
+    // The update it asks to export before has happened (#17 PR 1b): it never shows again
+    if (this.storageState.upgraded()) return false;
     if (EXPORT_AUX_STORES.some((store) => missingStores.includes(store))) return false;
     if (ExportNotice.isRecorded(await this._recorded())) return false;
     // Whether the profile has a note outside trash with a title or a block that holds
@@ -174,26 +193,25 @@ class ExportNotice {
     const title = doc.createElement('h2');
     title.id = 'export-notice-title';
     title.className = 'export-notice-title';
-    title.textContent = EXPORT_NOTICE_TEXT.title;
+    title.textContent = this.text.title;
     const body = doc.createElement('p');
     body.className = 'export-notice-body';
-    body.textContent = EXPORT_NOTICE_TEXT.body;
-    const contents = doc.createElement('p');
-    contents.className = 'export-notice-contents';
-    contents.textContent = EXPORT_NOTICE_TEXT.contents;
-    const anyTime = doc.createElement('p');
-    anyTime.className = 'export-notice-contents';
-    anyTime.textContent = EXPORT_NOTICE_TEXT.anyTime;
+    body.textContent = this.text.body;
     text.appendChild(title);
     text.appendChild(body);
-    text.appendChild(contents);
-    text.appendChild(anyTime);
+    for (const line of this._contents()) {
+      const contents = doc.createElement('p');
+      contents.className = 'export-notice-contents';
+      contents.textContent = line;
+      text.appendChild(contents);
+    }
 
     const actions = doc.createElement('div');
     actions.className = 'export-notice-actions';
-    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.export, 'primary-btn', 'export', () => this._export()));
-    actions.appendChild(this._button(doc, EXPORT_NOTICE_TEXT.dismiss, 'secondary-btn', 'dismiss', () => this._decide('dismissed')));
+    actions.appendChild(this._button(doc, this.text.export, 'primary-btn', 'export', () => this._export()));
+    actions.appendChild(this._button(doc, this.text.dismiss, 'secondary-btn', 'dismiss', () => this._decide('dismissed')));
     card.appendChild(actions);
+    card.dataset.notice = this.kind;
     if (this.exportedEarlier) this._askToConfirm();
     // Named by its heading, now that the heading is there
     card.setAttribute('aria-labelledby', 'export-notice-title');
@@ -203,15 +221,41 @@ class ExportNotice {
     // settings.changed names the keys only, so the choice another tab recorded is read again,
     // through the settings port the notice came from: none, when the read fails
     this.unsubscribe = this.settings.onChanged(async ({ keys }) => {
-      if (keys.includes(EXPORT_NOTICE_SETTING)) {
-        const stored = await this.settings.workspaceDataOr({ [EXPORT_NOTICE_SETTING]: null });
-        if (ExportNotice.isRecorded(stored[EXPORT_NOTICE_SETTING])) {
-          this.close();
-          return;
-        }
-      }
       if (keys.includes(EXPORT_RECEIPT_SETTING)) this._askToConfirm();
+      if (await this._closesOn(keys)) this.close();
     });
+  }
+
+  /** This notice's kind, as the card's data-notice */
+  get kind() {
+    return 'pre-migration';
+  }
+
+  /**
+   * This notice's words
+   * @returns {NoticeText}
+   */
+  get text() {
+    return EXPORT_NOTICE_TEXT;
+  }
+
+  /**
+   * The smaller lines under the body: what the export holds, and where exporting stays
+   * @returns {string[]}
+   */
+  _contents() {
+    return [EXPORT_NOTICE_TEXT.contents, EXPORT_NOTICE_TEXT.anyTime];
+  }
+
+  /**
+   * Whether a settings change another tab made closes this one: it recorded an outcome
+   * @param {readonly string[]} keys
+   * @returns {Promise<boolean>}
+   */
+  async _closesOn(keys) {
+    if (!keys.includes(EXPORT_NOTICE_SETTING)) return false;
+    const stored = await this.settings.workspaceDataOr({ [EXPORT_NOTICE_SETTING]: null });
+    return ExportNotice.isRecorded(stored[EXPORT_NOTICE_SETTING]);
   }
 
   /**
@@ -282,12 +326,22 @@ class ExportNotice {
   _askToConfirm() {
     const card = this.card;
     if (!card || card.querySelector('[data-action="done"]')) return;
-    /** @type {HTMLElement} */ (card.querySelector('.export-notice-body')).textContent = EXPORT_NOTICE_TEXT.confirm;
+    /** @type {HTMLElement} */ (card.querySelector('.export-notice-body')).textContent = this.text.confirm;
+    this._confirmContents(card);
     const exportButton = /** @type {HTMLElement} */ (card.querySelector('[data-action="export"]'));
-    exportButton.textContent = EXPORT_NOTICE_TEXT.exportAgain;
+    exportButton.textContent = this.text.exportAgain;
     exportButton.className = 'secondary-btn export-notice-btn';
-    const done = this._button(card.ownerDocument, EXPORT_NOTICE_TEXT.done, 'primary-btn', 'done', () => this._decide('exported'));
+    const done = this._button(card.ownerDocument, this.text.done, 'primary-btn', 'done', () => this._decide('exported'));
     /** @type {HTMLElement} */ (exportButton.parentNode).insertBefore(done, exportButton);
+  }
+
+  /**
+   * What the smaller lines say at the check step; #47's stay as they are
+   * @param {HTMLElement} card
+   * @returns {void}
+   */
+  _confirmContents(card) {
+    void card;
   }
 
   /**
@@ -321,6 +375,7 @@ class ExportNotice {
     const heldFocus = card.contains(card.ownerDocument.activeElement);
     card.classList.remove('is-shown');
     card.removeAttribute('aria-labelledby');
+    card.removeAttribute('data-notice');
     /** @type {HTMLElement} */ (card.querySelector('.export-notice-text')).textContent = '';
     /** @type {HTMLElement} */ (card.querySelector('.export-notice-actions')).remove();
     if (heldFocus && this.onClose) this.onClose(this.returnFocus);
@@ -329,4 +384,123 @@ class ExportNotice {
 
 if (typeof window !== 'undefined') {
   /** @type {any} */ (window).ExportNotice = ExportNotice;
+}
+
+/** The settings key the service worker records its migration run's outcome under (#17 PR 1b) */
+const UPGRADE_RECORD_SETTING = 'storageUpgrade';
+
+/** The settings key of when the space notice was last put off, by Not now or Done */
+const SPACE_NOTICE_SETTING = 'spaceNoticeSnoozedAt';
+
+/** How long Not now or Done puts the space notice off while the upgrade stays blocked */
+const SPACE_NOTICE_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+
+const SPACE_NOTICE_TEXT = Object.freeze({
+  title: 'The update is waiting for free space',
+  body: "Before NewTabNote changes how your notes are stored, it saves a copy of them. This device doesn't "
+    + 'have enough free space for that copy yet, so nothing has changed: your notes are stored as they were.',
+  contents: 'Free up some space on this device and NewTabNote will try again on its own. '
+    + 'Export JSON saves a copy of your notes now.',
+  // At the check step the export has happened, so the second sentence goes
+  confirmContents: 'Free up some space on this device and NewTabNote will try again on its own.',
+  confirm: EXPORT_NOTICE_TEXT.confirm,
+  export: EXPORT_NOTICE_TEXT.export,
+  exportAgain: EXPORT_NOTICE_TEXT.exportAgain,
+  done: EXPORT_NOTICE_TEXT.done,
+  dismiss: EXPORT_NOTICE_TEXT.dismiss,
+  recordFailed: EXPORT_NOTICE_TEXT.recordFailed,
+});
+
+/**
+ * Whether `record`, the worker's recorded run, says the upgrade stopped short of space
+ * @param {*} record
+ * @returns {boolean}
+ */
+function isSpaceBlocked(record) {
+  return Boolean(record) && typeof record === 'object' && record.status === 'space-blocked';
+}
+
+/**
+ * #47's notice, in the same #export-notice region and form, for a profile whose upgrade
+ * stopped short of space (#17 PR 1b, Q9): the service worker couldn't make the recovery copy
+ * it needs first, so nothing changed, and it tries again on its own. While the upgrade stays
+ * blocked it shows in every new tab, unless Not now or Done put it off in the last 7 days
+ * (`setting_spaceNoticeSnoozedAt` in chrome.storage.local). It wins over #47's notice, and
+ * closes once the worker records another outcome. Export JSON works as #47's does: the
+ * check step follows, with Done. It reads the worker's record and its own put-off, and puts
+ * itself off, through the page's settings port, as #47's notice records its outcome.
+ */
+class SpaceNotice extends ExportNotice {
+  get kind() {
+    return 'space-blocked';
+  }
+
+  /** @returns {NoticeText} */
+  get text() {
+    return SPACE_NOTICE_TEXT;
+  }
+
+  /**
+   * Whether this new tab shows it, which App asks once the tab's storage has opened: the
+   * worker's last run stopped short of space, and nothing put the notice off in the last 7
+   * days. A failed read rejects.
+   * @returns {Promise<boolean>}
+   */
+  async isDue() {
+    // A record a full disk kept from being replaced says nothing once the database is at this
+    // build's version (review R79)
+    if (this.storageState.upgraded()) return false;
+    const stored = await this.settings.workspaceData([UPGRADE_RECORD_SETTING, SPACE_NOTICE_SETTING]);
+    if (!isSpaceBlocked(stored[UPGRADE_RECORD_SETTING])) return false;
+    const snoozedAt = Number(stored[SPACE_NOTICE_SETTING]);
+    if (Number.isFinite(snoozedAt) && snoozedAt > 0 && Date.now() - snoozedAt < SPACE_NOTICE_SNOOZE_MS) return false;
+    return true;
+  }
+
+  /** @returns {string[]} */
+  _contents() {
+    return [SPACE_NOTICE_TEXT.contents];
+  }
+
+  /**
+   * @param {HTMLElement} card
+   * @returns {void}
+   */
+  _confirmContents(card) {
+    const contents = card.querySelector('.export-notice-contents');
+    if (contents) contents.textContent = SPACE_NOTICE_TEXT.confirmContents;
+  }
+
+  /**
+   * It closes when another tab puts it off, or once the worker records another outcome
+   * @param {readonly string[]} keys
+   * @returns {Promise<boolean>}
+   */
+  async _closesOn(keys) {
+    if (keys.includes(UPGRADE_RECORD_SETTING)) {
+      const stored = await this.settings.workspaceDataOr({ [UPGRADE_RECORD_SETTING]: null });
+      if (!isSpaceBlocked(stored[UPGRADE_RECORD_SETTING])) return true;
+    }
+    return keys.includes(SPACE_NOTICE_SETTING);
+  }
+
+  /**
+   * Not now, or Done: put it off for 7 days, in every tab. A choice that fails to save keeps
+   * the notice and says so.
+   * @returns {Promise<void>}
+   */
+  async _decide() {
+    try {
+      // From the kernel clock's now, through the page's settings port
+      await this.settings.snoozeSpaceNotice();
+      this.close();
+    } catch (error) {
+      console.error('Space notice: the choice was not saved', error);
+      Utils.showToast(SPACE_NOTICE_TEXT.recordFailed, 'error');
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  /** @type {any} */ (window).SpaceNotice = SpaceNotice;
 }

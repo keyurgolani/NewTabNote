@@ -896,10 +896,14 @@ describe('BlockEditor saves keep trash and archive state', () => {
 describe('BlockEditor template inserts (#12)', () => {
   it("inserts a template's blocks in the order 1.4.x read them, by id, which R1 keeps", async () => {
     const { env } = await setup();
-    // The template's blocks were dragged around: t1 shows second, t2 first
+    // The template's blocks were dragged around: t1 shows second, t2 first. Their ids have the
+    // form 1.4.x's Utils.generateId gave every block, which begins with when it was made.
     const Storage = env.get('Storage');
     await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
-    await Storage.saveElements([block('t1', 'C', 1, 'second shown'), block('t2', 'C', 0, 'first shown')]);
+    await Storage.saveElements([
+      block('1700000000000-t1aaaaaaa', 'C', 1, 'second shown'),
+      block('1700000005000-t2bbbbbbb', 'C', 0, 'first shown'),
+    ]);
     await Storage.deleteElements(['c1']);
     const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
     await editor.loadNote('A');
@@ -916,6 +920,172 @@ describe('BlockEditor template inserts (#12)', () => {
     assert.deepEqual(inserted, ['second shown', 'first shown']);
     const stored = (await Storage.getElementsByNote('A')).sort((a, b) => a.order - b.order).map((b) => b.content);
     assert.deepEqual(plain(stored).slice(1, 3), ['second shown', 'first shown'], 'and saves them in that order');
+  });
+
+  it('inserts them in the order they were made when legacy and UUID ids mix, as 1.4.x did by id (#17 PR 2a)', async () => {
+    const { env } = await setup();
+    const Storage = env.get('Storage');
+    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    // Two blocks from 1.4.x, whose ids sort by time, then two a 2a build made, whose UUIDs don't:
+    // one typed, and one captured, which has no createdAt and keeps its capture time as order
+    await Storage.saveElements([
+      block('1700000000000-aaaaaaaaa', 'C', 3, 'made first', { createdAt: 1700000000000 }),
+      block('0f2c41aa-0000-4000-8000-000000000003', 'C', 0, 'made third', { createdAt: 1700000002000 }),
+      block('1700000001000-bbbbbbbbb', 'C', 2, 'made second', { createdAt: 1700000001000 }),
+      block('00a1b2c3-0000-4000-8000-000000000004', 'C', 1700000003000, 'captured last', { createdAt: undefined }),
+    ]);
+    await Storage.deleteElements(['c1']);
+    const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
+    await editor.loadNote('A');
+    const blockEl = { dataset: { id: 'a1' }, querySelector: () => ({ textContent: '/template' }) };
+    editor.doc.defaultView.getSelection = () => ({
+      rangeCount: 1,
+      getRangeAt: () => ({ startContainer: { parentElement: { closest: () => blockEl } } }),
+    });
+    await runUntil(env, editor.selectTemplateItem('C'));
+    await runUntil(env, editor.flushSave());
+
+    assert.deepEqual(editor.blocks.slice(1, 5).map((b) => b.content), ['made first', 'made second', 'made third', 'captured last']);
+  });
+
+  /**
+   * "/template" with `templateId` in A's first block, in `editor` or a new one; the text of the
+   * `count` blocks it puts in
+   */
+  async function insertTemplate(env, templateId, count, editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} })) {
+    await editor.loadNote('A');
+    const blockEl = { dataset: { id: 'a1' }, querySelector: () => ({ textContent: '/template' }) };
+    editor.doc.defaultView.getSelection = () => ({
+      rangeCount: 1,
+      getRangeAt: () => ({ startContainer: { parentElement: { closest: () => blockEl } } }),
+    });
+    await runUntil(env, editor.selectTemplateItem(templateId));
+    await runUntil(env, editor.flushSave());
+    return editor.blocks.slice(1, 1 + count).map((b) => b.content);
+  }
+
+  it('puts the copies 1.4.x made from a template after the blocks typed before them, by the time in their ids (#17 PR 2a)', async () => {
+    const { env } = await setup();
+    const Storage = env.get('Storage');
+    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    // Two blocks typed in the template, then another template put in after them. 1.4.x gave each
+    // copy a new id, which begins with when it went in, and kept the createdAt of the block it
+    // copied, from before the typed ones. Both copies went in within one millisecond, where 1.4.x's
+    // id order fell to the random rest of each id: their order breaks that tie.
+    await Storage.saveElements([
+      block('1700000100000-k2m9x0a1b', 'C', 0, 'typed first', { createdAt: 1700000100000 }),
+      block('1700000101000-a0b1c2d3e', 'C', 1, 'typed second', { createdAt: 1700000101000 }),
+      block('1700000200000-zz9y8x7w6', 'C', 2, 'copy put in first', { createdAt: 1700000000000 }),
+      block('1700000200000-aa1b2c3d4', 'C', 3, 'copy put in second', { createdAt: 1700000000500 }),
+    ]);
+    await Storage.deleteElements(['c1']);
+
+    assert.deepEqual(await insertTemplate(env, 'C', 4), ['typed first', 'typed second', 'copy put in first', 'copy put in second']);
+  });
+
+  it('puts UUID captures in the order they were captured, after the editor has saved them (#17 PR 2a)', async () => {
+    const { env } = await setup();
+    const Storage = env.get('Storage');
+    const { captureBlock } = await import('../js/kernel/core/domain/note.js');
+    await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
+    // Two captures a minute apart, as the kernel stores them, whose UUIDs sort the other way
+    const capturedAt = 1761800000000;
+    const first = 'f0000000-0000-4000-8000-000000000001';
+    const second = '00000000-0000-4000-8000-000000000002';
+    await Storage.saveElements([
+      captureBlock({ id: first, noteId: 'C', capture: { type: 'text', content: 'captured first' }, now: capturedAt }),
+      captureBlock({ id: second, noteId: 'C', capture: { type: 'text', content: 'captured second' }, now: capturedAt + 60_000 }),
+    ]);
+    await Storage.deleteElements(['c1']);
+    // The editor loads both at one moment, an hour later, and the second is moved up. The save
+    // gives each block its place as its order, and a createdAt: the one it has, else the load's.
+    const editor = Object.assign(makeEditor(env), { hideTemplateMenu() {}, focusBlock() {} });
+    const PageDate = env.get('Date');
+    const realNow = PageDate.now;
+    PageDate.now = () => capturedAt + 3_600_000;
+    try {
+      await editor.loadNote('C');
+    } finally {
+      PageDate.now = realNow;
+    }
+    editor.moveBlockByDirection(second, -1);
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+    const saved = (await Storage.getElementsByNote('C')).sort((a, b) => a.order - b.order);
+    assert.deepEqual(saved.map((b) => b.content), ['captured second', 'captured first'], 'the save keeps the move');
+
+    assert.deepEqual(await insertTemplate(env, 'C', 2, editor), ['captured first', 'captured second']);
+  });
+});
+
+describe("the search index's and the embeddings' text, in the order a note's blocks were made (#17 PR 2a)", () => {
+  const made = 'made first made second made third';
+
+  /** NotesManager on a note whose blocks' key order is the reverse of the order they were made */
+  async function manager() {
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('N', { name: 'Reading list' })],
+        // Two UUID blocks, the second moved up, then a copy 1.4.x made from a template, which
+        // kept the createdAt of the block it copied
+        elements: [
+          block('ffffffff-0000-4000-8000-000000000001', 'N', 1, 'made first', { createdAt: 1700000001000 }),
+          block('cccccccc-0000-4000-8000-000000000002', 'N', 0, 'made second', { createdAt: 1700000002000 }),
+          block('1700000003000-abcdefghi', 'N', 2, 'made third', { createdAt: 1600000000000 }),
+        ],
+      },
+    });
+    env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/notes-manager.js');
+    const Storage = env.get('Storage');
+    await Storage.init();
+    // The page's document client, which NotesManager reads a note's blocks through
+    await startEditorClient(env);
+    const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+    const notes = new (env.get('NotesManager'))({
+      storage: Storage,
+      domRefs: null,
+      logger: quiet,
+      llm: null,
+      documentClient: env.documentClient,
+    });
+    const active = [await Storage.getNote('N')];
+    notes.noteList = { view: (which) => (which === 'active' ? active : []), settled: async () => {} };
+    return { env, notes };
+  }
+
+  it('indexes UUID blocks and a copy 1.4.x made as 1.4.x did by id, not in their key or note order', async () => {
+    const { notes } = await manager();
+    const sent = [];
+    notes.indexerWorker = { postMessage: (message) => sent.push(plain(message)) };
+    await notes.rebuildSearchIndex();
+    await notes.updateNoteIndex('N');
+
+    // The indexer's own entries from what it was sent, by js/workers/indexer.js in a worker of its own
+    const indexer = createLegacyEnv({ context: 'worker' });
+    indexer.load('js/workers/indexer.js');
+    const answers = [];
+    indexer.global.postMessage = (message) => answers.push(plain(message));
+    for (const message of sent) indexer.global.onmessage({ data: message });
+    assert.deepEqual(
+      answers.map(({ type, data }) => [type, type === 'INDEX_COMPLETE' ? data.map((entry) => entry.content) : data.entry.content]),
+      [['INDEX_COMPLETE', [made]], ['INDEX_UPDATED', made]],
+    );
+  });
+
+  it('embeds them in that order too', async () => {
+    const { env, notes } = await manager();
+    const embedded = [];
+    env.global.Embeddings = { generateEmbedding: async (text) => { embedded.push(text); return [1, 0]; } };
+    let finished = false;
+    const run = notes.updateMissingEmbeddings().finally(() => { finished = true; });
+    // It waits 100 ms after a note
+    for (let i = 0; i < 100 && !finished; i++) {
+      env.clock.tick(100);
+      await settle(2);
+    }
+    await run;
+    assert.deepEqual(embedded, [`Reading list\n${made}`]);
   });
 });
 

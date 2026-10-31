@@ -25,7 +25,7 @@ import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/cat
 import { REMEDIATION_CLASSES } from '../../js/trust/core/vocabulary.js';
 import { placementOf } from '../../js/product/placement.js';
 import { describeRegistryConformance } from './registry-conformance.mjs';
-import { KeyRange, ROOMY, legacyEnv, profileWith, synthesized } from './migration-support.mjs';
+import { KeyRange, ROOMY, legacyEnv, profileWith, run, synthesized } from './migration-support.mjs';
 import { memoryFiles, remediationCenter, runLocks, runOf } from './trust-remediation-support.mjs';
 import { manualClock } from './trust-support.mjs';
 
@@ -61,13 +61,12 @@ describeRegistryConformance('remediation catalog (#20 slice 3)', {
 async function profileCenter(id, { prepare, hooks } = {}) {
   const of = await profileWith(/** @type {any} */ (FIXTURES.get(id)));
   if (prepare) await prepare(of);
+  // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+  // build's version before #17's adapter opens it versioned
+  assert.equal((await run(of)).status, 'migrated');
   const clock = manualClock();
   const locks = runLocks();
-  const adapter = createIndexedDbAdapter({
-    indexedDB: of.real,
-    settings: of.chrome.api.storage.local,
-    locks: /** @type {any} */ (locks),
-  });
+  const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
   await adapter.open();
   const recoveryPoints = createRepairPoints({
     indexedDB: of.real,
@@ -266,6 +265,9 @@ describe('recover-orphans: "Recover N blocks into a new Inbox note" (#20, refine
 
   it('short of space for the point, it changes nothing and says why', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.orphans')));
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+    // build's version before #17's adapter opens it versioned
+    assert.equal((await run(of)).status, 'migrated');
     const before = await legacyEnv.dumpDatabase(of.real);
     const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
     await adapter.open();

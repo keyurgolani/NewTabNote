@@ -95,6 +95,7 @@ function derivedTx(tx) {
     getAllByIndex: (store, index, value) => tx.getAllByIndex(store, index, value),
     getKeysByIndex: (store, index, value) => tx.getKeysByIndex(store, index, value),
     revision: (store, key) => tx.revision(store, key),
+    versions: (store, key) => tx.versions(store, key),
     put: (store, record) => {
       const before = store === 'notes' ? read.get(/** @type {string} */ (record.id)) : undefined;
       if (!before) throw outsideScope();
