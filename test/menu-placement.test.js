@@ -5,7 +5,8 @@
 // the list). It used to clamp its top to innerHeight - 200 when it's about 314 px tall, so a low
 // note's last items, Move to Trash among them, opened below the window. Now each site measures
 // the menu first, opens it above the pointer when it doesn't fit below, and keeps 8 px from
-// every edge. Utils.menuPosition is the arithmetic, and Utils.placeMenu measures and shows.
+// every edge. The folder menus, which opened at the pointer's page position unclamped, are
+// placed the same way. Utils.menuPosition is the arithmetic, and Utils.placeMenu measures and shows.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
