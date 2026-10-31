@@ -273,12 +273,13 @@ class App {
 
   /**
    * Have a reload through the page's loader wait until every open editor, the PiP one included,
-   * has written what it has pending: the reload guard the update notice's Reload waits on (#27
-   * slice 3; the notice is slice 3b's). Nothing without the loader.
+   * has written what it has pending, and not reload when one couldn't: the guard every Reload a
+   * part's failure shows runs first (#27 slice 3b). The flush is quiet, since the Reload's own
+   * line says a failed save. Nothing without the loader.
    * @returns {void}
    */
   guardReloads() {
-    if (this.loader) this.loader.registerReloadGuard(() => this.tabController.saveOpenEditors());
+    if (this.loader) this.loader.registerReloadGuard(() => this.tabController.saveOpenEditors({ quiet: true }));
   }
 
   /**

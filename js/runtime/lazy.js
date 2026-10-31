@@ -25,13 +25,13 @@
  * until its retry runs, as a missing one did before, and a retry called again while one runs
  * answers that one; a chunk's next load tries again.
  *
- * It also keeps the page's reload guards, which reloadAfterGuards waits on before it reloads
- * (App's writes what every open editor has pending), and its extra documents, the
- * Picture-in-Picture editor's, which get each stylesheet a load adds, since they copy the
- * page's only when they open.
- *
- * Three states #27 slice 3b gives words and an element have a seam each here, which shows
- * nothing in slice 3 (seams): loading, updated, and failed.
+ * It also keeps the page's reload guards, and its extra documents, the Picture-in-Picture
+ * editor's, which get each stylesheet a load adds, since they copy the page's only when they open.
+ * reloadAfterGuards reloads only once every guard answers that it saved (App's writes what every
+ * open editor has pending), and answers the failure otherwise; a guard that hasn't answered in
+ * RELOAD_GUARD_MS counts as failed, and no timer reloads over one. reloadNow reloads without them,
+ * for "Reload anyway". Each call site draws its own failure and loading status from the answer it
+ * gets (#27 slice 3b, js/ui/part-state.js), so nothing here draws.
  *
  * It imports nothing, and the bundler gives it a chunk of its own at this path
  * (scripts/build/vite-config.js): the one file the closure check lets build a path at run
@@ -80,21 +80,13 @@
  */
 
 /**
- * The seams of the states #27 slice 3b shows, one per state, which 3b replaces on the page's
- * loader. Each shows nothing in slice 3, where every state lands on what the page did before.
- * @typedef {object} Seams
- * @property {(name: string) => () => void} loading - state 4: a load at a lazy boundary
- *   starts; answers what to call once it settles. 3b: an indeterminate role="status" after 400 ms.
- * @property {(name: string) => void} updated - state 2: a load found the extension updated
- *   under the page. 3b: "NewTabNote was updated. Save and reload.", whose Reload is
- *   reloadAfterGuards.
- * @property {(name: string, failure: Failed) => void} failed - state 3: an optional chunk or
- *   library didn't load, and its call site's own failure path runs. 3b: a labelled failure with
- *   Retry (failure.retry).
+ * What reloadAfterGuards answers: whether it reloaded, which it does only once every guard saved
+ * @typedef {object} GuardedReload
+ * @property {boolean} reloaded
  */
 
-/** How long reloadAfterGuards waits for the guards before it reloads anyway */
-export const RELOAD_GUARD_MS = 2000;
+/** How long reloadAfterGuards waits for a guard's answer before it counts the guard as failed */
+export const RELOAD_GUARD_MS = 10_000;
 
 /**
  * The vendored libraries, by loader name: each file, which this literal names to the closure
@@ -107,13 +99,6 @@ export const LIBRARIES = Object.freeze({
   jszip: Object.freeze({ url: () => chrome.runtime.getURL('js/lib/jszip.min.js'), global: 'JSZip' }),
   transformers: Object.freeze({ url: () => chrome.runtime.getURL('js/lib/transformers.js'), global: 'transformers' }),
 });
-
-/** The seams as slice 3 has them, which every loader starts with */
-export const seams = Object.freeze(/** @type {Seams} */ ({
-  loading: () => () => {},
-  updated: () => {},
-  failed: () => {},
-}));
 
 /**
  * How Chrome says an import()'s file, or one it imports, didn't load, and how Vite's preload of a
@@ -176,11 +161,11 @@ export function createLoader(host) {
 
   const loader = {
     buildId: host.buildId,
-    seams: /** @type {Seams} */ ({ ...seams }),
     loadChunk,
     loadLibrary,
     registerReloadGuard,
     reloadAfterGuards,
+    reloadNow,
     registerExtraDocument,
   };
 
@@ -228,11 +213,18 @@ export function createLoader(host) {
     const loading = settle(name, async () => {
       if (!library) return failed('chunk-missing', again);
       if (host.global[library.global]) return loaded(host.global[library.global]);
+      // A page whose extension context is gone can't build the URL, and the load fails, not throws
+      let url;
+      try {
+        url = library.url();
+      } catch {
+        return failed('chunk-missing', again);
+      }
       // Its path is the same in every build, so a newer build's file would run in this page
       if (isOtherBuild(await buildInfo())) return failed('build-mismatch', again);
-      if (!(await script(library.url()))) {
+      if (!(await script(url))) {
         if (isOtherBuild(await buildInfo())) return failed('build-mismatch', again);
-        if (!(await script(`${library.url()}?r=1`))) return failed('chunk-missing', again);
+        if (!(await script(`${url}?r=1`))) return failed('chunk-missing', again);
       }
       const module = host.global[library.global];
       return module ? loaded(module) : failed('evaluation-failed', again);
@@ -262,23 +254,19 @@ export function createLoader(host) {
   }
 
   /**
-   * Run a load between the loading seam's start and its settle. Then the extra documents get the
-   * stylesheets a load that worked added, or a failure is logged and goes to its state's seam.
+   * Run a load. Then the extra documents get the stylesheets a load that worked added, or the
+   * failure is logged, and the call site draws it from the answer.
    * @param {string} name
    * @param {() => Promise<Result>} run
    * @returns {Promise<Result>}
    */
   async function settle(name, run) {
-    const settled = loader.seams.loading(name);
     const before = stylesheets();
     const result = await run();
-    settled();
     if (result.status === 'loaded') {
       mirror(before);
     } else {
       host.warn(`NewTabNote loader: ${result.reason}`, { buildId: host.buildId, chunk: name, reason: result.reason });
-      if (result.reason === 'build-mismatch') loader.seams.updated(name);
-      else loader.seams.failed(name, result);
     }
     return result;
   }
@@ -340,23 +328,34 @@ export function createLoader(host) {
   }
 
   /**
-   * Reload the page once every reload guard has finished, one that fails included, or once
-   * RELOAD_GUARD_MS have passed, whichever comes first
-   * @returns {Promise<void>}
+   * Reload the page once every reload guard answers true, that it saved. A guard that answers
+   * anything else, throws, or hasn't answered in RELOAD_GUARD_MS has failed: the page stays, and
+   * the answer says it didn't reload, so the caller can say why.
+   * @returns {Promise<GuardedReload>}
    */
   function reloadAfterGuards() {
     return new Promise((resolve) => {
-      let reloaded = false;
-      const finish = () => {
-        if (reloaded) return;
-        reloaded = true;
+      let answered = false;
+      /** @param {boolean} saved */
+      const answer = (saved) => {
+        if (answered) return;
+        answered = true;
         host.clearTimeout(timer);
-        host.reload();
-        resolve();
+        if (saved) host.reload();
+        resolve({ reloaded: saved });
       };
-      const timer = host.setTimeout(finish, RELOAD_GUARD_MS);
-      Promise.allSettled([...guards].map((guard) => Promise.resolve().then(guard))).then(finish);
+      const timer = host.setTimeout(() => answer(false), RELOAD_GUARD_MS);
+      const saving = [...guards].map((guard) => Promise.resolve().then(guard).then((saved) => saved === true, () => false));
+      Promise.all(saving).then((saved) => answer(saved.every(Boolean)));
     });
+  }
+
+  /**
+   * Reload the page now, without the guards: "Reload anyway", after the guarded reload failed
+   * @returns {void}
+   */
+  function reloadNow() {
+    host.reload();
   }
 
   /**
