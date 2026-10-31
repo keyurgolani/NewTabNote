@@ -13,6 +13,7 @@ import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
+import { checkRequest, fetchInit, isOwnSender, loopbackOrigin } from './kernel/composition/api-request.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
@@ -158,8 +159,13 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'API_REQUEST') {
-    console.debug('Background: Received API_REQUEST for', request.url);
+  if (request && request.type === 'API_REQUEST') {
+    // Only this extension's own pages and worker (#21): a web page or another extension
+    // never gets a request made for it
+    if (!isOwnSender(sender, chrome.runtime.id)) {
+      sendResponse({ error: 'request-refused' });
+      return false;
+    }
     handleApiRequest(request)
       .then(response => {
         console.debug('Background: API response status:', response.status, 'ok:', response.ok);
@@ -174,24 +180,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 /**
- * Handle an API request by proxying it via fetch or offscreen document.
+ * The stored Ollama URL's origin when it's loopback http, the one local origin a request may
+ * reach (#21), or null
+ * @returns {Promise<string | null>}
+ */
+async function storedLoopbackOrigin() {
+  try {
+    const stored = await chrome.storage.local.get(['setting_ollamaUrl']);
+    const url = stored && stored.setting_ollamaUrl !== undefined ? stored.setting_ollamaUrl : 'http://localhost:11434';
+    return loopbackOrigin(url);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Handle an API request by proxying it via fetch or the offscreen document, once the policy
+ * took it (js/kernel/composition/api-request.js): a packaged destination, or the Ollama URL's
+ * loopback origin, with Content-Type only
  * @param {{url: string, options: Object}} request - Request details
- * @returns {Promise<{ok: boolean, status: number, data: *}>} Response object
+ * @returns {Promise<{ok: boolean, status: number, data: *} | {error: string}>} Response object
  */
 async function handleApiRequest(request) {
-  const { url, options } = request;
+  const checked = checkRequest(request, { loopback: await storedLoopbackOrigin() });
+  if (!checked.ok) return { error: 'request-refused' };
 
-  console.debug('Background: Making fetch to', url);
+  console.debug('Background: Making fetch to', checked.url);
 
-  // For localhost requests, try to use the offscreen document
-  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+  // The Ollama URL goes through the offscreen document, which checks it again
+  if (checked.loopback) {
     try {
       await ensureOffscreenDocument();
-      // Forward the request to the offscreen document
+      /** @type {{method: string, body?: string}} */
+      const options = { method: checked.method };
+      if (checked.body !== undefined) options.body = checked.body;
       const response = await chrome.runtime.sendMessage({
         type: 'OFFSCREEN_API_REQUEST',
-        url,
-        options
+        url: checked.url,
+        options,
+        loopbackOrigin: new URL(checked.url).origin,
       });
       if (response && !response.error) {
         return response;
@@ -202,18 +229,7 @@ async function handleApiRequest(request) {
   }
 
   try {
-    const fetchOptions = {
-      method: options.method || 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    };
-
-    if (options.body) {
-      fetchOptions.body = options.body;
-    }
-
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(checked.url, fetchInit(checked));
     console.debug('Background: Fetch response status:', response.status);
 
     const contentType = response.headers.get('content-type') || '';

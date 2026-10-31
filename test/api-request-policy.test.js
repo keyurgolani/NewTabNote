@@ -128,7 +128,8 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
  * The worker, its fetches recorded, answering each message as Chrome's onMessage does
  */
 async function worker() {
-  const started = await loadBackground();
+  // URL is a global in every extension context; legacy-env's sandbox leaves it out
+  const started = await loadBackground({ setup: (env) => { env.global.URL = URL; } });
   const env = started.env;
   const fetches = [];
   env.global.fetch = async (url, init) => {
@@ -213,6 +214,7 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
 describe('OFFSCREEN_API_REQUEST in the offscreen document (js/offscreen.js)', () => {
   async function offscreenPage() {
     const env = createLegacyEnv();
+    env.global.URL = URL;
     const opened = [];
     env.global.XMLHttpRequest = class {
       constructor() {
