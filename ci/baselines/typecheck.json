@@ -132,7 +132,7 @@
     },
     "js/controllers/notes-manager.js": {
       "TS2304": {
-        "Cannot find name 'AIResponseUtils'.": 6,
+        "Cannot find name 'AIResponseUtils'.": 3,
         "Cannot find name 'DomRefs'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'confirmDialog'.": 1
@@ -143,7 +143,6 @@
     },
     "js/controllers/settings-controller.js": {
       "TS2304": {
-        "Cannot find name 'AIResponseUtils'.": 3,
         "Cannot find name 'DomRefs'.": 1,
         "Cannot find name 'JSZip'.": 1,
         "Cannot find name 'Logger'.": 1,
