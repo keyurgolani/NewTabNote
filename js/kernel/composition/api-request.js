@@ -6,9 +6,10 @@
  * - only this extension's own senders: its id, and a sender URL on its own origin (an
  *   extension page or the worker), never a web page or another extension; the offscreen
  *   document takes the service worker only (isWorkerSender);
- * - only a URL that `URL` parses to an origin on DESTINATIONS, with a method that row allows,
- *   or the stored Ollama URL's origin when that's `http://localhost` or `http://127.0.0.1`,
- *   on any port; userinfo is refused, and nothing else is local because it says `localhost`;
+ * - only a URL the destination client (destinations.js) takes to a registry row the proxy may
+ *   reach, under its path prefix and with one of its methods, or to the stored Ollama URL's
+ *   origin when that's `http://localhost` or `http://127.0.0.1`, on any port; userinfo is
+ *   refused, and nothing else is local because it says `localhost`;
  * - only `method` and a string `body` in the options, a body only with POST, and under
  *   MAX_BODY_BYTES in UTF-8;
  * - sent with `fetch`, no header but `Content-Type`, no cookies, and `redirect: 'error'`, so
@@ -16,46 +17,21 @@
  *
  * A refused request is final: the page doesn't fetch it itself instead (js/llm.js).
  *
- * DESTINATIONS is the one packaged list both read: every provider endpoint js/llm.js names,
- * and the `legacy` model hosts for GET, each with the issue that removes it
- * (test/api-request-policy.test.js holds llm.js to it). #21 slice 1b moves them into
- * `security/destinations.json`. Loading this module touches no browser API.
+ * The destinations are security/destinations.json's rows the proxy may reach (#21 slice 1b),
+ * and DESTINATIONS lists the remote ones: every provider endpoint js/llm.js names, and the
+ * `legacy` model hosts for GET, each with the issue that removes it. Loading this module
+ * touches no browser API.
  */
+
+import { DESTINATIONS as REGISTRY, destinationFor, queryProblems } from './destinations.js';
 
 /**
- * @typedef {Readonly<{origin: string, methods: readonly string[], kind: 'provider' | 'legacy', removeWhen?: number}>} Destination
+ * A remote destination the proxy may reach, as the registry has it
+ * @typedef {import('./destinations.js').Destination} Destination
  */
-
-const PROVIDER_METHODS = Object.freeze(['GET', 'POST']);
-
-/**
- * @param {string} origin
- * @returns {Destination}
- */
-const provider = origin => Object.freeze({ origin, methods: PROVIDER_METHODS, kind: /** @type {const} */ ('provider') });
 
 /** @type {readonly Destination[]} */
-export const DESTINATIONS = Object.freeze([
-  provider('https://api.openai.com'),
-  provider('https://api.anthropic.com'),
-  provider('https://generativelanguage.googleapis.com'),
-  provider('https://openrouter.ai'),
-  provider('https://api.x.ai'),
-  provider('https://api.deepseek.com'),
-  provider('https://api.mistral.ai'),
-  provider('https://api.groq.com'),
-  provider('https://dashscope-intl.aliyuncs.com'),
-  provider('https://dashscope.aliyuncs.com'),
-  provider('https://api.z.ai'),
-  provider('https://open.bigmodel.cn'),
-  provider('https://api.moonshot.ai'),
-  provider('https://api.moonshot.cn'),
-  provider('https://api.minimax.io'),
-  provider('https://api.minimax.chat'),
-  // The embedding model and its runtime, which 1.4.0 loads; #9's model library replaces them
-  Object.freeze({ origin: 'https://huggingface.co', methods: Object.freeze(['GET']), kind: /** @type {const} */ ('legacy'), removeWhen: 9 }),
-  Object.freeze({ origin: 'https://cdn.jsdelivr.net', methods: Object.freeze(['GET']), kind: /** @type {const} */ ('legacy'), removeWhen: 9 }),
-]);
+export const DESTINATIONS = Object.freeze(REGISTRY.filter(row => row.proxy && row.location === 'remote'));
 
 /** Ollama's URL with nothing stored, as js/llm.js defaults it */
 const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
@@ -196,18 +172,13 @@ export function checkRequest(request, { loopback }) {
   const { body } = given;
   if (body !== undefined && (typeof body !== 'string' || utf8Bytes(body) > MAX_BODY_BYTES)) return { ok: false, code: 'invalid-body' };
   if (body !== undefined && !BODY_METHODS.includes(method.toUpperCase())) return { ok: false, code: 'invalid-body' };
-  const url = parse(raw);
-  if (!url || url.username !== '' || url.password !== '') return { ok: false, code: 'destination-refused' };
   const upper = method.toUpperCase();
-  if (loopback !== null && url.origin === loopback && url.protocol === 'http:') {
-    if (!PROVIDER_METHODS.includes(upper)) return { ok: false, code: 'invalid-method' };
-    return withBody({ ok: true, url: url.href, method: upper, loopback: true }, body);
-  }
-  if (url.protocol !== 'https:') return { ok: false, code: 'destination-refused' };
-  const row = DESTINATIONS.find(destination => destination.origin === url.origin);
-  if (!row) return { ok: false, code: 'destination-refused' };
-  if (!row.methods.includes(upper)) return { ok: false, code: 'invalid-method' };
-  return withBody({ ok: true, url: url.href, method: upper, loopback: false }, body);
+  const found = destinationFor(raw, { method: upper, loopback, reachedBy: 'fetch' });
+  if (!found.ok) return { ok: false, code: found.code };
+  if (!found.row.proxy) return { ok: false, code: 'destination-refused' };
+  // The proxy sends no header of the caller's, so a credential could only ride in the query
+  if (queryProblems(found.url.href).length > 0) return { ok: false, code: 'destination-refused' };
+  return withBody({ ok: true, url: found.url.href, method: upper, loopback: found.row.location === 'loopback' }, body);
 }
 
 /**

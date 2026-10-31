@@ -108,7 +108,8 @@ test('a proxied request follows no redirect, with or without a body', async ({ e
       expect(answer.ok).not.toBe(true);
       expect(answer.data).toBeUndefined();
     }
-    expect(ollama.seen.length).toBeGreaterThan(0);
+    // One request each: the worker takes the offscreen document's refusal of the redirect as final
+    expect(ollama.seen).toHaveLength(2);
     expect(elsewhere.seen).toEqual([]);
 
     await expectNoUncaught(extension, page);

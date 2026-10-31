@@ -206,9 +206,9 @@ async function handleApiRequest(request) {
         options,
         loopbackOrigin: new URL(checked.url).origin,
       });
-      if (response && !response.error) {
-        return response;
-      }
+      // Its answer is final, an error included, so the loopback origin is reached once. The
+      // worker fetches itself only when the document can't be reached or doesn't answer
+      if (response) return response;
     } catch (e) {
       console.debug('Background: Offscreen failed, trying direct fetch:', e.message);
     }
