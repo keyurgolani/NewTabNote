@@ -186,7 +186,8 @@ describe("#68's follow-ups (the fourth delta check)", () => {
       ),
     ]);
     // The receipt lands; the capture incident's write fails, so it's held
-    failNext(1, 'unreadable', { after: 1, writesOnly: true });
+    // The pre-check read and the receipt's write go through, the incident's fails
+    failNext(1, 'unreadable', { after: 2, writesOnly: true });
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
     assert.equal(await storedAt(database, 'capture/capture-failed/-'), undefined);
     assert.notEqual(outcome.kind, 'committed');
@@ -280,14 +281,16 @@ describe("#68's follow-ups (the fourth delta check)", () => {
     const healthy = databaseOn(profile);
     opened.push(healthy);
     const rb = await recordsOn(healthy, profile, { clock, prefix: 'bbbb' });
-    const ra = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock, prefix: 'aaaa' });
-    // A fails a write; B replays it, then a storage check passes in B
+    const a = flaky(profile);
+    const ra = await recordsOn(a.store, profile, { clock, prefix: 'aaaa' });
+    // A fails a write, and (part 3) its next write that lands resolves it
+    a.failNext(1, 'unreadable', { writesOnly: true });
     await ra.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
-    await rb.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
     clock.advance(1000);
-    await rb.records.resolve('storage', []);
+    await ra.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
     assert.equal((await storedAt(healthy, WRITE_FAILED))?.state, 'resolved');
     clock.advance(-5000);
+    a.failNext(1000);
     const failed = await ra.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 1 } });
     assert.equal(failed.recorded, false);
     assert.equal((await at(rb.records, WRITE_FAILED))?.state, 'open');

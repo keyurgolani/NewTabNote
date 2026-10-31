@@ -249,9 +249,9 @@ describe("#68's fourth review round", () => {
     const { records, clock } = await recordsOn(store, profile);
     failNext(1);
     await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
+    // Part 3: the next write that lands resolves this context's write-failed itself
     await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 1 } });
     clock.advance(1000);
-    await records.resolve('storage', []);
     assert.equal((await at(records, WRITE_FAILED))?.state, 'resolved');
     clock.advance(-5000);
     failNext(1);
@@ -277,8 +277,8 @@ describe("#68's fourth review round", () => {
     const { trust } = await useCases(records, clock, [
       provider('index', () => ({ status: 'degraded', faults: [{ faultCode: 'lagging', severity: 'degraded' }] })),
     ]);
-    // The receipt's write goes through, the incident's fails
-    failNext(1, 'unreadable', { after: 1 });
+    // The pre-check read and the receipt's write go through, the incident's fails
+    failNext(1, 'unreadable', { after: 2 });
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
     assert.equal(outcome.kind, 'unavailable');
     assert.equal(/** @type {any} */ (outcome).code, 'not-recorded');
