@@ -34,10 +34,11 @@ export const BLOCK_GROUPS = Object.freeze(['text', 'list', 'structure', 'media']
 
 /**
  * Where block types run: every host #15's kit has (js/kernel/registry/vocabulary.js), spelled
- * out since core can't import the kit. The worker decodes and projects blocks too.
+ * out since core can't import the kit. The worker decodes and projects blocks too, and
+ * recovery.html's root registers them for the block-health query (#20 slice 4b).
  */
 export const BLOCK_HOSTS = Object.freeze(
-  /** @type {const} */ (['moment', 'workspace', 'popup', 'sidepanel', 'background', 'pip']),
+  /** @type {const} */ (['moment', 'workspace', 'popup', 'sidepanel', 'background', 'pip', 'recovery']),
 );
 
 /** The conformance fixture every block contribution declares: its model's examples */

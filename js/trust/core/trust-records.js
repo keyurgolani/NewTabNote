@@ -52,6 +52,9 @@
  *   landed write. Any other context's occurrence keeps it open: this context can't tell
  *   whether that one recovered, since the copy is the only channel between them. One that
  *   fails later reopens it, as any held sighting does.
+ * - A receipt the store won't take stays in this context's memory (`unsaved`), its newest per
+ *   provider, so latestReceipts() still answers what this visit's checks found; the next one
+ *   that lands replaces it. Nothing else reads it, and it's never written.
  * - Nothing outside the records resolves their own two incidents: `records.resolve` skips them
  *   whoever calls it, a check whatever its `looked` says, and no check may observe
  *   `write-failed` (families.js).
@@ -308,6 +311,13 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   /** The copy lock inside this context, for a host without Web Locks */
   /** @type {Promise<unknown>} */
   let localTurn = Promise.resolve();
+  /**
+   * This context's newest receipt per provider that the store wouldn't take: what its checks
+   * found this visit, which latestReceipts() still answers until a later one lands (#115's
+   * review). Never written anywhere, and gone with the context.
+   * @type {Map<string, HealthReceipt>}
+   */
+  const unsaved = new Map();
 
   // ============ Held storage incidents ============
 
@@ -1097,7 +1107,13 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       await pruneReceipts(tx, input.providerId);
       return receipt;
     });
-    if (stored.ok) return { recorded: true, receipt: stored.value };
+    if (stored.ok) {
+      unsaved.delete(input.providerId);
+      return { recorded: true, receipt: stored.value };
+    }
+    // Kept in this context only, so what this visit's checks found still shows
+    const kept = unsaved.get(input.providerId);
+    unsaved.set(input.providerId, { ...stamped, transition: !kept || kept.status !== input.status });
     await failedWrite(errorOf(stored));
     return { recorded: false };
   };
@@ -1206,11 +1222,19 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   /** @returns {Promise<HealthReceipt[]>} every receipt, oldest first */
   const receipts = async () => /** @type {HealthReceipt[]} */ (await readAll('receipts', [])).sort(byTime('verifiedAt'));
 
-  /** @returns {Promise<HealthReceipt[]>} each provider's latest receipt */
+  /**
+   * Each provider's latest receipt: the store's, or the one this context's check made since,
+   * which the store wouldn't take (`unsaved`)
+   * @returns {Promise<HealthReceipt[]>}
+   */
   const latestReceipts = async () => {
     /** @type {Map<string, HealthReceipt>} */
     const latest = new Map();
     for (const receipt of await receipts()) latest.set(receipt.providerId, receipt);
+    for (const [providerId, receipt] of unsaved) {
+      const stored = latest.get(providerId);
+      if (!stored || stored.verifiedAt <= receipt.verifiedAt) latest.set(providerId, copy(receipt));
+    }
     return [...latest.values()];
   };
 

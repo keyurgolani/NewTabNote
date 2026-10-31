@@ -27,7 +27,9 @@ describe('the closure check on the sources the bundler reads', () => {
     const { problems, referenced } = checkClosure(sourcePackage());
     assert.deepEqual(named(problems), []);
     for (const file of ['js/workers/indexer.js', 'js/kernel/composition/workers.js', 'offscreen.html', 'js/offscreen.js', 'popup.html',
-      'css/popup.css', 'css/sidepanel.css', 'icons/icon48.png', 'css/editor.css', 'js/lib/fuse.js', 'js/insights-summary.js']) {
+      'css/popup.css', 'css/sidepanel.css', 'icons/icon48.png', 'css/editor.css', 'js/lib/fuse.js', 'js/insights-summary.js',
+      // recovery.html, through Settings' link to it, and what it loads (#20 slice 4b)
+      'recovery.html', 'js/recovery.js', 'css/recovery.css', 'css/design-tokens.css', 'js/trust/ui/view.js']) {
       assert.ok(referenced.has(file), `${file} isn't named`);
     }
   });
@@ -45,7 +47,7 @@ describe('the closure check on the sources the bundler reads', () => {
     const bundled = Object.keys(CLASSIC_SCRIPTS).filter((file) => CLASSIC_SCRIPTS[file] === 'bundle');
     assert.deepEqual(bundled, ['js/network-guard.js']);
     assert.deepEqual(checkClassicScripts(sourcePackage(), { bundled }), []);
-    assert.deepEqual(checkClassicScripts(sourcePackage()).map(({ code, subject }) => `${code} ${subject}`), Array(4).fill('build/load-mode js/network-guard.js'));
+    assert.deepEqual(checkClassicScripts(sourcePackage()).map(({ code, subject }) => `${code} ${subject}`), Array(5).fill('build/load-mode js/network-guard.js'));
     const file = 'js/insights-summary.js';
     const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     const problems = checkClassicScripts(sourcePackage({ edits: { [file]: `import './utils.js';\n${text}` } }), { bundled });

@@ -19,12 +19,10 @@
 
 import { portOf } from './context.js';
 import { ERROR_CODES } from '../codes.js';
+import { LEGACY_COPY_KEY } from '../ports.js';
 
 /** @typedef {import('../checks.js').CheckResult} CheckResult */
 /** @typedef {import('./context.js').PointSummary} PointSummary */
-
-/** The chrome.storage.local keys 1.4.x keeps a legacy copy under (js/storage.js) */
-export const LEGACY_COPY_KEY = /^(?:auto|recovery)_backup_[0-9]{10,16}$/;
 
 /**
  * How many legacy copies the settings area holds, or null when it can't list its keys without
