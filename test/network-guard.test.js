@@ -72,7 +72,11 @@ function context({ chrome = { runtime: { id: 'test-extension' } }, location = `$
     URL,
     EventTarget,
     Event,
-    setTimeout,
+    // As a page's: called on anything but its own global, it throws
+    setTimeout(fn, ms) {
+      if (this !== scope) throw new TypeError('Illegal invocation');
+      return setTimeout(fn, ms);
+    },
     fetch: async (input, init) => {
       sent.push({ api: 'fetch', input, init });
       return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });

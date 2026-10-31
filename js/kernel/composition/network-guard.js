@@ -153,7 +153,9 @@ export function installGuard(scope, { surface, loopback = () => null, stored = (
   const NativeURL = scope.URL;
   const NativeRequest = scope.Request;
   const NativeEvent = scope.Event;
-  const later = scope.setTimeout;
+  const setTimer = scope.setTimeout;
+  // Called on its own global, as the platform's timers have to be
+  const later = (/** @type {() => void} */ fn) => setTimer.call(scope, fn, 0);
   const request = NativeRequest && NativeRequest.prototype;
   /** @type {Record<string, any>} */
   const read = {
@@ -308,7 +310,7 @@ export function installGuard(scope, { surface, loopback = () => null, stored = (
           // A handler's throw is the handler's
         }
       }
-    }, 0);
+    });
   };
 
   wrap(scope, 'fetch', original => function fetch(/** @type {any} */ input, /** @type {any} */ init) {
