@@ -14,6 +14,7 @@ import { SIGNAL_ID, signalIdOf } from '../../js/kernel/core/intelligence/identit
 import {
   HISTORY_MAX,
   KINDS,
+  LINK_PATTERNS,
   REASON_MAX,
   SOURCES_MAX,
   SUBJECT_KEY_MAX,
@@ -637,6 +638,34 @@ describe('link redaction, round 4 (#71)', () => {
       started = performance.now();
       plainTitle(text);
       assert.ok(performance.now() - started < 50, `redaction on ${unit}`);
+    }
+  });
+});
+
+describe('the raw link patterns (#71 follow-ups)', () => {
+  it('stay linear on 200,000 adversarial characters, without the length check or the source cap', () => {
+    for (const unit of [
+      'a:',
+      'x.y:',
+      'a%:',
+      'a.a/',
+      'a.b/?',
+      'a@a.a/',
+      'a.aa:',
+      'a.',
+      ':@',
+      'a.a/a.',
+      '1.1/',
+      'https:a.a',
+      'a.a/a?',
+    ]) {
+      const text = unit.repeat(Math.ceil(200000 / unit.length)).slice(0, 200000);
+      for (const { pattern, keeps } of LINK_PATTERNS) {
+        const started = performance.now();
+        for (const [match] of text.matchAll(new RegExp(pattern.source, pattern.flags))) keeps(match);
+        const took = performance.now() - started;
+        assert.ok(took < 250, `${JSON.stringify(unit)} took ${took.toFixed(0)} ms on ${pattern.source.slice(0, 40)}`);
+      }
     }
   });
 });

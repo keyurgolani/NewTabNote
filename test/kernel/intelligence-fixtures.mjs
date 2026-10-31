@@ -279,8 +279,11 @@ export const todo = (id, text, checked = false) => ({ id, type: 'todo', content:
  * command completes tasks, and a fake `tasks` producer derives task signals from the kernel's
  * blocks. Every regeneration request and event is recorded.
  * @param {{timeZone?: string, start?: number, producers?: ProducerDescriptor[], recipeVersion?: number,
- *   timers?: import('../../js/kernel/core/ports/runtime.js').Timers, noteCommandTimeoutMs?: number, checkSources?: boolean}} [options]
- *   `checkSources` gives the port `sourceStates`, so an upsert checks the notes and blocks it cites
+ *   timers?: import('../../js/kernel/core/ports/runtime.js').Timers, noteCommandTimeoutMs?: number, checkSources?: boolean,
+ *   portReplay?: boolean}} [options]
+ *   `portReplay: false` makes the note port a plain saveNoteContent one, as production's is until
+ *   #14: no answer of its own for a commandId it has seen, so the kernel fingerprints the whole
+ *   block. `checkSources` gives the port `sourceStates`, so an upsert checks the notes and blocks it cites
  */
 export async function intelligenceWorld({
   timeZone = ZONE,
@@ -290,6 +293,7 @@ export async function intelligenceWorld({
   timers = realTimers,
   noteCommandTimeoutMs = undefined,
   checkSources = false,
+  portReplay = true,
 } = {}) {
   const clock = testClock(start);
   const ids = testIds('cmd');
@@ -352,7 +356,7 @@ export async function intelligenceWorld({
       // A commandId the port has answered gets that answer again, as #14's todo commands, keyed
       // by their own small payload, will; the kernel's saveNoteContent fingerprints the whole
       // block, which a later edit changes
-      const kept = portOutcomes.get(command.commandId);
+      const kept = portReplay ? portOutcomes.get(command.commandId) : undefined;
       if (kept) return kept;
       const read = await readNote(command.noteId);
       const block = read?.blocks.find(candidate => candidate.id === command.blockId);

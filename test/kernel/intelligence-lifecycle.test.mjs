@@ -1240,3 +1240,171 @@ describe('every writer goes through the signal’s queue (#71 round 3)', () => {
     );
   });
 });
+
+describe('#71 follow-ups', () => {
+  const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
+
+  /** @param {Parameters<typeof intelligenceWorld>[0]} [options] */
+  async function taskWorld(options = {}) {
+    const w = await intelligenceWorld(options);
+    await w.addNote('n5', [todo('t1', 'Call vendor'), todo('t2', 'Pay invoice')]);
+    let count = 0;
+    const id = idOf(taskDraft({ noteId: 'n5', blockId: 't1' }));
+    /**
+     * @param {string} type
+     * @param {number} expectedDecisionRevision
+     * @param {Record<string, unknown>} [fields]
+     */
+    const command = (type, expectedDecisionRevision, fields = {}) => ({
+      type: `intelligence.${type}`,
+      commandId: `fu-${++count}`,
+      signalId: id,
+      expectedDecisionRevision,
+      ...fields,
+    });
+    return { w, id, command };
+  }
+
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+
+  it(
+    'runs one re-derive for every hint queued behind a hung producer, so a dismiss waits about one deadline',
+    { timeout: 5000 },
+    async () => {
+      const timers = manualTimers();
+      const { w, command } = await taskWorld({ timers });
+      w.tasks.hold = new Promise(() => {});
+      /** @type {Promise<unknown>[]} */
+      const hints = [];
+      for (let index = 0; index < 4; index += 1) {
+        await w.editBlock('n5', todo('t1', `Call vendor ${index}`));
+        hints.push(w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null }));
+      }
+      await tick();
+      const dismissing = w.intelligence.execute(command('dismiss', 0));
+      await tick();
+      // One deadline: the derive that's running times out, and the hints behind it shared it
+      timers.fireAll();
+      const raced = await Promise.race([
+        dismissing.then(outcome => outcome.kind),
+        tick(100).then(() => 'still-waiting'),
+      ]);
+      assert.equal(raced, 'committed');
+      w.tasks.hold = null;
+      timers.fireAll();
+      await Promise.all(hints);
+    },
+  );
+
+  it('skips a note conflict’s re-derive when the same producer just timed out', { timeout: 5000 }, async () => {
+    const timers = manualTimers();
+    const { w, command } = await taskWorld({ timers });
+    w.tasks.hold = new Promise(() => {});
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    const hint = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+    await tick();
+    const completing = w.intelligence.execute(command('complete', 0));
+    await tick();
+    timers.fireAll();
+    const raced = await Promise.race([completing.then(outcome => outcome.code), tick(100).then(() => 'still-waiting')]);
+    assert.equal(raced, 'note-revision-conflict');
+    w.tasks.hold = null;
+    timers.fireAll();
+    await hint;
+  });
+
+  for (const portReplay of [true, false]) {
+    it(`answers a retry whose note port refuses the resent command as reused (port replay ${portReplay ? 'on' : 'off'}) from the checked that stands`, async () => {
+      const timers = manualTimers();
+      const { w, id, command } = await taskWorld({ timers, portReplay });
+      let release = () => {};
+      const gate = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      let first = true;
+      const slow = w.anotherContext({
+        ...w.noteCommands,
+        async setTodoChecked(note) {
+          if (first) {
+            first = false;
+            await gate;
+          }
+          return w.noteCommands.setTodoChecked(note);
+        },
+      });
+      const complete = command('complete', 0);
+      const pending = slow.execute(complete);
+      await tick();
+      timers.fireAll();
+      assertOutcome(await pending, 'unknown', 'note-command-timeout');
+      release();
+      await tick(20);
+      // An edit between the late write and the retry: the block is still checked
+      await w.editBlock('n5', todo('t1', 'Call the vendor', true));
+      const retry = await slow.execute({ ...complete });
+      assertOutcome(retry, 'committed', 'signal-completed');
+      const read = await stateOf(w, id);
+      assert.equal(read.signal.checked, true);
+      assert.deepEqual(
+        read.decision?.history.map(entry => entry.action),
+        ['complete'],
+      );
+      assert.deepEqual(await slow.execute({ ...complete }), retry);
+    });
+  }
+
+  it('answers a refused resend as a conflict when the checked that stands differs', async () => {
+    const timers = manualTimers();
+    const { w, id, command } = await taskWorld({ timers, portReplay: false });
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let first = true;
+    const slow = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        if (first) {
+          first = false;
+          await gate;
+        }
+        return w.noteCommands.setTodoChecked(note);
+      },
+    });
+    const complete = command('complete', 0);
+    const pending = slow.execute(complete);
+    await tick();
+    timers.fireAll();
+    await pending;
+    release();
+    await tick(20);
+    // The user unchecked it again in the editor
+    await w.editBlock('n5', todo('t1', 'Call vendor', false));
+    const retry = await slow.execute({ ...complete });
+    assertOutcome(retry, 'conflict', 'note-revision-conflict');
+    assert.equal((await stateOf(w, id)).signal.checked, false);
+  });
+
+  it('brings back a task the producer had stopped finding once its block is a todo again', async () => {
+    const { w, id } = await taskWorld();
+    await w.editBlock('n5', { id: 't1', type: 'text', content: 'Call vendor' });
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+    assert.equal((await stateOf(w, id)).signal.freshness.cause, 'not-reproduced');
+    await w.editBlock('n5', todo('t1', 'Call vendor'));
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.freshness.state, 'current');
+    // Deleted anchors stay deleted
+    await w.intelligence.noteChanged({ type: 'block-deleted', noteId: 'n5', blockId: 't1' });
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+    assert.equal((await stateOf(w, id)).signal.freshness.cause, 'anchor-deleted');
+  });
+});
