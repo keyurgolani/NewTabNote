@@ -61,7 +61,7 @@ export function adapterOn(of, options = {}) {
 /**
  * Every record of `store` in the profile's CanvasTabDB, read on a connection of its own, as
  * the adapter keeps them: none when the database lacks the store
- * @param {Profile} of
+ * @param {{real: IDBFactory}} of - a profile, from here or migration-support.mjs
  * @param {string} store
  * @returns {Promise<any[]>}
  */

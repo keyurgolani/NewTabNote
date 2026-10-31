@@ -15,12 +15,14 @@ import {
   UPGRADE_RECORD_KEY,
   createWorkerClient,
 } from '../../js/kernel/composition/background.js';
+import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
+import { recordsOf } from './storage-fixture.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -67,6 +69,29 @@ const recoveryExists = async of =>
 const RUN_BLOCKS = Object.freeze({ withinMs: 10_000, message: "the run's upgrade to be blocked" });
 
 describe("the worker's composition root", () => {
+  it("sweeps the adapter's ledger once its kernel is ready, and not again within a day (#17 PR 2a)", async () => {
+    // v10.basic's ledger rows are from 2025, past the 30 days a row is kept
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v10.basic')));
+    assert.equal((await recordsOf(of, 'operations')).length, 3);
+    const swept = async () => (await recordsOf(of, 'meta')).find(record => record.key === SWEPT_KEY);
+    const worker = createWorkerClient(hostOf(of));
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.migration.done).status, 'current');
+    // The sweep runs behind the kernel, so the test waits on it in real time
+    const deadline = Date.now() + 10_000;
+    while (!(await swept()) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    const record = await swept();
+    assert.equal(typeof record?.sweptAt, 'number');
+    assert.deepEqual(await recordsOf(of, 'operations'), []);
+    // A capture keeps its row, and the next start, within the day, sweeps nothing
+    assert.equal((await capture(worker, 'kept')).kind, 'committed');
+    const again = createWorkerClient(hostOf(of));
+    assert.equal(await again.whenReady(), null);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(await swept(), record);
+    assert.equal((await recordsOf(of, 'operations')).length, 1);
+  });
+
   it('short of space: records it, opens the database as it is, and captures still commit on 8', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
