@@ -613,6 +613,8 @@ describe('background capture on a version-8 database', () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB);
     await startWorker(env);
+    // The worker opens its database on the first event that needs it (#35), here a browser start
+    env.chrome.api.runtime.onStartup.listeners[0]();
     await waitFor(() => env.get('Storage').openState === 'open', { message: 'storage open' });
     // The capture's block write fails: first for a full disk, then for something else
     const Storage = env.get('Storage');

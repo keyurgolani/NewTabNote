@@ -79,10 +79,13 @@ async function drain() {
  * specifiers, and evaluated once, imports first. importScripts() throws, as it does in a
  * module worker. Resolves once the graph has evaluated, so its listeners are registered;
  * rejects with what a module threw while it evaluated, which would stop the real worker.
+ * `rewrite` maps a module's path from the repository root to a function that changes its
+ * source, for a test of a module that throws; each must change a module the graph loads.
  * @param {ReturnType<typeof createLegacyEnv>} env
+ * @param {{rewrite?: Record<string, (source: string) => string>}} [options]
  * @returns {Promise<void>}
  */
-async function startWorker(env) {
+async function startWorker(env, { rewrite = {} } = {}) {
   if (typeof vm.SourceTextModule !== 'function') {
     throw new Error('test/helpers/load-background.js runs the module service worker with vm.SourceTextModule, '
       + 'which needs node --experimental-vm-modules (npm test passes it)');
@@ -96,9 +99,18 @@ async function startWorker(env) {
   env.global.crypto = webcrypto;
 
   const modules = new Map();
+  const rewritten = new Set();
   const moduleFor = file => {
     if (!modules.has(file)) {
-      modules.set(file, new vm.SourceTextModule(fs.readFileSync(file, 'utf8'), {
+      const name = path.relative(ROOT, file).split(path.sep).join('/');
+      let source = fs.readFileSync(file, 'utf8');
+      if (Object.hasOwn(rewrite, name)) {
+        const changed = rewrite[name](source);
+        if (changed === source) throw new Error(`rewrite left ${name} as it was`);
+        source = changed;
+        rewritten.add(name);
+      }
+      modules.set(file, new vm.SourceTextModule(source, {
         context: env.context,
         identifier: pathToFileURL(file).href,
       }));
@@ -112,17 +124,22 @@ async function startWorker(env) {
     }
     return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
   });
+  const unused = Object.keys(rewrite).filter(name => !rewritten.has(name));
+  if (unused.length > 0) throw new Error(`rewrite names modules the worker doesn't load: ${unused.join(', ')}`);
   await worker.evaluate();
 }
 
 /**
- * Start js/background.js on an empty profile and wait until it has opened the database.
- * `mutate`, for the self-tests that check these assertions catch a broken worker, gets the
- * worker's global once it has started, to break something in it. `setup` gets the worker's
- * environment before it starts, to lay out a profile or replace a global, and with
- * `opens: false` a worker whose database didn't open is returned rather than refused, for
- * #20's failure-site tests (test/failure-events.test.js).
- * @param {{mutate?: (worker: any) => void, setup?: (env: any) => Promise<void> | void, opens?: boolean}} [options]
+ * Start js/background.js on an empty profile, as a browser start wakes it, and wait until it
+ * has opened the database. `mutate`, for the self-tests that check these assertions catch a
+ * broken worker, gets the worker's global once it has started, to break something in it.
+ * `setup` gets the worker's environment before it starts, to lay out a profile or replace a
+ * global, and with `opens: false` a worker whose database didn't open is returned rather than
+ * refused, for #20's failure-site tests (test/failure-events.test.js). With `start: false`
+ * the worker is returned as its modules leave it, before any event, for #35's tests of what
+ * starts its coordinator (test/background-coordinator.test.js), and `rewrite` goes to
+ * startWorker, for its test of a coordinator that throws while it's built.
+ * @param {{mutate?: (worker: any) => void, setup?: (env: any) => Promise<void> | void, opens?: boolean, start?: boolean, rewrite?: Record<string, (source: string) => string>}} [options]
  * @returns {Promise<{
  *   tab: {id: number, windowId: number, url: string, title: string},
  *   selection: {text: string, title: string, url: string},
@@ -132,7 +149,7 @@ async function startWorker(env) {
  *   indexedDB: any,
  * }>}
  */
-async function loadBackground({ mutate, setup, opens = true } = {}) {
+async function loadBackground({ mutate, setup, opens = true, start = true, rewrite } = {}) {
   if (fs.existsSync(DEFINE_ALLOWLIST)) {
     throw new Error(`${path.relative(ROOT, DEFINE_ALLOWLIST)} exists: set each of its rows to its release-build value in test/helpers/load-background.js before loading the worker`);
   }
@@ -149,18 +166,34 @@ async function loadBackground({ mutate, setup, opens = true } = {}) {
   };
 
   if (setup) await setup(env);
-  await startWorker(env);
-  // background.js's kernel opens the database and runs startup maintenance as the worker
-  // starts, and captures wait for it. A module's top-level bindings aren't globals, so wait
-  // until the worker is idle, when that has settled, and check it opened the database.
-  await drain();
-  const { openState } = env.global.Storage;
-  if (opens && openState !== 'open') {
-    throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
+  await startWorker(env, { rewrite });
+  const events = eventFakes(env.chrome.api);
+  /**
+   * Fire a chrome.* event at the worker's listeners, as Chrome would, and wait for what they
+   * return. A listener that starts a capture without awaiting it returns first;
+   * readTodaysDailyNote waits for the capture.
+   * @param {string} name
+   * @param {...any} args
+   */
+  const dispatch = async (name, ...args) => {
+    const event = events.get(name);
+    if (!event) throw new Error(`No chrome.* event fake named ${name}`);
+    for (const listener of [...event.listeners]) await listener(...args);
+  };
+  if (start) {
+    // Chrome starts the worker for an event, and its coordinator opens the database on the
+    // first one that needs storage (#35): here a browser start, which creates no menus. A
+    // module's top-level bindings aren't globals, so wait until the worker is idle, when the
+    // open has settled, and check it opened the database.
+    await dispatch('runtime.onStartup');
+    await drain();
+    const { openState } = env.global.Storage;
+    if (opens && openState !== 'open') {
+      throw new Error(`The worker's startup left Storage.openState at '${openState}' on an empty profile`);
+    }
   }
   if (mutate) mutate(env.global);
 
-  const events = eventFakes(env.chrome.api);
   return {
     tab: TAB,
     selection: SELECTION,
@@ -170,16 +203,7 @@ async function loadBackground({ mutate, setup, opens = true } = {}) {
       .map(([name, event]) => [name, event.listeners.length])),
     /** The properties of each chrome.contextMenus.create call, in order */
     contextMenus: () => menus.map(menu => ({ ...menu })),
-    /**
-     * Fire a chrome.* event at the worker's listeners, as Chrome would, and wait for what
-     * they return. A listener that starts a capture without awaiting it returns first;
-     * readTodaysDailyNote waits for the capture.
-     */
-    async dispatch(name, ...args) {
-      const event = events.get(name);
-      if (!event) throw new Error(`No chrome.* event fake named ${name}`);
-      for (const listener of [...event.listeners]) await listener(...args);
-    },
+    dispatch,
     indexedDB: env.indexedDB,
     /** The worker's environment: its console's logs, chrome.* calls, and notifications */
     env,

@@ -51,6 +51,7 @@ const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import
  */
 const COMMAND_SAMPLES = {
   runStartupMaintenance: {},
+  runIntegrityCheck: {},
   createFolder: { folderId: 'f0', name: 'Work', parentId: null },
   createNote: {
     noteId: 'n1',

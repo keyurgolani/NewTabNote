@@ -2,8 +2,9 @@
 // adapter, over the storage its context loaded, with its surface as the caller the policy
 // checks. The new tab's and the worker's open the database versioned and maintain it first,
 // Popup's and Side Panel's open it as it is, and in slice 4a only the worker's watches its
-// connection. Each root takes the storage and settings it would read from its context's
-// globals, here production js/storage.js in test/helpers/legacy-env.js.
+// connection. The worker's maintenance leaves out the integrity check, which it runs when
+// asked (#35 slice 1). Each root takes the storage and settings it would read from its
+// context's globals, here production js/storage.js in test/helpers/legacy-env.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import { createWorkerClient } from '../../js/kernel/composition/background.js';
 import { createNewTabClient, createNewTabLegacyStores } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
-import { closeAll, legacyContext } from './legacy-fixture.mjs';
+import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
@@ -121,6 +122,39 @@ describe('each composition root', () => {
     assert.deepEqual(handled(tab), [true, true]);
     assert.deepEqual(handled(worker), [true, true]);
     closeAll([tab, worker]);
+  });
+
+  it('checks integrity as the new tab starts, and in the worker only when asked, as runIntegrityCheck (#35)', async () => {
+    /** @param {LegacyContext} context */
+    const reported = context =>
+      context.env.logs.filter((/** @type {{args: unknown[]}} */ log) =>
+        String(log.args[0]).includes('Integrity check (read-only) found orphaned records'),
+      ).length;
+    /** A profile whose one block has no note, which the check reports */
+    const withOrphan = async () => {
+      const profile = legacyContext();
+      await legacyEnv.createDatabase(profile.env.indexedDB, {
+        records: { elements: [legacyEnv.block('orphan', 'missing-note', 0)] },
+      });
+      return profile;
+    };
+
+    const tab = await withOrphan();
+    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    assert.equal(reported(tab), 1);
+
+    // The worker's start writes first-run settings only
+    const profile = await withOrphan();
+    const worker = createWorkerClient(hostOf(profile));
+    assert.equal(await worker.whenReady(), null);
+    assert.equal(profile.env.chrome.local.setting_storageInitialized, true);
+    assert.equal(reported(profile), 0);
+    const checked = await worker.execute({ type: 'runIntegrityCheck', commandId: worker.ids.next() });
+    assert.deepEqual(checked.kind === 'committed' && [checked.code, checked.changedIds], ['integrity-checked', []]);
+    assert.equal(reported(profile), 1);
+    const elements = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(profile.env.indexedDB), 'elements');
+    assert.ok(elements.orphan, 'the orphaned block is still there');
+    closeAll([tab, profile]);
   });
 
   it("hands NotesManager, GraphView and SyncService only their own calls on the new tab's Storage", async () => {

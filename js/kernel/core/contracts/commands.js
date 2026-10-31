@@ -50,6 +50,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/set-preferences.js').SetPreferences} SetPreferences */
 /** @typedef {import('./operations/save-workspace-session.js').SaveWorkspaceSession} SaveWorkspaceSession */
 /** @typedef {import('./operations/run-startup-maintenance.js').RunStartupMaintenance} RunStartupMaintenance */
+/** @typedef {import('./operations/run-integrity-check.js').RunIntegrityCheck} RunIntegrityCheck */
 /** @typedef {import('./operations/set-insights-pending.js').SetInsightsPending} SetInsightsPending */
 /** @typedef {import('./operations/record-job-run.js').RecordJobRun} RecordJobRun */
 /** @typedef {import('./operations/save-snapshot.js').SaveSnapshot} SaveSnapshot */
@@ -71,7 +72,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | SaveNoteContent | DeleteBlocks | ApplyDerivedTitle | AttachInsights | CaptureToDailyNote | EnsureDailyNote
  *   | RunBulkAction | CreateFolder | MoveFolder | RenameFolder | SetFolderCollapsed | DeleteFolder | MoveNoteToFolder
  *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
- *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | SetInsightsPending | RecordJobRun
+ *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | RunIntegrityCheck | SetInsightsPending | RecordJobRun
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
  *   | CompleteOnboarding | RecordBackup | RecordExportNotice | CreateAutoBackup | ImportBackup} Command
  */
@@ -148,7 +149,7 @@ const LARGE = MAX_MESSAGE_BYTES;
 /**
  * What each surface could do before the kernel: everything from the new-tab page, a quick
  * note from Popup, nothing from Side Panel, and capture plus startup maintenance from the
- * service worker.
+ * service worker, which #35 gives the integrity check it ran at every start.
  * @type {Readonly<Record<CommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
@@ -191,6 +192,11 @@ export const COMMANDS = Object.freeze({
     maxBytes: LARGE,
   }),
   runStartupMaintenance: entry('run-startup-maintenance', 'system', ['newtab', 'worker-internal'], {
+    entityTypes: [],
+    deadlineMs: MAINTENANCE_DEADLINE_MS,
+  }),
+  // The read-only integrity check, which the service worker runs after an install or an update (#35)
+  runIntegrityCheck: entry('run-integrity-check', 'system', ['worker-internal'], {
     entityTypes: [],
     deadlineMs: MAINTENANCE_DEADLINE_MS,
   }),

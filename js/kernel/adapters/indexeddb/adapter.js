@@ -453,6 +453,8 @@ export function createIndexedDbAdapter({
         else if (effect.kind === 'settings') outcome = commitSettings(work, effect.area, effect.values);
         // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
         else if (effect.kind === 'backup') outcome = Promise.resolve(unavailable('adapter', 'backups-need-legacy-storage', false));
+        // No integrity check here until #17's scan exists (#35 slice 1): it commits and checks nothing
+        else if (effect.kind === 'integrity-check') outcome = Promise.resolve(work.done());
         else outcome = maintain(work);
       } catch (error) {
         outcome = Promise.resolve(unavailableFrom(failureOf(error)));

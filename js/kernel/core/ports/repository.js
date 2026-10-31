@@ -132,10 +132,11 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
  * What a command changes: units over the stores, keys in a settings area, startup
- * maintenance, or a legacy backup task.
+ * maintenance, the read-only integrity check (which changes nothing), or a legacy backup task.
  * @typedef {{kind: 'units', units: Unit[]}
  *   | {kind: 'settings', area: SettingsArea, values: Record<string, unknown>}
  *   | {kind: 'maintenance'}
+ *   | {kind: 'integrity-check'}
  *   | ({kind: 'backup'} & BackupTask)} Effect
  */
 

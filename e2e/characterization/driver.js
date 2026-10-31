@@ -381,10 +381,59 @@ async function captureFunctionName(extension) {
 }
 
 /**
+ * In an extension page: open #13's port, say hello as `surface`, and resolve once the worker
+ * answers, closes the port, or 5 s pass. A worker with no router (1.4.x) closes it.
+ */
+function helloOnPort(surface) {
+  return new Promise(resolve => {
+    const port = chrome.runtime.connect({ name: 'ntn-rpc' });
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      port.disconnect();
+      resolve();
+    };
+    const timer = setTimeout(done, 5000);
+    port.onDisconnect.addListener(() => {
+      // Read, so a port no listener took isn't an unchecked runtime.lastError
+      void chrome.runtime.lastError;
+      done();
+    });
+    port.onMessage.addListener(done);
+    port.postMessage(JSON.stringify({
+      frame: 'hello',
+      protocol: { major: 1, minor: 0 },
+      extensionVersion: chrome.runtime.getManifest().version,
+      surface,
+      sessionId: `driver-${Date.now()}`,
+    }));
+  });
+}
+
+/**
+ * Start the worker's background coordinator the way a page does, with a session on #13's
+ * port: since #35 the worker opens its database on the first event that needs it, not when
+ * it wakes, and one Chrome stopped wakes for the port. The session is the offscreen page's,
+ * which reads and writes nothing, opened in a tab and closed again.
+ */
+async function startCoordinator(extension) {
+  const page = await extension.context.newPage();
+  try {
+    await page.goto(extension.url('offscreen.html'));
+    await page.evaluate(helloOnPort, 'offscreen');
+  } finally {
+    await page.close();
+  }
+}
+
+/**
  * Resolve once a write through the worker's Storage global can't be lost. At 1.4.x the
  * startup Storage.init() ends by deleting blocks whose note it hadn't read yet, so a block
  * written while it runs can vanish. Since #33 that check only reads, and Storage.openState
- * turns 'open' once the database is open, which is enough.
+ * turns 'open' once the database is open, which is enough. Since #35 the database opens on
+ * the first event that needs it, so this starts the coordinator first (startCoordinator).
  *
  * A 1.4.x worker has no openState, so this waits for the startup promise itself.
  * background.js keeps it in a top-level binding that captureToDailyNote awaits first, and
@@ -393,6 +442,7 @@ async function captureFunctionName(extension) {
  * fails asking for an update instead of guessing.
  */
 async function workerStorageSettled(extension) {
+  await startCoordinator(extension);
   if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
     await expect.poll(() => extension.worker.evaluate(() => self.Storage.openState), { timeout: SETTLE_TIMEOUT_MS }).not.toBe('closed');
     const state = await extension.worker.evaluate(() => self.Storage.openState);

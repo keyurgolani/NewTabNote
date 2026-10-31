@@ -5,58 +5,55 @@
  * A module worker (manifest background "type": "module"). Everything it imports runs before
  * the listeners below register, and a throw there stops the worker with no menus or
  * commands, so no module in this graph may throw, or use top-level await, while it loads.
- * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
+ * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations. In this
+ * file every listener registers first, and #35's coordinator is built last, in a try/catch
+ * (test/background-coordinator.test.js lists each listener, and which start it).
  */
 
 // utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
 import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import { coordinatorInstanceId, createCoordinator, unavailableCoordinator } from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 
-/** When the worker started opening the database, for how long a failed open took */
-const openStartedAt = Date.now();
+/** This worker instance's id, which #13's router sends in each welcome (#35) */
+const instanceId = coordinatorInstanceId();
 
 /**
- * The worker's kernel. It opens the database and runs startup maintenance now, as
- * Storage.init() did here, and a capture waits for both.
+ * The background coordinator (#35, js/kernel/composition/coordinator.js), built at the end of
+ * this file, after every listener, so a throw while building it leaves the menus, the commands
+ * and #13's port listener in place. Until then, and for good if building it threw, this
+ * stand-in answers that it can't serve. It opens nothing until an event needs storage: an
+ * install or update, a browser start, a page's port session, or a capture.
  */
-const kernel = createWorkerClient();
+let coordinator = unavailableCoordinator(instanceId);
 
 /**
- * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
- * go to the diagnostic journal and raise their incidents in NewTabNoteTrust, which opens only
- * when the first one happens. Best effort: nothing here changes what the worker does or logs.
+ * The worker's failure events (#20, "Diagnostic journal"), set with the coordinator at the end
+ * of this file: a failed open and a failed capture go to the diagnostic journal and raise their
+ * incidents in NewTabNoteTrust, which opens only when the first one happens. Best effort:
+ * nothing here changes what the worker does or logs.
+ * @type {{event(code: string, fields?: Record<string, unknown>, error?: unknown): void}}
  */
-const failureEvents = createFailureEvents({ surface: 'worker-internal' });
-
-// Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
-// reconcile now, not only at the next failure; with none held this reads one key and opens
-// nothing
-failureEvents.reconcile();
-
-// The worker's storage init: an open that failed is a storage incident now, not only when a
-// capture finds it
-kernel.whenReady().then(
-  failure => {
-    if (!failure) return;
-    failureEvents.event(
-      'storage.open-failed',
-      { subjectId: 'CanvasTabDB', durationMs: Math.max(0, Date.now() - openStartedAt) },
-      failure,
-    );
-  },
-  () => {},
-);
+let failureEvents = { event() {} };
 
 /**
  * #13's router, which takes each port this extension's pages open by its name. It's installed
  * here at the top level, synchronously, so Chrome finds its listener when a port wakes the
- * worker. It serves only the handshake and system.messagingHealth until #35, and it never
- * throws.
+ * worker. Each welcome says what the coordinator can do now, and a page's session starts it.
+ * It never throws.
  */
-installWorkerRouter();
+installWorkerRouter({
+  coordinatorId: instanceId,
+  status: () => coordinator.status(),
+  sessions: {
+    opened: () => {
+      coordinator.start();
+    },
+  },
+});
 
 /**
  * The worker's global. A module's top-level functions aren't globals, so captureToDailyNote
@@ -233,7 +230,7 @@ async function handleApiRequest(request) {
 /**
  * Handle extension installation/update
  */
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   enableSidePanelAction();
 
   // Create context menu items
@@ -248,10 +245,15 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Add selection to today\'s note',
     contexts: ['selection']
   });
+
+  // The menus first, then storage: first-run settings, and after an install or an update the
+  // read-only integrity check (#35)
+  coordinator.installed(details && details.reason);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   enableSidePanelAction();
+  coordinator.start();
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -321,6 +323,8 @@ function notifyCapture(title, message) {
  */
 async function captureToDailyNote(item) {
   try {
+    await coordinator.start();
+    const kernel = coordinator.client();
     const failure = await kernel.whenReady();
     if (failure) {
       const refusal = captureRefusal(failure);
@@ -359,4 +363,24 @@ async function captureToDailyNote(item) {
     notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
     failureEvents.event('capture.failed', {}, error);
   }
+}
+
+// ============ The coordinator ============
+
+// Built last, after every listener above (#35): a throw here leaves them all in place
+try {
+  const events = createFailureEvents({ surface: 'worker-internal' });
+  failureEvents = events;
+  // Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
+  // reconcile now, not only at the next failure; with none held this reads one key and opens
+  // nothing
+  events.reconcile();
+} catch {
+  // The journal is best effort: without it the worker does exactly what it did
+}
+try {
+  coordinator = createCoordinator({ instanceId, makeKernel: () => createWorkerClient(), events: failureEvents });
+} catch (error) {
+  // The stand-in stays, and every capture says it couldn't open the notes
+  console.error("NewTabNote: the background coordinator couldn't be built", error);
 }

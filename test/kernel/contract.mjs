@@ -2243,6 +2243,17 @@ export function runContractSuite(fixture) {
         assert.deepEqual(kept.kind === 'ready' && kept.data, session);
       });
 
+      it("runIntegrityCheck is the service worker's alone, and commits having changed nothing (#35)", async () => {
+        const noteId = await createNote({ name: 'Plan' });
+        const before = await noteOf(noteId);
+        assertRejected(await kernel.execute(cmd('runIntegrityCheck', {})), 'policy', 'not-on-surface');
+        const checked = committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runIntegrityCheck', {})));
+        assert.deepEqual([checked.code, checked.changedIds], ['integrity-checked', []]);
+        assert.deepEqual(await noteOf(noteId), before);
+        // First-run settings are runStartupMaintenance's
+        assert.equal((await kernel.query({ type: 'getPreferences' })).kind, 'empty');
+      });
+
       /**
        * A kernel the way the new-tab and service-worker roots build it: startup maintenance
        * runs once `ready` settles, before any command or query
@@ -3022,6 +3033,7 @@ export function runContractSuite(fixture) {
           'restoreNote',
           'restoreSnapshot',
           'runBulkAction',
+          'runIntegrityCheck',
           'runStartupMaintenance',
           'runTrashCleanup',
           'saveChatHistory',
