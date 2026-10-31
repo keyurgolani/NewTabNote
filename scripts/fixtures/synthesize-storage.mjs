@@ -549,6 +549,39 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
   );
 }
 
+// After every other fixture, so the ids the seed gives them stay the same (#17 PR 3b)
+v8(
+  'v8.evening-daily-notes',
+  "Daily Notes 1.4.x made in Los Angeles: two its ensureDailyNote made in the evening, keyed by the next day's UTC date, a third whose own date two notes a race made at once hold, and one the calendar made ahead of its day.",
+  r => {
+    /**
+     * A Daily Note as 1.4.x's ensureDailyNote or ensureDailyNoteForDate wrote it
+     * @param {string} id
+     * @param {string} day - the local date its name gives, `Mon D`
+     * @param {string} dateStr
+     * @param {number} createdAt
+     */
+    const daily = (id, day, dateStr, createdAt) =>
+      note('v8', id, `Daily Note - ${day}, 2025`, { isDaily: true, dateStr, createdAt, updatedAt: createdAt });
+    const notes = [
+      // 19:00 and 20:00 in Los Angeles, the next day in UTC, which 1.4.x took for today
+      daily('daily-oct-7-evening', 'Oct 7', '2025-10-08', Date.UTC(2025, 9, 8, 2)),
+      daily('daily-oct-8-evening', 'Oct 8', '2025-10-09', Date.UTC(2025, 9, 9, 3)),
+      // Two tabs at once on Oct 10's morning, and that evening's note, keyed by Oct 11
+      daily('daily-oct-10-a', 'Oct 10', '2025-10-10', Date.UTC(2025, 9, 10, 17)),
+      daily('daily-oct-10-b', 'Oct 10', '2025-10-10', Date.UTC(2025, 9, 10, 17, 0, 1)),
+      daily('daily-oct-10-evening', 'Oct 10', '2025-10-11', Date.UTC(2025, 9, 11, 3)),
+      // The calendar's Oct 12, opened on Oct 5
+      daily('daily-oct-12-planned', 'Oct 12', '2025-10-12', Date.UTC(2025, 9, 5, 19)),
+    ];
+    return {
+      ...r,
+      canvases: [...r.canvases, ...notes],
+      elements: [...r.elements, ...notes.map((n, i) => block(`${n.id}-b1`, n.id, 0, `Written on ${n.name}`, { createdAt: n.createdAt + i }))],
+    };
+  },
+);
+
 fs.mkdirSync(OUT, { recursive: true });
 for (const value of fixtures) {
   fs.writeFileSync(path.join(OUT, `${value.header.id}.json`), `${JSON.stringify(value, null, 2)}\n`);
