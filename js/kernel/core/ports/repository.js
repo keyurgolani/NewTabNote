@@ -223,7 +223,8 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   same command sent again runs again. A bulk command keeps only its fingerprint, from its
  *   first recall: the same commandId with another selection is key reuse, even when both are
  *   sent at once, and a resend runs again, so each item that committed or conflicted answers
- *   from its own record and each other item runs again.
+ *   from its own record and each other item runs again. Work that isn't a catalog command,
+ *   such as #20's storage probe, keeps no record, so every run of it runs.
  * @property {boolean} backups
  *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
  *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery

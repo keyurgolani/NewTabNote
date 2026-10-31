@@ -51,7 +51,10 @@ import { failureEvidence, portOf } from './context.js';
  */
 export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
 
-/** The commandId a probe's work carries: neither adapter keeps one (idempotency: false), and a probe isn't a command */
+/**
+ * The commandId a probe's work carries. A probe isn't a catalog command, so no adapter keeps a
+ * record under it: #17's ledger keeps only catalog commands' (#17 PR 2a), and every run runs
+ */
 const PROBE_COMMAND_ID = 'trust-probe';
 
 /**
@@ -129,7 +132,7 @@ const isProbe = (/** @type {unknown} */ record) =>
 /**
  * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction. It
  * changes no entity (`changedIds` is empty), so a commit log that appends one entry per changed
- * entity, as #17's PR 2 will, gets none. A commit that answers without running the unit, or
+ * entity, as #17's has since its PR 2a, gets none. A commit that answers without running the unit, or
  * replays an earlier answer, didn't verify anything, and answers `unknown`.
  * @param {KernelAdapter} adapter
  * @param {StoreName[]} stores
@@ -141,8 +144,8 @@ export async function probeCommit(adapter, stores) {
   /** @type {Work} */
   const work = {
     commandId: PROBE_COMMAND_ID,
-    // A probe isn't a catalog command: nothing reads this beyond an adapter with idempotency,
-    // and neither adapter has it
+    // A probe isn't a catalog command: an adapter with idempotency keeps no record of it, so
+    // nothing reads this
     command: /** @type {any} */ ({ type: 'trust.probe', commandId: PROBE_COMMAND_ID }),
     effect: {
       kind: 'units',
