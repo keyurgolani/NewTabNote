@@ -124,7 +124,8 @@ class LLMService {
     })) {
       stored[key] = await Storage.getSetting(key, fallback);
     }
-    this.savedKey = stored.llmApiKey;
+    // A saved key that isn't a string is no key
+    this.savedKey = typeof stored.llmApiKey === 'string' ? stored.llmApiKey : '';
     this.keyProvider = stored.llmApiKeyProvider;
     // 1.4.x saved one key with no provider: it belongs to the provider its prefix names, or
     // else to the provider in use now; with none in use, it waits for one
