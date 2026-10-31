@@ -84,6 +84,14 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     }
   });
 
+  it("reads the stored Ollama URL's loopback origin per request, Ollama's default with none stored, and null when the read fails", async () => {
+    const settings = (stored) => ({ get: async (keys) => (assert.deepEqual(keys, ['setting_ollamaUrl']), stored) });
+    assert.equal(await policy.storedLoopbackOrigin(settings({})), 'http://localhost:11434');
+    assert.equal(await policy.storedLoopbackOrigin(settings({ setting_ollamaUrl: 'http://127.0.0.1:8080' })), 'http://127.0.0.1:8080');
+    assert.equal(await policy.storedLoopbackOrigin(settings({ setting_ollamaUrl: 'http://192.168.1.5:11434' })), null);
+    assert.equal(await policy.storedLoopbackOrigin({ get: async () => { throw new Error('read failed'); } }), null);
+  });
+
   it('refuses a method outside the list, a body that is not a string or is too large, and any option but method and body', () => {
     const check = (options) => policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options }, { loopback: null }).ok;
     assert.equal(check({ method: 'GET' }), true);

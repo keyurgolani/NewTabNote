@@ -40,9 +40,6 @@
     "js/background.js": {
       "TS2304": {
         "Cannot find name 'chrome'.": 21
-      },
-      "TS2353": {
-        "Object literal may only specify known properties, and 'error' does not exist in type '{ ok: boolean; status: number; data: any; }'.": 1
       }
     },
     "js/blocks.js": {
@@ -298,7 +295,7 @@
       "TS2339": {
         "Property 'LLM' does not exist on type 'Window & typeof globalThis'.": 1,
         "Property 'error' does not exist on type '{ ok: boolean; status: number; data: any; }'.": 1,
-        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 5,
+        "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 2,
         "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4
       }
     },

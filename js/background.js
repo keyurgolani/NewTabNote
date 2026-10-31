@@ -13,7 +13,7 @@ import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
-import { checkRequest, fetchInit, isOwnSender, loopbackOrigin } from './kernel/composition/api-request.js';
+import { checkRequest, fetchInit, isOwnSender, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
@@ -162,13 +162,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.type === 'API_REQUEST') {
     // Only this extension's own pages and worker (#21): a web page or another extension
     // never gets a request made for it
-    if (!isOwnSender(sender, chrome.runtime.id)) {
+    if (!isOwnSender(sender)) {
       sendResponse({ error: 'request-refused' });
       return false;
     }
     handleApiRequest(request)
       .then(response => {
-        console.debug('Background: API response status:', response.status, 'ok:', response.ok);
+        if ('error' in response) console.debug('Background: API request failed:', response.error);
+        else console.debug('Background: API response status:', response.status, 'ok:', response.ok);
         sendResponse(response);
       })
       .catch(error => {
@@ -178,21 +179,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
-
-/**
- * The stored Ollama URL's origin when it's loopback http, the one local origin a request may
- * reach (#21), or null
- * @returns {Promise<string | null>}
- */
-async function storedLoopbackOrigin() {
-  try {
-    const stored = await chrome.storage.local.get(['setting_ollamaUrl']);
-    const url = stored && stored.setting_ollamaUrl !== undefined ? stored.setting_ollamaUrl : 'http://localhost:11434';
-    return loopbackOrigin(url);
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Handle an API request by proxying it via fetch or the offscreen document, once the policy

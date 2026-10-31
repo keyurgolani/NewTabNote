@@ -11,7 +11,7 @@ import { checkRequest, isOwnSender, loopbackOrigin } from './kernel/composition/
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.type === 'OFFSCREEN_API_REQUEST') {
-    if (!isOwnSender(sender, chrome.runtime.id)) {
+    if (!isOwnSender(sender)) {
       sendResponse({ error: 'request-refused' });
       return false;
     }

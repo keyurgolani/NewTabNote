@@ -178,7 +178,7 @@
     {
       "file": "js/llm.js",
       "rule": "Storage",
-      "count": 9,
+      "count": 8,
       "owner": 11,
       "removeWhen": "#11 moves provider settings, keys, and requests behind its provider registry; #21 reviews the key rows",
       "verify": "npm run check:boundaries"
