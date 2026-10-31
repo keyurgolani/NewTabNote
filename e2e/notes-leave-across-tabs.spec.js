@@ -109,7 +109,7 @@ test('after Replace all in another new tab, this one stays on its note, and typi
 });
 
 for (const [what, act] of [
-  ['when another new tab empties trash', (used) => confirmIn(used, 'Empty Trash', used.evaluate(() => app.emptyTrash()))],
+  ['when another new tab empties trash', (used) => confirmIn(used, 'Empty Trash', used.evaluate(() => app.sidebarController.emptyTrash()))],
   ['when another new tab deletes it for good', (used, ids) => confirmIn(used, 'Delete Permanently', used.evaluate(id => app.permanentlyDeleteNoteById(id), ids.Alpha))],
 ]) {
   test(`a note deleted ${what} stays on screen in this one, and typing there shows the notice and keeps the text`, async ({ extension }) => {

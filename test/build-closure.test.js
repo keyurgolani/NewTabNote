@@ -28,17 +28,16 @@ describe('the closure check on the package the build lists describe', () => {
     }
   });
 
-  it('would have caught the indexer: without it in JS_FILES, both new Worker() calls name a missing file', () => {
+  it('would have caught the indexer: without it in JS_FILES, the new Worker() call names a missing file', () => {
     const jsFiles = build.JS_FILES.filter((file) => file !== 'js/workers/indexer.js');
     assert.equal(jsFiles.length, build.JS_FILES.length - 1, 'JS_FILES ships the indexer');
     const { problems } = checkClosure(sourcePackage({ jsFiles }));
     assert.deepEqual(problems.map(({ code, subject }) => `${code} ${subject}`), [
       'closure/missing js/workers/indexer.js',
-      'closure/missing js/workers/indexer.js',
     ]);
+    // NotesManager's is the one call left; App's unreachable copy went in #12 slice 7a
     const named = problems.map(({ message }) => message.replace(/ at \d+:\d+/, '')).sort();
     assert.deepEqual(named, [
-      "new Worker() in js/app.js, but the package doesn't have it",
       "new Worker() in js/controllers/notes-manager.js, but the package doesn't have it",
     ]);
   });

@@ -128,12 +128,14 @@ describe('one note list per new tab', () => {
     assert.deepEqual(ids(active), ['A', 'B', 'C', 'D']);
     for (const reader of [sidebar, analytics, app]) {
       assert.equal(reader.notes, active, `${reader.constructor.name}: the same frozen list, not a copy`);
-      assert.equal(reader.folders, noteList.folders());
     }
+    // App reads only the active and archived lists; the trash, templates, folders, and search
+    // entries are the sidebar's and analytics' (#12 slice 7a)
+    for (const reader of [sidebar, analytics]) assert.equal(reader.folders, noteList.folders());
     assert.equal(sidebar.archivedNotes, app.archivedNotes);
-    assert.equal(sidebar.trashedNotes, app.trashedNotes);
-    assert.equal(sidebar.templates, app.templates);
-    assert.equal(app.searchIndexByNoteId.get('A'), noteList.searchEntry('A'));
+    assert.equal(sidebar.trashedNotes, noteList.view('trashed'));
+    assert.equal(sidebar.templates, noteList.view('templates'));
+    assert.equal(sidebar.searchIndexByNoteId.get('A'), noteList.searchEntry('A'));
     assert.deepEqual(plain(palette.getCommandPaletteNotes().map((n) => [n.id, n.badges])), [
       ['A', []], ['B', []], ['C', []], ['D', []], ['R', ['Archived']],
     ]);
@@ -328,10 +330,10 @@ describe('one note list per new tab', () => {
     assert.ok(!shown.includes('A') && !shown.includes('B'), 'trashed notes leave the palette');
     assert.deepEqual(shown.sort(), ['C', 'D', 'R']);
     assert.deepEqual(ids(app.notes), ['D']);
-    assert.deepEqual(ids(app.trashedNotes).sort(), ['A', 'B', 'T']);
+    assert.deepEqual(ids(noteList.view('trashed')).sort(), ['A', 'B', 'T']);
     assert.deepEqual(
       [count(env, 'notes-count'), count(env, 'archive-count'), count(env, 'trash-count')],
-      [app.notes.length, app.archivedNotes.length, app.trashedNotes.length],
+      [app.notes.length, app.archivedNotes.length, noteList.view('trashed').length],
     );
     assert.deepEqual(ids(app.notes), ids(await Storage.getAllNotes()));
   });

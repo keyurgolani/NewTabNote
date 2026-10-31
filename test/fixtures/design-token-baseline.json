@@ -41,8 +41,7 @@
       "alias-use": 14
     },
     "js/app.js": {
-      "color-literal": 2,
-      "style-attribute": 3
+      "color-literal": 1
     },
     "js/controllers/ai-chat-controller.js": {
       "style-attribute": 3,

@@ -28,8 +28,8 @@ function inside(position, size, viewport) {
 }
 
 /**
- * A stand-in for the new tab's note menu and its buttons: enough of an element for the two
- * showNoteContextMenu sites, which clone the select button, toggle classes, and set styles. The
+ * A stand-in for the new tab's note menu and its buttons: enough of an element for
+ * showNoteContextMenu, which clones the select button, toggles classes, and sets styles. The
  * menu lays out at `size` once it's shown, hidden only by visibility, and 0 by 0 while
  * display: none (its `hidden` class), as a browser would.
  */
@@ -113,7 +113,9 @@ describe('Utils.menuPosition', () => {
   });
 });
 
-describe("the note menu's two sites place it after measuring it", () => {
+// The sidebar's sites are the menus' only ones: App's copies, used only without a sidebar
+// controller, went with the rest of its unreachable code in #12 slice 7a
+describe("the note menu's site places it after measuring it", () => {
   for (const { site, files, open } of [
     {
       site: 'SidebarController.showNoteContextMenu',
@@ -123,14 +125,6 @@ describe("the note menu's two sites place it after measuring it", () => {
         const sidebar = new SidebarController({ storage: {}, settings: {}, domRefs: {}, logger: { warn() {} } });
         sidebar._noteList = { view: () => [{ id: 'N', pinned: false }] };
         sidebar.showNoteContextMenu(event, 'N', 'notes');
-      },
-    },
-    {
-      site: 'App.showNoteContextMenu, without a sidebar controller',
-      files: ['js/core/storage-error.js', 'js/storage.js', 'js/app.js'],
-      open: (env, event) => {
-        const App = env.get('App');
-        App.prototype.showNoteContextMenu.call({ sidebarController: null }, event, 'N', 'notes');
       },
     },
   ]) {
@@ -205,7 +199,7 @@ function folderDocument(size) {
   };
 }
 
-describe("the folder menu's two sites place it after measuring it", () => {
+describe("the folder menu's site places it after measuring it", () => {
   for (const { site, files, open } of [
     {
       site: 'SidebarController.showFolderContextMenu',
@@ -215,11 +209,6 @@ describe("the folder menu's two sites place it after measuring it", () => {
         const sidebar = new SidebarController({ storage: {}, settings: {}, domRefs: {}, logger: { warn() {} } });
         return sidebar.showFolderContextMenu(event, { id: 'F', name: 'Folder' });
       },
-    },
-    {
-      site: 'App.showFolderContextMenu, without a sidebar controller',
-      files: ['js/core/storage-error.js', 'js/storage.js', 'js/app.js'],
-      open: (env, event) => env.get('App').prototype.showFolderContextMenu.call({ sidebarController: null }, event, { id: 'F', name: 'Folder' }),
     },
   ]) {
     it(`${site}: a low folder's menu opens above the pointer, and one near the right edge comes in from it`, async () => {
