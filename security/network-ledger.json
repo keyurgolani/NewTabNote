@@ -345,6 +345,16 @@
       "owner": 19,
       "removeWhen": "#19's sync engine deletes this file",
       "note": "The user's WebDAV server, which no row lists yet: today's CSP reaches only localhost, and a user row needs a later slice's gesture"
+    },
+    {
+      "file": "js/runtime/lazy.js",
+      "function": "fetchJson",
+      "count": 1,
+      "credential": "none",
+      "destinations": [],
+      "owner": 27,
+      "removeWhen": "Stays: it reads this extension's own build-info.json, which no destination row needs",
+      "note": "The loader's check that the page's code and the package are the same build (#27 slice 3)"
     }
   ],
   "proxies": [
