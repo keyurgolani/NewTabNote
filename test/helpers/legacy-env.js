@@ -403,6 +403,11 @@ class FakeWindowTarget {
   fire(type, event = {}) {
     return (this.listeners[type] || []).slice().map((fn) => fn({ type, ...event }));
   }
+  /** As window.dispatchEvent: the event itself to each listener of its type, such as App's ntn:app-error */
+  dispatchEvent(event) {
+    (this.listeners[event.type] || []).slice().forEach((fn) => fn(event));
+    return true;
+  }
 }
 
 // ─── navigator.locks stub ───
@@ -722,6 +727,8 @@ function createLegacyEnv(options = {}) {
     // pagehide and other window listeners go to windowTarget so tests can fire them.
     sandbox.addEventListener = (type, fn) => windowTarget.addEventListener(type, fn);
     sandbox.removeEventListener = (type, fn) => windowTarget.removeEventListener(type, fn);
+    sandbox.dispatchEvent = (event) => windowTarget.dispatchEvent(event);
+    sandbox.CustomEvent = CustomEvent;
   }
 
   const loaded = [];

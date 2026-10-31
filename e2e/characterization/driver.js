@@ -838,6 +838,7 @@ module.exports = {
   clickBlock,
   rightPaneBlocks,
   clickRightPaneBlock,
+  recordToasts,
   importBackup,
   openPopup,
   addQuickNote,

@@ -7,7 +7,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkClosure, checkPreloads, checkClassicScripts, resolve, staticAssets, STATIC_ASSETS } = require('../scripts/build/closure.js');
+const { checkClosure, checkPreloads, checkClassicScripts, resolve, staticAssets, packagedChunks, STATIC_ASSETS } = require('../scripts/build/closure.js');
 const { sourcePackage, packageOf } = require('./helpers/source-package.js');
 
 const NO_ASSETS = { files: new Set(), directories: [] };
@@ -138,6 +138,35 @@ describe('the closure check on a package laid out as the bundler writes one', ()
       'js/workers/helper.js': '',
     });
     assert.deepEqual(checkClosure(pkg, { staticAssets: NO_ASSETS, vendored: new Set() }).problems, []);
+  });
+
+  it("lets the loader alone build its retry's path at run time, and follows the libraries it names (#27 slice 3)", () => {
+    const loader = 'export const r=e=>import(chrome.runtime.getURL(e)+"?r=1");export const f=()=>chrome.runtime.getURL("js/lib/fuse.js");';
+    const page = '<script type="module" crossorigin src="/assets/newtab-A1.js"></script><link rel="modulepreload" crossorigin href="/assets/host-B2.js">'
+      + '<link rel="modulepreload" crossorigin href="/js/runtime/lazy.js"><link rel="stylesheet" crossorigin href="/assets/newtab-C3.css">';
+    const entry = `import"../js/runtime/lazy.js";${files['assets/newtab-A1.js']}`;
+    const pkg = bundled({ 'newtab.html': page, 'assets/newtab-A1.js': entry, 'js/runtime/lazy.js': loader });
+    const { problems, referenced } = checkClosure(pkg, options);
+    assert.deepEqual(found(problems), []);
+    assert.ok(referenced.has('js/lib/fuse.js'), 'the loader names Fuse.js, which no page loads');
+    assert.deepEqual(checkPreloads(pkg), []);
+    // The same code in any other file builds paths the check can't follow
+    const elsewhere = bundled({ 'newtab.html': page, 'assets/newtab-A1.js': `${entry}${loader.replace(/export const /g, 'const ')}`, 'js/runtime/lazy.js': loader });
+    assert.deepEqual(found(checkClosure(elsewhere, options).problems).map((line) => line.replace(/:\d+:\d+$/, '')), [
+      'closure/non-literal assets/newtab-A1.js', 'closure/non-literal assets/newtab-A1.js',
+    ]);
+  });
+
+  it("requires each file build-info.json's chunks names, which the loader's retry imports, read from the file or handed from the bundle", () => {
+    const info = JSON.stringify({ buildId: 'b', chunks: { newtab: 'assets/newtab-A1.js', workspace: 'assets/gone-F6.js' } });
+    const assets = { files: new Set(['build-info.json']), directories: [] };
+    assert.deepEqual(found(checkClosure(bundled({ 'build-info.json': info }), { ...options, staticAssets: assets }).problems), ['closure/missing assets/gone-F6.js']);
+    // The build checks before it writes build-info.json, so it hands the bundle's
+    assert.deepEqual(found(checkClosure(bundled(), { ...options, chunks: { workspace: 'assets/gone-F6.js' } }).problems), ['closure/missing assets/gone-F6.js']);
+    assert.deepEqual(checkClosure(bundled(), { ...options, chunks: { trust: 'assets/trust-E5.js' } }).problems, []);
+    assert.match(checkClosure(bundled(), { ...options, chunks: { workspace: 'assets/gone-F6.js' } }).problems[0].message, /^build-info\.json names it as chunks\.workspace, the file the loader's retry imports/);
+    // One that doesn't parse is npm run package's to report
+    assert.deepEqual(packagedChunks(packageOf({ 'build-info.json': '{' })), {});
   });
 
   it('fails a page that doesn\'t preload a chunk its module scripts import, or preloads one they don\'t', () => {
