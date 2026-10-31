@@ -47,7 +47,7 @@ import { createTrustDatabase } from '../adapters/indexeddb/trust.js';
 import { ERROR_CODES, EXCEPTION_NAMES } from '../../trust/core/codes.js';
 import { EVENT_CODES, isEventCode } from '../../trust/core/event-codes.js';
 import { SETTINGS_KEYS } from '../../trust/core/ports.js';
-import { OPEN_FAILED_KEY, RETRY_OPEN_MS } from '../../trust/core/trust-records.js';
+import { COPY_READ_MS, OPEN_FAILED_KEY, RETRY_OPEN_MS } from '../../trust/core/trust-records.js';
 import { createDiagnosticJournal } from '../../trust/core/journal.js';
 import { createTrustRecords } from '../../trust/core/trust-records.js';
 
@@ -247,6 +247,32 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   };
 
   /**
+   * `work`, or a rejection once COPY_READ_MS pass when the host has timers: the context's
+   * events run one at a time, so a chrome.storage.local call that never answers mustn't hold
+   * the rest
+   * @template T
+   * @param {Promise<T>} work
+   * @returns {Promise<T>}
+   */
+  const settled = work => {
+    const { timers = null } = hostOnce();
+    if (!timers) return work;
+    return new Promise((resolve, reject) => {
+      const handle = timers.set(() => reject(new Error('chrome.storage.local did not answer')), COPY_READ_MS);
+      work.then(
+        value => {
+          timers.clear(handle);
+          resolve(value);
+        },
+        error => {
+          timers.clear(handle);
+          reject(error);
+        },
+      );
+    });
+  };
+
+  /**
    * What `trust.openSites` holds, `{failure code: {incident key: occurrences}}`; nothing when
    * it can't be read, or holds anything else
    * @returns {Promise<Record<string, Record<string, number>>>}
@@ -254,7 +280,7 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   const marked = async () => {
     try {
       const key = SETTINGS_KEYS.openSites;
-      return openSitesOf((await hostOnce().settings.get([key]))[key]);
+      return openSitesOf((await settled(hostOnce().settings.get([key])))[key]);
     } catch {
       return {};
     }
@@ -279,7 +305,7 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
         entry[key] = /** @type {number} */ (occurrences);
         now[site] = entry;
       }
-      await hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: now });
+      await settled(hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: now }));
     } catch {
       // A lost mark errs toward an incident left open
     }
@@ -355,14 +381,19 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
     },
 
     reconcile() {
-      return enqueue(async () => {
+      // Outside the events' queue: it only opens the records, which orders nothing, so a read
+      // that's slow to answer holds up no event
+      const done = (async () => {
         const key = SETTINGS_KEYS.lastStorageIncident;
         const { settings, clock } = hostOnce();
-        const copy = (await settings.get([key]))[key];
+        const copy = (await settled(settings.get([key])))[key];
         if (!reconcileDue(copy, clock.now())) return;
         // Opening replays the copy and applies the records' own rules
         await ready();
-      });
+      })().catch(() => {});
+      pending.add(done);
+      done.then(() => pending.delete(done));
+      return done;
     },
 
     async rejected() {

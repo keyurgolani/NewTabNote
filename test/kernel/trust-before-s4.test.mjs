@@ -282,7 +282,8 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
     await page.events.reconcile();
     await page.events.flush();
     assert.equal(page.loads(), 1);
-    assert.deepEqual(page.heard, ['indexer.started', 'reconcile']);
+    // The reconcile runs beside the page's queue, so its order against the event isn't fixed
+    assert.deepEqual([...page.heard].sort(), ['indexer.started', 'reconcile']);
   });
 
   it("names the same success codes and settings keys as the trust code, which it can't import", async () => {
@@ -293,6 +294,7 @@ describe('the new tab at a success (js/kernel/composition/lazy-failure-events.js
     const records = await import('../../js/trust/core/trust-records.js');
     assert.equal(lazy.OPEN_FAILED_KEY, records.OPEN_FAILED_KEY);
     assert.equal(lazy.RETRY_OPEN_MS, records.RETRY_OPEN_MS);
+    assert.equal(lazy.READ_WITHIN_MS, records.COPY_READ_MS);
     const registered = Object.fromEntries(
       Object.entries(EVENT_CODES)
         .filter(([, entry]) => /** @type {any} */ (entry).resolves)

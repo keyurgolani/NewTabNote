@@ -34,6 +34,9 @@ export const COPY_KEY = 'trust.lastStorageIncident';
 export const OPEN_FAILED_KEY = 'storage/open-failed/NewTabNoteTrust';
 export const RETRY_OPEN_MS = 30_000;
 
+/** How long a read of chrome.storage.local may take before it counts as unanswered (COPY_READ_MS) */
+export const READ_WITHIN_MS = 2_000;
+
 /**
  * chrome.storage.local's answer for `keys`, or none when there's no chrome.storage
  * @param {string[]} keys
@@ -78,15 +81,17 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
   };
 
   /**
-   * Runs `work` after every event before it on this page, and tracks it until it settles
+   * Runs `work` after every event before it on this page (unless `queued` is false), and
+   * tracks it until it settles
    * @param {() => Promise<unknown>} work
+   * @param {{queued?: boolean}} [options]
    */
-  const track = work => {
-    const done = queue.then(work).then(
+  const track = (work, { queued = true } = {}) => {
+    const done = (queued ? queue.then(work) : Promise.resolve().then(work)).then(
       () => {},
       () => {},
     );
-    queue = done;
+    if (queued) queue = done;
     pending.add(done);
     done.then(() => pending.delete(done));
     return done;
@@ -97,10 +102,18 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
    * @param {string} key
    */
   const readKey = async key => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let handle;
     try {
-      return (await read([key]))[key];
+      // The page's events run one at a time, so a read that never answers mustn't hold the rest
+      const late = new Promise(resolve => {
+        handle = setTimeout(() => resolve({}), READ_WITHIN_MS);
+      });
+      return /** @type {Record<string, unknown>} */ (await Promise.race([read([key]), late]))[key];
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(handle);
     }
   };
 
@@ -130,19 +143,23 @@ export function lazyFailureEvents({ surface, load = () => import('./trust.js'), 
     },
 
     reconcile() {
-      return track(async () => {
-        const copy = await readKey(COPY_KEY);
-        const entries = copy && typeof copy === 'object' ? /** @type {{entries?: unknown}} */ (copy).entries : null;
-        if (!Array.isArray(entries) || entries.length === 0) return undefined;
-        // A context failed to open NewTabNoteTrust just now: likely still broken
-        const now = Date.now();
-        const recent = entries.some(
-          entry =>
-            entry && entry.key === OPEN_FAILED_KEY && typeof entry.at === 'number' && now - entry.at < RETRY_OPEN_MS,
-        );
-        if (recent) return undefined;
-        return ready().then(loaded => loaded.reconcile());
-      });
+      // Outside the page's queue: it only opens the records, so a slow read holds up no event
+      return track(
+        async () => {
+          const copy = await readKey(COPY_KEY);
+          const entries = copy && typeof copy === 'object' ? /** @type {{entries?: unknown}} */ (copy).entries : null;
+          if (!Array.isArray(entries) || entries.length === 0) return undefined;
+          // A context failed to open NewTabNoteTrust just now: likely still broken
+          const now = Date.now();
+          const recent = entries.some(
+            entry =>
+              entry && entry.key === OPEN_FAILED_KEY && typeof entry.at === 'number' && now - entry.at < RETRY_OPEN_MS,
+          );
+          if (recent) return undefined;
+          return ready().then(loaded => loaded.reconcile());
+        },
+        { queued: false },
+      );
     },
 
     async flush() {
