@@ -525,6 +525,82 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
     assert.deepEqual(await writtenIn(of), before);
   });
 
+  it('Daily opened every morning and evening in 1.4.x: each date opens the note named for it, today opens fresh, the first evening note stays under the next day as a duplicate, and nothing is lost', async () => {
+    // Oct 27's morning note, then each evening's, which 1.4.x filed under the next day's UTC date
+    // and opened again the next morning
+    const CHAIN = /** @type {const} */ ([
+      ['chain-oct-27', 'Oct 27', '2025-10-27', Date.UTC(2025, 9, 27, 16)],
+      ['chain-oct-27-evening', 'Oct 27', '2025-10-28', Date.UTC(2025, 9, 28, 3)],
+      ['chain-oct-28-evening', 'Oct 28', '2025-10-29', Date.UTC(2025, 9, 29, 2)],
+      ['chain-oct-29-evening', 'Oct 29', '2025-10-30', Date.UTC(2025, 9, 30, 2)],
+    ]);
+    const of = await profileWith(BASIC);
+    const db = await done(of.real.open('CanvasTabDB'));
+    const tx = db.transaction(['canvases', 'elements'], 'readwrite');
+    for (const [id, day, dateStr, createdAt] of CHAIN) {
+      const name = `Daily Note - ${day}, 2025`;
+      tx.objectStore('canvases').put(legacyNote(id, { name, isDaily: true, dateStr, createdAt, updatedAt: createdAt }));
+      // What its evening wrote, and the next morning, when 1.4.x opened it again
+      for (const [order, content] of ['Evening', 'Next morning'].entries()) {
+        tx.objectStore('elements').put({ id: `${id}-${order}`, canvasId: id, type: 'text', content, order, createdAt });
+      }
+    }
+    await committed(tx);
+    db.close();
+    assert.equal((await run(of)).status, 'migrated');
+    const kept = async () => ({
+      names: Object.fromEntries(Object.values(await notesIn(of)).map(note => [note.id, note.name])),
+      blocks: recordsIn(await dump(of), 'CanvasTabDB', 'elements').map(({ value }) => value),
+    });
+    const before = await kept();
+    assert.equal((await transform(of, { clock: inLA })).status, 'transformed');
+
+    // Nothing is lost: every note is still there with its name, and every block is as it was
+    assert.deepEqual(await kept(), before);
+    const after = await notesIn(of);
+    assert.deepEqual(
+      CHAIN.map(([id]) => [id, after[id].dailyKey, after[id].dateStr, after[id].dailyDuplicateOf]),
+      [
+        ['chain-oct-27', '2025-10-27', '2025-10-27', null],
+        // Its own date is held, so it stays under the next day, where 1.4.x showed it, as the
+        // duplicate of the note named for that day, which moved there (the one exception to Q7)
+        ['chain-oct-27-evening', '2025-10-28', '2025-10-28', 'chain-oct-28-evening'],
+        ['chain-oct-28-evening', '2025-10-28', '2025-10-28', null],
+        ['chain-oct-29-evening', '2025-10-29', '2025-10-29', null],
+      ],
+    );
+
+    // Oct 30 at 6:30 PM in Los Angeles
+    const onOct30 = { now: () => Date.UTC(2025, 9, 31, 1, 30), zone: () => 'America/Los_Angeles' };
+    await withCommands(
+      of,
+      async (send, kernel) => {
+        // Each date opens the note named for it
+        for (const [dateStr, id] of [
+          ['2025-10-27', 'chain-oct-27'],
+          ['2025-10-28', 'chain-oct-28-evening'],
+          ['2025-10-29', 'chain-oct-29-evening'],
+        ]) {
+          const found = await kernel.query({ type: 'findDailyNote', dateStr });
+          assert.equal(found.kind === 'ready' && found.data.note.id, id, dateStr);
+        }
+        // Today's opens fresh: a new note, named for today
+        const made = await send({ type: 'ensureDailyNote', noteId: 'chain-today', at: onOct30.now() });
+        assert.deepEqual([made.code, made.changedIds], ['daily-note-created', ['chain-today']]);
+        const today = await kernel.query({ type: 'findDailyNote', dateStr: '2025-10-30' });
+        assert.deepEqual(today.kind === 'ready' && [today.data.note.id, today.data.note.name], [
+          'chain-today',
+          'Daily Note - Oct 30, 2025',
+        ]);
+        // And the duplicate stays in the list
+        const listed = await kernel.query({ type: 'listNotes', view: 'active' });
+        const ids = listed.kind === 'ready' ? listed.data.map(note => note.id) : [];
+        for (const [id] of CHAIN) assert.ok(ids.includes(id), id);
+      },
+      onOct30,
+    );
+  });
+
   it('takes a date back from a Daily Note made after the one that holds it, whose entry the index had, which becomes its duplicate', async () => {
     const of = await evening();
     // A Daily Note the kernel made for Oct 10 at 11, with its entry, after the race's two
