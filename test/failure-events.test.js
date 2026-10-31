@@ -899,3 +899,41 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
     assert.equal(reconciled, 1);
   });
 });
+
+describe("the background coordinator's start (js/kernel/composition/coordinator.js, #35)", () => {
+  /** A worker instance's coordinator on `makeKernel`, started, with failure events over `host` */
+  async function coordinatorOver(host, makeKernel) {
+    const { createCoordinator } = await import('../js/kernel/composition/coordinator.js');
+    const events = trust.createFailureEvents({ surface: 'worker-internal', host: () => host });
+    const coordinator = createCoordinator({ instanceId: crypto.randomUUID(), makeKernel, events, report: () => {} });
+    await coordinator.start();
+    await events.flush();
+    return coordinator;
+  }
+
+  it("a kernel the worker can't build is coordinator.start-failed and its incident, and the next start that opens resolves it", async () => {
+    const host = trustHost();
+    const unbuilt = await coordinatorOver(host, () => {
+      throw canaryError('TypeError');
+    });
+    assert.deepEqual(unbuilt.status(), { status: 'degraded', reason: 'coordinator-unavailable' });
+    let seen = await inspect(host.indexedDB, host.settings.items);
+    assert.deepEqual(incidentsOf(seen.incidents), [['coordinator', 'start-failed', null, 'capture-risk', 1]]);
+    assert.deepEqual(failures(seen.events), [['coordinator.start-failed', { exception: 'TypeError', surface: 'worker-internal' }]]);
+
+    // The next worker instance builds its kernel, and it opens
+    const kernel = {
+      execute: async () => ({ kind: 'committed', code: 'test', changedIds: [] }),
+      query: async () => ({ kind: 'empty', asOf: 0 }),
+      subscribe: () => () => {},
+      whenReady: async () => null,
+      ids: { next: () => crypto.randomUUID() },
+    };
+    const started = await coordinatorOver(host, () => kernel);
+    assert.deepEqual(started.status(), { status: 'ready' });
+    seen = await inspect(host.indexedDB, host.settings.items);
+    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['coordinator/start-failed/-', 'resolved']]);
+    assert.deepEqual(failures(seen.events).map(([code]) => code), ['coordinator.start-failed', 'coordinator.started']);
+    assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+  });
+});

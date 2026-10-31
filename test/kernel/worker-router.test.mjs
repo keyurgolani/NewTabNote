@@ -1,6 +1,7 @@
 // The worker's router (composition/background.js), which js/background.js installs at its top
-// level (#13, "Topology"): a page's port reaches it on the Chrome fake, and it serves only the
-// handshake and system.messagingHealth until #35 adds its handlers. Installing it never
+// level (#13, "Topology"): a page's port reaches it on the Chrome fake, and it serves the
+// handshake, system.messagingHealth, and the system.coordinatorHealth handler #35's
+// coordinator gives it, and nothing else until #35 adds the kernel's. Installing it never
 // throws, since a throw while the worker evaluates would stop every listener it registers.
 
 import { describe, it } from 'node:test';
@@ -8,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { PORT_NAME } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { installWorkerRouter } from '../../js/kernel/composition/background.js';
+import { coordinatorHandlers } from '../../js/kernel/composition/coordinator.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
 import { createChromeFake } from './chrome-fake.mjs';
@@ -129,6 +131,40 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(opened, [
       { surface: 'popup', sessionId: 's1' },
       { surface: 'popup', sessionId: 's2' },
+    ]);
+  });
+
+  it("answers system.coordinatorHealth from the coordinator's handler (#35)", async () => {
+    const fake = createChromeFake();
+    const health = {
+      status: 'ready',
+      coordinatorId: 'coordinator-1',
+      startedAt: 7,
+      commands: [],
+      oldestOrphanedEntryAt: null,
+    };
+    fake.worker.install(chrome => {
+      installWorkerRouter({
+        runtime: chrome.runtime,
+        coordinatorId: 'coordinator-1',
+        handlers: coordinatorHandlers(() => /** @type {any} */ ({ health: () => health })),
+      });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', { type: 'system.coordinatorHealth' }, soon())));
+    await settle();
+    await settle();
+    const response = frames.find(frame => frame.frame === 'response');
+    assert.deepEqual(response && [response.requestId, response.result.kind, response.result.data], [
+      'r1',
+      'ready',
+      health,
     ]);
   });
 

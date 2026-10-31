@@ -156,6 +156,7 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
       'remote-ai': [],
       'local-inference': ['load-failed'],
       index: ['lagging', 'stalled'],
+      coordinator: ['start-failed', 'unreachable'],
       messaging: ['unreachable'],
       contributions: ['contribution-unavailable'],
       'block-types': ['contribution-unavailable'],

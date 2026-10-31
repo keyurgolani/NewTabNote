@@ -14,7 +14,12 @@
 import './utils.js';
 import './storage.js';
 import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
-import { coordinatorInstanceId, createCoordinator, unavailableCoordinator } from './kernel/composition/coordinator.js';
+import {
+  coordinatorHandlers,
+  coordinatorInstanceId,
+  createCoordinator,
+  unavailableCoordinator,
+} from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
 
@@ -42,8 +47,8 @@ let failureEvents = { event() {} };
 /**
  * #13's router, which takes each port this extension's pages open by its name. It's installed
  * here at the top level, synchronously, so Chrome finds its listener when a port wakes the
- * worker. Each welcome says what the coordinator can do now, and a page's session starts it.
- * It never throws.
+ * worker. Each welcome says what the coordinator can do now, a page's session starts it, and
+ * system.coordinatorHealth asks it. It never throws.
  */
 installWorkerRouter({
   coordinatorId: instanceId,
@@ -53,6 +58,7 @@ installWorkerRouter({
       coordinator.start();
     },
   },
+  handlers: coordinatorHandlers(() => coordinator),
 });
 
 /**
@@ -381,6 +387,7 @@ try {
 try {
   coordinator = createCoordinator({ instanceId, makeKernel: () => createWorkerClient(), events: failureEvents });
 } catch (error) {
-  // The stand-in stays, and every capture says it couldn't open the notes
+  // The stand-in stays, every capture says it couldn't open the notes, and #20 hears why
   console.error("NewTabNote: the background coordinator couldn't be built", error);
+  failureEvents.event('coordinator.start-failed', {}, error);
 }

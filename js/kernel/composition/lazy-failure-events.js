@@ -25,6 +25,7 @@ export const SUCCESS_SITES = Object.freeze({
   'capture.committed': 'capture.failed',
   'backup.auto-succeeded': 'backup.auto-failed',
   'indexer.started': 'indexer.start-failed',
+  'coordinator.started': 'coordinator.start-failed',
 });
 
 /** js/trust/core/ports.js's SETTINGS_KEYS.openSites and .lastStorageIncident */
