@@ -15,12 +15,12 @@ const THIS_VERSION = 10;
 
 const TAB = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
 
-/** Send the worker a runtime message as a page would, and resolve its answer */
-function message(env, request) {
+/** Send the worker a runtime message as a page would (from `sender`), and resolve its answer */
+function message(env, request, sender = {}) {
   return new Promise((resolve) => {
     let answered = false;
     for (const listener of env.chrome.api.runtime.onMessage.listeners) {
-      const keepsChannel = listener(request, {}, (response) => {
+      const keepsChannel = listener(request, sender, (response) => {
         answered = true;
         resolve(plain(response));
       });
@@ -42,6 +42,17 @@ describe('the worker upgrades the database and answers the pages that wait on it
     assert.ok(Object.keys(dump.stores).includes('meta') && Object.keys(dump.stores).includes('migrations'));
     // A second ask on the same worker answers at once, the same way
     assert.deepEqual(await message(env, { type: 'storage.migrate' }), { status: 'migrated' });
+  });
+
+  it("answers this extension's storage.purge with the sweep's status, and nothing from anyone else (#17 PR 2b)", async () => {
+    const env = createLegacyEnv({ context: 'worker' });
+    await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
+    await startWorker(env);
+    assert.deepEqual(await message(env, { type: 'storage.migrate' }), { status: 'migrated' });
+    const self = { id: env.chrome.api.runtime.id };
+    assert.deepEqual(await message(env, { type: 'storage.purge' }, self), { status: 'nothing' });
+    assert.equal(await message(env, { type: 'storage.purge' }, { id: 'another-extension' }), undefined);
+    assert.equal(await message(env, { type: 'storage.purge' }), undefined);
   });
 
   it('while an older page blocks the upgrade, a capture says Not captured and why, and saves nothing; then captures save', async () => {

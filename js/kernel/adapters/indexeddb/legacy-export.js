@@ -26,7 +26,14 @@
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
-import { DEFAULT_LIMITS, POINTS_LOCK, listPoints, openRecovery, readPointStore, verifyPoint } from './recovery-points.js';
+import {
+  DEFAULT_LIMITS,
+  POINTS_LOCK,
+  listPoints,
+  openRecovery,
+  readPointStore,
+  verifyPoint,
+} from './recovery-points.js';
 
 /** How deep a value is searched for a Blob, as Storage searches it */
 const MAX_DEPTH = 32;

@@ -11,7 +11,8 @@ import { webcrypto } from 'node:crypto';
 
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
-import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
+import { PURGE_MESSAGE, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
+import { createNewTabClient, withPurgeWake } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
@@ -181,5 +182,87 @@ describe('each composition root', () => {
       'version-too-new',
     ]);
     closeAll([tab]);
+  });
+});
+
+describe("the new tab's wake of the worker's purge (#17 PR 2b)", () => {
+  it('wakes the worker after each command that deleted something for good, and after nothing else', async () => {
+    const tab = legacyContext();
+    /** @type {string[]} */
+    const wakes = [];
+    const newtab = withPurgeWake(createNewTabClient(hostOf(tab)), () => wakes.push('wake'));
+    assert.equal(await newtab.whenReady(), null);
+    /**
+     * @param {Record<string, unknown>} fields
+     * @returns {Promise<any>}
+     */
+    const send = fields => newtab.execute(/** @type {any} */ ({ commandId: newtab.ids.next(), ...fields }));
+    /** @param {Record<string, unknown>} [fields] */
+    const make = async (fields = {}) => {
+      const noteId = newtab.ids.next();
+      assert.equal((await send({ type: 'createNote', noteId, ...fields })).kind, 'committed');
+      return noteId;
+    };
+    const kept = await make({
+      name: 'Kept',
+      blocks: [{ id: newtab.ids.next(), type: 'text', content: 'Milk', order: 0 }],
+    });
+    const deleted = await make({
+      name: 'Deleted',
+      blocks: [{ id: newtab.ids.next(), type: 'text', content: 'Eggs', order: 0 }],
+    });
+    const empty = await make();
+    const steps = [
+      // A trash, an archive, a rename, and a refused delete delete nothing
+      [{ type: 'trashNote', noteId: deleted }, 0],
+      [{ type: 'archiveNote', noteId: kept }, 0],
+      [{ type: 'renameNote', noteId: kept, name: 'Still kept' }, 0],
+      [{ type: 'deleteNotePermanently', noteId: kept }, 0],
+      // A permanent delete, and a trash of an empty untitled note, which deletes it
+      [{ type: 'deleteNotePermanently', noteId: deleted }, 1],
+      [{ type: 'trashNote', noteId: empty }, 1],
+      // Empty trash and trash retention with nothing to delete, then a folder's delete
+      [{ type: 'emptyTrash' }, 0],
+      [{ type: 'runTrashCleanup' }, 0],
+      [{ type: 'createFolder', folderId: 'f1', name: 'Folder', parentId: null }, 0],
+      [{ type: 'deleteFolder', folderId: 'f1' }, 1],
+    ];
+    for (const [fields, wanted] of steps) {
+      const before = wakes.length;
+      await send(/** @type {Record<string, unknown>} */ (fields));
+      assert.equal(wakes.length - before, wanted, JSON.stringify(fields));
+    }
+    // A bulk delete wakes it once, when any item deleted
+    await send({ type: 'unarchiveNote', noteId: kept });
+    await send({ type: 'trashNote', noteId: kept });
+    const before = wakes.length;
+    const bulk = await send({ type: 'runBulkAction', action: 'delete', noteIds: [kept] });
+    assert.equal(bulk.kind, 'bulk');
+    assert.equal(wakes.length - before, 1);
+    closeAll([tab]);
+  });
+
+  it("sends storage.purge and nothing else, and a worker that can't be reached changes nothing", async () => {
+    /** @type {unknown[]} */
+    const sent = [];
+    wakeWorkerToPurge({
+      runtime: {
+        sendMessage: async message => {
+          sent.push(message);
+          throw new Error('no worker');
+        },
+      },
+    });
+    wakeWorkerToPurge({ runtime: undefined });
+    wakeWorkerToPurge({
+      runtime: {
+        sendMessage: () => {
+          throw new Error('not now');
+        },
+      },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sent, [{ type: PURGE_MESSAGE }]);
+    assert.equal(PURGE_MESSAGE, 'storage.purge');
   });
 });
