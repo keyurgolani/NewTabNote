@@ -1,0 +1,4111 @@
+{
+  "format": "ntn-perf-baseline/2",
+  "about": "#27 slice 4a: 1.4.0 against itself and against next, interleaved in one run of npm run perf:probe on ref-desktop, and the budget numbers proposed from it for the owner to approve. Not a budget file: slice 4b writes build/budgets.json with the approved numbers. docs/performance/baseline-1.4.0.md explains each number.",
+  "reference": {
+    "label": "1.4.0",
+    "packageDigest": "50d8ddc57945dc129ddabda2304f45b9354db79eff608017da49d5b845ab554d",
+    "about": "SHA-256 over the 1.4.0 package's files, sorted by path (perf-probe.js packageDigest): the frozen package every gate run measures as its reference, twice a round. --baseline refuses a run whose first or second package isn't this one."
+  },
+  "fixtureDigests": {
+    "typical": "7060d7b19e9357c5c1778d401f04d3c409abe55ed632e2bf09d01735ca7b2cc9",
+    "maximal": "7eac2192becb6faff4bf074e10e935a3fe040cb58f97b360c682ad93c4092431",
+    "first-run": null
+  },
+  "machine": {
+    "beside": "the other machine-lock slot held by another stream's run (ntn27s2-r6) for the whole probe; the lock has no exclusive mode before 2026-11-02 08:00",
+    "loadMean": 32.1,
+    "loadMax": 50.9
+  },
+  "analysis": {
+    "note": "next's ratio on each profile, three ways: against the first 1.4.0 copy, the second, and the mean of both in the same round, with the last's resampled 95% band (10,000 seeded draws)",
+    "typical": {
+      "againstFirst": 1.104,
+      "againstSecond": 1.07,
+      "againstBoth": 1.077,
+      "againstBothBand": [
+        1.036,
+        1.105
+      ]
+    },
+    "maximal": {
+      "againstFirst": 1.032,
+      "againstSecond": 1.017,
+      "againstBoth": 1.022,
+      "againstBothBand": [
+        0.994,
+        1.051
+      ]
+    },
+    "first-run": {
+      "againstFirst": 1.033,
+      "againstSecond": 1.037,
+      "againstBoth": 1.026,
+      "againstBothBand": [
+        0.967,
+        1.069
+      ]
+    }
+  },
+  "report": {
+    "format": "ntn-perf-probe/2",
+    "measuredAt": "2026-10-31T10:54:48.766Z",
+    "environment": {
+      "node": "v24.18.0",
+      "platform": "darwin 27.2.0 arm64",
+      "cpu": "Apple M5 Pro",
+      "cores": 18,
+      "memoryGiB": 48
+    },
+    "packages": [
+      {
+        "label": "1.4.0",
+        "version": "1.4.0",
+        "name": "NewTabNote: AI-Powered Block Editor & Note-Taking",
+        "bytes": {
+          "newtab": {
+            "file": "newtab.html",
+            "html": {
+              "raw": 66918,
+              "gzip": 10268,
+              "files": 1
+            },
+            "js": {
+              "raw": 1690721,
+              "gzip": 437321,
+              "files": 46
+            },
+            "css": {
+              "raw": 95385,
+              "gzip": 17350,
+              "files": 3
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 1853024,
+              "gzip": 464939,
+              "files": 50
+            },
+            "modules": 42,
+            "classicScripts": 4,
+            "dynamicImports": 0,
+            "missing": [
+              "js/workers/indexer.js"
+            ],
+            "files": [
+              {
+                "file": "css/editor.css",
+                "type": "css",
+                "raw": 76111,
+                "gzip": 13293
+              },
+              {
+                "file": "css/premium-chat.css",
+                "type": "css",
+                "raw": 17012,
+                "gzip": 3239
+              },
+              {
+                "file": "css/stats.css",
+                "type": "css",
+                "raw": 2262,
+                "gzip": 818
+              },
+              {
+                "file": "js/ai-prompt-templates.js",
+                "type": "js",
+                "raw": 2568,
+                "gzip": 1058
+              },
+              {
+                "file": "js/ai-response-utils.js",
+                "type": "js",
+                "raw": 5541,
+                "gzip": 1991
+              },
+              {
+                "file": "js/analytics.js",
+                "type": "js",
+                "raw": 1901,
+                "gzip": 834
+              },
+              {
+                "file": "js/app.js",
+                "type": "js",
+                "raw": 126019,
+                "gzip": 27258
+              },
+              {
+                "file": "js/block-placeholders.js",
+                "type": "js",
+                "raw": 303,
+                "gzip": 241
+              },
+              {
+                "file": "js/blocks.js",
+                "type": "js",
+                "raw": 12698,
+                "gzip": 3613
+              },
+              {
+                "file": "js/chat-ui-components.js",
+                "type": "js",
+                "raw": 10412,
+                "gzip": 2833
+              },
+              {
+                "file": "js/command-palette-utils.js",
+                "type": "js",
+                "raw": 2242,
+                "gzip": 1065
+              },
+              {
+                "file": "js/controllers/ai-chat-controller.js",
+                "type": "js",
+                "raw": 62179,
+                "gzip": 14848
+              },
+              {
+                "file": "js/controllers/analytics-controller.js",
+                "type": "js",
+                "raw": 3794,
+                "gzip": 1333
+              },
+              {
+                "file": "js/controllers/export-import-service.js",
+                "type": "js",
+                "raw": 1793,
+                "gzip": 453
+              },
+              {
+                "file": "js/controllers/notes-manager.js",
+                "type": "js",
+                "raw": 21310,
+                "gzip": 5492
+              },
+              {
+                "file": "js/controllers/settings-controller.js",
+                "type": "js",
+                "raw": 17684,
+                "gzip": 4653
+              },
+              {
+                "file": "js/controllers/shortcuts-manager.js",
+                "type": "js",
+                "raw": 10168,
+                "gzip": 2900
+              },
+              {
+                "file": "js/controllers/sidebar-controller.js",
+                "type": "js",
+                "raw": 29990,
+                "gzip": 6921
+              },
+              {
+                "file": "js/controllers/tab-controller.js",
+                "type": "js",
+                "raw": 10304,
+                "gzip": 2737
+              },
+              {
+                "file": "js/controllers/theme-builder-controller.js",
+                "type": "js",
+                "raw": 3002,
+                "gzip": 1107
+              },
+              {
+                "file": "js/core/dom-refs.js",
+                "type": "js",
+                "raw": 3889,
+                "gzip": 1323
+              },
+              {
+                "file": "js/core/event-bus.js",
+                "type": "js",
+                "raw": 393,
+                "gzip": 237
+              },
+              {
+                "file": "js/core/logger.js",
+                "type": "js",
+                "raw": 1102,
+                "gzip": 562
+              },
+              {
+                "file": "js/core/storage-error.js",
+                "type": "js",
+                "raw": 326,
+                "gzip": 212
+              },
+              {
+                "file": "js/editor.js",
+                "type": "js",
+                "raw": 71082,
+                "gzip": 17056
+              },
+              {
+                "file": "js/embeddings.js",
+                "type": "js",
+                "raw": 1041,
+                "gzip": 552
+              },
+              {
+                "file": "js/image-compression.js",
+                "type": "js",
+                "raw": 374,
+                "gzip": 269
+              },
+              {
+                "file": "js/lib/chart.js",
+                "type": "js",
+                "raw": 203141,
+                "gzip": 68974
+              },
+              {
+                "file": "js/lib/fuse.js",
+                "type": "js",
+                "raw": 16818,
+                "gzip": 6356
+              },
+              {
+                "file": "js/lib/jszip.min.js",
+                "type": "js",
+                "raw": 94459,
+                "gzip": 27804
+              },
+              {
+                "file": "js/lib/transformers.js",
+                "type": "js",
+                "raw": 850004,
+                "gzip": 197415
+              },
+              {
+                "file": "js/llm.js",
+                "type": "js",
+                "raw": 33560,
+                "gzip": 8104
+              },
+              {
+                "file": "js/main.js",
+                "type": "js",
+                "raw": 1268,
+                "gzip": 374
+              },
+              {
+                "file": "js/onboarding.js",
+                "type": "js",
+                "raw": 7342,
+                "gzip": 2611
+              },
+              {
+                "file": "js/resizable-panel.js",
+                "type": "js",
+                "raw": 2199,
+                "gzip": 748
+              },
+              {
+                "file": "js/scroll-state-machine.js",
+                "type": "js",
+                "raw": 2359,
+                "gzip": 713
+              },
+              {
+                "file": "js/search.js",
+                "type": "js",
+                "raw": 1419,
+                "gzip": 706
+              },
+              {
+                "file": "js/services/sync-service.js",
+                "type": "js",
+                "raw": 8457,
+                "gzip": 2379
+              },
+              {
+                "file": "js/shortcut-utils.js",
+                "type": "js",
+                "raw": 1307,
+                "gzip": 635
+              },
+              {
+                "file": "js/sidebar-utils.js",
+                "type": "js",
+                "raw": 2017,
+                "gzip": 1037
+              },
+              {
+                "file": "js/storage.js",
+                "type": "js",
+                "raw": 27955,
+                "gzip": 6475
+              },
+              {
+                "file": "js/stream-renderer.js",
+                "type": "js",
+                "raw": 2859,
+                "gzip": 927
+              },
+              {
+                "file": "js/theme-engine.js",
+                "type": "js",
+                "raw": 2144,
+                "gzip": 831
+              },
+              {
+                "file": "js/ui/confirm-dialog.js",
+                "type": "js",
+                "raw": 6500,
+                "gzip": 1806
+              },
+              {
+                "file": "js/ui/formatting-toolbar.js",
+                "type": "js",
+                "raw": 8778,
+                "gzip": 2693
+              },
+              {
+                "file": "js/ui/graph-view.js",
+                "type": "js",
+                "raw": 7419,
+                "gzip": 2510
+              },
+              {
+                "file": "js/utils.js",
+                "type": "js",
+                "raw": 8099,
+                "gzip": 3511
+              },
+              {
+                "file": "js/utils/sanitize.js",
+                "type": "js",
+                "raw": 1223,
+                "gzip": 629
+              },
+              {
+                "file": "js/virtual-scroller.js",
+                "type": "js",
+                "raw": 1279,
+                "gzip": 535
+              },
+              {
+                "file": "newtab.html",
+                "type": "html",
+                "raw": 66918,
+                "gzip": 10268
+              }
+            ]
+          },
+          "popup": {
+            "file": "popup.html",
+            "html": {
+              "raw": 11939,
+              "gzip": 2926,
+              "files": 1
+            },
+            "js": {
+              "raw": 5827,
+              "gzip": 1919,
+              "files": 1
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 17766,
+              "gzip": 4845,
+              "files": 2
+            },
+            "modules": 0,
+            "classicScripts": 1,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/popup.js",
+                "type": "js",
+                "raw": 5827,
+                "gzip": 1919
+              },
+              {
+                "file": "popup.html",
+                "type": "html",
+                "raw": 11939,
+                "gzip": 2926
+              }
+            ]
+          },
+          "sidepanel": {
+            "file": "sidepanel.html",
+            "html": {
+              "raw": 5360,
+              "gzip": 1738,
+              "files": 1
+            },
+            "js": {
+              "raw": 3789,
+              "gzip": 1660,
+              "files": 2
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 9149,
+              "gzip": 3398,
+              "files": 3
+            },
+            "modules": 0,
+            "classicScripts": 2,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/insights-summary.js",
+                "type": "js",
+                "raw": 1173,
+                "gzip": 571
+              },
+              {
+                "file": "js/sidepanel.js",
+                "type": "js",
+                "raw": 2616,
+                "gzip": 1089
+              },
+              {
+                "file": "sidepanel.html",
+                "type": "html",
+                "raw": 5360,
+                "gzip": 1738
+              }
+            ]
+          }
+        },
+        "problems": [],
+        "source": {
+          "tag": "v1.4.0",
+          "commit": "e93b21e6acf065c198a71646fc0ee185cfd416ba",
+          "build": "its own npm ci --ignore-scripts and npm run build, in a git archive export"
+        }
+      },
+      {
+        "label": "1.4.0-again",
+        "version": "1.4.0",
+        "name": "NewTabNote: AI-Powered Block Editor & Note-Taking",
+        "bytes": {
+          "newtab": {
+            "file": "newtab.html",
+            "html": {
+              "raw": 66918,
+              "gzip": 10268,
+              "files": 1
+            },
+            "js": {
+              "raw": 1690721,
+              "gzip": 437321,
+              "files": 46
+            },
+            "css": {
+              "raw": 95385,
+              "gzip": 17350,
+              "files": 3
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 1853024,
+              "gzip": 464939,
+              "files": 50
+            },
+            "modules": 42,
+            "classicScripts": 4,
+            "dynamicImports": 0,
+            "missing": [
+              "js/workers/indexer.js"
+            ],
+            "files": [
+              {
+                "file": "css/editor.css",
+                "type": "css",
+                "raw": 76111,
+                "gzip": 13293
+              },
+              {
+                "file": "css/premium-chat.css",
+                "type": "css",
+                "raw": 17012,
+                "gzip": 3239
+              },
+              {
+                "file": "css/stats.css",
+                "type": "css",
+                "raw": 2262,
+                "gzip": 818
+              },
+              {
+                "file": "js/ai-prompt-templates.js",
+                "type": "js",
+                "raw": 2568,
+                "gzip": 1058
+              },
+              {
+                "file": "js/ai-response-utils.js",
+                "type": "js",
+                "raw": 5541,
+                "gzip": 1991
+              },
+              {
+                "file": "js/analytics.js",
+                "type": "js",
+                "raw": 1901,
+                "gzip": 834
+              },
+              {
+                "file": "js/app.js",
+                "type": "js",
+                "raw": 126019,
+                "gzip": 27258
+              },
+              {
+                "file": "js/block-placeholders.js",
+                "type": "js",
+                "raw": 303,
+                "gzip": 241
+              },
+              {
+                "file": "js/blocks.js",
+                "type": "js",
+                "raw": 12698,
+                "gzip": 3613
+              },
+              {
+                "file": "js/chat-ui-components.js",
+                "type": "js",
+                "raw": 10412,
+                "gzip": 2833
+              },
+              {
+                "file": "js/command-palette-utils.js",
+                "type": "js",
+                "raw": 2242,
+                "gzip": 1065
+              },
+              {
+                "file": "js/controllers/ai-chat-controller.js",
+                "type": "js",
+                "raw": 62179,
+                "gzip": 14848
+              },
+              {
+                "file": "js/controllers/analytics-controller.js",
+                "type": "js",
+                "raw": 3794,
+                "gzip": 1333
+              },
+              {
+                "file": "js/controllers/export-import-service.js",
+                "type": "js",
+                "raw": 1793,
+                "gzip": 453
+              },
+              {
+                "file": "js/controllers/notes-manager.js",
+                "type": "js",
+                "raw": 21310,
+                "gzip": 5492
+              },
+              {
+                "file": "js/controllers/settings-controller.js",
+                "type": "js",
+                "raw": 17684,
+                "gzip": 4653
+              },
+              {
+                "file": "js/controllers/shortcuts-manager.js",
+                "type": "js",
+                "raw": 10168,
+                "gzip": 2900
+              },
+              {
+                "file": "js/controllers/sidebar-controller.js",
+                "type": "js",
+                "raw": 29990,
+                "gzip": 6921
+              },
+              {
+                "file": "js/controllers/tab-controller.js",
+                "type": "js",
+                "raw": 10304,
+                "gzip": 2737
+              },
+              {
+                "file": "js/controllers/theme-builder-controller.js",
+                "type": "js",
+                "raw": 3002,
+                "gzip": 1107
+              },
+              {
+                "file": "js/core/dom-refs.js",
+                "type": "js",
+                "raw": 3889,
+                "gzip": 1323
+              },
+              {
+                "file": "js/core/event-bus.js",
+                "type": "js",
+                "raw": 393,
+                "gzip": 237
+              },
+              {
+                "file": "js/core/logger.js",
+                "type": "js",
+                "raw": 1102,
+                "gzip": 562
+              },
+              {
+                "file": "js/core/storage-error.js",
+                "type": "js",
+                "raw": 326,
+                "gzip": 212
+              },
+              {
+                "file": "js/editor.js",
+                "type": "js",
+                "raw": 71082,
+                "gzip": 17056
+              },
+              {
+                "file": "js/embeddings.js",
+                "type": "js",
+                "raw": 1041,
+                "gzip": 552
+              },
+              {
+                "file": "js/image-compression.js",
+                "type": "js",
+                "raw": 374,
+                "gzip": 269
+              },
+              {
+                "file": "js/lib/chart.js",
+                "type": "js",
+                "raw": 203141,
+                "gzip": 68974
+              },
+              {
+                "file": "js/lib/fuse.js",
+                "type": "js",
+                "raw": 16818,
+                "gzip": 6356
+              },
+              {
+                "file": "js/lib/jszip.min.js",
+                "type": "js",
+                "raw": 94459,
+                "gzip": 27804
+              },
+              {
+                "file": "js/lib/transformers.js",
+                "type": "js",
+                "raw": 850004,
+                "gzip": 197415
+              },
+              {
+                "file": "js/llm.js",
+                "type": "js",
+                "raw": 33560,
+                "gzip": 8104
+              },
+              {
+                "file": "js/main.js",
+                "type": "js",
+                "raw": 1268,
+                "gzip": 374
+              },
+              {
+                "file": "js/onboarding.js",
+                "type": "js",
+                "raw": 7342,
+                "gzip": 2611
+              },
+              {
+                "file": "js/resizable-panel.js",
+                "type": "js",
+                "raw": 2199,
+                "gzip": 748
+              },
+              {
+                "file": "js/scroll-state-machine.js",
+                "type": "js",
+                "raw": 2359,
+                "gzip": 713
+              },
+              {
+                "file": "js/search.js",
+                "type": "js",
+                "raw": 1419,
+                "gzip": 706
+              },
+              {
+                "file": "js/services/sync-service.js",
+                "type": "js",
+                "raw": 8457,
+                "gzip": 2379
+              },
+              {
+                "file": "js/shortcut-utils.js",
+                "type": "js",
+                "raw": 1307,
+                "gzip": 635
+              },
+              {
+                "file": "js/sidebar-utils.js",
+                "type": "js",
+                "raw": 2017,
+                "gzip": 1037
+              },
+              {
+                "file": "js/storage.js",
+                "type": "js",
+                "raw": 27955,
+                "gzip": 6475
+              },
+              {
+                "file": "js/stream-renderer.js",
+                "type": "js",
+                "raw": 2859,
+                "gzip": 927
+              },
+              {
+                "file": "js/theme-engine.js",
+                "type": "js",
+                "raw": 2144,
+                "gzip": 831
+              },
+              {
+                "file": "js/ui/confirm-dialog.js",
+                "type": "js",
+                "raw": 6500,
+                "gzip": 1806
+              },
+              {
+                "file": "js/ui/formatting-toolbar.js",
+                "type": "js",
+                "raw": 8778,
+                "gzip": 2693
+              },
+              {
+                "file": "js/ui/graph-view.js",
+                "type": "js",
+                "raw": 7419,
+                "gzip": 2510
+              },
+              {
+                "file": "js/utils.js",
+                "type": "js",
+                "raw": 8099,
+                "gzip": 3511
+              },
+              {
+                "file": "js/utils/sanitize.js",
+                "type": "js",
+                "raw": 1223,
+                "gzip": 629
+              },
+              {
+                "file": "js/virtual-scroller.js",
+                "type": "js",
+                "raw": 1279,
+                "gzip": 535
+              },
+              {
+                "file": "newtab.html",
+                "type": "html",
+                "raw": 66918,
+                "gzip": 10268
+              }
+            ]
+          },
+          "popup": {
+            "file": "popup.html",
+            "html": {
+              "raw": 11939,
+              "gzip": 2926,
+              "files": 1
+            },
+            "js": {
+              "raw": 5827,
+              "gzip": 1919,
+              "files": 1
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 17766,
+              "gzip": 4845,
+              "files": 2
+            },
+            "modules": 0,
+            "classicScripts": 1,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/popup.js",
+                "type": "js",
+                "raw": 5827,
+                "gzip": 1919
+              },
+              {
+                "file": "popup.html",
+                "type": "html",
+                "raw": 11939,
+                "gzip": 2926
+              }
+            ]
+          },
+          "sidepanel": {
+            "file": "sidepanel.html",
+            "html": {
+              "raw": 5360,
+              "gzip": 1738,
+              "files": 1
+            },
+            "js": {
+              "raw": 3789,
+              "gzip": 1660,
+              "files": 2
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 9149,
+              "gzip": 3398,
+              "files": 3
+            },
+            "modules": 0,
+            "classicScripts": 2,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/insights-summary.js",
+                "type": "js",
+                "raw": 1173,
+                "gzip": 571
+              },
+              {
+                "file": "js/sidepanel.js",
+                "type": "js",
+                "raw": 2616,
+                "gzip": 1089
+              },
+              {
+                "file": "sidepanel.html",
+                "type": "html",
+                "raw": 5360,
+                "gzip": 1738
+              }
+            ]
+          }
+        },
+        "problems": [],
+        "source": {
+          "sameAs": "1.4.0",
+          "why": "the same package again, so 1.4.0 against itself sizes the tolerance"
+        }
+      },
+      {
+        "label": "next",
+        "version": "1.4.1",
+        "name": "NewTabNote: AI-Powered Block Editor & Note-Taking",
+        "bytes": {
+          "newtab": {
+            "file": "newtab.html",
+            "html": {
+              "raw": 70480,
+              "gzip": 10869,
+              "files": 1
+            },
+            "js": {
+              "raw": 1812042,
+              "gzip": 484619,
+              "files": 87
+            },
+            "css": {
+              "raw": 97083,
+              "gzip": 17680,
+              "files": 3
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 262137,
+              "gzip": 47800,
+              "files": 20
+            },
+            "workers": {
+              "raw": 1004,
+              "gzip": 524,
+              "files": 1
+            },
+            "total": {
+              "raw": 1979605,
+              "gzip": 513168,
+              "files": 91
+            },
+            "modules": 83,
+            "classicScripts": 4,
+            "dynamicImports": 1,
+            "missing": [],
+            "files": [
+              {
+                "file": "css/editor.css",
+                "type": "css",
+                "raw": 77809,
+                "gzip": 13623
+              },
+              {
+                "file": "css/premium-chat.css",
+                "type": "css",
+                "raw": 17012,
+                "gzip": 3239
+              },
+              {
+                "file": "css/stats.css",
+                "type": "css",
+                "raw": 2262,
+                "gzip": 818
+              },
+              {
+                "file": "js/ai-prompt-templates.js",
+                "type": "js",
+                "raw": 2568,
+                "gzip": 1058
+              },
+              {
+                "file": "js/ai-response-utils.js",
+                "type": "js",
+                "raw": 5541,
+                "gzip": 1991
+              },
+              {
+                "file": "js/analytics.js",
+                "type": "js",
+                "raw": 1850,
+                "gzip": 838
+              },
+              {
+                "file": "js/app.js",
+                "type": "js",
+                "raw": 92290,
+                "gzip": 22011
+              },
+              {
+                "file": "js/block-placeholders.js",
+                "type": "js",
+                "raw": 303,
+                "gzip": 241
+              },
+              {
+                "file": "js/blocks.js",
+                "type": "js",
+                "raw": 12632,
+                "gzip": 3614
+              },
+              {
+                "file": "js/chat-ui-components.js",
+                "type": "js",
+                "raw": 10175,
+                "gzip": 2822
+              },
+              {
+                "file": "js/command-palette-utils.js",
+                "type": "js",
+                "raw": 2242,
+                "gzip": 1065
+              },
+              {
+                "file": "js/controllers/ai-chat-controller.js",
+                "type": "js",
+                "raw": 62013,
+                "gzip": 14900
+              },
+              {
+                "file": "js/controllers/analytics-controller.js",
+                "type": "js",
+                "raw": 3893,
+                "gzip": 1365
+              },
+              {
+                "file": "js/controllers/export-import-service.js",
+                "type": "js",
+                "raw": 1732,
+                "gzip": 439
+              },
+              {
+                "file": "js/controllers/notes-manager.js",
+                "type": "js",
+                "raw": 23578,
+                "gzip": 6497
+              },
+              {
+                "file": "js/controllers/settings-controller.js",
+                "type": "js",
+                "raw": 23640,
+                "gzip": 6686
+              },
+              {
+                "file": "js/controllers/shortcuts-manager.js",
+                "type": "js",
+                "raw": 10212,
+                "gzip": 2934
+              },
+              {
+                "file": "js/controllers/sidebar-controller.js",
+                "type": "js",
+                "raw": 33443,
+                "gzip": 8036
+              },
+              {
+                "file": "js/controllers/tab-controller.js",
+                "type": "js",
+                "raw": 19669,
+                "gzip": 5363
+              },
+              {
+                "file": "js/controllers/theme-builder-controller.js",
+                "type": "js",
+                "raw": 2959,
+                "gzip": 1112
+              },
+              {
+                "file": "js/core/dom-refs.js",
+                "type": "js",
+                "raw": 3853,
+                "gzip": 1321
+              },
+              {
+                "file": "js/core/logger.js",
+                "type": "js",
+                "raw": 1025,
+                "gzip": 543
+              },
+              {
+                "file": "js/core/storage-error.js",
+                "type": "js",
+                "raw": 306,
+                "gzip": 211
+              },
+              {
+                "file": "js/editor.js",
+                "type": "js",
+                "raw": 91463,
+                "gzip": 22727
+              },
+              {
+                "file": "js/embeddings.js",
+                "type": "js",
+                "raw": 1211,
+                "gzip": 623
+              },
+              {
+                "file": "js/image-compression.js",
+                "type": "js",
+                "raw": 344,
+                "gzip": 264
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/failures.js",
+                "type": "lazy",
+                "raw": 1689,
+                "gzip": 692
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/requests.js",
+                "type": "js",
+                "raw": 368,
+                "gzip": 246
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/schema.js",
+                "type": "js",
+                "raw": 1456,
+                "gzip": 492
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/settings.js",
+                "type": "js",
+                "raw": 898,
+                "gzip": 437
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/trust.js",
+                "type": "lazy",
+                "raw": 3968,
+                "gzip": 1620
+              },
+              {
+                "file": "js/kernel/adapters/legacy/adapter.js",
+                "type": "js",
+                "raw": 5141,
+                "gzip": 2174
+              },
+              {
+                "file": "js/kernel/composition/document.js",
+                "type": "js",
+                "raw": 4182,
+                "gzip": 1238
+              },
+              {
+                "file": "js/kernel/composition/host.js",
+                "type": "js",
+                "raw": 748,
+                "gzip": 424
+              },
+              {
+                "file": "js/kernel/composition/lazy-failure-events.js",
+                "type": "js",
+                "raw": 1773,
+                "gzip": 885
+              },
+              {
+                "file": "js/kernel/composition/newtab.js",
+                "type": "js",
+                "raw": 1784,
+                "gzip": 741
+              },
+              {
+                "file": "js/kernel/composition/removal.js",
+                "type": "js",
+                "raw": 1574,
+                "gzip": 752
+              },
+              {
+                "file": "js/kernel/composition/settings.js",
+                "type": "js",
+                "raw": 1870,
+                "gzip": 879
+              },
+              {
+                "file": "js/kernel/composition/trust.js",
+                "type": "lazy",
+                "raw": 4336,
+                "gzip": 1844
+              },
+              {
+                "file": "js/kernel/core/application/feed.js",
+                "type": "js",
+                "raw": 482,
+                "gzip": 296
+              },
+              {
+                "file": "js/kernel/core/application/folders.js",
+                "type": "js",
+                "raw": 2644,
+                "gzip": 965
+              },
+              {
+                "file": "js/kernel/core/application/jobs.js",
+                "type": "js",
+                "raw": 1418,
+                "gzip": 660
+              },
+              {
+                "file": "js/kernel/core/application/kernel.js",
+                "type": "js",
+                "raw": 3914,
+                "gzip": 1554
+              },
+              {
+                "file": "js/kernel/core/application/maintenance.js",
+                "type": "js",
+                "raw": 215,
+                "gzip": 167
+              },
+              {
+                "file": "js/kernel/core/application/note-list.js",
+                "type": "js",
+                "raw": 5370,
+                "gzip": 2188
+              },
+              {
+                "file": "js/kernel/core/application/notes.js",
+                "type": "js",
+                "raw": 14287,
+                "gzip": 4221
+              },
+              {
+                "file": "js/kernel/core/application/preferences.js",
+                "type": "js",
+                "raw": 1169,
+                "gzip": 562
+              },
+              {
+                "file": "js/kernel/core/application/scopes.js",
+                "type": "js",
+                "raw": 1337,
+                "gzip": 699
+              },
+              {
+                "file": "js/kernel/core/application/session.js",
+                "type": "js",
+                "raw": 790,
+                "gzip": 438
+              },
+              {
+                "file": "js/kernel/core/application/snapshots.js",
+                "type": "js",
+                "raw": 2555,
+                "gzip": 1057
+              },
+              {
+                "file": "js/kernel/core/application/work.js",
+                "type": "js",
+                "raw": 306,
+                "gzip": 225
+              },
+              {
+                "file": "js/kernel/core/application/workspace-data.js",
+                "type": "js",
+                "raw": 2700,
+                "gzip": 1166
+              },
+              {
+                "file": "js/kernel/core/contracts/checks.js",
+                "type": "js",
+                "raw": 460,
+                "gzip": 248
+              },
+              {
+                "file": "js/kernel/core/contracts/clone.js",
+                "type": "js",
+                "raw": 926,
+                "gzip": 464
+              },
+              {
+                "file": "js/kernel/core/contracts/codec.js",
+                "type": "lazy",
+                "raw": 2512,
+                "gzip": 1135
+              },
+              {
+                "file": "js/kernel/core/contracts/commands.js",
+                "type": "js",
+                "raw": 4401,
+                "gzip": 1263
+              },
+              {
+                "file": "js/kernel/core/contracts/envelope.js",
+                "type": "lazy",
+                "raw": 1789,
+                "gzip": 674
+              },
+              {
+                "file": "js/kernel/core/contracts/fields.js",
+                "type": "lazy",
+                "raw": 737,
+                "gzip": 345
+              },
+              {
+                "file": "js/kernel/core/contracts/hint-channel.js",
+                "type": "lazy",
+                "raw": 1020,
+                "gzip": 492
+              },
+              {
+                "file": "js/kernel/core/contracts/limits.js",
+                "type": "js",
+                "raw": 633,
+                "gzip": 310
+              },
+              {
+                "file": "js/kernel/core/contracts/outcome-schemas.js",
+                "type": "lazy",
+                "raw": 1948,
+                "gzip": 681
+              },
+              {
+                "file": "js/kernel/core/contracts/outcomes.js",
+                "type": "js",
+                "raw": 2645,
+                "gzip": 1026
+              },
+              {
+                "file": "js/kernel/core/contracts/queries.js",
+                "type": "js",
+                "raw": 1302,
+                "gzip": 631
+              },
+              {
+                "file": "js/kernel/core/contracts/surfaces.js",
+                "type": "js",
+                "raw": 109,
+                "gzip": 121
+              },
+              {
+                "file": "js/kernel/core/contracts/system.js",
+                "type": "js",
+                "raw": 448,
+                "gzip": 318
+              },
+              {
+                "file": "js/kernel/core/contracts/transport-codes.js",
+                "type": "lazy",
+                "raw": 916,
+                "gzip": 473
+              },
+              {
+                "file": "js/kernel/core/contracts/validate.js",
+                "type": "lazy",
+                "raw": 1579,
+                "gzip": 681
+              },
+              {
+                "file": "js/kernel/core/domain/folder.js",
+                "type": "js",
+                "raw": 483,
+                "gzip": 302
+              },
+              {
+                "file": "js/kernel/core/domain/note.js",
+                "type": "js",
+                "raw": 5577,
+                "gzip": 2165
+              },
+              {
+                "file": "js/kernel/core/domain/preferences.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 311
+              },
+              {
+                "file": "js/kernel/core/domain/session.js",
+                "type": "js",
+                "raw": 621,
+                "gzip": 384
+              },
+              {
+                "file": "js/kernel/core/domain/snapshot.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 323
+              },
+              {
+                "file": "js/kernel/core/domain/theme.js",
+                "type": "js",
+                "raw": 573,
+                "gzip": 327
+              },
+              {
+                "file": "js/kernel/core/ports/policy.js",
+                "type": "js",
+                "raw": 819,
+                "gzip": 431
+              },
+              {
+                "file": "js/kernel/core/ports/repository.js",
+                "type": "js",
+                "raw": 447,
+                "gzip": 187
+              },
+              {
+                "file": "js/kernel/core/ports/runtime.js",
+                "type": "js",
+                "raw": 220,
+                "gzip": 165
+              },
+              {
+                "file": "js/lib/chart.js",
+                "type": "js",
+                "raw": 205361,
+                "gzip": 69574
+              },
+              {
+                "file": "js/lib/fuse.js",
+                "type": "js",
+                "raw": 17763,
+                "gzip": 6563
+              },
+              {
+                "file": "js/lib/jszip.min.js",
+                "type": "js",
+                "raw": 97630,
+                "gzip": 28444
+              },
+              {
+                "file": "js/lib/transformers.js",
+                "type": "js",
+                "raw": 863376,
+                "gzip": 198545
+              },
+              {
+                "file": "js/lib/valibot/index.mjs",
+                "type": "lazy",
+                "raw": 206411,
+                "gzip": 25667
+              },
+              {
+                "file": "js/llm.js",
+                "type": "js",
+                "raw": 33538,
+                "gzip": 8098
+              },
+              {
+                "file": "js/main.js",
+                "type": "js",
+                "raw": 1335,
+                "gzip": 422
+              },
+              {
+                "file": "js/onboarding.js",
+                "type": "js",
+                "raw": 7313,
+                "gzip": 2627
+              },
+              {
+                "file": "js/resizable-panel.js",
+                "type": "js",
+                "raw": 2199,
+                "gzip": 748
+              },
+              {
+                "file": "js/scroll-state-machine.js",
+                "type": "js",
+                "raw": 2322,
+                "gzip": 707
+              },
+              {
+                "file": "js/search.js",
+                "type": "js",
+                "raw": 1394,
+                "gzip": 697
+              },
+              {
+                "file": "js/services/ai-port.mjs",
+                "type": "js",
+                "raw": 380,
+                "gzip": 254
+              },
+              {
+                "file": "js/services/sync-service.js",
+                "type": "js",
+                "raw": 8162,
+                "gzip": 2375
+              },
+              {
+                "file": "js/shortcut-utils.js",
+                "type": "js",
+                "raw": 1307,
+                "gzip": 635
+              },
+              {
+                "file": "js/sidebar-utils.js",
+                "type": "js",
+                "raw": 2017,
+                "gzip": 1037
+              },
+              {
+                "file": "js/storage.js",
+                "type": "js",
+                "raw": 37869,
+                "gzip": 9803
+              },
+              {
+                "file": "js/stream-renderer.js",
+                "type": "js",
+                "raw": 2830,
+                "gzip": 921
+              },
+              {
+                "file": "js/theme-engine.js",
+                "type": "js",
+                "raw": 2121,
+                "gzip": 823
+              },
+              {
+                "file": "js/trust/core/codes.js",
+                "type": "lazy",
+                "raw": 4189,
+                "gzip": 1616
+              },
+              {
+                "file": "js/trust/core/event-codes.js",
+                "type": "lazy",
+                "raw": 3086,
+                "gzip": 958
+              },
+              {
+                "file": "js/trust/core/evidence.js",
+                "type": "lazy",
+                "raw": 3172,
+                "gzip": 1340
+              },
+              {
+                "file": "js/trust/core/incidents.js",
+                "type": "lazy",
+                "raw": 3376,
+                "gzip": 1326
+              },
+              {
+                "file": "js/trust/core/journal.js",
+                "type": "lazy",
+                "raw": 2387,
+                "gzip": 1141
+              },
+              {
+                "file": "js/trust/core/ports.js",
+                "type": "lazy",
+                "raw": 148,
+                "gzip": 124
+              },
+              {
+                "file": "js/trust/core/records.js",
+                "type": "lazy",
+                "raw": 3463,
+                "gzip": 1406
+              },
+              {
+                "file": "js/trust/core/trust-records.js",
+                "type": "lazy",
+                "raw": 13635,
+                "gzip": 4955
+              },
+              {
+                "file": "js/trust/core/vocabulary.js",
+                "type": "lazy",
+                "raw": 1776,
+                "gzip": 630
+              },
+              {
+                "file": "js/ui/confirm-dialog.js",
+                "type": "js",
+                "raw": 8222,
+                "gzip": 2105
+              },
+              {
+                "file": "js/ui/export-notice.js",
+                "type": "js",
+                "raw": 4864,
+                "gzip": 1955
+              },
+              {
+                "file": "js/ui/formatting-toolbar.js",
+                "type": "js",
+                "raw": 8716,
+                "gzip": 2688
+              },
+              {
+                "file": "js/ui/graph-view.js",
+                "type": "js",
+                "raw": 7442,
+                "gzip": 2545
+              },
+              {
+                "file": "js/utils.js",
+                "type": "js",
+                "raw": 8865,
+                "gzip": 3848
+              },
+              {
+                "file": "js/utils/sanitize.js",
+                "type": "js",
+                "raw": 991,
+                "gzip": 573
+              },
+              {
+                "file": "js/virtual-scroller.js",
+                "type": "js",
+                "raw": 1248,
+                "gzip": 529
+              },
+              {
+                "file": "js/workers/indexer.js",
+                "type": "workers",
+                "raw": 1004,
+                "gzip": 524
+              },
+              {
+                "file": "newtab.html",
+                "type": "html",
+                "raw": 70480,
+                "gzip": 10869
+              }
+            ]
+          },
+          "popup": {
+            "file": "popup.html",
+            "html": {
+              "raw": 15585,
+              "gzip": 3533,
+              "files": 1
+            },
+            "js": {
+              "raw": 105613,
+              "gzip": 36891,
+              "files": 37
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 121198,
+              "gzip": 40424,
+              "files": 38
+            },
+            "modules": 37,
+            "classicScripts": 0,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/kernel/adapters/indexeddb/requests.js",
+                "type": "js",
+                "raw": 368,
+                "gzip": 246
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/schema.js",
+                "type": "js",
+                "raw": 1456,
+                "gzip": 492
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/settings.js",
+                "type": "js",
+                "raw": 898,
+                "gzip": 437
+              },
+              {
+                "file": "js/kernel/adapters/legacy/adapter.js",
+                "type": "js",
+                "raw": 5141,
+                "gzip": 2174
+              },
+              {
+                "file": "js/kernel/composition/host.js",
+                "type": "js",
+                "raw": 748,
+                "gzip": 424
+              },
+              {
+                "file": "js/kernel/composition/popup.js",
+                "type": "js",
+                "raw": 238,
+                "gzip": 182
+              },
+              {
+                "file": "js/kernel/core/application/feed.js",
+                "type": "js",
+                "raw": 482,
+                "gzip": 296
+              },
+              {
+                "file": "js/kernel/core/application/folders.js",
+                "type": "js",
+                "raw": 2644,
+                "gzip": 965
+              },
+              {
+                "file": "js/kernel/core/application/jobs.js",
+                "type": "js",
+                "raw": 1418,
+                "gzip": 660
+              },
+              {
+                "file": "js/kernel/core/application/kernel.js",
+                "type": "js",
+                "raw": 3914,
+                "gzip": 1554
+              },
+              {
+                "file": "js/kernel/core/application/maintenance.js",
+                "type": "js",
+                "raw": 215,
+                "gzip": 167
+              },
+              {
+                "file": "js/kernel/core/application/notes.js",
+                "type": "js",
+                "raw": 14287,
+                "gzip": 4221
+              },
+              {
+                "file": "js/kernel/core/application/preferences.js",
+                "type": "js",
+                "raw": 1169,
+                "gzip": 562
+              },
+              {
+                "file": "js/kernel/core/application/scopes.js",
+                "type": "js",
+                "raw": 1337,
+                "gzip": 699
+              },
+              {
+                "file": "js/kernel/core/application/session.js",
+                "type": "js",
+                "raw": 790,
+                "gzip": 438
+              },
+              {
+                "file": "js/kernel/core/application/snapshots.js",
+                "type": "js",
+                "raw": 2555,
+                "gzip": 1057
+              },
+              {
+                "file": "js/kernel/core/application/work.js",
+                "type": "js",
+                "raw": 306,
+                "gzip": 225
+              },
+              {
+                "file": "js/kernel/core/application/workspace-data.js",
+                "type": "js",
+                "raw": 2700,
+                "gzip": 1166
+              },
+              {
+                "file": "js/kernel/core/contracts/checks.js",
+                "type": "js",
+                "raw": 460,
+                "gzip": 248
+              },
+              {
+                "file": "js/kernel/core/contracts/clone.js",
+                "type": "js",
+                "raw": 926,
+                "gzip": 464
+              },
+              {
+                "file": "js/kernel/core/contracts/commands.js",
+                "type": "js",
+                "raw": 4401,
+                "gzip": 1263
+              },
+              {
+                "file": "js/kernel/core/contracts/limits.js",
+                "type": "js",
+                "raw": 633,
+                "gzip": 310
+              },
+              {
+                "file": "js/kernel/core/contracts/outcomes.js",
+                "type": "js",
+                "raw": 2645,
+                "gzip": 1026
+              },
+              {
+                "file": "js/kernel/core/contracts/queries.js",
+                "type": "js",
+                "raw": 1302,
+                "gzip": 631
+              },
+              {
+                "file": "js/kernel/core/contracts/surfaces.js",
+                "type": "js",
+                "raw": 109,
+                "gzip": 121
+              },
+              {
+                "file": "js/kernel/core/contracts/system.js",
+                "type": "js",
+                "raw": 448,
+                "gzip": 318
+              },
+              {
+                "file": "js/kernel/core/domain/folder.js",
+                "type": "js",
+                "raw": 483,
+                "gzip": 302
+              },
+              {
+                "file": "js/kernel/core/domain/note.js",
+                "type": "js",
+                "raw": 5577,
+                "gzip": 2165
+              },
+              {
+                "file": "js/kernel/core/domain/preferences.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 311
+              },
+              {
+                "file": "js/kernel/core/domain/session.js",
+                "type": "js",
+                "raw": 621,
+                "gzip": 384
+              },
+              {
+                "file": "js/kernel/core/domain/snapshot.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 323
+              },
+              {
+                "file": "js/kernel/core/domain/theme.js",
+                "type": "js",
+                "raw": 573,
+                "gzip": 327
+              },
+              {
+                "file": "js/kernel/core/ports/policy.js",
+                "type": "js",
+                "raw": 819,
+                "gzip": 431
+              },
+              {
+                "file": "js/kernel/core/ports/repository.js",
+                "type": "js",
+                "raw": 447,
+                "gzip": 187
+              },
+              {
+                "file": "js/kernel/core/ports/runtime.js",
+                "type": "js",
+                "raw": 220,
+                "gzip": 165
+              },
+              {
+                "file": "js/popup.js",
+                "type": "js",
+                "raw": 6224,
+                "gzip": 2147
+              },
+              {
+                "file": "js/storage.js",
+                "type": "js",
+                "raw": 37869,
+                "gzip": 9803
+              },
+              {
+                "file": "popup.html",
+                "type": "html",
+                "raw": 15585,
+                "gzip": 3533
+              }
+            ]
+          },
+          "sidepanel": {
+            "file": "sidepanel.html",
+            "html": {
+              "raw": 8968,
+              "gzip": 2308,
+              "files": 1
+            },
+            "js": {
+              "raw": 104068,
+              "gzip": 36700,
+              "files": 38
+            },
+            "css": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "fonts": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "lazy": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "workers": {
+              "raw": 0,
+              "gzip": 0,
+              "files": 0
+            },
+            "total": {
+              "raw": 113036,
+              "gzip": 39008,
+              "files": 39
+            },
+            "modules": 37,
+            "classicScripts": 1,
+            "dynamicImports": 0,
+            "missing": [],
+            "files": [
+              {
+                "file": "js/insights-summary.js",
+                "type": "js",
+                "raw": 1173,
+                "gzip": 571
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/requests.js",
+                "type": "js",
+                "raw": 368,
+                "gzip": 246
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/schema.js",
+                "type": "js",
+                "raw": 1456,
+                "gzip": 492
+              },
+              {
+                "file": "js/kernel/adapters/indexeddb/settings.js",
+                "type": "js",
+                "raw": 898,
+                "gzip": 437
+              },
+              {
+                "file": "js/kernel/adapters/legacy/adapter.js",
+                "type": "js",
+                "raw": 5141,
+                "gzip": 2174
+              },
+              {
+                "file": "js/kernel/composition/host.js",
+                "type": "js",
+                "raw": 748,
+                "gzip": 424
+              },
+              {
+                "file": "js/kernel/composition/sidepanel.js",
+                "type": "js",
+                "raw": 246,
+                "gzip": 187
+              },
+              {
+                "file": "js/kernel/core/application/feed.js",
+                "type": "js",
+                "raw": 482,
+                "gzip": 296
+              },
+              {
+                "file": "js/kernel/core/application/folders.js",
+                "type": "js",
+                "raw": 2644,
+                "gzip": 965
+              },
+              {
+                "file": "js/kernel/core/application/jobs.js",
+                "type": "js",
+                "raw": 1418,
+                "gzip": 660
+              },
+              {
+                "file": "js/kernel/core/application/kernel.js",
+                "type": "js",
+                "raw": 3914,
+                "gzip": 1554
+              },
+              {
+                "file": "js/kernel/core/application/maintenance.js",
+                "type": "js",
+                "raw": 215,
+                "gzip": 167
+              },
+              {
+                "file": "js/kernel/core/application/notes.js",
+                "type": "js",
+                "raw": 14287,
+                "gzip": 4221
+              },
+              {
+                "file": "js/kernel/core/application/preferences.js",
+                "type": "js",
+                "raw": 1169,
+                "gzip": 562
+              },
+              {
+                "file": "js/kernel/core/application/scopes.js",
+                "type": "js",
+                "raw": 1337,
+                "gzip": 699
+              },
+              {
+                "file": "js/kernel/core/application/session.js",
+                "type": "js",
+                "raw": 790,
+                "gzip": 438
+              },
+              {
+                "file": "js/kernel/core/application/snapshots.js",
+                "type": "js",
+                "raw": 2555,
+                "gzip": 1057
+              },
+              {
+                "file": "js/kernel/core/application/work.js",
+                "type": "js",
+                "raw": 306,
+                "gzip": 225
+              },
+              {
+                "file": "js/kernel/core/application/workspace-data.js",
+                "type": "js",
+                "raw": 2700,
+                "gzip": 1166
+              },
+              {
+                "file": "js/kernel/core/contracts/checks.js",
+                "type": "js",
+                "raw": 460,
+                "gzip": 248
+              },
+              {
+                "file": "js/kernel/core/contracts/clone.js",
+                "type": "js",
+                "raw": 926,
+                "gzip": 464
+              },
+              {
+                "file": "js/kernel/core/contracts/commands.js",
+                "type": "js",
+                "raw": 4401,
+                "gzip": 1263
+              },
+              {
+                "file": "js/kernel/core/contracts/limits.js",
+                "type": "js",
+                "raw": 633,
+                "gzip": 310
+              },
+              {
+                "file": "js/kernel/core/contracts/outcomes.js",
+                "type": "js",
+                "raw": 2645,
+                "gzip": 1026
+              },
+              {
+                "file": "js/kernel/core/contracts/queries.js",
+                "type": "js",
+                "raw": 1302,
+                "gzip": 631
+              },
+              {
+                "file": "js/kernel/core/contracts/surfaces.js",
+                "type": "js",
+                "raw": 109,
+                "gzip": 121
+              },
+              {
+                "file": "js/kernel/core/contracts/system.js",
+                "type": "js",
+                "raw": 448,
+                "gzip": 318
+              },
+              {
+                "file": "js/kernel/core/domain/folder.js",
+                "type": "js",
+                "raw": 483,
+                "gzip": 302
+              },
+              {
+                "file": "js/kernel/core/domain/note.js",
+                "type": "js",
+                "raw": 5577,
+                "gzip": 2165
+              },
+              {
+                "file": "js/kernel/core/domain/preferences.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 311
+              },
+              {
+                "file": "js/kernel/core/domain/session.js",
+                "type": "js",
+                "raw": 621,
+                "gzip": 384
+              },
+              {
+                "file": "js/kernel/core/domain/snapshot.js",
+                "type": "js",
+                "raw": 595,
+                "gzip": 323
+              },
+              {
+                "file": "js/kernel/core/domain/theme.js",
+                "type": "js",
+                "raw": 573,
+                "gzip": 327
+              },
+              {
+                "file": "js/kernel/core/ports/policy.js",
+                "type": "js",
+                "raw": 819,
+                "gzip": 431
+              },
+              {
+                "file": "js/kernel/core/ports/repository.js",
+                "type": "js",
+                "raw": 447,
+                "gzip": 187
+              },
+              {
+                "file": "js/kernel/core/ports/runtime.js",
+                "type": "js",
+                "raw": 220,
+                "gzip": 165
+              },
+              {
+                "file": "js/sidepanel.js",
+                "type": "js",
+                "raw": 3498,
+                "gzip": 1380
+              },
+              {
+                "file": "js/storage.js",
+                "type": "js",
+                "raw": 37869,
+                "gzip": 9803
+              },
+              {
+                "file": "sidepanel.html",
+                "type": "html",
+                "raw": 8968,
+                "gzip": 2308
+              }
+            ]
+          }
+        },
+        "problems": [],
+        "source": {
+          "base": "next at 6ddb4e1 with this PR's interaction-ready mark",
+          "build": "npm run build -- --strict"
+        }
+      }
+    ],
+    "timing": {
+      "runs": 12,
+      "order": "interleaved: every round runs each package once, rotated each round (ABBA for two)",
+      "network": "offline (a dead proxy and no host resolution in Chromium; no route)",
+      "cpuThrottle": 4,
+      "settleMs": 1000,
+      "editor": "#editor-container #blocks-container .block-content[contenteditable=\"true\"]",
+      "key": "q",
+      "browser": "156.0.0.0",
+      "reference": "1.4.0",
+      "profiles": {
+        "typical": {
+          "fixtureDigest": "7060d7b19e9357c5c1778d401f04d3c409abe55ed632e2bf09d01735ca7b2cc9",
+          "packages": {
+            "1.4.0": {
+              "interactionReadyMs": {
+                "median": 993.15,
+                "q1": 974.45,
+                "q3": 1010.4,
+                "min": 889.4,
+                "max": 1067.7,
+                "values": [
+                  889.4,
+                  1028.7,
+                  964.4,
+                  987.4,
+                  963.6,
+                  990.7,
+                  996.3,
+                  1032.1,
+                  1067.7,
+                  995.6,
+                  977.8,
+                  1004.3
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4129166,
+                "q1": 4126747,
+                "q3": 4136306,
+                "min": 4123896,
+                "max": 4187964,
+                "values": [
+                  4123896,
+                  4133168,
+                  4126968,
+                  4129796,
+                  4128536,
+                  4127216,
+                  4145720,
+                  4132356,
+                  4184300,
+                  4126084,
+                  4124560,
+                  4187964
+                ]
+              },
+              "driverMs": {
+                "median": 25.4,
+                "q1": 19.8,
+                "q3": 49.625,
+                "min": 12.1,
+                "max": 80.7,
+                "values": [
+                  47,
+                  24.3,
+                  12.1,
+                  74.2,
+                  17.4,
+                  23.6,
+                  49,
+                  20.6,
+                  14.3,
+                  80.7,
+                  26.5,
+                  51.5
+                ]
+              },
+              "throttledAtMs": {
+                "median": 364.5,
+                "q1": 351,
+                "q3": 377.25,
+                "min": 336,
+                "max": 405,
+                "values": [
+                  405,
+                  369,
+                  384,
+                  348,
+                  352,
+                  342,
+                  369,
+                  360,
+                  375,
+                  336,
+                  400,
+                  356
+                ]
+              },
+              "documentAtMs": {
+                "median": 337.5,
+                "q1": 333.25,
+                "q3": 344.5,
+                "min": 327,
+                "max": 391,
+                "values": [
+                  391,
+                  337,
+                  334,
+                  338,
+                  331,
+                  327,
+                  352,
+                  342,
+                  358,
+                  327,
+                  337,
+                  340
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 772.4,
+                "q1": 757.6,
+                "q3": 788.15,
+                "min": 689.5,
+                "max": 800.1,
+                "values": [
+                  723.6,
+                  772.3,
+                  778.1,
+                  752.8,
+                  763.9,
+                  772.5,
+                  799.2,
+                  792.8,
+                  800.1,
+                  759.2,
+                  689.5,
+                  786.6
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            },
+            "1.4.0-again": {
+              "interactionReadyMs": {
+                "median": 996,
+                "q1": 973.3,
+                "q3": 1025.875,
+                "min": 964.8,
+                "max": 1105.7,
+                "values": [
+                  964.8,
+                  1007.4,
+                  1105.7,
+                  986.8,
+                  1005.2,
+                  974.8,
+                  1081.4,
+                  1025.5,
+                  968.8,
+                  978.1,
+                  1027,
+                  966.7
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4126930,
+                "q1": 4123102,
+                "q3": 4136739,
+                "min": 4121944,
+                "max": 4312820,
+                "values": [
+                  4129252,
+                  4123312,
+                  4123316,
+                  4125064,
+                  4122472,
+                  4122208,
+                  4150836,
+                  4153076,
+                  4132040,
+                  4128796,
+                  4121944,
+                  4312820
+                ]
+              },
+              "driverMs": {
+                "median": 24.4,
+                "q1": 16,
+                "q3": 46.275,
+                "min": 13.8,
+                "max": 64.6,
+                "values": [
+                  14.2,
+                  16.2,
+                  15.4,
+                  16.4,
+                  26.9,
+                  50.4,
+                  64.6,
+                  44.6,
+                  60.9,
+                  13.8,
+                  44.9,
+                  21.9
+                ]
+              },
+              "throttledAtMs": {
+                "median": 360.5,
+                "q1": 345,
+                "q3": 391,
+                "min": 343,
+                "max": 531,
+                "values": [
+                  397,
+                  364,
+                  531,
+                  369,
+                  354,
+                  343,
+                  425,
+                  357,
+                  343,
+                  345,
+                  389,
+                  345
+                ]
+              },
+              "documentAtMs": {
+                "median": 337,
+                "q1": 332,
+                "q3": 371.25,
+                "min": 322,
+                "max": 398,
+                "values": [
+                  370,
+                  338,
+                  398,
+                  354,
+                  336,
+                  331,
+                  394,
+                  332,
+                  322,
+                  334,
+                  375,
+                  332
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 779.05,
+                "q1": 770.45,
+                "q3": 802.8,
+                "min": 748.4,
+                "max": 913,
+                "values": [
+                  772.8,
+                  784.4,
+                  913,
+                  773,
+                  781.5,
+                  763.4,
+                  833.1,
+                  795.5,
+                  761.7,
+                  776.6,
+                  824.7,
+                  748.4
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            },
+            "next": {
+              "interactionReadyMs": {
+                "median": 1084.2,
+                "q1": 1025,
+                "q3": 1108.625,
+                "min": 988.1,
+                "max": 1162.3,
+                "values": [
+                  997.7,
+                  1162.3,
+                  1088.4,
+                  1015.1,
+                  1084.8,
+                  1059.5,
+                  1083.6,
+                  1108,
+                  1028.3,
+                  988.1,
+                  1110.5,
+                  1125.2
+                ]
+              },
+              "markMs": {
+                "median": 1072.65,
+                "q1": 1012.75,
+                "q3": 1094.35,
+                "min": 980.4,
+                "max": 1144.6,
+                "values": [
+                  984.3,
+                  1144.6,
+                  1074.8,
+                  1008.1,
+                  1077.4,
+                  1051.3,
+                  1070.5,
+                  1093.6,
+                  1014.3,
+                  980.4,
+                  1096.6,
+                  1118.5
+                ]
+              },
+              "heapBytes": {
+                "median": 4625744,
+                "q1": 4609512,
+                "q3": 4626552,
+                "min": 4558736,
+                "max": 4631184,
+                "values": [
+                  4630040,
+                  4626504,
+                  4626696,
+                  4558736,
+                  4624960,
+                  4569864,
+                  4626108,
+                  4631184,
+                  4625960,
+                  4621476,
+                  4573620,
+                  4625528
+                ]
+              },
+              "driverMs": {
+                "median": 17.1,
+                "q1": 15.15,
+                "q3": 19.975,
+                "min": 14.2,
+                "max": 61,
+                "values": [
+                  17.7,
+                  27.2,
+                  15.9,
+                  14.2,
+                  17.8,
+                  15,
+                  19.3,
+                  15.2,
+                  16.5,
+                  22,
+                  61,
+                  14.7
+                ]
+              },
+              "throttledAtMs": {
+                "median": 370.5,
+                "q1": 362.75,
+                "q3": 391.75,
+                "min": 349,
+                "max": 457,
+                "values": [
+                  414,
+                  376,
+                  457,
+                  364,
+                  391,
+                  359,
+                  364,
+                  365,
+                  349,
+                  356,
+                  384,
+                  394
+                ]
+              },
+              "documentAtMs": {
+                "median": 345.5,
+                "q1": 333,
+                "q3": 354.5,
+                "min": 331,
+                "max": 414,
+                "values": [
+                  356,
+                  351,
+                  414,
+                  333,
+                  348,
+                  331,
+                  343,
+                  333,
+                  335,
+                  331,
+                  354,
+                  367
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 861.1,
+                "q1": 811.475,
+                "q3": 870.75,
+                "min": 763.5,
+                "max": 891.6,
+                "values": [
+                  800.6,
+                  864.6,
+                  880.2,
+                  810.8,
+                  867.6,
+                  844.4,
+                  863.2,
+                  859,
+                  811.7,
+                  763.5,
+                  884.2,
+                  891.6
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            }
+          },
+          "ratios": {
+            "1.4.0-again": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 0.996,
+                "q1": 0.982,
+                "q3": 1.059,
+                "min": 0.9074,
+                "max": 1.1465,
+                "values": [
+                  1.0848,
+                  0.9793,
+                  1.1465,
+                  0.9994,
+                  1.0432,
+                  0.984,
+                  1.0854,
+                  0.9936,
+                  0.9074,
+                  0.9824,
+                  1.0503,
+                  0.9626
+                ]
+              },
+              "heap": {
+                "median": 0.999,
+                "q1": 0.999,
+                "q3": 1.001,
+                "min": 0.9875,
+                "max": 1.0298,
+                "values": [
+                  1.0013,
+                  0.9976,
+                  0.9991,
+                  0.9989,
+                  0.9985,
+                  0.9988,
+                  1.0012,
+                  1.005,
+                  0.9875,
+                  1.0007,
+                  0.9994,
+                  1.0298
+                ]
+              }
+            },
+            "next": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 1.104,
+                "q1": 1.059,
+                "q3": 1.127,
+                "min": 0.9631,
+                "max": 1.1357,
+                "values": [
+                  1.1218,
+                  1.1299,
+                  1.1286,
+                  1.0281,
+                  1.1258,
+                  1.0694,
+                  1.0876,
+                  1.0735,
+                  0.9631,
+                  0.9925,
+                  1.1357,
+                  1.1204
+                ]
+              },
+              "heap": {
+                "median": 1.118,
+                "q1": 1.107,
+                "q3": 1.12,
+                "min": 1.1039,
+                "max": 1.1227,
+                "values": [
+                  1.1227,
+                  1.1194,
+                  1.1211,
+                  1.1039,
+                  1.1202,
+                  1.1073,
+                  1.1159,
+                  1.1207,
+                  1.1056,
+                  1.1201,
+                  1.1089,
+                  1.1045
+                ]
+              }
+            }
+          }
+        },
+        "maximal": {
+          "fixtureDigest": "7eac2192becb6faff4bf074e10e935a3fe040cb58f97b360c682ad93c4092431",
+          "packages": {
+            "1.4.0": {
+              "interactionReadyMs": {
+                "median": 858.7,
+                "q1": 841.325,
+                "q3": 942.025,
+                "min": 831.1,
+                "max": 1071.7,
+                "values": [
+                  1071.7,
+                  845.8,
+                  834.1,
+                  851.8,
+                  831.1,
+                  902.3,
+                  993.9,
+                  840.8,
+                  865.6,
+                  841.5,
+                  930.5,
+                  976.6
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4165244,
+                "q1": 4157305,
+                "q3": 4171680,
+                "min": 4146552,
+                "max": 4180952,
+                "values": [
+                  4165664,
+                  4163864,
+                  4176060,
+                  4172424,
+                  4164824,
+                  4180952,
+                  4168972,
+                  4158320,
+                  4147400,
+                  4146552,
+                  4171432,
+                  4154260
+                ]
+              },
+              "driverMs": {
+                "median": 19.45,
+                "q1": 12.175,
+                "q3": 22.325,
+                "min": 10.8,
+                "max": 43.3,
+                "values": [
+                  34.8,
+                  20,
+                  11.5,
+                  19.8,
+                  19.1,
+                  12.9,
+                  43.3,
+                  12.4,
+                  20.5,
+                  10.8,
+                  11,
+                  27.8
+                ]
+              },
+              "throttledAtMs": {
+                "median": 344.5,
+                "q1": 334.5,
+                "q3": 353,
+                "min": 323,
+                "max": 374,
+                "values": [
+                  346,
+                  343,
+                  332,
+                  339,
+                  333,
+                  374,
+                  353,
+                  335,
+                  349,
+                  323,
+                  353,
+                  369
+                ]
+              },
+              "documentAtMs": {
+                "median": 329.5,
+                "q1": 323.5,
+                "q3": 342,
+                "min": 312,
+                "max": 356,
+                "values": [
+                  331,
+                  326,
+                  319,
+                  328,
+                  316,
+                  356,
+                  342,
+                  325,
+                  340,
+                  312,
+                  342,
+                  351
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 664.1,
+                "q1": 653.05,
+                "q3": 722.975,
+                "min": 631.4,
+                "max": 764.9,
+                "values": [
+                  764.9,
+                  654.5,
+                  653.1,
+                  662.1,
+                  640,
+                  700.2,
+                  755.2,
+                  652.9,
+                  666.1,
+                  631.4,
+                  718.6,
+                  736.1
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            },
+            "1.4.0-again": {
+              "interactionReadyMs": {
+                "median": 869.25,
+                "q1": 844.425,
+                "q3": 939.2,
+                "min": 835,
+                "max": 1005.2,
+                "values": [
+                  979,
+                  845.2,
+                  858.6,
+                  835,
+                  867.1,
+                  1005.2,
+                  931.2,
+                  842.1,
+                  871.4,
+                  928.5,
+                  838.5,
+                  963.2
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4169428,
+                "q1": 4162086,
+                "q3": 4173819,
+                "min": 4153908,
+                "max": 4180180,
+                "values": [
+                  4179692,
+                  4167420,
+                  4176180,
+                  4162260,
+                  4161564,
+                  4172396,
+                  4153908,
+                  4163800,
+                  4180180,
+                  4171436,
+                  4161544,
+                  4173032
+                ]
+              },
+              "driverMs": {
+                "median": 28.35,
+                "q1": 12.1,
+                "q3": 36.725,
+                "min": 11.5,
+                "max": 50.4,
+                "values": [
+                  15.5,
+                  12.1,
+                  27.9,
+                  36.1,
+                  43.9,
+                  28.8,
+                  12.1,
+                  11.5,
+                  11.8,
+                  50.4,
+                  38.6,
+                  34.1
+                ]
+              },
+              "throttledAtMs": {
+                "median": 338,
+                "q1": 335.75,
+                "q3": 353.5,
+                "min": 327,
+                "max": 405,
+                "values": [
+                  352,
+                  337,
+                  336,
+                  333,
+                  339,
+                  358,
+                  405,
+                  337,
+                  350,
+                  327,
+                  335,
+                  373
+                ]
+              },
+              "documentAtMs": {
+                "median": 328.5,
+                "q1": 321,
+                "q3": 343.75,
+                "min": 319,
+                "max": 359,
+                "values": [
+                  337,
+                  319,
+                  321,
+                  320,
+                  326,
+                  346,
+                  350,
+                  331,
+                  343,
+                  321,
+                  325,
+                  359
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 660.5,
+                "q1": 652.525,
+                "q3": 716,
+                "min": 646,
+                "max": 777.7,
+                "values": [
+                  752.5,
+                  663.8,
+                  653.4,
+                  646,
+                  657.2,
+                  777.7,
+                  706.5,
+                  649.9,
+                  672.6,
+                  648.1,
+                  654.9,
+                  744.5
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            },
+            "next": {
+              "interactionReadyMs": {
+                "median": 898.9,
+                "q1": 875.625,
+                "q3": 948.35,
+                "min": 855.7,
+                "max": 1001,
+                "values": [
+                  908.1,
+                  875.9,
+                  991.4,
+                  857.1,
+                  855.7,
+                  934,
+                  874.8,
+                  889.7,
+                  877.1,
+                  924.4,
+                  1001,
+                  996.4
+                ]
+              },
+              "markMs": {
+                "median": 903,
+                "q1": 862.175,
+                "q3": 942.375,
+                "min": 843.6,
+                "max": 993.2,
+                "values": [
+                  900.5,
+                  870.2,
+                  984.3,
+                  850.3,
+                  843.6,
+                  928.4,
+                  863.4,
+                  905.5,
+                  858.5,
+                  916.8,
+                  993.2,
+                  989.3
+                ]
+              },
+              "heapBytes": {
+                "median": 4651656,
+                "q1": 4626440,
+                "q3": 4663173,
+                "min": 4559692,
+                "max": 4841588,
+                "values": [
+                  4654672,
+                  4663404,
+                  4644568,
+                  4652052,
+                  4572056,
+                  4841588,
+                  4567256,
+                  4825800,
+                  4663096,
+                  4644964,
+                  4651260,
+                  4559692
+                ]
+              },
+              "driverMs": {
+                "median": 14.1,
+                "q1": 12.7,
+                "q3": 16.075,
+                "min": 10.6,
+                "max": 50.3,
+                "values": [
+                  14.2,
+                  10.6,
+                  50.3,
+                  12.1,
+                  14.1,
+                  11.8,
+                  12.9,
+                  35.6,
+                  20.5,
+                  14.1,
+                  14.6,
+                  14
+                ]
+              },
+              "throttledAtMs": {
+                "median": 345.5,
+                "q1": 339,
+                "q3": 376.25,
+                "min": 335,
+                "max": 401,
+                "values": [
+                  337,
+                  347,
+                  382,
+                  340,
+                  335,
+                  401,
+                  344,
+                  339,
+                  339,
+                  375,
+                  361,
+                  380
+                ]
+              },
+              "documentAtMs": {
+                "median": 329,
+                "q1": 323.75,
+                "q3": 352.75,
+                "min": 315,
+                "max": 365,
+                "values": [
+                  323,
+                  324,
+                  364,
+                  322,
+                  315,
+                  365,
+                  329,
+                  329,
+                  328,
+                  352,
+                  335,
+                  355
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 719.35,
+                "q1": 703.7,
+                "q3": 774.3,
+                "min": 694.5,
+                "max": 806.9,
+                "values": [
+                  723.5,
+                  715.2,
+                  799.8,
+                  703.1,
+                  694.5,
+                  765.8,
+                  708.3,
+                  701,
+                  703.9,
+                  754.2,
+                  804,
+                  806.9
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 1,
+                "values": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            }
+          },
+          "ratios": {
+            "1.4.0-again": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 1,
+                "q1": 0.969,
+                "q3": 1.033,
+                "min": 0.9011,
+                "max": 1.114,
+                "values": [
+                  0.9135,
+                  0.9993,
+                  1.0294,
+                  0.9803,
+                  1.0433,
+                  1.114,
+                  0.9369,
+                  1.0015,
+                  1.0067,
+                  1.1034,
+                  0.9011,
+                  0.9863
+                ]
+              },
+              "heap": {
+                "median": 1,
+                "q1": 0.998,
+                "q3": 1.004,
+                "min": 0.9964,
+                "max": 1.0079,
+                "values": [
+                  1.0034,
+                  1.0009,
+                  1,
+                  0.9976,
+                  0.9992,
+                  0.998,
+                  0.9964,
+                  1.0013,
+                  1.0079,
+                  1.006,
+                  0.9976,
+                  1.0045
+                ]
+              }
+            },
+            "next": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 1.032,
+                "q1": 1.012,
+                "q3": 1.063,
+                "min": 0.8473,
+                "max": 1.1886,
+                "values": [
+                  0.8473,
+                  1.0356,
+                  1.1886,
+                  1.0062,
+                  1.0296,
+                  1.0351,
+                  0.8802,
+                  1.0582,
+                  1.0133,
+                  1.0985,
+                  1.0758,
+                  1.0203
+                ]
+              },
+              "heap": {
+                "median": 1.116,
+                "q1": 1.109,
+                "q3": 1.121,
+                "min": 1.0955,
+                "max": 1.1605,
+                "values": [
+                  1.1174,
+                  1.12,
+                  1.1122,
+                  1.115,
+                  1.0978,
+                  1.158,
+                  1.0955,
+                  1.1605,
+                  1.1243,
+                  1.1202,
+                  1.115,
+                  1.0976
+                ]
+              }
+            }
+          }
+        },
+        "first-run": {
+          "fixtureDigest": null,
+          "packages": {
+            "1.4.0": {
+              "interactionReadyMs": {
+                "median": 949.8,
+                "q1": 884.325,
+                "q3": 1056.275,
+                "min": 860.3,
+                "max": 1149.8,
+                "values": [
+                  955.2,
+                  881.6,
+                  881.7,
+                  1062.5,
+                  1069.3,
+                  1149.8,
+                  1054.2,
+                  885.2,
+                  860.3,
+                  944.4,
+                  963.5,
+                  888.9
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4204372,
+                "q1": 4201047,
+                "q3": 4206154,
+                "min": 4200684,
+                "max": 4219428,
+                "values": [
+                  4210460,
+                  4204252,
+                  4200904,
+                  4204740,
+                  4200912,
+                  4204240,
+                  4201092,
+                  4204492,
+                  4204508,
+                  4219428,
+                  4200684,
+                  4210396
+                ]
+              },
+              "driverMs": {
+                "median": 23.8,
+                "q1": 14.075,
+                "q3": 58.85,
+                "min": 13.1,
+                "max": 118.3,
+                "values": [
+                  86.1,
+                  13.1,
+                  48.9,
+                  19,
+                  15.8,
+                  14.3,
+                  13.4,
+                  13.4,
+                  50.7,
+                  83.3,
+                  28.6,
+                  118.3
+                ]
+              },
+              "throttledAtMs": {
+                "median": 349.5,
+                "q1": 343.5,
+                "q3": 362.25,
+                "min": 321,
+                "max": 366,
+                "values": [
+                  354,
+                  351,
+                  345,
+                  363,
+                  366,
+                  366,
+                  348,
+                  337,
+                  339,
+                  347,
+                  362,
+                  321
+                ]
+              },
+              "documentAtMs": {
+                "median": 336.5,
+                "q1": 331.75,
+                "q3": 341.75,
+                "min": 315,
+                "max": 355,
+                "values": [
+                  339,
+                  335,
+                  330,
+                  355,
+                  350,
+                  350,
+                  337,
+                  331,
+                  332,
+                  338,
+                  336,
+                  315
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 679.25,
+                "q1": 664.525,
+                "q3": 714.825,
+                "min": 614,
+                "max": 803.4,
+                "values": [
+                  687.5,
+                  684.8,
+                  666.8,
+                  803.4,
+                  712,
+                  754.4,
+                  673.7,
+                  654.4,
+                  666.9,
+                  657.7,
+                  723.3,
+                  614
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1.25,
+                "min": 1,
+                "max": 2,
+                "values": [
+                  2,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  2,
+                  1,
+                  2
+                ]
+              },
+              "failures": []
+            },
+            "1.4.0-again": {
+              "interactionReadyMs": {
+                "median": 902.4,
+                "q1": 869.525,
+                "q3": 1043.175,
+                "min": 842.8,
+                "max": 1266.7,
+                "values": [
+                  879.2,
+                  969.4,
+                  1057.5,
+                  1038.4,
+                  1266.7,
+                  1140.3,
+                  870.5,
+                  898.1,
+                  906.7,
+                  866.6,
+                  858.9,
+                  842.8
+                ]
+              },
+              "markMs": null,
+              "heapBytes": {
+                "median": 4204432,
+                "q1": 4201131,
+                "q3": 4204564,
+                "min": 4200480,
+                "max": 4219672,
+                "values": [
+                  4204492,
+                  4219672,
+                  4200480,
+                  4204492,
+                  4204480,
+                  4204780,
+                  4201144,
+                  4201092,
+                  4209968,
+                  4204264,
+                  4200864,
+                  4204384
+                ]
+              },
+              "driverMs": {
+                "median": 21.65,
+                "q1": 14.525,
+                "q3": 49.5,
+                "min": 10.1,
+                "max": 121.9,
+                "values": [
+                  51.3,
+                  121.9,
+                  14.8,
+                  16.7,
+                  48.9,
+                  12.5,
+                  13.7,
+                  47.5,
+                  77.6,
+                  24.8,
+                  10.1,
+                  18.5
+                ]
+              },
+              "throttledAtMs": {
+                "median": 354,
+                "q1": 344,
+                "q3": 370.5,
+                "min": 330,
+                "max": 413,
+                "values": [
+                  344,
+                  363,
+                  387,
+                  391,
+                  413,
+                  365,
+                  344,
+                  353,
+                  330,
+                  343,
+                  348,
+                  355
+                ]
+              },
+              "documentAtMs": {
+                "median": 339,
+                "q1": 333,
+                "q3": 347,
+                "min": 320,
+                "max": 365,
+                "values": [
+                  330,
+                  337,
+                  365,
+                  344,
+                  364,
+                  356,
+                  329,
+                  334,
+                  320,
+                  335,
+                  341,
+                  341
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 668.95,
+                "q1": 657.525,
+                "q3": 743.25,
+                "min": 648.5,
+                "max": 821,
+                "values": [
+                  674.7,
+                  675.2,
+                  816.8,
+                  793.8,
+                  821,
+                  726.4,
+                  653.4,
+                  659.4,
+                  648.5,
+                  652.3,
+                  663.2,
+                  658.9
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 1,
+                "min": 1,
+                "max": 2,
+                "values": [
+                  1,
+                  2,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  2,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            },
+            "next": {
+              "interactionReadyMs": {
+                "median": 974.5,
+                "q1": 900.8,
+                "q3": 1044.6,
+                "min": 880.8,
+                "max": 1151.9,
+                "values": [
+                  983.5,
+                  1035.6,
+                  1002.6,
+                  1151.9,
+                  1117.9,
+                  1071.6,
+                  903.8,
+                  930.2,
+                  891.8,
+                  965.5,
+                  889.5,
+                  880.8
+                ]
+              },
+              "markMs": {
+                "median": 885.7,
+                "q1": 874.525,
+                "q3": 949.5,
+                "min": 851.2,
+                "max": 1139.7,
+                "values": [
+                  851.2,
+                  903.7,
+                  878.4,
+                  1139.7,
+                  1105.5,
+                  1051.8,
+                  892.1,
+                  915.4,
+                  854.5,
+                  876.3,
+                  879.3,
+                  869.2
+                ]
+              },
+              "heapBytes": {
+                "median": 4599384,
+                "q1": 4595966,
+                "q3": 4604951,
+                "min": 4595204,
+                "max": 4613044,
+                "values": [
+                  4603964,
+                  4609452,
+                  4613044,
+                  4599496,
+                  4596100,
+                  4599532,
+                  4595244,
+                  4599244,
+                  4595204,
+                  4607912,
+                  4595564,
+                  4599272
+                ]
+              },
+              "driverMs": {
+                "median": 21.35,
+                "q1": 18.25,
+                "q3": 99.9,
+                "min": 12.3,
+                "max": 133.5,
+                "values": [
+                  132.9,
+                  133.5,
+                  125.4,
+                  19.3,
+                  20.2,
+                  22.5,
+                  18.8,
+                  16.6,
+                  38.2,
+                  91.4,
+                  16.2,
+                  12.3
+                ]
+              },
+              "throttledAtMs": {
+                "median": 357,
+                "q1": 352.75,
+                "q3": 364.25,
+                "min": 323,
+                "max": 455,
+                "values": [
+                  353,
+                  374,
+                  357,
+                  455,
+                  361,
+                  378,
+                  352,
+                  361,
+                  352,
+                  357,
+                  355,
+                  323
+                ]
+              },
+              "documentAtMs": {
+                "median": 337.5,
+                "q1": 335.5,
+                "q3": 345,
+                "min": 315,
+                "max": 411,
+                "values": [
+                  337,
+                  345,
+                  342,
+                  411,
+                  345,
+                  362,
+                  331,
+                  338,
+                  337,
+                  334,
+                  336,
+                  315
+                ]
+              },
+              "domContentLoadedMs": {
+                "median": 727,
+                "q1": 708.95,
+                "q3": 756.625,
+                "min": 665.3,
+                "max": 916.4,
+                "values": [
+                  724.7,
+                  753.7,
+                  738.6,
+                  916.4,
+                  826.9,
+                  765.4,
+                  709.7,
+                  726.3,
+                  727.7,
+                  706.7,
+                  699.7,
+                  665.3
+                ]
+              },
+              "keyTries": {
+                "median": 1,
+                "q1": 1,
+                "q3": 2,
+                "min": 1,
+                "max": 2,
+                "values": [
+                  2,
+                  2,
+                  2,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  2,
+                  1,
+                  1
+                ]
+              },
+              "failures": []
+            }
+          },
+          "ratios": {
+            "1.4.0-again": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 0.984,
+                "q1": 0.92,
+                "q3": 1.065,
+                "min": 0.8257,
+                "max": 1.1994,
+                "values": [
+                  0.9204,
+                  1.0996,
+                  1.1994,
+                  0.9773,
+                  1.1846,
+                  0.9917,
+                  0.8257,
+                  1.0146,
+                  1.0539,
+                  0.9176,
+                  0.8914,
+                  0.9481
+                ]
+              },
+              "heap": {
+                "median": 1,
+                "q1": 0.999,
+                "q3": 1,
+                "min": 0.9964,
+                "max": 1.0037,
+                "values": [
+                  0.9986,
+                  1.0037,
+                  0.9999,
+                  0.9999,
+                  1.0008,
+                  1.0001,
+                  1,
+                  0.9992,
+                  1.0013,
+                  0.9964,
+                  1,
+                  0.9986
+                ]
+              }
+            },
+            "next": {
+              "against": "1.4.0",
+              "rounds": 12,
+              "interactionReady": {
+                "median": 1.033,
+                "q1": 0.976,
+                "q3": 1.059,
+                "min": 0.8573,
+                "max": 1.1747,
+                "values": [
+                  1.0296,
+                  1.1747,
+                  1.1371,
+                  1.0841,
+                  1.0455,
+                  0.932,
+                  0.8573,
+                  1.0508,
+                  1.0366,
+                  1.0223,
+                  0.9232,
+                  0.9909
+                ]
+              },
+              "heap": {
+                "median": 1.094,
+                "q1": 1.093,
+                "q3": 1.094,
+                "min": 1.0921,
+                "max": 1.0981,
+                "values": [
+                  1.0935,
+                  1.0964,
+                  1.0981,
+                  1.0939,
+                  1.0941,
+                  1.094,
+                  1.0938,
+                  1.0939,
+                  1.0929,
+                  1.0921,
+                  1.094,
+                  1.0924
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "problems": []
+  },
+  "proposed": {
+    "status": "proposed, awaiting the owner",
+    "timing": {
+      "rule": "paired: each gate run times the frozen 1.4.0 package twice and the candidate once a round, interleaved and rotated, on the same machine, at least 12 rounds per profile and a multiple of the package count (12, 15, 18 for three), so each package runs in each position equally often. It fails when the median of the candidate's per-round ratio to the mean of the two 1.4.0 runs exceeds 1 + tolerancePct / 100. The run is invalid, not a pass, when 1.4.0 against itself is more than tolerancePct off, a check that catches only gross noise. tolerancePct was sized on 1.4.0 against one copy of itself; the mean of two is less noisy, so it is slightly loose for this comparison. The gate machine sizes its own tolerance from its own run of 1.4.0 against itself. Absolute ms are recorded beside it, not gated.",
+      "reference": "1.4.0, built from v1.4.0 (e93b21e) as this report built it",
+      "tolerancePct": 7,
+      "profiles": [
+        "typical",
+        "maximal"
+      ],
+      "reported": [
+        "first-run"
+      ]
+    },
+    "heap": {
+      "rule": "absolute MiB at interaction-ready, failing above the budget by more than tolerancePct",
+      "tolerancePct": 3,
+      "ownerChoice": {
+        "a": {
+          "budgetBytes": 4194304,
+          "says": "1.4.0's heap: with the 3% tolerance it fails above 4.12 MiB, so next fails it until the kernel's extra comes off"
+        },
+        "b": {
+          "budgetBytes": 4666163.2,
+          "says": "next's heap (its highest median, 4.44), accepting the kernel's extra of about 0.45 MiB (11%) over 1.4.0; with the 3% tolerance it fails above 4.58 MiB, about 0.6 MiB over 1.4.0"
+        }
+      }
+    },
+    "bytes": {
+      "newtab": {
+        "jsBytes": {
+          "raw": 716800,
+          "gzip": 204800
+        },
+        "cssBytes": {
+          "raw": 102400,
+          "gzip": 19456
+        },
+        "htmlBytes": {
+          "raw": 73728,
+          "gzip": 12288
+        },
+        "fontBytes": {
+          "raw": 0,
+          "gzip": 0
+        },
+        "jsFiles": 90
+      },
+      "popup": {
+        "jsBytes": {
+          "raw": 117760,
+          "gzip": 40960
+        },
+        "cssBytes": {
+          "raw": 12288,
+          "gzip": 4096
+        },
+        "htmlBytes": {
+          "raw": 16384,
+          "gzip": 4096
+        },
+        "fontBytes": {
+          "raw": 0,
+          "gzip": 0
+        },
+        "jsFiles": 40
+      },
+      "sidepanel": {
+        "jsBytes": {
+          "raw": 114688,
+          "gzip": 40960
+        },
+        "cssBytes": {
+          "raw": 6144,
+          "gzip": 2560
+        },
+        "htmlBytes": {
+          "raw": 10240,
+          "gzip": 3072
+        },
+        "fontBytes": {
+          "raw": 0,
+          "gzip": 0
+        },
+        "jsFiles": 40
+      }
+    }
+  }
+}
