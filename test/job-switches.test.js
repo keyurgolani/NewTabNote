@@ -59,15 +59,17 @@ function heldAI() {
 
 /**
  * A new tab with three untitled notes that hold enough text for both jobs, both switched on
- * as onboarding leaves them, the Settings controls, NotesManager with a held AI port, and
- * SettingsController wired to it as App wires them
+ * as onboarding leaves them, the Settings controls, and NotesManager with a held AI port,
+ * following its jobs' settings through the settings port as App has it do. With `name`, the
+ * notes have that title, and with `text`, each holds it.
+ * @param {{name?: string, text?: string}} [options]
  */
-async function setup() {
+async function setup({ name = 'Untitled', text } = {}) {
   const env = createLegacyEnv();
   await createDatabase(env.indexedDB, {
     records: {
-      canvases: ['A', 'B', 'C'].map((id) => note(id, { name: 'Untitled' })),
-      elements: ['A', 'B', 'C'].map((id, index) => block(`${id.toLowerCase()}1`, id, 0, TEXT[index])),
+      canvases: ['A', 'B', 'C'].map((id) => note(id, { name })),
+      elements: ['A', 'B', 'C'].map((id, index) => block(`${id.toLowerCase()}1`, id, 0, text === undefined ? TEXT[index] : text)),
     },
   });
   env.load(...FILES);
@@ -104,8 +106,10 @@ async function setup() {
     logger: quietLogger,
     llm: ai.port,
     documentClient: env.documentClient,
+    settings: env.settingsClient,
   });
   manager.getEditor = () => null;
+  manager.followJobSettings();
   const settings = new (env.get('SettingsController'))({
     settings: env.settingsClient,
     documentClient: env.documentClient,
@@ -113,8 +117,6 @@ async function setup() {
     domRefs: null,
     logger: quietLogger,
   });
-  settings.onSetupAutoTitle = () => manager.setupAutoTitle();
-  settings.onSetupInsightsExtraction = () => manager.setupInsightsExtraction();
   settings.setupJobSettings();
   settings.setupSettingsSync();
   return { env, Storage, ai, manager, controls };
@@ -224,6 +226,37 @@ describe('the auto-title and insights switches stop provider calls at once (priv
     assert.deepEqual(ai.calls, [], 'no note went to the provider');
     assert.equal(manager.autoTitleIntervalId, null);
   });
+
+  for (const [job, setUp, enabledId, intervalId, intervalTo, runKey] of [
+    ['auto-title', 'setupAutoTitle', 'auto-title-enabled', 'auto-title-interval', '60', 'setting_lastAutoTitleRun'],
+    ['insights', 'setupInsightsExtraction', 'insights-enabled', 'insights-interval', '1440', 'setting_lastInsightsRun'],
+  ]) {
+    it(`a ${job} switch or interval changed in this tab sets the job up once, so it runs once and records one run`, async () => {
+      // Titled notes too short for insights, so each run sends nothing and ends at once
+      const { env, ai, manager, controls } = await setup({ name: 'Groceries', text: 'Milk and eggs' });
+      await toggle(env, controls[enabledId], false);
+      let setUps = 0;
+      const original = manager[setUp].bind(manager);
+      manager[setUp] = () => {
+        setUps += 1;
+        return original();
+      };
+      const runsRecorded = () => env.chrome.writes().filter((write) => write.keys.includes(runKey)).length;
+      const before = runsRecorded();
+
+      await toggle(env, controls[enabledId], true);
+      assert.equal(setUps, 1, 'switched on: set up once, by the settings change');
+      assert.equal(runsRecorded() - before, 1, 'one run, so one run recorded');
+
+      controls[intervalId].value = intervalTo;
+      controls[intervalId].dispatchEvent({ type: 'change' });
+      await run(env, 1000);
+      assert.equal(setUps, 2, 'a new interval: set up once more');
+      assert.equal(runsRecorded() - before, 2);
+      assert.deepEqual(ai.calls, [], 'no note went to the provider');
+      manager.destroy();
+    });
+  }
 
   it('switching auto-title off while its catch-up run goes starts no timer after it', async () => {
     const { env, ai, manager } = await setup();
