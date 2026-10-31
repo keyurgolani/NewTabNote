@@ -110,7 +110,9 @@ function migrationDone() {
  * What a page that found no database, or an older one, hears when it waits on the migration
  * (#17, Q12): the attempt in progress, or after one that was short of space or failed, a new
  * one. Only its status goes back, never anything stored. js/kernel/composition/worker-network.js
- * runs it for this extension's own senders only.
+ * runs it for this extension's own senders only (#21's isOwnSender), a page in a tab included,
+ * since a new attempt can make another full recovery point, and answers any other sender
+ * `{error: 'request-refused'}`.
  * @returns {Promise<{status: string}>}
  */
 function migrationStatus() {

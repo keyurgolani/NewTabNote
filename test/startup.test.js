@@ -58,14 +58,45 @@ function allRecords() {
  * What `env` logged at `level` whose first argument is `first`, as each call's arguments
  * @returns {Array<Array<any>>}
  */
+/** #20's mark of each open incident, which a failure event keeps once it reaches the journal */
+const OPEN_SITES = 'trust.openSites';
+
+/**
+ * Each value chrome.storage.local's `key` is set to from now on, so a test can say what was
+ * written as well as that it was. Install it before the worker starts.
+ * @returns {unknown[]}
+ */
+function valuesSetFor(env, key) {
+  const local = env.chrome.api.storage.local;
+  const set = local.set.bind(local);
+  const values = [];
+  local.set = (items, callback) => {
+    if (items && Object.hasOwn(items, key)) values.push(plain(items[key]));
+    return set(items, callback);
+  };
+  return values;
+}
+
 /**
  * chrome.storage.local writes but the worker's record of its migration run (#17 PR 1b), the
- * one key it writes on a profile it leaves as it is, and #20's mark of the refused captures'
- * open incident (`trust.openSites`), which its failure events keep once they reach the journal
+ * one key it writes on a profile it leaves as it is, and the refused captures' marks of their
+ * open incident (OPEN_SITES). Those are pinned to the captures: `refused` writes of the key
+ * alone, one per refused capture, each holding only `capture.failed`'s one incident, counted
+ * up to that capture. A mark of anything else, or one more write, stays in what this answers
+ * or fails here.
+ * @param {{refused: number, marks: unknown[]}} captures - how many captures were refused, and
+ *   each value OPEN_SITES was set to (valuesSetFor)
  */
-function writesButUpgradeRecord(env) {
-  return env.chrome.writes().filter((w) => !(w.method === 'set' && w.keys.length === 1
-    && (w.keys[0] === 'setting_storageUpgrade' || w.keys[0] === 'trust.openSites')));
+function writesButUpgradeRecord(env, { refused, marks }) {
+  const writes = env.chrome.writes().filter((w) => !(w.method === 'set' && w.keys.length === 1 && w.keys[0] === 'setting_storageUpgrade'));
+  const marked = writes.filter((w) => w.method === 'set' && w.keys.length === 1 && w.keys[0] === OPEN_SITES);
+  assert.equal(marked.length, refused, 'one mark per refused capture');
+  const id = marks[0]?.['capture.failed']?.['capture/capture-failed/-']?.id;
+  assert.equal(typeof id, 'string', JSON.stringify(marks));
+  assert.deepEqual(marks, Array.from({ length: refused }, (_, index) => ({
+    'capture.failed': { 'capture/capture-failed/-': { id, occurrences: index + 1 } },
+  })));
+  return writes.filter((w) => !marked.includes(w));
 }
 
 function logged(env, level, first) {
@@ -517,6 +548,7 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { version: 10 });
     const before = await dumpDatabase(env.indexedDB);
+    const marks = valuesSetFor(env, OPEN_SITES);
     await startWorker(env);
     const tab = { id: 7, windowId: 1, url: 'https://example.test/page', title: 'Example page' };
 
@@ -530,8 +562,10 @@ describe('a database a newer build upgraded, past version 9 (AC7)', () => {
       assert.match(notification.message, /^Your notes were upgraded by a newer NewTabNote version\./);
     }
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    // The worker's run left it as it was, and recorded that, and wrote nothing else
-    assert.deepEqual(writesButUpgradeRecord(env), []);
+    // The worker's run left it as it was, and recorded that, the three refusals marked their
+    // incident, and nothing else was written
+    await waitFor(() => marks.length >= 3, { withinMs: 10000, message: "the refusals' marks" });
+    assert.deepEqual(writesButUpgradeRecord(env, { refused: 3, marks }), []);
     assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
 
     // Each refusal is in the console with its cause and code, and so is the open's
@@ -664,6 +698,7 @@ describe('background capture on a version-8 database', () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { omit: ['elements'] });
     const before = await dumpDatabase(env.indexedDB);
+    const marks = valuesSetFor(env, OPEN_SITES);
     await startWorker(env);
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, { url: 'https://example.test/', title: 'x' });
     await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'refusal notification' });
@@ -672,8 +707,10 @@ describe('background capture on a version-8 database', () => {
       message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
     });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    // The run gave it a recovery point and no step (Q13), and recorded that
-    assert.deepEqual(writesButUpgradeRecord(env), []);
+    // The run gave it a recovery point and no step (Q13), and recorded that, and the refusal
+    // marked its incident
+    await waitFor(() => marks.length >= 1, { withinMs: 10000, message: "the refusal's mark" });
+    assert.deepEqual(writesButUpgradeRecord(env, { refused: 1, marks }), []);
     assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
   });
 
