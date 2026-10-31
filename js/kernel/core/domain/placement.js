@@ -21,12 +21,18 @@
  */
 
 /**
- * The fields 1.4.x doesn't know, which #17 PR 3 adds to notes. A legacy path that writes notes
- * from outside the kernel (Settings' import) and the pinned point's export drop them, so a trip
- * through 1.4.x, which keeps a field it doesn't know while it changes the flags, can't bring one
- * back stale.
+ * The fields 1.4.x doesn't know, which #17 PR 3 adds to notes: the group (PR 3a), and a Daily
+ * Note's key (PR 3b, domain/daily.js). A legacy path that writes notes from outside the kernel
+ * (Settings' import), Export JSON, and a point's export drop them, so a trip through 1.4.x,
+ * which keeps a field it doesn't know while it changes the flags, can't bring one back stale.
  */
 export const PLACEMENT_FIELDS = Object.freeze(['placement', 'kind', 'lifecycle']);
+
+/** A Daily Note's key, its zone, and the note that holds the key when another does (domain/daily.js) */
+export const DAILY_FIELDS = Object.freeze(['dailyKey', 'dailyTimeZone', 'dailyDuplicateOf']);
+
+/** Every field #17 PR 3 adds to a note */
+export const NEW_NOTE_FIELDS = Object.freeze([...PLACEMENT_FIELDS, ...DAILY_FIELDS]);
 
 const DATE_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const UNTITLED = /^untitled\s*\d*$/;
@@ -125,7 +131,8 @@ export function placementGroupOf(note, liveFolderIds) {
  * What #1's placementOf finds on a note that its placement leaves as it is, as codes: a
  * `folderId` naming no live folder (`stale-folder`), and a Daily Note without a valid `dateStr`
  * (`daily-without-date`). #17's transform counts them in its receipt. The third, a Daily Note
- * keyed by its UTC date (`daily-utc-key`), is #17 PR 3b's.
+ * keyed by its UTC date (`daily-utc-key`), is daily.js's utcKeyedLocalKey, which #17 PR 3b's
+ * logical 3 re-keys by.
  * @param {Record<string, unknown>} note
  * @param {ReadonlySet<string>} liveFolderIds
  * @returns {Array<'daily-without-date' | 'stale-folder'>}
@@ -189,13 +196,13 @@ export function withPlacementGroup(before, after) {
 }
 
 /**
- * A note without its fields of #17 PR 3, as 1.4.x stores one
+ * A note without its fields of #17 PR 3 (NEW_NOTE_FIELDS), as 1.4.x stores one
  * @template {Record<string, unknown>} T
  * @param {T} note
  * @returns {T}
  */
 export function withoutPlacement(note) {
   const copy = { ...note };
-  for (const field of PLACEMENT_FIELDS) delete copy[field];
+  for (const field of NEW_NOTE_FIELDS) delete copy[field];
   return copy;
 }
