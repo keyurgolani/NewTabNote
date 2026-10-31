@@ -27,12 +27,25 @@
       "px-font-size": 176,
       "alias-use": 604
     },
+    "css/popup.css": {
+      "color-literal": 54,
+      "theme-branching": 2,
+      "transition-all": 2,
+      "px-font-size": 16,
+      "alias-use": 37
+    },
     "css/premium-chat.css": {
       "color-literal": 93,
       "theme-branching": 1,
-      "backdrop-filter": 4,
+      "backdrop-filter": 2,
       "px-font-size": 23,
-      "alias-use": 101
+      "alias-use": 99
+    },
+    "css/sidepanel.css": {
+      "color-literal": 21,
+      "theme-branching": 1,
+      "px-font-size": 13,
+      "alias-use": 33
     },
     "css/stats.css": {
       "undefined-var": 4,
@@ -97,21 +110,6 @@
     },
     "newtab.html": {
       "style-attribute": 2
-    },
-    "popup.html": {
-      "color-literal": 54,
-      "theme-branching": 2,
-      "inline-style-block": 1,
-      "transition-all": 2,
-      "px-font-size": 16,
-      "alias-use": 37
-    },
-    "sidepanel.html": {
-      "color-literal": 21,
-      "theme-branching": 1,
-      "inline-style-block": 1,
-      "px-font-size": 13,
-      "alias-use": 33
     }
   }
 }

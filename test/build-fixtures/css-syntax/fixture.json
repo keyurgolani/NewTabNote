@@ -1,5 +1,5 @@
 {
-  "rule": "a level-2 stylesheet has a syntax error CleanCSS reports only as a warning, and drops the rule it couldn't read",
+  "rule": "a stylesheet has a syntax error lightningcss refuses",
   "expect": [
     "build/css"
   ],

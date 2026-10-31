@@ -10,14 +10,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
-const { readFixtures, reportedCodes } = require('../scripts/build/verify-fixtures.js');
+const { readFixtures, reportedCodes, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
 
 const ROOT = path.join(__dirname, '..');
 const fixtures = readFixtures();
 
-// Codes no fixture can show: a mistyped argument, no npm ci, a zip write that throws, and
-// the canary, which its own fixture proves absent
-const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary'];
+// Codes no fixture can show: a mistyped argument, no npm ci, a zip write that throws, the
+// canary, which its own fixture proves absent, and a page's preloads, which the bundler writes
+// from the graph it built (test/bundler.test.js covers that rule)
+const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary', 'closure/preload'];
 
 describe('test/build-fixtures/', () => {
   it('has a fixture for every build failure rule, and the canary run', () => {
@@ -25,6 +26,12 @@ describe('test/build-fixtures/', () => {
     const missing = Object.keys(CODES).filter((code) => !NOT_RULES.includes(code) && !covered.has(code));
     assert.deepEqual(missing, [], 'no fixture fails with these codes');
     assert.ok(fixtures.some((fixture) => fixture.kind === 'canary'));
+  });
+
+  it("sets the canary under a VITE_ name too, which Vite hands to import.meta.env from the environment even with envDir: false", () => {
+    // #99's review: the release's secret names and the common ones, and none Vite reads itself
+    assert.ok(CANARY_NAMES.includes('NTN_CANARY_SECRET'));
+    assert.ok(CANARY_NAMES.some((name) => name.startsWith('VITE_')), CANARY_NAMES.join(', '));
   });
 
   it('gives each fixture a rule, known codes, and a kind and modes the runner knows', () => {

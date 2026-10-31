@@ -60,6 +60,16 @@ describe('the pinned toolchain', () => {
     assert.equal(pkg.scripts['typecheck:ratchet'], 'node scripts/build/type-gate.js', 'typecheck:ratchet runs the type gate');
   });
 
+  it('installs from the lockfile with no install script, in every workflow and in the setup the docs give', () => {
+    // #99's review: README.md and CONTRIBUTING.md still said npm install
+    const workflows = fs.readdirSync(path.join(ROOT, '.github/workflows')).map((name) => `.github/workflows/${name}`);
+    for (const file of ['README.md', 'CONTRIBUTING.md', ...workflows]) {
+      const installs = read(file).split('\n').filter((line) => /\bnpm (?:ci|install|i)\b/.test(line));
+      assert.ok(installs.every((line) => /\bnpm ci --ignore-scripts\b/.test(line)), `${file}: ${installs.join(' | ')}`);
+    }
+    for (const doc of ['README.md', 'CONTRIBUTING.md']) assert.match(read(doc), /`npm ci --ignore-scripts`/, doc);
+  });
+
   it('keeps LF line endings, with the notices exempt so their license texts stay as written', () => {
     assert.match(read('.gitattributes'), /^\* text=auto eol=lf$/m);
     assert.match(read('.gitattributes'), /^THIRD_PARTY_NOTICES -text$/m);

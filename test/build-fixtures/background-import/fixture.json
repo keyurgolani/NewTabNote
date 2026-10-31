@@ -1,0 +1,12 @@
+{
+  "rule": "the service worker's entry calls import(), which the bundler folds in and a worker can't run",
+  "expect": [
+    "background/not-self-contained"
+  ],
+  "edits": [
+    {
+      "file": "js/background.js",
+      "append": "\nself.ntnFixtureLater = () => import('./utils.js');\n"
+    }
+  ]
+}

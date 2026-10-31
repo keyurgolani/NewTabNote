@@ -187,4 +187,4 @@ It covers the approved cases, listed in `CONFORMANCE_CASES`: valid, disabled, du
 
 ## In the build
 
-`scripts/build.js` already walks `js/kernel/`, so the kit ships in `dist/` minified as ES modules. No page or worker imports it yet, so nothing loads it. `check:dist` lists `js/kernel/registry/` with #13's directories whose every module must ship, so a missing one fails before the first family imports it.
+Since #27 slice 2 the bundler ships only what an entry imports, inside that context's chunks. No page or worker imports the kit yet, so it isn't in `dist/` until the first family does. Then a module of the kit the import needs that's missing fails the build (`build/bundle`), and until then the kit's tests import it from the sources.

@@ -24,7 +24,7 @@ Thank you for your interest in contributing to NewTabNote! We welcome contributi
 ## Development Setup
 
 1. Clone the repo: `git clone https://github.com/keyurgolani/new-tab-note.git`
-2. Install dependencies: `npm install`
+2. Install dependencies: `npm ci --ignore-scripts`
 3. Build the extension: `npm run build`
 4. Load the `dist` folder as an unpacked extension in Chrome (`chrome://extensions/`).
 

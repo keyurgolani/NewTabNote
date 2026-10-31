@@ -49,7 +49,9 @@ async function smallBuild(extra = {}) {
     fs.writeFileSync(path.join(dir, file), text);
   }
   const info = { commit: null, tree: null, dirty: true, sourceDateEpoch: EPOCH };
-  const written = writeBuildInfo(dir, fromDirectory(dir), { buildId: 'test-build', info, mode: 'production', versions: await kernelVersions(ROOT) });
+  // The bundle names its chunks: each loader name to its file
+  const chunks = { a: 'js/a.js' };
+  const written = writeBuildInfo(dir, fromDirectory(dir), { buildId: 'test-build', info, mode: 'production', versions: await kernelVersions(ROOT), chunks });
   return { dir, written };
 }
 
@@ -120,7 +122,7 @@ describe('build-info.json and asset-manifest.json', () => {
     assert.deepEqual(Object.keys(info), ['buildId', 'outputDigest', 'chunks', 'version', 'commit', 'SOURCE_DATE_EPOCH', 'mode', 'protocolVersion', 'schemaVersion']);
     assert.equal(info.outputDigest, sha256(files.read('asset-manifest.json')));
     assert.equal(info.outputDigest, written.outputDigest);
-    assert.deepEqual(info.chunks, { 'js/a.js': 'js/a.js' });
+    assert.deepEqual(info.chunks, { a: 'js/a.js' });
     assert.equal(info.version, '1.2.3');
     assert.equal(info.SOURCE_DATE_EPOCH, EPOCH);
     assert.deepEqual(info.protocolVersion, { major: 1, minor: 0 });

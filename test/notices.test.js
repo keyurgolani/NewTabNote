@@ -11,8 +11,9 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const JSZip = require('../js/lib/jszip.min.js');
 const {
-  REQUIRED_DESTINATIONS, vendoredFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip,
+  REQUIRED_DESTINATIONS, vendoredFiles, shippedFiles, policyPermissions, checkPolicy, checkLibReadme, checkZip, checkBundledNotices,
 } = require('../scripts/check-notices.js');
+const { fromMap } = require('../scripts/build/package-files.js');
 const { excerpt, MARKERS } = require('../scripts/ci/failure-excerpt.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -20,18 +21,30 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 const policy = read('PRIVACY_POLICY.md');
 
-/** A zip laid out like the package, built from the repository files. */
+/** Valibot's code as terser leaves it in a chunk: its Standard Schema object and a "~run" call */
+const VALIBOT = 'function $(e){return e["~standard"]={version:1,vendor:"valibot",validate:t=>e["~run"]({value:t},S())},e}';
+/** The chunks the bundler folds Valibot into: the pages' shared trust chunk and the service worker */
+const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";' };
+
+/** A zip laid out like the package, built from the repository files and CHUNKS. */
 async function packageZip({ omit = [], replace = {} } = {}) {
   const zip = new JSZip();
   for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES', 'manifest.json']) {
     if (!omit.includes(name)) zip.file(name, replace[name] ?? fs.readFileSync(path.join(ROOT, name)));
   }
-  for (const name of vendoredFiles()) {
+  for (const name of shippedFiles()) {
     const entry = `js/lib/${name}`;
     if (!omit.includes(entry)) zip.file(entry, replace[entry] ?? fs.readFileSync(path.join(ROOT, entry)));
   }
+  for (const [name, text] of Object.entries(CHUNKS)) {
+    if (!omit.includes(name)) zip.file(name, replace[name] ?? text);
+  }
   return zip.generateAsync({ type: 'nodebuffer' });
 }
+
+/** Package files from the repository's notices and `files` */
+const filesOf = (files, notices = read('THIRD_PARTY_NOTICES')) => fromMap(new Map(Object.entries({ THIRD_PARTY_NOTICES: notices, ...files })
+  .map(([name, text]) => [name, Buffer.from(text)])), 'the package');
 
 describe('privacy policy (AC9)', () => {
   it('lists exactly the manifest permissions, describes the hosts, and names every network destination', () => {
@@ -114,7 +127,7 @@ describe('license notices (AC8)', () => {
     for (const heading of [
       'Chart.js 4.4.1', '@kurkle/color 0.3.2', 'Fuse.js 7.1.0', 'JSZip 3.10.1', 'pako 1.0.11',
       '@xenova/transformers (Transformers.js) 2.17.1', '@huggingface/jinja 0.2.2', 'onnxruntime-web 1.14.0',
-      'onnxruntime-common 1.14.0', 'ONNX Runtime 1.14.0 third-party notices', 'Valibot 1.5.0',
+      'onnxruntime-common 1.14.0', 'ONNX Runtime 1.14.0 third-party notices', 'Valibot 1.5.0', 'emoji-regex-xs 1.0.0',
     ]) {
       assert.match(notices, new RegExp(`^\\d+\\. ${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'), heading);
     }
@@ -127,15 +140,17 @@ describe('license notices (AC8)', () => {
 
   it('the build copies every js/lib file that ships byte for byte and ships both notice files', () => {
     const build = require('../scripts/build.js');
+    const { BUNDLED } = require('../scripts/check-notices.js');
     for (const name of vendoredFiles()) {
       const file = `js/lib/${name}`;
       // STATIC_FILES are copied as they are
       if (build.STATIC_FILES.includes(file)) continue;
-      const walked = /\.m?js$/.test(file) && build.JS_DIRS.some((dir) => file.startsWith(dir));
-      assert.ok(build.JS_FILES.includes(file) || walked, `${file} isn't in JS_FILES or under a JS_DIRS directory`);
-      assert.ok(build.isCopiedAsIs(file), `${file} isn't in COPY_AS_IS, so terser would strip its header`);
+      // The bundler folds Valibot's build into the chunks that import it, and the build checks
+      // it against its record and its notice (checkBundledVendor)
+      if (BUNDLED.has(name)) continue;
+      assert.equal(build.CLASSIC_SCRIPTS[file], 'as-is', `${file} isn't a classic script the build copies as is, so terser would rewrite it`);
     }
-    assert.ok(build.JS_DIRS.includes('js/lib/valibot/'));
+    assert.deepEqual([...BUNDLED], ['valibot/index.mjs']);
     assert.ok(build.STATIC_FILES.includes('js/lib/valibot/LICENSE.md'));
     assert.ok(build.STATIC_FILES.includes('LICENSE'));
     assert.ok(build.STATIC_FILES.includes('THIRD_PARTY_NOTICES'));
@@ -143,6 +158,45 @@ describe('license notices (AC8)', () => {
 
   it('checkZip passes a package laid out like npm run package', async () => {
     assert.deepEqual(await checkZip(await packageZip()), []);
+  });
+
+  it("names the files Valibot ships in, bundled and minified, and emoji-regex-xs, whose regex Valibot's build holds, with its MIT notice", () => {
+    // #99's review: the Valibot entry still said js/lib/valibot/index.mjs, unmodified, and no
+    // entry covered emoji-regex-xs, whose regex Valibot's build holds
+    const notices = read('THIRD_PARTY_NOTICES');
+    assert.match(notices, /^In: {8}assets\/trust-\*\.js and js\/background\.js: dist\/index\.mjs from the valibot package, bundled and minified/m);
+    // #99's delta: trust-* is the trust chunk, which the pages load for their failure events;
+    // the pages' shared chunk is host-*
+    assert.match(notices, /^In: .*bundled and minified into the chunks that import it: the trust chunk, which a page loads only for its failure events \(\* is its content hash\), and the service worker\./m);
+    assert.doesNotMatch(notices, /shared chunk/);
+    assert.match(notices, /^ {2}20\. emoji-regex-xs 1\.0\.0 \(MIT\)$/m);
+    assert.match(notices, /^Copyright: Copyright \(c\) 2024 Steven Levithan$/m);
+    assert.match(notices, /^MIT License\n\nCopyright \(c\) 2024 Steven Levithan\n\nPermission is hereby granted/m);
+    assert.deepEqual(checkBundledNotices(filesOf(CHUNKS)), []);
+  });
+
+  it("fails a bundled package's notice that misses a script carrying its code or names one that doesn't", () => {
+    const valibot = 'Valibot 1.5.0';
+    const emoji = 'emoji-regex-xs 1.0.0';
+    // Valibot moves from the service worker into the popup's chunk
+    assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'js/background.js': 'self.ntn=1;', 'assets/popup-LWzkxAKk.js': VALIBOT })), [
+      `assets/popup-LWzkxAKk.js carries ${valibot}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+      `the In: line of THIRD_PARTY_NOTICES' ${valibot} entry names js/background.js, and no shipped script it matches carries its code`,
+    ]);
+    // A schema uses Valibot's emoji action, so its regex ships
+    const regex = 'const r=/^(?:[\\u{1F1E6}-\\u{1F1FF}]{2}|\\u{1F3F4}[\\u{E0061}-\\u{E007A}]{2}[\\u{E0030}-\\u{E0039}\\u{E0061}-\\u{E007A}]{1,3}\\u{E007F})+$/u;';
+    assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'assets/trust-YdWbqFjr.js': `${VALIBOT}${regex}` })), [
+      `assets/trust-YdWbqFjr.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+    ]);
+    // Unminified, as a development build writes it, with every export and the regex
+    assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'assets/sidepanel-DgtwzUbD.js': read('js/lib/valibot/index.mjs') })), [
+      `assets/sidepanel-DgtwzUbD.js carries ${valibot}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+      `assets/sidepanel-DgtwzUbD.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+    ]);
+    // No entry at all
+    assert.deepEqual(checkBundledNotices(filesOf(CHUNKS, read('THIRD_PARTY_NOTICES').replace(/^19\. Valibot 1\.5\.0$/m, '19. Valibot'))), [
+      `THIRD_PARTY_NOTICES has no "${valibot}" entry with an In: line, and assets/trust-YdWbqFjr.js and js/background.js carry its code`,
+    ]);
   });
 
   it('checkZip flags missing notices and a modified or missing js/lib file', async () => {
@@ -173,6 +227,7 @@ describe('npm run check:notices (AC8, AC9)', () => {
       const passed = run(good);
       assert.equal(passed.status, 0, passed.stderr);
       assert.match(passed.stdout, /^check:notices passed: /);
+      assert.match(passed.stdout, /Valibot 1\.5\.0 in assets\/trust-YdWbqFjr\.js and js\/background\.js/);
 
       const failed = run(bad);
       assert.equal(failed.status, 1);

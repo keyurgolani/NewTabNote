@@ -373,11 +373,13 @@ const Utils = {
   /**
    * Show `menu`, a position: fixed element, at the pointer (x, y), measured first so it opens
    * inside the window (menuPosition). It's laid out hidden, so it never shows where it won't stay.
+   * The service worker shares this file and has no window (#27's background/dom).
    * @param {HTMLElement} menu
    * @param {number} x
    * @param {number} y
    */
   placeMenu(menu, x, y) {
+    if (typeof window === 'undefined') return;
     menu.style.visibility = 'hidden';
     menu.style.left = '0px';
     menu.style.top = '0px';
@@ -805,7 +807,8 @@ const Utils = {
     const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
     function onKeyDown(e) {
-      if (e.key !== 'Tab') return;
+      // The service worker's graph shares this file and has no document (#27 "Entries")
+      if (e.key !== 'Tab' || typeof document === 'undefined') return;
       const focusable = Array.from(modal.querySelectorAll(FOCUSABLE)).filter(el => el.offsetParent !== null);
       if (focusable.length === 0) return;
       const first = focusable[0];

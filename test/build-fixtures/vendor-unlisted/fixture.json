@@ -9,14 +9,14 @@
       "write": "window.ntnFixtureVendored = 1;\n"
     },
     {
-      "file": "scripts/build.js",
-      "replace": "  'js/lib/fuse.js',\n",
-      "with": "  'js/lib/ntn-fixture.js',\n  'js/lib/fuse.js',\n"
+      "file": "scripts/build/vite-config.js",
+      "replace": "  'js/lib/fuse.js': 'as-is',\n",
+      "with": "  'js/lib/ntn-fixture.js': 'as-is',\n  'js/lib/fuse.js': 'as-is',\n"
     },
     {
       "file": "newtab.html",
-      "replace": "  <script src=\"js/lib/fuse.js\"></script>",
-      "with": "  <script src=\"js/lib/ntn-fixture.js\"></script>\n  <script src=\"js/lib/fuse.js\"></script>"
+      "replace": "  <script vite-ignore src=\"js/lib/fuse.js\"></script>",
+      "with": "  <script vite-ignore src=\"js/lib/ntn-fixture.js\"></script>\n  <script vite-ignore src=\"js/lib/fuse.js\"></script>"
     }
   ]
 }

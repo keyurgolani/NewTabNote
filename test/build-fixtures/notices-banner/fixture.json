@@ -1,17 +1,14 @@
 {
-  "rule": "terser minifies a vendored file and strips its license banner (Fuse.js's Apache-2.0 header, as before #33). Production only: a development build ships the source terser checked, banner included.",
+  "rule": "a vendored file lost its license banner (Fuse.js's Apache-2.0 header, which terser stripped before #33)",
   "expect": [
     "notices/banner",
     "vendor/mismatch"
   ],
-  "modes": [
-    "production"
-  ],
   "edits": [
     {
-      "file": "scripts/build.js",
-      "replace": "  'js/lib/',\n",
-      "with": "  'js/lib/chart.js',\n  'js/lib/jszip.min.js',\n  'js/lib/transformers.js',\n  'js/lib/valibot/',\n"
+      "file": "js/lib/fuse.js",
+      "replace": "/**\n * Fuse.js v7.1.0 - Lightweight fuzzy-search (http://fusejs.io)\n *\n * Copyright (c) 2025 Kiro Risk (http://kiro.me)\n * All Rights Reserved. Apache Software License 2.0\n *\n * http://www.apache.org/licenses/LICENSE-2.0\n */",
+      "with": ""
     }
   ]
 }

@@ -1,17 +1,11 @@
 {
-  "about": "Files the package may hold without anything in it naming them (#27 AC5). scripts/build/closure.js fails the build, and npm run package, on any other file nothing names. A directory row covers only the .js and .mjs files under it. A row changes only by review, with the reason the file ships; `until` says which change removes it.",
+  "about": "Files the package may hold without anything in it naming them (#27 AC5). scripts/build/closure.js fails the build, and npm run package, on any other file nothing names. A directory row would cover only the .js and .mjs files under it; since #27 slice 2's bundler ships only what an entry reaches, there are none. A row changes only by review, with the reason the file ships; `until` says which change removes it.",
   "files": [
     { "path": "LICENSE", "why": "NewTabNote's own license" },
     { "path": "THIRD_PARTY_NOTICES", "why": "the notices of every vendored library" },
-    { "path": "js/lib/valibot/LICENSE.md", "why": "Valibot's license, which ships beside its build" },
-    { "path": "build-info.json", "why": "the build's identity: buildId, outputDigest, version, commit, mode, and the protocol and schema versions" },
-    { "path": "asset-manifest.json", "why": "every other file's path, size, and SHA-256, which outputDigest hashes" },
-    { "path": "icons/icon16.svg", "why": "icon artwork that ships with icons/ (scripts/build.js STATIC_DIRS); the manifest and pages use the PNGs", "until": "#27 slice 2, which stops shipping it as a declared change" },
-    { "path": "icons/icon48.svg", "why": "icon artwork that ships with icons/ (scripts/build.js STATIC_DIRS); the manifest and pages use the PNGs", "until": "#27 slice 2, which stops shipping it as a declared change" },
-    { "path": "icons/icon128.svg", "why": "icon artwork that ships with icons/ (scripts/build.js STATIC_DIRS); the manifest and pages use the PNGs", "until": "#27 slice 2, which stops shipping it as a declared change" }
+    { "path": "js/lib/valibot/LICENSE.md", "why": "Valibot's license; its code ships inside the chunks that import it" },
+    { "path": "build-info.json", "why": "the build's identity: buildId, outputDigest, chunks, version, commit, mode, and the protocol and schema versions" },
+    { "path": "asset-manifest.json", "why": "every other file's path, size, and SHA-256, which outputDigest hashes" }
   ],
-  "directories": [
-    { "path": "js/kernel/", "why": "#12's module seam ships js/kernel/ whole (scripts/build.js JS_DIRS), and #13 AC7 has its contract, messaging, and registry modules ship before anything imports them (scripts/check-dist.js SHIPPED_DIRS)", "until": "#27 slice 2, whose bundler ships only what an entry reaches plus #13 AC7's required modules" },
-    { "path": "js/trust/", "why": "#20's trust core ships whole the same way (scripts/build.js JS_DIRS), so a module can land before its importer", "until": "#27 slice 2, whose bundler ships only what an entry reaches plus #13 AC7's required modules" }
-  ]
+  "directories": []
 }

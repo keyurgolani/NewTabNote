@@ -1,0 +1,12 @@
+{
+  "rule": "a module the bundle reads doesn't parse",
+  "expect": [
+    "build/bundle"
+  ],
+  "edits": [
+    {
+      "file": "js/utils.js",
+      "append": "\nconst = ;\n"
+    }
+  ]
+}

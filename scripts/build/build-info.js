@@ -9,8 +9,8 @@
  * plus -dirty when the tree has tracked changes or untracked files git doesn't ignore, or isn't
  * a git checkout. SOURCE_DATE_EPOCH, which dates every zip entry, is the environment's when
  * it's set, the commit's otherwise, and the earliest date a zip holds outside a checkout.
- * chunks maps each loader name to its file; until the bundler names chunks (#27 slice 2), each
- * script is its own chunk, under its path.
+ * chunks maps each loader name to its file: each page's entry, each chunk a dynamic import
+ * starts, each module worker, and the background, as the bundler names them (#27 slice 2).
  */
 
 const crypto = require('node:crypto');
@@ -154,16 +154,13 @@ function assetManifest(files) {
  * Write asset-manifest.json and then build-info.json into the build directory `dir`
  * @param {string} dir
  * @param {PackageFiles} files - dir's files, without either of the two
- * @param {{buildId: string, info: SourceInfo, mode: Mode, versions: {protocolVersion: unknown, schemaVersion: unknown}}} build
+ * @param {{buildId: string, info: SourceInfo, mode: Mode, versions: {protocolVersion: unknown, schemaVersion: unknown}, chunks: Record<string, string>}} build
  * @returns {{buildId: string, outputDigest: string}}
  */
-function writeBuildInfo(dir, files, { buildId: id, info, mode, versions }) {
+function writeBuildInfo(dir, files, { buildId: id, info, mode, versions, chunks }) {
   const manifest = assetManifest(files);
   fs.writeFileSync(path.join(dir, ASSET_MANIFEST), manifest);
   const outputDigest = sha256(manifest);
-  /** @type {Record<string, string>} */
-  const chunks = {};
-  for (const file of files.paths) if (/\.m?js$/.test(file)) chunks[file] = file;
   const version = JSON.parse(files.text('manifest.json')).version;
   fs.writeFileSync(path.join(dir, BUILD_INFO), json({
     buildId: id,

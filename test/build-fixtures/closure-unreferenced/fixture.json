@@ -1,5 +1,5 @@
 {
-  "rule": "the package holds a stylesheet nothing names",
+  "rule": "the build copies a stylesheet nothing names",
   "expect": [
     "closure/unreferenced"
   ],
@@ -9,9 +9,9 @@
       "write": ".ntn-fixture-unused{color:red}\n"
     },
     {
-      "file": "scripts/build.js",
-      "replace": "  'css/stats.css',\n",
-      "with": "  'css/stats.css',\n  'css/ntn-fixture-unused.css',\n"
+      "file": "scripts/build/vite-config.js",
+      "replace": "  'icons/icon128.png',\n]);",
+      "with": "  'icons/icon128.png',\n  'css/ntn-fixture-unused.css',\n]);"
     }
   ]
 }

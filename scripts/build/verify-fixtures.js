@@ -32,8 +32,12 @@ const { copyTree, runScript } = require('./tree.js');
 const ROOT = path.join(__dirname, '..', '..');
 const FIXTURES = path.join(ROOT, 'test', 'build-fixtures');
 const MODES = /** @type {const} */ (['production', 'development']);
-/** The environment names the canary goes under: the release workflow's secrets, and common ones */
-const CANARY_NAMES = ['NTN_CANARY_SECRET', 'CHROME_CLIENT_ID', 'CHROME_CLIENT_SECRET', 'CHROME_REFRESH_TOKEN', 'CHROME_EXTENSION_ID', 'CHROME_PUBLISHER_ID', 'GITHUB_TOKEN', 'NPM_TOKEN'];
+/**
+ * The environment names the canary goes under: the release workflow's secrets, common ones, and
+ * a VITE_ one, which Vite hands to import.meta.env from the environment even with envDir: false
+ * (#99's review)
+ */
+const CANARY_NAMES = Object.freeze(['NTN_CANARY_SECRET', 'VITE_NTN_CANARY_SECRET', 'CHROME_CLIENT_ID', 'CHROME_CLIENT_SECRET', 'CHROME_REFRESH_TOKEN', 'CHROME_EXTENSION_ID', 'CHROME_PUBLISHER_ID', 'GITHUB_TOKEN', 'NPM_TOKEN']);
 
 /**
  * @typedef {object} Edit
@@ -278,4 +282,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, reportedCodes, runFixture, FIXTURES };
+module.exports = { readFixtures, applyEdits, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };

@@ -613,7 +613,9 @@ describe("the indexer's start reports a worker that won't start (js/controllers/
     const { env, Storage } = await page();
     const made = fakeWorkers(env, options);
     const NotesManager = env.get('NotesManager');
-    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null });
+    // App hands NotesManager the composition root's starter (js/kernel/composition/workers.js)
+    const startIndexer = () => new env.global.Worker('js/workers/indexer.js', { type: 'module' });
+    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     notes.initIndexer();
     await new Promise(resolve => setImmediate(resolve));
     return { env, notes, made };
@@ -763,14 +765,16 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
       terminate() {}
     };
     const NotesManager = env.get('NotesManager');
-    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null });
+    // The composition root hands NotesManager the indexer's starter (js/kernel/composition/workers.js)
+    const startIndexer = () => new env.global.Worker('js/workers/indexer.js', { type: 'module' });
+    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     notes.initIndexer();
     made[0].onerror({ message: MESSAGE, error: canaryError('SyntaxError') });
     await events.flush();
     let seen = await inspect(host.indexedDB, host.settings.items);
     assert.deepEqual(incidentsOf(seen.incidents), [['index', 'indexer-start-failed', null, 'degraded', 1]]);
     // Another tab's indexer starts and answers: a later success at the same site
-    const later = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null });
+    const later = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     later.initIndexer();
     await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
     await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
