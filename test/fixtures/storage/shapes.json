@@ -1,0 +1,735 @@
+{
+  "format": "ntn-storage-shapes/1",
+  "about": "The CanvasTabDB shapes #17's support matrix covers (js/kernel/adapters/indexeddb/shapes.js), read at the release tags: each store's key path, key generator, and indexes, with the tag and the js/storage.js line that creates each in onupgradeneeded. Every release creates each index on the field it is named after, neither unique nor multi-entry. v9 is #17 PR 1a's step 9 (registry.js), which no shipped build opens yet. scripts/fixtures/check-shapes.mjs --tags runs each tag's own Storage.init() and compares.",
+  "shapes": {
+    "none": {
+      "database": "CanvasTabDB",
+      "idbVersion": null,
+      "releases": [],
+      "note": "No database, or one with no stores at any version this build can open.",
+      "stores": []
+    },
+    "v2-idb-settings": {
+      "database": "CanvasTabDB",
+      "idbVersion": 2,
+      "releases": [
+        "v1.0.0",
+        "v1.1.0",
+        "v1.1.1",
+        "v1.1.2"
+      ],
+      "note": "Every setting, llmApiKey included, in the IndexedDB settings store.",
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 58
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 59
+            }
+          ],
+          "tag": "v1.0.0",
+          "line": 57
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 65
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 66
+            }
+          ],
+          "tag": "v1.0.0",
+          "line": 64
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 77
+            }
+          ],
+          "tag": "v1.0.0",
+          "line": 76
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.0.0",
+          "line": 71
+        }
+      ]
+    },
+    "v2-local-settings": {
+      "database": "CanvasTabDB",
+      "idbVersion": 2,
+      "releases": [
+        "v1.1.3",
+        "v1.1.4",
+        "v1.1.5"
+      ],
+      "note": "Same schema; settings in chrome.storage.local (v1.1.3 js/storage.js line 621), and rows an older release left in the settings store stay there.",
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 58
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 59
+            }
+          ],
+          "tag": "v1.1.3",
+          "line": 57
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 65
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 66
+            }
+          ],
+          "tag": "v1.1.3",
+          "line": 64
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 77
+            }
+          ],
+          "tag": "v1.1.3",
+          "line": 76
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.1.3",
+          "line": 71
+        }
+      ]
+    },
+    "v7": {
+      "database": "CanvasTabDB",
+      "idbVersion": 7,
+      "releases": [
+        "v1.2.0"
+      ],
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 100
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 101
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 99
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 107
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 108
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 106
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 130
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 129
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 128
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 136
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 137
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 135
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 118
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 117
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.2.0",
+          "line": 123
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.2.0",
+          "line": 113
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 143
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 144
+            }
+          ],
+          "tag": "v1.2.0",
+          "line": 142
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.2.0",
+          "line": 149
+        }
+      ]
+    },
+    "v8": {
+      "database": "CanvasTabDB",
+      "idbVersion": 8,
+      "releases": [
+        "v1.3.0",
+        "v1.4.0",
+        "v1.4.1"
+      ],
+      "note": "v1.4.1 creates the same stores at js/storage.js lines 278 to 335.",
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 136
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 137
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 135
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 143
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 144
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 142
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 166
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 165
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 164
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 172
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 173
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 171
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 154
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 153
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 159
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 149
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 191
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false,
+              "line": 192
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 190
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 179
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 180
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 178
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 185
+        }
+      ]
+    },
+    "v9": {
+      "database": "CanvasTabDB",
+      "idbVersion": 9,
+      "releases": [],
+      "note": "#17 step 9: the ten version-8 stores, then meta and migrations. Not shipped: schema.js's DB_VERSION is still 8.",
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 136
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 137
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 135
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 143
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false,
+              "line": 144
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 142
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 166
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 165
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 164
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 172
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 173
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 171
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 154
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 153
+        },
+        {
+          "name": "meta",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "migrations",
+          "keyPath": [
+            "id",
+            "status"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "file": "js/kernel/adapters/indexeddb/registry.js"
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 159
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 149
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false,
+              "line": 191
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false,
+              "line": 192
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 190
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false,
+              "line": 179
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false,
+              "line": 180
+            }
+          ],
+          "tag": "v1.3.0",
+          "line": 178
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "tag": "v1.3.0",
+          "line": 185
+        }
+      ]
+    }
+  }
+}

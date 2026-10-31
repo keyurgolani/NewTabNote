@@ -1,0 +1,31 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "none.empty-v1",
+    "purpose": "An empty CanvasTabDB at version 1, as an aborted first open can leave, which counts as none.",
+    "shape": "none",
+    "releases": [],
+    "provenance": "synthesized",
+    "source": {
+      "generator": "scripts/fixtures/synthesize-storage.mjs",
+      "seed": 1
+    },
+    "schema": {
+      "idbVersion": 1,
+      "structuralVersion": null,
+      "logicalVersion": null
+    },
+    "degraded": [
+      "idb-version:1"
+    ],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 1,
+      "stores": []
+    }
+  ],
+  "chromeStorageLocal": {}
+}

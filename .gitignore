@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 releases/
+# Release files frozen as #17's test fixtures, not build output
+!/test/fixtures/storage/releases/
 
 # OS files
 .DS_Store

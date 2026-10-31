@@ -1,0 +1,1457 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "v8.daily-duplicates.v9",
+    "purpose": "After the registry runs to 9 on v8.daily-duplicates.",
+    "shape": "v9",
+    "releases": [
+      "v1.3.0",
+      "v1.4.0",
+      "v1.4.1"
+    ],
+    "provenance": "synthesized",
+    "source": {
+      "generator": "scripts/fixtures/synthesize-storage.mjs",
+      "seed": 1
+    },
+    "schema": {
+      "idbVersion": 9,
+      "structuralVersion": 9,
+      "logicalVersion": 1
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 9,
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000216078-1uzysy8lm",
+              "value": {
+                "id": "1760000216078-1uzysy8lm",
+                "name": "Groceries",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": "1760000221626-b52ffnady",
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000217438-ugsn3loz4",
+              "value": {
+                "id": "1760000217438-ugsn3loz4",
+                "name": "Reading list",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000219063-6qophdq6b",
+              "value": {
+                "id": "1760000219063-6qophdq6b",
+                "name": "Old plans",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": true,
+                "archivedAt": 1760000005000,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000220139-m4v7j9s5i",
+              "value": {
+                "id": "1760000220139-m4v7j9s5i",
+                "name": "Thrown away",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "trashed": true,
+                "trashedAt": 1760000006000
+              }
+            },
+            {
+              "key": "1760000223329-sjxnqdyks",
+              "value": {
+                "id": "1760000223329-sjxnqdyks",
+                "name": "Meeting template",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": true,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000237920-09hcx0w6l",
+              "value": {
+                "id": "1760000237920-09hcx0w6l",
+                "name": "Daily Note - Oct 9, 2025",
+                "createdAt": 1760000000100,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": true,
+                "dateStr": "2025-10-09",
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1760000239783-m8stw3ie3",
+              "value": {
+                "id": "1760000239783-m8stw3ie3",
+                "name": "Daily Note - Oct 9, 2025",
+                "createdAt": 1760000000200,
+                "updatedAt": 1760000000000,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": true,
+                "dateStr": "2025-10-09",
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000225153-5al8gyiqo",
+              "value": {
+                "id": "1760000225153-5al8gyiqo",
+                "type": "text",
+                "content": "Milk and eggs",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000216078-1uzysy8lm",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000226840-9ilx21ctw",
+              "value": {
+                "id": "1760000226840-9ilx21ctw",
+                "type": "todo",
+                "content": "Bread",
+                "indentLevel": 0,
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000216078-1uzysy8lm",
+                "order": 1
+              }
+            },
+            {
+              "key": "1760000228046-4xg3aivbr",
+              "value": {
+                "id": "1760000228046-4xg3aivbr",
+                "type": "text",
+                "content": "A long book",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000217438-ugsn3loz4",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000229142-j0hc66rf5",
+              "value": {
+                "id": "1760000229142-j0hc66rf5",
+                "type": "text",
+                "content": "Ideas from last year",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000219063-6qophdq6b",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000230408-nco2a7tlp",
+              "value": {
+                "id": "1760000230408-nco2a7tlp",
+                "type": "text",
+                "content": "Not needed",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000220139-m4v7j9s5i",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000221626-b52ffnady",
+              "value": {
+                "id": "1760000221626-b52ffnady",
+                "name": "Home",
+                "parentId": null,
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "color": null,
+                "collapsed": false
+              }
+            }
+          ]
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000233724-13uo9r3qy",
+              "value": {
+                "id": "1760000233724-13uo9r3qy",
+                "fromNoteId": "1760000216078-1uzysy8lm",
+                "toNoteId": "1760000217438-ugsn3loz4",
+                "createdAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000232098-3ovxmhcj0",
+              "value": {
+                "id": "1760000232098-3ovxmhcj0",
+                "canvasId": "1760000216078-1uzysy8lm",
+                "blob": {
+                  "$type": "Blob",
+                  "mime": "image/png",
+                  "base64": "iVBORw0KGgoAAAANAQIDBA=="
+                },
+                "type": "image/png",
+                "createdAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "meta",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "schema",
+              "value": {
+                "key": "schema",
+                "structuralVersion": 9,
+                "logicalVersion": 1
+              }
+            }
+          ]
+        },
+        {
+          "name": "migrations",
+          "keyPath": [
+            "id",
+            "status"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": [
+                "structural-9",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-9",
+                "from": 8,
+                "to": 9,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": "pre-migration-1792497600000",
+                "failure": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1760000216078-1uzysy8lm",
+              "value": {
+                "noteId": "1760000216078-1uzysy8lm",
+                "name": "Groceries",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000217438-ugsn3loz4",
+              "value": {
+                "noteId": "1760000217438-ugsn3loz4",
+                "name": "Reading list",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000219063-6qophdq6b",
+              "value": {
+                "noteId": "1760000219063-6qophdq6b",
+                "name": "Old plans",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000220139-m4v7j9s5i",
+              "value": {
+                "noteId": "1760000220139-m4v7j9s5i",
+                "name": "Thrown away",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            },
+            {
+              "key": "1760000223329-sjxnqdyks",
+              "value": {
+                "noteId": "1760000223329-sjxnqdyks",
+                "name": "Meeting template",
+                "content": "",
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000236750-9faguu2ju",
+              "value": {
+                "id": "1760000236750-9faguu2ju",
+                "noteId": "1760000216078-1uzysy8lm",
+                "timestamp": 1760000300000,
+                "blocks": [
+                  {
+                    "id": "snap-b1",
+                    "type": "text",
+                    "content": "Milk",
+                    "indentLevel": 0,
+                    "checked": false,
+                    "imageUrl": null,
+                    "calloutIcon": "💡",
+                    "createdAt": 1760000000000,
+                    "updatedAt": 1760000000000,
+                    "canvasId": "1760000216078-1uzysy8lm",
+                    "order": 0
+                  }
+                ],
+                "title": "Groceries"
+              }
+            }
+          ]
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000235434-gqvnq8hul",
+              "value": {
+                "id": "1760000235434-gqvnq8hul",
+                "name": "Dusk",
+                "colors": {
+                  "background": "#101820",
+                  "text": "#f2f2f2"
+                },
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1760000216078-1uzysy8lm",
+              "value": {
+                "id": "1760000216078-1uzysy8lm",
+                "noteId": "1760000216078-1uzysy8lm",
+                "vector": [
+                  0.125,
+                  -0.5,
+                  0.25,
+                  1
+                ],
+                "updatedAt": 1760000000000
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "NewTabNoteRecovery",
+      "version": 1,
+      "stores": [
+        {
+          "name": "points",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "pre-migration-1792497600000",
+              "value": {
+                "id": "pre-migration-1792497600000",
+                "kind": "pre-migration",
+                "pinned": true,
+                "status": "verified",
+                "sourceShape": "legacy",
+                "sourceVersion": 8,
+                "structuralVersion": null,
+                "logicalVersion": null,
+                "target": 9,
+                "stores": [
+                  "canvases",
+                  "elements",
+                  "folders",
+                  "links",
+                  "media",
+                  "search_index",
+                  "snapshots",
+                  "themes",
+                  "vectors"
+                ],
+                "createdAt": 1792497600000,
+                "verifiedAt": 1792497600000,
+                "manifest": {
+                  "canvases": {
+                    "count": 7,
+                    "idSetHash": "91d23905ac1bedc98945e556b11b71842aeb85cdd37ddf2c9eddcd4d96ae0de3",
+                    "contentHash": "c21fd1e887e3ee16bb509adbf6908475449125b100fccd4494321d62d3fa2ca6",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "elements": {
+                    "count": 5,
+                    "idSetHash": "3bb93391a53c02121a168275c37053a315188dd8a1e7568ffd9e556c9307c323",
+                    "contentHash": "bc0fe356b45c576dabd102bd9ecc41ae154b47dfb140e4fa583a44bec04b5986",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "folders": {
+                    "count": 1,
+                    "idSetHash": "5dca240e4bec2ef80e1a074ec6b55aef94e422930612005abb7d17191bfd8cba",
+                    "contentHash": "742f89c6fc7168e056968bed951622bfa5ddad0eddb6b6ebd40e8e8ab76246ee",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "links": {
+                    "count": 1,
+                    "idSetHash": "2ea5af00306c9c6cafee2494ef3eec6a7afd63a71a29dcf4139a042b0c8c2f20",
+                    "contentHash": "2dce468d15220618bd7013974823219f5ebc10f6e389d5c392d0725198299943",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "media": {
+                    "count": 1,
+                    "idSetHash": "e3722f21cf5efe15e6f5ab02f9b698a5497367f2949595bc328153ec65da97f7",
+                    "contentHash": "0977149d1e6b0cc1161355d46eacce0a850c350811fd4fe2e1ed8b51dff6793e",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "search_index": {
+                    "count": 5,
+                    "idSetHash": "7bcf979db7c080706fadb6060c2fedbde8b9eaaf4fef15261a56215e557229c2",
+                    "contentHash": "031f8d24d35f5e00f91bcfff34e112f23e7291aefb3369bbe26345d80eca7f05",
+                    "keyPath": "noteId",
+                    "purged": []
+                  },
+                  "snapshots": {
+                    "count": 1,
+                    "idSetHash": "b36d7c56bfd834d1c4a4e94656487c14d87b144d511df2e35a4989dbd3dee11b",
+                    "contentHash": "df14353522d7924cb796191bf0ad0178094b8cc7759400d5d3958e4a54e5b189",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "themes": {
+                    "count": 1,
+                    "idSetHash": "225e059f4e7b9b48eccb3f3cbe0af5bb06e3f2c86a4e4d6c70fc6ee3d106d1b5",
+                    "contentHash": "669ad8572f2254517c458b196af7f9f804fd252444994c8a99318d60054c60f8",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "vectors": {
+                    "count": 1,
+                    "idSetHash": "7374a3ba082249177ad8d2e8b6603143aa30cff6931cce66eb5075a60220315d",
+                    "contentHash": "13a4109b33e8f9f57e7566ee37e0733b4b850eebc7e9a13f824bc2302ac7a6f8",
+                    "keyPath": "id",
+                    "purged": []
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "progress",
+          "keyPath": "pointId",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "rows",
+          "keyPath": [
+            "pointId",
+            "store",
+            "key"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000216078-1uzysy8lm"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000216078-1uzysy8lm",
+                "value": {
+                  "id": "1760000216078-1uzysy8lm",
+                  "name": "Groceries",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": "1760000221626-b52ffnady",
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "28bc729e3f30f92a55b938efdc813da9ff7f47b5312f6d3d8f93f3a282b146aa"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000217438-ugsn3loz4"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000217438-ugsn3loz4",
+                "value": {
+                  "id": "1760000217438-ugsn3loz4",
+                  "name": "Reading list",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "0d229eebf7e1165978de228d1269cb7cb52eeccda9bb27948eee2f0a4d7cbdd3"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000219063-6qophdq6b"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000219063-6qophdq6b",
+                "value": {
+                  "id": "1760000219063-6qophdq6b",
+                  "name": "Old plans",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": true,
+                  "archivedAt": 1760000005000,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "5d160d0ee613f6194e4a59246816120f91477b432e688cd2ab91c8c3affcaf30"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000220139-m4v7j9s5i"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000220139-m4v7j9s5i",
+                "value": {
+                  "id": "1760000220139-m4v7j9s5i",
+                  "name": "Thrown away",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": false,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  },
+                  "trashed": true,
+                  "trashedAt": 1760000006000
+                },
+                "sha256": "e47ff0c7113c6d805f5fe8f0ddddb7ea0690d7fb2407e4d04742a0f03d632bdf"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000223329-sjxnqdyks"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000223329-sjxnqdyks",
+                "value": {
+                  "id": "1760000223329-sjxnqdyks",
+                  "name": "Meeting template",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": false,
+                  "dateStr": null,
+                  "isTemplate": true,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "14c25911c08c5cfcbc83f59263a02c60066a05a8a1bfa3029afcab279c3ca1fd"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000237920-09hcx0w6l"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000237920-09hcx0w6l",
+                "value": {
+                  "id": "1760000237920-09hcx0w6l",
+                  "name": "Daily Note - Oct 9, 2025",
+                  "createdAt": 1760000000100,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": true,
+                  "dateStr": "2025-10-09",
+                  "isTemplate": false,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "25bbfe9ad78a2c5d10e3b1a125770a1dda32edc9d5ca26b4024d8213e00808db"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1760000239783-m8stw3ie3"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1760000239783-m8stw3ie3",
+                "value": {
+                  "id": "1760000239783-m8stw3ie3",
+                  "name": "Daily Note - Oct 9, 2025",
+                  "createdAt": 1760000000200,
+                  "updatedAt": 1760000000000,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "preview": "",
+                  "pinned": false,
+                  "todoProgress": null,
+                  "isDaily": true,
+                  "dateStr": "2025-10-09",
+                  "isTemplate": false,
+                  "folderId": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "cc7fc49233354a06725f54f5669334e661c6663831d0be5c4e9e290c8d29e83b"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000225153-5al8gyiqo"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000225153-5al8gyiqo",
+                "value": {
+                  "id": "1760000225153-5al8gyiqo",
+                  "type": "text",
+                  "content": "Milk and eggs",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000216078-1uzysy8lm",
+                  "order": 0
+                },
+                "sha256": "7bc98ccb46d485219a0a81ad99ae2305015e03bed7afa98cc68cf0be4ee821f8"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000226840-9ilx21ctw"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000226840-9ilx21ctw",
+                "value": {
+                  "id": "1760000226840-9ilx21ctw",
+                  "type": "todo",
+                  "content": "Bread",
+                  "indentLevel": 0,
+                  "checked": true,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000216078-1uzysy8lm",
+                  "order": 1
+                },
+                "sha256": "717644d3bf201abd2e324248059b6b0d41b7a5d56903b4e774c204c0ab85e112"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000228046-4xg3aivbr"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000228046-4xg3aivbr",
+                "value": {
+                  "id": "1760000228046-4xg3aivbr",
+                  "type": "text",
+                  "content": "A long book",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000217438-ugsn3loz4",
+                  "order": 0
+                },
+                "sha256": "78c75c5d4e4ecd0ff1b6b367fb98df298bf1f017bf7311c758cc2756566e7129"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000229142-j0hc66rf5"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000229142-j0hc66rf5",
+                "value": {
+                  "id": "1760000229142-j0hc66rf5",
+                  "type": "text",
+                  "content": "Ideas from last year",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000219063-6qophdq6b",
+                  "order": 0
+                },
+                "sha256": "053fb09fa93d4f9d7b438b49b05637b55c441a0b390f8627079449757673cb2e"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000230408-nco2a7tlp"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000230408-nco2a7tlp",
+                "value": {
+                  "id": "1760000230408-nco2a7tlp",
+                  "type": "text",
+                  "content": "Not needed",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000220139-m4v7j9s5i",
+                  "order": 0
+                },
+                "sha256": "4af509b1f77a0966e46501dd5808b56127ec361f56d35b5993f60995f18c12c5"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "folders",
+                "1760000221626-b52ffnady"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "folders",
+                "key": "1760000221626-b52ffnady",
+                "value": {
+                  "id": "1760000221626-b52ffnady",
+                  "name": "Home",
+                  "parentId": null,
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "color": null,
+                  "collapsed": false
+                },
+                "sha256": "c6fc691cf8faa548b2c6292e430b65dd212dcded770cbdd8b244ddf073ede58b"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "links",
+                "1760000233724-13uo9r3qy"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "links",
+                "key": "1760000233724-13uo9r3qy",
+                "value": {
+                  "id": "1760000233724-13uo9r3qy",
+                  "fromNoteId": "1760000216078-1uzysy8lm",
+                  "toNoteId": "1760000217438-ugsn3loz4",
+                  "createdAt": 1760000000000
+                },
+                "sha256": "8c0a1af421ccfd986fa72ce3a9d72962bc327537fa445eafbbf2316dfed53a11"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "media",
+                "1760000232098-3ovxmhcj0"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "media",
+                "key": "1760000232098-3ovxmhcj0",
+                "value": {
+                  "id": "1760000232098-3ovxmhcj0",
+                  "canvasId": "1760000216078-1uzysy8lm",
+                  "blob": {
+                    "$type": "Blob",
+                    "mime": "image/png",
+                    "base64": "iVBORw0KGgoAAAANAQIDBA=="
+                  },
+                  "type": "image/png",
+                  "createdAt": 1760000000000
+                },
+                "sha256": "80c1aa54f155b432ebe5a7a46473cad462237f821975fe0d3553d4a08a349013"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "search_index",
+                "1760000216078-1uzysy8lm"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "search_index",
+                "key": "1760000216078-1uzysy8lm",
+                "value": {
+                  "noteId": "1760000216078-1uzysy8lm",
+                  "name": "Groceries",
+                  "content": "",
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "9e02e745c378cc93d476f58564dd498006053c0e6a078f45a3ce2a223a737205"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "search_index",
+                "1760000217438-ugsn3loz4"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "search_index",
+                "key": "1760000217438-ugsn3loz4",
+                "value": {
+                  "noteId": "1760000217438-ugsn3loz4",
+                  "name": "Reading list",
+                  "content": "",
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "f654ba136e0762dfc0ab015ea56a4214c4f965a9622899b61c6e39c23ad04f7f"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "search_index",
+                "1760000219063-6qophdq6b"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "search_index",
+                "key": "1760000219063-6qophdq6b",
+                "value": {
+                  "noteId": "1760000219063-6qophdq6b",
+                  "name": "Old plans",
+                  "content": "",
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "9b118bf824f6e233e4470344a5e5dafa89f3b61cd206f1948cb22b6bb3dbb610"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "search_index",
+                "1760000220139-m4v7j9s5i"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "search_index",
+                "key": "1760000220139-m4v7j9s5i",
+                "value": {
+                  "noteId": "1760000220139-m4v7j9s5i",
+                  "name": "Thrown away",
+                  "content": "",
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "adfce05396e88a0079b9e306f36a032c3654934364b3d31da19704bd6ef46e6c"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "search_index",
+                "1760000223329-sjxnqdyks"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "search_index",
+                "key": "1760000223329-sjxnqdyks",
+                "value": {
+                  "noteId": "1760000223329-sjxnqdyks",
+                  "name": "Meeting template",
+                  "content": "",
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "e1715e7c176a8dd8a424e7f083c074faa0859c6b1e353bb12b46098d958708a3"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "snapshots",
+                "1760000236750-9faguu2ju"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "snapshots",
+                "key": "1760000236750-9faguu2ju",
+                "value": {
+                  "id": "1760000236750-9faguu2ju",
+                  "noteId": "1760000216078-1uzysy8lm",
+                  "timestamp": 1760000300000,
+                  "blocks": [
+                    {
+                      "id": "snap-b1",
+                      "type": "text",
+                      "content": "Milk",
+                      "indentLevel": 0,
+                      "checked": false,
+                      "imageUrl": null,
+                      "calloutIcon": "💡",
+                      "createdAt": 1760000000000,
+                      "updatedAt": 1760000000000,
+                      "canvasId": "1760000216078-1uzysy8lm",
+                      "order": 0
+                    }
+                  ],
+                  "title": "Groceries"
+                },
+                "sha256": "498cb7b046dcab9e0f9a891d497a6e720a6b23bd76cdb45f7bab025990b62cc0"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "themes",
+                "1760000235434-gqvnq8hul"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "themes",
+                "key": "1760000235434-gqvnq8hul",
+                "value": {
+                  "id": "1760000235434-gqvnq8hul",
+                  "name": "Dusk",
+                  "colors": {
+                    "background": "#101820",
+                    "text": "#f2f2f2"
+                  },
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "d7605868c35cdf6280e872a85f321bb50f6e6b195689568ff5b1726b61ff7991"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "vectors",
+                "1760000216078-1uzysy8lm"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "vectors",
+                "key": "1760000216078-1uzysy8lm",
+                "value": {
+                  "id": "1760000216078-1uzysy8lm",
+                  "noteId": "1760000216078-1uzysy8lm",
+                  "vector": [
+                    0.125,
+                    -0.5,
+                    0.25,
+                    1
+                  ],
+                  "updatedAt": 1760000000000
+                },
+                "sha256": "1b3be5855351ed58f8e994b8f53f1b6f63accbb4d2f66d48787a691c5c6896e9"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "chromeStorageLocal": {
+    "setting_theme": "system",
+    "setting_storageInitialized": true
+  }
+}

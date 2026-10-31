@@ -2,7 +2,10 @@
 // transactions (#17, "Test plan"), over the pinned fake-indexeddb. It records every
 // transaction opened, and makes the next write to a store throw, or go through and then have
 // its transaction abort the way one the disk refuses at commit does, or the next read of a
-// store fail. Everything else passes through to fake-indexeddb unchanged.
+// store fail. #17 PR 1a adds the open (the next open of a database fails, as a VersionError
+// does), cursors among the reads, and the stores a `versionchange` creates or reaches, so a
+// fault lands inside an upgrade too, on CanvasTabDB and NewTabNoteRecovery alike. Everything
+// else passes through to fake-indexeddb unchanged.
 
 /**
  * @typedef {object} OpenedTransaction
@@ -28,6 +31,10 @@
  * @property {(store: string, name: string) => void} failNextRead
  *   The next read of `store` fails with a DOMException called `name` and its transaction aborts,
  *   as a read of a damaged file does (NotReadableError, UnknownError)
+ * @property {string[]} deletes - every database name the wrapped factory was asked to delete
+ * @property {(database: string, name: string) => void} failNextOpen
+ *   The next open of `database` fails with a DOMException called `name`, touching nothing, as
+ *   an open below the version on disk does (VersionError)
  */
 
 /**
@@ -77,6 +84,10 @@ export function faultyFactory(real) {
   const aborting = [];
   /** @type {Array<{store: string, name: string}>} */
   const unreadable = [];
+  /** @type {Array<{store: string, name: string}>} */
+  const unopenable = [];
+  /** @type {string[]} */
+  const deletes = [];
 
   /**
    * @param {IDBTransaction} tx
@@ -104,7 +115,7 @@ export function faultyFactory(real) {
      * @returns {Record<string, unknown>}
      */
     const reads = (storeName, source) => {
-      /** @param {'get' | 'getAll' | 'getAllKeys' | 'getKey' | 'count'} method */
+      /** @param {'get' | 'getAll' | 'getAllKeys' | 'getKey' | 'count' | 'openCursor'} method */
       const read =
         method =>
         (/** @type {unknown[]} */ ...args) => {
@@ -120,46 +131,67 @@ export function faultyFactory(real) {
           });
           return request;
         };
-      return { get: read('get'), getAll: read('getAll'), getAllKeys: read('getAllKeys') };
+      return {
+        get: read('get'),
+        getAll: read('getAll'),
+        getAllKeys: read('getAllKeys'),
+        openCursor: read('openCursor'),
+      };
     };
 
-    return wrap(tx, {
+    /**
+     * `store` with its writes and reads open to faults
+     * @param {string} name
+     * @param {IDBObjectStore} store
+     * @returns {IDBObjectStore}
+     */
+    const wrapStore = (name, store) => {
+      /** @param {'put' | 'delete' | 'add' | 'clear'} method */
+      const write =
+        method =>
+        (/** @type {unknown[]} */ ...args) => {
+          const refused = take(throwing, name);
+          if (refused) throw new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
+          const request = /** @type {any} */ (store)[method](...args);
+          const late = take(aborting, name);
+          if (late) {
+            request.addEventListener('success', () => {
+              abortWith(late.name);
+              // Added after every listener the transaction already had, so it hears last
+              tx.addEventListener('abort', late.delivered, { once: true });
+            });
+          }
+          return request;
+        };
+      return wrap(store, {
+        put: write('put'),
+        delete: write('delete'),
+        add: write('add'),
+        clear: write('clear'),
+        ...reads(name, store),
+        index: (/** @type {string} */ indexName) => {
+          const index = store.index(indexName);
+          return wrap(index, reads(name, index));
+        },
+      });
+    };
+
+    const wrapped = wrap(tx, {
       get error() {
         return injected || tx.error;
       },
-      objectStore: (/** @type {string} */ name) => {
-        const store = tx.objectStore(name);
-        /** @param {'put' | 'delete' | 'add' | 'clear'} method */
-        const write =
-          method =>
-          (/** @type {unknown[]} */ ...args) => {
-            const refused = take(throwing, name);
-            if (refused) throw new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
-            const request = /** @type {any} */ (store)[method](...args);
-            const late = take(aborting, name);
-            if (late) {
-              request.addEventListener('success', () => {
-                abortWith(late.name);
-                // Added after every listener the transaction already had, so it hears last
-                tx.addEventListener('abort', late.delivered, { once: true });
-              });
-            }
-            return request;
-          };
-        return wrap(store, {
-          put: write('put'),
-          delete: write('delete'),
-          add: write('add'),
-          clear: write('clear'),
-          ...reads(name, store),
-          index: (/** @type {string} */ indexName) => {
-            const index = store.index(indexName);
-            return wrap(index, reads(name, index));
-          },
-        });
-      },
+      objectStore: (/** @type {string} */ name) => wrapStore(name, tx.objectStore(name)),
     });
+    storeWrappers.set(wrapped, wrapStore);
+    return wrapped;
   };
+
+  /** Each wrapped transaction's store wrapper, for the stores an upgrade creates */
+  /** @type {WeakMap<IDBTransaction, (name: string, store: IDBObjectStore) => IDBObjectStore>} */
+  const storeWrappers = new WeakMap();
+  /** Each connection's running upgrade, wrapped */
+  /** @type {WeakMap<IDBDatabase, IDBTransaction>} */
+  const upgrades = new WeakMap();
 
   /**
    * @param {IDBDatabase} db
@@ -167,6 +199,12 @@ export function faultyFactory(real) {
    */
   const wrapConnection = db =>
     wrap(db, {
+      createObjectStore: (/** @type {string} */ name, /** @type {IDBObjectStoreParameters | undefined} */ options) => {
+        const store = db.createObjectStore(name, options);
+        const upgrade = upgrades.get(db);
+        const wrapStore = upgrade && storeWrappers.get(upgrade);
+        return wrapStore ? wrapStore(name, store) : store;
+      },
       transaction: (
         /** @type {string | string[]} */ names,
         /** @type {IDBTransactionMode | undefined} */ mode,
@@ -187,17 +225,51 @@ export function faultyFactory(real) {
   const wrapped = new WeakMap();
 
   const factory = wrap(real, {
+    deleteDatabase: (/** @type {string} */ name) => {
+      deletes.push(name);
+      return real.deleteDatabase(name);
+    },
     open: (/** @type {string} */ name, /** @type {number | undefined} */ version) => {
+      const refused = take(unopenable, name);
+      if (refused) {
+        // A request that fails, touching nothing
+        const failing = /** @type {any} */ ({
+          result: undefined,
+          error: null,
+          readyState: 'pending',
+          transaction: null,
+        });
+        setImmediate(() => {
+          failing.readyState = 'done';
+          failing.error = new DOMException(`A fault the test injected: ${refused.name}`, refused.name);
+          if (typeof failing.onerror === 'function') failing.onerror({ type: 'error', target: failing });
+        });
+        return failing;
+      }
       const request = version === undefined ? real.open(name) : real.open(name, version);
+      /** @type {IDBTransaction | null} */
+      let upgrade = null;
+      const connection = () => {
+        const db = request.result;
+        if (!db) return db;
+        if (!wrapped.has(db)) {
+          connections.push(db);
+          wrapped.set(db, wrapConnection(db));
+        }
+        return /** @type {IDBDatabase} */ (wrapped.get(db));
+      };
       return wrap(request, {
         get result() {
-          const db = request.result;
-          if (!db) return db;
-          if (!wrapped.has(db)) {
-            connections.push(db);
-            wrapped.set(db, wrapConnection(db));
+          return connection();
+        },
+        get transaction() {
+          const tx = request.transaction;
+          if (!tx) return tx;
+          if (!upgrade) {
+            upgrade = wrapTransaction(tx);
+            upgrades.set(request.result, upgrade);
           }
-          return wrapped.get(db);
+          return upgrade;
         },
       });
     },
@@ -216,6 +288,10 @@ export function faultyFactory(real) {
       }),
     failNextRead: (store, name) => {
       unreadable.push({ store, name });
+    },
+    deletes,
+    failNextOpen: (database, name) => {
+      unopenable.push({ store: database, name });
     },
   };
 }
