@@ -449,6 +449,44 @@ async function seedNotes(extension, notes) {
 }
 
 /**
+ * Leave the profile as a 1.4.1 one whose update to this build stopped short of space (#17 PR
+ * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and nothing in
+ * them, no recovery point, and the worker's record of a run short of space that stands. The
+ * worker made the database at 9 when the harness installed it, so this deletes both databases
+ * first (test code only: nothing under js/ deletes a database). Seed notes after it.
+ */
+async function shortOfSpace(extension) {
+  await workerStorageSettled(extension);
+  await extension.worker.evaluate(async () => {
+    const done = request => new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await done(indexedDB.deleteDatabase('CanvasTabDB'));
+    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    const stores = {
+      canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
+      media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
+      links: ['id', ['fromNoteId', 'toNoteId']], themes: ['id', ['name', 'updatedAt']], vectors: ['id', []],
+      snapshots: ['id', ['noteId', 'timestamp']],
+    };
+    const request = indexedDB.open('CanvasTabDB', 8);
+    request.onupgradeneeded = () => {
+      for (const [name, [keyPath, indexes]] of Object.entries(stores)) {
+        const store = request.result.createObjectStore(name, { keyPath });
+        for (const index of indexes) store.createIndex(index, index, { unique: false });
+      }
+    };
+    (await done(request)).close();
+    await chrome.storage.local.set({
+      setting_storageUpgrade: {
+        status: 'space-blocked', code: 'space-short', at: Date.now(), version: chrome.runtime.getManifest().version, costly: true,
+      },
+    });
+  });
+}
+
+/**
  * Call background.js's captureToDailyNote(item) in the service worker
  */
 async function captureToDailyNote(extension, item) {
@@ -800,6 +838,7 @@ function recentNoteNames(popup) {
 }
 
 module.exports = {
+  shortOfSpace,
   trackStartup,
   afterEditorFocus,
   waitForApp,

@@ -68,8 +68,8 @@ installWorkerRouter();
  */
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
-/** The migration run's outcome, for #34's harness, which seeds a profile only once it's in */
-workerGlobal.storageUpgrade = kernel.migration.done;
+/** The latest migration attempt's outcome, for #34's harness, which seeds a profile only once it's in */
+Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => kernel.migration.done, configurable: true });
 
 /** Why a capture can't be saved (the reasons the new tab shows) */
 const CAPTURE_REFUSALS = {
@@ -166,10 +166,11 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // A page that found no database, or an older one, waits on the migration run (#17, Q12).
-  // Only its status goes back, never anything stored.
+  // A page that found no database, or an older one, waits on the migration (#17, Q12): the
+  // attempt in progress, or after one that was short of space or failed, a new one. Only its
+  // status goes back, never anything stored.
   if (request && request.type === MIGRATE_MESSAGE) {
-    kernel.migration.done.then(
+    kernel.migration.request().then(
       outcome => sendResponse({ status: outcome.status }),
       () => sendResponse({ status: 'failed' }),
     );

@@ -57,7 +57,7 @@ function sectionMarkup(env) {
  * The section over a port: `point` is what find gives, `upgrade` the worker's record, and
  * `exports` what each export does in turn
  */
-function setup({ point = { id: 'pre-migration-1', createdAt: MADE }, upgrade = { status: 'migrated' }, exports = [] } = {}) {
+function setup({ point = { id: 'pre-migration-1', createdAt: MADE }, upgrade = { status: 'migrated' }, exports = [], upgraded = false } = {}) {
   const env = createLegacyEnv({ document: new FakeDocument(), worker: false });
   env.load(...FILES);
   const toasts = [];
@@ -76,7 +76,7 @@ function setup({ point = { id: 'pre-migration-1', createdAt: MADE }, upgrade = {
     },
   };
   const els = sectionMarkup(env);
-  const section = new (env.get('PreUpdateCopySection'))({ copy, readUpgrade: async () => upgrade });
+  const section = new (env.get('PreUpdateCopySection'))({ copy, readUpgrade: async () => upgrade, isUpgraded: () => upgraded });
   section.mount(els.section);
   return { env, section, els, toasts, downloads, calls };
 }
@@ -103,6 +103,12 @@ describe('Settings > Data & Backup: Copy From Before the Update', () => {
     await section.refresh();
     assert.deepEqual(state(els), { state: 'waiting', button: false, disabled: false, busy: false, guidance: TEXT.waiting, status: '' });
     assert.equal(calls.finds, 0);
+  });
+
+  it('a space-blocked record on a database already at 9 is stale: the copy shows, not "waiting" (review R79)', async () => {
+    const { section, els } = setup({ upgrade: { status: 'space-blocked', code: 'space-short' }, upgraded: true });
+    await section.refresh();
+    assert.equal(state(els).state, 'available');
   });
 
   it('none: no copy on this device, no button, a fresh install included', async () => {

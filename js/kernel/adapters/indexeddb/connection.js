@@ -3,10 +3,12 @@
  * two ways:
  * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 9. The
  *   worker opens it so only once the migration runner (migrate.js) has brought the database
- *   there after its verified recovery point, so this open finds nothing to upgrade. One that
- *   does (a database made or replaced since the run) runs the registry's pending structural
- *   steps in its `versionchange`, which only add, as the runner's would. A database without
- *   `canvases` or `elements` is refused, `missing-core-stores`. Before #17 PR 1b the new tab
+ *   there after its verified recovery point, so this open finds nothing to upgrade. With no
+ *   database it makes one through the registry's structural steps, which have nothing to keep.
+ *   An older database is never upgraded here, since every structural step needs a verified
+ *   point first: the open is refused, `migration-required`, retryable, and the worker runs the
+ *   runner again (review R79). A database without `canvases` or `elements` is refused,
+ *   `missing-core-stores`. Before #17 PR 1b the new tab
  *   opened it this way too, and saved #33's missing-stores copy first; that copy stays the new
  *   tab's own (js/storage.js), since no page opens this adapter versioned now.
  * - `existing` (Popup, Side Panel, and the worker when its run left the database as it was):
@@ -167,6 +169,8 @@ export function createConnection({
       }
       // A database without its notes or blocks gets no step (Q13), and is refused
       let coreMissing = false;
+      // A database below this build's version, which only the migration runner upgrades
+      let needsRunner = false;
       request.onupgradeneeded = event => {
         // An existing open makes no database, and changes none
         if (mode === 'existing') {
@@ -176,6 +180,13 @@ export function createConnection({
         const names = request.result.objectStoreNames;
         if (event.oldVersion > 0 && CORE_STORES.some(name => !names.contains(name))) {
           coreMissing = true;
+          if (request.transaction) request.transaction.abort();
+          return;
+        }
+        // A database with anything in it upgrades only through the runner, after its verified
+        // point (review R79): this open makes only a new one
+        if (event.oldVersion > 0) {
+          needsRunner = true;
           if (request.transaction) request.transaction.abort();
           return;
         }
@@ -224,6 +235,10 @@ export function createConnection({
       request.onerror = () => {
         if (coreMissing) {
           fail(new UnavailableError('storage', 'missing-core-stores', false));
+          return;
+        }
+        if (needsRunner) {
+          fail(new UnavailableError('storage', 'migration-required', true));
           return;
         }
         // The upgrade an existing open aborted: there was no database

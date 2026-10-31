@@ -5709,6 +5709,8 @@ kbd {
 .export-notice-body {
   font-size: 14px;
   line-height: 1.5;
+  /* So a narrow width leaves no word alone on the last line */
+  text-wrap: pretty;
 }
 
 .export-notice-contents {
@@ -5761,6 +5763,7 @@ kbd {
 .pre-update-copy-status {
   margin: 0;
   color: var(--text-secondary);
+  text-wrap: pretty;
 }
 
 .pre-update-copy-row:not([hidden]) + .pre-update-copy-guidance {
