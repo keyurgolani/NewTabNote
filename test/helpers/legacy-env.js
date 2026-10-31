@@ -919,8 +919,23 @@ async function settle(rounds = 20) {
   for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Poll `predicate` until it returns something truthy, letting queued work run in between; returns that value. */
-async function waitFor(predicate, { rounds = 500, message = 'condition' } = {}) {
+/**
+ * Poll `predicate` until it returns something truthy, letting queued work run in between; returns that value.
+ * By default it gives up after `rounds` setImmediate turns. With `withinMs` it polls every few
+ * milliseconds of real time until that deadline instead, for work that runs off the main
+ * thread (webcrypto's hashing, on the thread pool) and so takes longer on a slower machine.
+ */
+async function waitFor(predicate, { rounds = 500, withinMs = null, message = 'condition' } = {}) {
+  if (withinMs !== null) {
+    const deadline = Date.now() + withinMs;
+    for (;;) {
+      const value = await predicate();
+      if (value) return value;
+      if (Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Timed out waiting for ${message} within ${withinMs} ms`);
+  }
   for (let i = 0; i < rounds; i++) {
     const value = await predicate();
     if (value) return value;
