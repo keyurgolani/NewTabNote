@@ -1,5 +1,5 @@
 /**
- * #20 slice 2's permissions and destinations provider in Chromium: its check, run in an
+ * #20 slice 2 in Chromium. The permissions and destinations provider: its check, run in an
  * extension page against Chrome's own chrome.permissions.getAll() and the installed manifest,
  * verifies, and the receipt runCheck makes from it is one NewTabNoteTrust's schema takes.
  *
@@ -93,4 +93,31 @@ test("the permissions provider verifies against Chrome's grants for the installe
   } finally {
     await extension.close();
   }
+});
+
+/**
+ * In the page: with no CanvasTabDB in the profile, the legacy secret reader answers and leaves
+ * none behind. It resolves with the database names before and after.
+ */
+async function readSecretsWithoutDatabase() {
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('CanvasTabDB');
+    request.onsuccess = () => resolve(undefined);
+    request.onerror = () => reject(request.error);
+  });
+  const names = async () => (await indexedDB.databases()).map(database => database.name).sort();
+  const before = await names();
+  const { createLegacySecretReader } = await import('/js/kernel/adapters/indexeddb/legacy-secrets.js');
+  const present = await createLegacySecretReader({ indexedDB, settings: chrome.storage.local }).present();
+  return { before, present: [...present], after: await names() };
+}
+
+test('the legacy secret reader makes no database in Chromium on a profile without one', async ({ extension }) => {
+  await extension.seedOnboarded();
+  const page = await extension.openSurface('popup');
+  const result = await page.evaluate(readSecretsWithoutDatabase);
+  expect(result.before).not.toContain('CanvasTabDB');
+  expect(result.present).toEqual([]);
+  expect(result.after).toEqual(result.before);
+  await expectNoUncaught(extension, page);
 });
