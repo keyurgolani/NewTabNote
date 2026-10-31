@@ -1553,3 +1553,142 @@ describe('#85 review', () => {
     assert.equal((await stateOf(w, id)).signal.freshness.state, 'current');
   });
 });
+
+describe('a stale retry of a lost complete (#7, "Before anything wires a producer or the note port")', () => {
+  const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+  /**
+   * A task signal on n5's t1, its anchor revision recorded or null
+   * @param {{portReplay: boolean, nullRevision: boolean}} options
+   */
+  async function taskWorld({ portReplay, nullRevision }) {
+    const timers = manualTimers();
+    const w = await intelligenceWorld({ timers, portReplay });
+    await w.kernel.execute({
+      type: 'createNote',
+      commandId: 'mk',
+      noteId: 'n5',
+      name: 'n5',
+      blocks: /** @type {any} */ ([todo('t1', 'Call vendor')]),
+    });
+    const draft = await w.tasks.derive?.({ producerId: TASKS, noteId: 'n5', anchorBlockId: 't1', subjectKey: 'task' });
+    assert.ok(draft);
+    if (nullRevision) draft.sourceRefs = draft.sourceRefs.map(source => ({ ...source, revision: null }));
+    await w.intelligence.upsertSignals(TASKS, [draft]);
+    return { w, timers, id: idOf(taskDraft({ noteId: 'n5', blockId: 't1' })) };
+  }
+
+  for (const portReplay of [true, false]) {
+    it(`answers a retry of a lost complete with the decision that moved past it, and sends nothing (replay ${portReplay ? 'on' : 'off'})`, async () => {
+      const { w, timers, id } = await taskWorld({ portReplay, nullRevision: false });
+      const inner = w.noteCommands.setTodoChecked;
+      // The first send never reaches the note
+      w.noteCommands.setTodoChecked = async note => (note.commandId === 'k1' ? new Promise(() => {}) : inner(note));
+      const k1 = { type: 'intelligence.complete', commandId: 'k1', signalId: id, expectedDecisionRevision: 0 };
+      const lost = w.intelligence.execute(k1);
+      await tick();
+      timers.fireAll();
+      assertOutcome(await lost, 'unknown', 'note-command-timeout');
+      w.noteCommands.setTodoChecked = inner;
+      // The user completes and then reopens it
+      assertOutcome(await w.intelligence.execute({ ...k1, commandId: 'k2' }), 'committed', 'signal-completed');
+      const revision = (await stateOf(w, id)).state.decisionRevision;
+      assertOutcome(
+        await w.intelligence.execute({
+          type: 'intelligence.reopen',
+          commandId: 'k3',
+          signalId: id,
+          expectedDecisionRevision: revision,
+        }),
+        'committed',
+        'signal-reopened',
+      );
+      const sent = w.noteCalls.length;
+      const retry = await w.intelligence.execute({ ...k1 });
+      assertOutcome(retry, 'conflict', 'signal-decision-conflict');
+      assert.equal(w.noteCalls.length, sent, 'the retry sends no note command');
+      const after = await stateOf(w, id);
+      assert.equal((await w.readNote('n5'))?.blocks[0].checked, false);
+      assert.equal(after.signal.checked, false);
+      assert.equal(after.state.status, 'active');
+      assert.deepEqual(
+        after.decision?.history.map(entry => entry.action),
+        ['complete', 'reopen'],
+      );
+      // And that answer is kept: the next retry gets it again, with nothing sent
+      assert.deepEqual(await w.intelligence.execute({ ...k1 }), retry);
+      assert.equal(w.noteCalls.length, sent);
+    });
+
+    it(`never sends a note command without the anchor's revision, so a stale one can't overwrite the block (replay ${portReplay ? 'on' : 'off'})`, async () => {
+      const { w, id } = await taskWorld({ portReplay, nullRevision: true });
+      const k1 = { type: 'intelligence.complete', commandId: 'k1', signalId: id, expectedDecisionRevision: 0 };
+      const refused = await w.intelligence.execute(k1);
+      assertOutcome(refused, 'rejected', 'anchor-revision-unknown');
+      assert.equal(w.noteCalls.length, 0);
+      // Kept, as refusals are
+      assert.deepEqual(await w.intelligence.execute({ ...k1 }), refused);
+      assert.equal(w.noteCalls.length, 0);
+      assert.equal((await stateOf(w, id)).decision, null);
+      assert.equal((await w.readNote('n5'))?.blocks[0].checked, false);
+      // Once a re-derive records the revision, a new command goes out with it
+      await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+      assertOutcome(await w.intelligence.execute({ ...k1, commandId: 'k2' }), 'committed', 'signal-completed');
+      assert.equal(w.noteCalls.length, 1);
+      assert.equal(typeof w.noteCalls[0].expectedRevision, 'number');
+      assert.equal((await w.readNote('n5'))?.blocks[0].checked, true);
+    });
+  }
+
+  it('still resends a lost complete when nothing moved, and decides from a real derive once the producer answers', async () => {
+    const timers = manualTimers();
+    const w = await intelligenceWorld({ timers });
+    await w.addNote('n5', [todo('t1', 'Call vendor')]);
+    const id = idOf(taskDraft({ noteId: 'n5', blockId: 't1' }));
+    const inner = w.noteCommands.setTodoChecked;
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    w.noteCommands.setTodoChecked = async note => {
+      await held;
+      return inner(note);
+    };
+    const k1 = { type: 'intelligence.complete', commandId: 'k1', signalId: id, expectedDecisionRevision: 0 };
+    const first = w.intelligence.execute(k1);
+    await tick();
+    timers.fireAll();
+    assertOutcome(await first, 'unknown', 'note-command-timeout');
+    release();
+    await tick(10);
+    w.noteCommands.setTodoChecked = inner;
+    // The user unchecks it in the note, and that hint's derive times out
+    await w.editBlock('n5', todo('t1', 'Call vendor', false));
+    let releaseDerive = () => {};
+    w.tasks.hold = new Promise(resolve => {
+      releaseDerive = () => resolve(undefined);
+    });
+    const hung = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+    await tick();
+    timers.fireAll();
+    await hung;
+    w.tasks.hold = null;
+    releaseDerive();
+    assertOutcome(await w.intelligence.execute({ ...k1 }), 'unknown', 'note-state-unconfirmed');
+    assert.equal((await stateOf(w, id)).signal.checked, false);
+    w.clock.advance(10000);
+    assertOutcome(await w.intelligence.execute({ ...k1 }), 'conflict', 'note-revision-conflict');
+    const after = await stateOf(w, id);
+    assert.equal(after.signal.checked, false);
+    assert.equal((await w.readNote('n5'))?.blocks[0].checked, false);
+    assert.deepEqual(after.decision?.history.map(entry => entry.action) ?? [], []);
+  });
+});
