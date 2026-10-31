@@ -162,6 +162,7 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
       'faultCode',
       'incidentId',
       'lag',
+      'outcome',
       'packageHash',
       'pending',
       'providerId',

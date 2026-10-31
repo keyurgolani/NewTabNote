@@ -230,6 +230,20 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
+  // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
+  // the one implementation of its port, which no shipped root makes until slice 4
+  'js/kernel/adapters/indexeddb/salvage-reader.js': {
+    implements: "#20's SalvagePort: CanvasTabDB but settings, the legacy copies, and #17's points",
+    tests: 'test/kernel/trust-salvage.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/repair-points.js': {
+    implements: "#20's RecoveryPointPort: #17's verified pre-repair point, under Web Lock storage.migrate",
+    tests: 'test/kernel/trust-remediation-catalog.test.mjs',
+  },
+  'js/kernel/adapters/files/save-picker.js': {
+    implements: "#20's FilePort, over showSaveFilePicker: a closed write, read back from the same handle",
+    tests: 'test/kernel/trust-salvage.test.mjs',
+  },
 });
 
 /**

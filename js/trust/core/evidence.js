@@ -24,6 +24,7 @@ import {
   PROVIDER_IDS,
   REASON_CODES,
   REMEDIATION_IDS,
+  RUN_OUTCOMES,
   SUBJECT_NAMES,
 } from './codes.js';
 import {
@@ -48,17 +49,31 @@ export const recordId = v.pipe(
   v.regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{13}-[a-z0-9]{0,9})$/),
 );
 
+/**
+ * A #17 recovery point's id (js/kernel/adapters/indexeddb/recovery-points.js): its kind and
+ * the time it was made, with a counter when two share a millisecond, such as
+ * `pre-migration-1760000000000` or `pre-repair-1760000000000-2`
+ */
+export const pointId = v.pipe(v.string(), v.regex(/^pre-(?:migration|repair)-[0-9]{10,16}(?:-[0-9]{1,3})?$/));
+
+/** A recovery point's id as a record holds it: a #17 point's, or a record id */
+export const recoveryPointId = v.union([recordId, pointId]);
+
 /** A health provider's id, from the registered ones (codes.js) */
 export const providerId = v.picklist(PROVIDER_IDS);
 
 /** A remediation's id, from the registered ones (codes.js) */
 export const remediationId = v.picklist(REMEDIATION_IDS);
 
-/** What an incident is about: a record's id, a named database, store, or permission, or a legacy copy's key */
+/**
+ * What an incident or a remediation is about: a record's id, a named database, store, or
+ * permission, a legacy copy's key, or a #17 recovery point's id
+ */
 export const subjectId = v.union([
   recordId,
   v.picklist(SUBJECT_NAMES),
   v.pipe(v.string(), v.regex(/^(?:auto|recovery)_backup_[0-9]{10,16}$/)),
+  pointId,
 ]);
 
 /** An Error's or DOMException's name, from the known ones, never its message */
@@ -93,12 +108,13 @@ export const EVIDENCE_FIELDS = Object.freeze({
   incidentId: recordId,
   runId: recordId,
   commandId: recordId,
-  recoveryPointId: recordId,
+  recoveryPointId,
   subjectId,
   // Registered codes, enums, and exception names
   faultCode,
   errorCode,
   reason: v.picklist(REASON_CODES),
+  outcome: v.picklist(RUN_OUTCOMES),
   cause: v.picklist(FAIL_CAUSES),
   exception: exceptionName,
   status: v.picklist(PROVIDER_STATUSES),

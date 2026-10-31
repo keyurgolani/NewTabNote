@@ -11,13 +11,24 @@ import { count, timestamp } from '../../kernel/core/contracts/fields.js';
 import { check } from '../../kernel/core/contracts/validate.js';
 import { RUN_OUTCOMES } from './codes.js';
 import { EVENT_CODE_NAMES } from './event-codes.js';
-import { capability, evidenceSchema, faultCode, providerId, recordId, remediationId, subjectId } from './evidence.js';
+import {
+  capability,
+  evidenceSchema,
+  faultCode,
+  pointId,
+  providerId,
+  recordId,
+  recoveryPointId,
+  remediationId,
+  subjectId,
+} from './evidence.js';
 import {
   CAPTURE_STATES,
   COST_CLASSES,
   INCIDENT_STATES,
   RECEIPT_STATUSES,
   RUN_STATES,
+  RUN_STEPS,
   SEVERITIES,
 } from './vocabulary.js';
 
@@ -126,13 +137,64 @@ export const incidentSchema = v.strictObject({
 
 /** @typedef {v.InferOutput<typeof incidentSchema>} Incident */
 
-/** A RemediationRun: one remediation's run, written before its first mutation (slice 3) */
+/** Where a salvage file reads from (remediation/salvage-file.js) */
+export const SALVAGE_ORIGINS = Object.freeze(/** @type {const} */ (['CanvasTabDB', 'legacyCopies', 'recoveryPoints']));
+
+/**
+ * The CanvasTabDB stores a salvage file holds: version 8's, but the secret `settings`, and
+ * #17's `meta` and `migrations`. Any other store is left out, since nothing says what it holds.
+ */
+export const SALVAGE_STORES = Object.freeze(
+  /** @type {const} */ ([
+    'canvases',
+    'elements',
+    'media',
+    'folders',
+    'search_index',
+    'links',
+    'themes',
+    'vectors',
+    'snapshots',
+    'meta',
+    'migrations',
+  ]),
+);
+
+/** The most `unreadable` entries an answer or a run record carries; a count says how many there were */
+export const MAX_UNREADABLE = 64;
+
+/**
+ * A source or a store a saved file couldn't read: where, and its code. `part` is the store,
+ * null for a whole source, and `pointId` the recovery point it's in, when it's in one.
+ */
+export const unreadableSchema = v.strictObject({
+  origin: v.picklist(SALVAGE_ORIGINS),
+  part: v.nullable(v.picklist(SALVAGE_STORES)),
+  pointId: v.nullable(pointId),
+  code: v.picklist(RUN_OUTCOMES),
+});
+
+/**
+ * A RemediationRun: one remediation's run, written before its first mutation (slice 3's
+ * pipeline). `commandId` is the remediation's id. `step` is the step it's on or stopped at,
+ * written before that step starts, and `subjectId` what it acts on when it isn't the whole
+ * store, such as the legacy copy a Save as file saves. `fileSavedAt` is when a recovery file
+ * this run saved read back verified.
+ */
 export const runSchema = v.strictObject({
   id: recordId,
   commandId: remediationId,
   incidentId: v.nullable(recordId),
+  subjectId: v.optional(v.nullable(subjectId)),
   state: v.picklist(RUN_STATES),
-  recoveryPointId: v.optional(recordId),
+  step: v.optional(v.picklist(RUN_STEPS)),
+  recoveryPointId: v.optional(recoveryPointId),
+  fileSavedAt: v.optional(timestamp),
+  // What a saved file couldn't read (the first 64), how many there were, and whether the file
+  // the user picked may be empty, so a resend answers as the run finished
+  unreadable: v.optional(v.pipe(v.array(unreadableSchema), v.maxLength(MAX_UNREADABLE))),
+  unreadableCount: v.optional(count),
+  fileMayBeEmpty: v.optional(v.boolean()),
   outcome: v.nullable(v.picklist(RUN_OUTCOMES)),
   startedAt: timestamp,
   updatedAt: timestamp,
