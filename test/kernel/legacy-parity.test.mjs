@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
+import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
 import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
@@ -974,6 +975,27 @@ describe("the kernel's copies of production rules, run both ways", () => {
       state.kind === 'ready' ? state.data.map(block => block.id) : [],
       editor.blocks.map((/** @type {{id: string}} */ block) => block.id),
     );
+  });
+
+  it("the document client's blocksAsStored lists a note's blocks as Storage.getElementsByNote does: by id, never by order", async () => {
+    // Ids that sort against the blocks' order, blocks that share an order, an upper-case id,
+    // which sorts before every lower-case one, and another note's block
+    const { viaStorage, kernel } = await twin({
+      canvases: [legacyEnv.note('n1'), legacyEnv.note('n2')],
+      elements: [
+        legacyEnv.block('z', 'n1', 0, 'zero'),
+        legacyEnv.block('m', 'n1', 1, 'one'),
+        legacyEnv.block('a', 'n1', 2, 'two'),
+        legacyEnv.block('q', 'n1', 1, 'one again'),
+        legacyEnv.block('c', 'n1', 1, 'one more'),
+        legacyEnv.block('B', 'n1', 3, 'three'),
+        legacyEnv.block('k', 'n2', 0, 'elsewhere'),
+      ],
+    });
+    const asStored = legacyEnv.plain(await viaStorage.storage.getElementsByNote('n1'));
+    assert.deepEqual(asStored.map((/** @type {{id: string}} */ block) => block.id), ['B', 'a', 'c', 'm', 'q', 'z']);
+    const documentClient = createDocumentClient(/** @type {any} */ ({ ...kernel, ids: testIds('d') }));
+    assert.deepEqual(legacyEnv.plain(await documentClient.blocksAsStored('n1')), asStored);
   });
 
   it("the jobs' bookkeeping reads back through Storage's settings, both ways, under 1.4.x's keys", async () => {
