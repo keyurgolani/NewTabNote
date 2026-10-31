@@ -14,6 +14,7 @@ import { createSettingsClient } from './settings.js';
 import { kernelClient, legacyHost } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
+import { startIndexer } from './workers.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./host.js').LegacyHost} LegacyHost */
@@ -56,7 +57,7 @@ import { createNoteRemoval } from './removal.js';
  * @typedef {object} NewTabPage
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
  *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
- *   recovery: Recovery, validateBackup: ValidateBackup, legacyStorage: unknown}) => NewTabApp} App
+ *   recovery: Recovery, validateBackup: ValidateBackup, legacyStorage: unknown, startIndexer: () => Worker}) => NewTabApp} App
  * @property {unknown} [app]
  */
 
@@ -189,10 +190,10 @@ export function createNewTabBackupCheck(host) {
 /**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
  * client, its document client, its settings client, its AI port, its note list, its failure
- * events, its removeNotes, its database's state and recovery, its import's backup check, and
- * the legacy storage the graph view, the search index, and sync still go through, and becomes
- * window.app before init runs. The listener answers with init's promise, which a page ignores
- * and a test can wait for.
+ * events, its removeNotes, its database's state and recovery, its import's backup check, the
+ * legacy storage the graph view, the search index, and sync still go through, and the
+ * indexer's starter (./workers.js), and becomes window.app before init runs. The listener
+ * answers with init's promise, which a page ignores and a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -215,6 +216,7 @@ export function startNewTab() {
       recovery: createNewTabRecovery(host),
       validateBackup: createNewTabBackupCheck(host),
       legacyStorage: host.storage,
+      startIndexer,
     });
     built = app;
     page.app = app;

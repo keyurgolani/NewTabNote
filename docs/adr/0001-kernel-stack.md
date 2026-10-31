@@ -99,6 +99,7 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 - `js/lib/` stays third-party code that lint and format rules skip.
 - `scripts/build.js` walks `js/lib/valibot/` instead of listing it in `JS_FILES`, and `check:dist` covers it.
 - #27's bundler swap replaces the vendored copy with the exact-pinned npm package. The kernel-core boundary rule then allows `valibot` in place of `js/lib/valibot/`, and the license stays in the notice inputs.
+- **Amended by #27 slice 2.** The bundler folds the vendored copy into the chunks that import it, and the build holds each bundled `js/lib/` module to its `vendor.json` record and its `THIRD_PARTY_NOTICES` heading, and its `LICENSE.md` still ships at `js/lib/valibot/`. Slice 2 installs only the owner-approved Vite tree, so the vendored copy stays until a change that adds the npm package, and the boundary rule with it.
 
 ### 3. ESLint and Prettier, pinned
 
@@ -143,6 +144,8 @@ The owner's spec (section 7.1) says a background coordinator serializes durable 
 - A module worker's top-level functions aren't globals, so `js/background.js` sets `self.captureToDailyNote` for #34's harness, and slice 4 points that name at the kernel's `captureToDailyNote` command.
 - A kernel file missing from `dist/` breaks the module graph, and the new tab boots blank. The build walks the directories, so no hand-kept list can miss a file, and `check:dist` resolves every static import, `<script src>`, and the manifest's `service_worker` inside `dist/`. Removing a kernel file from `dist/` has to fail it.
 
+**Amended by #27 slice 2.** Vite bundles, in build mode only: the four pages as HTML entries, the service worker in a pass of its own into one self-contained ES module at `js/background.js`, and each module worker a page starts with `new Worker(new URL(…, import.meta.url), {type: 'module'})`. The sources stay native ES modules with nothing a bundler provides, as decided above, and the tests still load them as they are. The build no longer walks `js/kernel/` or `js/lib/valibot/`: the bundler resolves every import as it builds, so a missing kernel module fails the build (`build/bundle`) where it used to boot the new tab blank, and `check:dist` runs the build's closure, preload, classic-script, and service-worker checks on a build that exists. The worker's rules above still hold, and the build checks them on the worker's graph: no `import()`, `importScripts()`, or top-level `await` (`background/not-self-contained`, `background/top-level-await`), and `document` or `window` read only behind a `typeof` check (`background/dom`).
+
 ### 5. Plain DOM
 
 **Context.** The legacy UI is hand-written DOM, and the repo has no UI framework. The kernel hands out plain-data projections with no rendering dependency. Moment's critical allowlist in #27 is the storage client, the editor kernel, save status, and essential commands, and [#1][i1] keeps the canvas and editor root as the same DOM nodes when Workspace opens and closes.
@@ -184,11 +187,11 @@ Each exits nonzero on failure and runs in #34's required PR check until #29 take
 | `test:kernel` | `node --test test/kernel/*.test.mjs`, also run by `npm test` |
 | `typecheck:kernel` | `tsc -p tsconfig.kernel.json` |
 | `check:boundaries` | ESLint boundary rules against `docs/architecture/kernel-ledger.json` |
-| `check:dist` | Resolves every static import, `<script src>`, and the manifest `service_worker` inside `dist/` |
+| `check:dist` | The build's closure, preload, classic-script, and service-worker checks on the build in `dist/` (#27 slice 2) |
 
 ## Changing this record
 
-Change a decision by amending this file in a PR that merges before the code that depends on it. #27's bundler swap and any Workspace framework are the amendments already expected.
+Change a decision by amending this file in a PR that merges before the code that depends on it. #27's bundler swap amended decisions 2 and 4 in its slice 2. A Workspace framework is the amendment still expected.
 
 [i1]: https://github.com/keyurgolani/NewTabNote/issues/1
 [i2]: https://github.com/keyurgolani/NewTabNote/issues/2

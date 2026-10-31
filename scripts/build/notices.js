@@ -91,7 +91,7 @@ function checkBanners(files, vendor = readVendor()) {
     if (!files.has(file)) continue;
     if (record.banner !== null && !files.text(file).includes(record.banner)) {
       const first = record.banner.split('\n').find((line) => /\w/.test(line)) || record.banner;
-      problems.push(problem('notices/banner', file, `shipped without its license banner (${first.replace(/^[\s/*!]+/, '')}). js/lib/ files ship byte for byte (COPY_AS_IS in scripts/build.js).`));
+      problems.push(problem('notices/banner', file, `shipped without its license banner (${first.replace(/^[\s/*!]+/, '')}). js/lib/ files ship byte for byte (CLASSIC_SCRIPTS in scripts/build/vite-config.js).`));
     }
     if (headings !== null && !headings.has(record.notice)) {
       problems.push(problem('notices/no-entry', file, `THIRD_PARTY_NOTICES has no "${record.notice}" heading for it`));
@@ -147,4 +147,37 @@ function checkVendor(files, vendor = readVendor()) {
   return problems;
 }
 
-module.exports = { readVendor, checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, NOTICE_FILES };
+/**
+ * The vendored modules the bundler folds into chunks, which don't ship as files (#27 slice 2):
+ * each one bundled has to be its record's file, and its package needs a THIRD_PARTY_NOTICES
+ * heading. Valibot is today's, which the kernel's contracts import.
+ * @param {string[]} modules - every source module the bundle holds, by its path in the sources
+ * @param {PackageFiles} files - the build, for its THIRD_PARTY_NOTICES
+ * @param {string} [root]
+ * @param {Map<string, VendoredFile>} [vendor]
+ * @returns {Problem[]}
+ */
+function checkBundledVendor(modules, files, root = ROOT, vendor = readVendor(root)) {
+  /** @type {Problem[]} */
+  const problems = [];
+  const notices = files.has('THIRD_PARTY_NOTICES') ? files.text('THIRD_PARTY_NOTICES') : null;
+  const headings = notices === null ? null : new Set([...notices.matchAll(/^\d+\. (.+?)\r?$/gm)].map((match) => match[1]));
+  for (const file of modules) {
+    if (!file.startsWith(LIB)) continue;
+    const record = vendor.get(file);
+    if (!record) {
+      problems.push(problem('vendor/unlisted', file, 'the bundle holds it, and js/lib/vendor.json has no record of it'));
+      continue;
+    }
+    const digest = sha256(fs.readFileSync(path.join(root, file)));
+    if (digest !== record.sha256) {
+      problems.push(problem('vendor/mismatch', file, `the bundle holds it with SHA-256 ${digest}, and its record says ${record.sha256}. Record a local edit, or restore the file.`));
+    }
+    if (headings !== null && !headings.has(record.notice)) {
+      problems.push(problem('notices/no-entry', file, `the bundle holds it, and THIRD_PARTY_NOTICES has no "${record.notice}" heading for it`));
+    }
+  }
+  return problems;
+}
+
+module.exports = { readVendor, checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, checkBundledVendor, NOTICE_FILES };

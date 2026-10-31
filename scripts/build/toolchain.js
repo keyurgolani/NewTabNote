@@ -12,8 +12,11 @@ const { problem } = require('./diagnostics.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 
-/** The build tools whose versions go into buildId, with Node's */
-const TOOLS = ['typescript', 'terser', 'clean-css'];
+/**
+ * The build tools whose versions go into buildId, with Node's: the bundler, its own bundler and
+ * CSS pipeline, the minifier, and the type gate's checker. The lockfile's hash covers the rest.
+ */
+const TOOLS = ['vite', 'rolldown', 'lightningcss', 'terser', 'typescript'];
 
 /**
  * The exact Node version .nvmrc pins, such as 24.18.0

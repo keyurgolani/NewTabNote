@@ -3,15 +3,17 @@
 /**
  * What the output checks read from a shipped script, from one parse with the TypeScript
  * compiler API: the paths it names (closure), the URL-like literals and where they sit
- * (remote code), and its environment reads (environment). Each file is parsed once per
- * content however many checks ask.
+ * (remote code), its environment reads (environment), and the syntax only a module parses
+ * (load mode). Each file is parsed once per content however many checks ask.
  */
 
 const crypto = require('node:crypto');
 const ts = require('typescript');
 
 /**
- * @typedef {'import' | 'dynamic-import' | 'worker' | 'import-scripts' | 'get-url' | 'offscreen-document' | 'tabs-create' | 'icon-url'} ReferenceKind
+ * @typedef {'import' | 'dynamic-import' | 'worker' | 'worker-url' | 'import-scripts' | 'get-url' | 'offscreen-document' | 'tabs-create' | 'icon-url'} ReferenceKind
+ * A `worker-url` is a worker started with `new Worker(new URL(path, import.meta.url))`, whose path
+ * resolves against the script itself, as the bundler writes every worker (#27 slice 2).
  */
 
 /**
@@ -42,6 +44,8 @@ const ts = require('typescript');
  *   ...` reads nothing.
  * @property {string[]} functionConstructors - where the Function constructor is called or
  *   constructed some way ESLint's no-new-func doesn't see (isFunctionConstructor)
+ * @property {string[]} moduleSyntax - where it has syntax only a module parses: an import or
+ *   export statement, or import.meta
  */
 
 /** @type {Map<string, ScriptScan>} */
@@ -135,6 +139,70 @@ function isFunctionConstructor(node) {
 }
 
 /**
+ * Whether `node` is import.meta.url, or `'' + import.meta.url` as Vite writes it
+ * @param {ts.Expression} node
+ * @returns {boolean}
+ */
+function isImportMetaUrl(node) {
+  let expression = node;
+  while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+  if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken
+    && ts.isStringLiteralLike(expression.left) && expression.left.text === '') expression = expression.right;
+  return ts.isPropertyAccessExpression(expression) && expression.name.text === 'url'
+    && ts.isMetaProperty(expression.expression) && expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword;
+}
+
+/**
+ * The path argument of `new URL(path, import.meta.url)`, or null when `node` is anything else
+ * @param {ts.Expression} node
+ * @returns {ts.Expression | null}
+ */
+function moduleUrl(node) {
+  let expression = node;
+  while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+  if (!ts.isNewExpression(expression) || !expression.arguments || expression.arguments.length !== 2) return null;
+  const names = memberPath(expression.expression);
+  if (names === null || names.length !== 1 || names[0] !== 'URL') return null;
+  return isImportMetaUrl(expression.arguments[1]) ? expression.arguments[0] : null;
+}
+
+/**
+ * Whether `node` is a chrome.runtime.getURL call, which names its path itself
+ * @param {ts.Expression} node
+ * @returns {boolean}
+ */
+function isGetUrlCall(node) {
+  if (!ts.isCallExpression(node)) return false;
+  const names = memberPath(node.expression);
+  return names !== null && names.join('.') === 'chrome.runtime.getURL';
+}
+
+/**
+ * Whether `source` declares a binding named `name` anywhere: a function or class, a variable or
+ * a destructured one, a parameter, or an import
+ * @param {ts.SourceFile} source
+ * @param {string} name
+ * @returns {boolean}
+ */
+function declares(source, name) {
+  let found = false;
+  /** @param {ts.Node} node */
+  const look = (node) => {
+    if (found) return;
+    if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node)
+      || ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)
+      || ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node))
+      && node.name && ts.isIdentifier(node.name) && node.name.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, look);
+  };
+  look(source);
+  return found;
+}
+
+/**
  * A string literal's text, or null for anything else, a template with an expression included
  * @param {ts.Node | undefined} node
  * @returns {string | null}
@@ -188,7 +256,10 @@ function scanScript(file, text) {
     return `${line + 1}:${character + 1}`;
   };
   /** @type {ScriptScan} */
-  const scan = { references: [], urls: [], environment: [], functionConstructors: [] };
+  const scan = { references: [], urls: [], environment: [], functionConstructors: [], moduleSyntax: [] };
+  // A file that declares its own process (a function, a local, a parameter, an import) reads
+  // that one, not Node's, wherever it names it
+  const declaresProcess = declares(source, 'process');
   const reference = (/** @type {ReferenceKind} */ kind, /** @type {ts.Node | undefined} */ node, /** @type {ts.Node} */ where) => {
     scan.references.push({ kind, value: literal(node), at: at(node || where) });
   };
@@ -241,7 +312,7 @@ function scanScript(file, text) {
       return;
     }
     // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all
-    if (ts.isIdentifier(node) && node.text === 'process' && isVariableRead(node)) {
+    if (!declaresProcess && ts.isIdentifier(node) && node.text === 'process' && isVariableRead(node)) {
       scan.environment.push({ what: 'process', name: null, at: at(node) });
       return;
     }
@@ -272,20 +343,29 @@ function scanScript(file, text) {
       } else if (name === 'chrome.offscreen.createDocument') {
         reference('offscreen-document', propertyValue(node.arguments[0], 'url'), node);
       } else if (name === 'chrome.tabs.create') {
-        const url = propertyValue(node.arguments[0], 'url');
-        // A URL built by a call, such as getURL, is that call's reference
-        if (url && !ts.isCallExpression(url)) reference('tabs-create', url, url);
+        const options = node.arguments[0];
+        if (!options || !ts.isObjectLiteralExpression(options) || options.properties.some(ts.isSpreadAssignment)) {
+          // Options it can't read, or a spread that may carry the url: a path known only at run time
+          reference('tabs-create', undefined, options || node);
+        } else {
+          const url = propertyValue(options, 'url');
+          // A getURL call is its own reference; any other call builds the path at run time
+          if (url && !isGetUrlCall(url)) reference('tabs-create', url, url);
+        }
       }
     } else if (ts.isNewExpression(node)) {
       const names = memberPath(node.expression);
       const name = names ? names.join('.') : '';
       if (name === 'Worker' || name === 'SharedWorker') {
-        reference('worker', node.arguments ? node.arguments[0] : undefined, node);
+        const argument = node.arguments ? node.arguments[0] : undefined;
+        const url = argument && moduleUrl(argument);
+        if (url) reference('worker-url', url, url);
+        else reference('worker', argument, node);
         argumentContext = 'Worker';
       }
     } else if (ts.isShorthandPropertyAssignment(node) && node.name.text === 'iconUrl') {
       reference('icon-url', node.name, node.name);
-    } else if (ts.isPropertyAssignment(node) && propertyName(node.name) === 'iconUrl' && !ts.isCallExpression(node.initializer)) {
+    } else if (ts.isPropertyAssignment(node) && propertyName(node.name) === 'iconUrl' && !isGetUrlCall(node.initializer)) {
       reference('icon-url', node.initializer, node.initializer);
     }
 
@@ -311,6 +391,16 @@ function scanScript(file, text) {
     ts.forEachChild(node, (child) => visit(child, context));
   };
   visit(source, null);
+
+  for (const statement of source.statements) {
+    const exported = ts.canHaveModifiers(statement) && (ts.getModifiers(statement) || []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isExportAssignment(statement) || exported) scan.moduleSyntax.push(at(statement));
+  }
+  const importMeta = (/** @type {ts.Node} */ node) => {
+    if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) scan.moduleSyntax.push(at(node));
+    ts.forEachChild(node, importMeta);
+  };
+  importMeta(source);
 
   cache.set(key, scan);
   return scan;

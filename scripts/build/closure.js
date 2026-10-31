@@ -6,10 +6,12 @@
  * href, poster, data, and srcset, stylesheet url() and CSS imports, static and literal dynamic
  * imports, new Worker, importScripts, chrome.runtime.getURL, chrome.offscreen.createDocument's
  * url, chrome.tabs.create's url, and iconUrl, a shorthand `{ url }` or `{ iconUrl }` included. It
- * fails on a named path the package lacks, on a file nothing names that build/static-assets.json
- * doesn't list, and on a path of any of those kinds built at run time in first-party code,
- * which it couldn't follow (#89's review: terser folds some constants into literals, so a
- * development build shipped them unchecked). A vendored file's own paths are its record's.
+ * fails on a named path the package lacks; on an import of a bare specifier, which nothing
+ * resolves without a bundler or an import map; on a file nothing names that
+ * build/static-assets.json doesn't list; and on a path of any of those kinds built at run time
+ * in first-party code, which it couldn't follow (#89's review: terser folds some constants into
+ * literals, so a development build shipped them unchecked). A vendored file's own paths are its
+ * record's.
  *
  * Paths resolve as Chrome resolves them: imports, page attributes, and stylesheet URLs from
  * their own file; new Worker and importScripts from the page or worker that runs the script;
@@ -53,6 +55,7 @@ const NON_LITERAL = {
   import: 'An import',
   'dynamic-import': 'import()',
   worker: 'new Worker()',
+  'worker-url': 'new Worker(new URL())',
   'import-scripts': 'importScripts()',
   'get-url': 'chrome.runtime.getURL',
   'offscreen-document': 'chrome.offscreen.createDocument\'s url',
@@ -275,12 +278,22 @@ function checkClosure(files, { staticAssets: assets = staticAssets(), vendored =
           continue;
         }
         if (referenceKind === 'import' || referenceKind === 'dynamic-import') {
+          // A bare specifier names a package, which Chrome resolves only through an import map. A
+          // URL is elsewhere, and the remote-code scan's.
+          if (!/^(?:\.{0,2}\/|[a-z][a-z\d+.-]*:)/i.test(value)) {
+            problems.push(problem('closure/missing', where, `${NON_LITERAL[referenceKind]} of "${value}": a bare specifier, which nothing resolves without a bundler or an import map`));
+            continue;
+          }
           follow(file, `${referenceKind === 'import' ? 'imported' : 'import()ed'} at ${at}`, value, dir, base);
         } else if (referenceKind === 'worker') {
           follow(file, `new Worker() at ${at}`, value, base);
+        } else if (referenceKind === 'worker-url') {
+          // new URL(path, import.meta.url): against the script itself, wherever it runs
+          follow(file, `new Worker(new URL()) at ${at}`, value, dir);
         } else if (referenceKind === 'import-scripts') {
           follow(file, `importScripts() at ${at}`, value, base, base);
         } else {
+          /** @type {Record<string, string>} */
           const names = {
             'get-url': 'chrome.runtime.getURL',
             'offscreen-document': 'chrome.offscreen.createDocument',
@@ -301,4 +314,77 @@ function checkClosure(files, { staticAssets: assets = staticAssets(), vendored =
   return { problems, referenced };
 }
 
-module.exports = { checkClosure, staticAssets, isListed, resolve, manifestPaths, STATIC_ASSETS };
+/**
+ * Each page preloads exactly the chunks its module scripts import, statically and through each
+ * other (#27 slice 2: the bundler writes these links, which replaced scripts/module-preloads.js).
+ * A missing preload costs a round trip per import level, and a preload of anything else fetches
+ * code the page doesn't run at start (`closure/preload`).
+ * @param {PackageFiles} files
+ * @returns {Problem[]}
+ */
+function checkPreloads(files) {
+  /** @type {Problem[]} */
+  const problems = [];
+  for (const page of files.paths.filter((file) => kindOf(file) === 'page')) {
+    const dir = path.posix.dirname(page) === '.' ? '' : path.posix.dirname(page);
+    /** @type {string[]} */
+    const entries = [];
+    /** @type {Set<string>} */
+    const preloads = new Set();
+    for (const tag of htmlTags(files.text(page))) {
+      const src = tag.attributes.get('src');
+      const href = tag.attributes.get('href');
+      if (tag.name === 'script' && (tag.attributes.get('type') || '').trim().toLowerCase() === 'module' && src) entries.push(resolve(src, dir));
+      if (tag.name === 'link' && /(^|\s)modulepreload(\s|$)/i.test(tag.attributes.get('rel') || '') && href) preloads.add(resolve(href, dir));
+    }
+    /** @type {Set<string>} */
+    const imported = new Set();
+    const queue = [...entries];
+    while (queue.length > 0) {
+      const file = /** @type {string} */ (queue.shift());
+      if (!files.has(file) || kindOf(file) !== 'script') continue;
+      const base = path.posix.dirname(file) === '.' ? '' : path.posix.dirname(file);
+      for (const { kind, value } of scanScript(file, files.text(file)).references) {
+        if (kind !== 'import' || value === null) continue;
+        const target = resolve(value, base);
+        if (target === 'elsewhere' || target === 'outside' || entries.includes(target) || imported.has(target)) continue;
+        imported.add(target);
+        queue.push(target);
+      }
+    }
+    for (const file of imported) {
+      if (!preloads.has(file)) problems.push(problem('closure/preload', page, `doesn't preload ${file}, which its module scripts import`));
+    }
+    for (const file of preloads) {
+      if (!imported.has(file)) problems.push(problem('closure/preload', page, `preloads ${file}, which its module scripts don't import at start`));
+    }
+  }
+  return problems;
+}
+
+/**
+ * A script a page loads without type="module" runs as a classic script, which can't parse an
+ * import or export statement or import.meta, so none of it runs (`build/load-mode`)
+ * @param {PackageFiles} files
+ * @returns {Problem[]}
+ */
+function checkClassicScripts(files) {
+  /** @type {Problem[]} */
+  const problems = [];
+  for (const page of files.paths.filter((file) => kindOf(file) === 'page')) {
+    const dir = path.posix.dirname(page) === '.' ? '' : path.posix.dirname(page);
+    for (const tag of htmlTags(files.text(page))) {
+      const src = tag.attributes.get('src');
+      if (tag.name !== 'script' || !src || (tag.attributes.get('type') || '').trim().toLowerCase() === 'module') continue;
+      const file = resolve(src, dir);
+      if (!files.has(file) || kindOf(file) !== 'script') continue;
+      const [first] = scanScript(file, files.text(file)).moduleSyntax;
+      if (first !== undefined) {
+        problems.push(problem('build/load-mode', file, `${page} loads it as a classic script at ${tag.at}, but it has an import or export statement or import.meta at ${first}, which only a module parses`));
+      }
+    }
+  }
+  return problems;
+}
+
+module.exports = { checkClosure, checkPreloads, checkClassicScripts, staticAssets, isListed, resolve, manifestPaths, STATIC_ASSETS };

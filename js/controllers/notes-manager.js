@@ -45,12 +45,14 @@ function jobTimer(minutes, fallback) {
 }
 
 class NotesManager {
-  constructor({ storage, domRefs, logger, llm, documentClient = null }) {
+  constructor({ storage, domRefs, logger, llm, documentClient = null, startIndexer = null }) {
     this.storage = storage;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;
     this.documentClient = documentClient;
+    // Starts the search indexer's module worker (js/kernel/composition/workers.js), from App
+    this.startIndexer = startIndexer;
 
     // Auto-title state
     this.autoTitleIntervalId = null;
@@ -1175,11 +1177,11 @@ class NotesManager {
    * Initialize search indexer
    */
   initIndexer() {
-    if (typeof Worker === 'undefined') return;
+    if (typeof Worker === 'undefined' || !this.startIndexer) return;
     // Search indexing is off while the search_index store is missing.
     if (!this.storage.hasStore('search_index')) return;
     try {
-      this.indexerWorker = new Worker('js/workers/indexer.js');
+      this.indexerWorker = this.startIndexer();
       // A worker that won't load, or throws before its first answer, fires `error` here (#20,
       // "Diagnostic journal"): the first such error is an `indexer.start-failed` event. It
       // doesn't call preventDefault, so the browser still reports the error as it did before.

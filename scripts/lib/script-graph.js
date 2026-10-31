@@ -1,17 +1,15 @@
 'use strict';
 
 /**
- * How the extension loads its JavaScript, read from a directory laid out like the package:
- * the repository root (scripts/build.js, to minify each file the way it's loaded) or dist/
- * (scripts/check-dist.js, to prove every reference resolves).
+ * How the extension's sources load their JavaScript, read from the repository root: the
+ * kernel's tests see from it which modules each page and the service worker reach. Since #27
+ * slice 2 the bundler builds dist/ from these sources and scripts/build/closure.js checks it.
  *
  * The roots are the manifest's background.service_worker and every <script src> in the
  * pages. Module scripts are followed through their static imports and `export ... from`;
  * a classic service worker through its importScripts() calls with string arguments.
  *
- * Each page's modules are also kept by depth, for its <link rel="modulepreload"> hints
- * (scripts/module-preloads.js): a module two or more imports from the page's own module
- * scripts is one the browser only finds after it has loaded another module.
+ * Each page's modules are also kept by depth from its own module scripts.
  */
 
 const fs = require('fs');
@@ -44,21 +42,6 @@ function attribute(attributes, name) {
   const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i').exec(attributes);
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3];
-}
-
-/**
- * The modules a page asks the browser to preload, in order: the href of each
- * <link rel="modulepreload">, outside comments
- */
-function preloadLinks(html) {
-  const text = html.replace(/<!--[\s\S]*?-->/g, '');
-  const links = [];
-  for (const match of text.matchAll(/<link\b([^>]*)>/gi)) {
-    const rel = attribute(match[1], 'rel');
-    const href = attribute(match[1], 'href');
-    if (rel !== null && rel.trim().toLowerCase() === 'modulepreload' && href !== null) links.push(href);
-  }
-  return links;
 }
 
 /**
@@ -334,4 +317,4 @@ function readScriptGraph(root, { pages = [], inspectClassic = false } = {}) {
   return graph;
 }
 
-module.exports = { readScriptGraph, scriptTags, preloadLinks, inspect };
+module.exports = { readScriptGraph, scriptTags, inspect };

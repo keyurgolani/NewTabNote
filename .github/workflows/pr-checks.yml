@@ -167,6 +167,15 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+      # The build's module map, which never ships: the extension job's self-tests edit a
+      # module in the chunks that hold it (#27 slice 2)
+      - name: Upload dist-report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-report
+          path: dist-report/
+          if-no-files-found: error
+          retention-days: 14
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()
@@ -197,6 +206,11 @@ jobs:
         with:
           name: dist
           path: dist
+      - name: Download dist-report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-report
+          path: dist-report
       # Chromium only, without the headless shell: the harness runs extensions on the
       # full build (channel: 'chromium'). The locked Playwright from node_modules/.bin, never
       # npx, which can fetch another version.

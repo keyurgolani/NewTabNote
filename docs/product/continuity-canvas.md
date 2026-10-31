@@ -190,7 +190,7 @@ Pure modules with `node:test` suites and no I/O. Callers pass in reads and write
 - `nextLastUsed(event, now)` returns `{version: 1, value, at}` for the two transitions and `null` for `boot`, `reload`, `back-forward`, `deep-link`, `popstate`, and `default-change`.
 - `validateProductSession` rejects any field beyond `version`, `aperture`, `route`, `noteId`, and `layout`. `formatRoute` emits only aperture, route, and an encoded note ID. `resolveOpenNote` returns `{action: 'activate', tabId}` (#6 adds `windowId`) or `{action: 'open', url}`. `documentTitle` never contains note text.
 - `js/product/placement.js`: `Placement`, `placementOf`, and the verb contracts.
-- Module format follows #12's stack ADR (`docs/adr/0001-kernel-stack.md`) once it lands, else [`js/sidebar-utils.js`][sidebar-utils]. The first page to load the modules adds them to [`JS_FILES`][js-files] until #27 replaces it.
+- Module format follows #12's stack ADR (`docs/adr/0001-kernel-stack.md`) once it lands, else [`js/sidebar-utils.js`][sidebar-utils]. Since #27 slice 2 the bundler ships what a page imports, so the first page to import the modules ships them.
 
 Slice 2 builds them as ES modules with JSDoc types, per the ADR. `js/product/validation.js` holds the checks both modules share, and `js/product/package.json` sets `"type": "module"` for Node and isn't shipped. Where the rules above leave a choice, the modules make it like this:
 
@@ -354,7 +354,6 @@ Shell, settings, toolbar, and storage code are out of scope here. The consumers 
 [export-import]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/controllers/export-import-service.js#L46-L126
 [file-inputs]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/newtab.html#L1238-L1239
 [sidebar-utils]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/sidebar-utils.js#L210-L215
-[js-files]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/scripts/build.js#L21-L73
 [npm-scripts]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/package.json#L6-L14
 [save-status]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/editor.js#L3424-L3429
 [notes-view]: https://github.com/keyurgolani/NewTabNote/blob/3706d84938aa3102261eacb0b89351f3752da0ea/js/controllers/sidebar-controller.js#L862-L883
