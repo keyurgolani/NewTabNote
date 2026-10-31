@@ -53,8 +53,8 @@ const UNDEFINED = { $type: 'undefined' };
 /** A note as each tag's Storage.createNote writes it */
 function note(shape, id, name, fields = {}) {
   const base = { id, name, createdAt: T0, updatedAt: T0, archived: false, archivedAt: null, titleManuallySet: false, lastAutoTitleAt: null };
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10';
-  const v8Fields = shape === 'v8' || shape === 'v9' || shape === 'v10';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
+  const v8Fields = shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
   return {
     ...base,
     // v1.1.0's createNote added insights, so every shape but v1.0.0's own notes has them (#28 slice 3's recordings)
@@ -135,7 +135,7 @@ const nextId = idMaker(SEED);
 
 /** The notes, blocks, and media every richer fixture starts from */
 function profile(shape) {
-  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10';
+  const later = shape === 'v7' || shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11';
   const [a, b, c, d] = [nextId(), nextId(), nextId(), nextId()];
   const f1 = nextId();
   const notes = [
@@ -166,7 +166,7 @@ function auxiliary(shape, base) {
     themes: [{ id: nextId(), name: 'Dusk', properties: { '--bg-primary': '#101820', '--text-primary': '#f2f2f2' }, updatedAt: T0 }],
     vectors: [{ id: first.id, noteId: first.id, vector: [0.125, -0.5, 0.25, 1], updatedAt: T0 }],
   };
-  if (shape === 'v8' || shape === 'v9' || shape === 'v10') {
+  if (shape === 'v8' || shape === 'v9' || shape === 'v10' || shape === 'v11') {
     out.snapshots = [{ id: nextId(), noteId: first.id, timestamp: T0 + 300000, blocks: [block('snap-b1', first.id, 0, 'Milk')], title: first.name }];
   }
   return out;
@@ -360,7 +360,7 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
   add(
     fixture({
       id: 'v9.basic',
-      purpose: "At structural version 9 with its receipt, as #17 PR 1b's builds left a dev profile: a run makes a point and runs step 10.",
+      purpose: "At structural version 9 with its receipt, as #17 PR 1b's builds left a dev profile: a run makes a point and runs steps 10 and 11.",
       shape: 'v9',
       schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 },
       databases: [database('v9', records)],
@@ -488,10 +488,63 @@ v8('v8.data-urls', 'Images and files inline as data URLs in blocks, as 1.4.x sto
     fixture({
       id: 'v10.basic',
       purpose:
-        'Already at structural version 10 with its receipts, holding a ledger, a change log, a conflict, and a tombstone: a run finds nothing to do and writes nothing.',
+        "At structural version 10 with its receipts, as #17 PR 2a's to 3a's builds left a dev profile, holding a ledger, a change log, a conflict, and a tombstone: a run makes a point and runs step 11.",
       shape: 'v10',
       schema: { idbVersion: 10, structuralVersion: 10, logicalVersion: 1 },
       databases: [database('v10', records)],
+    }),
+  );
+}
+
+// After every other fixture, so the ids the seed gives them stay the same
+{
+  const base = profile('v11');
+  const [groceries] = base.notes;
+  // #17 PR 3b's daily index, and a Daily Note each key names, as logical 3 leaves them
+  const daily = note('v11', nextId(), 'Daily Note - Oct 9, 2025', {
+    isDaily: true,
+    dateStr: '2025-10-09',
+    dailyKey: '2025-10-09',
+    dailyTimeZone: null,
+    dailyDuplicateOf: null,
+  });
+  const receipt = (id, from, to) => ({
+    id,
+    from,
+    to,
+    status: 'completed',
+    startedAt: T0,
+    completedAt: T0,
+    recoveryPointId: null,
+    failure: null,
+  });
+  const records = {
+    canvases: [...base.notes.map(n => (n.id === groceries.id ? { ...n, revision: 2, placementVersion: 0, sourceRevision: 0 } : n)), daily],
+    elements: [...base.elements, block(nextId(), daily.id, 0, 'Morning pages')],
+    media: base.media,
+    folders: base.folders,
+    ...auxiliary('v11', base),
+    meta: [
+      { key: 'changes', head: 0, floor: 0 },
+      { key: 'schema', structuralVersion: 11, logicalVersion: 3 },
+    ],
+    migrations: [
+      receipt('logical-2', 1, 2),
+      receipt('logical-3', 2, 3),
+      receipt('structural-10', 9, 10),
+      receipt('structural-11', 10, 11),
+      receipt('structural-9', 8, 9),
+    ],
+    daily_index: [{ dailyKey: '2025-10-09', noteId: daily.id }],
+  };
+  add(
+    fixture({
+      id: 'v11.basic',
+      purpose:
+        'Already at structural version 11 and logical 3 with their receipts, holding a keyed Daily Note and its daily index entry: a run finds nothing to do and writes nothing.',
+      shape: 'v11',
+      schema: { idbVersion: 11, structuralVersion: 11, logicalVersion: 3 },
+      databases: [database('v11', records)],
     }),
   );
 }

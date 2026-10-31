@@ -57,7 +57,7 @@ const FIXTURES = synthesized();
 const OUTCOMES = {
   'none.basic': 'migrated',
   'none.empty-v1': 'migrated',
-  'v10.basic': 'current',
+  'v11.basic': 'current',
   'v8.missing-core': 'refused',
   'v8.extra-store': 'refused',
   'v9.newer': 'refused',
@@ -401,6 +401,7 @@ describe('shape detection reads stores, indexes, and meta', () => {
     'v8.extra-store': 'unknown',
     'v9.basic': 'current',
     'v10.basic': 'current',
+    'v11.basic': 'current',
     'v9.newer': 'newer',
   };
   for (const [id, fixture] of FIXTURES) {
@@ -465,9 +466,9 @@ describe('shape detection reads stores, indexes, and meta', () => {
       await shapeOf({
         version: 9,
         extraStores: v9,
-        records: { meta: [{ key: 'schema', structuralVersion: 11, logicalVersion: 3 }] },
+        records: { meta: [{ key: 'schema', structuralVersion: 12, logicalVersion: 4 }] },
       }),
-      { kind: 'newer', structuralVersion: 11 },
+      { kind: 'newer', structuralVersion: 12 },
     );
   });
 
@@ -549,6 +550,7 @@ describe('step 9 inside its versionchange', () => {
       kind === 'none' ||
       id === 'v9.basic' ||
       id === 'v10.basic' ||
+      id === 'v11.basic' ||
       id === 'v9.newer' ||
       id === 'v8.extra-store' ||
       id === 'v8.missing-core'
@@ -628,6 +630,45 @@ describe('step 10 inside its versionchange (#17 PR 2a)', () => {
     for (const name of ['operations', 'changes', 'conflicts', 'tombstones']) {
       assert.deepStrictEqual(recordsIn(dumped, 'CanvasTabDB', name), [], name);
     }
+  });
+});
+
+describe('step 11 inside its versionchange (#17 PR 3b)', () => {
+  it('on a database at 10: only createObjectStore and put, synchronously, an empty daily index, and every other record kept', async () => {
+    const fixture = /** @type {any} */ (FIXTURES.get('v10.basic'));
+    const { of, calls, late, result } = await recorded(fixture, { version: 11, step: STEPS[2] });
+    assert.equal(result, undefined, 'returned something, so it could have awaited');
+    assert.deepStrictEqual(late, [], 'called after it returned');
+    assert.deepStrictEqual(
+      calls.filter(call => !ALLOWED.has(call)),
+      [],
+    );
+    // meta's schema at 11, and nothing else
+    assert.equal(calls.filter(call => call === 'store.put').length, 1);
+    const dumped = await dump({ ...of, chrome: { api: { storage: { local: { get: async () => ({}) } } } } });
+    const db = /** @type {any} */ (dumped.databases.find(candidate => candidate.name === 'CanvasTabDB'));
+    const eleven = /** @type {Record<string, any>} */ (schemaAt(11));
+    assert.deepStrictEqual(
+      db.stores.map((/** @type {any} */ store) => store.name),
+      Object.keys(eleven).sort(),
+    );
+    assert.deepStrictEqual(
+      { keyPath: db.stores.find((/** @type {any} */ store) => store.name === 'daily_index').keyPath },
+      { keyPath: 'dailyKey' },
+    );
+    // Every record of every store as it was, but meta's schema, which says 11
+    for (const store of fillCanaries(fixture).databases[0].stores) {
+      if (store.name === 'meta') continue;
+      assert.deepStrictEqual(recordsIn(dumped, 'CanvasTabDB', store.name), store.records, store.name);
+    }
+    assert.deepStrictEqual(
+      recordsIn(dumped, 'CanvasTabDB', 'meta').map(record => record.value),
+      [
+        { key: 'changes', head: 3, floor: 0 },
+        { key: 'schema', structuralVersion: 11, logicalVersion: 1 },
+      ],
+    );
+    assert.deepStrictEqual(recordsIn(dumped, 'CanvasTabDB', 'daily_index'), []);
   });
 });
 
@@ -926,12 +967,12 @@ describe("a 9 profile #17 PR 1b's run left, updated to 10 (#17 PR 2a, review R88
     return { of, pointId };
   }
 
-  it("keeps 1b's pinned 8 to 9 point pinned, with an unpinned 9 to 10 point beside it, and both receipts", async () => {
+  it("keeps 1b's pinned 8 to 9 point pinned, with an unpinned 9 to 11 point beside it, and every receipt", async () => {
     const { of, pointId } = await leftBy1b();
     const shape = detectShape(await inspect(of.real));
     assert.deepEqual([shape.kind, shape.kind === 'current' && shape.structuralVersion], ['current', 9]);
     const outcome = await run(of);
-    assert.deepEqual([outcome.status, outcome.steps, outcome.to], ['migrated', ['structural-10'], 10]);
+    assert.deepEqual([outcome.status, outcome.steps, outcome.to], ['migrated', ['structural-10', 'structural-11'], 11]);
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     let points;
     try {
@@ -943,13 +984,14 @@ describe("a 9 profile #17 PR 1b's run left, updated to 10 (#17 PR 2a, review R88
       points.map(point => [point.id === pointId, point.sourceVersion, point.target, point.status, point.pinned]),
       [
         [true, 8, 9, 'verified', true],
-        [false, 9, 10, 'verified', false],
+        [false, 9, 11, 'verified', false],
       ],
     );
     assert.equal(outcome.recoveryPointId, points[1].id);
     const receipts = recordsIn(await dump(of), 'CanvasTabDB', 'migrations').map(record => record.value);
     assert.deepEqual(receipts.map(receipt => [receipt.id, receipt.status, receipt.recoveryPointId]).sort(), [
       ['structural-10', 'completed', points[1].id],
+      ['structural-11', 'completed', points[1].id],
       ['structural-9', 'completed', pointId],
     ]);
     // Settings' pre-update export still offers 1b's point, the one from before any upgrade

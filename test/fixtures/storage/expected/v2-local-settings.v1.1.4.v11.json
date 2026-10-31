@@ -1,18 +1,18 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v2-idb-settings.v1.1.2.v10",
-    "purpose": "After the registry runs to 10 on v2-idb-settings.v1.1.2.",
-    "shape": "v10",
+    "id": "v2-local-settings.v1.1.4.v11",
+    "purpose": "After the registry runs to 11 on v2-local-settings.v1.1.4.",
+    "shape": "v11",
     "releases": [
-      "v1.1.2"
+      "v1.1.4"
     ],
     "provenance": "recorded",
     "source": {
       "recorder": "scripts/fixtures/record-release.mjs",
-      "tag": "v1.1.2",
-      "commit": "5fe472c4906e9d56151b25e3402699394186331f",
-      "tree": "f616c691564e1a4b636ae2b1f651dd499f518a8c",
+      "tag": "v1.1.4",
+      "commit": "5bc09cd439766c064109a1cf0459849ccf9a5438",
+      "tree": "fac0995b3abb15cc12287b00ca2393e5918f9752",
       "browser": "chromium 156.0.0.0",
       "writePaths": [
         "Storage.createNote",
@@ -24,8 +24,8 @@
       ]
     },
     "schema": {
-      "idbVersion": 10,
-      "structuralVersion": 10,
+      "idbVersion": 11,
+      "structuralVersion": 11,
       "logicalVersion": 1
     },
     "degraded": [],
@@ -34,7 +34,7 @@
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 10,
+      "version": 11,
       "stores": [
         {
           "name": "canvases",
@@ -56,12 +56,12 @@
           ],
           "records": [
             {
-              "key": "1793409045245-m5v222cjq",
+              "key": "1793409098039-1yx2ut8eo",
               "value": {
-                "id": "1793409045245-m5v222cjq",
+                "id": "1793409098039-1yx2ut8eo",
                 "name": "Untitled",
-                "createdAt": 1793409045245,
-                "updatedAt": 1793409045245,
+                "createdAt": 1793409098039,
+                "updatedAt": 1793409098039,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
@@ -80,12 +80,12 @@
               }
             },
             {
-              "key": "1793409046748-8f9ubll43",
+              "key": "1793409099533-4a0wtfdco",
               "value": {
-                "id": "1793409046748-8f9ubll43",
+                "id": "1793409099533-4a0wtfdco",
                 "name": "{{CANARY:note-1-title}}",
-                "createdAt": 1793409046748,
-                "updatedAt": 1793409046748,
+                "createdAt": 1793409099533,
+                "updatedAt": 1793409099533,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
@@ -104,60 +104,12 @@
               }
             },
             {
-              "key": "1793409046750-tor8et7ok",
+              "key": "1793409099534-cvdp79l1t",
               "value": {
-                "id": "1793409046750-tor8et7ok",
-                "name": "{{CANARY:note-2-title}}",
-                "createdAt": 1793409046750,
-                "updatedAt": 1793409046750,
-                "archived": false,
-                "archivedAt": null,
-                "titleManuallySet": false,
-                "lastAutoTitleAt": null,
-                "insights": null,
-                "lastInsightsExtractedAt": null,
-                "viewport": {
-                  "scale": 1,
-                  "offsetX": 0,
-                  "offsetY": 0
-                },
-                "settings": {
-                  "gridType": "dots",
-                  "backgroundColor": "#fafafa"
-                }
-              }
-            },
-            {
-              "key": "1793409046751-hwk89oqes",
-              "value": {
-                "id": "1793409046751-hwk89oqes",
-                "name": "{{CANARY:note-3-title}}",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046762,
-                "archived": true,
-                "archivedAt": 1793409046761,
-                "titleManuallySet": false,
-                "lastAutoTitleAt": null,
-                "insights": null,
-                "lastInsightsExtractedAt": null,
-                "viewport": {
-                  "scale": 1,
-                  "offsetX": 0,
-                  "offsetY": 0
-                },
-                "settings": {
-                  "gridType": "dots",
-                  "backgroundColor": "#fafafa"
-                }
-              }
-            },
-            {
-              "key": "1793409046751-rvu4yivww",
-              "value": {
-                "id": "1793409046751-rvu4yivww",
+                "id": "1793409099534-cvdp79l1t",
                 "name": "{{CANARY:note-4-title}}",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046763,
+                "createdAt": 1793409099534,
+                "updatedAt": 1793409099546,
                 "archived": false,
                 "archivedAt": null,
                 "titleManuallySet": false,
@@ -174,7 +126,55 @@
                   "backgroundColor": "#fafafa"
                 },
                 "trashed": true,
-                "trashedAt": 1793409046763
+                "trashedAt": 1793409099546
+              }
+            },
+            {
+              "key": "1793409099534-gtzq6f7vv",
+              "value": {
+                "id": "1793409099534-gtzq6f7vv",
+                "name": "{{CANARY:note-2-title}}",
+                "createdAt": 1793409099534,
+                "updatedAt": 1793409099534,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793409099534-q74he8r4k",
+              "value": {
+                "id": "1793409099534-q74he8r4k",
+                "name": "{{CANARY:note-3-title}}",
+                "createdAt": 1793409099534,
+                "updatedAt": 1793409099545,
+                "archived": true,
+                "archivedAt": 1793409099545,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
               }
             }
           ]
@@ -215,6 +215,13 @@
           "records": []
         },
         {
+          "name": "daily_index",
+          "keyPath": "dailyKey",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
           "name": "elements",
           "keyPath": "id",
           "autoIncrement": false,
@@ -234,122 +241,122 @@
           ],
           "records": [
             {
-              "key": "1793409046751-6jxpl6xoy",
+              "key": "1793409099535-itsc2yhic",
               "value": {
-                "id": "1793409046751-6jxpl6xoy",
-                "type": "todo",
-                "content": "{{CANARY:block-3}}",
-                "checked": true,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
-                "order": 2
-              }
-            },
-            {
-              "key": "1793409046751-cedws40pv",
-              "value": {
-                "id": "1793409046751-cedws40pv",
+                "id": "1793409099535-itsc2yhic",
                 "type": "image",
                 "content": "",
                 "checked": false,
                 "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
                 "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
+                "createdAt": 1793409099535,
+                "updatedAt": 1793409099535,
+                "canvasId": "1793409099533-4a0wtfdco",
                 "order": 3
               }
             },
             {
-              "key": "1793409046751-qhcfxfgeu",
+              "key": "1793409099535-jljsqkel9",
               "value": {
-                "id": "1793409046751-qhcfxfgeu",
-                "type": "h1",
-                "content": "{{CANARY:block-1}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
-                "order": 0
-              }
-            },
-            {
-              "key": "1793409046751-vt452xxq2",
-              "value": {
-                "id": "1793409046751-vt452xxq2",
+                "id": "1793409099535-jljsqkel9",
                 "type": "text",
                 "content": "{{CANARY:block-2}}",
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046751,
-                "updatedAt": 1793409046751,
-                "canvasId": "1793409046748-8f9ubll43",
+                "createdAt": 1793409099535,
+                "updatedAt": 1793409099535,
+                "canvasId": "1793409099533-4a0wtfdco",
                 "order": 1
               }
             },
             {
-              "key": "1793409046755-iaj4mlbmc",
+              "key": "1793409099535-tqtemaxds",
               "value": {
-                "id": "1793409046755-iaj4mlbmc",
+                "id": "1793409099535-tqtemaxds",
+                "type": "h1",
+                "content": "{{CANARY:block-1}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409099535,
+                "updatedAt": 1793409099535,
+                "canvasId": "1793409099533-4a0wtfdco",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409099535-xdlarfr7j",
+              "value": {
+                "id": "1793409099535-xdlarfr7j",
+                "type": "todo",
+                "content": "{{CANARY:block-3}}",
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409099535,
+                "updatedAt": 1793409099535,
+                "canvasId": "1793409099533-4a0wtfdco",
+                "order": 2
+              }
+            },
+            {
+              "key": "1793409099536-2x7udfle8",
+              "value": {
+                "id": "1793409099536-2x7udfle8",
                 "type": "todo",
                 "content": "{{CANARY:block-5}}",
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046755,
-                "updatedAt": 1793409046755,
-                "canvasId": "1793409046750-tor8et7ok",
+                "createdAt": 1793409099536,
+                "updatedAt": 1793409099536,
+                "canvasId": "1793409099534-gtzq6f7vv",
                 "order": 1
               }
             },
             {
-              "key": "1793409046755-say5963dm",
+              "key": "1793409099536-exqzo4dnm",
               "value": {
-                "id": "1793409046755-say5963dm",
-                "type": "text",
-                "content": "{{CANARY:block-4}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046755,
-                "updatedAt": 1793409046755,
-                "canvasId": "1793409046750-tor8et7ok",
-                "order": 0
-              }
-            },
-            {
-              "key": "1793409046756-9ebtrqbwx",
-              "value": {
-                "id": "1793409046756-9ebtrqbwx",
-                "type": "text",
-                "content": "{{CANARY:block-7}}",
-                "checked": false,
-                "imageUrl": null,
-                "calloutIcon": "💡",
-                "createdAt": 1793409046756,
-                "updatedAt": 1793409046756,
-                "canvasId": "1793409046751-rvu4yivww",
-                "order": 0
-              }
-            },
-            {
-              "key": "1793409046756-k8jrdtsq3",
-              "value": {
-                "id": "1793409046756-k8jrdtsq3",
+                "id": "1793409099536-exqzo4dnm",
                 "type": "text",
                 "content": "{{CANARY:block-6}}",
                 "checked": false,
                 "imageUrl": null,
                 "calloutIcon": "💡",
-                "createdAt": 1793409046756,
-                "updatedAt": 1793409046756,
-                "canvasId": "1793409046751-hwk89oqes",
+                "createdAt": 1793409099536,
+                "updatedAt": 1793409099536,
+                "canvasId": "1793409099534-q74he8r4k",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409099536-rt8i3wd99",
+              "value": {
+                "id": "1793409099536-rt8i3wd99",
+                "type": "text",
+                "content": "{{CANARY:block-4}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409099536,
+                "updatedAt": 1793409099536,
+                "canvasId": "1793409099534-gtzq6f7vv",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793409099537-7cyx3lm2r",
+              "value": {
+                "id": "1793409099537-7cyx3lm2r",
+                "type": "text",
+                "content": "{{CANARY:block-7}}",
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793409099537,
+                "updatedAt": 1793409099537,
+                "canvasId": "1793409099534-cvdp79l1t",
                 "order": 0
               }
             }
@@ -409,17 +416,17 @@
           ],
           "records": [
             {
-              "key": "1793409046756-hb1ritwgw",
+              "key": "1793409099537-5tejd0aog",
               "value": {
-                "id": "1793409046756-hb1ritwgw",
-                "canvasId": "1793409046748-8f9ubll43",
+                "id": "1793409099537-5tejd0aog",
+                "canvasId": "1793409099533-4a0wtfdco",
                 "blob": {
                   "$type": "Blob",
                   "mime": "image/png",
                   "base64": "iVBORw0KGgoAAAANAQIDBA=="
                 },
                 "type": "image/png",
-                "createdAt": 1793409046757
+                "createdAt": 1793409099537
               }
             }
           ]
@@ -442,7 +449,7 @@
               "key": "schema",
               "value": {
                 "key": "schema",
-                "structuralVersion": 10,
+                "structuralVersion": 11,
                 "logicalVersion": 1
               }
             }
@@ -466,6 +473,22 @@
                 "id": "structural-10",
                 "from": 9,
                 "to": 10,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": "pre-migration-1792497600000",
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-11",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-11",
+                "from": 10,
+                "to": 11,
                 "status": "completed",
                 "startedAt": 1792497600000,
                 "completedAt": 1792497600000,
@@ -517,48 +540,7 @@
           "keyPath": "key",
           "autoIncrement": false,
           "indexes": [],
-          "records": [
-            {
-              "key": "activeTabIndex",
-              "value": {
-                "key": "activeTabIndex",
-                "value": 0
-              }
-            },
-            {
-              "key": "llmApiKey",
-              "value": {
-                "key": "llmApiKey",
-                "value": "{{CANARY:llm-api-key}}"
-              }
-            },
-            {
-              "key": "llmProvider",
-              "value": {
-                "key": "llmProvider",
-                "value": "openai"
-              }
-            },
-            {
-              "key": "openTabs",
-              "value": {
-                "key": "openTabs",
-                "value": [
-                  {
-                    "noteId": "1793409045245-m5v222cjq",
-                    "name": "Untitled"
-                  }
-                ]
-              }
-            },
-            {
-              "key": "theme",
-              "value": {
-                "key": "theme",
-                "value": "dark"
-              }
-            }
-          ]
+          "records": []
         },
         {
           "name": "snapshots",
@@ -647,7 +629,7 @@
                 "sourceVersion": 2,
                 "structuralVersion": null,
                 "logicalVersion": null,
-                "target": 10,
+                "target": 11,
                 "stores": [
                   "canvases",
                   "elements",
@@ -658,22 +640,22 @@
                 "manifest": {
                   "canvases": {
                     "count": 5,
-                    "idSetHash": "bcf6a61691f772b3e59dda92075fae17d7e0fbedc39872e1c70c55c6d539a5f5",
-                    "contentHash": "379eda9def5e71e70d9104f4b64a53b5a5f165294e2910c303db63b0ae7c4ad4",
+                    "idSetHash": "455031f24f62b711e0699b5b9d1ff182f5032f7def94f918026c66b568341e36",
+                    "contentHash": "707e366e9545e8566d37ea32785f234b9c8c7cc28ba99936ccd3b4f2710a444b",
                     "keyPath": "id",
                     "purged": []
                   },
                   "elements": {
                     "count": 8,
-                    "idSetHash": "30f847ba3926ff98d283a6630f474a2a25c953d80a5c3332f367c796c530e477",
-                    "contentHash": "c731e8124c127b959dcd3802499cbe32a24049429909c7c4c82c299f25d6d303",
+                    "idSetHash": "c6328de1b599f3cda900ddf0a1949786559697b9bf11e5f45fcf05e72005c27d",
+                    "contentHash": "a385f8f9b3891dfe3fec13c1f11f38829eea7ee699db2a0883f0c9fdbd37b008",
                     "keyPath": "id",
                     "purged": []
                   },
                   "media": {
                     "count": 1,
-                    "idSetHash": "561c2ff52d479a8b873b8429011fe46313174d4b7528ae48ff126eb05e841160",
-                    "contentHash": "5ec691322eecbc08b672be5673782b2f7414837f1330627357dd1e4be94f20fa",
+                    "idSetHash": "3fe81ed251817d581b1d483a2a6c749f38d4e74afb41fe0099916b9f5b799e86",
+                    "contentHash": "5a68dd11c016899f74a52665b9e463002f6e9da161d51246ca23c72395e67161",
                     "keyPath": "id",
                     "purged": []
                   }
@@ -703,17 +685,17 @@
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409045245-m5v222cjq"
+                "1793409098039-1yx2ut8eo"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409045245-m5v222cjq",
+                "key": "1793409098039-1yx2ut8eo",
                 "value": {
-                  "id": "1793409045245-m5v222cjq",
+                  "id": "1793409098039-1yx2ut8eo",
                   "name": "Untitled",
-                  "createdAt": 1793409045245,
-                  "updatedAt": 1793409045245,
+                  "createdAt": 1793409098039,
+                  "updatedAt": 1793409098039,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
@@ -730,24 +712,24 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "c546958a68a4fd0789ef72f96fe2e2eb5e02513d82ea111adb5ea16c5921f925"
+                "sha256": "1fa2781c34537f5c399bce3ab2c291b5c14d86b8af6580d622b1f6ff1d6593d6"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409046748-8f9ubll43"
+                "1793409099533-4a0wtfdco"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409046748-8f9ubll43",
+                "key": "1793409099533-4a0wtfdco",
                 "value": {
-                  "id": "1793409046748-8f9ubll43",
+                  "id": "1793409099533-4a0wtfdco",
                   "name": "{{CANARY:note-1-title}}",
-                  "createdAt": 1793409046748,
-                  "updatedAt": 1793409046748,
+                  "createdAt": 1793409099533,
+                  "updatedAt": 1793409099533,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
@@ -764,92 +746,24 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "4bc784e560e858ccf5a54d8caf0c9f2e70d4fc3c8eb5d0b12427297820f2e56b"
+                "sha256": "42317433df667e393f6cb981a1c977351c6ba4c8951305928d43f4b5939086ae"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1793409046750-tor8et7ok"
+                "1793409099534-cvdp79l1t"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1793409046750-tor8et7ok",
+                "key": "1793409099534-cvdp79l1t",
                 "value": {
-                  "id": "1793409046750-tor8et7ok",
-                  "name": "{{CANARY:note-2-title}}",
-                  "createdAt": 1793409046750,
-                  "updatedAt": 1793409046750,
-                  "archived": false,
-                  "archivedAt": null,
-                  "titleManuallySet": false,
-                  "lastAutoTitleAt": null,
-                  "insights": null,
-                  "lastInsightsExtractedAt": null,
-                  "viewport": {
-                    "scale": 1,
-                    "offsetX": 0,
-                    "offsetY": 0
-                  },
-                  "settings": {
-                    "gridType": "dots",
-                    "backgroundColor": "#fafafa"
-                  }
-                },
-                "sha256": "9d2aee3956e0d8b02922e4797c8854513b6dd8f27bdbbc5eec5685b65c8d0389"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "canvases",
-                "1793409046751-hwk89oqes"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "canvases",
-                "key": "1793409046751-hwk89oqes",
-                "value": {
-                  "id": "1793409046751-hwk89oqes",
-                  "name": "{{CANARY:note-3-title}}",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046762,
-                  "archived": true,
-                  "archivedAt": 1793409046761,
-                  "titleManuallySet": false,
-                  "lastAutoTitleAt": null,
-                  "insights": null,
-                  "lastInsightsExtractedAt": null,
-                  "viewport": {
-                    "scale": 1,
-                    "offsetX": 0,
-                    "offsetY": 0
-                  },
-                  "settings": {
-                    "gridType": "dots",
-                    "backgroundColor": "#fafafa"
-                  }
-                },
-                "sha256": "a64a84a821f73cb3c71701b1ee450b4859836ce613f042f851f066549bf2ac3a"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "canvases",
-                "1793409046751-rvu4yivww"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "canvases",
-                "key": "1793409046751-rvu4yivww",
-                "value": {
-                  "id": "1793409046751-rvu4yivww",
+                  "id": "1793409099534-cvdp79l1t",
                   "name": "{{CANARY:note-4-title}}",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046763,
+                  "createdAt": 1793409099534,
+                  "updatedAt": 1793409099546,
                   "archived": false,
                   "archivedAt": null,
                   "titleManuallySet": false,
@@ -866,233 +780,301 @@
                     "backgroundColor": "#fafafa"
                   },
                   "trashed": true,
-                  "trashedAt": 1793409046763
+                  "trashedAt": 1793409099546
                 },
-                "sha256": "c8345a6fc9140fd403a18865bf7ebcf4c50d526f90b6e5f675ec6c002133d522"
+                "sha256": "bb3b846844c7138d68998a4230b07a56373841249af2f5179a91e8e230e894f2"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1793409099534-gtzq6f7vv"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1793409099534-gtzq6f7vv",
+                "value": {
+                  "id": "1793409099534-gtzq6f7vv",
+                  "name": "{{CANARY:note-2-title}}",
+                  "createdAt": 1793409099534,
+                  "updatedAt": 1793409099534,
+                  "archived": false,
+                  "archivedAt": null,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "97d29628ac2f68e5c04604b5ee246beaf44377242e59ee81300eb57c6e79938d"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "canvases",
+                "1793409099534-q74he8r4k"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "canvases",
+                "key": "1793409099534-q74he8r4k",
+                "value": {
+                  "id": "1793409099534-q74he8r4k",
+                  "name": "{{CANARY:note-3-title}}",
+                  "createdAt": 1793409099534,
+                  "updatedAt": 1793409099545,
+                  "archived": true,
+                  "archivedAt": 1793409099545,
+                  "titleManuallySet": false,
+                  "lastAutoTitleAt": null,
+                  "insights": null,
+                  "lastInsightsExtractedAt": null,
+                  "viewport": {
+                    "scale": 1,
+                    "offsetX": 0,
+                    "offsetY": 0
+                  },
+                  "settings": {
+                    "gridType": "dots",
+                    "backgroundColor": "#fafafa"
+                  }
+                },
+                "sha256": "7ca119909ebcf34963cacb5eb3c02c0fb0e7e8ff842ea3e1bb2836248260210a"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046751-6jxpl6xoy"
+                "1793409099535-itsc2yhic"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046751-6jxpl6xoy",
+                "key": "1793409099535-itsc2yhic",
                 "value": {
-                  "id": "1793409046751-6jxpl6xoy",
-                  "type": "todo",
-                  "content": "{{CANARY:block-3}}",
-                  "checked": true,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "order": 2
-                },
-                "sha256": "ea6c1d1f158ebbf295242d9fe2e5ac1850e9147240d17bce8f61955be0712193"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046751-cedws40pv"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046751-cedws40pv",
-                "value": {
-                  "id": "1793409046751-cedws40pv",
+                  "id": "1793409099535-itsc2yhic",
                   "type": "image",
                   "content": "",
                   "checked": false,
                   "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
+                  "createdAt": 1793409099535,
+                  "updatedAt": 1793409099535,
+                  "canvasId": "1793409099533-4a0wtfdco",
                   "order": 3
                 },
-                "sha256": "5ac3f40e51b3db6ee338f1486ca5522169d364164fdec612b93a4747e13c0a3c"
+                "sha256": "e1c6f0fc6186d96fb7c28c28b17059ed3ca7a0e1950d098a4cab0514fccb4275"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046751-qhcfxfgeu"
+                "1793409099535-jljsqkel9"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046751-qhcfxfgeu",
+                "key": "1793409099535-jljsqkel9",
                 "value": {
-                  "id": "1793409046751-qhcfxfgeu",
-                  "type": "h1",
-                  "content": "{{CANARY:block-1}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
-                  "order": 0
-                },
-                "sha256": "2baf56fa3a157b8217a2bb826714102b2b518e0042d8c7d9c49ce849c969696c"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046751-vt452xxq2"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046751-vt452xxq2",
-                "value": {
-                  "id": "1793409046751-vt452xxq2",
+                  "id": "1793409099535-jljsqkel9",
                   "type": "text",
                   "content": "{{CANARY:block-2}}",
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046751,
-                  "updatedAt": 1793409046751,
-                  "canvasId": "1793409046748-8f9ubll43",
+                  "createdAt": 1793409099535,
+                  "updatedAt": 1793409099535,
+                  "canvasId": "1793409099533-4a0wtfdco",
                   "order": 1
                 },
-                "sha256": "8f52af2f78da96f77d21dff15c1e203de26bdb1fa415c195dd35a94d459c5983"
+                "sha256": "fa3db4f59ff5dda41d609ab094c6e34e61d06c3e702dcde158bf4e67e251010a"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046755-iaj4mlbmc"
+                "1793409099535-tqtemaxds"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046755-iaj4mlbmc",
+                "key": "1793409099535-tqtemaxds",
                 "value": {
-                  "id": "1793409046755-iaj4mlbmc",
+                  "id": "1793409099535-tqtemaxds",
+                  "type": "h1",
+                  "content": "{{CANARY:block-1}}",
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1793409099535,
+                  "updatedAt": 1793409099535,
+                  "canvasId": "1793409099533-4a0wtfdco",
+                  "order": 0
+                },
+                "sha256": "d59fe7f24ab60e30aef48e5b20f47650d6c86a0698c4d477b5e27e7b01391a6b"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1793409099535-xdlarfr7j"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1793409099535-xdlarfr7j",
+                "value": {
+                  "id": "1793409099535-xdlarfr7j",
+                  "type": "todo",
+                  "content": "{{CANARY:block-3}}",
+                  "checked": true,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1793409099535,
+                  "updatedAt": 1793409099535,
+                  "canvasId": "1793409099533-4a0wtfdco",
+                  "order": 2
+                },
+                "sha256": "5df4f3042eb9b513a7161635e72a50f09b2cdd0c9d0616c9eb7ed2c351cc56e6"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1793409099536-2x7udfle8"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1793409099536-2x7udfle8",
+                "value": {
+                  "id": "1793409099536-2x7udfle8",
                   "type": "todo",
                   "content": "{{CANARY:block-5}}",
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046755,
-                  "updatedAt": 1793409046755,
-                  "canvasId": "1793409046750-tor8et7ok",
+                  "createdAt": 1793409099536,
+                  "updatedAt": 1793409099536,
+                  "canvasId": "1793409099534-gtzq6f7vv",
                   "order": 1
                 },
-                "sha256": "8f83202170e94457f7f23395392b38aa705ae1f838edf17ea129a352c53df6c7"
+                "sha256": "23298135b8a61e0d95ab3e9beb0031b4fc0fe0f732a94b566923ed102092c7bd"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "elements",
-                "1793409046755-say5963dm"
+                "1793409099536-exqzo4dnm"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "elements",
-                "key": "1793409046755-say5963dm",
+                "key": "1793409099536-exqzo4dnm",
                 "value": {
-                  "id": "1793409046755-say5963dm",
-                  "type": "text",
-                  "content": "{{CANARY:block-4}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046755,
-                  "updatedAt": 1793409046755,
-                  "canvasId": "1793409046750-tor8et7ok",
-                  "order": 0
-                },
-                "sha256": "30183e29c442948b17027ae442635c04406ebcd0e278caba4f6aca22c72c3fd6"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046756-9ebtrqbwx"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046756-9ebtrqbwx",
-                "value": {
-                  "id": "1793409046756-9ebtrqbwx",
-                  "type": "text",
-                  "content": "{{CANARY:block-7}}",
-                  "checked": false,
-                  "imageUrl": null,
-                  "calloutIcon": "💡",
-                  "createdAt": 1793409046756,
-                  "updatedAt": 1793409046756,
-                  "canvasId": "1793409046751-rvu4yivww",
-                  "order": 0
-                },
-                "sha256": "e70e16cfd2fa6b7ef1308feaa5a85cff992f414bdc1103d6216fd8a6b02ec567"
-              }
-            },
-            {
-              "key": [
-                "pre-migration-1792497600000",
-                "elements",
-                "1793409046756-k8jrdtsq3"
-              ],
-              "value": {
-                "pointId": "pre-migration-1792497600000",
-                "store": "elements",
-                "key": "1793409046756-k8jrdtsq3",
-                "value": {
-                  "id": "1793409046756-k8jrdtsq3",
+                  "id": "1793409099536-exqzo4dnm",
                   "type": "text",
                   "content": "{{CANARY:block-6}}",
                   "checked": false,
                   "imageUrl": null,
                   "calloutIcon": "💡",
-                  "createdAt": 1793409046756,
-                  "updatedAt": 1793409046756,
-                  "canvasId": "1793409046751-hwk89oqes",
+                  "createdAt": 1793409099536,
+                  "updatedAt": 1793409099536,
+                  "canvasId": "1793409099534-q74he8r4k",
                   "order": 0
                 },
-                "sha256": "939b83c7ccd3a11ff3cbe11897b4f9fd3c497f045186ce68d672431b788dd146"
+                "sha256": "565c6ac8801430fc814804e9738f549c81b34ee6eb62e73c9c9cd731a379d944"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1793409099536-rt8i3wd99"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1793409099536-rt8i3wd99",
+                "value": {
+                  "id": "1793409099536-rt8i3wd99",
+                  "type": "text",
+                  "content": "{{CANARY:block-4}}",
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1793409099536,
+                  "updatedAt": 1793409099536,
+                  "canvasId": "1793409099534-gtzq6f7vv",
+                  "order": 0
+                },
+                "sha256": "4fdf77f345b6294a2336eac820d958ea317a707ca88e21a31e0f7d18472e434b"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1793409099537-7cyx3lm2r"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1793409099537-7cyx3lm2r",
+                "value": {
+                  "id": "1793409099537-7cyx3lm2r",
+                  "type": "text",
+                  "content": "{{CANARY:block-7}}",
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1793409099537,
+                  "updatedAt": 1793409099537,
+                  "canvasId": "1793409099534-cvdp79l1t",
+                  "order": 0
+                },
+                "sha256": "6b662ee976705e02f029f17fc7e4f2d1ecec914b6abdefce4103cc652b228057"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "media",
-                "1793409046756-hb1ritwgw"
+                "1793409099537-5tejd0aog"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "media",
-                "key": "1793409046756-hb1ritwgw",
+                "key": "1793409099537-5tejd0aog",
                 "value": {
-                  "id": "1793409046756-hb1ritwgw",
-                  "canvasId": "1793409046748-8f9ubll43",
+                  "id": "1793409099537-5tejd0aog",
+                  "canvasId": "1793409099533-4a0wtfdco",
                   "blob": {
                     "$type": "Blob",
                     "mime": "image/png",
                     "base64": "iVBORw0KGgoAAAANAQIDBA=="
                   },
                   "type": "image/png",
-                  "createdAt": 1793409046757
+                  "createdAt": 1793409099537
                 },
-                "sha256": "9d9ecf1e66194f68e2186f200cfe1fb107fc22b21aec2958ed4c88b6104aea21"
+                "sha256": "a98aac495fda84c2e853fb1ead29695a2921cbe0414e6416805c8ffbd9252a6c"
               }
             }
           ]
@@ -1100,5 +1082,16 @@
       ]
     }
   ],
-  "chromeStorageLocal": {}
+  "chromeStorageLocal": {
+    "setting_activeTabIndex": 0,
+    "setting_llmApiKey": "{{CANARY:llm-api-key}}",
+    "setting_llmProvider": "openai",
+    "setting_openTabs": [
+      {
+        "name": "Untitled",
+        "noteId": "1793409098039-1yx2ut8eo"
+      }
+    ],
+    "setting_theme": "dark"
+  }
 }
