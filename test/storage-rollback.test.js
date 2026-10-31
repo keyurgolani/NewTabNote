@@ -2,7 +2,8 @@
 
 // #17 PR 1b, rolling back once version 9 ships (plan risk 1), and version 10 since #17 PR 2a:
 // the shipped service worker (js/background.js, through test/helpers/load-background.js)
-// migrates each storage fixture to 10, and then the frozen v1.4.0 and v1.4.1 Storage
+// migrates each storage fixture to 10 and, since #17 PR 3a, runs its transforms, so the notes
+// carry placement, kind, and lifecycle beside their flags, and then the frozen v1.4.0 and v1.4.1 Storage
 // (test/fixtures/storage/releases/, the tags' own files) opens that profile. Neither deletes or changes anything: CanvasTabDB and
 // NewTabNoteRecovery stay byte for byte, and no chrome.storage.local key goes, auto_backup_*
 // and recovery_backup_* included. v1.4.1's #33 guard refuses with NEWER_SCHEMA, and v1.4.0
@@ -52,7 +53,12 @@ async function migrated(id) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(worker.chrome.local.setting_storageUpgrade.status, 'migrated');
+  // The transforms after the run, then the purge after them (#17 PR 3a), so nothing writes later
+  assert.equal((await worker.global.storageTransforms).status, 'transformed', id);
+  await worker.global.storagePurge;
   const dump = () => load.dumpFixture({ factory: worker.indexedDB, storage: worker.chrome.api.storage.local });
+  const notes = Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'canvases'));
+  for (const note of notes) assert.ok(note.placement && note.kind && note.lifecycle, `${id}: ${note.id} has its group`);
   return { worker, dump };
 }
 
@@ -152,6 +158,46 @@ describe('going back to 1.4.1 with a file it imports', () => {
     assert.ok(result.notes > 0);
     const names = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases')).map((n) => n.name).sort();
     assert.deepStrictEqual(names, file.canvases.map((n) => n.name).sort());
+  });
+
+  it('a point taken after the transform exports each note as 1.4.1 stores one, and that file imports through the frozen v1.4.1 importData (#17 PR 3a)', async () => {
+    const { worker } = await migrated('v8.basic');
+    const { IDBKeyRange } = require('fake-indexeddb');
+    // In the page's realm, as the export reads it, so a Blob hashes alike both ways
+    const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome, worker: false });
+    const points = await loadPageModule(page, 'js/kernel/adapters/indexeddb/recovery-points.js');
+    const { openWithoutUpgrade } = await loadPageModule(page, 'js/kernel/adapters/indexeddb/shapes.js');
+    // A point a later run takes, as #17 PR 3b's step 11 will, holds the notes with their group
+    const io = { keyRange: IDBKeyRange, crypto: webcrypto, limits: points.DEFAULT_LIMITS };
+    const source = await openWithoutUpgrade(worker.indexedDB, 'CanvasTabDB');
+    const recovery = await points.openRecovery(worker.indexedDB, { create: false });
+    const createdAt = Date.now() + 60 * 1000;
+    const { point, progress } = await points.startPoint(recovery, {
+      id: `pre-migration-${createdAt}`, kind: 'pre-migration', sourceShape: 'current', sourceVersion: source.version,
+      structuralVersion: 10, logicalVersion: 2, target: 11, stores: points.storesToCopy(source), createdAt,
+    });
+    await points.copyPoint({ source, recovery, point, progress, io });
+    const stored = (await points.listPoints(recovery)).find((found) => found.id === point.id);
+    assert.equal((await points.verifyPoint({ recovery, point: stored, io })).ok, true);
+    await points.keepVerified({ recovery, point: stored, clock: { now: () => createdAt }, io });
+    source.close();
+    recovery.close();
+
+    const { createPreUpdateCopy } = await loadPageModule(page, 'js/kernel/composition/newtab.js');
+    const copy = createPreUpdateCopy({ indexedDB: worker.indexedDB, keyRange: IDBKeyRange, crypto: webcrypto });
+    const file = JSON.parse(JSON.stringify(await copy.export(point.id)));
+    assert.ok(file.canvases.length > 0);
+    for (const note of [...file.canvases, ...file.trashedCanvases]) {
+      for (const field of ['placement', 'kind', 'lifecycle']) assert.equal(field in note, false, `${note.id}: ${field}`);
+    }
+    const { env, Storage } = await release141();
+    const check = Storage.validateImport(file);
+    assert.equal(check.ok, true, check.reason);
+    const result = plain(await Storage.importData(file, 'merge'));
+    assert.equal(result.notes, file.canvases.length);
+    const imported = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases'));
+    assert.deepStrictEqual(imported.map((n) => n.name).sort(), file.canvases.map((n) => n.name).sort());
+    for (const note of imported) assert.equal('placement' in note, false, note.name);
   });
 
   it("this build's Export JSON, taken after the upgrade, imports through the frozen v1.4.1 importData too", async () => {
