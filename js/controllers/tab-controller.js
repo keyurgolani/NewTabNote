@@ -23,6 +23,15 @@ class TabController {
     // Tab state
     this.openTabs = []; // Array of { noteId, name }
     this.activeTabIndex = 0;
+    /**
+     * What AI chat, NotesManager, and the palette see of the tabs, in place of App's copy of
+     * them: the notes they show, in tab order, and a committed title naming its note's tab.
+     * None of them holds the tab array, which TabController replaces when it restores tabs.
+     */
+    this.noteTabs = Object.freeze({
+      openNoteIds: () => this.openTabs.map((tab) => tab.noteId),
+      showNoteName: (noteId, name) => this.showNoteName(noteId, name),
+    });
 
     // Split-view state
     this.splitViewEnabled = false;
@@ -974,6 +983,21 @@ class TabController {
       this.renderTabs();
       this.saveTabs();
     }
+  }
+
+  /**
+   * A title the kernel committed for `noteId`, from AI chat or NotesManager (noteTabs), names
+   * its note's tab, if it has one, and the tabs are saved
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async showNoteName(noteId, name) {
+    const tab = this.openTabs.find((open) => open.noteId === noteId);
+    if (!tab) return;
+    tab.name = name;
+    this.renderTabs();
+    await this.saveTabs();
   }
 
   // ─── Split view ───

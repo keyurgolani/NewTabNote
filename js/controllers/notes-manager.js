@@ -77,16 +77,14 @@ class NotesManager {
 
     // App-level callbacks (set by App after construction)
     this.onRefreshNotesList = null;
-    this.onRenderNotesList = null;
     /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: archive, trash, and delete go through it */
     this.removal = null;
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
     this.onUpdateEmptyState = null;
     this.getEditor = null;
-    this.getOpenTabs = null;
-    this.onRenderTabs = null;
-    this.onSaveTabs = null;
+    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    this.noteTabs = null;
 
     this.triggerIndexing = Utils.debounce((noteId) => {
       if (noteId) {
@@ -667,8 +665,9 @@ class NotesManager {
 
   /**
    * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save), in the note's tab, and in the list. A title the
-   * user typed there that no save has stored yet stays, and names the tab when it lands.
+   * holds that note (display only, no save) and in the note's tab. The list shows it from the
+   * commit feed. A title the user typed there that no save has stored yet stays, and names
+   * the tab when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
@@ -678,16 +677,7 @@ class NotesManager {
     const shown = editor && typeof editor.showCommittedTitle === 'function'
       ? editor.showCommittedTitle(noteId, name)
       : 'not-open';
-    if (shown !== 'typed-title-pending') {
-      const openTabs = this.getOpenTabs ? this.getOpenTabs() : [];
-      const tabIndex = openTabs.findIndex(t => t.noteId === noteId);
-      if (tabIndex !== -1) {
-        openTabs[tabIndex].name = name;
-        if (this.onRenderTabs) this.onRenderTabs();
-        if (this.onSaveTabs) await this.onSaveTabs();
-      }
-    }
-    if (this.onRenderNotesList) this.onRenderNotesList();
+    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
   }
 
   /**
