@@ -189,8 +189,19 @@ export function trashRetentionDays(stored) {
 }
 
 /**
+ * Whether a note has a time in the trash that retention counts from: a number other than 0, as
+ * Storage.cleanupTrash read one. A trashed note without one stays until the trash is emptied.
+ * @param {NoteRecord} note
+ */
+export const hasTrashTime = note =>
+  typeof note.trashedAt === 'number' && Number.isFinite(note.trashedAt) && note.trashedAt !== 0;
+
+/**
  * The trashed notes trash retention deletes at `now`: in the trash since before `days` days
- * ago, as Storage.cleanupTrash picks them from getTrashedNotes, latest trashed first
+ * ago, as Storage.cleanupTrash picks them from getTrashedNotes, latest trashed first. A note
+ * without an updatedAt the index holds, which getTrashedNotes never listed, waits: #17's
+ * transform gives it its time in the trash when it fills the field, so it shows in Trash for a
+ * whole retention window first (#17 PR 3a). Emptying the trash takes it like any other.
  * @param {NoteRecord[]} notes - every stored note
  * @param {number} now
  * @param {number} days
@@ -199,7 +210,7 @@ export function trashRetentionDays(stored) {
 export function expiredInTrash(notes, now, days) {
   const cutoff = now - days * DAY_MS;
   return notesInView(notes, 'trashed').filter(
-    note => typeof note.trashedAt === 'number' && note.trashedAt !== 0 && note.trashedAt < cutoff,
+    note => hasIndexedTime(note) && hasTrashTime(note) && /** @type {number} */ (note.trashedAt) < cutoff,
   );
 }
 

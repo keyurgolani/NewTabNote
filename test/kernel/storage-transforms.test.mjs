@@ -66,6 +66,9 @@ const SHORT = async () => ({ quota: 1024, usage: 0 });
 /** The stores logical 2 never writes */
 const UNTOUCHED = ['elements', 'folders', 'links', 'media', 'search_index', 'snapshots', 'themes', 'vectors'];
 
+/** The commands withCommands has sent in this file */
+let commandCount = 0;
+
 /** @type {Array<{close(): void}>} */
 const open = [];
 afterEach(() => {
@@ -170,15 +173,17 @@ const BASIC_GROUPS = Object.freeze({
 });
 
 /**
- * v8.basic with CASES' notes and BLOCKS at version 8, migrated to 10 by the run, which made its
- * pinned point of them
+ * v8.basic with CASES' notes, BLOCKS, and `extra` at version 8, migrated to 10 by the run,
+ * which made its pinned point of them
+ * @param {Array<Record<string, unknown>>} [extra]
  * @returns {Promise<Profile>}
  */
-async function upgraded() {
+async function upgraded(extra = []) {
   const of = await profileWith(BASIC);
   const db = await done(of.real.open('CanvasTabDB'));
   const tx = db.transaction(['canvases', 'elements'], 'readwrite');
   for (const { note } of Object.values(CASES)) tx.objectStore('canvases').put(note);
+  for (const note of extra) tx.objectStore('canvases').put(note);
   for (const block of BLOCKS) tx.objectStore('elements').put(block);
   await committed(tx);
   db.close();
@@ -233,28 +238,31 @@ async function pointsIn(of) {
 }
 
 /**
- * Runs `body` with commands on #17's adapter over `of`, as a page sends them
+ * Runs `body` with commands on #17's adapter over `of`, as a page sends them, and the kernel
+ * for its queries
  * @template T
  * @param {Profile} of
- * @param {(send: (fields: Record<string, unknown>) => Promise<void>) => Promise<T>} body
+ * @param {(send: (fields: Record<string, unknown>) => Promise<any>, kernel: import('../../js/kernel/core/application/kernel.js').Kernel) => Promise<T>} body
+ * @param {{now: () => number}} [clock]
  * @returns {Promise<T>}
  */
-async function withCommands(of, body) {
+async function withCommands(of, body, clock = later) {
   const adapter = createIndexedDbAdapter({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
-    clock: later,
+    clock,
   });
   await adapter.open();
   try {
-    let count = 0;
-    const ids = { next: () => `t-${(count += 1)}` };
-    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
+    // Ids no other call's commands took, so the ledger never answers one with an earlier outcome
+    const ids = { next: () => `t-${(commandCount += 1)}` };
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
     return await body(async fields => {
       const outcome = await kernel.execute(/** @type {any} */ ({ commandId: ids.next(), ...fields }));
       assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
-    });
+      return outcome;
+    }, kernel);
   } finally {
     adapter.close();
   }
@@ -353,6 +361,80 @@ describe('logical 2 (#17 PR 3a)', () => {
     });
     const reading = Object.values(notes).find(note => note.name === 'Reading list');
     assert.deepEqual(after[reading.id], { ...reading, ...BASIC_GROUPS['Reading list'] });
+  });
+});
+
+describe("a trashed note's time in the trash (#17 PR 3a, the lead's rule)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  /** Trashed, and never listed by 1.4.x, since it has no updatedAt */
+  const unlistedOld = legacyNote(
+    'x-trash-old',
+    { name: 'Trashed long ago', trashed: true, trashedAt: NOW - 90 * DAY },
+    ['updatedAt'],
+  );
+  const unlistedUndated = legacyNote('x-trash-none', { name: 'Trashed, no date', trashed: true }, [
+    'updatedAt',
+    'trashedAt',
+  ]);
+  /** Trashed, and listed */
+  const listedOld = legacyNote('x-trash-listed', { name: 'Listed, old', trashed: true, trashedAt: NOW - 90 * DAY });
+  const listedUndated = legacyNote('x-trash-undated', { name: 'Listed, no date', trashed: true, trashedAt: null });
+
+  /**
+   * The ids the trash lists, as the new tab reads it
+   * @param {import('../../js/kernel/core/application/kernel.js').Kernel} kernel
+   */
+  const inTrash = async kernel => {
+    const state = await kernel.query({ type: 'listNotes', view: 'trashed' });
+    return state.kind === 'ready' ? state.data.map(note => note.id) : [];
+  };
+
+  for (const [label, note] of /** @type {const} */ ([
+    ['an old trashedAt', unlistedOld],
+    ['no trashedAt', unlistedUndated],
+  ])) {
+    it(`a trashed note 1.4.x never listed, with ${label}, survives the startup retention cleanup before and after the transform, lists in Trash, and its window starts at the upgrade`, async () => {
+      const of = await upgraded([note]);
+      // The new tab's startup cleanup before the transform reached it
+      await withCommands(of, async (send, kernel) => {
+        await send({ type: 'runTrashCleanup' });
+        assert.ok((await inTrash(kernel)).includes(/** @type {string} */ (note.id)), 'in Trash before the transform');
+      });
+      assert.equal((await transform(of, { clock: later })).status, 'transformed');
+      const filled = (await notesIn(of))[/** @type {string} */ (note.id)];
+      assert.deepEqual([filled.trashedAt, filled.lifecycle], [RUN_START, 'trashed']);
+      // A cleanup inside a window from the upgrade keeps it, and one past it takes it
+      await withCommands(
+        of,
+        async (send, kernel) => {
+          await send({ type: 'runTrashCleanup' });
+          assert.ok((await inTrash(kernel)).includes(/** @type {string} */ (note.id)), 'in Trash after the transform');
+        },
+        { now: () => RUN_START + 29 * DAY },
+      );
+      await withCommands(of, send => send({ type: 'runTrashCleanup' }), { now: () => RUN_START + 31 * DAY });
+      assert.equal(/** @type {string} */ (note.id) in (await notesIn(of)), false);
+    });
+  }
+
+  it("a trashed note 1.4.x listed keeps its trashedAt, and one with no time in the trash gets the run's start", async () => {
+    const of = await upgraded([listedOld, listedUndated]);
+    assert.equal((await transform(of, { clock: later })).status, 'transformed');
+    const notes = await notesIn(of);
+    assert.deepEqual(
+      [notes['x-trash-listed'].trashedAt, notes['x-trash-undated'].trashedAt],
+      [NOW - 90 * DAY, RUN_START],
+    );
+    // Retention counts each from its own: the old one goes now, the other a window from the upgrade
+    await withCommands(of, send => send({ type: 'runTrashCleanup' }), { now: () => RUN_START + DAY });
+    const after = await notesIn(of);
+    assert.deepEqual(['x-trash-listed' in after, 'x-trash-undated' in after], [false, true]);
+  });
+
+  it('Empty trash takes a trashed note 1.4.x never listed, as the user sees it in Trash', async () => {
+    const of = await upgraded([unlistedOld]);
+    await withCommands(of, send => send({ type: 'emptyTrash' }));
+    assert.equal('x-trash-old' in (await notesIn(of)), false);
   });
 });
 
