@@ -2,7 +2,7 @@
   "format": "ntn-storage-fixture/1",
   "header": {
     "id": "v10.basic",
-    "purpose": "Already at structural version 10 with its receipts, holding a ledger, a change log, a conflict, and a tombstone: a run finds nothing to do and writes nothing.",
+    "purpose": "At structural version 10 with its receipts, as #17 PR 2a's to 3a's builds left a dev profile, holding a ledger, a change log, a conflict, and a tombstone: a run makes a point and runs step 11.",
     "shape": "v10",
     "releases": [],
     "provenance": "synthesized",

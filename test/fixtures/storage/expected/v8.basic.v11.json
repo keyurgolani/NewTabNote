@@ -1,9 +1,9 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v8.missing-core.v10",
-    "purpose": "After the registry runs to 10 on v8.missing-core.",
-    "shape": "v8",
+    "id": "v8.basic.v11",
+    "purpose": "After the registry runs to 11 on v8.basic.",
+    "shape": "v11",
     "releases": [
       "v1.3.0",
       "v1.4.0",
@@ -15,19 +15,17 @@
       "seed": 1
     },
     "schema": {
-      "idbVersion": 8,
-      "structuralVersion": null,
-      "logicalVersion": null
+      "idbVersion": 11,
+      "structuralVersion": 11,
+      "logicalVersion": 1
     },
-    "degraded": [
-      "missing-store:elements"
-    ],
+    "degraded": [],
     "privacy": "synthetic"
   },
   "databases": [
     {
       "name": "CanvasTabDB",
-      "version": 8,
+      "version": 11,
       "stores": [
         {
           "name": "canvases",
@@ -49,9 +47,9 @@
           ],
           "records": [
             {
-              "key": "1760000116669-yenasgqlo",
+              "key": "1760000072164-q3ba6j12b",
               "value": {
-                "id": "1760000116669-yenasgqlo",
+                "id": "1760000072164-q3ba6j12b",
                 "name": "Groceries",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -67,7 +65,7 @@
                 "isDaily": false,
                 "dateStr": null,
                 "isTemplate": false,
-                "folderId": "1760000122537-p7z6wnsbb",
+                "folderId": "1760000077870-8umr0nk18",
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -80,9 +78,9 @@
               }
             },
             {
-              "key": "1760000118473-9caqndso0",
+              "key": "1760000073577-ao81njzsd",
               "value": {
-                "id": "1760000118473-9caqndso0",
+                "id": "1760000073577-ao81njzsd",
                 "name": "Reading list",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -111,9 +109,9 @@
               }
             },
             {
-              "key": "1760000120147-zpe5rct8r",
+              "key": "1760000075063-ln2nd9rvc",
               "value": {
-                "id": "1760000120147-zpe5rct8r",
+                "id": "1760000075063-ln2nd9rvc",
                 "name": "Old plans",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -142,9 +140,9 @@
               }
             },
             {
-              "key": "1760000121328-o0caep3gg",
+              "key": "1760000076822-wzutfe7wq",
               "value": {
-                "id": "1760000121328-o0caep3gg",
+                "id": "1760000076822-wzutfe7wq",
                 "name": "Thrown away",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -175,9 +173,9 @@
               }
             },
             {
-              "key": "1760000123672-dun8nldzf",
+              "key": "1760000078915-q2w7d1mov",
               "value": {
-                "id": "1760000123672-dun8nldzf",
+                "id": "1760000078915-q2w7d1mov",
                 "name": "Meeting template",
                 "createdAt": 1760000000000,
                 "updatedAt": 1760000000000,
@@ -208,6 +206,149 @@
           ]
         },
         {
+          "name": "changes",
+          "keyPath": [
+            "seq",
+            "entityType",
+            "entityId"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "entity",
+              "keyPath": [
+                "entityType",
+                "entityId"
+              ],
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "conflicts",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "daily_index",
+          "keyPath": "dailyKey",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1760000080837-2wnmb1t6o",
+              "value": {
+                "id": "1760000080837-2wnmb1t6o",
+                "type": "text",
+                "content": "Milk and eggs",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000072164-q3ba6j12b",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000082730-aeyv4r3kc",
+              "value": {
+                "id": "1760000082730-aeyv4r3kc",
+                "type": "todo",
+                "content": "Bread",
+                "indentLevel": 0,
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000072164-q3ba6j12b",
+                "order": 1
+              }
+            },
+            {
+              "key": "1760000083894-36ek4yb1f",
+              "value": {
+                "id": "1760000083894-36ek4yb1f",
+                "type": "text",
+                "content": "A long book",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000073577-ao81njzsd",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000085094-c0myz8sj8",
+              "value": {
+                "id": "1760000085094-c0myz8sj8",
+                "type": "text",
+                "content": "Ideas from last year",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000075063-ln2nd9rvc",
+                "order": 0
+              }
+            },
+            {
+              "key": "1760000086983-222etnacg",
+              "value": {
+                "id": "1760000086983-222etnacg",
+                "type": "text",
+                "content": "Not needed",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1760000000000,
+                "updatedAt": 1760000000000,
+                "canvasId": "1760000076822-wzutfe7wq",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
           "name": "folders",
           "keyPath": "id",
           "autoIncrement": false,
@@ -227,9 +368,9 @@
           ],
           "records": [
             {
-              "key": "1760000122537-p7z6wnsbb",
+              "key": "1760000077870-8umr0nk18",
               "value": {
-                "id": "1760000122537-p7z6wnsbb",
+                "id": "1760000077870-8umr0nk18",
                 "name": "Home",
                 "parentId": null,
                 "createdAt": 1760000000000,
@@ -260,11 +401,11 @@
           ],
           "records": [
             {
-              "key": "1760000135523-je0dgbimy",
+              "key": "1760000090218-p7ypw6z0g",
               "value": {
-                "id": "1760000135523-je0dgbimy",
-                "fromNoteId": "1760000116669-yenasgqlo",
-                "toNoteId": "1760000118473-9caqndso0",
+                "id": "1760000090218-p7ypw6z0g",
+                "fromNoteId": "1760000072164-q3ba6j12b",
+                "toNoteId": "1760000073577-ao81njzsd",
                 "createdAt": 1760000000000
               }
             }
@@ -284,10 +425,10 @@
           ],
           "records": [
             {
-              "key": "1760000133614-eovbwghze",
+              "key": "1760000088366-lhqpp2gff",
               "value": {
-                "id": "1760000133614-eovbwghze",
-                "canvasId": "1760000116669-yenasgqlo",
+                "id": "1760000088366-lhqpp2gff",
+                "canvasId": "1760000072164-q3ba6j12b",
                 "blob": {
                   "$type": "Blob",
                   "mime": "image/png",
@@ -300,51 +441,148 @@
           ]
         },
         {
+          "name": "meta",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "changes",
+              "value": {
+                "key": "changes",
+                "head": 0,
+                "floor": 0
+              }
+            },
+            {
+              "key": "schema",
+              "value": {
+                "key": "schema",
+                "structuralVersion": 11,
+                "logicalVersion": 1
+              }
+            }
+          ]
+        },
+        {
+          "name": "migrations",
+          "keyPath": [
+            "id",
+            "status"
+          ],
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": [
+                "structural-10",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-10",
+                "from": 9,
+                "to": 10,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": "pre-migration-1792497600000",
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-11",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-11",
+                "from": 10,
+                "to": 11,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": "pre-migration-1792497600000",
+                "failure": null
+              }
+            },
+            {
+              "key": [
+                "structural-9",
+                "completed"
+              ],
+              "value": {
+                "id": "structural-9",
+                "from": 8,
+                "to": 9,
+                "status": "completed",
+                "startedAt": 1792497600000,
+                "completedAt": 1792497600000,
+                "recoveryPointId": "pre-migration-1792497600000",
+                "failure": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "operations",
+          "keyPath": "opId",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "at",
+              "keyPath": "at",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
           "name": "search_index",
           "keyPath": "noteId",
           "autoIncrement": false,
           "indexes": [],
           "records": [
             {
-              "key": "1760000116669-yenasgqlo",
+              "key": "1760000072164-q3ba6j12b",
               "value": {
-                "noteId": "1760000116669-yenasgqlo",
+                "noteId": "1760000072164-q3ba6j12b",
                 "name": "Groceries",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000118473-9caqndso0",
+              "key": "1760000073577-ao81njzsd",
               "value": {
-                "noteId": "1760000118473-9caqndso0",
+                "noteId": "1760000073577-ao81njzsd",
                 "name": "Reading list",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000120147-zpe5rct8r",
+              "key": "1760000075063-ln2nd9rvc",
               "value": {
-                "noteId": "1760000120147-zpe5rct8r",
+                "noteId": "1760000075063-ln2nd9rvc",
                 "name": "Old plans",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000121328-o0caep3gg",
+              "key": "1760000076822-wzutfe7wq",
               "value": {
-                "noteId": "1760000121328-o0caep3gg",
+                "noteId": "1760000076822-wzutfe7wq",
                 "name": "Thrown away",
                 "content": "",
                 "updatedAt": 1760000000000
               }
             },
             {
-              "key": "1760000123672-dun8nldzf",
+              "key": "1760000078915-q2w7d1mov",
               "value": {
-                "noteId": "1760000123672-dun8nldzf",
+                "noteId": "1760000078915-q2w7d1mov",
                 "name": "Meeting template",
                 "content": "",
                 "updatedAt": 1760000000000
@@ -379,10 +617,10 @@
           ],
           "records": [
             {
-              "key": "1760000137847-q05i8kucy",
+              "key": "1760000092464-59othhzr2",
               "value": {
-                "id": "1760000137847-q05i8kucy",
-                "noteId": "1760000116669-yenasgqlo",
+                "id": "1760000092464-59othhzr2",
+                "noteId": "1760000072164-q3ba6j12b",
                 "timestamp": 1760000300000,
                 "blocks": [
                   {
@@ -395,7 +633,7 @@
                     "calloutIcon": "💡",
                     "createdAt": 1760000000000,
                     "updatedAt": 1760000000000,
-                    "canvasId": "1760000116669-yenasgqlo",
+                    "canvasId": "1760000072164-q3ba6j12b",
                     "order": 0
                   }
                 ],
@@ -424,9 +662,9 @@
           ],
           "records": [
             {
-              "key": "1760000136839-0p15vvsnz",
+              "key": "1760000091371-m2m44cg9m",
               "value": {
-                "id": "1760000136839-0p15vvsnz",
+                "id": "1760000091371-m2m44cg9m",
                 "name": "Dusk",
                 "properties": {
                   "--bg-primary": "#101820",
@@ -438,16 +676,33 @@
           ]
         },
         {
+          "name": "tombstones",
+          "keyPath": [
+            "entityType",
+            "id"
+          ],
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "purge",
+              "keyPath": "purge",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
           "name": "vectors",
           "keyPath": "id",
           "autoIncrement": false,
           "indexes": [],
           "records": [
             {
-              "key": "1760000116669-yenasgqlo",
+              "key": "1760000072164-q3ba6j12b",
               "value": {
-                "id": "1760000116669-yenasgqlo",
-                "noteId": "1760000116669-yenasgqlo",
+                "id": "1760000072164-q3ba6j12b",
+                "noteId": "1760000072164-q3ba6j12b",
                 "vector": [
                   0.125,
                   -0.5,
@@ -478,13 +733,14 @@
                 "kind": "pre-migration",
                 "pinned": true,
                 "status": "verified",
-                "sourceShape": "missing-core",
+                "sourceShape": "legacy",
                 "sourceVersion": 8,
                 "structuralVersion": null,
                 "logicalVersion": null,
-                "target": null,
+                "target": 11,
                 "stores": [
                   "canvases",
+                  "elements",
                   "folders",
                   "links",
                   "media",
@@ -498,57 +754,64 @@
                 "manifest": {
                   "canvases": {
                     "count": 5,
-                    "idSetHash": "f50f0b5c5e779985f9d410c8a91303203758ed3097fb5c8dd63c8c9f4eaefa00",
-                    "contentHash": "abc597b48f8625572fafbe0c8159d52354d79aad3607ffee4f98cb250a23561c",
+                    "idSetHash": "132771c2bf72eebf3233903a13766efb65a3964264c1ddfc5528bd5e29c1b8c9",
+                    "contentHash": "baafa33f70c95ff7906020d8a8d50aa23ceafd22c281187a34b56f830e4c0033",
+                    "keyPath": "id",
+                    "purged": []
+                  },
+                  "elements": {
+                    "count": 5,
+                    "idSetHash": "ade5a6bc92c4d0d2959a024219a14ca9568c3ad000156d774a9c485ddcc0cbc0",
+                    "contentHash": "46244c62ae909da91967c56d2bd59631d3fa081f2d3402443d1d35dd80f3951a",
                     "keyPath": "id",
                     "purged": []
                   },
                   "folders": {
                     "count": 1,
-                    "idSetHash": "73eac9b5c403b6d34eb3e0f37360575f2ab7efc1cf63a18dffc71552f9b6d130",
-                    "contentHash": "3fb64a3f39d87351f08b26d31ad450ea27d39780d0d7242e49575b29bdc606c7",
+                    "idSetHash": "f9ceaa9a41a53f2bb78c1c2cb1b1a894a70c8a8c9a9c3cac0dfeee1a27b806db",
+                    "contentHash": "8f24d9582407c28ea436ea5a74f5de0618d4f5befb3841bd9825d73597465c9f",
                     "keyPath": "id",
                     "purged": []
                   },
                   "links": {
                     "count": 1,
-                    "idSetHash": "49a497ac49355fb0f1a3b0e355cc78029f5da60171e17ba713441819d595e69d",
-                    "contentHash": "837894adad7e781b024ebedec3f23576ff4b3821ed7bcd7db05a17414f504d3b",
+                    "idSetHash": "31f50f07713cb94fdfa196616782e774df95fe708a426c15205b579ba05a192c",
+                    "contentHash": "996e60af06d94c23bf8b522058be5211865a9988ab8c771bfd8df5fc1768eb03",
                     "keyPath": "id",
                     "purged": []
                   },
                   "media": {
                     "count": 1,
-                    "idSetHash": "f7f1baaf3f95036c299799b6690f7cab06ada06f66b6e5ca0e3d049f5e839c4d",
-                    "contentHash": "ec0540faca72fa0f6372bb9f600fc407ce2d3227ace6aaf13110da618de77ef8",
+                    "idSetHash": "46336bfba7b4b5ff453d415b4d6ebb61fe02379196a35a621b6af26579dcfab2",
+                    "contentHash": "720042edf0a332fa516de2bf95675aabfdbc2aab67306354e0ac332554196374",
                     "keyPath": "id",
                     "purged": []
                   },
                   "search_index": {
                     "count": 5,
-                    "idSetHash": "f50f0b5c5e779985f9d410c8a91303203758ed3097fb5c8dd63c8c9f4eaefa00",
-                    "contentHash": "10073bd83cc539d88d2aff4a175d4bd105d0c1631c98347bf415ca6aa31a5160",
+                    "idSetHash": "132771c2bf72eebf3233903a13766efb65a3964264c1ddfc5528bd5e29c1b8c9",
+                    "contentHash": "a92c530fcf9ec5c7ca2ebcc9e7178026cbb7656769a720a1d88921f8d1e6a772",
                     "keyPath": "noteId",
                     "purged": []
                   },
                   "snapshots": {
                     "count": 1,
-                    "idSetHash": "808a5e8663d068c4ca1606588b346cc796e1f196be222a51ef149bad19dcd452",
-                    "contentHash": "4622b0555c90467d32dd08a2494acf4b5e329fe07dad05731e6e7d6da4049b37",
+                    "idSetHash": "d1c6971c3046351d8540f082977d000ea16c8765da9dca7b79d49af5d9f86fd2",
+                    "contentHash": "c98fa51d8fe936b7eda4217608d4b456cf04bfe814f5c4683c962265439ab755",
                     "keyPath": "id",
                     "purged": []
                   },
                   "themes": {
                     "count": 1,
-                    "idSetHash": "7c4cf1342e20e5d45115d764a3723e3eb4613f24dc78557d49bc0f4f37d4fabe",
-                    "contentHash": "3dbae36ba20a4797183ed6561fbe85cbaaf2b507a391b59783da29e5980c9442",
+                    "idSetHash": "e363a7a9fa7864c644ddc32ad23c399e0908426026e33f5004eeda8585594376",
+                    "contentHash": "3c2a1021d14aa2470c131b9ad57d2993a2fb2394ff46a0bd0eb6f75f12b3e44b",
                     "keyPath": "id",
                     "purged": []
                   },
                   "vectors": {
                     "count": 1,
-                    "idSetHash": "92fcbd23bb81a6c0d8c7c7c3923cccad10cb889ebc9a376450ba5b2631c3b99f",
-                    "contentHash": "32fb1379b88930a61f2b1fd2b104c713c8549b4e3646ef9f9fc41f8ae8985d00",
+                    "idSetHash": "23d710aef62bcea12a00f2753ece51f57f28c2f86c5f691c078074791520dfd3",
+                    "contentHash": "3e3df508e257d2880caafc02de3af86ce478f2f10bcff9b0ba552d7d23410aef",
                     "keyPath": "id",
                     "purged": []
                   }
@@ -578,14 +841,14 @@
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1760000116669-yenasgqlo"
+                "1760000072164-q3ba6j12b"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1760000116669-yenasgqlo",
+                "key": "1760000072164-q3ba6j12b",
                 "value": {
-                  "id": "1760000116669-yenasgqlo",
+                  "id": "1760000072164-q3ba6j12b",
                   "name": "Groceries",
                   "createdAt": 1760000000000,
                   "updatedAt": 1760000000000,
@@ -601,7 +864,7 @@
                   "isDaily": false,
                   "dateStr": null,
                   "isTemplate": false,
-                  "folderId": "1760000122537-p7z6wnsbb",
+                  "folderId": "1760000077870-8umr0nk18",
                   "viewport": {
                     "scale": 1,
                     "offsetX": 0,
@@ -612,21 +875,21 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "f895c3d80cf8b1f7d74f866f4fabb5770468cdf6666860acba824b2e915a54d4"
+                "sha256": "e4ed9dd52e79c68a02617ec30ddf7a1fc531e3890466ad70ba24dde8f9aacb08"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1760000118473-9caqndso0"
+                "1760000073577-ao81njzsd"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1760000118473-9caqndso0",
+                "key": "1760000073577-ao81njzsd",
                 "value": {
-                  "id": "1760000118473-9caqndso0",
+                  "id": "1760000073577-ao81njzsd",
                   "name": "Reading list",
                   "createdAt": 1760000000000,
                   "updatedAt": 1760000000000,
@@ -653,21 +916,21 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "0414cec815a7b7c44f50e1716c8479137ec89d09bb57270056b26e2b3005d5bb"
+                "sha256": "c311a03bf642a27554d67c4090892f803b5f05a7a3c0512917a5b6333d8f887b"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1760000120147-zpe5rct8r"
+                "1760000075063-ln2nd9rvc"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1760000120147-zpe5rct8r",
+                "key": "1760000075063-ln2nd9rvc",
                 "value": {
-                  "id": "1760000120147-zpe5rct8r",
+                  "id": "1760000075063-ln2nd9rvc",
                   "name": "Old plans",
                   "createdAt": 1760000000000,
                   "updatedAt": 1760000000000,
@@ -694,21 +957,21 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "def73ea950a9eb05d418e5f41e8fa133c5f693d3462d2e2a1ccc80a775e3246b"
+                "sha256": "daff256f3e34222eeb8a563ebda57bd9c58f0fcabdc645286465a256004cf9d9"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1760000121328-o0caep3gg"
+                "1760000076822-wzutfe7wq"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1760000121328-o0caep3gg",
+                "key": "1760000076822-wzutfe7wq",
                 "value": {
-                  "id": "1760000121328-o0caep3gg",
+                  "id": "1760000076822-wzutfe7wq",
                   "name": "Thrown away",
                   "createdAt": 1760000000000,
                   "updatedAt": 1760000000000,
@@ -737,21 +1000,21 @@
                   "trashed": true,
                   "trashedAt": 1760000006000
                 },
-                "sha256": "93236b7dc27ab3f1386dcb0a96de5efd6825dc96558194991afc38dbf989370d"
+                "sha256": "6a3b0641b7d48071e0c46329ca72fc203881feedd7c9b03652efb7523149b2d3"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "canvases",
-                "1760000123672-dun8nldzf"
+                "1760000078915-q2w7d1mov"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "canvases",
-                "key": "1760000123672-dun8nldzf",
+                "key": "1760000078915-q2w7d1mov",
                 "value": {
-                  "id": "1760000123672-dun8nldzf",
+                  "id": "1760000078915-q2w7d1mov",
                   "name": "Meeting template",
                   "createdAt": 1760000000000,
                   "updatedAt": 1760000000000,
@@ -778,21 +1041,151 @@
                     "backgroundColor": "#fafafa"
                   }
                 },
-                "sha256": "83d0bce6379d29d98689f0014bb55c523e72d9011d3b7e8751d9e38536428547"
+                "sha256": "f4e82174aef4f17e955e9820814c2ef465bbbd68e7c5300141a2c73b7741a63a"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000080837-2wnmb1t6o"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000080837-2wnmb1t6o",
+                "value": {
+                  "id": "1760000080837-2wnmb1t6o",
+                  "type": "text",
+                  "content": "Milk and eggs",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000072164-q3ba6j12b",
+                  "order": 0
+                },
+                "sha256": "a95c2cd0ca6479c4e150bcab946092dc8abbeddb90822ee402553860518dc575"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000082730-aeyv4r3kc"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000082730-aeyv4r3kc",
+                "value": {
+                  "id": "1760000082730-aeyv4r3kc",
+                  "type": "todo",
+                  "content": "Bread",
+                  "indentLevel": 0,
+                  "checked": true,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000072164-q3ba6j12b",
+                  "order": 1
+                },
+                "sha256": "1b00fc7ab29b7b8ff980dde34a07348af96f2466df2568c6c578482ba6021070"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000083894-36ek4yb1f"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000083894-36ek4yb1f",
+                "value": {
+                  "id": "1760000083894-36ek4yb1f",
+                  "type": "text",
+                  "content": "A long book",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000073577-ao81njzsd",
+                  "order": 0
+                },
+                "sha256": "b36c5c4cc1ab6c16f4e538dacac0e5f04c86a6539da8c32dbeda1fc36e746edc"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000085094-c0myz8sj8"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000085094-c0myz8sj8",
+                "value": {
+                  "id": "1760000085094-c0myz8sj8",
+                  "type": "text",
+                  "content": "Ideas from last year",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000075063-ln2nd9rvc",
+                  "order": 0
+                },
+                "sha256": "fadc9426dfe01083a9505e55bf8d72816552c30413c6f654080e90087bb623fb"
+              }
+            },
+            {
+              "key": [
+                "pre-migration-1792497600000",
+                "elements",
+                "1760000086983-222etnacg"
+              ],
+              "value": {
+                "pointId": "pre-migration-1792497600000",
+                "store": "elements",
+                "key": "1760000086983-222etnacg",
+                "value": {
+                  "id": "1760000086983-222etnacg",
+                  "type": "text",
+                  "content": "Not needed",
+                  "indentLevel": 0,
+                  "checked": false,
+                  "imageUrl": null,
+                  "calloutIcon": "💡",
+                  "createdAt": 1760000000000,
+                  "updatedAt": 1760000000000,
+                  "canvasId": "1760000076822-wzutfe7wq",
+                  "order": 0
+                },
+                "sha256": "66c5783e761b48fd563c29248f2ddbfb36677d3ca25858bcad161a99c5c7e835"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "folders",
-                "1760000122537-p7z6wnsbb"
+                "1760000077870-8umr0nk18"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "folders",
-                "key": "1760000122537-p7z6wnsbb",
+                "key": "1760000077870-8umr0nk18",
                 "value": {
-                  "id": "1760000122537-p7z6wnsbb",
+                  "id": "1760000077870-8umr0nk18",
                   "name": "Home",
                   "parentId": null,
                   "createdAt": 1760000000000,
@@ -800,41 +1193,41 @@
                   "color": null,
                   "collapsed": false
                 },
-                "sha256": "bb91e834b330269612ff1dde06021596115049c71c95e5f124b1041fc3e3c866"
+                "sha256": "2996e681014595fd2bd9bb79093a520d7b1f497d466ecf648d35700a41ea7d24"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "links",
-                "1760000135523-je0dgbimy"
+                "1760000090218-p7ypw6z0g"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "links",
-                "key": "1760000135523-je0dgbimy",
+                "key": "1760000090218-p7ypw6z0g",
                 "value": {
-                  "id": "1760000135523-je0dgbimy",
-                  "fromNoteId": "1760000116669-yenasgqlo",
-                  "toNoteId": "1760000118473-9caqndso0",
+                  "id": "1760000090218-p7ypw6z0g",
+                  "fromNoteId": "1760000072164-q3ba6j12b",
+                  "toNoteId": "1760000073577-ao81njzsd",
                   "createdAt": 1760000000000
                 },
-                "sha256": "c8d962cbb00e48604752f3cb71af6580ca4a27bcb8920ce6b1cd5b17a0d5b7ba"
+                "sha256": "e04e5317941903e209d5d8cc5cbf36479a73c6e9e6aa29339172f19cd216d4ed"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "media",
-                "1760000133614-eovbwghze"
+                "1760000088366-lhqpp2gff"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "media",
-                "key": "1760000133614-eovbwghze",
+                "key": "1760000088366-lhqpp2gff",
                 "value": {
-                  "id": "1760000133614-eovbwghze",
-                  "canvasId": "1760000116669-yenasgqlo",
+                  "id": "1760000088366-lhqpp2gff",
+                  "canvasId": "1760000072164-q3ba6j12b",
                   "blob": {
                     "$type": "Blob",
                     "mime": "image/png",
@@ -843,117 +1236,117 @@
                   "type": "image/png",
                   "createdAt": 1760000000000
                 },
-                "sha256": "340de114d5f9b56a57cdd4445fd1a55bcbdec0ebf863f9fb701dd5d0067bb294"
+                "sha256": "c5a0e2ece1549ef04d982319e7f205168be51d303aa738b82f89432336de8025"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "search_index",
-                "1760000116669-yenasgqlo"
+                "1760000072164-q3ba6j12b"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "search_index",
-                "key": "1760000116669-yenasgqlo",
+                "key": "1760000072164-q3ba6j12b",
                 "value": {
-                  "noteId": "1760000116669-yenasgqlo",
+                  "noteId": "1760000072164-q3ba6j12b",
                   "name": "Groceries",
                   "content": "",
                   "updatedAt": 1760000000000
                 },
-                "sha256": "65d21021522bec8d93738ec8e0d20c50c57530748d33e8207199d2ec9d36a7eb"
+                "sha256": "0d1417addffb0c44d87122d349aa1578d024b5f0d25ff7b6268b7dc847751b16"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "search_index",
-                "1760000118473-9caqndso0"
+                "1760000073577-ao81njzsd"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "search_index",
-                "key": "1760000118473-9caqndso0",
+                "key": "1760000073577-ao81njzsd",
                 "value": {
-                  "noteId": "1760000118473-9caqndso0",
+                  "noteId": "1760000073577-ao81njzsd",
                   "name": "Reading list",
                   "content": "",
                   "updatedAt": 1760000000000
                 },
-                "sha256": "ee94922937e07d53feba3194141021dee38a8f202bf0b4a4f22e79bef6d6076c"
+                "sha256": "26c4fe577b41250a6ab8094de92a3c37859175f3d99f447b2de2af3a516c145b"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "search_index",
-                "1760000120147-zpe5rct8r"
+                "1760000075063-ln2nd9rvc"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "search_index",
-                "key": "1760000120147-zpe5rct8r",
+                "key": "1760000075063-ln2nd9rvc",
                 "value": {
-                  "noteId": "1760000120147-zpe5rct8r",
+                  "noteId": "1760000075063-ln2nd9rvc",
                   "name": "Old plans",
                   "content": "",
                   "updatedAt": 1760000000000
                 },
-                "sha256": "20baedeac27eca140863f11b9e40e5a70361b66d4592b3ba23489708783a68ab"
+                "sha256": "d14ce0e72a703b4484e060bb5f1e6a7d444d462c260208841d9749706e539f68"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "search_index",
-                "1760000121328-o0caep3gg"
+                "1760000076822-wzutfe7wq"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "search_index",
-                "key": "1760000121328-o0caep3gg",
+                "key": "1760000076822-wzutfe7wq",
                 "value": {
-                  "noteId": "1760000121328-o0caep3gg",
+                  "noteId": "1760000076822-wzutfe7wq",
                   "name": "Thrown away",
                   "content": "",
                   "updatedAt": 1760000000000
                 },
-                "sha256": "47bb7ff8890d1c12202122e6bbea9a75c101bd81ec6fd79a2f926b040f8ae34c"
+                "sha256": "922125092b209861e8bbf5f3e3197ddb928f97d80c33b39c08de37f6e126ca5f"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "search_index",
-                "1760000123672-dun8nldzf"
+                "1760000078915-q2w7d1mov"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "search_index",
-                "key": "1760000123672-dun8nldzf",
+                "key": "1760000078915-q2w7d1mov",
                 "value": {
-                  "noteId": "1760000123672-dun8nldzf",
+                  "noteId": "1760000078915-q2w7d1mov",
                   "name": "Meeting template",
                   "content": "",
                   "updatedAt": 1760000000000
                 },
-                "sha256": "d8da495a2b589be9ed9c2957a75d4e15b606156e50136f92b9b194e3734fb3a0"
+                "sha256": "19b98c1bfcfec17bb0baa94b4d981d6ae507f9677b35fc6bc424bf11b33682e9"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "snapshots",
-                "1760000137847-q05i8kucy"
+                "1760000092464-59othhzr2"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "snapshots",
-                "key": "1760000137847-q05i8kucy",
+                "key": "1760000092464-59othhzr2",
                 "value": {
-                  "id": "1760000137847-q05i8kucy",
-                  "noteId": "1760000116669-yenasgqlo",
+                  "id": "1760000092464-59othhzr2",
+                  "noteId": "1760000072164-q3ba6j12b",
                   "timestamp": 1760000300000,
                   "blocks": [
                     {
@@ -966,27 +1359,27 @@
                       "calloutIcon": "💡",
                       "createdAt": 1760000000000,
                       "updatedAt": 1760000000000,
-                      "canvasId": "1760000116669-yenasgqlo",
+                      "canvasId": "1760000072164-q3ba6j12b",
                       "order": 0
                     }
                   ],
                   "title": "Groceries"
                 },
-                "sha256": "ce4b3eba72bc107da6ff7e7059f2f901a2d11074edd281264c83b9b424cd2f54"
+                "sha256": "0bca1b2156e543dbbf1a0759364e7292e08abc068f528e3b6c45ca8e6798441c"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "themes",
-                "1760000136839-0p15vvsnz"
+                "1760000091371-m2m44cg9m"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "themes",
-                "key": "1760000136839-0p15vvsnz",
+                "key": "1760000091371-m2m44cg9m",
                 "value": {
-                  "id": "1760000136839-0p15vvsnz",
+                  "id": "1760000091371-m2m44cg9m",
                   "name": "Dusk",
                   "properties": {
                     "--bg-primary": "#101820",
@@ -994,22 +1387,22 @@
                   },
                   "updatedAt": 1760000000000
                 },
-                "sha256": "36b4b69016935f5b100d1240d9682f7b289e530004b2ce0f2ec0638c5377fd63"
+                "sha256": "e14e3bad8e4fc73a220265350e7cd8230651cca381374c08cb41935a277db348"
               }
             },
             {
               "key": [
                 "pre-migration-1792497600000",
                 "vectors",
-                "1760000116669-yenasgqlo"
+                "1760000072164-q3ba6j12b"
               ],
               "value": {
                 "pointId": "pre-migration-1792497600000",
                 "store": "vectors",
-                "key": "1760000116669-yenasgqlo",
+                "key": "1760000072164-q3ba6j12b",
                 "value": {
-                  "id": "1760000116669-yenasgqlo",
-                  "noteId": "1760000116669-yenasgqlo",
+                  "id": "1760000072164-q3ba6j12b",
+                  "noteId": "1760000072164-q3ba6j12b",
                   "vector": [
                     0.125,
                     -0.5,
@@ -1018,7 +1411,7 @@
                   ],
                   "updatedAt": 1760000000000
                 },
-                "sha256": "a69dde990c70aaa2f5c71c68ae9e30b58996e0d5f103678bbedd1f66f72f7b3a"
+                "sha256": "2e2a9de2968c1d0fabb7acfa06c99b0cce2cbf5e48ff00dd9716a263319f8f21"
               }
             }
           ]
