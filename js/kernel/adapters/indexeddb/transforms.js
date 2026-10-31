@@ -42,10 +42,13 @@
  * assignDailyKeys), and fills step 11's daily index. The rules weigh every Daily Note at once,
  * so the run reads them all first, in bounded readonly batches, and keeps the answer in `meta`
  * (TRANSFORM_DAILY_KEY) until the step's receipt, so a cut-off run picks up with the same answer
- * whatever its batches wrote. A batch claims each key in the index as it writes the note that
- * holds it, so an entry a command wrote since the run read the notes, for a Daily Note it made,
- * goes to the earlier made of the two. Its receipt counts the notes it read and filled, the
- * ones it moved to their local date, and the ones it marked as duplicates, never content.
+ * whatever its batches wrote. A lookup between two batches finds what the answer gives, since a
+ * note a batch marked as a duplicate never counts as a claim (assignDailyKeys), so its repair
+ * writes the fields that note's own batch would. A batch claims each key in the index as it
+ * writes the note that holds it. An entry for another note the run read goes by the answer, and
+ * one for a note a page made since the run read the notes goes to the earlier made of the two.
+ * Its receipt counts the notes it read and filled, the ones it moved to their local date, and
+ * the ones it marked as duplicates, never content.
  */
 
 import { assignDailyKeys, canHoldKey, holdsKey, madeBefore, withAssignedKey } from '../../core/domain/daily.js';
@@ -533,17 +536,20 @@ async function fillBatch({ db, step, after, keyRange, limits, runStart, progress
 const added = (a, b) => Object.fromEntries(Object.entries(a).map(([name, count]) => [name, count + (b[name] || 0)]));
 
 /**
- * Puts `note`'s entry for `key` in the daily index, and answers `note` as it then is. An entry
- * for another note that still holds the key, which a command made or keyed since the run read
- * the notes, stays when that note was made first, and `note` becomes its duplicate. Otherwise
- * `note` takes the key, and the other note becomes its duplicate, in the same transaction.
+ * Puts `note`'s entry for `key` in the daily index, and answers `note` as it then is. `note` is
+ * the one the run's answer gives `key`. An entry for another note that still holds the key goes
+ * by that answer when the run read the other note too, as when a command keyed it there since:
+ * `note` takes the key, and the other becomes its duplicate, in the same transaction. An entry for
+ * a note a page made since the run read the notes, which the answer never weighed, stays when
+ * that note was made first, and `note` becomes its duplicate, else it goes the same way (Q7).
  * @param {IDBObjectStore} notes
  * @param {IDBObjectStore} index
  * @param {NoteRecord} note
  * @param {string} key
+ * @param {ReadonlyMap<string, DailyAssignment>} assigned - the run's answer
  * @returns {Promise<{note: NoteRecord, displaced: NoteRecord | null}>}
  */
-async function claimKey(notes, index, note, key) {
+async function claimKey(notes, index, note, key, assigned) {
   const entry = /** @type {{noteId?: unknown} | undefined} */ (await result(index.get(key)));
   if (entry && entry.noteId === note.id) return { note, displaced: null };
   /** @type {NoteRecord | null} */
@@ -551,7 +557,9 @@ async function claimKey(notes, index, note, key) {
   if (entry && typeof entry.noteId === 'string') {
     const holder = /** @type {NoteRecord | undefined} */ (await result(notes.get(entry.noteId)));
     if (holder && holdsKey(holder, key)) {
-      if (!madeBefore(note, holder)) return { note: { ...note, dailyDuplicateOf: holder.id }, displaced: null };
+      if (!assigned.has(holder.id) && !madeBefore(note, holder)) {
+        return { note: { ...note, dailyDuplicateOf: holder.id }, displaced: null };
+      }
       if (holder.dailyDuplicateOf !== note.id) displaced = { ...holder, dailyDuplicateOf: note.id };
     }
   }
@@ -595,7 +603,7 @@ async function fillDailyBatch({ db, step, after, keyRange, limits, assigned, pro
     if (isDateKey(note.dailyKey) && note.dailyKey !== assignment.dailyKey) continue;
     let next = withAssignedKey(note, assignment);
     if (assignment.duplicateOf === null && canHoldKey(next)) {
-      const claimed = await claimKey(notes, index, next, assignment.dailyKey);
+      const claimed = await claimKey(notes, index, next, assignment.dailyKey, assigned);
       next = claimed.note;
       if (claimed.displaced) {
         notes.put(claimed.displaced);
