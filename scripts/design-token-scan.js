@@ -677,16 +677,26 @@ function scan(options = {}) {
     return { unit: collect(file, text), text };
   });
   // Stylesheets and scripts define for every page. A page's <style> blocks, style=
-  // attributes, and inline scripts define only for that page.
+  // attributes, and inline scripts define only for that page, and so does its own stylesheet,
+  // named for it (css/popup.css for popup.html), for the page and itself, as the <style> block
+  // it replaced did (#27 slice 2 moved the Popup's and the Side Panel's blocks there).
   const isPage = file => file.endsWith('.html');
+  const pageOf = new Map();
+  for (const { unit } of units) {
+    const named = /^css\/([^/]+)\.css$/.exec(unit.file);
+    if (named && files.includes(`${named[1]}.html`)) pageOf.set(unit.file, `${named[1]}.html`);
+  }
   const shared = new Set(design.tokens);
-  units.filter(({ unit }) => !isPage(unit.file)).forEach(({ unit }) => definitionsOf(unit).forEach(name => shared.add(name)));
+  units.filter(({ unit }) => !isPage(unit.file) && !pageOf.has(unit.file)).forEach(({ unit }) => definitionsOf(unit).forEach(name => shared.add(name)));
+  const local = new Map(units.filter(({ unit }) => isPage(unit.file)).map(({ unit }) => [unit.file, new Set(definitionsOf(unit))]));
+  units.filter(({ unit }) => pageOf.has(unit.file)).forEach(({ unit }) => definitionsOf(unit).forEach(name => local.get(pageOf.get(unit.file)).add(name)));
 
   const counts = {};
   const occurrences = [];
   const failures = [];
   for (const { unit, text } of units) {
-    const defined = isPage(unit.file) ? new Set([...shared, ...definitionsOf(unit)]) : shared;
+    const page = isPage(unit.file) ? unit.file : pageOf.get(unit.file);
+    const defined = page ? new Set([...shared, ...local.get(page)]) : shared;
     const result = countUnit(unit, text, design, defined);
     occurrences.push(...result.occurrences);
     failures.push(...result.failures);

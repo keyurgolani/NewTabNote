@@ -148,6 +148,7 @@ function assetFileName(asset) {
  * @property {string | null} facadeModuleId
  * @property {string[]} moduleIds
  * @property {string[]} imports
+ * @property {string[]} commonJs - the modules the bundler wrapped as CommonJS, by id
  */
 
 /**
@@ -157,8 +158,15 @@ function assetFileName(asset) {
  */
 
 /**
- * A plugin that records what each pass wrote: every chunk with the modules it holds, and every
- * asset
+ * The call to the bundler's CommonJS wrapper in a module as the bundler rendered it, before
+ * terser renames it: `var require_x = __commonJSMin((exports, module) => {...})`, the helper
+ * renamed with a $n suffix when the module has a name of its own like it
+ */
+const COMMONJS_WRAPPER = /\b__commonJS(?:Min)?(?:\$\d+)?\(/;
+
+/**
+ * A plugin that records what each pass wrote: every chunk with the modules it holds and the ones
+ * the bundler wrapped as CommonJS, and every asset
  * @param {BundleReport} report
  * @param {ChunkReport['pass']} pass
  * @returns {Plugin}
@@ -178,6 +186,10 @@ function reportPlugin(report, pass) {
             facadeModuleId: output.facadeModuleId,
             moduleIds: [...output.moduleIds],
             imports: [...output.imports],
+            // The bundler's own runtime module defines the wrapper; a module it wraps calls it
+            commonJs: Object.entries(output.modules || {})
+              .filter(([id, rendered]) => !id.includes('\0') && COMMONJS_WRAPPER.test((rendered && rendered.code) || ''))
+              .map(([id]) => id),
           });
         } else {
           report.assets.push({ pass, fileName: output.fileName });

@@ -37,9 +37,9 @@
     "css/premium-chat.css": {
       "color-literal": 93,
       "theme-branching": 1,
-      "backdrop-filter": 4,
+      "backdrop-filter": 2,
       "px-font-size": 23,
-      "alias-use": 101
+      "alias-use": 99
     },
     "css/sidepanel.css": {
       "color-literal": 21,

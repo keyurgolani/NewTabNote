@@ -69,7 +69,7 @@ Most "New Tab" extensions are either too simple or cluttered with ads. NewTabNot
 
 ### From Source (Development)
 1. Clone this repository
-2. Install dependencies: `npm install`
+2. Install dependencies: `npm ci --ignore-scripts`
 3. Build the extension: `npm run build`
 4. Open Chrome and navigate to `chrome://extensions/`
 5. Enable **"Developer mode"** in the top right corner
@@ -86,8 +86,9 @@ After a rebuild, click **Reload** on the extension in `chrome://extensions/`. St
 The build runs only on the Node version in `.nvmrc` (24.18.0), with npm 11.16.0, which it bundles.
 
 ```bash
-# Install dependencies
-npm install
+# Install the dependencies the lockfile pins, running none of their install scripts, as CI
+# and the release do
+npm ci --ignore-scripts
 
 # Build for production. Vite bundles the four pages, their module workers, and the service
 # worker (scripts/build/vite-config.js); terser minifies the JavaScript and lightningcss the

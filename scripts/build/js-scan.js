@@ -9,6 +9,7 @@
 
 const crypto = require('node:crypto');
 const ts = require('typescript');
+const { isDeclaredInScope } = require('./js-scope.js');
 
 /**
  * @typedef {'import' | 'dynamic-import' | 'worker' | 'worker-url' | 'import-scripts' | 'get-url' | 'offscreen-document' | 'tabs-create' | 'icon-url'} ReferenceKind
@@ -178,31 +179,6 @@ function isGetUrlCall(node) {
 }
 
 /**
- * Whether `source` declares a binding named `name` anywhere: a function or class, a variable or
- * a destructured one, a parameter, or an import
- * @param {ts.SourceFile} source
- * @param {string} name
- * @returns {boolean}
- */
-function declares(source, name) {
-  let found = false;
-  /** @param {ts.Node} node */
-  const look = (node) => {
-    if (found) return;
-    if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node)
-      || ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)
-      || ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node))
-      && node.name && ts.isIdentifier(node.name) && node.name.text === name) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, look);
-  };
-  look(source);
-  return found;
-}
-
-/**
  * A string literal's text, or null for anything else, a template with an expression included
  * @param {ts.Node | undefined} node
  * @returns {string | null}
@@ -257,9 +233,6 @@ function scanScript(file, text) {
   };
   /** @type {ScriptScan} */
   const scan = { references: [], urls: [], environment: [], functionConstructors: [], moduleSyntax: [] };
-  // A file that declares its own process (a function, a local, a parameter, an import) reads
-  // that one, not Node's, wherever it names it
-  const declaresProcess = declares(source, 'process');
   const reference = (/** @type {ReferenceKind} */ kind, /** @type {ts.Node | undefined} */ node, /** @type {ts.Node} */ where) => {
     scan.references.push({ kind, value: literal(node), at: at(node || where) });
   };
@@ -311,8 +284,10 @@ function scanScript(file, text) {
       scan.environment.push({ what: 'process.env', name: null, at: at(node) });
       return;
     }
-    // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all
-    if (!declaresProcess && ts.isIdentifier(node) && node.text === 'process' && isVariableRead(node)) {
+    // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all.
+    // Where a binding of the file's own is in scope (a function, a local, a parameter, an
+    // import), the name is that one, not Node's (#99's review: only there).
+    if (ts.isIdentifier(node) && node.text === 'process' && isVariableRead(node) && !isDeclaredInScope(node, 'process')) {
       scan.environment.push({ what: 'process', name: null, at: at(node) });
       return;
     }
