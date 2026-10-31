@@ -1678,19 +1678,7 @@ Return JSON in this exact format:
       console.debug('LLM raw response for insights:', response);
       
       // Parse JSON from response (handle potential markdown code blocks and surrounding text)
-      let jsonStr = response.trim();
-      
-      // Try to extract JSON from markdown code blocks first
-      const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        jsonStr = codeBlockMatch[1].trim();
-      } else {
-        // Try to find JSON object directly (starts with { and ends with })
-        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonStr = jsonMatch[0];
-        }
-      }
+      const jsonStr = this._insightsJson(response);
       
       // Check if we have valid JSON string to parse
       if (!jsonStr || jsonStr.trim() === '') {
@@ -1747,6 +1735,29 @@ Return JSON in this exact format:
       console.error('Failed to extract insights:', error);
       return null;
     }
+  }
+
+  /**
+   * The JSON an insights response holds, as 1.4.x found it with `/```(?:json)?\s*([\s\S]*?)```/`
+   * and then `/\{[\s\S]*\}/`, in one pass: in the trimmed response, the code of the first fenced
+   * block, after `json` and white space, when a fence follows; or else the text from the first
+   * `{` to the last `}`; or else all of it
+   * @param {string} response
+   * @returns {string}
+   */
+  _insightsJson(response) {
+    const text = response.trim();
+    const open = text.indexOf('```');
+    if (open !== -1) {
+      let start = open + 3;
+      if (text.startsWith('json', start)) start += 4;
+      while (start < text.length && /\s/.test(text[start])) start++;
+      const close = text.indexOf('```', start);
+      if (close !== -1) return text.slice(start, close).trim();
+    }
+    const brace = text.indexOf('{');
+    const last = text.lastIndexOf('}');
+    return brace !== -1 && last > brace ? text.slice(brace, last + 1) : text;
   }
 
   /**

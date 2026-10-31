@@ -1261,7 +1261,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * @returns {number} Seconds to wait (default 30)
    */
   _parseRetryAfter(errorMsg) {
-    const match = errorMsg.match(/(\d+)\s*s(?:ec(?:ond)?s?)?/i);
+    // A match can only start where a run of digits does, so the search starts only there,
+    // which reads in linear time with the same match
+    const match = errorMsg.match(/(?<!\d)(\d+)\s*s(?:ec(?:ond)?s?)?/i);
     return match ? parseInt(match[1], 10) : 30;
   }
 
