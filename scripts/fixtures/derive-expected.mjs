@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Writes test/fixtures/storage/expected/<fixture-id>.v9.json from each synthesized fixture, by
+// Writes test/fixtures/storage/expected/<fixture-id>.v9.json from each synthesized fixture, and
+// each fixture #28 slice 3 recorded from a release (recorded/, record-release.mjs), by
 // #17's rules as the plan states them, with code of its own: it imports nothing from
 // js/kernel/, so test/kernel/storage-migrate.test.mjs compares the runner against an
 // independent derivation, not against itself. Run by hand after synthesize-storage.mjs; the
@@ -20,6 +21,7 @@
 //   key path, and an empty purge list.
 // - missing-core, an extra store, or a newer database: CanvasTabDB stays exactly as it was,
 //   and a point is made with no target (Q13).
+// - Any database but CanvasTabDB a release left (a recorded fixture can hold one) stays as it was.
 // The run's clock is test/kernel/support.mjs's NOW, held still, so every time is NOW.
 
 import { createHash } from 'node:crypto';
@@ -166,11 +168,17 @@ function upgraded(db, recoveryPointId) {
   return { name: 'CanvasTabDB', version: 9, stores };
 }
 
-const files = fs.readdirSync(path.join(DIR, 'synthesized')).filter(file => file.endsWith('.json')).sort();
+const files = ['synthesized', 'recorded'].flatMap(kind =>
+  fs.existsSync(path.join(DIR, kind))
+    ? fs.readdirSync(path.join(DIR, kind)).filter(file => file.endsWith('.json')).sort().map(file => path.join(kind, file))
+    : [],
+);
 fs.mkdirSync(path.join(DIR, 'expected'), { recursive: true });
 for (const file of files) {
-  const fixture = JSON.parse(fs.readFileSync(path.join(DIR, 'synthesized', file), 'utf8'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(DIR, file), 'utf8'));
   const db = fixture.databases.find(database => database.name === 'CanvasTabDB');
+  const others = fixture.databases.filter(database => database.name !== 'CanvasTabDB');
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const header = { ...fixture.header, id: `${fixture.header.id}.v9`, purpose: `After the registry runs to 9 on ${fixture.header.id}.` };
   let databases;
   switch (fate(fixture)) {
@@ -178,15 +186,15 @@ for (const file of files) {
       databases = fixture.databases;
       break;
     case 'migrate-empty':
-      databases = [upgraded(null, null)];
+      databases = [...others, upgraded(null, null)].sort(byName);
       Object.assign(header, { shape: 'v9', degraded: [], schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 } });
       break;
     case 'migrate':
-      databases = [upgraded(db, POINT_ID), recoveryOf(fixture, db, 9)];
+      databases = [...others, upgraded(db, POINT_ID), recoveryOf(fixture, db, 9)].sort(byName);
       Object.assign(header, { shape: 'v9', degraded: [], schema: { idbVersion: 9, structuralVersion: 9, logicalVersion: 1 } });
       break;
     case 'refuse':
-      databases = [db, recoveryOf(fixture, db, null)];
+      databases = [...others, db, recoveryOf(fixture, db, null)].sort(byName);
       break;
   }
   const expected = { format: fixture.format, header, databases, chromeStorageLocal: fixture.chromeStorageLocal || {} };

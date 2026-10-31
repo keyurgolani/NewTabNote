@@ -74,6 +74,15 @@
       "tests": [
         "KD-009 WebDAV connect stays disconnected when the server answers 403, 404, or 500"
       ]
+    },
+    {
+      "id": "KD-010",
+      "ownerIssue": 17,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/e49e5436a60f61b56b3efeb721ed7b552b1deafb/js/storage.js#L1083-L1088",
+      "tests": [
+        "KD-010 a note whose name isn't text leaves the other notes' names for wiki-link autocomplete",
+        "KD-010 a note whose name isn't text doesn't stop another note's wiki links from saving"
+      ]
     }
   ]
 }

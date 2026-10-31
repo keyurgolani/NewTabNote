@@ -1,0 +1,2147 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "v8.v1.4.0",
+    "purpose": "What v1.4.0's own code writes for a synthetic seed: notes, blocks, media, settings and backups, as far as v1.4.0 has them.",
+    "shape": "v8",
+    "releases": [
+      "v1.4.0"
+    ],
+    "provenance": "recorded",
+    "source": {
+      "recorder": "scripts/fixtures/record-release.mjs",
+      "tag": "v1.4.0",
+      "commit": "e93b21e6acf065c198a71646fc0ee185cfd416ba",
+      "tree": "3c9926fe68088cbe9b5031b1dd20d9da5b4917e1",
+      "browser": "chromium 156.0.0.0",
+      "writePaths": [
+        "Storage.createNote",
+        "the editor save (Block.serialize, saveElement)",
+        "the editor save metadata (preview, todoProgress)",
+        "Storage.saveMedia",
+        "Storage.updateNoteLinks",
+        "Storage.createFolder",
+        "Storage.moveNoteToFolder",
+        "Storage.archiveNote",
+        "Storage.trashNote",
+        "convert a note to a template (updateNote)",
+        "Storage.ensureDailyNote",
+        "Storage.saveCustomTheme",
+        "Storage.saveVector",
+        "Storage.saveSnapshot",
+        "Storage.setSetting",
+        "Storage.createAutoBackup",
+        "Storage._exportBeforeCorruptionDelete",
+        "the Popup quick note"
+      ]
+    },
+    "schema": {
+      "idbVersion": 8,
+      "structuralVersion": null,
+      "logicalVersion": null
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 8,
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408585266-fptzi6lti",
+              "value": {
+                "id": "1793408585266-fptzi6lti",
+                "name": "Welcome to NewTabNote 🚀",
+                "createdAt": 1793408585266,
+                "updatedAt": 1793408585266,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586747-3xc1rh7qa",
+              "value": {
+                "id": "1793408586747-3xc1rh7qa",
+                "name": "{{CANARY:note-4-title}}",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586760,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "{{CANARY:block-7}}",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                },
+                "trashed": true,
+                "trashedAt": 1793408586760
+              }
+            },
+            {
+              "key": "1793408586747-a8w26tlk5",
+              "value": {
+                "id": "1793408586747-a8w26tlk5",
+                "name": "{{CANARY:note-2-title}}",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586750,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "{{CANARY:block-4}}",
+                "pinned": false,
+                "todoProgress": {
+                  "completed": 0,
+                  "total": 1
+                },
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586747-c2siatij8",
+              "value": {
+                "id": "1793408586747-c2siatij8",
+                "name": "{{CANARY:note-1-title}}",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586758,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "{{CANARY:block-1}}",
+                "pinned": false,
+                "todoProgress": {
+                  "completed": 1,
+                  "total": 1
+                },
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": "1793408586758-2bk0xgoic",
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586747-r2skypm6e",
+              "value": {
+                "id": "1793408586747-r2skypm6e",
+                "name": "{{CANARY:note-3-title}}",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586759,
+                "archived": true,
+                "archivedAt": 1793408586759,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "{{CANARY:block-6}}",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586760-3vjdp6uk5",
+              "value": {
+                "id": "1793408586760-3vjdp6uk5",
+                "name": "{{CANARY:note-5-title}}",
+                "createdAt": 1793408586760,
+                "updatedAt": 1793408586760,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": true,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586761-2tldok2ha",
+              "value": {
+                "id": "1793408586761-2tldok2ha",
+                "name": "Daily Note - Oct 31, 2026",
+                "createdAt": 1793408586761,
+                "updatedAt": 1793408586761,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": true,
+                "dateStr": "2026-10-31",
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793408586873-f7eniim61",
+              "value": {
+                "id": "1793408586873-f7eniim61",
+                "name": "{{CANARY:popup-note}}",
+                "createdAt": 1793408586873,
+                "updatedAt": 1793408586873
+              }
+            }
+          ]
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408585266-fyrgz5l9h",
+              "value": {
+                "id": "1793408585266-fyrgz5l9h",
+                "type": "text",
+                "content": "This is a block-based note-taking app designed for speed and productivity. Every paragraph, image, or list is a \"block\" that you can move, change, or delete.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 1,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585266,
+                "updatedAt": 1793408585266
+              }
+            },
+            {
+              "key": "1793408585266-utv4zd9zn",
+              "value": {
+                "id": "1793408585266-utv4zd9zn",
+                "type": "text",
+                "content": "Welcome to <b>NewTabNote</b>! 🚀",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 0,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585266,
+                "updatedAt": 1793408585266
+              }
+            },
+            {
+              "key": "1793408585267-4kaplh5e9",
+              "value": {
+                "id": "1793408585267-4kaplh5e9",
+                "type": "text",
+                "content": "<b>Slash Commands</b>: Type <code class=\"code-pill\">/</code> in any empty block to see all available block types.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 3,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585267,
+                "updatedAt": 1793408585267
+              }
+            },
+            {
+              "key": "1793408585267-6b01ootpg",
+              "value": {
+                "id": "1793408585267-6b01ootpg",
+                "type": "h2",
+                "content": "Quick Start",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 2,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585267,
+                "updatedAt": 1793408585267
+              }
+            },
+            {
+              "key": "1793408585267-j2vvpxn0k",
+              "value": {
+                "id": "1793408585267-j2vvpxn0k",
+                "type": "text",
+                "content": "<b>Drag &amp; Drop</b>: Grab the ⠿ handle on the left of any block to reorder it.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 5,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585267,
+                "updatedAt": 1793408585267
+              }
+            },
+            {
+              "key": "1793408585267-l89yhfd0b",
+              "value": {
+                "id": "1793408585267-l89yhfd0b",
+                "type": "text",
+                "content": "<b>Daily Notes</b>: Click the 📅 icon in the sidebar or press <kbd>Alt</kbd>+<kbd>D</kbd> to open today's note.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 4,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585267,
+                "updatedAt": 1793408585267
+              }
+            },
+            {
+              "key": "1793408585268-42llx2m2y",
+              "value": {
+                "id": "1793408585268-42llx2m2y",
+                "type": "h2",
+                "content": "Code Blocks",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 10,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585268,
+                "updatedAt": 1793408585268
+              }
+            },
+            {
+              "key": "1793408585268-53li5zjvh",
+              "value": {
+                "id": "1793408585268-53li5zjvh",
+                "type": "todo",
+                "content": "Try the slash command menu by typing /",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 9,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585268,
+                "updatedAt": 1793408585268
+              }
+            },
+            {
+              "key": "1793408585268-ersi97pvr",
+              "value": {
+                "id": "1793408585268-ersi97pvr",
+                "type": "todo",
+                "content": "Check off this todo item",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 7,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585268,
+                "updatedAt": 1793408585268
+              }
+            },
+            {
+              "key": "1793408585268-j3ngz8kir",
+              "value": {
+                "id": "1793408585268-j3ngz8kir",
+                "type": "h2",
+                "content": "Try It Out",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 6,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585268,
+                "updatedAt": 1793408585268
+              }
+            },
+            {
+              "key": "1793408585268-pug8aydua",
+              "value": {
+                "id": "1793408585268-pug8aydua",
+                "type": "todo",
+                "content": "Create a new note from the sidebar",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 8,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585268,
+                "updatedAt": 1793408585268
+              }
+            },
+            {
+              "key": "1793408585269-l4m3jdfz4",
+              "value": {
+                "id": "1793408585269-l4m3jdfz4",
+                "type": "h2",
+                "content": "AI Powered Features",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 13,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585269,
+                "updatedAt": 1793408585269
+              }
+            },
+            {
+              "key": "1793408585269-r5awems71",
+              "value": {
+                "id": "1793408585269-r5awems71",
+                "type": "code",
+                "content": "console.log(\"Hello from NewTabNote!\");",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 12,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585269,
+                "updatedAt": 1793408585269
+              }
+            },
+            {
+              "key": "1793408585269-zj4nvj1qj",
+              "value": {
+                "id": "1793408585269-zj4nvj1qj",
+                "type": "text",
+                "content": "You can add code snippets with syntax highlighting:",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 11,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585269,
+                "updatedAt": 1793408585269
+              }
+            },
+            {
+              "key": "1793408585271-kt8hjhkxb",
+              "value": {
+                "id": "1793408585271-kt8hjhkxb",
+                "type": "text",
+                "content": "We've integrated AI to help you organize your thoughts.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 14,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585271,
+                "updatedAt": 1793408585271
+              }
+            },
+            {
+              "key": "1793408585272-8rrm3u7mf",
+              "value": {
+                "id": "1793408585272-8rrm3u7mf",
+                "type": "bullet",
+                "content": "<b>Smart Sidebar</b>: Click the ✨ button to chat with your notes or see proactive insights.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 16,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585272,
+                "updatedAt": 1793408585272
+              }
+            },
+            {
+              "key": "1793408585272-mw6qgs621",
+              "value": {
+                "id": "1793408585272-mw6qgs621",
+                "type": "bullet",
+                "content": "<b>Semantic Search</b>: Find notes by meaning, not just keywords.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 15,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585272,
+                "updatedAt": 1793408585272
+              }
+            },
+            {
+              "key": "1793408585273-hvbu7d539",
+              "value": {
+                "id": "1793408585273-hvbu7d539",
+                "type": "h2",
+                "content": "Organization",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 17,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585273,
+                "updatedAt": 1793408585273
+              }
+            },
+            {
+              "key": "1793408585273-jzemda7c3",
+              "value": {
+                "id": "1793408585273-jzemda7c3",
+                "type": "bullet",
+                "content": "<b>Folders</b>: Create folders in the sidebar and drag notes into them.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 18,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585273,
+                "updatedAt": 1793408585273
+              }
+            },
+            {
+              "key": "1793408585273-tjf6772y1",
+              "value": {
+                "id": "1793408585273-tjf6772y1",
+                "type": "text",
+                "content": "Happy note-taking! ✨",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 20,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585273,
+                "updatedAt": 1793408585273
+              }
+            },
+            {
+              "key": "1793408585273-wpsl5lbv2",
+              "value": {
+                "id": "1793408585273-wpsl5lbv2",
+                "type": "bullet",
+                "content": "<b>Backlinks</b>: Use <code class=\"code-pill\">[[Note Name]]</code> to link notes together.",
+                "canvasId": "1793408585266-fptzi6lti",
+                "order": 19,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793408585273,
+                "updatedAt": 1793408585273
+              }
+            },
+            {
+              "key": "1793408586747-61wc0b7in",
+              "value": {
+                "id": "1793408586747-61wc0b7in",
+                "type": "todo",
+                "content": "{{CANARY:block-3}}",
+                "indentLevel": 0,
+                "checked": true,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586747,
+                "canvasId": "1793408586747-c2siatij8",
+                "order": 2
+              }
+            },
+            {
+              "key": "1793408586747-c6qrhjfdw",
+              "value": {
+                "id": "1793408586747-c6qrhjfdw",
+                "type": "text",
+                "content": "{{CANARY:block-2}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586747,
+                "canvasId": "1793408586747-c2siatij8",
+                "order": 1
+              }
+            },
+            {
+              "key": "1793408586747-rn04s5mdf",
+              "value": {
+                "id": "1793408586747-rn04s5mdf",
+                "type": "h1",
+                "content": "{{CANARY:block-1}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586747,
+                "canvasId": "1793408586747-c2siatij8",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793408586747-rq1tfq7ws",
+              "value": {
+                "id": "1793408586747-rq1tfq7ws",
+                "type": "image",
+                "content": "",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+                "calloutIcon": "💡",
+                "createdAt": 1793408586747,
+                "updatedAt": 1793408586747,
+                "canvasId": "1793408586747-c2siatij8",
+                "order": 3
+              }
+            },
+            {
+              "key": "1793408586750-3urbz1t6v",
+              "value": {
+                "id": "1793408586750-3urbz1t6v",
+                "type": "text",
+                "content": "{{CANARY:block-4}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586750,
+                "updatedAt": 1793408586750,
+                "canvasId": "1793408586747-a8w26tlk5",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793408586750-kgza6xh9b",
+              "value": {
+                "id": "1793408586750-kgza6xh9b",
+                "type": "todo",
+                "content": "{{CANARY:block-5}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586750,
+                "updatedAt": 1793408586750,
+                "canvasId": "1793408586747-a8w26tlk5",
+                "order": 1
+              }
+            },
+            {
+              "key": "1793408586751-qj2tnqjun",
+              "value": {
+                "id": "1793408586751-qj2tnqjun",
+                "type": "text",
+                "content": "{{CANARY:block-6}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586751,
+                "updatedAt": 1793408586751,
+                "canvasId": "1793408586747-r2skypm6e",
+                "order": 0
+              }
+            },
+            {
+              "key": "1793408586751-tbn40kpow",
+              "value": {
+                "id": "1793408586751-tbn40kpow",
+                "type": "text",
+                "content": "{{CANARY:block-7}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793408586751,
+                "updatedAt": 1793408586751,
+                "canvasId": "1793408586747-3xc1rh7qa",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408586758-2bk0xgoic",
+              "value": {
+                "id": "1793408586758-2bk0xgoic",
+                "name": "{{CANARY:folder-1}}",
+                "parentId": null,
+                "createdAt": 1793408586758,
+                "updatedAt": 1793408586758,
+                "color": null,
+                "collapsed": false
+              }
+            }
+          ]
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408586758-287a7o1p5",
+              "value": {
+                "id": "1793408586758-287a7o1p5",
+                "fromNoteId": "1793408586747-c2siatij8",
+                "toNoteId": "1793408586747-a8w26tlk5",
+                "createdAt": 1793408586758
+              }
+            }
+          ]
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408586752-3znt68b3t",
+              "value": {
+                "id": "1793408586752-3znt68b3t",
+                "canvasId": "1793408586747-c2siatij8",
+                "blob": {
+                  "$type": "Blob",
+                  "mime": "image/png",
+                  "base64": "iVBORw0KGgoAAAANAQIDBA=="
+                },
+                "type": "image/png",
+                "createdAt": 1793408586752
+              }
+            }
+          ]
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1793408585266-fptzi6lti",
+              "value": {
+                "noteId": "1793408585266-fptzi6lti",
+                "name": "Welcome to NewTabNote 🚀",
+                "content": "",
+                "updatedAt": 1793408585266
+              }
+            },
+            {
+              "key": "1793408586747-3xc1rh7qa",
+              "value": {
+                "noteId": "1793408586747-3xc1rh7qa",
+                "name": "{{CANARY:note-4-title}}",
+                "content": "",
+                "updatedAt": 1793408586760
+              }
+            },
+            {
+              "key": "1793408586747-a8w26tlk5",
+              "value": {
+                "noteId": "1793408586747-a8w26tlk5",
+                "name": "{{CANARY:note-2-title}}",
+                "content": "",
+                "updatedAt": 1793408586751
+              }
+            },
+            {
+              "key": "1793408586747-c2siatij8",
+              "value": {
+                "noteId": "1793408586747-c2siatij8",
+                "name": "{{CANARY:note-1-title}}",
+                "content": "",
+                "updatedAt": 1793408586759
+              }
+            },
+            {
+              "key": "1793408586747-r2skypm6e",
+              "value": {
+                "noteId": "1793408586747-r2skypm6e",
+                "name": "{{CANARY:note-3-title}}",
+                "content": "",
+                "updatedAt": 1793408586759
+              }
+            },
+            {
+              "key": "1793408586760-3vjdp6uk5",
+              "value": {
+                "noteId": "1793408586760-3vjdp6uk5",
+                "name": "{{CANARY:note-5-title}}",
+                "content": "",
+                "updatedAt": 1793408586761
+              }
+            },
+            {
+              "key": "1793408586761-2tldok2ha",
+              "value": {
+                "noteId": "1793408586761-2tldok2ha",
+                "name": "Daily Note - Oct 31, 2026",
+                "content": "",
+                "updatedAt": 1793408586762
+              }
+            }
+          ]
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408586763-lcw42pjrp",
+              "value": {
+                "id": "1793408586763-lcw42pjrp",
+                "noteId": "1793408586747-c2siatij8",
+                "timestamp": 1793408586763,
+                "blocks": [
+                  {
+                    "id": "1793408586747-61wc0b7in",
+                    "type": "todo",
+                    "content": "{{CANARY:block-3}}",
+                    "indentLevel": 0,
+                    "checked": true,
+                    "imageUrl": null,
+                    "calloutIcon": "💡",
+                    "createdAt": 1793408586747,
+                    "updatedAt": 1793408586747
+                  },
+                  {
+                    "id": "1793408586747-c6qrhjfdw",
+                    "type": "text",
+                    "content": "{{CANARY:block-2}}",
+                    "indentLevel": 0,
+                    "checked": false,
+                    "imageUrl": null,
+                    "calloutIcon": "💡",
+                    "createdAt": 1793408586747,
+                    "updatedAt": 1793408586747
+                  },
+                  {
+                    "id": "1793408586747-rn04s5mdf",
+                    "type": "h1",
+                    "content": "{{CANARY:block-1}}",
+                    "indentLevel": 0,
+                    "checked": false,
+                    "imageUrl": null,
+                    "calloutIcon": "💡",
+                    "createdAt": 1793408586747,
+                    "updatedAt": 1793408586747
+                  },
+                  {
+                    "id": "1793408586747-rq1tfq7ws",
+                    "type": "image",
+                    "content": "",
+                    "indentLevel": 0,
+                    "checked": false,
+                    "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+                    "calloutIcon": "💡",
+                    "createdAt": 1793408586747,
+                    "updatedAt": 1793408586747
+                  }
+                ],
+                "title": "{{CANARY:note-1-title}}"
+              }
+            }
+          ]
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793408586762-rb2e6ay7c",
+              "value": {
+                "name": "{{CANARY:theme-1}}",
+                "properties": {
+                  "--bg-primary": "#101820",
+                  "--text-primary": "#f2f2f2"
+                },
+                "id": "1793408586762-rb2e6ay7c",
+                "updatedAt": 1793408586762
+              }
+            }
+          ]
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1793408586747-c2siatij8",
+              "value": {
+                "id": "1793408586747-c2siatij8",
+                "noteId": "1793408586747-c2siatij8",
+                "vector": [
+                  0.125,
+                  -0.5,
+                  0.25,
+                  1
+                ],
+                "updatedAt": 1793408586763
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "chromeStorageLocal": {
+    "auto_backup_1793408586769": {
+      "autoBackup": true,
+      "backupCreatedAt": 1793408586769,
+      "canvases": [
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586761,
+          "dateStr": "2026-10-31",
+          "folderId": null,
+          "id": "1793408586761-2tldok2ha",
+          "insights": null,
+          "isDaily": true,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "Daily Note - Oct 31, 2026",
+          "pinned": false,
+          "preview": "",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408586761,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": "1793408586758-2bk0xgoic",
+          "id": "1793408586747-c2siatij8",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-1-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-1}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": {
+            "completed": 1,
+            "total": 1
+          },
+          "updatedAt": 1793408586758,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408586747-a8w26tlk5",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-2-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-4}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": {
+            "completed": 0,
+            "total": 1
+          },
+          "updatedAt": 1793408586750,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408585266,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408585266-fptzi6lti",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "Welcome to NewTabNote 🚀",
+          "pinned": false,
+          "preview": "",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408585266,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        }
+      ],
+      "elements": [
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": true,
+          "content": "{{CANARY:block-3}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-61wc0b7in",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 2,
+          "type": "todo",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "{{CANARY:block-2}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-c6qrhjfdw",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 1,
+          "type": "text",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "{{CANARY:block-1}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-rn04s5mdf",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "h1",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-rq1tfq7ws",
+          "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+          "indentLevel": 0,
+          "order": 3,
+          "type": "image",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-a8w26tlk5",
+          "checked": false,
+          "content": "{{CANARY:block-4}}",
+          "createdAt": 1793408586750,
+          "id": "1793408586750-3urbz1t6v",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408586750
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-a8w26tlk5",
+          "checked": false,
+          "content": "{{CANARY:block-5}}",
+          "createdAt": 1793408586750,
+          "id": "1793408586750-kgza6xh9b",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 1,
+          "type": "todo",
+          "updatedAt": 1793408586750
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "This is a block-based note-taking app designed for speed and productivity. Every paragraph, image, or list is a \"block\" that you can move, change, or delete.",
+          "createdAt": 1793408585266,
+          "id": "1793408585266-fyrgz5l9h",
+          "indentLevel": 0,
+          "order": 1,
+          "type": "text",
+          "updatedAt": 1793408585266
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Welcome to <b>NewTabNote</b>! 🚀",
+          "createdAt": 1793408585266,
+          "id": "1793408585266-utv4zd9zn",
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408585266
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Slash Commands</b>: Type <code class=\"code-pill\">/</code> in any empty block to see all available block types.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-4kaplh5e9",
+          "indentLevel": 0,
+          "order": 3,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Quick Start",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-6b01ootpg",
+          "indentLevel": 0,
+          "order": 2,
+          "type": "h2",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Drag &amp; Drop</b>: Grab the ⠿ handle on the left of any block to reorder it.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-j2vvpxn0k",
+          "indentLevel": 0,
+          "order": 5,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Daily Notes</b>: Click the 📅 icon in the sidebar or press <kbd>Alt</kbd>+<kbd>D</kbd> to open today's note.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-l89yhfd0b",
+          "indentLevel": 0,
+          "order": 4,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Code Blocks",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-42llx2m2y",
+          "indentLevel": 0,
+          "order": 10,
+          "type": "h2",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Try the slash command menu by typing /",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-53li5zjvh",
+          "indentLevel": 0,
+          "order": 9,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Check off this todo item",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-ersi97pvr",
+          "indentLevel": 0,
+          "order": 7,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Try It Out",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-j3ngz8kir",
+          "indentLevel": 0,
+          "order": 6,
+          "type": "h2",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Create a new note from the sidebar",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-pug8aydua",
+          "indentLevel": 0,
+          "order": 8,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "AI Powered Features",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-l4m3jdfz4",
+          "indentLevel": 0,
+          "order": 13,
+          "type": "h2",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "console.log(\"Hello from NewTabNote!\");",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-r5awems71",
+          "indentLevel": 0,
+          "order": 12,
+          "type": "code",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "You can add code snippets with syntax highlighting:",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-zj4nvj1qj",
+          "indentLevel": 0,
+          "order": 11,
+          "type": "text",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "We've integrated AI to help you organize your thoughts.",
+          "createdAt": 1793408585271,
+          "id": "1793408585271-kt8hjhkxb",
+          "indentLevel": 0,
+          "order": 14,
+          "type": "text",
+          "updatedAt": 1793408585271
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Smart Sidebar</b>: Click the ✨ button to chat with your notes or see proactive insights.",
+          "createdAt": 1793408585272,
+          "id": "1793408585272-8rrm3u7mf",
+          "indentLevel": 0,
+          "order": 16,
+          "type": "bullet",
+          "updatedAt": 1793408585272
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Semantic Search</b>: Find notes by meaning, not just keywords.",
+          "createdAt": 1793408585272,
+          "id": "1793408585272-mw6qgs621",
+          "indentLevel": 0,
+          "order": 15,
+          "type": "bullet",
+          "updatedAt": 1793408585272
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Organization",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-hvbu7d539",
+          "indentLevel": 0,
+          "order": 17,
+          "type": "h2",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Folders</b>: Create folders in the sidebar and drag notes into them.",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-jzemda7c3",
+          "indentLevel": 0,
+          "order": 18,
+          "type": "bullet",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Happy note-taking! ✨",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-tjf6772y1",
+          "indentLevel": 0,
+          "order": 20,
+          "type": "text",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Backlinks</b>: Use <code class=\"code-pill\">[[Note Name]]</code> to link notes together.",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-wpsl5lbv2",
+          "indentLevel": 0,
+          "order": 19,
+          "type": "bullet",
+          "updatedAt": 1793408585273
+        }
+      ],
+      "exportedAt": 1793408586769,
+      "media": [
+        {
+          "blob": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+          "canvasId": "1793408586747-c2siatij8",
+          "createdAt": 1793408586752,
+          "id": "1793408586752-3znt68b3t",
+          "type": "image/png"
+        }
+      ],
+      "version": 1
+    },
+    "lastOpenedNoteId": "1793408585266-fptzi6lti",
+    "recovery_backup_1793408586773": {
+      "canvases": [
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408585266,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408585266-fptzi6lti",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "Welcome to NewTabNote 🚀",
+          "pinned": false,
+          "preview": "",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408585266,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408586747-3xc1rh7qa",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-4-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-7}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "trashed": true,
+          "trashedAt": 1793408586760,
+          "updatedAt": 1793408586760,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408586747-a8w26tlk5",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-2-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-4}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": {
+            "completed": 0,
+            "total": 1
+          },
+          "updatedAt": 1793408586750,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": "1793408586758-2bk0xgoic",
+          "id": "1793408586747-c2siatij8",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-1-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-1}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": {
+            "completed": 1,
+            "total": 1
+          },
+          "updatedAt": 1793408586758,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": true,
+          "archivedAt": 1793408586759,
+          "createdAt": 1793408586747,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408586747-r2skypm6e",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-3-title}}",
+          "pinned": false,
+          "preview": "{{CANARY:block-6}}",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408586759,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586760,
+          "dateStr": null,
+          "folderId": null,
+          "id": "1793408586760-3vjdp6uk5",
+          "insights": null,
+          "isDaily": false,
+          "isTemplate": true,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "{{CANARY:note-5-title}}",
+          "pinned": false,
+          "preview": "",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408586760,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        },
+        {
+          "archived": false,
+          "archivedAt": null,
+          "createdAt": 1793408586761,
+          "dateStr": "2026-10-31",
+          "folderId": null,
+          "id": "1793408586761-2tldok2ha",
+          "insights": null,
+          "isDaily": true,
+          "isTemplate": false,
+          "lastAutoTitleAt": null,
+          "lastInsightsExtractedAt": null,
+          "name": "Daily Note - Oct 31, 2026",
+          "pinned": false,
+          "preview": "",
+          "settings": {
+            "backgroundColor": "#fafafa",
+            "gridType": "dots"
+          },
+          "titleManuallySet": false,
+          "todoProgress": null,
+          "updatedAt": 1793408586761,
+          "viewport": {
+            "offsetX": 0,
+            "offsetY": 0,
+            "scale": 1
+          }
+        }
+      ],
+      "elements": [
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "This is a block-based note-taking app designed for speed and productivity. Every paragraph, image, or list is a \"block\" that you can move, change, or delete.",
+          "createdAt": 1793408585266,
+          "id": "1793408585266-fyrgz5l9h",
+          "indentLevel": 0,
+          "order": 1,
+          "type": "text",
+          "updatedAt": 1793408585266
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Welcome to <b>NewTabNote</b>! 🚀",
+          "createdAt": 1793408585266,
+          "id": "1793408585266-utv4zd9zn",
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408585266
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Slash Commands</b>: Type <code class=\"code-pill\">/</code> in any empty block to see all available block types.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-4kaplh5e9",
+          "indentLevel": 0,
+          "order": 3,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Quick Start",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-6b01ootpg",
+          "indentLevel": 0,
+          "order": 2,
+          "type": "h2",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Drag &amp; Drop</b>: Grab the ⠿ handle on the left of any block to reorder it.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-j2vvpxn0k",
+          "indentLevel": 0,
+          "order": 5,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Daily Notes</b>: Click the 📅 icon in the sidebar or press <kbd>Alt</kbd>+<kbd>D</kbd> to open today's note.",
+          "createdAt": 1793408585267,
+          "id": "1793408585267-l89yhfd0b",
+          "indentLevel": 0,
+          "order": 4,
+          "type": "text",
+          "updatedAt": 1793408585267
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Code Blocks",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-42llx2m2y",
+          "indentLevel": 0,
+          "order": 10,
+          "type": "h2",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Try the slash command menu by typing /",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-53li5zjvh",
+          "indentLevel": 0,
+          "order": 9,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Check off this todo item",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-ersi97pvr",
+          "indentLevel": 0,
+          "order": 7,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Try It Out",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-j3ngz8kir",
+          "indentLevel": 0,
+          "order": 6,
+          "type": "h2",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Create a new note from the sidebar",
+          "createdAt": 1793408585268,
+          "id": "1793408585268-pug8aydua",
+          "indentLevel": 0,
+          "order": 8,
+          "type": "todo",
+          "updatedAt": 1793408585268
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "AI Powered Features",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-l4m3jdfz4",
+          "indentLevel": 0,
+          "order": 13,
+          "type": "h2",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "console.log(\"Hello from NewTabNote!\");",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-r5awems71",
+          "indentLevel": 0,
+          "order": 12,
+          "type": "code",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "You can add code snippets with syntax highlighting:",
+          "createdAt": 1793408585269,
+          "id": "1793408585269-zj4nvj1qj",
+          "indentLevel": 0,
+          "order": 11,
+          "type": "text",
+          "updatedAt": 1793408585269
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "We've integrated AI to help you organize your thoughts.",
+          "createdAt": 1793408585271,
+          "id": "1793408585271-kt8hjhkxb",
+          "indentLevel": 0,
+          "order": 14,
+          "type": "text",
+          "updatedAt": 1793408585271
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Smart Sidebar</b>: Click the ✨ button to chat with your notes or see proactive insights.",
+          "createdAt": 1793408585272,
+          "id": "1793408585272-8rrm3u7mf",
+          "indentLevel": 0,
+          "order": 16,
+          "type": "bullet",
+          "updatedAt": 1793408585272
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Semantic Search</b>: Find notes by meaning, not just keywords.",
+          "createdAt": 1793408585272,
+          "id": "1793408585272-mw6qgs621",
+          "indentLevel": 0,
+          "order": 15,
+          "type": "bullet",
+          "updatedAt": 1793408585272
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Organization",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-hvbu7d539",
+          "indentLevel": 0,
+          "order": 17,
+          "type": "h2",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Folders</b>: Create folders in the sidebar and drag notes into them.",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-jzemda7c3",
+          "indentLevel": 0,
+          "order": 18,
+          "type": "bullet",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "Happy note-taking! ✨",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-tjf6772y1",
+          "indentLevel": 0,
+          "order": 20,
+          "type": "text",
+          "updatedAt": 1793408585273
+        },
+        {
+          "canvasId": "1793408585266-fptzi6lti",
+          "checked": false,
+          "content": "<b>Backlinks</b>: Use <code class=\"code-pill\">[[Note Name]]</code> to link notes together.",
+          "createdAt": 1793408585273,
+          "id": "1793408585273-wpsl5lbv2",
+          "indentLevel": 0,
+          "order": 19,
+          "type": "bullet",
+          "updatedAt": 1793408585273
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": true,
+          "content": "{{CANARY:block-3}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-61wc0b7in",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 2,
+          "type": "todo",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "{{CANARY:block-2}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-c6qrhjfdw",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 1,
+          "type": "text",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "{{CANARY:block-1}}",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-rn04s5mdf",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "h1",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-c2siatij8",
+          "checked": false,
+          "content": "",
+          "createdAt": 1793408586747,
+          "id": "1793408586747-rq1tfq7ws",
+          "imageUrl": "data:image/png;base64,iVBORw0KGgoAAAANAQIDBA==",
+          "indentLevel": 0,
+          "order": 3,
+          "type": "image",
+          "updatedAt": 1793408586747
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-a8w26tlk5",
+          "checked": false,
+          "content": "{{CANARY:block-4}}",
+          "createdAt": 1793408586750,
+          "id": "1793408586750-3urbz1t6v",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408586750
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-a8w26tlk5",
+          "checked": false,
+          "content": "{{CANARY:block-5}}",
+          "createdAt": 1793408586750,
+          "id": "1793408586750-kgza6xh9b",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 1,
+          "type": "todo",
+          "updatedAt": 1793408586750
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-r2skypm6e",
+          "checked": false,
+          "content": "{{CANARY:block-6}}",
+          "createdAt": 1793408586751,
+          "id": "1793408586751-qj2tnqjun",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408586751
+        },
+        {
+          "calloutIcon": "💡",
+          "canvasId": "1793408586747-3xc1rh7qa",
+          "checked": false,
+          "content": "{{CANARY:block-7}}",
+          "createdAt": 1793408586751,
+          "id": "1793408586751-tbn40kpow",
+          "imageUrl": null,
+          "indentLevel": 0,
+          "order": 0,
+          "type": "text",
+          "updatedAt": 1793408586751
+        }
+      ],
+      "recoveryBackup": true,
+      "timestamp": 1793408586772
+    },
+    "setting_activeTabIndex": 0,
+    "setting_aiChatHistory": [],
+    "setting_aiPromptTemplates": [
+      {
+        "behavior": "send",
+        "id": "note-summarize",
+        "label": "Summarize note",
+        "prompt": "Summarize this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-expand",
+        "label": "Expand content",
+        "prompt": "Expand on the main points in this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-title",
+        "label": "Generate title",
+        "prompt": "Generate a concise title for this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-takeaways",
+        "label": "Key takeaways",
+        "prompt": "What are the key takeaways from this note?",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-questions",
+        "label": "Suggest questions",
+        "prompt": "Suggest follow-up questions based on this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "global-deadlines",
+        "label": "Upcoming deadlines",
+        "prompt": "What are my upcoming deadlines?",
+        "scope": "global"
+      },
+      {
+        "behavior": "send",
+        "id": "global-meetings",
+        "label": "Meeting summaries",
+        "prompt": "Summarize my recent meeting notes",
+        "scope": "global"
+      },
+      {
+        "behavior": "send",
+        "id": "global-tasks",
+        "label": "Pending tasks",
+        "prompt": "What tasks do I have pending?",
+        "scope": "global"
+      },
+      {
+        "behavior": "prefill",
+        "id": "global-find",
+        "label": "Find notes about...",
+        "prompt": "Find notes about",
+        "scope": "global"
+      }
+    ],
+    "setting_aiSidebarWidth": 360,
+    "setting_autoTitleEnabled": true,
+    "setting_autoTitleInterval": 15,
+    "setting_embeddingsEnabled": true,
+    "setting_font": "default",
+    "setting_globalChatHistory": [],
+    "setting_globalChatMessages": [],
+    "setting_insightsEnabled": true,
+    "setting_insightsInterval": 360,
+    "setting_lastAutoTitleRun": 0,
+    "setting_lastBackupAt": 1793408586772,
+    "setting_lastInsightsRun": 0,
+    "setting_llmApiKey": "{{CANARY:llm-api-key}}",
+    "setting_llmModel": "",
+    "setting_llmProvider": "openai",
+    "setting_noteChatMessages": [],
+    "setting_ollamaUrl": "http://localhost:11434",
+    "setting_openTabs": [
+      {
+        "name": "Welcome to NewTabNote 🚀",
+        "noteId": "1793408585266-fptzi6lti"
+      }
+    ],
+    "setting_sidebarOpen": true,
+    "setting_sidebarViewMode": "list",
+    "setting_sidebarWidth": 260,
+    "setting_splitViewEnabled": false,
+    "setting_storageInitialized": true,
+    "setting_theme": "1793408586762-rb2e6ay7c",
+    "setting_trashRetention": 30,
+    "setting_width": "default"
+  }
+}
