@@ -53,7 +53,7 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {MigrateLocks} locks
  * @property {Estimate | null} estimate
  * @property {Digester} crypto
- * @property {string} [version] - the build's manifest version, which a record that stands must match
+ * @property {string | null} [version] - the build's manifest version, which a record that stands must match
  */
 
 /**
