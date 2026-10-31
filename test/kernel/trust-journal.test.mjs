@@ -93,6 +93,17 @@ async function capturingConsole(body) {
     .join('\n');
 }
 
+/** Registered providers the canary checks run as, one per check */
+const CANARY_PROVIDERS = [
+  'messaging',
+  'contributions',
+  'block-types',
+  'credentials',
+  'recovery-readiness',
+  'ai-scope-grants',
+  'remote-ai',
+];
+
 /** Every way a caller might try to put a canary into an event */
 const CANARY_FIELDS = [
   { title: TITLE },
@@ -259,13 +270,13 @@ describe('logger.event (#20 slice 1, AC3)', () => {
     journal.event('capture.failed', {
       surface: 'worker-internal',
       errorCode: 'store-unavailable',
-      subjectId: '1730246400000-daily',
+      subjectId: '1730246400000-dailynote',
     });
     await journal.flush();
     const incidents = await records.incidents();
     assert.deepEqual(incidents.map(incident => [incident.key, incident.severity, incident.occurrences]).sort(), [
       ['backup/auto-backup-failed/-', 'data-risk', 1],
-      ['capture/capture-failed/1730246400000-daily', 'capture-risk', 1],
+      ['capture/capture-failed/1730246400000-dailynote', 'capture-risk', 1],
       ['index/indexer-start-failed/-', 'degraded', 1],
       ['local-inference/load-failed/-', 'degraded', 1],
       ['storage/open-failed/-', 'capture-risk', 2],
@@ -356,7 +367,7 @@ describe('seeded canaries reach no record, journal event, report, or log line (#
     root.register(
       health,
       checks.map((check, index) => ({
-        id: `canary-${index}`,
+        id: CANARY_PROVIDERS[index],
         version: 1,
         apiVersion: 1,
         group: 'recovery',

@@ -7,12 +7,12 @@
 import * as v from '../../../lib/valibot/index.mjs';
 import { commandPayload } from '../../../kernel/core/contracts/operation.js';
 import { outcomeSchema } from '../../../kernel/core/contracts/outcome-schemas.js';
-import { contributionId, evidenceSchema, faultCode, subjectId } from '../evidence.js';
+import { evidenceSchema, faultCode, providerId, subjectId } from '../evidence.js';
 import { capabilities } from '../records.js';
 import { SEVERITIES } from '../vocabulary.js';
 
 export const payload = commandPayload('recovery.raise', {
-  providerId: contributionId,
+  providerId,
   faultCode,
   subjectId: v.optional(v.nullable(subjectId)),
   severity: v.picklist(SEVERITIES),

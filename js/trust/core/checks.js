@@ -15,7 +15,7 @@
 
 import * as v from '../../lib/valibot/index.mjs';
 import { EXCEPTION_NAMES } from './codes.js';
-import { contributionId, evidenceSchema, faultCode, subjectId } from './evidence.js';
+import { evidenceSchema, faultCode, remediationId, subjectId } from './evidence.js';
 import { capabilities, consequenceKey } from './records.js';
 import { CAPTURE_STATES, RECEIPT_STATUSES, SEVERITIES } from './vocabulary.js';
 
@@ -41,7 +41,7 @@ export const checkResultSchema = v.strictObject({
   evidence: v.optional(evidenceSchema),
   consequenceKey: v.optional(v.nullable(consequenceKey)),
   preserved: v.optional(capabilities),
-  nextAction: v.optional(v.nullable(contributionId)),
+  nextAction: v.optional(v.nullable(remediationId)),
   faults: v.optional(v.pipe(v.array(faultSchema), v.maxLength(32))),
 });
 

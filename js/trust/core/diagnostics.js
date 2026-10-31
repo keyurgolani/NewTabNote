@@ -15,7 +15,7 @@
 import * as v from '../../lib/valibot/index.mjs';
 import { encodedBytes } from '../../kernel/core/contracts/codec.js';
 import { count, timestamp } from '../../kernel/core/contracts/fields.js';
-import { contributionId, dottedVersion, errorCode, recordId } from './evidence.js';
+import { dottedVersion, errorCode, recordId } from './evidence.js';
 import { REJECTION_REASONS } from './journal.js';
 import { incidentSchema, journalEventSchema, parseRecord, receiptSchema, runSchema } from './records.js';
 
@@ -42,7 +42,8 @@ export const versionsSchema = v.strictObject({
 
 /** One migration receipt (#17 slice 2 writes them; none exist before it) */
 export const migrationSchema = v.strictObject({
-  id: contributionId,
+  // A migration step's id in #17's registry, such as `structural-9`
+  id: v.pipe(v.string(), v.regex(/^[a-z]{1,16}-[0-9]{1,4}$/)),
   fromVersion: count,
   toVersion: count,
   at: timestamp,

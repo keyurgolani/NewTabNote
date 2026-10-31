@@ -88,7 +88,10 @@ describe('NewTabNoteTrust (#20 slice 1, "Records")', () => {
     assert.equal(records.failureCode(), 'quota');
     // The storage incident survives the context
     const stored = /** @type {any} */ (profile.settings.items.get('trust.lastStorageIncident'));
-    assert.equal(stored.incident.key, 'storage/quota/-');
+    assert.deepEqual(
+      stored.ops.map((/** @type {any} */ op) => op.key),
+      ['storage/quota/-'],
+    );
     // and nothing committed
     assert.deepEqual(JSON.parse(await dumpTrustDatabase(profile.real)).incidents, []);
     // until the next open reconciles it

@@ -125,6 +125,47 @@ export const FAULT_CODES = Object.freeze([
   'legacy-secret',
 ]);
 
+/**
+ * The health providers there are, by id: slice 2's real and interim ones (#20, "Providers").
+ * A provider's descriptor id is one of these, and so is every providerId a record or an event
+ * holds, so no string a caller makes up passes as one.
+ */
+export const PROVIDER_IDS = Object.freeze([
+  'capture',
+  'storage',
+  'recovery-readiness',
+  'backup',
+  'sync',
+  'credentials',
+  'permissions',
+  'ai-scope-grants',
+  'remote-ai',
+  'local-inference',
+  'index',
+  'messaging',
+  'contributions',
+  'block-types',
+]);
+
+/** The remediations there are, by id: slice 3's (#20, "Remediation pipeline") */
+export const REMEDIATION_IDS = Object.freeze([
+  'retry-open',
+  'retry-sync',
+  'reconnect',
+  'safe-disable',
+  'rebuild-index',
+  'remove-index',
+  'save-recovery-file',
+  'save-salvage-file',
+  'export-diagnostics',
+  'recover-orphans',
+  'discard-orphans',
+  'remove-saved-key',
+  'restore-point',
+  'delete-restore-point',
+  'reset',
+]);
+
 /** Reasons: why an event didn't reach the journal (journal.js) */
 export const REASON_CODES = Object.freeze([
   'unregistered-code',

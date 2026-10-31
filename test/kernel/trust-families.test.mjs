@@ -20,6 +20,7 @@ import { reportSchema } from '../../js/trust/core/operations/trust-report.js';
 import { receiptSchema } from '../../js/trust/core/records.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases, runsOn } from '../../js/trust/core/use-cases.js';
+import { REMEDIATION_IDS } from '../../js/trust/core/codes.js';
 import { REMEDIATION_CLASSES } from '../../js/trust/core/vocabulary.js';
 import { describeRegistryConformance } from './registry-conformance.mjs';
 import { hexIds, lockManager, manualClock, realTimers, settingsArea } from './trust-support.mjs';
@@ -96,9 +97,12 @@ const PROVIDERS = [
     faults: [{ faultCode: 'model-rebuilding', severity: 'degraded' }],
   })),
   // unverifiable: never answers, so its check times out
-  provider('remote-ai', 'inference', 20, () => new Promise(() => {}), { timeoutMs: 20 }),
+  provider('ai-scope-grants', 'inference', 20, () => new Promise(() => {}), { timeoutMs: 20 }),
   // a network check, which opening Trust never runs
-  provider('webdav', 'sync', 20, () => ({ status: 'verified' }), { costClass: 'network', triggers: ['verify-now'] }),
+  provider('remote-ai', 'inference', 30, () => ({ status: 'verified' }), {
+    costClass: 'network',
+    triggers: ['verify-now'],
+  }),
 ];
 
 /** @type {Descriptor[]} */
@@ -179,6 +183,10 @@ describeRegistryConformance('remediation (#20)', {
         assert.equal(typeof steps[step], 'function', `${contribution.ref} has no ${step}()`);
       }
       assert.ok(REMEDIATION_CLASSES.includes(/** @type {any} */ (contribution.data).class));
+      assert.ok(
+        REMEDIATION_IDS.includes(/** @type {string} */ (contribution.id)),
+        `${contribution.ref} isn't a registered remediation`,
+      );
     },
   },
 });
@@ -281,9 +289,9 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     const { trust } = await trustCenter();
     const outcome = await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'open' });
     assert.equal(outcome.kind, 'committed');
-    assert.equal((await statusesOf(trust)).webdav, 'unverified');
-    await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['webdav'] });
-    assert.equal((await statusesOf(trust)).webdav, 'verified');
+    assert.equal((await statusesOf(trust))['remote-ai'], 'unverified');
+    await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['remote-ai'] });
+    assert.equal((await statusesOf(trust))['remote-ai'], 'verified');
   });
 
   it('each fixture reads as its state, a past window reads stale, and a timeout reads unverified', async () => {
@@ -297,8 +305,8 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       index: 'degraded',
       permissions: 'failed',
       'local-inference': 'degraded',
-      'remote-ai': 'unverified',
-      webdav: 'verified',
+      'ai-scope-grants': 'unverified',
+      'remote-ai': 'verified',
     });
     const summary = await summaryOf(trust);
     assert.equal(summary.worstCore, 'verified');
@@ -310,9 +318,9 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       [
         ['storage', 2, 0, 'verified'],
         ['backup', 1, 0, 'verified'],
-        ['sync', 2, 0, 'not-configured'],
+        ['sync', 1, 0, 'not-configured'],
         ['indexing', 1, 1, 'degraded'],
-        ['inference', 2, 1, 'degraded'],
+        ['inference', 3, 1, 'degraded'],
         ['permissions', 1, 1, 'failed'],
       ],
     );
@@ -347,7 +355,7 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
   });
 
   it('a dismissed incident leaves Needs action until the next failing check, and a passing one resolves it', async () => {
-    const { trust, records } = await trustCenter();
+    const { trust, records, clock } = await trustCenter();
     storageAnswer.next = {
       status: 'degraded',
       capture: 'safe',
@@ -362,6 +370,8 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
       assert.equal(summary.groups.find(group => group.group === 'storage')?.needsAction, 0);
       const listed = await trust.incidents();
       assert.equal(/** @type {any} */ (listed).data.incidents.length, 1, 'a dismissed incident stays listed');
+      // The next failing check, later than the dismissal, puts it back in Needs action
+      clock.advance(1);
       await trust.verify({ type: 'trust.verify', commandId: 'c2', trigger: 'verify-now', providerIds: ['storage'] });
       summary = await summaryOf(trust);
       assert.equal(summary.actionRequired, 1);

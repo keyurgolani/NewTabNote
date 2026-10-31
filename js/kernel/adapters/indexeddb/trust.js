@@ -109,7 +109,9 @@ function createStores(db, upgrade) {
  * @returns {TrustStore & {state: () => string}}
  */
 export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_OPEN_WITHIN_MS }) {
-  /** @type {'closed' | 'opening' | 'open' | 'gone' | 'failed'} */
+  // `lost`: Chrome closed the connection (onclose, or onversionchange for a deleted database),
+  // which the next open() connects again; `gone`: close() was called, which nothing reopens
+  /** @type {'closed' | 'opening' | 'open' | 'lost' | 'gone' | 'failed'} */
   let state = 'closed';
   /** @type {IDBDatabase | null} */
   let db = null;
@@ -117,6 +119,12 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
   let failure = null;
   /** @type {Promise<unknown> | null} */
   let connecting = null;
+  /** The connection is closed under us: the next open() connects again */
+  const lose = () => {
+    state = 'lost';
+    db = null;
+    connecting = null;
+  };
   // Read when a range is first needed, so a host without the global can still open
   const ranges = () =>
     keyRange || /** @type {{upperBound(bound: unknown, open?: boolean): IDBKeyRange}} */ (IDBKeyRange);
@@ -146,10 +154,10 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
         }
         database.onversionchange = () => {
           database.close();
-          if (db === database) state = 'gone';
+          if (db === database) lose();
         };
         database.onclose = () => {
-          if (db === database) state = 'gone';
+          if (db === database) lose();
         };
         db = database;
         state = 'open';
@@ -215,10 +223,10 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
     try {
       tx = database.transaction([...stores], mode, mode === 'readwrite' ? STRICT : undefined);
     } catch (error) {
-      if (state === 'open' && /** @type {{name?: unknown}} */ (error)?.name === 'InvalidStateError') state = 'gone';
+      if (state === 'open' && /** @type {{name?: unknown}} */ (error)?.name === 'InvalidStateError') lose();
       return {
         ok: false,
-        error: state === 'gone' ? new UnavailableError('storage', 'reload-required', false) : failureOf(error),
+        error: state === 'lost' ? new UnavailableError('storage', 'database-closed', true) : failureOf(error),
       };
     }
     const ended = ending(tx);
@@ -274,6 +282,7 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
       if (state !== 'open') {
         if (state === 'failed' && failure) throw failure;
         if (state === 'opening') throw new UnavailableError('storage', 'open-pending', true);
+        if (state === 'lost') throw new UnavailableError('storage', 'database-closed', true);
         if (state === 'gone') throw new UnavailableError('storage', 'reload-required', false);
         throw new UnavailableError('adapter', 'not-open', false);
       }

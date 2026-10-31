@@ -20,7 +20,7 @@ const DAY = 24 * 60 * 60 * 1000;
  * @param {number} n
  * @param {string} [tag]
  */
-const legacyId = (n, tag = 'a') => `${1730000000000 + n}-${tag}`;
+const legacyId = (n, tag = 'a') => `${1730000000000 + n}-${(tag + n.toString(36)).padStart(9, '0').slice(-9)}`;
 
 /** @type {TrustStore[]} */
 const opened = [];

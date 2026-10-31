@@ -7,11 +7,11 @@
 import * as v from '../../../lib/valibot/index.mjs';
 import { commandPayload } from '../../../kernel/core/contracts/operation.js';
 import { outcomeSchema } from '../../../kernel/core/contracts/outcome-schemas.js';
-import { contributionId } from '../evidence.js';
+import { providerId } from '../evidence.js';
 import { TRIGGERS } from '../vocabulary.js';
 
 export const payload = commandPayload('trust.verify', {
-  providerIds: v.optional(v.pipe(v.array(contributionId), v.maxLength(64))),
+  providerIds: v.optional(v.pipe(v.array(providerId), v.maxLength(64))),
   trigger: v.picklist(TRIGGERS),
 });
 
