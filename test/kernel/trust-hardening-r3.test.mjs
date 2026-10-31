@@ -53,7 +53,13 @@ const WRITE_FAILED = 'storage/write-failed/-';
  * @param {{clock?: ReturnType<typeof manualClock>, prefix?: string}} [options]
  */
 async function recordsOn(store, profile, { clock = manualClock(), prefix = 'a1b2' } = {}) {
-  const records = createTrustRecords({ store, settings: profile.settings, clock, ids: hexIds(prefix), locks: profile.locks });
+  const records = createTrustRecords({
+    store,
+    settings: profile.settings,
+    clock,
+    ids: hexIds(prefix),
+    locks: profile.locks,
+  });
   const result = await records.open();
   return { records, clock, result };
 }
@@ -290,7 +296,13 @@ describe("#68's third review round", () => {
       evidence: {},
       appliedOps: [],
     };
-    const undismissed = applyOp(/** @type {any} */ (base), { opId: 'u', kind: 'dismiss', at: 30, key: base.key, dismissed: false });
+    const undismissed = applyOp(/** @type {any} */ (base), {
+      opId: 'u',
+      kind: 'dismiss',
+      at: 30,
+      key: base.key,
+      dismissed: false,
+    });
     const after = applyOp(undismissed, { opId: 'd', kind: 'dismiss', at: 20, key: base.key, dismissed: true });
     assert.equal(after?.dismissed, false);
   });

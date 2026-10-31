@@ -13,7 +13,7 @@ import { health } from '../../js/trust/core/families.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { BOUNDS } from '../../js/trust/core/records.js';
-import { FALLBACK_LIMITS, createTrustRecords } from '../../js/trust/core/trust-records.js';
+import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases } from '../../js/trust/core/use-cases.js';
 import {
   brokenFactory,
@@ -79,7 +79,7 @@ function useCases(records, clock, { strict = true } = {}) {
 }
 
 describe("#68's review round", () => {
-  it('1 (blocking): one failed write leaves every read on the store, merged with what memory holds', async () => {
+  it('1 (blocking): one failed write leaves every read on the store, with the failure shown', async () => {
     const profile = trustProfile();
     const database = databaseOn(profile);
     opened.push(database);
@@ -91,21 +91,21 @@ describe("#68's review round", () => {
     assert.equal(records.state(), 'fallback');
     const incidents = await records.incidents();
     assert.deepEqual(
-      incidents.map(incident => incident.key),
-      ['storage/scan-findings/-'],
+      incidents.map(incident => incident.key).sort(),
+      ['storage/scan-findings/-', 'storage/write-failed/-'],
       'the open incident in NewTabNoteTrust disappeared from reads',
     );
     const { trust } = useCases(records, clock);
     const summary = /** @type {any} */ (await trust.summary()).data;
-    assert.equal(summary.actionRequired, 1);
-    // The held event shows, and the next write that succeeds puts it in the store
-    assert.ok((await records.events()).some(event => event.code === 'trust.reconciled'));
+    assert.equal(summary.actionRequired, 2);
+    // The event that failed isn't held, and the next write that succeeds stores the failure
+    assert.deepEqual(await records.events(), []);
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
     assert.equal(records.state(), 'open');
-    const stored = await database.run(['journal'], 'readonly', tx => tx.getAll('journal'));
+    const stored = await database.run(['incidents'], 'readonly', tx => tx.getAll('incidents'));
     assert.ok(
-      stored.some(event => event.code === 'trust.reconciled'),
-      'the held event never reached the store',
+      stored.some(incident => incident.key === 'storage/write-failed/-'),
+      'the failed write was never counted',
     );
   });
 
@@ -158,54 +158,16 @@ describe("#68's review round", () => {
     assert.deepEqual((await c.records.incidents()).map(incident => incident.key).sort(), [
       'capture/capture-failed/-',
       'storage/open-failed/-',
+      'storage/write-failed/-',
     ]);
   });
 
-  it('4: the memory fallback drops resolved incidents and finished runs first, and counts what open ones it drops', async () => {
+  it('4: memory holds only storage incidents, so nothing else can be dropped from it: other failed writes are counted', async () => {
     const profile = trustProfile();
-    const { records, clock } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile);
-    /** @param {number} n */
-    const subject = n => `${1730000000000 + n}-${n.toString(36).padStart(9, '0')}`;
-    const limit = FALLBACK_LIMITS.operations;
-    for (let n = 0; n < limit - 2; n++) {
-      await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(n), severity: 'degraded' });
-      clock.advance(1);
-    }
-    await records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
-    clock.advance(1);
-    await records.resolve('sync', []);
-    clock.advance(1);
-    // One past the limit, twice: the operations of the incident that ends resolved go first
-    await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: subject(limit), severity: 'degraded' });
-    clock.advance(1);
-    await records.raise({ providerId: 'backup', faultCode: 'stale-backup', severity: 'data-risk' });
-    const kept = await records.incidents();
-    assert.equal(kept.length, limit);
-    assert.equal(
-      kept.filter(incident => incident.state === 'open').length,
-      limit,
-      'an open sighting was dropped before a resolved incident',
-    );
-    assert.equal(records.dropped().incidents, 0);
-    // Then an open sighting has to go, and it's counted
-    clock.advance(1);
-    await records.raise({ providerId: 'storage', faultCode: 'scan-findings', severity: 'degraded' });
-    assert.equal((await records.incidents()).length, limit);
-    assert.equal(records.dropped().incidents, 1);
-    assert.ok((await records.events()).some(event => event.code === 'trust.fallback-dropped'));
-    // Runs: a running one outlives finished ones
-    await records.putRun({
-      id: hexIds('eeee').next(),
-      commandId: 'retry-open',
-      incidentId: null,
-      state: 'running',
-      outcome: null,
-      startedAt: 0,
-      updatedAt: 0,
-    });
+    const { records } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile);
     const runIds = hexIds('ffff');
     for (let n = 0; n < 60; n++) {
-      await records.putRun({
+      const answer = await records.putRun({
         id: runIds.next(),
         commandId: 'retry-open',
         incidentId: null,
@@ -214,8 +176,13 @@ describe("#68's review round", () => {
         startedAt: n + 1,
         updatedAt: n + 1,
       });
+      assert.equal(answer.recorded, false);
     }
-    assert.ok((await records.runs()).some(run => run.state === 'running'));
+    assert.deepEqual(await records.runs(), []);
+    assert.deepEqual(
+      (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
+      [['storage/write-failed/-', 60]],
+    );
   });
 
   it('5: refused events are counted in memory, and never crowd real events out of the journal', async () => {
@@ -261,7 +228,7 @@ describe("#68's review round", () => {
     for (const providerId of [`p${'x'.repeat(63)}`, `p${'x'.repeat(127)}`]) {
       for (const subjectId of ['00000000-0000-4000-8000-000000000000', `s${'x'.repeat(127)}`]) {
         await records.raise({ providerId, faultCode: 'scan-findings', subjectId, severity: 'degraded' }).then(
-          ({ incident }) => assert.equal(incident.providerId, providerId),
+          ({ incident }) => assert.equal(incident?.providerId, providerId),
           error => {
             // Refused for an input it names, never for the key the inputs made
             assert.ok(error instanceof TypeError);
@@ -278,7 +245,8 @@ describe("#68's review round", () => {
     await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
     await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
     await records.resolve('index', []);
-    clock.advance(BOUNDS.resolvedIncidentAgeMs + 1);
+    // The resolution is ordered after the sighting it follows, a millisecond on
+    clock.advance(BOUNDS.resolvedIncidentAgeMs + 2);
     assert.deepEqual(await records.events(), []);
     assert.deepEqual(await records.incidents(), []);
   });
@@ -294,9 +262,10 @@ describe("#68's review round", () => {
     const up = await recordsOn(database, profile, { clock, prefix: 'bbbb' });
     await aborted;
     const reconciled = (await up.records.events()).filter(event => event.code === 'trust.reconciled');
+    // The held open-failed incident and the failed write, once each
     assert.deepEqual(
       reconciled.map(event => event.fields.count),
-      [1],
+      [2],
     );
     // An incident a remediation is working on stays remediating when a held copy reconciles
     const [incident] = await up.records.incidents();

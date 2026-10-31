@@ -94,8 +94,8 @@ export const receiptSchema = v.strictObject({
 /**
  * An Incident. `key` (provider, fault, subject) makes a repeat update this record, and `ref`
  * is the first 6 characters of `id`, uppercased, for support. `resolvedAt` is set once
- * re-verification passes, and cleared if the fault comes back after it. `dismissedAt` is when
- * it was dismissed, which a later sighting overrides. incidents.js holds the rules.
+ * re-verification passes, and cleared if the fault comes back after it. `dismissChangedAt` is
+ * when it was last dismissed or undismissed. incidents.js holds the rules.
  */
 export const incidentSchema = v.strictObject({
   id: recordId,
@@ -107,7 +107,7 @@ export const incidentSchema = v.strictObject({
   severity: v.picklist(SEVERITIES),
   state: v.picklist(INCIDENT_STATES),
   dismissed: v.boolean(),
-  dismissedAt: v.nullable(timestamp),
+  dismissChangedAt: v.nullable(timestamp),
   firstSeenAt: timestamp,
   lastSeenAt: timestamp,
   resolvedAt: v.nullable(timestamp),
@@ -115,8 +115,9 @@ export const incidentSchema = v.strictObject({
   affected: capabilities,
   preserved: capabilities,
   evidence: evidenceSchema,
-  // The held operations already applied to it, newest last, so a replay never counts twice
-  appliedOps: v.pipe(v.array(recordId), v.maxLength(64)),
+  // The held sightings already replayed into it, with their counts, newest last, so a replay
+  // never counts twice (incidents.js)
+  appliedOps: v.pipe(v.array(v.strictObject({ opId: recordId, count })), v.maxLength(64)),
 });
 
 /** @typedef {v.InferOutput<typeof incidentSchema>} Incident */

@@ -35,6 +35,17 @@ const opened = [];
 after(() => opened.forEach(store => store.close()));
 
 const VERSIONS = Object.freeze({ extension: '1.4.1', browser: null, canvasSchema: 8, trustSchema: 1 });
+const CAP = Object.freeze({
+  providerId: 'capture',
+  faultCode: 'capture-failed',
+  severity: /** @type {const} */ ('capture-risk'),
+});
+
+/**
+ * The capture incident `records` shows
+ * @param {ReturnType<typeof createTrustRecords>} records
+ */
+const captureIn = async records => (await records.incidents()).find(item => item.key === 'capture/capture-failed/-');
 
 /**
  * A legacy record id, as Utils.generateId makes one: a millisecond time, a hyphen, and nine
@@ -105,18 +116,19 @@ describe("#68's second review round", () => {
     assert.equal(held.held, true);
     clock.advance(10);
     await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
-    const [incident] = await records.incidents();
-    assert.equal(incident.state, 'open');
+    const incident = await captureIn(records);
+    assert.equal(incident?.state, 'open');
     const summary = await summaryOf(records, clock);
-    assert.equal(summary.actionRequired, 1);
+    // The capture incident and the failed write
+    assert.equal(summary.actionRequired, 2);
     assert.equal(summary.capture, 'at-risk');
     // and a fresh context agrees, counting it once
     const fresh = databaseOn(profile);
     opened.push(fresh);
     const other = await recordsOn(fresh, profile, { clock, prefix: 'bbbb' });
-    const [seen] = await other.records.incidents();
-    assert.equal(seen.state, 'open');
-    assert.equal(seen.occurrences, 2);
+    const seen = await captureIn(other.records);
+    assert.equal(seen?.state, 'open');
+    assert.equal(seen?.occurrences, 2);
   });
 
   it('S1: each occurrence counts once, before, during, and after reconciling', async () => {
@@ -127,32 +139,32 @@ describe("#68's second review round", () => {
     await records.raise({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' });
     clock.advance(1);
     await records.raise({ providerId: 'capture', faultCode: 'capture-failed', severity: 'capture-risk' });
-    assert.equal((await records.incidents())[0].occurrences, 2);
+    assert.equal((await captureIn(records))?.occurrences, 2);
     await records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
-    assert.equal((await records.incidents())[0].occurrences, 2);
+    assert.equal((await captureIn(records))?.occurrences, 2);
     const fresh = databaseOn(profile);
     opened.push(fresh);
     const other = await recordsOn(fresh, profile, { clock, prefix: 'bbbb' });
-    assert.equal((await other.records.incidents())[0].occurrences, 2);
+    assert.equal((await captureIn(other.records))?.occurrences, 2);
   });
 
   it('S2: a held sighting older than a later resolution only adds an occurrence', async () => {
     const profile = trustProfile();
     const { store, failNext } = flakyDatabase(profile);
     const { records, clock } = await recordsOn(store, profile);
-    await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
+    await records.raise(CAP);
     clock.advance(1000);
     failNext(1);
-    await records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded' });
+    await records.raise(CAP);
     clock.advance(1000);
-    await records.resolve('index', []);
-    const [incident] = await records.incidents();
-    assert.equal(incident.state, 'resolved');
-    assert.equal(incident.resolvedAt, clock.now());
-    assert.equal(incident.occurrences, 2);
+    await records.resolve('capture', []);
+    const incident = await captureIn(records);
+    assert.equal(incident?.state, 'resolved');
+    assert.equal(incident?.resolvedAt, clock.now());
+    assert.equal(incident?.occurrences, 2);
   });
 
-  it('S3: a held dismissal older than a newer sighting is dropped', async () => {
+  it("S3: a dismissal that fails isn't held, says so, and can't hide a newer sighting", async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const { store, failNext } = flakyDatabase(profile);
@@ -160,7 +172,7 @@ describe("#68's second review round", () => {
     const { incident } = await a.records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
     clock.advance(10);
     failNext(1);
-    await a.records.dismiss(incident.id, true);
+    assert.equal(await a.records.dismiss(/** @type {any} */ (incident).id, true), null);
     clock.advance(10);
     const other = databaseOn(profile);
     opened.push(other);
@@ -168,10 +180,11 @@ describe("#68's second review round", () => {
     await b.records.raise({ providerId: 'sync', faultCode: 'conflict', severity: 'data-risk' });
     clock.advance(10);
     await a.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
-    const [after] = await a.records.incidents();
-    assert.equal(after.occurrences, 2);
-    assert.equal(after.dismissed, false);
-    assert.equal((await summaryOf(a.records, clock)).actionRequired, 1);
+    const after = (await a.records.incidents()).find(item => item.key === 'sync/conflict/-');
+    assert.equal(after?.occurrences, 2);
+    assert.equal(after?.dismissed, false);
+    // The conflict and the failed write
+    assert.equal((await summaryOf(a.records, clock)).actionRequired, 2);
   });
 
   it('S4: no provider, remediation, subject, or command id holds free text', async () => {
@@ -250,30 +263,22 @@ describe("#68's second review round", () => {
     const third = databaseOn(profile);
     opened.push(third);
     const up = await recordsOn(third, profile, { clock, prefix: 'dddd' });
-    const [incident] = await up.records.incidents();
-    assert.equal(incident.key, 'storage/quota/-');
-    assert.equal(incident.occurrences, 1);
+    const incident = (await up.records.incidents()).find(item => item.key === 'storage/quota/-');
+    assert.equal(incident?.occurrences, 1);
   });
 
-  it('S6: dropping sightings in memory keeps one counting event, and real events stay', async () => {
+  it('S6: failed writes while the store is broken are one counted incident, never a flood', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const { records } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock });
-    const journal = createDiagnosticJournal({ records, clock });
-    journal.event('capture.failed', { surface: 'worker-internal', errorCode: 'quota' });
-    await journal.flush();
     for (let n = 0; n < 260; n++) {
       await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: legacyId(n), severity: 'degraded' });
       clock.advance(1);
     }
-    const events = await records.events();
-    assert.ok(
-      events.some(event => event.code === 'capture.failed'),
-      'dropped sightings pushed a real event out',
+    assert.deepEqual(
+      (await records.incidents()).map(incident => [incident.key, incident.occurrences]),
+      [['storage/write-failed/-', 260]],
     );
-    assert.equal(records.dropped().events, 0);
-    assert.ok(events.filter(event => event.code === 'trust.fallback-dropped').length <= 1);
-    assert.ok(records.dropped().incidents > 0);
   });
 
   it('N1: a connection Chrome closes opens again on the next write', async () => {
@@ -286,7 +291,7 @@ describe("#68's second review round", () => {
     assert.equal(raised.held, false, 'the records stayed in memory after a closed connection');
   });
 
-  it('N2: a sighting the settings copy still holds is not counted as dropped', async () => {
+  it('N2: a held storage incident still shows, however many other writes fail after it', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const { records } = await recordsOn(createTrustDatabase({ indexedDB: brokenFactory }), profile, { clock });
@@ -296,12 +301,9 @@ describe("#68's second review round", () => {
       await records.raise({ providerId: 'index', faultCode: 'lagging', subjectId: legacyId(n), severity: 'degraded' });
       clock.advance(1);
     }
-    assert.equal(records.dropped().incidents, 0);
-    assert.equal(
-      (await records.incidents()).filter(incident => incident.key === 'storage/quota/-').length,
-      1,
-      'the copy still shows the storage incident',
-    );
+    const shown = await records.incidents();
+    assert.equal(shown.filter(incident => incident.key === 'storage/quota/-').length, 1);
+    assert.equal(shown.find(incident => incident.key === 'storage/write-failed/-')?.occurrences, 201);
   });
 
   it("N4: a held sighting older than the stored one adds an occurrence, and leaves the newer one's fields", async () => {
@@ -309,27 +311,21 @@ describe("#68's second review round", () => {
     const clock = manualClock();
     const { store, failNext } = flakyDatabase(profile);
     const a = await recordsOn(store, profile, { clock, prefix: 'aaaa' });
-    await a.records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded', evidence: { lag: 1 } });
+    await a.records.raise({ ...CAP, evidence: { lag: 1 } });
     clock.advance(10);
     failNext(1);
-    await a.records.raise({ providerId: 'index', faultCode: 'lagging', severity: 'degraded', evidence: { lag: 2 } });
+    await a.records.raise({ ...CAP, evidence: { lag: 2 } });
     clock.advance(10);
     const other = databaseOn(profile);
     opened.push(other);
     const b = await recordsOn(other, profile, { clock, prefix: 'bbbb' });
-    await b.records.raise({
-      providerId: 'index',
-      faultCode: 'lagging',
-      severity: 'degraded',
-      affected: ['search'],
-      evidence: { lag: 3 },
-    });
+    await b.records.raise({ ...CAP, affected: ['search'], evidence: { lag: 3 } });
     clock.advance(10);
     await a.records.append({ at: clock.now(), code: 'trust.reconciled', fields: { count: 0 } });
-    const [incident] = await a.records.incidents();
-    assert.equal(incident.occurrences, 3);
-    assert.deepEqual(incident.evidence, { lag: 3 });
-    assert.deepEqual(incident.affected, ['search']);
-    assert.equal(incident.lastSeenAt, clock.now() - 10);
+    const incident = await captureIn(a.records);
+    assert.equal(incident?.occurrences, 3);
+    assert.deepEqual(incident?.evidence, { lag: 3 });
+    assert.deepEqual(incident?.affected, ['search']);
+    assert.equal(incident?.lastSeenAt, clock.now() - 10);
   });
 });

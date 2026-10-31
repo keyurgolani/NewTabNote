@@ -88,10 +88,10 @@ describe('NewTabNoteTrust (#20 slice 1, "Records")', () => {
     assert.equal(records.failureCode(), 'quota');
     // The storage incident survives the context
     const stored = /** @type {any} */ (profile.settings.items.get('trust.lastStorageIncident'));
-    assert.deepEqual(
-      stored.ops.map((/** @type {any} */ op) => op.key),
-      ['storage/quota/-'],
-    );
+    assert.deepEqual(stored.entries.map((/** @type {any} */ entry) => entry.key).sort(), [
+      'storage/quota/-',
+      'storage/write-failed/-',
+    ]);
     // and nothing committed
     assert.deepEqual(JSON.parse(await dumpTrustDatabase(profile.real)).incidents, []);
     // until the next open reconciles it
@@ -99,10 +99,10 @@ describe('NewTabNoteTrust (#20 slice 1, "Records")', () => {
     opened.push(again);
     const second = await openRecords(again, profile);
     assert.equal(second.opened.ok, true);
-    assert.deepEqual(
-      (await second.records.incidents()).map(incident => incident.key),
-      ['storage/quota/-'],
-    );
+    assert.deepEqual((await second.records.incidents()).map(incident => incident.key).sort(), [
+      'storage/quota/-',
+      'storage/write-failed/-',
+    ]);
     assert.equal(profile.settings.items.get('trust.lastStorageIncident'), null);
   });
 
