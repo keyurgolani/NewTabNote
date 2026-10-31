@@ -11,7 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { expect, launchExtension, resolveDist } = require('../harness');
+const { expect, launchExtension, resolveDist, builtFiles } = require('../harness');
 
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
@@ -169,21 +169,27 @@ async function withFreshProfile({ playwright, headless }, testInfo, body, { dist
 }
 
 /**
- * Run `body` with a session on a copy of the build edited by `edits`, which maps each file
- * to a function from its text to the text to write. For the self-tests that check a spec
- * fails when the build does the wrong thing. An edit that changes nothing throws, so a
- * build that no longer has the code a self-test edits fails it instead of passing it.
+ * Run `body` with a session on a copy of the build edited by `edits`, which maps each file of
+ * the sources to a function from its text to the text to write: a module the bundler folded
+ * into chunks in each chunk that holds it (dist-report/modules.json). For the self-tests that
+ * check a spec fails when the build does the wrong thing. An edit that changes nothing in a
+ * file throws, so a build that no longer has the code a self-test edits fails it instead of
+ * passing it.
  */
 async function withEditedBuild({ playwright, headless }, testInfo, edits, body) {
   const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-edited-'));
   try {
     fs.cpSync(resolveDist(), dist, { recursive: true });
     for (const [file, edit] of Object.entries(edits)) {
-      const target = path.join(dist, file);
-      const before = fs.readFileSync(target, 'utf8');
-      const after = edit(before);
-      if (after === before) throw new Error(`The edit to ${file} changed nothing; update the self-test that makes it`);
-      fs.writeFileSync(target, after);
+      const holders = builtFiles(resolveDist(), file);
+      if (holders.length === 0) throw new Error(`The build holds no ${file}; update the self-test that edits it`);
+      for (const built of holders) {
+        const target = path.join(dist, built);
+        const before = fs.readFileSync(target, 'utf8');
+        const after = edit(before);
+        if (after === before) throw new Error(`The edit to ${file} changed nothing in ${built}; update the self-test that makes it`);
+        fs.writeFileSync(target, after);
+      }
     }
     await withFreshProfile({ playwright, headless }, testInfo, body, { dist });
   } finally {

@@ -6,18 +6,22 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { test, expect, launchExtension, resolveDist } = require('./harness');
+const { test, expect, launchExtension, resolveDist, builtFiles } = require('./harness');
 
 /**
- * Copy the build to a temp dir and edit it: `edits` maps each file to a function from its
- * text (empty for a new file) to the text to write
+ * Copy the build to a temp dir and edit it: `edits` maps each file of the sources to a function
+ * from its text (empty for a new file) to the text to write. A module the bundler folded into
+ * chunks is edited in each chunk that holds it (dist-report/modules.json).
  */
 function editedBuild(edits) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-edited-'));
   fs.cpSync(resolveDist(), dir, { recursive: true });
   for (const [file, edit] of Object.entries(edits)) {
-    const target = path.join(dir, file);
-    fs.writeFileSync(target, edit(fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : ''));
+    const holders = builtFiles(resolveDist(), file);
+    for (const built of holders.length > 0 ? holders : [file]) {
+      const target = path.join(dir, built);
+      fs.writeFileSync(target, edit(fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : ''));
+    }
   }
   return dir;
 }
@@ -50,7 +54,8 @@ chrome.runtime.onMessage.addListener(message => {
 
 for (const [title, edits, thrown] of [
   ['throws at the top level', { 'js/background.js': text => `${text}\nthrow new Error('self-test: background.js throws');\n` }, 'self-test: background.js throws'],
-  // The module worker imports storage.js statically, so what it throws stops the worker
+  // The worker's one module holds storage.js, so what it throws stops the worker; the pages'
+  // chunks that hold it run it with a window
   ['loses storage.js', { 'js/storage.js': text => `if (typeof window === 'undefined') throw new Error('self-test: storage.js throws');\n${text}` }, 'self-test: storage.js throws'],
 ]) {
   test(`fails the launch when the worker ${title} while starting`, async ({ playwright, headless }) => {

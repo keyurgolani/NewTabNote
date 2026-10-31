@@ -1,12 +1,19 @@
 /**
  * #20 slice 2 in Chromium. The permissions and destinations provider: its check, run in an
  * extension page against Chrome's own chrome.permissions.getAll() and the installed manifest,
- * verifies, and the receipt runCheck makes from it is one NewTabNoteTrust's schema takes. The
- * page loads the build's own js/trust/, which ships since slice 1b, and the legacy secret
- * reader leaves no database behind.
+ * verifies, and the receipt runCheck makes from it is one NewTabNoteTrust's schema takes. And
+ * the legacy secret reader leaves no database behind.
+ *
+ * Since #27 slice 2 the bundler ships only what an entry imports, folded into chunks, and no
+ * entry imports the providers or the legacy secret reader until #20 slice 4 wires them. Until
+ * then the page imports them from the sources, which the harness copies into this spec's
+ * extension copy at their own paths: js/trust/, js/kernel/, and Valibot's build. Once slice 4
+ * wires them, the spec goes back to the shipped bundle.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+
+test.use({ extensionSources: ['js/trust/', 'js/kernel/', 'js/lib/valibot/'] });
 
 /**
  * In the page: the permissions provider's check, run into a receipt against chrome.permissions

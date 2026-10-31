@@ -1,0 +1,12 @@
+{
+  "rule": "the service worker awaits at its top level, which stops it before its listeners register",
+  "expect": [
+    "background/top-level-await"
+  ],
+  "edits": [
+    {
+      "file": "js/background.js",
+      "append": "\nawait Promise.resolve();\n"
+    }
+  ]
+}

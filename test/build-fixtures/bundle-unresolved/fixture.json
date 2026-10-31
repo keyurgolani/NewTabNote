@@ -1,0 +1,12 @@
+{
+  "rule": "a module imports a file that isn't there",
+  "expect": [
+    "build/bundle"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "prepend": "import './ntn-fixture-missing.js';\n"
+    }
+  ]
+}

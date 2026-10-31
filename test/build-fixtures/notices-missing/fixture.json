@@ -5,7 +5,7 @@
   ],
   "edits": [
     {
-      "file": "scripts/build.js",
+      "file": "scripts/build/vite-config.js",
       "replace": "  'THIRD_PARTY_NOTICES',\n",
       "with": ""
     }

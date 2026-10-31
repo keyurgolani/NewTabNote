@@ -1,0 +1,12 @@
+{
+  "rule": "a stylesheet has a pseudo-class lightningcss doesn't know, which it reports only as a warning: a CSS warning fails the build as an error does (#89's review)",
+  "expect": [
+    "build/css"
+  ],
+  "edits": [
+    {
+      "file": "css/premium-chat.css",
+      "append": "\n.ntn-fixture:ntn-unknown { color: red; }\n"
+    }
+  ]
+}

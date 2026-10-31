@@ -5,14 +5,18 @@
  * incident. Unpacked source loads always ran it. Now the worker starts, writes each note's
  * text into its search entry, and the command palette finds a note by a word only in its
  * body, as it does from source. A note's preview holds its first line only, so the word is
- * on the second.
+ * on the second. Since #27 slice 2 the indexer is a module worker the bundler builds as a chunk
+ * of its own, which build-info.json's chunks names.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { test, expect, expectNoUncaught, launchExtension, resolveDist } = require('./harness');
+const { test, expect, expectNoUncaught, launchExtension, resolveDist, chunkFile } = require('./harness');
 const driver = require('./characterization/driver');
+
+/** The indexer's chunk in the build under test, such as assets/indexer-<hash>.js */
+const indexerChunk = () => chunkFile(resolveDist(), 'indexer');
 
 const NOTES = [
   { name: 'Groceries', blocks: [{ type: 'text', content: 'Weekly shop' }, { type: 'text', content: 'Buy saffron and limes' }] },
@@ -91,18 +95,19 @@ test('the packaged build starts the search indexer, and a word only in a note\'s
   expect(await indexedContent(page, 'Errands')).toContain('library');
   await expect.poll(() => paletteNotes(page, 'saffron')).toEqual(['Groceries']);
   expect((await trustRecords(page)).filter(record => /indexer[.-]start-failed/.test(record))).toEqual([]);
-  expect(extension.log()).not.toMatch(/request failed: GET chrome-extension:\/\/[^ ]+\/js\/workers\/indexer\.js/);
+  expect(extension.log()).not.toContain(`request failed: GET chrome-extension://${extension.extensionId}/${indexerChunk()}`);
+  expect(extension.log()).not.toMatch(/request failed: GET chrome-extension:\/\/[^ ]+\/(js\/workers|assets)\/indexer/);
   await expectNoUncaught(extension, page);
 });
 
-// The spec's own check: a package without the worker file, as every one before #27, fails
+// The spec's own check: a package without the worker's file, as every one before #27, fails
 // it, and journals indexer.start-failed on the new tab
-test('self-test: without js/workers/indexer.js the body word isn\'t indexed, and the start failure is journaled', async ({ playwright, headless }, testInfo) => {
+test('self-test: without the indexer\'s chunk the body word isn\'t indexed, and the start failure is journaled', async ({ playwright, headless }, testInfo) => {
   const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-e2e-no-indexer-'));
   let extension;
   try {
     fs.cpSync(resolveDist(), dist, { recursive: true });
-    fs.rmSync(path.join(dist, 'js', 'workers', 'indexer.js'));
+    fs.rmSync(path.join(dist, indexerChunk()));
     extension = await launchExtension({ dist, chromium: playwright.chromium, headless });
     await extension.seedOnboarded();
     await driver.seedNotes(extension, NOTES);

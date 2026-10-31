@@ -20,12 +20,19 @@
     "css/editor.css": {
       "color-literal": 134,
       "theme-branching": 7,
-      "undefined-var": 8,
+      "undefined-var": 6,
       "hard-shadow": 1,
       "one-sided-border": 6,
       "transition-all": 47,
       "px-font-size": 176,
       "alias-use": 604
+    },
+    "css/popup.css": {
+      "color-literal": 54,
+      "theme-branching": 2,
+      "transition-all": 2,
+      "px-font-size": 16,
+      "alias-use": 37
     },
     "css/premium-chat.css": {
       "color-literal": 93,
@@ -34,8 +41,14 @@
       "px-font-size": 23,
       "alias-use": 101
     },
+    "css/sidepanel.css": {
+      "color-literal": 21,
+      "theme-branching": 1,
+      "px-font-size": 13,
+      "alias-use": 33
+    },
     "css/stats.css": {
-      "undefined-var": 4,
+      "undefined-var": 3,
       "gradient-text": 1,
       "transition-all": 1,
       "alias-use": 14
@@ -97,21 +110,6 @@
     },
     "newtab.html": {
       "style-attribute": 2
-    },
-    "popup.html": {
-      "color-literal": 54,
-      "theme-branching": 2,
-      "inline-style-block": 1,
-      "transition-all": 2,
-      "px-font-size": 16,
-      "alias-use": 37
-    },
-    "sidepanel.html": {
-      "color-literal": 21,
-      "theme-branching": 1,
-      "inline-style-block": 1,
-      "px-font-size": 13,
-      "alias-use": 33
     }
   }
 }

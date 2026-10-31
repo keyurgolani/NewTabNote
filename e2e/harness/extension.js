@@ -443,8 +443,11 @@ const OFFLINE_ARGS = ['--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=
  *             resolution, so nothing outside the extension loads, and no extension request
  *             passes through a route here, which would cost each one a round trip to this
  *             process (the performance probe's timing depends on that)
+ *   sources   repository paths, files or directories, to copy into the extension copy at their
+ *             own paths, for a spec that imports source modules the bundle doesn't ship there
+ *             (#27 slice 2; default none)
  */
-async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium, network = 'route' } = {}) {
+async function launchExtension({ dist = resolveDist(), headless = true, chromium = require('@playwright/test').chromium, network = 'route', sources = [] } = {}) {
   if (network !== 'route' && network !== 'offline') throw new Error(`launchExtension: network is 'route' or 'offline', not ${JSON.stringify(network)}`);
   if (!fs.existsSync(path.join(dist, 'manifest.json'))) {
     throw new Error(`No built extension at ${dist} (no manifest.json). npm run test:extension tests a build and `
@@ -456,6 +459,7 @@ async function launchExtension({ dist = resolveDist(), headless = true, chromium
   let context;
   try {
     prepareExtension(dist, extensionDir);
+    for (const source of sources) fs.cpSync(path.join(REPO_ROOT, source), path.join(extensionDir, source), { recursive: true });
     context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
       // Branded Chrome ignores --load-extension since Chrome 137, and the headless shell
       // can't run extensions, so headless runs use Playwright's own Chromium build

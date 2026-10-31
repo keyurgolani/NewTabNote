@@ -1,0 +1,12 @@
+{
+  "rule": "first-party code starts a module worker from a specifier built at run time, which the bundler can't build and the closure check can't follow",
+  "expect": [
+    "closure/non-literal"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "append": "\nconst ntnFixtureName = location.hash.slice(1);\nwindow.ntnFixtureWorker = new Worker(new URL(ntnFixtureName, import.meta.url), { type: 'module' });\n"
+    }
+  ]
+}

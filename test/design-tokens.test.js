@@ -9,7 +9,8 @@ const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const CleanCSS = require('clean-css');
+// Vite's own CSS minifier: vite 8.3.5 depends on lightningcss, which the lockfile pins
+const { transform: lightningcss } = require('lightningcss');
 const generator = require('../scripts/build-design-tokens.js');
 const build = require('../scripts/build.js');
 const { parse, walk } = require('../scripts/css-parser.js');
@@ -451,7 +452,7 @@ function attributeCombinations() {
   return out;
 }
 
-// Whitespace around commas carries no meaning in these values; CleanCSS drops it
+// Whitespace around commas carries no meaning in these values; lightningcss drops it
 const compact = value => (value === undefined ? value : value.replace(/\s*,\s*/g, ',').replace(/\s+/g, ' ').trim());
 
 function assertCascadeMatches(cssText, label, { normalize = value => value, data = DATA } = {}) {
@@ -507,30 +508,49 @@ describe('the generated CSS applies each variant', () => {
 });
 
 describe('the build\'s CSS minifier keeps the token output intact', () => {
+  /** lightningcss as the bundler runs it on a stylesheet: minifying, for build.cssTarget */
+  const minifyCss = (code, filename) => {
+    const result = lightningcss({ filename, code: Buffer.from(code), minify: true, targets: build.lightningcssTargets() });
+    return { code: Buffer.from(result.code).toString('utf8'), warnings: result.warnings };
+  };
+  // lightningcss writes each value in its shortest form (#ffffff as #fff, 0.55 as .55, 180ms as
+  // .18s), so a value compares in that form: the same value minified on its own
+  const canonical = new Map();
+  const canon = (property, value) => {
+    if (value === undefined) return value;
+    const key = `${property}\0${value}`;
+    if (!canonical.has(key)) {
+      const { code } = minifyCss(`a{${property}:${value}}`, 'value.css');
+      canonical.set(key, code.replace(/^a\{[^:]+:/, '').replace(/\}$/, ''));
+    }
+    return canonical.get(key);
+  };
   let minified;
   before(() => {
-    // CleanCSS level 2 with scripts/build.js's options, as the build runs a CSS_FILES
-    // entry that isn't in CSS_LEVEL_1
-    assert.ok(!build.CSS_LEVEL_1.includes(generator.CSS_PATH));
-    const result = new CleanCSS(build.CLEANCSS_OPTIONS).minify(committedCss);
-    assert.deepEqual(result.errors, []);
+    const result = minifyCss(committedCss, generator.CSS_PATH);
     assert.deepEqual(result.warnings, []);
-    minified = result.styles;
+    minified = result.code;
   });
+
+  // A media query in the form lightningcss writes it
+  const canonMedia = (prelude) => {
+    const { code } = minifyCss(`@media ${prelude}{a{color:red}}`, 'media.css');
+    return code.replace(/^@media ?/, '').replace(/\{a\{color:red\}\}$/, '');
+  };
 
   function inventory(cssText) {
     const out = { properties: {}, fontFaces: [], media: new Set(), declarations: new Set() };
     walk(parse(cssText), (node, ancestors) => {
-      const context = ancestors.filter(at => at.name === 'media').map(at => at.prelude.replace(/\s+/g, '')).join(' & ');
+      const context = ancestors.filter(at => at.name === 'media').map(at => canonMedia(at.prelude)).join(' & ');
       if (node.type === 'at-rule' && node.name === 'property') {
-        out.properties[node.prelude] = node.declarations.map(d => `${d.property}:${d.value.replace(/'/g, '"')}`).join(';');
+        out.properties[node.prelude] = node.declarations.map(d => `${d.property}:${canon(d.property, d.value)}`).join(';');
       }
-      if (node.type === 'at-rule' && node.name === 'font-face') out.fontFaces.push(node.declarations.map(d => `${d.property}:${d.value}`).join(';'));
-      if (node.type === 'at-rule' && node.name === 'media') out.media.add(node.prelude.replace(/\s+/g, ''));
+      if (node.type === 'at-rule' && node.name === 'font-face') out.fontFaces.push(node.declarations.map(d => `${d.property}:${canon(d.property, d.value)}`).join(';'));
+      if (node.type === 'at-rule' && node.name === 'media') out.media.add(canonMedia(node.prelude));
       if (node.type === 'rule') {
         for (const selector of node.prelude.split(',')) {
           for (const d of node.declarations) {
-            out.declarations.add(`${context} ${selector.replace(/"/g, '').trim()} ${d.property}:${compact(d.value)}${d.important ? '!' : ''}`);
+            out.declarations.add(`${context} ${selector.replace(/"/g, '').trim()} ${d.property}:${canon(d.property, compact(d.value))}${d.important ? '!' : ''}`);
           }
         }
       }
@@ -549,7 +569,7 @@ describe('the build\'s CSS minifier keeps the token output intact', () => {
   });
 
   it('applies every variant exactly as the source does', () => {
-    assertCascadeMatches(minified, 'the minified CSS', { normalize: compact });
+    assertCascadeMatches(minified, 'the minified CSS', { normalize: (value) => canon('--token', compact(value)) });
   });
 });
 
