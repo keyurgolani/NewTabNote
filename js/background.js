@@ -177,7 +177,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // points. The message carries nothing; the sweep goes by the tombstones the delete left, and
   // only the status goes back.
   if (request && request.type === PURGE_MESSAGE) {
-    if (!sender || sender.id !== chrome.runtime.id) return false;
+    if (!sender || sender.id !== workerGlobal.chrome.runtime.id) return false;
     kernel.purge.request().then(
       outcome => sendResponse({ status: outcome ? outcome.status : 'skipped' }),
       () => sendResponse({ status: 'failed' }),
