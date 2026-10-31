@@ -151,6 +151,7 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
   const READ_FILES = [
     ...FILES,
     'js/theme-engine.js',
+    'js/ai-prompt-templates.js',
     'js/controllers/sidebar-controller.js',
     'js/controllers/ai-chat-controller.js',
     'js/search.js',
@@ -170,6 +171,21 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
   const SIDEBAR_STEPS = [
     'updateSidebarState', 'applySidebarWidth', 'applySidebarViewMode', '_bindSidebarListeners', 'setupCalendar',
     'setupSidebarResize', 'setupSidebarViewToggle', 'setupNoteContextMenu', '_bindBulkActions', '_bindSidebarDropHandlers',
+  ];
+  const AI_SETUP_STEPS = [
+    'loadChatHistory', 'setupAISidebarResize', 'setupGlobalChat', 'setupLLMSettings', 'setupAIPromptTemplateSettings',
+    'renderAIPromptSuggestions', 'updateAISidebarState', '_setupAccessibility',
+  ];
+  // Settings' controls as newtab.html has them, which updateSettingsUI fills in
+  const SETTINGS_CONTROLS = [
+    { id: 'theme-select', tag: 'select' }, { id: 'font-select', tag: 'select' }, { id: 'width-select', tag: 'select' },
+    { id: 'auto-backup-toggle', tag: 'input' }, { id: 'backup-frequency-select', tag: 'select' },
+    { id: 'trash-retention-select', tag: 'select' }, { id: 'daily-note-template-select', tag: 'select' },
+  ];
+  // What AI chat starts with when no prompt templates are stored (js/ai-prompt-templates.js)
+  const DEFAULT_PROMPT_TEMPLATES = [
+    'note-summarize', 'note-expand', 'note-title', 'note-takeaways', 'note-questions',
+    'global-deadlines', 'global-meetings', 'global-tasks', 'global-find',
   ];
 
   /** Settings as App makes it, on `settings` unless given */
@@ -209,6 +225,42 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
       await chat.loadChatHistory();
       return plain([chat.globalChatHistory, chat.globalChatMessages]);
     }, [[{ role: 'user', content: 'another' }], [{ content: 'another', type: 'user' }]], [[], []], 2],
+    ["AI chat's panel width", { aiSidebarWidth: 410 }, async (env) => {
+      env.document.stub(['ai-sidebar']);
+      const chat = chatOf(env);
+      for (const step of AI_SETUP_STEPS) chat[step] = async () => {};
+      await chat.setupAI();
+      return chat.aiSidebarWidth;
+    }, 410, 360],
+    ["AI chat's prompt templates", {
+      aiPromptTemplates: [{ id: 'mine', label: 'Mine', prompt: 'My prompt', scope: 'note', behavior: 'send' }],
+    }, async (env) => {
+      const chat = chatOf(env);
+      chat.renderAIPromptSuggestions = () => {};
+      await chat.loadAIPromptTemplates();
+      return plain(chat.aiPromptTemplates.map((template) => template.id));
+    }, ['mine'], DEFAULT_PROMPT_TEMPLATES],
+    ['what Settings shows', {
+      theme: 'dark', font: 'serif', width: 'wide', autoBackupEnabled: true, autoBackupFrequency: 3, trashRetention: 7,
+      dailyNoteTemplate: 'T',
+    }, async (env) => {
+      const controls = env.document.stub(SETTINGS_CONTROLS);
+      const settings = settingsOf(env);
+      settings.updateThemePreview = () => {};
+      settings.updateNotesList = async () => {};
+      await settings.updateSettingsUI();
+      const template = controls['daily-note-template-select'].children.find((option) => option.selected);
+      return {
+        theme: controls['theme-select'].value,
+        font: controls['font-select'].value,
+        width: controls['width-select'].value,
+        autoBackup: controls['auto-backup-toggle'].checked,
+        frequency: controls['backup-frequency-select'].value,
+        retention: controls['trash-retention-select'].value,
+        template: template ? template.value : '',
+      };
+    }, { theme: 'dark', font: 'serif', width: 'wide', autoBackup: true, frequency: '3', retention: '7', template: 'T' },
+    { theme: 'system', font: 'default', width: 'default', autoBackup: false, frequency: '7', retention: '30', template: '' }],
     ["Settings' font", { font: 'serif' }, async (env) => {
       await settingsOf(env).applyFont();
       return env.document.documentElement.dataset.font;
@@ -254,13 +306,15 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
   const READ_KEYS = [...new Set(READS.flatMap(([, stored]) => Object.keys(stored)))];
 
   /**
-   * A new tab whose chrome.storage holds `stored` and nothing else of what these reads read:
-   * startup stored some of 1.4.x's first-run values, which go. With `failing`, chrome.storage's
-   * read number `failingRead` from now fails, the next one by default.
+   * A new tab with a note and a template, whose chrome.storage holds `stored` and nothing else
+   * of what these reads read: startup stored some of 1.4.x's first-run values, which go. With
+   * `failing`, chrome.storage's read number `failingRead` from now fails, the next one by default.
    */
   async function tabWith(stored, { failing = false, failingRead = 1 } = {}) {
     const env = createLegacyEnv({ document: new FakeDocument() });
-    await createDatabase(env.indexedDB, { records: { canvases: [note('A', { name: 'Alpha' })] } });
+    await createDatabase(env.indexedDB, {
+      records: { canvases: [note('A', { name: 'Alpha' }), note('T', { name: 'Morning', isTemplate: true })] },
+    });
     env.load(...READ_FILES);
     await env.get('Storage').init();
     await startEditorClient(env);
