@@ -179,6 +179,8 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
   const pending = new Set();
   /** @type {TrustHost | null} */
   let hosted = null;
+  /** @type {Promise<void>} */
+  let marking = Promise.resolve();
   const hostOnce = () => {
     if (!hosted) hosted = host();
     return hosted;
@@ -203,15 +205,19 @@ export function createFailureEvents({ surface, host = browserTrustHost }) {
    * @param {string} site
    * @param {boolean} open
    */
-  const mark = async (site, open) => {
-    try {
-      const now = await marked();
-      if (now.includes(site) === open) return;
-      const next = open ? [...now, site] : now.filter(item => item !== site);
-      await hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: next });
-    } catch {
-      // A lost mark errs toward an incident left open
-    }
+  const mark = (site, open) => {
+    // One at a time in this context, so a burst of failures at one site writes the mark once
+    marking = marking.then(async () => {
+      try {
+        const now = await marked();
+        if (now.includes(site) === open) return;
+        const next = open ? [...now, site] : now.filter(item => item !== site);
+        await hostOnce().settings.set({ [SETTINGS_KEYS.openSites]: next });
+      } catch {
+        // A lost mark errs toward an incident left open
+      }
+    });
+    return marking;
   };
 
   /**
