@@ -121,6 +121,34 @@ describe('how the closure check follows paths', () => {
     }
   });
 
+  it('fails on a path built at run time in first-party code, for every kind it follows, and leaves vendored code to its records', () => {
+    // #89's review: each of these named a missing file and passed, and terser folds only some
+    // of the constants into literals, so a --dev build shipped them all. Each line and the
+    // text the problem points at.
+    const cases = [
+      ['const n = "w"; new Worker(`js/${n}.js`);', '`js/'],
+      ["const u = 'js/w.js'; new Worker(u);", 'u);'],
+      ["new Worker(new URL('js/w.js', import.meta.url));", 'new URL'],
+      ["const s = 'w.js'; importScripts(s);", 's);'],
+      ["const m = './gone.js'; import(m);", 'm);'],
+      ["const page = 'gone.html'; chrome.tabs.create({ url: page });", 'page }'],
+      ["const url = 'gone.html'; chrome.tabs.create({ url });", 'url }'],
+      ["const icon = 'gone.png'; chrome.notifications.create({ iconUrl: icon });", 'icon }'],
+      ["const iconUrl = 'gone.png'; chrome.notifications.create({ iconUrl });", 'iconUrl }'],
+    ];
+    const pkg = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script><script src="js/lib/vendored.js"></script>',
+      'js/a.js': cases.map(([line]) => line).join('\n'),
+      // A vendored library's own run-time paths are its record's business, not the closure's
+      'js/lib/vendored.js': "var u = base + 'w.js'; new Worker(u); import(u); importScripts(u);",
+    });
+    const { problems } = checkClosure(pkg, { staticAssets: NO_ASSETS, vendored: new Set(['js/lib/vendored.js']) });
+    const expected = cases.map(([line, at], i) => `closure/non-literal js/a.js:${i + 1}:${line.indexOf(at) + 1}`);
+    assert.deepEqual(found(problems), [...expected].sort());
+    assert.ok(problems.every(({ message }) => /built at run time/.test(message)), problems.map(({ message }) => message).join('\n'));
+  });
+
   it('resolves a worker from the page that runs the script, and importScripts from the worker', () => {
     // From js/a.js on a root page, 'w.js' is the root's w.js, not js/w.js
     const pkg = packageOf({

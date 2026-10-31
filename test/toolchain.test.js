@@ -51,7 +51,8 @@ describe('the pinned toolchain', () => {
 
   it('runs tools from node_modules/.bin, never npx, which can fetch', () => {
     for (const [name, script] of Object.entries(pkg.scripts)) assert.doesNotMatch(script, /\bnpx\b/, name);
-    for (const file of ['scripts/build.js', 'scripts/package.js', 'scripts/check-notices.js', ...fs.readdirSync(path.join(ROOT, 'scripts/build')).map((name) => `scripts/build/${name}`)]) {
+    const workflows = fs.readdirSync(path.join(ROOT, '.github/workflows')).map((name) => `.github/workflows/${name}`);
+    for (const file of ['scripts/build.js', 'scripts/package.js', 'scripts/check-notices.js', ...fs.readdirSync(path.join(ROOT, 'scripts/build')).map((name) => `scripts/build/${name}`), ...workflows]) {
       assert.doesNotMatch(read(file), /\bnpx\s/, file);
     }
     assert.equal(binPath(ROOT, 'tsc'), path.join(ROOT, 'node_modules', '.bin', 'tsc'));
