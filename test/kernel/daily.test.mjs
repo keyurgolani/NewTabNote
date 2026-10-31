@@ -255,6 +255,78 @@ describe('who holds a date (assignDailyKeys, #17 Q1 and Q7)', () => {
   });
 });
 
+describe('a duplicate logical 3 marked, in a later lookup', () => {
+  /**
+   * `notes` as logical 3 leaves them, every one keyed by its answer, or only those `keyed` names
+   * @param {Array<Record<string, unknown> & {id: string}>} notes
+   * @param {string[]} [keyed]
+   */
+  const keyedBy = (notes, keyed = notes.map(note => note.id)) => {
+    const answer = assignDailyKeys(notes, LA);
+    return notes.map(note => {
+      const one = answer.get(note.id);
+      return one && keyed.includes(note.id) ? withAssignedKey(note, one) : note;
+    });
+  };
+  // Daily opened every morning and evening in 1.4.x
+  const chain = [
+    daily('oct-27', 'Oct 27', '2025-10-27', Date.UTC(2025, 9, 27, 16)),
+    daily('oct-27-evening', 'Oct 27', '2025-10-28', Date.UTC(2025, 9, 28, 3)),
+    daily('oct-28-evening', 'Oct 28', '2025-10-29', Date.UTC(2025, 9, 29, 2)),
+    daily('oct-29-evening', 'Oct 29', '2025-10-30', Date.UTC(2025, 9, 30, 2)),
+  ];
+
+  it('never counts as a claim: once the run is done, a date opens the note that moved there, not the duplicate made before it', () => {
+    const after = keyedBy(chain);
+    assert.equal(after[1].dailyDuplicateOf, 'oct-28-evening');
+    assert.deepEqual(
+      ['2025-10-27', '2025-10-28', '2025-10-29', '2025-10-30'].map(key => dailyHolder(after, key, LA)?.note.id),
+      ['oct-27', 'oct-28-evening', 'oct-29-evening', undefined],
+    );
+    // So a lookup's repair writes nothing new on the note that holds it
+    const found = /** @type {NonNullable<ReturnType<typeof dailyHolder>>} */ (dailyHolder(after, '2025-10-28', LA));
+    assert.equal(withAssignedKey(found.note, found.assignment), found.note);
+  });
+
+  it('never counts as a claim before the note it names is keyed, so that note still moves and today stays free', () => {
+    // Oct 27's morning; Oct 28's morning and evening; Oct 29's evening; upgraded Oct 30. The run
+    // has keyed Oct 28's evening note, a duplicate under Oct 29, and not yet Oct 29's evening note
+    const notes = [
+      daily('oct-27', 'Oct 27', '2025-10-27', Date.UTC(2025, 9, 27, 15)),
+      daily('oct-28', 'Oct 28', '2025-10-28', Date.UTC(2025, 9, 28, 15)),
+      daily('oct-28-evening', 'Oct 28', '2025-10-29', Date.UTC(2025, 9, 29, 2)),
+      daily('oct-29-evening', 'Oct 29', '2025-10-30', Date.UTC(2025, 9, 30, 2)),
+    ];
+    const during = keyedBy(notes, ['oct-27', 'oct-28', 'oct-28-evening']);
+    assert.deepEqual([during[2].dailyKey, during[2].dailyDuplicateOf], ['2025-10-29', 'oct-29-evening']);
+    assert.equal(dailyHolder(during, '2025-10-29', LA)?.note.id, 'oct-29-evening');
+    assert.equal(dailyHolder(during, '2025-10-30', LA), undefined, "today's opens a new note");
+  });
+
+  it('holds its date once no other note does, so a date never loses its note to the trash', () => {
+    const after = keyedBy(chain).map(note => (note.id === 'oct-28-evening' ? { ...note, trashed: true } : note));
+    assert.equal(dailyHolder(after, '2025-10-28', LA)?.note.id, 'oct-27-evening');
+    // Two duplicates of one note that's gone: the earlier made holds
+    const race = [
+      { ...daily('a', 'Oct 10', '2025-10-10', 3), dailyKey: '2025-10-10', dailyDuplicateOf: 'gone' },
+      { ...daily('b', 'Oct 10', '2025-10-10', 1), dailyKey: '2025-10-10', dailyDuplicateOf: 'gone' },
+    ];
+    assert.equal(dailyHolder(race, '2025-10-10', LA)?.note.id, 'b');
+    // And two that name each other: the earlier made holds, so the date still has its note
+    const crossed = [
+      { ...race[0], dailyDuplicateOf: 'b' },
+      { ...race[1], dailyDuplicateOf: 'a' },
+    ];
+    assert.equal(dailyHolder(crossed, '2025-10-10', LA)?.note.id, 'b');
+  });
+
+  it("a marked duplicate isn't the date's note, even where the index names it", () => {
+    const after = keyedBy(chain);
+    assert.equal(holdsKey(after[1], '2025-10-28'), false);
+    assert.equal(holdsKey(after[2], '2025-10-28'), true);
+  });
+});
+
 describe('what logical 3 writes on a note (withAssignedKey)', () => {
   it('its key, a zone of null for a 1.4.x note, and its holder, and for a note that moves, its dateStr and daily placement, never its name', () => {
     const evening = {
