@@ -59,8 +59,9 @@ describe("html-text.js reads markup's text as a div's textContent does (#14 slic
       declared.map(({ declared: reason, chromium, text }) => [typeof reason === 'string' && reason.length > 0, chromium !== text]),
       declared.map(() => [true, true]),
     );
-    // Foster parenting, a hex reference with no digits, and a `<` before a NUL
-    assert.equal(declared.length, 3);
+    // Foster parenting, a hex reference with no digits, a `<` before a NUL, an end tag inside a
+    // select (for an svg and a math), and a foreignObject end tag for an HTML element
+    assert.equal(declared.length, 6);
   });
 
   it('reads with scripting on unless told otherwise, as a div of the page does', () => {
