@@ -182,7 +182,7 @@ describe('the auto-title and insights switches stop provider calls at once (priv
     assert.equal(manager.autoTitleIntervalId, null);
   });
 
-  it('a new interval saves with the switch, in one write, and restarts the timer on it', async () => {
+  it('a new interval saves only the interval, in one write, and restarts the timer on it', async () => {
     const { env, ai, manager, controls } = await setup();
     manager.setupAutoTitle();
     await waitFor(() => ai.calls.length === 1, { message: 'the first note sent' });
@@ -201,10 +201,113 @@ describe('the auto-title and insights switches stop provider calls at once (priv
 
     assert.deepEqual(
       env.chrome.writes().slice(writes, writes + 1).map((write) => write.keys.slice().sort()),
-      [['setting_autoTitleEnabled', 'setting_autoTitleInterval']],
+      [['setting_autoTitleInterval']],
     );
     assert.equal(env.chrome.local.setting_autoTitleInterval, 60);
     assert.notEqual(manager.autoTitleIntervalId, null, 'still on, on the new interval');
     manager.destroy();
   });
+
+  it("a tab whose Settings still shows the switch on doesn't turn it back on when its interval changes", async () => {
+    const { env, ai, manager, controls } = await setup();
+    // Another tab switched auto-title off; this one's switch still shows on
+    await env.chrome.api.storage.local.set({ setting_autoTitleEnabled: false });
+    await run(env, 1000);
+
+    controls['auto-title-interval'].value = '30';
+    controls['auto-title-interval'].dispatchEvent({ type: 'change' });
+    await run(env, 5000);
+
+    assert.equal(env.chrome.local.setting_autoTitleEnabled, false, 'still off');
+    assert.equal(env.chrome.local.setting_autoTitleInterval, 30);
+    assert.deepEqual(ai.calls, [], 'no note went to the provider');
+    assert.equal(manager.autoTitleIntervalId, null);
+  });
+
+  it('switching auto-title off while its catch-up run goes starts no timer after it', async () => {
+    const { env, ai, manager } = await setup();
+    // The last run was a day ago, so switching on runs a catch-up first
+    await env.chrome.api.storage.local.set({ setting_lastAutoTitleRun: 1 });
+    env.clock.tick(2 * 60 * 60 * 1000);
+    const setUp = manager.setupAutoTitle();
+    await waitFor(() => ai.calls.length === 1, { message: 'the catch-up sent its first note' });
+    await env.chrome.api.storage.local.set({ setting_autoTitleEnabled: false });
+    await ai.answer('generateTitle', 'Groceries');
+    for (let step = 0; step < 20; step++) await run(env, 500);
+    await setUp;
+
+    assert.equal(manager.autoTitleIntervalId, null, 'no timer started');
+    assert.deepEqual(ai.calls, ['generateTitle']);
+  });
+
+  for (const [control, key, from, to] of [
+    ['auto-title-enabled', 'setting_autoTitleEnabled', true, false],
+    ['auto-title-interval', 'setting_autoTitleInterval', '15', '60'],
+    ['insights-interval', 'setting_insightsInterval', '60', '1440'],
+  ]) {
+    it(`a failed save of ${control} puts that control back to what's stored, and leaves the others`, async () => {
+      const { env, controls, manager } = await setup();
+      const before = {
+        title: controls['auto-title-enabled'].checked,
+        insights: controls['insights-enabled'].checked,
+        titleInterval: controls['auto-title-interval'].value,
+        insightsInterval: controls['insights-interval'].value,
+      };
+      env.chrome.failNextSet();
+      const input = controls[control];
+      if (typeof from === 'boolean') input.checked = to;
+      else input.value = to;
+      input.dispatchEvent({ type: 'change' });
+      await run(env, 1000);
+
+      const after = {
+        title: controls['auto-title-enabled'].checked,
+        insights: controls['insights-enabled'].checked,
+        titleInterval: controls['auto-title-interval'].value,
+        insightsInterval: controls['insights-interval'].value,
+      };
+      assert.deepEqual(after, before, 'the control is back, and nothing else moved');
+      assert.equal(String(env.chrome.local[key]), String(from === true ? true : from), 'stored as it was');
+      const row = env.document.querySelector('.llm-auto-title-interval-row');
+      assert.equal(row.classList.contains('hidden'), false, 'the switch is on, so its interval row shows');
+      manager.destroy();
+    });
+  }
+});
+
+describe("the jobs' timers wait each interval Settings offers, the longest included", () => {
+  /** What Chromium does with a delay past 2^31 - 1 ms: it fires at once */
+  const CHROMIUM_LONGEST_MS = 2 ** 31 - 1;
+
+  for (const [job, minutes] of [
+    ...[5, 15, 30, 60, 1440, 7200, 10080, 20160, 43200].map((value) => ['autoTitle', value]),
+    ...[60, 360, 720, 1440, 10080].map((value) => ['insights', value]),
+  ]) {
+    it(`${job}, every ${minutes} minutes: once when it starts, then once per interval and never sooner`, async () => {
+      const { env, manager } = await setup();
+      const delays = [];
+      const realSetInterval = env.global.setInterval;
+      // A delay past the longest Chromium takes fires at once, as it does in Chromium
+      env.global.setInterval = (fn, ms) => {
+        delays.push(ms);
+        return realSetInterval(fn, ms > CHROMIUM_LONGEST_MS ? 1 : ms);
+      };
+      let runs = 0;
+      const runName = job === 'autoTitle' ? 'runAutoTitle' : 'runInsightsExtraction';
+      manager[runName] = () => { runs += 1; };
+      if (job === 'autoTitle') manager.startAutoTitleInterval(minutes);
+      else manager.startInsightsInterval(minutes);
+      const interval = minutes * 60 * 1000;
+
+      assert.equal(runs, 1, 'the run as it starts');
+      env.clock.tick(interval - 1);
+      assert.equal(runs, 1, 'nothing sooner than the interval');
+      env.clock.tick(1);
+      assert.equal(runs, 2, 'one run at the interval');
+      env.clock.tick(interval);
+      assert.equal(runs, 3, 'and one each interval after');
+      assert.ok(delays.every((ms) => ms <= CHROMIUM_LONGEST_MS), `every delay fits a timer: ${delays}`);
+      manager.destroy();
+    });
+  }
 });
