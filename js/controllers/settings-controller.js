@@ -971,6 +971,21 @@ class SettingsController {
     return this.loadLibrary('jszip');
   }
 
+  /**
+   * A note as every export writes it: without the fields #17 PR 3 writes beside its flags,
+   * js/kernel/core/domain/placement.js's NEW_NOTE_FIELDS (test/import.test.js holds Export
+   * Current Note to that list), which 1.4.1's single-note import ignores (#17 PR 3b, Q8)
+   * @param {Record<string, any>} note
+   * @returns {Record<string, any>}
+   */
+  static exportedNote(note) {
+    const copy = { ...note };
+    for (const field of ['placement', 'kind', 'lifecycle', 'dailyKey', 'dailyTimeZone', 'dailyDuplicateOf']) {
+      delete copy[field];
+    }
+    return copy;
+  }
+
   async exportCurrentNote() {
     try {
       const editor = this.getEditor ? this.getEditor() : null;
@@ -979,7 +994,8 @@ class SettingsController {
         return;
       }
 
-      const note = await this.documentClient.readNote(editor.noteId);
+      const stored = await this.documentClient.readNote(editor.noteId);
+      const note = stored && SettingsController.exportedNote(stored);
       const blocks = await this.documentClient.blocksAsStored(editor.noteId);
 
       const data = {
