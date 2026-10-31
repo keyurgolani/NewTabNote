@@ -1,0 +1,632 @@
+/*
+ * recovery.html: the Trust Center and the Recovery Center (#20 slice 4b). Every color, size,
+ * and radius comes from Quiet Atlas's tokens (css/design-tokens.css, #16), which also carry
+ * the light, dark, and system schemes, so nothing here branches on a theme: sage for what
+ * checked out, clay for what needs you, and danger only for capture at risk.
+ */
+
+html {
+  /* The sticky header never covers what focus moves to: its height, measured by the page, plus 16px */
+  scroll-padding-top: calc(var(--trust-header-height, 4.5rem) + 1rem);
+}
+
+.trust-page {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--type-body-size);
+  line-height: 1.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.trust-skip {
+  position: absolute;
+  left: var(--space-region);
+  top: -10rem;
+  z-index: 2;
+  padding: var(--padding-button);
+  border-radius: var(--radius-control);
+  background: var(--surface-paper);
+  color: var(--text-primary);
+}
+
+.trust-skip:focus {
+  top: var(--space-region);
+}
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* ───────── The header ───────── */
+
+.trust-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-control) var(--space-layer);
+  padding: var(--space-control) var(--space-layer);
+  background: var(--surface-paper);
+  border-bottom: 1px solid var(--seam);
+}
+
+.trust-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.trust-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact);
+  flex: 1;
+}
+
+.trust-views a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  padding: 0 var(--space-control);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.trust-views a:hover {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+.trust-views a[aria-current="page"] {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.trust-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  padding: 0 0.35rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--seam-strong);
+  background: var(--tint-urgent);
+  color: var(--ink-urgent);
+  font-size: var(--type-label-size);
+  font-weight: 700;
+  line-height: 1.4rem;
+}
+
+.trust-count[data-tone="failed"] {
+  border-color: var(--state-danger);
+  background: var(--surface-paper);
+  color: var(--state-danger);
+}
+
+/* ───────── The page ───────── */
+
+.trust-main {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: var(--space-layer) var(--space-layer) 4rem;
+}
+
+.trust-main:focus {
+  outline: none;
+}
+
+.trust-main h2 {
+  margin: 2rem 0 var(--space-control);
+  font-size: 1.1rem;
+}
+
+.trust-main h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.trust-main h4 {
+  margin: 0 0 var(--space-compact);
+  font-size: 1rem;
+}
+
+.trust-muted {
+  color: var(--text-secondary);
+}
+
+/* ───────── Shapes: each status by its shape beside its words, never color alone ───────── */
+
+.trust-glyph {
+  display: inline-flex;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+}
+
+.trust-glyph svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.trust-tone-ok { color: var(--ink-local); }
+.trust-tone-partial,
+.trust-tone-action { color: var(--ink-urgent); }
+.trust-tone-failed { color: var(--state-danger); }
+.trust-tone-unknown,
+.trust-tone-absent,
+.trust-tone-locked,
+.trust-tone-checking,
+.trust-tone-todo { color: var(--text-secondary); }
+
+.trust-tone-checking svg {
+  animation: trust-spin 900ms linear infinite;
+}
+
+@keyframes trust-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trust-tone-checking svg { animation: none; }
+}
+
+/* ───────── Buttons and links ───────── */
+
+.trust-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-compact);
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  padding: var(--padding-button);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.primary-btn.trust-btn {
+  border: 1px solid var(--action-primary);
+  background: var(--action-primary);
+  color: var(--text-on-action);
+}
+
+.secondary-btn.trust-btn {
+  border: 1px solid var(--control-boundary);
+  background: var(--surface-paper);
+  color: var(--text-primary);
+}
+
+.secondary-btn.trust-btn:hover {
+  background: var(--surface-muted);
+}
+
+.trust-btn[aria-disabled="true"] {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+.trust-linkbtn,
+.trust-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-link);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.trust-link {
+  min-height: 0;
+  display: inline;
+}
+
+/* ───────── Headlines ───────── */
+
+.trust-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-region);
+  padding: var(--space-layer);
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+}
+
+.trust-headline[data-tone="failed"] {
+  border-color: var(--state-danger);
+}
+
+.trust-headline h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control);
+  margin: 0;
+  font-size: var(--type-title-size);
+  line-height: var(--type-title-line-height);
+}
+
+.trust-headline h1 .trust-glyph {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+.trust-headline h1:focus {
+  outline: none;
+}
+
+.trust-headline-body {
+  flex: 1 1 24rem;
+}
+
+.trust-proof {
+  margin: var(--space-compact) 0 0;
+  color: var(--text-secondary);
+}
+
+.trust-attention-line {
+  margin: var(--space-control) 0 0;
+}
+
+.trust-headline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact);
+}
+
+/* ───────── The Trust Center's rows ───────── */
+
+.trust-rows,
+.trust-incidents {
+  display: grid;
+  gap: var(--space-compact);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trust-row,
+.trust-incident,
+.trust-dismissed {
+  padding: var(--padding-card) var(--space-region);
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
+}
+
+.trust-row[data-attention="true"] {
+  border-color: var(--seam-strong);
+  background: var(--tint-urgent);
+}
+
+.trust-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  /* Its status ends where a one-line row's time does, before that row's chevron */
+  padding-right: 1.75rem;
+}
+
+.trust-row-status,
+.trust-row-status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.trust-row-status time {
+  color: var(--text-secondary);
+}
+
+.trust-row-text,
+.trust-row-keeps,
+.trust-keeps,
+.trust-incident-text {
+  margin: var(--space-compact) 0 0;
+}
+
+.trust-row-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  margin-top: var(--space-compact);
+}
+
+.trust-row-actions,
+.trust-incident-actions,
+.trust-flow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-compact) var(--space-region);
+}
+
+.trust-row--line {
+  padding: 0;
+}
+
+.trust-line > summary {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+  min-height: var(--target-min);
+  padding: var(--space-compact) 1.75rem var(--space-compact) var(--space-region);
+  list-style: none;
+  cursor: pointer;
+}
+
+.trust-line > summary::-webkit-details-marker {
+  display: none;
+}
+
+.trust-line-chevron {
+  position: absolute;
+  right: var(--space-control);
+  top: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 1px solid var(--text-secondary);
+  border-bottom: 1px solid var(--text-secondary);
+  transform: translateY(-70%) rotate(45deg);
+}
+
+.trust-line[open] .trust-line-chevron {
+  transform: translateY(-30%) rotate(225deg);
+}
+
+.trust-line-body {
+  padding: 0 var(--space-region) var(--padding-card);
+}
+
+.trust-evidence {
+  flex: 1 1 18rem;
+}
+
+.trust-evidence > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  color: var(--text-link);
+  cursor: pointer;
+}
+
+.trust-evidence-body {
+  padding: var(--space-compact) 0;
+}
+
+.trust-facts,
+.trust-incident-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem var(--space-region);
+  margin: var(--space-compact) 0 0;
+}
+
+.trust-facts > div,
+.trust-incident-facts > div {
+  display: contents;
+}
+
+.trust-facts dt,
+.trust-incident-facts dt {
+  color: var(--text-secondary);
+}
+
+.trust-facts dd,
+.trust-incident-facts dd {
+  margin: 0;
+}
+
+.trust-main code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.trust-sub + .trust-sub {
+  margin-top: var(--space-control);
+}
+
+.trust-dest {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-compact) 0;
+}
+
+.trust-dest th,
+.trust-dest td,
+.trust-impact th,
+.trust-impact td,
+.trust-runs th,
+.trust-runs td {
+  padding: 0.35rem var(--space-control) 0.35rem 0;
+  border-bottom: 1px solid var(--seam);
+  text-align: left;
+  vertical-align: top;
+}
+
+.trust-origin {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.trust-dest-note {
+  color: var(--text-secondary);
+}
+
+/* ───────── The Recovery Center ───────── */
+
+.trust-incident-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control);
+}
+
+.trust-incident[data-tone="failed"] {
+  border-color: var(--state-danger);
+}
+
+.trust-incident-body {
+  padding-left: calc(1rem + var(--space-control));
+}
+
+.trust-places {
+  margin: var(--space-compact) 0 0;
+  padding-left: 1.25rem;
+}
+
+.trust-section-text {
+  margin: 0 0 var(--space-control);
+  color: var(--text-secondary);
+}
+
+.trust-flow {
+  margin-top: var(--space-region);
+  padding: var(--space-region);
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-app);
+}
+
+.trust-flow h4:focus {
+  outline: none;
+}
+
+.trust-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-compact);
+  margin: 0 0 var(--space-control);
+}
+
+.trust-result .trust-glyph {
+  margin-top: 0.2rem;
+}
+
+.trust-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-compact);
+  margin: 0 0 var(--space-control);
+  padding: var(--space-control);
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--radius-control);
+  background: var(--tint-urgent);
+}
+
+.trust-warning p {
+  margin: 0;
+}
+
+.trust-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-compact) var(--space-layer);
+  margin: 0 0 var(--space-control);
+  padding: 0;
+  list-style: none;
+}
+
+.trust-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-compact);
+}
+
+.trust-steps li[data-step="todo"] {
+  color: var(--text-secondary);
+}
+
+.trust-impact {
+  border-collapse: collapse;
+  margin: var(--space-control) 0;
+}
+
+.trust-impact caption {
+  text-align: left;
+  font-weight: 700;
+  padding-bottom: 0.25rem;
+}
+
+.trust-zero {
+  color: var(--text-secondary);
+}
+
+.trust-table-wrap {
+  overflow-x: auto;
+}
+
+.trust-runs {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.trust-dismissed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-compact) var(--space-region);
+}
+
+.trust-dismissed p {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .trust-header {
+    padding: var(--space-compact) var(--space-region);
+  }
+
+  .trust-main {
+    padding: var(--space-region) var(--space-region) 3rem;
+  }
+
+  .trust-incident-body {
+    padding-left: 0;
+  }
+}
