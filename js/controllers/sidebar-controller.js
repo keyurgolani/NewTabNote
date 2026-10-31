@@ -40,6 +40,8 @@ class SidebarController {
     this._unsubscribeNoteList = null;
     // How many changes the sidebar has rendered, so a reload that changed nothing still renders
     this._listRenders = 0;
+    // Whether the list has rendered at all since the page started
+    this.listRendered = false;
 
     // Resizer instance
     this.sidebarResizer = null;
@@ -948,6 +950,7 @@ class SidebarController {
   async renderNotesList() {
     const list = document.getElementById('sidebar-notes-list');
     if (!list) return;
+    this.listRendered = true;
 
     const isSearch = this.searchQuery.trim() !== '';
 
