@@ -360,7 +360,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       return { outcome: finish(work), changed: [] };
     }
     // The legacy backup tasks run only on 1.4.x's Storage (the `backups` flag)
-    if (effect.kind === 'backup') return unavailable('adapter', 'backups-need-legacy-storage', false);
+    if (effect.kind === 'backup') return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), changed: [] };
     if (effect.kind === 'maintenance') {
       /** @type {Array<[SettingsArea, Readonly<Record<string, unknown>>]>} */
       const defaults = [

@@ -1039,8 +1039,16 @@ describe("the search index's and the embeddings' text, in the order a note's blo
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/notes-manager.js');
     const Storage = env.get('Storage');
     await Storage.init();
+    // The page's document client, which NotesManager reads a note's blocks through
+    await startEditorClient(env);
     const quiet = { debug() {}, info() {}, warn() {}, error() {} };
-    const notes = new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: quiet, llm: null });
+    const notes = new (env.get('NotesManager'))({
+      storage: Storage,
+      domRefs: null,
+      logger: quiet,
+      llm: null,
+      documentClient: env.documentClient,
+    });
     const active = [await Storage.getNote('N')];
     notes.noteList = { view: (which) => (which === 'active' ? active : []), settled: async () => {} };
     return { env, notes };

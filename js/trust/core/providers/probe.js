@@ -185,8 +185,9 @@ function failureOf(outcome) {
   if (outcome.kind === 'unavailable') {
     const evidence = failureEvidence(outcome);
     if (ACTION_CODES.includes(outcome.code)) return { kind: 'action', evidence, code: outcome.code };
-    // A versioned open below 9 isn't the path capture uses there: it probed nothing, so it's
-    // never a failed probe (the connection answers it unretryable once the open was refused)
+    // A versioned open below the latest version isn't the path capture uses there: it probed
+    // nothing, so it's never a failed probe (the connection answers it unretryable once the
+    // open was refused)
     if (outcome.code === 'migration-required') return { kind: 'unverified', evidence, code: outcome.code };
     return { kind: outcome.retryable ? 'unverified' : 'failed', evidence, code: outcome.code };
   }
@@ -299,7 +300,8 @@ export const storage = Object.freeze({
     } catch (error) {
       outcome = unavailableFrom(error);
     }
-    // A versioned open below 9: the adapter isn't capture's path, so it probed nothing capture uses
+    // A versioned open below the latest version: the adapter isn't capture's path, so it
+    // probed nothing capture uses
     if (outcome.kind === 'unavailable' && outcome.code === 'migration-required') {
       return migrationResult(migration || 'migration-pending', false);
     }

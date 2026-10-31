@@ -80,8 +80,9 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  *   `existing` open below the latest version (the worker's, since PR 1b), `versioned` at it
  * @property {{current(): Promise<{version: number, latest: number, status: string | null, code: string | null, blocked?: boolean}>}} [migration]
  *   CanvasTabDB's version, the latest, the worker's last recorded run, and whether its upgrade
- *   is blocked now, for storage below 9. Storage's check needs this port at every version: a
- *   context without it makes the check throw, even at 9 (slice 4a's root passes it). A port
+ *   is blocked now, for storage below the latest version. Storage's check needs this port at
+ *   every version: a context without it makes the check throw, even at the latest (slice 4a's
+ *   root passes it). A port
  *   that's there but can't read the state leaves it unknown, and storage probes anyway.
  * @property {SettingsPort} [settings] - chrome.storage.local, for the legacy facts legacy.js lists
  * @property {SecretReader} [secrets]

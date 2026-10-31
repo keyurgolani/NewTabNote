@@ -16,6 +16,9 @@ const { IDBKeyRange, IDBFactory } = require('fake-indexeddb');
 const { createLegacyEnv, createDatabase, note, block } = require('./helpers/legacy-env');
 const { loadBackground, startWorker } = require('./helpers/load-background');
 
+// This build's version, which the worker's run brings a profile to (js/storage.js's dbVersion)
+const THIS_VERSION = 10;
+
 /** @type {any} */
 let core;
 /** @type {any} */
@@ -51,11 +54,11 @@ async function profileAt8(env) {
 const codes = seen => seen.events.map(([code]) => code);
 
 describe("the worker journals its migration run (js/background.js, #17's runner)", () => {
-  it('a 1.4.x database upgraded to 9 journals storage.migration-completed, with no incident', async () => {
+  it("a 1.4.x database upgraded to this build's version journals storage.migration-completed, with no incident", async () => {
     const worker = await loadBackground({ setup: profileAt8 });
     await worker.drain();
     const seen = await inspect(worker.indexedDB);
-    assert.deepEqual(seen.events, [['storage.migration-completed', { schemaVersion: 9, surface: 'worker-internal' }]]);
+    assert.deepEqual(seen.events, [['storage.migration-completed', { schemaVersion: THIS_VERSION, surface: 'worker-internal' }]]);
     assert.deepEqual(seen.incidents, []);
   });
 
@@ -77,7 +80,7 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
     await worker.drain();
     const seen = await inspect(worker.indexedDB);
     assert.deepEqual(seen.events, [
-      ['storage.migration-blocked', { errorCode: 'space-short', schemaVersion: 9, surface: 'worker-internal' }],
+      ['storage.migration-blocked', { errorCode: 'space-short', schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
     ]);
     assert.deepEqual(seen.incidents, []);
   });
@@ -99,8 +102,8 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
     await worker.drain();
     const seen = await inspect(worker.indexedDB);
     assert.deepEqual(seen.events, [
-      ['storage.migration-blocked', { errorCode: 'blocked-upgrade', schemaVersion: 9, surface: 'worker-internal' }],
-      ['storage.migration-completed', { schemaVersion: 9, surface: 'worker-internal' }],
+      ['storage.migration-blocked', { errorCode: 'blocked-upgrade', schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
+      ['storage.migration-completed', { schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
     ]);
     assert.ok(!codes(seen).includes('storage.open-failed'));
     assert.deepEqual(seen.incidents, []);
