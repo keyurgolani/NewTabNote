@@ -744,7 +744,7 @@ describe('the anchor revision only moves forward (#71 round 2)', () => {
     w.tasks.hold = new Promise(resolve => {
       release = () => resolve(undefined);
     });
-    // A hint heard again: the derive reads the note as it stands, and lands after the complete
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
     const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
     // Let the derive read the note before the complete starts
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -1042,21 +1042,89 @@ describe('every writer goes through the signal’s queue (#71 round 3)', () => {
     assert.equal(await checkedOf(w), true);
   });
 
-  it('never holds the queue for a hung derive, and bounds it with the same deadline', { timeout: 5000 }, async () => {
-    const timers = manualTimers();
-    const { w, command } = await taskWorld({ timers });
-    w.tasks.hold = new Promise(() => {});
-    const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+  it(
+    'bounds a hung derive by its own short deadline, after which the queue moves and it counts as failed',
+    { timeout: 5000 },
+    async () => {
+      const timers = manualTimers();
+      const { w, id, command } = await taskWorld({ timers });
+      w.tasks.hold = new Promise(() => {});
+      const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+      await tick();
+      // The derive runs in the signal's queue, so a dismiss waits for it, up to its deadline
+      const dismissing = w.intelligence.execute(command('dismiss', 0));
+      const raced = await Promise.race([
+        dismissing.then(outcome => outcome.kind),
+        tick(50).then(() => 'still-waiting'),
+      ]);
+      assert.equal(raced, 'still-waiting');
+      timers.fireAll();
+      w.tasks.hold = null;
+      const result = await edited;
+      assert.ok(result.failed.includes(id));
+      assertOutcome(await dismissing, 'committed', 'signal-dismissed');
+      assert.equal((await stateOf(w, id)).signal.freshness.state, 'current');
+    },
+  );
+
+  it('never lets a slow null derive wipe out the newer signal a producer wrote meanwhile', async () => {
+    const { w, id } = await taskWorld();
+    await w.editBlock('n5', { id: 't1', type: 'text', content: 'Call vendor' });
+    let release = () => {};
+    w.tasks.hold = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
     await tick();
-    // The derive is still hung, and a dismiss on the same signal commits anyway
-    const dismissing = w.intelligence.execute(command('dismiss', 0));
-    const raced = await Promise.race([dismissing.then(outcome => outcome.kind), tick(200).then(() => 'still-waiting')]);
-    assert.equal(raced, 'committed');
-    timers.fireAll();
     w.tasks.hold = null;
-    const result = await edited;
-    assert.ok(result.failed.length > 0);
-    assertOutcome(await dismissing, 'committed', 'signal-dismissed');
+    await w.editBlock('n5', todo('t1', 'Call vendor'));
+    const fresh = await w.tasks.derive?.(identity);
+    assert.ok(fresh);
+    const upserting = w.intelligence.upsertSignals(TASKS, [fresh]);
+    await tick();
+    release();
+    await edited;
+    await upserting;
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.freshness.state, 'current');
+    assert.equal(read.signal.sourceRefs[0].revision, (await w.readNote('n5'))?.revision);
+  });
+
+  it('writes no checked onto a signal whose anchor was deleted before a retry, and tombstones its decision', async () => {
+    const timers = manualTimers();
+    const { w, id, command } = await taskWorld({ timers });
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let first = true;
+    const slow = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        if (first) {
+          first = false;
+          await gate;
+        }
+        return w.noteCommands.setTodoChecked(note);
+      },
+    });
+    const complete = command('complete', 0);
+    const pending = slow.execute(complete);
+    await tick();
+    timers.fireAll();
+    assertOutcome(await pending, 'unknown', 'note-command-timeout');
+    release();
+    await tick(20);
+    assert.equal(
+      (await w.kernel.execute({ type: 'deleteBlocks', commandId: 'del-t1', noteId: 'n5', blockIds: ['t1'] })).kind,
+      'committed',
+    );
+    await slow.noteChanged({ type: 'block-deleted', noteId: 'n5', blockId: 't1' });
+    await slow.execute({ ...complete });
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.freshness.cause, 'anchor-deleted');
+    assert.equal(read.signal.checked, false);
+    assert.ok(read.decision?.tombstone);
   });
 
   it('clears the deadline timer when the note command answers in time', async () => {

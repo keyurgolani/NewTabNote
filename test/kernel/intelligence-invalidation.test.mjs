@@ -678,3 +678,100 @@ describe('source checks fail closed (#71 round 3)', () => {
     assert.equal(state.signal.freshness.state, 'suspended');
   });
 });
+
+describe('note keys and source states (#71 round 4)', () => {
+  /** @param {Awaited<ReturnType<typeof intelligenceWorld>>} w */
+  const gatedContext = w => {
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    /** @type {(states: unknown) => void} */
+    let readDone = () => {};
+    /** Resolves with what the check read, once it has, before the gate opens */
+    const read = new Promise(resolve => {
+      readDone = resolve;
+    });
+    const context = w.anotherContext({
+      ...w.noteCommands,
+      async sourceStates(sourceRefs) {
+        const states = await w.noteCommands.sourceStates(sourceRefs);
+        readDone(states);
+        await gate;
+        return states;
+      },
+    });
+    return { context, release, read };
+  };
+
+  async function notes() {
+    const w = await intelligenceWorld({ checkSources: true });
+    await w.addNote('n1', [todo('t1', 'Call vendor')]);
+    await w.addNote('n2', []);
+    await w.addNote('n6', []);
+    return w;
+  }
+
+  it('makes a note’s state change wait for an upsert citing the note, so the new signal is suspended', async () => {
+    const w = await notes();
+    const { context, release, read: checked } = gatedContext(w);
+    const draft = connectionDraft({ others: ['n6'] });
+    const upserting = context.upsertSignals(LINKS, [draft]);
+    assert.deepEqual(await checked, ['available', 'available']);
+    assert.equal(
+      (await w.kernel.execute({ type: 'trashNote', commandId: 'trash-n6', noteId: 'n6' })).kind,
+      'committed',
+    );
+    const trashing = context.noteChanged({
+      type: 'note-state',
+      noteId: 'n6',
+      trashed: true,
+      archived: false,
+      isTemplate: false,
+    });
+    // Let the note change run as far as it can before the check finishes
+    await new Promise(resolve => setTimeout(resolve, 10));
+    release();
+    await upserting;
+    await trashing;
+    const state = await read(w, idOf(draft));
+    assert.deepEqual(state.signal.unavailableNotes, [{ noteId: 'n6', cause: 'note-trashed' }]);
+    assert.equal(state.signal.freshness.state, 'suspended');
+  });
+
+  it('makes a note’s deletion wait for an upsert citing the note, so no signal is left citing it', async () => {
+    const w = await notes();
+    const { context, release, read: checked } = gatedContext(w);
+    const draft = connectionDraft({ others: ['n2', 'n6'] });
+    const upserting = context.upsertSignals(LINKS, [draft]);
+    assert.deepEqual(await checked, ['available', 'available', 'available']);
+    const deleting = context.noteChanged({ type: 'note-deleted', noteId: 'n6' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    release();
+    await upserting;
+    await deleting;
+    const state = await read(w, idOf(draft));
+    assert.deepEqual(
+      state.signal.sourceRefs.map(source => source.noteId),
+      ['n1', 'n2'],
+    );
+  });
+
+  it('refuses junk source states as unavailable', async () => {
+    const w = await notes();
+    const draft = connectionDraft({ others: ['n2'] });
+    for (const junk of [
+      [undefined, undefined],
+      ['bogus', 'bogus'],
+      [null, null],
+      [{}, {}],
+    ]) {
+      const context = w.anotherContext({ ...w.noteCommands, sourceStates: async () => /** @type {any} */ (junk) });
+      assert.deepEqual(
+        (await context.upsertSignals(LINKS, [draft])).refused,
+        ['source-states-unavailable'],
+        String(junk),
+      );
+    }
+  });
+});
