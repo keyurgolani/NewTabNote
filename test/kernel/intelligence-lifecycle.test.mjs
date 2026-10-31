@@ -32,6 +32,7 @@ import {
 import { NOW, testClock } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/intelligence/operations.js').IntelligenceOutcome} IntelligenceOutcome */
+/** @typedef {Awaited<ReturnType<typeof world>>} World */
 
 const HOUR = 3_600_000;
 
@@ -532,5 +533,170 @@ describe('one completion authority (#7, "One completion authority")', () => {
     await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: 9 });
     assert.deepEqual(await w.noteSnapshot(['n5']), before);
     assert.equal(w.noteCalls.length, 0);
+  });
+});
+
+describe('the objective-task path under races (#71 review)', () => {
+  /** A world with one task, t1 in n5, and its signal id */
+  async function taskWorld() {
+    const w = await world();
+    await w.addNote('n5', [todo('t1', 'Call vendor'), todo('t2', 'Pay invoice')]);
+    return { w, id: idOf(taskDraft({ noteId: 'n5', blockId: 't1' })) };
+  }
+
+  /**
+   * @param {World} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+
+  it('lets a complete that started first win in one context, so a concurrent dismiss conflicts with it', async () => {
+    const { w, id } = await taskWorld();
+    const [complete, dismiss] = await Promise.all([
+      w.intelligence.execute(w.command('complete', id, 0)),
+      w.intelligence.execute(w.command('dismiss', id, 0)),
+    ]);
+    assertOutcome(complete, 'committed', 'signal-completed');
+    assertOutcome(dismiss, 'conflict', 'signal-decision-conflict');
+    if (dismiss.kind === 'conflict' && 'current' in dismiss) {
+      assert.equal(dismiss.current.status, 'completed');
+      assert.equal(dismiss.current.decisionRevision, 1);
+    }
+    const read = await stateOf(w, id);
+    assert.equal(read.state.status, 'completed');
+    assert.equal(read.decision?.history.length, 1);
+    assert.equal((await w.readNote('n5'))?.blocks.find(block => block.id === 't1')?.checked, true);
+  });
+
+  it('makes a complete that lost the race conflict before it writes the note', async () => {
+    const { w, id } = await taskWorld();
+    const [dismiss, complete] = await Promise.all([
+      w.intelligence.execute(w.command('dismiss', id, 0)),
+      w.intelligence.execute(w.command('complete', id, 0)),
+    ]);
+    assertOutcome(dismiss, 'committed', 'signal-dismissed');
+    assertOutcome(complete, 'conflict', 'signal-decision-conflict');
+    assert.equal(w.noteCalls.length, 0);
+    assert.equal((await w.readNote('n5'))?.blocks.find(block => block.id === 't1')?.checked, false);
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.checked, false);
+    assert.equal(read.state.status, 'dismissed');
+  });
+
+  it('across contexts, a note write that landed wins: the decision goes on top and the answer is committed', async () => {
+    const { w, id } = await taskWorld();
+    /** @type {Promise<IntelligenceOutcome> | null} */
+    let dismissed = null;
+    const other = w.anotherContext();
+    // The other context dismisses while this one's note command is in flight
+    const racing = w.anotherContext({
+      async setTodoChecked(command) {
+        const outcome = await w.noteCommands.setTodoChecked(command);
+        dismissed = other.execute(w.command('dismiss', id, 0));
+        await dismissed;
+        return outcome;
+      },
+    });
+    const complete = w.command('complete', id, 0);
+    const outcome = await racing.execute(complete);
+    assertOutcome(outcome, 'committed', 'signal-completed');
+    assertOutcome(await /** @type {Promise<IntelligenceOutcome>} */ (dismissed), 'committed', 'signal-dismissed');
+    if (outcome.kind === 'committed') assert.equal(outcome.revision, 2);
+    const read = await stateOf(w, id);
+    assert.equal(read.state.status, 'completed');
+    assert.equal(read.signal.checked, true);
+    assert.deepEqual(
+      read.decision?.history.map(entry => entry.action),
+      ['dismiss', 'complete'],
+    );
+    // A retry answers the same committed outcome
+    assert.deepEqual(await racing.execute({ ...complete }), outcome);
+  });
+
+  it('answers an in-flight duplicate with the first one’s outcome, in one context and across two', async () => {
+    const { w, id } = await taskWorld();
+    const complete = w.command('complete', id, 0);
+    const [first, second] = await Promise.all([
+      w.intelligence.execute(complete),
+      w.intelligence.execute({ ...complete }),
+    ]);
+    assertOutcome(first, 'committed', 'signal-completed');
+    assert.deepEqual(second, first);
+    assert.equal(w.noteCalls.length, 1);
+
+    const reopen = w.command('reopen', id, 1);
+    const [a, b] = await Promise.all([w.intelligence.execute(reopen), w.anotherContext().execute({ ...reopen })]);
+    assertOutcome(a, 'committed', 'signal-reopened');
+    assert.deepEqual(b, a);
+    const read = await stateOf(w, id);
+    assert.equal(read.state.decisionRevision, 2);
+    assert.equal(read.signal.checked, false);
+  });
+
+  it('completes a task once another block’s edit has been heard, and recovers on the next try when it hasn’t', async () => {
+    const { w, id } = await taskWorld();
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    const revision = (await w.readNote('n5'))?.revision;
+    await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: revision ?? null });
+    assertOutcome(await w.intelligence.execute(w.command('complete', id, 0)), 'committed', 'signal-completed');
+
+    const other = idOf(taskDraft({ noteId: 'n5', blockId: 't2' }));
+    // An edit nobody told the domain about: the first try conflicts and re-reads the anchor
+    await w.editBlock('n5', todo('t1', 'Call vendor'));
+    const conflict = await w.intelligence.execute(w.command('complete', other, 0));
+    assertOutcome(conflict, 'conflict', 'note-revision-conflict');
+    const after = (await w.readNote('n5'))?.revision;
+    const read = await stateOf(w, other);
+    assert.equal(read.signal.sourceRefs[0].revision, after);
+    if (conflict.kind === 'conflict' && 'current' in conflict) assert.deepEqual(conflict.current, read.state);
+    assertOutcome(await w.intelligence.execute(w.command('complete', other, 0)), 'committed', 'signal-completed');
+  });
+});
+
+describe('keys and snoozes (#71 review)', () => {
+  it('refuses a key reused with another payload after its first command was rejected', async () => {
+    const w = await world();
+    const first = await w.intelligence.execute({
+      type: 'intelligence.snooze',
+      commandId: 'K',
+      signalId: w.deadlineId,
+      expectedDecisionRevision: 0,
+      until: NOW,
+    });
+    assertOutcome(first, 'rejected', 'snooze-not-future');
+    const reused = await w.intelligence.execute({
+      type: 'intelligence.dismiss',
+      commandId: 'K',
+      signalId: w.deadlineId,
+      expectedDecisionRevision: 0,
+    });
+    assertOutcome(reused, 'rejected', 'idempotency-key-reuse');
+  });
+
+  it('measures a floating due date to the end of its local day before warning a snooze is past due', async () => {
+    const w = await intelligenceWorld();
+    const tomorrow = inferredDraft({ time: { dueDate: '2026-10-21' } });
+    await w.intelligence.upsertSignals(RECIPE, [tomorrow]);
+    const nineOnTheDay = Date.parse('2026-10-21T13:00:00Z'); // 09:00 EDT
+    const onTime = await w.intelligence.execute({
+      type: 'intelligence.snooze',
+      commandId: 's1',
+      signalId: idOf(tomorrow),
+      expectedDecisionRevision: 0,
+      until: nineOnTheDay,
+    });
+    assertOutcome(onTime, 'committed', 'signal-snoozed');
+    const late = await w.intelligence.execute({
+      type: 'intelligence.snooze',
+      commandId: 's2',
+      signalId: idOf(tomorrow),
+      expectedDecisionRevision: 1,
+      until: nineOnTheDay + 24 * HOUR,
+    });
+    assertOutcome(late, 'committed', 'signal-snoozed-past-due');
   });
 });

@@ -108,9 +108,13 @@ function surface(world, name, channel) {
     settle: async () => {
       while (reading.length > 0) await Promise.all(reading.splice(0));
     },
-    /** Reads every signal #17's change log names past what it holds, as a surface does on open */
+    /**
+     * Reads every signal #17's change log names past what it holds, from the oldest cursor it
+     * holds, as a surface does on open, and answers that cursor
+     */
     async catchUp() {
-      const floor = Math.min(...[...view.values()].map(entry => entry.asOf), 0);
+      const cursors = [...view.values()].map(entry => entry.asOf);
+      const floor = cursors.length > 0 ? Math.min(...cursors) : 0;
       const changes = await world.commitLog.readChangesSince(floor, 1000);
       if (changes.kind !== 'changes') throw new Error('resync');
       for (const entry of changes.entries) {
@@ -118,6 +122,7 @@ function surface(world, name, channel) {
           await refresh(entry.entityId);
         }
       }
+      return floor;
     },
     /**
      * Runs a lifecycle command against the revision it holds, and takes a conflict's state
@@ -205,7 +210,15 @@ describe('cross-surface convergence (#7, approved AC3)', () => {
     assert.ok(tally.committed > 0);
     assert.ok(tally.conflict > 0);
     // A surface that missed hints catches up from the change log, as it does on open
-    if (catchUp) for (const client of clients) await client.catchUp();
+    if (catchUp) {
+      const cursors = [];
+      for (const client of clients) cursors.push(await client.catchUp());
+      // It reads from a cursor, not the whole log
+      assert.ok(
+        cursors.some(cursor => cursor > 0),
+        String(cursors),
+      );
+    }
 
     for (const id of ids) {
       const read = await world.intelligence.readSignal(id);
