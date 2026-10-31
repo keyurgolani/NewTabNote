@@ -3090,6 +3090,36 @@ export function runContractSuite(fixture) {
         },
       );
 
+      it(
+        flags.backups
+          ? "getSyncData answers the export as one object, Storage.exportAll's, which sync uploads (#17 PR 4b)"
+          : 'no backups: getSyncData is failed',
+        async () => {
+          const noteId = await createNote({ name: 'Plan', blocks: [{ id: 'b1', type: 'text', content: 'Line' }] });
+          const state = await kernel.query({ type: 'getSyncData' });
+          if (!flags.backups) {
+            assert.deepEqual(state, { kind: 'failed', cause: 'adapter', code: 'backups-need-legacy-storage' });
+            return;
+          }
+          assert.equal(state.kind, 'ready', JSON.stringify(state));
+          // As JSON, the form sync uploads it in, so the legacy adapter's records compare too
+          /** @type {import('../../js/kernel/core/ports/repository.js').ExportData | null} */
+          const data = state.kind === 'ready' ? JSON.parse(JSON.stringify(state.data)) : null;
+          assert.deepEqual(Object.keys(data || {}), [
+            'version',
+            'exportedAt',
+            'canvases',
+            'elements',
+            'media',
+            'folders',
+          ]);
+          assert.deepEqual(
+            [data?.version, data?.canvases.map(note => note.id), data?.elements.map(block => block.content)],
+            [1, [noteId], ['Line']],
+          );
+        },
+      );
+
       it('profileHoldsContent is false until a note outside trash has a title or a block that holds something', async () => {
         const holds = async () => {
           const state = await kernel.query({ type: 'profileHoldsContent' });
@@ -3119,6 +3149,7 @@ export function runContractSuite(fixture) {
             { type: 'listThemes' },
             { type: 'exportBackup', backup: false },
             { type: 'profileHoldsContent' },
+            { type: 'getSyncData' },
           ])) {
             assert.deepEqual(
               await reader.query(query),

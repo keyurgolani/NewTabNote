@@ -38,6 +38,7 @@ const TODAY = {
       'profileHoldsContent',
       'listLinks',
       'listVectors',
+      'getSyncData',
     ],
   },
   popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },

@@ -289,7 +289,19 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   with an UnavailableError, code `setting-not-served`.
  * @property {(extra: Record<string, unknown>) => Promise<Blob>} exportBackup
  *   1.4.x's export file (Storage.exportAllAsBlob), with `extra` as more top-level fields: every
- *   note outside trash with its blocks and media, and every folder. Only an adapter with the
- *   `backups` flag makes one. One without rejects with an UnavailableError, `adapter`,
+ *   note outside trash with its blocks and media, and every folder, and on #17's adapter the
+ *   conflict records of those notes (#17 PR 4b). Only an adapter with the `backups` flag makes
+ *   one. One without rejects with an UnavailableError, `adapter`,
  *   `backups-need-legacy-storage`, as its backup tasks answer.
+ * @property {() => Promise<ExportData>} exportData
+ *   The same export as one object, as Storage.exportAll gave it, each media Blob a data URL:
+ *   what sync uploads (#17 PR 4b). Only an adapter with the `backups` flag makes it, and one
+ *   without rejects as for exportBackup.
+ */
+
+/**
+ * 1.4.x's export as one object: every note outside trash, then the templates, without #17 PR
+ * 3's fields beside their flags; their blocks; their media, each Blob a data URL; and every folder
+ * @typedef {{version: 1, exportedAt: number, canvases: NoteRecord[], elements: BlockRecord[],
+ *   media: StoreRecords['media'][], folders: FolderRecord[]}} ExportData
  */

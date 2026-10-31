@@ -162,6 +162,7 @@ const folderTypesMatch = true;
  *   profileHoldsContent: typeof import('../../js/kernel/core/contracts/operations/profile-holds-content.js').result,
  *   listLinks: typeof import('../../js/kernel/core/contracts/operations/list-links.js').result,
  *   listVectors: typeof import('../../js/kernel/core/contracts/operations/list-vectors.js').result,
+ *   getSyncData: typeof import('../../js/kernel/core/contracts/operations/get-sync-data.js').result,
  * }} ResultSchemas
  */
 
@@ -195,6 +196,7 @@ const queryDataMatches = {
   profileHoldsContent: true,
   listLinks: true,
   listVectors: true,
+  getSyncData: true,
 };
 
 /**

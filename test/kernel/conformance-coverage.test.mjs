@@ -107,6 +107,7 @@ describe('conformance coverage finds an implementation', () => {
         '  async read() { return undefined; }',
         '  async readSettings() { return {}; }',
         '  async exportBackup() { return new Blob([]); }',
+        '  async exportData() { return { version: 1, exportedAt: 0, canvases: [], elements: [], media: [], folders: [] }; }',
         '}',
       ]),
     });

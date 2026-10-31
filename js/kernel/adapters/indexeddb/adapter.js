@@ -90,7 +90,7 @@ import { withoutPlacement } from '../../core/domain/placement.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
-import { createAutoBackup, exportFile, prepareImport, readExport } from './backups.js';
+import { createAutoBackup, exportFile, exportObject, prepareImport, readExport } from './backups.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
@@ -931,6 +931,29 @@ export function createIndexedDbAdapter({
   };
 
   /**
+   * What an export read gives, on an adapter that runs the backup tasks: `read` over the open
+   * database, failing as the adapter's reads fail
+   * @template T
+   * @param {(db: IDBDatabase) => Promise<T>} read
+   * @returns {Promise<T>}
+   */
+  const exported = async read => {
+    if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      throw startFailure(error);
+    }
+    try {
+      return await read(db);
+    } catch (error) {
+      throw failureIn(error);
+    }
+  };
+
+  /**
    * Each bulk command's digest, by commandId, from its first recall in this adapter
    * @type {Map<string, string>}
    */
@@ -1008,21 +1031,16 @@ export function createIndexedDbAdapter({
     },
 
     // Export JSON's file, and Create Backup's with its fields, on an adapter that runs the
-    // backup tasks (backups.js), read in one readonly transaction
+    // backup tasks (backups.js), read in one readonly transaction, with the conflict records of
+    // the notes it holds (#17 PR 4b)
     async exportBackup(extra) {
-      if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
-      /** @type {IDBDatabase} */
-      let db;
-      try {
-        db = connection.database();
-      } catch (error) {
-        throw startFailure(error);
-      }
-      try {
-        return await exportFile(await readExport(db), clock.now(), extra);
-      } catch (error) {
-        throw failureIn(error);
-      }
+      return exported(db => readExport(db, { conflicts: true }).then(rows => exportFile(rows, clock.now(), extra)));
+    },
+
+    // The export as one object, what sync uploads, on an adapter that runs the backup tasks
+    async exportData() {
+      const data = await exported(db => readExport(db).then(rows => exportObject(rows, clock.now())));
+      return /** @type {import('../../core/ports/repository.js').ExportData} */ (data);
     },
 
     async readSettings(area, keys) {

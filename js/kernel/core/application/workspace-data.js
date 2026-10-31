@@ -8,7 +8,8 @@
  *
  * Slice 7's queries read them back: getWorkspaceData each key from the area its command
  * writes, listThemes the custom themes, and exportBackup the export file Export JSON and
- * Create Backup download.
+ * Create Backup download. getSyncData is the same export as one object, which sync uploads
+ * (#17 PR 4b).
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
@@ -173,6 +174,7 @@ export const workspaceDataCommands = {
  *   getWorkspaceData: QueryHandler<'getWorkspaceData'>,
  *   listThemes: QueryHandler<'listThemes'>,
  *   exportBackup: QueryHandler<'exportBackup'>,
+ *   getSyncData: QueryHandler<'getSyncData'>,
  * }}
  */
 export const workspaceDataQueries = {
@@ -205,6 +207,12 @@ export const workspaceDataQueries = {
       ? { backupType: 'full-backup', backupCreatedAt: new Date(clock.now()).toISOString(), backupVersion: 1 }
       : {};
     return ready(clock.now(), await adapter.exportBackup(extra));
+  },
+
+  // What #19's sync uploads: the same export as one object, as Storage.exportAll gave it
+  async getSyncData(query, { adapter, clock }) {
+    if (!adapter.flags.backups) return failed('adapter', BACKUPS_UNAVAILABLE);
+    return ready(clock.now(), await adapter.exportData());
   },
 };
 

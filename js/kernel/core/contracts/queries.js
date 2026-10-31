@@ -43,6 +43,8 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/profile-holds-content.js').ProfileHoldsContent} ProfileHoldsContent */
 /** @typedef {import('./operations/list-links.js').ListLinks} ListLinks */
 /** @typedef {import('./operations/list-vectors.js').ListVectors} ListVectors */
+/** @typedef {import('./operations/get-sync-data.js').GetSyncData} GetSyncData */
+/** @typedef {import('../ports/repository.js').ExportData} ExportData */
 /** @typedef {import('../domain/note.js').LinkRecord} LinkRecord */
 /** @typedef {import('../domain/note.js').VectorRecord} VectorRecord */
 /** @typedef {import('./settings.js').WorkspaceDataValues} WorkspaceDataValues */
@@ -55,7 +57,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
  *   | ListSnapshots | GetSnapshot | FindDailyNote
- *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors} Query
+ *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -90,6 +92,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {boolean} profileHoldsContent
  * @property {LinkRecord[]} listLinks
  * @property {VectorRecord[]} listVectors
+ * @property {ExportData} getSyncData
  */
 
 /**
@@ -175,6 +178,8 @@ export const QUERIES = Object.freeze({
   // The graph view's links and #22's embeddings, which only the new tab reads (#17 PR 4b)
   listLinks: entry('list-links', [], NEW_TAB),
   listVectors: entry('list-vectors', [], NEW_TAB),
+  // What #19's sync uploads, which only the new tab's sync service reads (#17 PR 4b)
+  getSyncData: entry('get-sync-data', [], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */

@@ -69,6 +69,7 @@ const QUERY_SAMPLES = {
   profileHoldsContent: {},
   listLinks: {},
   listVectors: {},
+  getSyncData: {},
 };
 
 /** The coordinator's own queries, which take no field */
@@ -364,8 +365,9 @@ describe('schema modules (#13, AC1)', () => {
       const state = await reader.query(
         /** @type {import('../../js/kernel/core/contracts/queries.js').Query} */ ({ ...fields, type }),
       );
-      // The export file is 1.4.x's Storage code, which the memory adapter doesn't run (`backups`)
-      const unavailable = type === 'exportBackup' && !adapter.flags.backups;
+      // The export, as a file or as sync's object, is the backup tasks', which the memory adapter
+      // doesn't run (`backups`)
+      const unavailable = (type === 'exportBackup' || type === 'getSyncData') && !adapter.flags.backups;
       assert.ok(
         unavailable ? state.kind === 'failed' : state.kind === 'ready' || state.kind === 'empty',
         `${type}: ${state.kind}`,
