@@ -8,7 +8,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, workerRun, settle, note, block, FakeDocument } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, workerRun, settle, note, block, FakeDocument, startEditorClient } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/ui/export-notice.js'];
 const UPGRADE = 'setting_storageUpgrade';
@@ -35,22 +35,20 @@ async function setup({ status = 'space-blocked', snoozedAt, upgraded = false } =
   env.load(...FILES);
   const Storage = env.get('Storage');
   await Storage.init();
+  // The page's settings port and what it knows of its database, as App gives the notices
+  await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
   return { env, Storage, toasts };
 }
 
-/** A space notice as App makes it, over `Storage` */
+/** A space notice as App makes it, on the page's settings port and its database's state */
 function spaceNotice(env, Storage, { exports = [true] } = {}) {
   const calls = { exports: 0 };
   return new (env.get('SpaceNotice'))({
-    storage: Storage,
+    settings: env.settingsClient,
+    storageState: env.storageState,
     onExport: async () => exports[calls.exports++],
-    settings: {
-      read: (key) => Storage.readSetting(key),
-      snooze: () => Storage.setSetting('spaceNoticeSnoozedAt', Date.now()),
-      upgraded: () => Storage.isUpgraded(),
-    },
   });
 }
 
@@ -163,7 +161,11 @@ describe("#47's notice after the upgrade", () => {
     const { env, Storage } = await setup({ status: 'migrated', upgraded: true });
     await Storage.createNote('Holds something');
     assert.equal(Storage.isUpgraded(), true);
-    const notice = new (env.get('ExportNotice'))({ storage: Storage, onExport: async () => true });
+    const notice = new (env.get('ExportNotice'))({
+      settings: env.settingsClient,
+      storageState: env.storageState,
+      onExport: async () => true,
+    });
     assert.equal(await notice.isDue(), false);
     assert.equal(env.chrome.local.setting_preMigrationNotice, undefined);
   });

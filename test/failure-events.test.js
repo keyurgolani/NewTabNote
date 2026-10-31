@@ -848,26 +848,33 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
 
   it('a capture that commits after one that failed is a capture.committed event, which resolves it', async () => {
     let failing = true;
-    const worker = await loadBackground({
-      mutate: global => {
-        const transaction = global.Storage.transaction.bind(global.Storage);
-        global.Storage.transaction = (...args) => {
-          if (failing) throw canaryError();
-          return transaction(...args);
-        };
-      },
-    });
-    const tab = { id: 9, windowId: 1, url: URL_CANARY, title: TITLE };
-    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
-    await worker.drain();
-    failing = false;
-    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
-    await worker.drain();
-    const seen = await inspect(worker.indexedDB);
-    assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['capture/capture-failed/-', 'resolved']]);
-    const codes = failures(seen.events).map(([code]) => code);
-    assert.deepEqual(codes, ['capture.failed', 'capture.committed']);
-    assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+    // The worker's kernel is on #17's adapter since #17 PR 1b, so the first capture fails where
+    // that opens its transaction on CanvasTabDB, once the worker's run and open are done
+    const { IDBDatabase } = require('fake-indexeddb');
+    const transaction = IDBDatabase.prototype.transaction;
+    try {
+      const worker = await loadBackground({
+        mutate: () => {
+          IDBDatabase.prototype.transaction = function failingOnce(...args) {
+            if (failing && this.name === 'CanvasTabDB') throw canaryError();
+            return transaction.apply(this, args);
+          };
+        },
+      });
+      const tab = { id: 9, windowId: 1, url: URL_CANARY, title: TITLE };
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+      await worker.drain();
+      failing = false;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page', pageUrl: URL_CANARY }, tab);
+      await worker.drain();
+      const seen = await inspect(worker.indexedDB);
+      assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['capture/capture-failed/-', 'resolved']]);
+      const codes = failures(seen.events).map(([code]) => code);
+      assert.deepEqual(codes, ['capture.failed', 'capture.committed']);
+      assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
+    } finally {
+      IDBDatabase.prototype.transaction = transaction;
+    }
   });
 
   it('a worker start reconciles the held failures of a context whose NewTabNoteTrust would not open', async () => {

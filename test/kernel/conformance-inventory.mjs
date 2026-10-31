@@ -239,6 +239,11 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
+  // #17 PR 1b took #33's copy back to js/storage.js, and with it the module these lived in
+  'js/kernel/adapters/indexeddb/data-urls.js': {
+    implements: "Blobs as data URLs, in the pre-update copy's export and #20's salvage file",
+    tests: 'test/kernel/storage-legacy-export.test.mjs',
+  },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
   // the one implementation of its port, which no shipped root makes until slice 4
   'js/kernel/adapters/indexeddb/salvage-reader.js': {
