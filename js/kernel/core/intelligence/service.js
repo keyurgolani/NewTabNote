@@ -51,7 +51,7 @@ import {
   sourceKey,
 } from './lifecycle.js';
 import { payload as commandSchema, signalConflict } from './operations.js';
-import { RECORD_VERSION, isSignal, signalRefusal } from './records.js';
+import { RECORD_VERSION, signalRefusal } from './records.js';
 import { isTimeZone, startOfLocalDay } from './time.js';
 
 /** @typedef {import('./records.js').IntelligenceSignal} IntelligenceSignal */
@@ -709,10 +709,17 @@ export function createIntelligence({
         events: made,
       } = await repository.transact(tx => {
         applyRederived(tx, drafts, now, changed);
+        // An inference read at the edit's revision already saw it, as when an edit is heard twice
+        const sawEdit = (/** @type {IntelligenceSignal} */ signal) =>
+          change.revision !== null &&
+          signal.sourceRefs.some(
+            source =>
+              source.kind === 'block' && source.blockId === change.blockId && source.revision === change.revision,
+          );
         const inferred = anchored
           .filter(signal => signal.provenance === 'inferred')
           .map(signal => tx.signal(signal.id))
-          .filter(/** @returns {signal is IntelligenceSignal} */ signal => signal !== null);
+          .filter(/** @returns {signal is IntelligenceSignal} */ signal => signal !== null && !sawEdit(signal));
         return staleAll(tx, inferred, 'source-edited', now, changed);
       });
       publish(made);
@@ -821,5 +828,5 @@ export function createIntelligence({
     return { commitSeq, changed, removed: [], regeneration: requests, refused: [] };
   }
 
-  return Object.freeze({ execute, readSignal, upsertSignals, noteChanged, invalidate, isSignal });
+  return Object.freeze({ execute, readSignal, upsertSignals, noteChanged, invalidate });
 }
