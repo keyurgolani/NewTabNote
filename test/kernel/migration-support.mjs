@@ -12,6 +12,7 @@ import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapt
 import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { runTransforms } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
@@ -21,6 +22,7 @@ import { CALLERS, NOW } from './support.mjs';
 /** @typedef {import('../fixtures/storage/load-fixture.mjs').Fixture} Fixture */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/migrate.js').MigrationOptions} MigrationOptions */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
+/** @typedef {import('../../js/kernel/adapters/indexeddb/transforms.js').TransformOptions} TransformOptions */
 /** @typedef {import('./storage-faults.mjs').Faults} Faults */
 
 const requireCommonJs = createRequire(import.meta.url);
@@ -112,6 +114,26 @@ export function start(of, options = {}) {
  * @param {Partial<MigrationOptions>} [options]
  */
 export const run = (of, options) => start(of, options).done;
+
+/**
+ * #17's data transforms on `of`, as the worker runs them once its run is in (#17 PR 3a), with
+ * the run's test host and no wait between batches
+ * @param {Profile} of
+ * @param {Partial<TransformOptions>} [options]
+ */
+export function transform(of, options = {}) {
+  return runTransforms({
+    indexedDB: of.faults.factory,
+    keyRange: KeyRange,
+    locks: legacyEnv.createLockManager(),
+    estimate: ROOMY,
+    crypto: /** @type {any} */ (webcrypto),
+    clock: { now: () => NOW },
+    logger: { warn: (event, detail) => of.logs.push({ event, detail }) },
+    yieldBetween: () => Promise.resolve(),
+    ...options,
+  });
+}
 
 /**
  * Commits on #17's adapter over `of`, opened as the worker opens it at this build's version,

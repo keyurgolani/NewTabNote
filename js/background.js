@@ -96,6 +96,11 @@ workerGlobal.captureToDailyNote = captureToDailyNote;
  */
 Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => migrationDone(), configurable: true });
 /**
+ * The latest data transforms' outcome (#17 PR 3a), for #34's harness. It starts the
+ * coordinator too, as storageUpgrade does, so reading it never throws before the start.
+ */
+Object.defineProperty(workerGlobal, 'storageTransforms', { get: () => transformsDone(), configurable: true });
+/**
  * The latest recovery-point purge's outcome (#17 PR 2b), for #34's harness. It starts the
  * coordinator too, as storageUpgrade does, so reading it never throws before the start.
  */
@@ -117,6 +122,18 @@ function migration() {
 function migrationDone() {
   const run = migration();
   return run ? run.done : null;
+}
+
+/**
+ * The latest data transforms' outcome of the coordinator's kernel (#17 PR 3a), after starting
+ * the coordinator, as migration() reads its run. Null when it has no kernel, since building it
+ * threw.
+ * @returns {WorkerClient['transforms']['done'] | null}
+ */
+function transformsDone() {
+  coordinator.start();
+  const client = /** @type {Partial<WorkerClient>} */ (coordinator.client());
+  return client.transforms ? client.transforms.done : null;
 }
 
 /**
