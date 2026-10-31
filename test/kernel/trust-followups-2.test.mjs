@@ -293,7 +293,7 @@ describe("#75's follow-ups (part 2)", () => {
     assert.equal(/** @type {any} */ (await trust.incidents()).data.copyRead, true);
   });
 
-  it('P4a: a memory remainder replayed after a clock step back reopens what it counts', async () => {
+  it('P4a: a memory remainder after a clock step back reopens what it counts, until its own write lands', async () => {
     const profile = trustProfile();
     const clock = manualClock();
     const a = flaky(profile);
@@ -310,17 +310,17 @@ describe("#75's follow-ups (part 2)", () => {
     assert.ok(rb);
     // The clock steps back; A fails a write and its copy set fails too: memory only
     clock.advance(-60_000);
-    a.failNext(5);
+    a.failNext(1, 'unreadable', { writesOnly: true });
     profile.settings.failSets = 10;
     assert.equal((await ra.records.append(event(1))).recorded, false);
     profile.settings.failSets = 0;
-    a.failNext(0);
+    // The remainder reopens it, whatever the clock says
+    const shown = (await ra.records.incidents()).find(incident => incident.key === WRITE_FAILED);
+    assert.deepEqual([shown?.state, shown?.occurrences], ['open', 2], 'a failed write held in memory read as resolved');
+    // #84: A's next write lands, and every occurrence since its baseline is its own, so it resolves
     await ra.records.append(event(2));
-    assert.equal(
-      (await storedAt(up, WRITE_FAILED))?.state,
-      'open',
-      'a failed write replayed from memory stayed resolved',
-    );
+    const stored = await storedAt(up, WRITE_FAILED);
+    assert.deepEqual([stored?.state, stored?.occurrences], ['resolved', 2]);
   });
 
   it('P4b: a later failing write undismisses write-failed after a clock step back', async () => {
