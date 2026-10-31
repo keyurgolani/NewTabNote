@@ -1,9 +1,11 @@
 /**
  * The new tab's boot guard (#27 slice 3, "Entries"), a classic script newtab.html runs before
  * its one module, the boot root. It watches for a start that fails before the app takes over:
- * the root's <script> firing error, the root's load of the workspace chunk failing
- * (`ntn:boot-failed`), or an error going uncaught or a rejection unhandled before the root
- * calls boot() (`ntn:boot`), when its listeners come off. A later error is the app's.
+ * the root's <script> firing error, the root telling it `ntn:boot-failed` (the workspace chunk
+ * didn't load, its boot() threw, or the root's own start failed), or an error going uncaught
+ * before boot() has returned. Then the root tells it `ntn:boot`, its listeners come off, and a
+ * later error is the app's. A rejection on the page doesn't count: one may not stop the start,
+ * and the root reports a failure of its own start itself.
  *
  * A failure goes to showBootFailure, state 1's seam. #27 slice 3b shows "NewTabNote couldn't
  * start. Reloading doesn't delete your notes." with Reload there; in slice 3 it logs one line,
@@ -14,7 +16,7 @@
  * @typedef {object} BootFailure
  * @property {string | null} buildId - the build, which the boot root knows and this doesn't
  * @property {string} chunk - newtab for the root, or the chunk the root loads
- * @property {string} reason - the loader's (js/runtime/lazy.js), or uncaught or unhandled
+ * @property {string} reason - the loader's (js/runtime/lazy.js), or uncaught
  */
 
 (function bootGuard() {
@@ -51,10 +53,6 @@
     fail({ buildId: null, chunk: 'newtab', reason: 'uncaught' });
   }
 
-  function onRejection() {
-    fail({ buildId: null, chunk: 'newtab', reason: 'unhandled' });
-  }
-
   /** @param {Event} event */
   function onBootFailed(event) {
     const detail = /** @type {CustomEvent} */ (event).detail || {};
@@ -68,13 +66,11 @@
   function stop() {
     watching = false;
     window.removeEventListener('error', onError, true);
-    window.removeEventListener('unhandledrejection', onRejection);
     window.removeEventListener('ntn:boot', stop);
     window.removeEventListener('ntn:boot-failed', onBootFailed);
   }
 
   window.addEventListener('error', onError, true);
-  window.addEventListener('unhandledrejection', onRejection);
   window.addEventListener('ntn:boot', stop);
   window.addEventListener('ntn:boot-failed', onBootFailed);
 })();
