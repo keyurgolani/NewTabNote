@@ -52,6 +52,13 @@ export const EVENT_CODES = Object.freeze({
     fields: Object.freeze([...ERROR, 'surface']),
     incident: Object.freeze({ providerId: 'index', faultCode: 'indexer-start-failed', severity: 'degraded' }),
   }),
+  // #17 PR 1b's migration run in the worker. None raises an incident: version 8 keeps working
+  // while a run is blocked or failed, so nothing the user has is at risk, and storage's check
+  // reports the state (`degraded`, a migration fault), which its check at 9 resolves.
+  // `schemaVersion` is the version the run upgrades to; `errorCode` why it stopped.
+  'storage.migration-completed': Object.freeze({ fields: Object.freeze(['surface', 'schemaVersion']) }),
+  'storage.migration-failed': Object.freeze({ fields: Object.freeze([...ERROR, 'surface', 'schemaVersion']) }),
+  'storage.migration-blocked': Object.freeze({ fields: Object.freeze(['errorCode', 'surface', 'schemaVersion']) }),
   // The Trust Center's own
   'trust.check-failed': Object.freeze({
     fields: Object.freeze(['providerId', 'durationMs', ...ERROR]),

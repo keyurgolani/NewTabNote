@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
-import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
+import { UPGRADE_RECORD_KEY, createWorkerClient, migrationEvents } from '../../js/kernel/composition/background.js';
 import { createMigrationReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
 import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
@@ -110,6 +110,25 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
     blocker.close();
     await worker.migration.done;
     assert.deepEqual(reports, [['blocked'], ['migrated', null]]);
+  });
+
+  it('migrationEvents journals each event once until a run completes, and nothing for a fresh profile or a current one', () => {
+    const sent = /** @type {any[]} */ ([]);
+    const report = migrationEvents((code, fields, failure) => sent.push([code, fields, failure && /** @type {any} */ (failure).code]));
+    const failed = { status: 'failed', shape: 'legacy', to: null, steps: [], recoveryPointId: null, failure: { code: 'schema-mismatch' } };
+    report({ kind: 'ended', outcome: /** @type {any} */ (failed) });
+    report({ kind: 'ended', outcome: /** @type {any} */ (failed) });
+    report({ kind: 'blocked' });
+    report({ kind: 'blocked' });
+    report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'current', failure: null }) });
+    report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', shape: 'none', to: 9, failure: null }) });
+    assert.deepEqual(sent, [
+      ['storage.migration-failed', { schemaVersion: 9 }, 'schema-mismatch'],
+      ['storage.migration-blocked', { schemaVersion: 9, errorCode: 'blocked-upgrade' }, undefined],
+    ]);
+    report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', to: 9, failure: null }) });
+    report({ kind: 'ended', outcome: /** @type {any} */ (failed) });
+    assert.deepEqual(sent.slice(2).map(([code]) => code), ['storage.migration-completed', 'storage.migration-failed']);
   });
 
   it("a runner whose report throws runs and records exactly as without one", async () => {

@@ -12,18 +12,17 @@
 // Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { MIGRATE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import {
+  MIGRATE_MESSAGE,
+  createWorkerClient,
+  installWorkerRouter,
+  migrationEvents,
+  workerHost,
+} from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
-
-/**
- * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
- * after a verified recovery point, then opens the database and runs startup maintenance, and a
- * capture waits for all of it, except while an older build's open page blocks the upgrade.
- */
-const kernel = createWorkerClient();
 
 /**
  * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
@@ -32,11 +31,20 @@ const kernel = createWorkerClient();
  */
 const failureEvents = createFailureEvents({ surface: 'worker-internal' });
 
+/**
+ * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
+ * after a verified recovery point, then opens the database and runs startup maintenance, and a
+ * capture waits for all of it, except while an older build's open page blocks the upgrade.
+ * Each run it makes goes to the journal as its own migration event (#20).
+ */
+const kernel = createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event) });
+
 // The worker's storage init: an open that failed is a storage incident now, not only when a
 // capture finds it
 kernel.whenReady().then(
   failure => {
-    if (!failure) return;
+    // A blocked upgrade is the run's own event (storage.migration-blocked), not a failed open
+    if (!failure || failure.code === 'blocked-upgrade') return;
     failureEvents.event(
       'storage.open-failed',
       { subjectId: 'CanvasTabDB', durationMs: Math.max(0, Date.now() - openStartedAt) },
