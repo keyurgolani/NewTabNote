@@ -76,12 +76,10 @@ class NotesManager {
     this.noteList = null;
 
     // App-level callbacks (set by App after construction)
-    this.onRefreshNotesList = null;
     /** @type {any} removeNotes (js/kernel/composition/removal.js), set by App: archive, trash, and delete go through it */
     this.removal = null;
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
-    this.onUpdateEmptyState = null;
     this.getEditor = null;
     /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
     this.noteTabs = null;
@@ -191,13 +189,13 @@ class NotesManager {
 
   /**
    * Unarchive a note by ID, with the kernel's unarchiveNote, which writes its placement fields
-   * and nothing else. The lists show it from the commit feed, with no refresh.
+   * and nothing else. The lists show it from the commit feed, with no refresh, and the empty
+   * state follows them (App.followEmptyState).
    */
   async unarchiveNote(noteId) {
     const outcome = await this.documentClient.unarchiveNote(noteId);
     if (!this._committed(outcome, 'Failed to restore note from archive')) return;
     await this._listed();
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     Utils.showToast('Note restored from archive', 'success');
   }
 
@@ -219,14 +217,13 @@ class NotesManager {
    * kind and code, never the note's content, and its toast says `action` failed and why
    * (Utils.writeFailureMessage, with `reasons` for a refusal's code). For a trash or a delete
    * (`removing`), a note another tab already deleted has left all the same, so it counts as
-   * done, as 1.4.x said. The empty state follows the lists either way.
+   * done, as 1.4.x said. The empty state follows the lists (App.followEmptyState).
    * @param {{kind: string, code?: string, reason?: string}} outcome
    * @param {string} action - such as "Failed to move note to trash"
    * @param {{removing?: boolean, reasons?: Object<string, string>}} [options]
    * @returns {boolean}
    */
   _removed(outcome, action, { removing = false, reasons } = {}) {
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     if (outcome.kind === 'committed') return true;
     if (removing && outcome.kind === 'rejected' && outcome.reason === 'not-found') return true;
     console.error(`${action}:`, outcome.kind, outcome.code);
@@ -467,7 +464,6 @@ class NotesManager {
     const outcome = await this.documentClient.createNote({ noteId, name, blocks });
     if (!this._committed(outcome, 'Failed to import note')) return;
     await this._listed();
-    if (this.onUpdateEmptyState) this.onUpdateEmptyState();
     if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
     Utils.showToast('Note imported', 'success');
   }

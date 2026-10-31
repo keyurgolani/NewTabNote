@@ -1175,13 +1175,13 @@ const NEW_TAB_FILES = [
 /**
  * A new tab's note workspace without App: Storage started, the elements the tab
  * bar and split view touch, and a TabController with both panes, wired the way
- * App wires it. `page.noteList` is the page's note list, as App's, which
- * onRefreshNotesList reloads, and `page.notes` its active notes. `wire(controller)`
- * gives a controller that takes notes out of the active set App's hooks for it, removeNotes
+ * App wires it. `page.noteList` is the page's note list, as App's, and
+ * `page.notes` its active notes. `wire(controller)` gives a controller that takes
+ * notes out of the active set App's hooks for it, removeNotes
  * (js/kernel/composition/removal.js) over this page's tabs as App builds it, the page's
  * document client, and the note list. `page.removal` is that removeNotes. With `ready: false` the tab is still starting up: other tabs' messages
- * refresh nothing until `tabs.workspaceReady()`. `page.refreshes` counts the refreshes,
- * and `page.listsOnly` the ones that asked for lists only. `onListQuery` is told of each
+ * refresh nothing until `tabs.workspaceReady()`. `page.refreshes` counts TabController's
+ * reloads of the note list, each for another tab's change. `onListQuery` is told of each
  * query the note list makes.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {{files?: Array<string>, ready?: boolean, onListQuery?: (query: Object) => void,
@@ -1225,22 +1225,24 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
       return noteList.view('active');
     },
     refreshes: 0,
-    listsOnly: 0,
   };
-  tabs.noteList = noteList;
+  // The page's note list, whose reloads TabController makes are counted
+  tabs.noteList = Object.create(noteList, {
+    reload: {
+      value: async () => {
+        const state = await noteList.reload();
+        page.refreshes += 1;
+        return state;
+      },
+    },
+  });
   // As App's createTabNote: an Untitled note through the kernel's createNote
   tabs.onCreateNote = async () => {
     const noteId = env.documentClient.newId();
     const outcome = await env.documentClient.createNote({ noteId, name: 'Untitled' });
     return outcome.kind === 'committed' ? { id: noteId, name: 'Untitled' } : null;
   };
-  tabs.onRefreshNotesList = async ({ listsOnly = false } = {}) => {
-    await noteList.reload();
-    page.refreshes += 1;
-    if (listsOnly) page.listsOnly += 1;
-  };
   tabs.onRenderNotesList = async () => {};
-  tabs.onUpdateEmptyState = () => {};
   await tabs.init();
   if (ready) tabs.workspaceReady();
   // As App.leaveNotes
@@ -1256,8 +1258,6 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
     documentClient: env.documentClient,
     onNotesLeaving: (ids) => tabs.forgetNotes(ids),
     onNotesLeft: (ids) => tabs.announceNotesLeft(ids),
-    onRefreshNotesList: tabs.onRefreshNotesList,
-    onUpdateEmptyState: () => {},
     onOpenNoteInNewTab: (noteId) => tabs.openNoteInNewTab(noteId),
     onOpenImportedNote: (noteId) => tabs.openImportedNote(noteId),
     getEditor: () => tabs.getEditor(),

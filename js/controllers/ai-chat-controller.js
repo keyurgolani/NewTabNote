@@ -57,7 +57,6 @@ class AIChatController {
     this.getEditor = null;           // () => BlockEditor
     this.onOpenNoteInNewTab = null;  // (noteId) => Promise<void>
     this.onOpenNoteById = null;      // (noteId) => Promise<void>
-    this.onRefreshNotesList = null;  // () => Promise<void>
     this.onEnsureDailyNote = null;   // () => Promise<{id: string}|null>, the Daily Note through the kernel
     this.onOpenNewTab = null;        // () => Promise<void>
     this.onOpenSettingsModal = null;  // () => Promise<void>
@@ -2151,7 +2150,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         }
       }
       if (this.indexing) this.indexing.noteChanged(noteId);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+      // The list shows the note's new preview from the commit feed
+      if (this.noteList) await this.noteList.settled();
 
       Utils.showToast(`Added ${parsedBlocks.length} AI block${parsedBlocks.length === 1 ? '' : 's'} to note`, 'success');
     } catch (error) {
@@ -2170,7 +2170,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       const created = await this.documentClient.createNote({ noteId, name: 'AI Generated' });
       if (created.kind !== 'committed') throw new Error(`Not stored: note (${created.kind}: ${created.code})`);
       await this.insertBlocksInto(noteId, parsedBlocks);
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+      // The list has the note from the commit feed before its tab opens
+      if (this.noteList) await this.noteList.settled();
       if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
 
       Utils.showToast('New note created from AI response', 'success');

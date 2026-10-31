@@ -273,6 +273,7 @@ class App {
       await this.noteList.settled();
       const lists = this.noteList.state();
       if (lists.kind === 'failed') throw storageFailure({ ...lists, messageKey: `unavailable.${lists.cause}` });
+      this.followEmptyState();
 
       // Initialize editors
       const editorChangeHandler = Utils.debounce(() => {
@@ -559,10 +560,10 @@ class App {
 
   /**
    * After a note-list write through the kernel (a new note, the Daily Note): once it
-   * committed, the tab's note list has it, from the commit feed with no refresh, and the empty
-   * state follows, as the refresh after the Storage write showed them. A write that didn't
-   * commit is logged by its outcome's kind and code, never the note's content, and its toast
-   * says `action` failed and why (Utils.writeFailureMessage).
+   * committed and the tab's note list has it, from the commit feed with no refresh, and the
+   * empty state has followed the list (followEmptyState). A write that didn't commit is
+   * logged by its outcome's kind and code, never the note's content, and its toast says
+   * `action` failed and why (Utils.writeFailureMessage).
    * @param {{kind: string, reason?: string, code?: string}} outcome
    * @param {string} action - such as "Failed to create note"
    * @returns {Promise<boolean>} whether it committed
@@ -574,7 +575,6 @@ class App {
       return false;
     }
     await this.noteList.settled();
-    this.updateEmptyState();
     return true;
   }
 
@@ -719,10 +719,9 @@ class App {
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => this.createTabNote();
-    this.tabController.onRefreshNotesList = (options) => this.refreshNotesList(options);
     this.tabController.onRenderNotesList = () => this.renderNotesList();
+    // Another new tab's change reads the lists again through it
     this.tabController.noteList = this.noteList;
-    this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     this.aiChatController = new AIChatController({
       settings: this.settings,
@@ -739,7 +738,6 @@ class App {
     this.aiChatController.getEditor = () => this.getEditor();
     this.aiChatController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.aiChatController.onOpenNoteById = (noteId) => this.openNoteById(noteId);
-    this.aiChatController.onRefreshNotesList = () => this.refreshNotesList();
     this.aiChatController.onEnsureDailyNote = () => this.ensureDailyNote();
     this.aiChatController.onOpenNewTab = () => this.openNewTab();
     this.aiChatController.onOpenSettingsModal = () => this.openSettingsModal();
@@ -767,7 +765,11 @@ class App {
       this.themeBuilderController.openThemeBuilder();
     };
     this.settingsController.onCloseAllModals = () => this.closeAllModals();
-    this.settingsController.onRefreshNotesList = () => this.refreshNotesList();
+    // An import, and a note opened from its Current Note list, read the lists again through it
+    this.settingsController.noteList = this.noteList;
+    // A note its notes list opened may be one another tab made: the sidebar marks it, and
+    // the empty state goes if it showed, as the refresh had them do
+    this.settingsController.onNoteOpened = () => this.showOpenedNote();
     this.settingsController.onOpenImportedNote = (noteId) => this.tabController.openImportedNote(noteId);
     this.settingsController.removal = this.removal;
     this.settingsController.onRenderAIPromptTemplateSettings = () => {
@@ -829,11 +831,9 @@ class App {
     this.notesManager.searchEngine = this.searchEngine;
 
     // Wire callbacks so the manager can trigger App-level actions
-    this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
     this.notesManager.removal = this.removal;
     this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
     this.notesManager.onCreateFirstNote = () => this.createFirstNote();
-    this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
     this.notesManager.getEditor = () => this.getEditor();
     // A title a job derives names the note's tab through TabController, as AI chat's does
     this.notesManager.noteTabs = this.tabController.noteTabs;
@@ -878,7 +878,6 @@ class App {
 
     // Wire App-level callbacks
     this.exportImportService.getEditor = () => this.getEditor();
-    this.exportImportService.onRefreshNotesList = () => this.refreshNotesList();
     this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
 
     this.themeBuilderController = new ThemeBuilderController({
@@ -1164,20 +1163,29 @@ class App {
   }
 
   /**
-   * Read the note lists again, after a write made outside the kernel or another tab's change,
-   * and show them, as this refresh always did: the sidebar's lists, counts, calendar, and
-   * tabs, keeping its virtual scroller, the empty state, and the palette while it's open. With
-   * `listsOnly`, as for another tab's change, the lists and counts refresh and the editor
-   * area stays as it is. A reload shim until #12 slice 7: a write routed through a command
-   * reaches the list from the commit feed instead.
-   * @param {{listsOnly?: boolean}} [options]
+   * The empty state follows the tab's note list, in place of the refresh and the callbacks
+   * that updated it: each change this tab commits shows it once no active or archived note is
+   * left, and takes it away once one is back. A reload doesn't: another tab's change reaches
+   * the lists only through one, and leaves this tab's editor area as it is
+   * (TabController._onNotesLeftElsewhere). The one reload that does is a note opened from
+   * Settings' notes list (showOpenedNote).
+   * @returns {void}
+   */
+  followEmptyState() {
+    this.noteList.subscribe((change) => {
+      if (change.reason === 'commit') this.updateEmptyState();
+    });
+  }
+
+  /**
+   * A note opened from Settings' notes list, which reads storage fresh, so it may be one
+   * another tab made, once the lists have read again: the sidebar marks it, and the empty
+   * state goes, as App's refresh had them do
    * @returns {Promise<void>}
    */
-  async refreshNotesList({ listsOnly = false } = {}) {
-    await this.sidebarController.reloadLists();
-
-    if (!listsOnly) this.updateEmptyState();
-    if (this.shortcutsManager.isCommandPaletteOpen()) this.shortcutsManager.refreshCommandPaletteResults();
+  async showOpenedNote() {
+    await this.renderNotesList();
+    this.updateEmptyState();
   }
 
   /**

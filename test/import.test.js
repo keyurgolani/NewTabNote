@@ -628,7 +628,10 @@ describe('Replace all (AC4)', () => {
     const { tabs, editors } = await openEditors(env, Storage);
     const controller = wireImport(makeController(env), tabs);
     let refreshes = 0;
-    controller.onRefreshNotesList = async () => { refreshes += 1; };
+    // The page's note list, as App hands it over, with its reloads counted
+    controller.noteList = Object.create(env.noteList, {
+      reload: { value: async () => { refreshes += 1; return env.noteList.reload(); } },
+    });
     // The commit lands, then the next chrome.storage.local write (the open tabs) fails
     const realImport = Storage.importData.bind(Storage);
     Storage.importData = async (...args) => {
@@ -646,7 +649,7 @@ describe('Replace all (AC4)', () => {
     const shown = await Storage.getNote(editors.primary.noteId);
     assert.ok(shown && !shown.trashed, 'a note from the import is open');
     assert.equal(tabs.openTabs[tabs.activeTabIndex].noteId, shown.id);
-    assert.equal(refreshes, 1, 'the notes list refreshed');
+    assert.equal(refreshes, 1, 'the lists read again');
   });
 
   it('a failed post-commit step in this page still tells the other new tabs', async () => {
