@@ -78,14 +78,6 @@
       ]
     },
     {
-      "id": "KD-011",
-      "ownerIssue": 17,
-      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/628bae9563e87dfebe9af0cde1cd8bc61ee215c4/js/storage.js#L1060-L1064",
-      "tests": [
-        "KD-011 a note with no updatedAt is listed with the other notes (fixed by #17 PR 3)"
-      ]
-    },
-    {
       "id": "KD-012",
       "ownerIssue": 18,
       "evidence": "https://github.com/keyurgolani/NewTabNote/blob/e64ece891b40b584e69833f478a9b8b179746530/js/ui/export-notice.js#L122-L123",

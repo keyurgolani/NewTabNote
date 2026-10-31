@@ -5,7 +5,8 @@
 // slices" item 4). Popup lists the notes with no archivedAt or trashedAt, templates included,
 // and reads insightsEnabled from IndexedDB's settings store, which Storage.setSetting never
 // writes (#4 fixes that). Side Panel reads every note the updatedAt index lists, and
-// InsightsSummary leaves out the ones archived or trashed by date.
+// InsightsSummary leaves out the ones archived or trashed by date. Since #17 PR 3a both read a
+// note without an updatedAt too, last (KD-011), which 1.4.x's index left out.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -92,7 +93,9 @@ describe('what Popup shows', () => {
 
   it("shows the day's summary only when IndexedDB's settings store says insightsEnabled", async () => {
     const enabled = await popup({ canvases: notes(), settings: [{ key: 'insightsEnabled', value: true }] });
-    assert.deepEqual(enabled.summary(), ['[Newest] todo newest', '[Template] todo template', '[Trashed without a date] todo trash-flag']);
+    assert.deepEqual(enabled.summary(), [
+      '[Newest] todo newest', '[Template] todo template', '[Trashed without a date] todo trash-flag', '[No time] todo no-time',
+    ]);
 
     const off = await popup({ canvases: notes(), settings: [{ key: 'insightsEnabled', value: false }] });
     assert.equal(off.summary(), null);
@@ -133,9 +136,11 @@ describe("Popup's quick note", () => {
     const saved = Object.values(recordsOf(dump, 'canvases')).find((record) => record.name === 'Call the plumber');
     const reference = recordsOf(dump, 'canvases')[referenceId];
     const fields = ({ id, name, createdAt, updatedAt, ...rest }) => rest;
-    const { revision, placementVersion, sourceRevision, ...own } = saved;
+    const { revision, placementVersion, sourceRevision, placement, kind, lifecycle, ...own } = saved;
     assert.deepEqual(fields(own), fields(reference));
     assert.deepEqual([revision, placementVersion, sourceRevision], [1, 0, 0]);
+    // #17 PR 3a's group beside the flags: Unfiled, a note, active
+    assert.deepEqual([placement, kind, lifecycle], [{ kind: 'collection', folderId: null }, 'note', 'active']);
     assert.equal(typeof saved.createdAt, 'number');
     assert.equal(saved.updatedAt, saved.createdAt);
     assert.deepEqual(recordsOf(dump, 'search_index')[saved.id], {
@@ -147,8 +152,8 @@ describe("Popup's quick note", () => {
 describe('what Side Panel shows', () => {
   it('summarizes the insights of every note it reads, leaving out what was archived or trashed by date', async () => {
     const { sections, els } = await sidePanel();
-    assert.deepEqual(sections(), [['Action Items', ['todo newest', 'todo template', 'todo trash-flag']]]);
-    assert.equal(els['status-count'].textContent, '3');
+    assert.deepEqual(sections(), [['Action Items', ['todo newest', 'todo template', 'todo trash-flag', 'todo no-time']]]);
+    assert.equal(els['status-count'].textContent, '4');
   });
 
   it('shows its empty state on a profile with no notes and one with no database', async () => {
