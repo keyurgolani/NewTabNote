@@ -1276,7 +1276,7 @@ describe('#71 follow-ups', () => {
   };
 
   it(
-    'runs one re-derive for every hint queued behind a hung producer, so a dismiss waits about one deadline',
+    'shares one queued re-derive among every hint behind a hung producer, so a dismiss waits two deadlines at most',
     { timeout: 5000 },
     async () => {
       const timers = manualTimers();
@@ -1291,7 +1291,11 @@ describe('#71 follow-ups', () => {
       await tick();
       const dismissing = w.intelligence.execute(command('dismiss', 0));
       await tick();
-      // One deadline: the derive that's running times out, and the hints behind it shared it
+      // The derive that's running times out, then the one the other hints share does
+      timers.fireAll();
+      await tick();
+      const afterOne = await Promise.race([dismissing.then(() => 'committed'), tick(20).then(() => 'still-waiting')]);
+      assert.equal(afterOne, 'still-waiting');
       timers.fireAll();
       const raced = await Promise.race([
         dismissing.then(outcome => outcome.kind),
@@ -1406,5 +1410,146 @@ describe('#71 follow-ups', () => {
     await w.intelligence.noteChanged({ type: 'block-deleted', noteId: 'n5', blockId: 't1' });
     await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
     assert.equal((await stateOf(w, id)).signal.freshness.cause, 'anchor-deleted');
+  });
+});
+
+describe('#85 review', () => {
+  const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} noteId
+   * @param {string} blockId
+   */
+  const hint = (w, noteId, blockId) =>
+    w.intelligence.noteChanged({ type: 'block-edited', noteId, blockId, revision: null });
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+
+  /**
+   * A world whose producer hung once, timed out, and works again
+   * @param {Parameters<typeof intelligenceWorld>[0]} [options]
+   */
+  async function hungOnce(options = {}) {
+    const timers = manualTimers();
+    const w = await intelligenceWorld({ timers, ...options });
+    await w.addNote('n5', [todo('t1', 'Call vendor')]);
+    await w.addNote('n8', [todo('u1', 'Buy milk')]);
+    let release = () => {};
+    w.tasks.hold = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const hung = hint(w, 'n5', 't1');
+    await tick();
+    timers.fireAll();
+    assert.equal((await hung).failed.length, 1);
+    w.tasks.hold = null;
+    release();
+    return { w, timers };
+  }
+
+  it('runs every hint after a producer timed out, on its own note and others, whether or not the clock moved', async () => {
+    for (const [advance, noteId, blockId, block] of /** @type {const} */ ([
+      [1000, 'n5', 't1', todo('t1', 'Call vendor before noon')],
+      [500, 'n8', 'u1', todo('u1', 'Buy oat milk')],
+      [2000, 'n5', 't1', todo('t1', 'Call vendor', true)],
+      [0, 'n5', 't1', todo('t1', 'Call vendor x')],
+    ])) {
+      const { w } = await hungOnce();
+      const id = idOf(taskDraft({ noteId, blockId }));
+      w.clock.advance(advance);
+      await w.editBlock(noteId, block);
+      const result = await hint(w, noteId, blockId);
+      assert.deepEqual(result.failed, [], `${noteId} after ${advance} ms`);
+      const read = await stateOf(w, id);
+      assert.equal(read.signal.title, block.content);
+      assert.equal(read.signal.checked, block.checked);
+    }
+  });
+
+  for (const portReplay of [true, false]) {
+    it(`answers unknown again when a resend's derive fails, keeps nothing, and decides on a later retry (replay ${portReplay ? 'on' : 'off'})`, async () => {
+      const timers = manualTimers();
+      const w = await intelligenceWorld({ timers, portReplay });
+      await w.addNote('n5', [todo('t1', 'Call vendor')]);
+      const id = idOf(taskDraft({ noteId: 'n5', blockId: 't1' }));
+      const inner = w.noteCommands.setTodoChecked;
+      let release = () => {};
+      const held = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      w.noteCommands.setTodoChecked = async note => {
+        await held;
+        return inner(note);
+      };
+      const complete = { type: 'intelligence.complete', commandId: 'k1', signalId: id, expectedDecisionRevision: 0 };
+      const first = w.intelligence.execute(complete);
+      await tick();
+      timers.fireAll();
+      assertOutcome(await first, 'unknown', 'note-command-timeout');
+      release();
+      await tick(10);
+      w.noteCommands.setTodoChecked = inner;
+      // The user unchecks it in the note, and that hint's derive times out
+      await w.editBlock('n5', todo('t1', 'Call vendor', false));
+      let releaseDerive = () => {};
+      w.tasks.hold = new Promise(resolve => {
+        releaseDerive = () => resolve(undefined);
+      });
+      const hung = hint(w, 'n5', 't1');
+      await tick();
+      timers.fireAll();
+      await hung;
+      w.tasks.hold = null;
+      releaseDerive();
+      // Inside the still-hung window the resend can't re-derive, so it can't say
+      const retry = await w.intelligence.execute({ ...complete });
+      assert.equal(retry.kind, 'unknown');
+      const during = await stateOf(w, id);
+      assert.equal(during.signal.checked, false);
+      assert.equal(during.decision, null);
+      // Once the window has passed, a retry decides from a real derive
+      w.clock.advance(10000);
+      const later = await w.intelligence.execute({ ...complete });
+      assertOutcome(later, 'conflict', 'note-revision-conflict');
+      assert.equal((await stateOf(w, id)).signal.checked, false);
+    });
+  }
+
+  it('brings back a not-reproduced signal on the next draft even when the draft is the same as before', async () => {
+    const w = await intelligenceWorld();
+    await w.addNote('n5', [todo('t1', 'Call vendor')]);
+    const id = idOf(taskDraft({ noteId: 'n5', blockId: 't1' }));
+    const base = /** @type {NonNullable<typeof w.tasks.derive>} */ (w.tasks.derive);
+    let once = true;
+    w.tasks.derive = async identity => {
+      if (once) {
+        once = false;
+        return null;
+      }
+      return base.call(w.tasks, identity);
+    };
+    await hint(w, 'n5', 't1');
+    assert.equal((await stateOf(w, id)).signal.freshness.cause, 'not-reproduced');
+    await hint(w, 'n5', 't1');
+    assert.equal((await stateOf(w, id)).signal.freshness.state, 'current');
+    // And through a producer upsert of the same draft
+    once = true;
+    await hint(w, 'n5', 't1');
+    const draft = await base.call(w.tasks, {
+      producerId: TASKS,
+      noteId: 'n5',
+      anchorBlockId: 't1',
+      subjectKey: 'task',
+    });
+    assert.ok(draft);
+    assert.deepEqual((await w.intelligence.upsertSignals(TASKS, [draft])).changed, [id]);
+    assert.equal((await stateOf(w, id)).signal.freshness.state, 'current');
   });
 });

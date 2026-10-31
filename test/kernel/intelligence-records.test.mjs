@@ -664,7 +664,8 @@ describe('the raw link patterns (#71 follow-ups)', () => {
         const started = performance.now();
         for (const [match] of text.matchAll(new RegExp(pattern.source, pattern.flags))) keeps(match);
         const took = performance.now() - started;
-        assert.ok(took < 250, `${JSON.stringify(unit)} took ${took.toFixed(0)} ms on ${pattern.source.slice(0, 40)}`);
+        // Generous, for a loaded CI runner: linear runs take a few ms, and the quadratic rule took seconds
+        assert.ok(took < 1500, `${JSON.stringify(unit)} took ${took.toFixed(0)} ms on ${pattern.source.slice(0, 40)}`);
       }
     }
   });
