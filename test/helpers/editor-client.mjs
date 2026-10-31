@@ -22,9 +22,9 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 /**
  * The page's kernel client, the document client over it, and its note list
  * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
- * them, so a commit an editor or a job makes reaches the list's feed. The database's state and
- * the storage guard's raw export come from the page's Storage, and an import's backup check is
- * the root's, as
+ * them, so a commit an editor or a job makes reaches the list's feed. The database's state
+ * comes from the page's Storage, and the storage guard's raw export and an import's backup check
+ * are the root's, as
  * the root gives them to App.
  * @param {{storage: any, settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
  *   pageNow?: () => number, zone?: string}} host - the page's Storage and chrome.storage.local,
@@ -81,7 +81,8 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
       missingStores: () => storage.missingStores,
       upgraded: () => storage.isUpgraded(),
     }),
-    recovery: createNewTabRecovery({ storage }),
+    // The raw export over the page's IndexedDB, as the root's (raw-export.js)
+    recovery: createNewTabRecovery({ indexedDB: globalThis.indexedDB }),
     validateBackup: createNewTabBackupCheck(),
   };
 }

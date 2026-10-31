@@ -77,12 +77,13 @@ export async function writeRecoveryCopy(settings, copy, clock, withItems) {
 
 /**
  * Every value of store `name`, each Blob in it as a data URL, read in a transaction of its own.
- * A store without a key path, which version 8 has none of, comes as `{key, value}` pairs.
+ * A store without a key path, which version 8 has none of, comes as `{key, value}` pairs. The
+ * storage guard's raw export reads each store with it too (raw-export.js).
  * @param {IDBDatabase} db
  * @param {string} name
  * @returns {Promise<unknown[]>}
  */
-function readStoreForCopy(db, name) {
+export function readStoreForCopy(db, name) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(name, 'readonly');
     const store = tx.objectStore(name);
