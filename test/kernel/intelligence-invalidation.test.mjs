@@ -621,3 +621,60 @@ describe('cited notes and requests (#71 round 2)', () => {
     assert.deepEqual((await w.intelligence.upsertSignals(RECIPE, [orphan])).refused, ['source-missing']);
   });
 });
+
+describe('source checks fail closed (#71 round 3)', () => {
+  async function notes() {
+    const w = await intelligenceWorld({ checkSources: true });
+    await w.addNote('n1', [todo('t1', 'Call vendor')]);
+    await w.addNote('n2', []);
+    await w.addNote('n3', []);
+    return w;
+  }
+
+  it('refuses and counts an upsert when sourceStates throws or answers the wrong count', async () => {
+    const w = await notes();
+    const draft = connectionDraft({ others: ['n2', 'n3'] });
+    for (const sourceStates of [
+      async () => {
+        throw new Error('read failed');
+      },
+      async () => /** @type {any} */ (['available']),
+    ]) {
+      const context = w.anotherContext({ ...w.noteCommands, sourceStates });
+      const result = await context.upsertSignals(LINKS, [draft]);
+      assert.deepEqual(result.refused, ['source-states-unavailable']);
+      assert.equal((await w.intelligence.readSignal(idOf(draft))).kind, 'not-found');
+    }
+  });
+
+  it('refuses a connection left with too few notes', async () => {
+    const w = await notes();
+    const draft = connectionDraft({ others: ['n8', 'n9'] });
+    assert.deepEqual((await w.intelligence.upsertSignals(LINKS, [draft])).refused, ['too-few-sources']);
+  });
+
+  it('starts a signal citing an archived or template note with it unavailable', async () => {
+    const w = await notes();
+    assert.equal(
+      (await w.kernel.execute({ type: 'archiveNote', commandId: 'arch-n2', noteId: 'n2' })).kind,
+      'committed',
+    );
+    const template = await w.kernel.execute({
+      type: 'createNote',
+      commandId: 'tmpl-n4',
+      noteId: 'n4',
+      name: 'n4',
+      blocks: [],
+    });
+    assert.equal(template.kind, 'committed');
+    w.markTemplate('n4');
+    const draft = connectionDraft({ others: ['n2', 'n4'] });
+    assert.deepEqual((await w.intelligence.upsertSignals(LINKS, [draft])).refused, []);
+    const state = await read(w, idOf(draft));
+    assert.deepEqual(state.signal.unavailableNotes, [
+      { noteId: 'n2', cause: 'note-archived' },
+      { noteId: 'n4', cause: 'template' },
+    ]);
+    assert.equal(state.signal.freshness.state, 'suspended');
+  });
+});

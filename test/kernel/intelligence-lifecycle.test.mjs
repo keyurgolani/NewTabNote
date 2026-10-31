@@ -29,6 +29,8 @@ import {
   pinDraft,
   taskDraft,
   todo,
+  noteCommandsFake,
+  realTimers,
 } from './intelligence-fixtures.mjs';
 import { NOW, testClock } from './support.mjs';
 
@@ -294,7 +296,8 @@ describe('lifecycle commands (#7, "Contracts")', () => {
     });
     const intelligence = createIntelligence({
       repository,
-      noteCommands: { setTodoChecked: async () => assert.fail('no note command') },
+      noteCommands: noteCommandsFake(async () => assert.fail('no note command')),
+      timers: realTimers,
       timeZone: ZONE,
       clock: testClock(),
     });
@@ -488,11 +491,10 @@ describe('one completion authority (#7, "One completion authority")', () => {
     const repository = createMemoryIntelligenceRepository();
     const intelligence = createIntelligence({
       repository,
-      noteCommands: {
-        setTodoChecked: async () => {
-          throw new UnavailableError('storage', 'note-write-failed', true);
-        },
-      },
+      noteCommands: noteCommandsFake(async () => {
+        throw new UnavailableError('storage', 'note-write-failed', true);
+      }),
+      timers: realTimers,
       timeZone: ZONE,
       clock: testClock(),
     });
@@ -881,5 +883,289 @@ describe('the anchor revision only moves forward (#71 round 2)', () => {
     await w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
     assert.deepEqual(w.events, []);
     assert.equal((await stateOf(w, id)).signal.revision, revisionNow);
+  });
+});
+
+describe('every writer goes through the signal’s queue (#71 round 3)', () => {
+  const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
+  const identity = { producerId: TASKS, noteId: 'n5', anchorBlockId: 't1', subjectKey: 'task' };
+
+  /** @param {Parameters<typeof intelligenceWorld>[0]} [options] */
+  async function taskWorld(options = {}) {
+    const w = await intelligenceWorld(options);
+    await w.addNote('n5', [todo('t1', 'Call vendor'), todo('t2', 'Pay invoice')]);
+    let count = 0;
+    const id = idOf(taskDraft({ noteId: 'n5', blockId: 't1' }));
+    /**
+     * @param {string} type
+     * @param {number} expectedDecisionRevision
+     * @param {Record<string, unknown>} [fields]
+     */
+    const command = (type, expectedDecisionRevision, fields = {}) => ({
+      type: `intelligence.${type}`,
+      commandId: `r3-${++count}`,
+      signalId: id,
+      expectedDecisionRevision,
+      ...fields,
+    });
+    return { w, id, command };
+  }
+
+  /** @param {Awaited<ReturnType<typeof intelligenceWorld>>} w */
+  const checkedOf = async w => (await w.readNote('n5'))?.blocks.find(block => block.id === 't1')?.checked === true;
+
+  /**
+   * @param {Awaited<ReturnType<typeof intelligenceWorld>>} w
+   * @param {string} id
+   */
+  const stateOf = async (w, id) => {
+    const read = await w.intelligence.readSignal(id);
+    if (read.kind !== 'ready') throw new Error('signal missing');
+    return read;
+  };
+
+  /** Every way the domain writes a signal, each a call that touches t1's */
+  const WRITERS = /** @type {const} */ ([
+    'upsertSignals',
+    'noteChanged block-edited',
+    'noteChanged block-deleted',
+    'noteChanged note-state',
+    'noteChanged note-deleted',
+    'invalidate producer-version',
+    'execute',
+  ]);
+
+  it('lists the writers: the API is readSignal and these, and each waits behind the signal’s queue', async () => {
+    const probe = await taskWorld();
+    assert.deepEqual(Object.keys(probe.w.intelligence).sort(), [
+      'execute',
+      'invalidate',
+      'noteChanged',
+      'readSignal',
+      'upsertSignals',
+    ]);
+    for (const name of WRITERS) {
+      const { w, id, command } = await taskWorld();
+      const old = await w.tasks.derive?.(identity);
+      assert.ok(old);
+      /** @type {Record<(typeof WRITERS)[number], () => Promise<unknown>>} */
+      const write = {
+        upsertSignals: () => w.intelligence.upsertSignals(TASKS, [{ ...old, title: 'Call the vendor' }]),
+        'noteChanged block-edited': async () => {
+          await w.editBlock('n5', todo('t1', 'Call the vendor'));
+          return w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+        },
+        'noteChanged block-deleted': () =>
+          w.intelligence.noteChanged({ type: 'block-deleted', noteId: 'n5', blockId: 't1' }),
+        'noteChanged note-state': () =>
+          w.intelligence.noteChanged({
+            type: 'note-state',
+            noteId: 'n5',
+            trashed: true,
+            archived: false,
+            isTemplate: false,
+          }),
+        'noteChanged note-deleted': () => w.intelligence.noteChanged({ type: 'note-deleted', noteId: 'n5' }),
+        'invalidate producer-version': () => {
+          w.tasks.version = 2;
+          return w.intelligence.invalidate({ cause: 'producer-version', match: { producerId: TASKS, version: 2 } });
+        },
+        execute: () => w.intelligence.execute(command('dismiss', 0)),
+      };
+      const before = await stateOf(w, id);
+      // A complete holds t1's queue while its note command waits at the gate
+      let release = () => {};
+      w.noteGate.hold = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      const holding = w.intelligence.execute(command('complete', 0));
+      await tick();
+      let settled = false;
+      const writing = write[name]().then(() => {
+        settled = true;
+      });
+      await tick(20);
+      assert.equal(settled, false, `${name} finished while t1's queue was held`);
+      const during = await w.intelligence.readSignal(id);
+      assert.equal(
+        during.kind === 'ready' ? during.signal.revision : -1,
+        before.signal.revision,
+        `${name} wrote early`,
+      );
+      w.noteGate.hold = null;
+      release();
+      await holding;
+      await writing;
+    }
+  });
+
+  it('never lets an older producer draft put back an older checked', async () => {
+    const { w, id, command } = await taskWorld();
+    const old = await w.tasks.derive?.(identity);
+    assert.ok(old);
+    assertOutcome(await w.intelligence.execute(command('complete', 0)), 'committed', 'signal-completed');
+    await w.intelligence.upsertSignals(TASKS, [old]);
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.checked, await checkedOf(w));
+    assert.equal(read.signal.checked, true);
+    assert.equal(read.signal.sourceRefs[0].revision, (await w.readNote('n5'))?.revision);
+  });
+
+  it('never brings back a signal whose anchor was deleted', async () => {
+    const { w, id } = await taskWorld();
+    const old = await w.tasks.derive?.(identity);
+    assert.ok(old);
+    await w.intelligence.noteChanged({ type: 'block-deleted', noteId: 'n5', blockId: 't1' });
+    const result = await w.intelligence.upsertSignals(TASKS, [old]);
+    assert.deepEqual(result.refused, ['anchor-deleted']);
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.freshness.state, 'invalidated');
+    assert.equal(read.signal.freshness.cause, 'anchor-deleted');
+  });
+
+  it('keeps a producer upsert landing between a complete’s phases from undoing it', async () => {
+    const { w, id, command } = await taskWorld();
+    const old = await w.tasks.derive?.(identity);
+    assert.ok(old);
+    const racing = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        const outcome = await w.noteCommands.setTodoChecked(note);
+        await w.intelligence.upsertSignals(TASKS, [old]);
+        return outcome;
+      },
+    });
+    assertOutcome(await racing.execute(command('complete', 0)), 'committed', 'signal-completed');
+    const read = await stateOf(w, id);
+    assert.equal(read.signal.checked, true);
+    assert.equal(await checkedOf(w), true);
+  });
+
+  it('bounds derive with the same deadline, so a hung derive leaves the queue moving', { timeout: 5000 }, async () => {
+    const timers = manualTimers();
+    const { w, command } = await taskWorld({ timers });
+    w.tasks.hold = new Promise(() => {});
+    const edited = w.intelligence.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+    await tick();
+    const dismissing = w.intelligence.execute(command('dismiss', 0));
+    await tick();
+    timers.fireAll();
+    w.tasks.hold = null;
+    const result = await edited;
+    assert.ok(result.failed.length > 0);
+    assertOutcome(await dismissing, 'committed', 'signal-dismissed');
+  });
+
+  it('clears the deadline timer when the note command answers in time', async () => {
+    const timers = manualTimers();
+    const { w, command } = await taskWorld({ timers });
+    assertOutcome(await w.intelligence.execute(command('complete', 0)), 'committed', 'signal-completed');
+    assert.equal(timers.size(), 0);
+  });
+
+  it('answers committed when an unrelated edit overtook the write but the checked asked for stands', async () => {
+    const { w, id, command } = await taskWorld();
+    const other = w.anotherContext();
+    const racing = w.anotherContext({
+      ...w.noteCommands,
+      async setTodoChecked(note) {
+        const outcome = await w.noteCommands.setTodoChecked(note);
+        await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+        await other.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't2', revision: null });
+        return outcome;
+      },
+    });
+    assertOutcome(await racing.execute(command('complete', 0)), 'committed', 'signal-completed');
+    const read = await stateOf(w, id);
+    assert.equal(read.state.status, 'completed');
+    assert.deepEqual(
+      read.decision?.history.map(entry => entry.action),
+      ['complete'],
+    );
+  });
+
+  it('resends a timed-out note command unchanged, so the retry gets the kernel’s kept outcome', async () => {
+    for (const heard of [true, false]) {
+      const timers = manualTimers();
+      const { w, id, command } = await taskWorld({ timers });
+      let release = () => {};
+      const gate = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      let first = true;
+      const slow = w.anotherContext({
+        ...w.noteCommands,
+        async setTodoChecked(note) {
+          if (first) {
+            first = false;
+            await gate;
+          }
+          return w.noteCommands.setTodoChecked(note);
+        },
+      });
+      const complete = command('complete', 0);
+      const pending = slow.execute(complete);
+      await tick();
+      timers.fireAll();
+      assertOutcome(await pending, 'unknown', 'note-command-timeout');
+      release();
+      await tick(20);
+      if (heard) await slow.noteChanged({ type: 'block-edited', noteId: 'n5', blockId: 't1', revision: null });
+      const retry = await slow.execute({ ...complete });
+      assertOutcome(retry, 'committed', 'signal-completed');
+      const read = await stateOf(w, id);
+      assert.equal(read.signal.checked, true);
+      assert.deepEqual(
+        read.decision?.history.map(entry => entry.action),
+        ['complete'],
+      );
+    }
+  });
+
+  it('answers a duplicate of a command that got a note conflict with that conflict', async () => {
+    const { w, command } = await taskWorld();
+    await w.editBlock('n5', todo('t2', 'Pay the invoice'));
+    const complete = command('complete', 0);
+    const first = await w.intelligence.execute(complete);
+    assertOutcome(first, 'conflict', 'note-revision-conflict');
+    assert.deepEqual(await w.intelligence.execute({ ...complete }), first);
+  });
+
+  it('answers a duplicate in flight beside a concurrent dismiss with the first one’s outcome', async () => {
+    const { w, id } = await taskWorld();
+    const complete = { type: 'intelligence.complete', commandId: 'x1', signalId: id, expectedDecisionRevision: 0 };
+    const [a, b, d] = await Promise.all([
+      w.intelligence.execute(complete),
+      w.intelligence.execute({ ...complete }),
+      w.intelligence.execute({
+        type: 'intelligence.dismiss',
+        commandId: 'x2',
+        signalId: id,
+        expectedDecisionRevision: 0,
+      }),
+    ]);
+    assert.deepEqual(a, b);
+    assert.equal(w.noteCalls.length, 1);
+    assert.equal(d.kind, 'conflict');
+  });
+
+  it('refuses to build without sourceStates or timers', () => {
+    const repository = createMemoryIntelligenceRepository();
+    const port = noteCommandsFake(async () => assert.fail('no note command'));
+    assert.throws(
+      () =>
+        createIntelligence({
+          repository,
+          noteCommands: { setTodoChecked: port.setTodoChecked },
+          timeZone: ZONE,
+          timers: realTimers,
+        }),
+      TypeError,
+    );
+    assert.throws(
+      () =>
+        createIntelligence({ repository, noteCommands: port, timeZone: ZONE, timers: /** @type {any} */ (undefined) }),
+      TypeError,
+    );
   });
 });

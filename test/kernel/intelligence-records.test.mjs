@@ -36,6 +36,8 @@ import {
   inferredDraft,
   pinDraft,
   taskDraft,
+  noteCommandsFake,
+  realTimers,
 } from './intelligence-fixtures.mjs';
 import { staticImports } from './import-graph.mjs';
 import { NOW, testClock } from './support.mjs';
@@ -109,7 +111,8 @@ describe('signal identity (#7, "Records and identity")', () => {
     const repository = createMemoryIntelligenceRepository();
     const intelligence = createIntelligence({
       repository,
-      noteCommands: { setTodoChecked: async () => assert.fail('no note command') },
+      noteCommands: noteCommandsFake(async () => assert.fail('no note command')),
+      timers: realTimers,
       timeZone: ZONE,
       clock: testClock(),
     });
@@ -305,7 +308,8 @@ describe('quarantine on read (#7, "Required states and failure behavior")', () =
     });
     const intelligence = createIntelligence({
       repository,
-      noteCommands: { setTodoChecked: async () => assert.fail('no note command') },
+      noteCommands: noteCommandsFake(async () => assert.fail('no note command')),
+      timers: realTimers,
       timeZone: ZONE,
       clock: testClock(),
     });
@@ -378,7 +382,8 @@ describe('URLs, tokens, and free text in records (#71 review)', () => {
     const repository = createMemoryIntelligenceRepository();
     const intelligence = createIntelligence({
       repository,
-      noteCommands: { setTodoChecked: async () => assert.fail('no note command') },
+      noteCommands: noteCommandsFake(async () => assert.fail('no note command')),
+      timers: realTimers,
       timeZone: ZONE,
       clock: testClock(),
     });
@@ -503,6 +508,77 @@ describe('link redaction, round 2 (#71)', () => {
     for (const mark of ['\u200e', '\u200f', '\u061c', '\u00ad', '\u200b', '\u2060', '\ufeff']) {
       assert.ok(!v.is(signalRecord, { ...signal, title: `Call ${mark}vendor` }), mark.codePointAt(0)?.toString(16));
       assert.equal(plainTitle(`Call ${mark}vendor`), 'Call vendor');
+    }
+  });
+});
+
+describe('link redaction, round 3 (#71)', () => {
+  it('redacts shortener TLDs, a host right after a colon, underscore, or @, other dots, backslashes, userinfo, and IPv6', () => {
+    for (const link of [
+      'bit.ly/abc123',
+      'amzn.to/3xYz',
+      'discord.gg/invite123',
+      'goo.gl/maps/xyz',
+      'evil.zip/reset?token=abc',
+      'evil.top/reset?token=abc',
+      'Link:evil.example/reset?token=abc',
+      'URL:https://evil.example/reset?token=abc',
+      'see_evil.example/reset?token=abc',
+      '@evil.example/reset?token=abc',
+      'evil\u{FF0E}example/reset?token=abc',
+      'evil\u{3002}example/reset?token=abc',
+      'evil\u{FF61}example/reset?token=abc',
+      'https:\\\\evil.example\\reset?token=abc',
+      'https:/evil.example/reset?token=abc',
+      'user:hunter2@evil.example',
+      'admin:pw@10.0.0.1',
+      '[::1]:8080/admin?pw=x',
+      'HTTPS://EVIL.EXAMPLE/X',
+      'about:blank',
+    ]) {
+      const redacted = plainTitle(`Call ${link} today`);
+      assert.ok(
+        redacted.includes('[link]') && !/evil|bit\.ly|amzn|discord|goo\.gl|hunter2|10\.0|::1/i.test(redacted),
+        `${link} => ${redacted}`,
+      );
+      assert.ok(!v.is(signalRecord, asSignal(inferredDraft(), { title: `Call ${link} today` })), link);
+    }
+  });
+
+  it('strips every default-ignorable code point, by code point, before matching', () => {
+    for (const mark of [
+      '\u{34F}',
+      '\u{FE00}',
+      '\u{FE0F}',
+      '\u{E0020}',
+      '\u{E0041}',
+      '\u{115F}',
+      '\u{1160}',
+      '\u{3164}',
+      '\u{FFA0}',
+    ]) {
+      assert.equal(
+        plainTitle(`Call evil${mark}.example/reset?token=abc today`),
+        'Call [link] today',
+        mark.codePointAt(0)?.toString(16),
+      );
+      assert.equal(plainTitle(`Call ${mark}vendor`), 'Call vendor', mark.codePointAt(0)?.toString(16));
+      assert.ok(
+        !v.is(signalRecord, asSignal(taskDraft(), { title: `Call ${mark}vendor` })),
+        mark.codePointAt(0)?.toString(16),
+      );
+    }
+  });
+
+  it('leaves ASP.NET/Core, Status:?, and Talk about:things as written', () => {
+    for (const text of [
+      'ASP.NET/Core',
+      'Status:?',
+      'Talk about:things',
+      'Fix README.md/CHANGELOG.md',
+      'Email bob@corp.example',
+    ]) {
+      assert.equal(plainTitle(text), text, text);
     }
   });
 });

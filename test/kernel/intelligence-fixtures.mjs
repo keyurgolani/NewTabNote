@@ -63,6 +63,17 @@ export function manualTimers() {
   };
 }
 
+/**
+ * A note-command port for a test that never completes a task: `setTodoChecked` as given, and
+ * `sourceStates` answering every source available
+ * @param {NoteCommandPort['setTodoChecked']} setTodoChecked
+ * @returns {NoteCommandPort}
+ */
+export const noteCommandsFake = setTodoChecked => ({
+  setTodoChecked,
+  sourceStates: async sourceRefs => sourceRefs.map(() => /** @type {const} */ ('available')),
+});
+
 /** A time zone that is neither UTC nor, on most machines, the machine's own */
 export const ZONE = 'America/New_York';
 
@@ -308,6 +319,9 @@ export async function intelligenceWorld({
     };
   };
 
+  /** Notes a test marks as templates, which createNote can't make */
+  const templates = new Set();
+
   /** @type {NonNullable<NoteCommandPort['sourceStates']>} */
   const sourceStates = async sourceRefs =>
     Promise.all(
@@ -317,16 +331,21 @@ export async function intelligenceWorld({
         if (source.kind === 'block' && !read.blocks.some(block => block.id === source.blockId)) return 'missing';
         if (read.note.trashed === true) return 'note-trashed';
         if (read.note.archived === true) return 'note-archived';
-        if (read.note.isTemplate === true) return 'template';
+        if (read.note.isTemplate === true || templates.has(source.noteId)) return 'template';
         return 'available';
       }),
     );
 
+  /** A test can hold every note command at this gate */
+  const noteGate = { hold: /** @type {Promise<unknown> | null} */ (null) };
+
   /** @type {NoteCommandPort} */
   const noteCommands = {
-    ...(checkSources ? { sourceStates } : {}),
+    // Without checkSources every source reads as available, since most tests cite notes they never made
+    sourceStates: checkSources ? sourceStates : async sourceRefs => sourceRefs.map(() => 'available'),
     async setTodoChecked(command) {
       noteCalls.push({ ...command });
+      if (noteGate.hold) await noteGate.hold;
       const read = await readNote(command.noteId);
       const block = read?.blocks.find(candidate => candidate.id === command.blockId);
       if (!read || !block)
@@ -487,6 +506,8 @@ export async function intelligenceWorld({
     repository,
     intelligence,
     noteCommands,
+    noteGate,
+    markTemplate: (/** @type {string} */ noteId) => templates.add(noteId),
     anotherContext,
     tasks,
     recipe,
