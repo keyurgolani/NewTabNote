@@ -202,12 +202,12 @@ describe('going back to 1.4.1 with a file it imports', () => {
 
   it("this build's Export JSON, taken after the upgrade, imports through the frozen v1.4.1 importData too", async () => {
     const { worker } = await migrated('v8.basic');
-    // The new tab's own Storage, on the version-10 database
+    // The new tab's own Storage, on the version-11 database
     const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
     page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
     const Current = page.get('Storage');
     await Current.init();
-    assert.equal(Current.db.version, 10);
+    assert.equal(Current.db.version, 11);
     const blob = await Current.exportAllAsBlob();
     const file = JSON.parse(await blob.text());
     assert.ok(file.canvases.length > 0);
