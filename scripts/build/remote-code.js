@@ -9,7 +9,7 @@
  *   - a page's <script src> or <link rel="modulepreload"> on another host.
  * build/remote-allowlist.json lists the occurrences reviewed to stay, each with its reason and
  * the issue that removes it. The list only shrinks: a row with more occurrences than the
- * package holds fails as stale, and test/remote-code.test.js pins the rows it may hold.
+ * package holds fails as stale, and test/build-security.test.js pins the rows it may hold.
  */
 
 const fs = require('node:fs');

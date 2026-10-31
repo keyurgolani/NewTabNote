@@ -23,6 +23,7 @@ const { Linter } = require('eslint');
 const { problem } = require('./diagnostics.js');
 const { htmlTags, rawTextElements } = require('./markup.js');
 const { readVendor } = require('./notices.js');
+const { scanScript } = require('./js-scan.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
@@ -46,7 +47,9 @@ const GLOBALS = {
   setInterval: 'readonly',
   execScript: 'readonly',
 };
-const SCRIPT_TYPES = new Set(['', 'module', 'text/javascript', 'application/javascript', 'importmap']);
+// The only inline <script> bodies a page may carry: JSON data blocks, which never run. Any
+// other type, JavaScript under some name a list would miss (text/ecmascript) included, fails.
+const DATA_TYPES = new Set(['application/json', 'application/ld+json']);
 
 const linter = new Linter({ configType: 'flat' });
 
@@ -74,7 +77,13 @@ function dynamicCode(file, text) {
       fatal = `${parseError.message} (${parseError.line}:${parseError.column})`;
       continue;
     }
-    return { hits: messages.map((message) => ({ rule: String(message.ruleId), at: `${message.line}:${message.column}` })), fatal: null };
+    const hits = messages.map((message) => ({ rule: String(message.ruleId), at: `${message.line}:${message.column}` }));
+    // The Function constructor reached in ways no-new-func doesn't see, counted under its rule
+    const seen = new Set(hits.map((hit) => `${hit.rule}@${hit.at}`));
+    for (const where of scanScript(file, text).functionConstructors) {
+      if (!seen.has(`no-new-func@${where}`)) hits.push({ rule: 'no-new-func', at: where });
+    }
+    return { hits, fatal: null };
   }
   return { hits: [], fatal };
 }
@@ -123,7 +132,7 @@ function checkPages(files) {
     const html = files.text(file);
     for (const element of rawTextElements(html)) {
       const type = (element.attributes.get('type') || '').trim().toLowerCase();
-      if (element.name === 'script' && SCRIPT_TYPES.has(type) && element.body.trim() !== '') {
+      if (element.name === 'script' && !DATA_TYPES.has(type) && element.body.trim() !== '') {
         problems.push(problem('csp/inline-script', `${file}:${element.at}`, 'an inline script, which the extension CSP blocks. Move it to a file in js/.'));
       }
     }

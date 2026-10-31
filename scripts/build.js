@@ -341,11 +341,12 @@ async function minifyJSFile(file, srcPath, destPath, module, isDev) {
 }
 
 /**
- * Minify a CSS file at level 2, or at level 1 when CSS_LEVEL_1 lists it. Any CleanCSS error or
- * throw fails it, in dev mode too, where the source then ships as written.
+ * Minify one stylesheet at level 2, or at level 1 when CSS_LEVEL_1 lists it. A CleanCSS error,
+ * warning, or throw is a problem: CleanCSS reports a syntax error as a warning and drops what
+ * it couldn't read (#89's review), so a warning fails the file as an error does.
+ * Returns the minified styles or the problem.
  */
-function minifyCSSFile(file, srcPath, destPath, isDev) {
-  const code = fs.readFileSync(srcPath, 'utf8');
+function minifyCSS(file, code) {
   const levelOne = CSS_LEVEL_1.includes(file);
 
   let result;
@@ -359,6 +360,19 @@ function minifyCSSFile(file, srcPath, destPath, isDev) {
   if (result.errors.length > 0) {
     return { problem: problem('build/css', file, `refused to copy it unminified after a CleanCSS error: ${result.errors.join('; ')}`) };
   }
+  if (result.warnings.length > 0) {
+    return { problem: problem('build/css', file, `refused CleanCSS's ${plural(result.warnings.length, 'warning')}, each a rule it couldn't read and drops: ${result.warnings.join('; ')}`) };
+  }
+  return { styles: result.styles };
+}
+
+/**
+ * Minify a CSS file (minifyCSS). It fails in dev mode too, where the source then ships as written.
+ */
+function minifyCSSFile(file, srcPath, destPath, isDev) {
+  const code = fs.readFileSync(srcPath, 'utf8');
+  const result = minifyCSS(file, code);
+  if (result.problem) return { problem: result.problem };
 
   const output = isDev ? code : result.styles;
   ensureDir(path.dirname(destPath));
@@ -660,5 +674,6 @@ module.exports = {
   MINIMUM_CHROME_VERSION,
   isCopiedAsIs,
   terserOptions,
+  minifyCSS,
   manifestProblems,
 };

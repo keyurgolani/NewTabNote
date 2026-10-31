@@ -5,9 +5,11 @@
  * manifest.json, it follows every path the package names: manifest keys, each page's src,
  * href, poster, data, and srcset, stylesheet url() and CSS imports, static and literal dynamic
  * imports, new Worker, importScripts, chrome.runtime.getURL, chrome.offscreen.createDocument's
- * url, chrome.tabs.create's url, and iconUrl. It fails on a named path the package lacks, on a
- * file nothing names that build/static-assets.json doesn't list, and on a getURL or
- * createDocument path built at run time, which it couldn't follow.
+ * url, chrome.tabs.create's url, and iconUrl, a shorthand `{ url }` or `{ iconUrl }` included. It
+ * fails on a named path the package lacks, on a file nothing names that build/static-assets.json
+ * doesn't list, and on a path of any of those kinds built at run time in first-party code,
+ * which it couldn't follow (#89's review: terser folds some constants into literals, so a
+ * development build shipped them unchecked). A vendored file's own paths are its record's.
  *
  * Paths resolve as Chrome resolves them: imports, page attributes, and stylesheet URLs from
  * their own file; new Worker and importScripts from the page or worker that runs the script;
@@ -19,6 +21,7 @@ const path = require('node:path');
 const { problem } = require('./diagnostics.js');
 const { scanScript } = require('./js-scan.js');
 const { htmlTags, rawTextElements, cssUrls } = require('./markup.js');
+const { readVendor } = require('./notices.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
@@ -40,6 +43,22 @@ const MANIFEST_FILES = [
 
 /** Page attributes that name a file */
 const URL_ATTRIBUTES = ['src', 'href', 'poster', 'data'];
+
+/**
+ * What takes each kind of path a script names, for the problem when it's built at run time.
+ * A static import's specifier is always a literal.
+ * @type {Record<import('./js-scan.js').ReferenceKind, string>}
+ */
+const NON_LITERAL = {
+  import: 'An import',
+  'dynamic-import': 'import()',
+  worker: 'new Worker()',
+  'import-scripts': 'importScripts()',
+  'get-url': 'chrome.runtime.getURL',
+  'offscreen-document': 'chrome.offscreen.createDocument\'s url',
+  'tabs-create': 'chrome.tabs.create\'s url',
+  'icon-url': 'iconUrl',
+};
 
 /** @typedef {'page' | 'stylesheet' | 'script' | 'other'} Kind */
 
@@ -156,10 +175,11 @@ function manifestPaths(manifest) {
 /**
  * Check that the package's references close over its files
  * @param {PackageFiles} files
- * @param {{staticAssets?: StaticAssets}} [options]
+ * @param {{staticAssets?: StaticAssets, vendored?: Set<string>}} [options] - vendored: the
+ *   package's vendored files (js/lib/vendor.json), whose own run-time paths aren't followed
  * @returns {{problems: Problem[], referenced: Set<string>}}
  */
-function checkClosure(files, { staticAssets: assets = staticAssets() } = {}) {
+function checkClosure(files, { staticAssets: assets = staticAssets(), vendored = new Set(readVendor().keys()) } = {}) {
   /** @type {Problem[]} */
   const problems = [];
   /** @type {Set<string>} */
@@ -248,9 +268,9 @@ function checkClosure(files, { staticAssets: assets = staticAssets() } = {}) {
       for (const { kind: referenceKind, value, at } of scan.references) {
         const where = `${file}:${at}`;
         if (value === null) {
-          if (referenceKind === 'get-url' || referenceKind === 'offscreen-document') {
-            const call = referenceKind === 'get-url' ? 'chrome.runtime.getURL' : 'chrome.offscreen.createDocument\'s url';
-            problems.push(problem('closure/non-literal', where, `${call} gets a path built at run time, which the closure check can't follow. Pass a string literal.`));
+          // A vendored library's own run-time paths are its record's business (js/lib/vendor.json)
+          if (!vendored.has(file)) {
+            problems.push(problem('closure/non-literal', where, `${NON_LITERAL[referenceKind]} gets a path built at run time, which the closure check can't follow. Pass a string literal.`));
           }
           continue;
         }
