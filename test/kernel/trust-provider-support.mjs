@@ -30,9 +30,9 @@ import { realTimers } from './trust-support.mjs';
 /** The manifest this build ships */
 export const MANIFEST = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'manifest.json'), 'utf8'));
 
-/** chrome.permissions as Chrome answers it for this manifest, everything declared granted */
+/** chrome.permissions as Chromium answers it for this manifest: everything declared, and the new tab override it implies */
 export const grantedAsDeclared = () => ({
-  getAll: async () => ({ permissions: [...MANIFEST.permissions], origins: [...MANIFEST.host_permissions] }),
+  getAll: async () => ({ permissions: [...MANIFEST.permissions, 'newTabPageOverride'], origins: [...MANIFEST.host_permissions] }),
 });
 
 /**

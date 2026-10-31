@@ -55,8 +55,8 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  */
 
 /**
- * The manifest's permission fields, as chrome.runtime.getManifest() answers them
- * @typedef {{permissions?: string[], optional_permissions?: string[], host_permissions?: string[], optional_host_permissions?: string[], version?: string}} ManifestPermissions
+ * The manifest fields that decide permissions, as chrome.runtime.getManifest() answers them
+ * @typedef {{permissions?: string[], optional_permissions?: string[], host_permissions?: string[], optional_host_permissions?: string[], chrome_url_overrides?: Record<string, string>, version?: string}} ManifestPermissions
  */
 
 /**

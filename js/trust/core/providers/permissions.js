@@ -50,16 +50,35 @@ const strings = value => (Array.isArray(value) ? value.filter(item => typeof ite
 const subjectOf = name => (SUBJECT_NAMES.includes(name) ? name : null);
 
 /**
+ * The permissions Chrome grants for a manifest key rather than a `permissions` entry, which
+ * getAll() lists: a page override, as the new tab is (seen in Chromium by
+ * e2e/trust-permissions.spec.js)
+ */
+const IMPLIED = Object.freeze({ newtab: 'newTabPageOverride', bookmarks: 'bookmarksPageOverride', history: 'historyPageOverride' });
+
+/**
+ * @param {{chrome_url_overrides?: unknown}} manifest
+ * @returns {string[]}
+ */
+function impliedBy(manifest) {
+  const overrides = manifest.chrome_url_overrides;
+  if (overrides === null || typeof overrides !== 'object') return [];
+  return Object.entries(IMPLIED)
+    .filter(([page]) => Object.prototype.hasOwnProperty.call(overrides, page))
+    .map(([, permission]) => permission);
+}
+
+/**
  * Compares Chrome's grants with the manifest
  * @param {{permissions?: unknown, origins?: unknown}} granted
- * @param {{permissions?: unknown, optional_permissions?: unknown, host_permissions?: unknown, optional_host_permissions?: unknown}} manifest
+ * @param {{permissions?: unknown, optional_permissions?: unknown, host_permissions?: unknown, optional_host_permissions?: unknown, chrome_url_overrides?: unknown}} manifest
  */
 export function comparePermissions(granted, manifest) {
   const grantedApis = new Set(strings(granted.permissions));
   const grantedOrigins = new Set(strings(granted.origins));
   const declaredApis = strings(manifest.permissions);
   const declaredOrigins = strings(manifest.host_permissions);
-  const allowedApis = new Set([...declaredApis, ...strings(manifest.optional_permissions)]);
+  const allowedApis = new Set([...declaredApis, ...strings(manifest.optional_permissions), ...impliedBy(manifest)]);
   const allowedOrigins = new Set([...declaredOrigins, ...strings(manifest.optional_host_permissions)]);
   return {
     missingApis: declaredApis.filter(name => !grantedApis.has(name)),

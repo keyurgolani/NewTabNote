@@ -33,7 +33,7 @@ function buildWithTrust() {
  * and the installed manifest
  */
 async function checkPermissions() {
-  const { permissions } = await import('/js/trust/core/providers/permissions.js');
+  const { comparePermissions, permissions } = await import('/js/trust/core/providers/permissions.js');
   const { runCheck } = await import('/js/trust/core/checks.js');
   const { receiptSchema } = await import('/js/trust/core/records.js');
   const v = await import('/js/lib/valibot/index.mjs');
@@ -65,8 +65,8 @@ async function checkPermissions() {
     receipt: run.receipt,
     faults: run.faults,
     storable: v.is(receiptSchema, stored),
-    declared: (manifest.permissions || []).length + (manifest.host_permissions || []).length,
     granted: (granted.permissions || []).length + (granted.origins || []).length,
+    difference: comparePermissions(granted, manifest),
   };
 }
 
@@ -83,11 +83,11 @@ test("the permissions provider verifies against Chrome's grants for the installe
     const page = await extension.openSurface('popup');
     const result = await page.evaluate(checkPermissions);
     expect(result.outcome).toBe('answered');
+    expect(result.difference).toMatchObject({ missingApis: [], missingOrigins: [], extraApis: [], extraOrigins: [] });
     expect(result.faults).toEqual([]);
     expect(result.receipt.status).toBe('verified');
     expect(result.receipt.operation).toBe('permissions.compare-manifest');
     expect(result.receipt.evidence.count).toBe(result.granted);
-    expect(result.granted).toBe(result.declared);
     expect(result.storable).toBe(true);
     await expectNoUncaught(extension, page);
   } finally {

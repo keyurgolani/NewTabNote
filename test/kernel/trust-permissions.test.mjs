@@ -34,14 +34,16 @@ const checkWith = (granted, manifest = MANIFEST) =>
     { context: { permissions: { getAll: async () => granted }, manifest }, clock: manualClock(), timers: realTimers },
   );
 
-const DECLARED = Object.freeze({ permissions: [...MANIFEST.permissions], origins: [...MANIFEST.host_permissions] });
+// What Chromium grants this manifest (e2e/trust-permissions.spec.js saw it): every declared
+// permission and host, and newTabPageOverride, which chrome_url_overrides.newtab implies
+const DECLARED = Object.freeze({ permissions: [...MANIFEST.permissions, 'newTabPageOverride'], origins: [...MANIFEST.host_permissions] });
 
 describe('permissions and destinations (#20 slice 2)', () => {
   it("verifies when Chrome grants exactly what the manifest declares, counting the grants and the egress list", async () => {
     const { receipt, faults } = await checkWith(DECLARED);
     assert.equal(receipt.status, 'verified');
     assert.deepEqual(receipt.evidence, {
-      count: MANIFEST.permissions.length + MANIFEST.host_permissions.length,
+      count: MANIFEST.permissions.length + 1 + MANIFEST.host_permissions.length,
       records: UNCOVERED_EGRESS.length,
     });
     assert.deepEqual(faults, []);
@@ -67,6 +69,10 @@ describe('permissions and destinations (#20 slice 2)', () => {
       optional_permissions: ['bookmarks'],
     });
     assert.equal(optional.receipt.status, 'verified');
+    // The new tab override is implied only by chrome_url_overrides.newtab
+    const { chrome_url_overrides: _, ...noOverride } = MANIFEST;
+    const implied = await checkWith(DECLARED, noOverride);
+    assert.deepEqual(implied.faults.map(fault => fault.faultCode), ['permission-changed']);
   });
 
   it('compares origins and permissions as sets, whatever order Chrome answers in', () => {
