@@ -3908,6 +3908,8 @@ class BlockEditor {
     this._inFlightSaves = new Set();
     /** Load counter; a load that is no longer the latest drops its result */
     this._loadSeq = 0;
+    /** Quiet flushes running (flushSave): a failed retry's toast is left to their caller */
+    this._quietFlushes = 0;
     /** True while an import holds saves (see holdSaves) */
     this._savesHeld = false;
     /** The save timer fired while saves were held */
@@ -4078,7 +4080,7 @@ class BlockEditor {
       // Resolves once the revert is done and the save it lets through has finished, so a caller
       // that needs the note stored (AI insert, flushSave) waits for that, not for nothing
       const revert = this._revertDone;
-      work.push(revert.then(() => this.flushSave()));
+      work.push(revert.then(() => this.flushSave()).then(() => {}));
     } else if (loaded) {
       work.push(this._startSave(loadedIsRetry));
     }
@@ -4098,22 +4100,34 @@ class BlockEditor {
 
   /**
    * Write any pending save now, or wait for the one in flight. A pending retry
-   * counts. Writes nothing when nothing is pending.
-   * @returns {Promise<void>}
+   * counts, and runs now. Writes nothing when nothing is pending. Answers
+   * whether everything the editor holds is stored: false while an edit whose
+   * save failed, its retry included, has no later save that stored it, while a
+   * deleted note keeps its text on screen, and once the page has to reload with
+   * an edit it can't write. A quiet flush (a reload's guard) leaves a failed
+   * retry's toast to its caller, which says the failure itself.
+   * @param {{quiet?: boolean}} [options]
+   * @returns {Promise<boolean>}
    */
-  async flushSave() {
-    // A pending save, the retry it may schedule, and the saves in flight: a few rounds at most.
-    for (let round = 0; round < 8; round++) {
-      if (this._takePendingSave()) {
-        await this._startDue();
-        continue;
+  async flushSave({ quiet = false } = {}) {
+    if (quiet) this._quietFlushes += 1;
+    try {
+      // A pending save, the retry it may schedule, and the saves in flight: a few rounds at most.
+      for (let round = 0; round < 8; round++) {
+        if (this._takePendingSave()) {
+          await this._startDue();
+          continue;
+        }
+        const active = this._activeSaves();
+        if (active.length > 0) {
+          await Promise.all(active.map((entry) => entry.promise));
+          continue;
+        }
+        return this._failedSeq.size === 0 && !this.noteGone && !this.reloadRequired;
       }
-      const active = this._activeSaves();
-      if (active.length > 0) {
-        await Promise.all(active.map((entry) => entry.promise));
-        continue;
-      }
-      return;
+      return false;
+    } finally {
+      if (quiet) this._quietFlushes -= 1;
     }
   }
 
@@ -4245,7 +4259,7 @@ class BlockEditor {
     if ((this._failedSeq.get(state.noteId) || 0) < state.seq) this._failedSeq.set(state.noteId, state.seq);
     if (state.isRetry) {
       this.updateSaveStatus('Error saving');
-      Utils.showToast('Failed to save note. Please try again.', 'error');
+      if (this._quietFlushes === 0) Utils.showToast('Failed to save note. Please try again.', 'error');
       return;
     }
     // A newer write of this note has opened since, and it holds this edit too.
@@ -4534,6 +4548,9 @@ class BlockEditor {
    */
   _onNoteGone(state) {
     if (state.noteId !== this.noteId) {
+      // Nothing can store the left note's changes any more, and the toast says so, so its
+      // failure no longer holds the editor's flush
+      this._failedSeq.delete(state.noteId);
       // A write that was in flight when "Save as a new note" took the text is moot
       if (!this._rescuedIds.has(state.noteId)) {
         Utils.showToast("A note you edited was deleted, so its last changes aren't saved.", 'error');
@@ -4646,6 +4663,7 @@ class BlockEditor {
     // The deleted note's pending and failed saves can't land anywhere; the new note gets all the text.
     this._takePendingSave();
     this._retryCopies.delete(goneId);
+    this._failedSeq.delete(goneId);
     this._rescuedIds.add(goneId);
     // The new note has the title already
     this._unsavedTitle = null;

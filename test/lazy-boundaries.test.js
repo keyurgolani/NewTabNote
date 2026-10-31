@@ -2,9 +2,9 @@
 
 // #27 slice 3, "Lazy boundaries": js/runtime/lazy.js. loadChunk and loadLibrary load what a
 // page needs only at first use and say how it went, loaded or failed with a reason, after one
-// retry; the reload guards; the extra documents a lazy chunk's stylesheets also reach; the
-// two seams #27 slice 3b replaces (states 2 and 4), which show nothing in slice 3; and the
-// boundary rules the loader keeps.
+// retry, and never reject; the reload guards, which reload only once every guard saved (#27 slice
+// 3b); the extra documents a lazy chunk's stylesheets also reach; and the boundary rules the
+// loader keeps. Each call site draws its own state from the answer (js/ui/part-state.js).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -130,34 +130,15 @@ describe('loadChunk (js/runtime/lazy.js)', () => {
     }
   });
 
-  it("is build-mismatch when build-info.json is another build's: it calls the update seam, state 2, and doesn't retry", async () => {
+  it("is build-mismatch when build-info.json is another build's, and doesn't retry", async () => {
     const { createLoader } = await lazy();
     const { host, calls } = fakeHost({ fetchJson: async () => ({ buildId: 'build-b', chunks: { workspace: 'assets/workspace-B2.js' } }) });
     const loader = createLoader(host);
-    const updated = [];
-    loader.seams.updated = (name) => updated.push(name);
     const result = await loader.loadChunk('workspace', async () => { throw fetchFailure('x'); });
     assert.equal(result.reason, 'build-mismatch');
-    assert.deepEqual(updated, ['workspace']);
+    assert.equal(typeof result.retry, 'function');
     assert.deepEqual(calls.imported, []);
     assert.deepEqual(calls.warned.map(([, detail]) => detail), [{ buildId: 'build-a', chunk: 'workspace', reason: 'build-mismatch' }]);
-  });
-
-  it("calls the loading seam, state 4, as a load starts and when it settles, and shows nothing by default", async () => {
-    const { createLoader, seams } = await lazy();
-    const { host } = fakeHost();
-    const loader = createLoader(host);
-    const events = [];
-    loader.seams.loading = (name) => {
-      events.push(`start ${name}`);
-      return () => events.push(`settled ${name}`);
-    };
-    await loader.loadChunk('workspace', async () => ({}));
-    await loader.loadChunk('workspace', async () => { throw new Error('x'); });
-    assert.deepEqual(events, ['start workspace', 'settled workspace', 'start workspace', 'settled workspace']);
-    // The page's seams are no-ops until #27 slice 3b
-    assert.equal(typeof seams.loading('workspace'), 'function');
-    assert.equal(seams.updated('workspace'), undefined);
   });
 
   it("gives a failure's retry, which loads it again", async () => {
@@ -171,25 +152,6 @@ describe('loadChunk (js/runtime/lazy.js)', () => {
     });
     assert.equal(result.reason, 'evaluation-failed');
     assert.deepEqual(await result.retry(), { status: 'loaded', module: { second: true } });
-  });
-
-  it('hands a failure to the failed seam, state 3, with its retry, and a mismatch to the update seam alone', async () => {
-    const { createLoader, seams } = await lazy();
-    const { host } = fakeHost();
-    const loader = createLoader(host);
-    const seen = [];
-    loader.seams.failed = (name, failure) => seen.push(['failed', name, failure.reason, typeof failure.retry]);
-    loader.seams.updated = (name) => seen.push(['updated', name]);
-    await loader.loadChunk('workspace', async () => { throw new Error('x'); });
-    const other = createLoader(fakeHost({ fetchJson: async () => ({ buildId: 'build-b', chunks: {} }) }).host);
-    other.seams.failed = loader.seams.failed;
-    other.seams.updated = loader.seams.updated;
-    await other.loadChunk('workspace', async () => { throw fetchFailure('x'); });
-    assert.deepEqual(seen, [['failed', 'workspace', 'evaluation-failed', 'function'], ['updated', 'workspace']]);
-    assert.equal(seams.failed('workspace', /** @type {any} */ ({})), undefined);
-    // Each loader starts with the page's seams, and replacing its own leaves those
-    assert.notEqual(loader.seams, seams);
-    assert.equal(createLoader(fakeHost().host).seams.failed, seams.failed);
   });
 
   /**
@@ -315,14 +277,11 @@ describe('loadLibrary (js/runtime/lazy.js)', () => {
       return { buildId: 'build-b', chunks: {} };
     };
     const loader = createLoader(host);
-    const updated = [];
-    loader.seams.updated = (name) => updated.push(name);
     const result = await loader.loadLibrary('chart');
     assert.equal(result.reason, 'build-mismatch');
     assert.deepEqual(seen, [], 'no script');
     assert.equal(host.global.Chart, undefined);
     assert.deepEqual(calls.fetched, ['chrome-extension://ntn/build-info.json']);
-    assert.deepEqual(updated, ['chart']);
     assert.deepEqual(calls.warned.map(([, detail]) => detail), [{ buildId: 'build-a', chunk: 'chart', reason: 'build-mismatch' }]);
   });
 

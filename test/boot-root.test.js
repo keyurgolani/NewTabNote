@@ -200,9 +200,8 @@ describe('the boot root loads the workspace chunk and calls its boot() (js/entri
     assert.equal(await startWorkspace({ loader: createLoader(fakeHost()), target, load: async () => ({ boot() {} }) }), true);
     assert.deepEqual(heard, ['ntn:boot']);
 
-    // A seam that throws makes the loader's own answer reject
-    const loader = createLoader(fakeHost());
-    loader.seams.loading = () => { throw new Error('a seam that throws'); };
+    // A loader whose own answer rejects
+    const loader = { ...createLoader(fakeHost()), loadChunk: async () => { throw new Error('a loader that rejects'); } };
     const failing = new EventTarget();
     const failed = listen(failing);
     assert.equal(await startWorkspace({ loader, target: failing, load: async () => ({ boot() {} }) }), false);

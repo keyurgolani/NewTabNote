@@ -172,11 +172,16 @@ class TabController {
 
   /**
    * Write what every open editor has pending, as Export JSON and Create
-   * Backup do before they read, so the file has the last edit.
-   * @returns {Promise<void>}
+   * Backup do before they read, so the file has the last edit. Answers whether
+   * every editor holds nothing unstored (BlockEditor.flushSave), which a reload
+   * through the page's loader waits on; a quiet flush leaves a failed retry's
+   * toast to the caller.
+   * @param {{quiet?: boolean}} [options]
+   * @returns {Promise<boolean>}
    */
-  async saveOpenEditors() {
-    await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave()));
+  async saveOpenEditors(options) {
+    const saved = await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave(options)));
+    return saved.every((answer) => answer === true);
   }
 
   /**
