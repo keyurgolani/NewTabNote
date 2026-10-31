@@ -50,7 +50,9 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {(storeNames: string | string[], mode?: IDBTransactionMode) => IDBTransaction} transaction
  * @property {(options?: {watchConnection?: boolean}) => Promise<void>} open
  * @property {() => Promise<void>} openExisting
- * @property {() => Promise<void>} runStartupMaintenance
+ * @property {(options?: {integrityCheck?: boolean}) => Promise<void>} runStartupMaintenance
+ *   first-run settings, then the read-only integrity check unless `integrityCheck` is false
+ * @property {() => Promise<void>} runIntegrityCheck - the read-only integrity check alone
  * @property {string} openState - `version-changed` or `closed-by-browser` once a connection openExisting opened is gone
  * @property {(flush: () => void) => () => void} beforeConnectionCloses - runs `flush` when another
  *   context upgrades the database, before a watched connection closes
@@ -226,11 +228,14 @@ function runUnit(storage, unit) {
  * it goes, before the next IndexedDB call: the service worker's root sets it, since a worker
  * has no page to reload. A reopen after a newer build's upgrade is refused as `newer-schema`,
  * and the next call tries again. A command that reopens awaits the open before its first
- * transaction, so only the worker, which runs no editor save, sets it.
- * @param {{storage: LegacyStorage, settings: SettingsStore, mode?: OpenMode, reopen?: boolean}} options
+ * transaction, so only the worker, which runs no editor save, sets it. `integrityCheck: false`
+ * leaves the read-only integrity check out of startup maintenance, which then writes first-run
+ * settings only: the worker runs the check as runIntegrityCheck after an install or an update
+ * (#35 slice 1), so no start reads every store for it.
+ * @param {{storage: LegacyStorage, settings: SettingsStore, mode?: OpenMode, reopen?: boolean, integrityCheck?: boolean}} options
  * @returns {LegacyAdapter}
  */
-export function createLegacyAdapter({ storage, settings, mode = 'versioned', reopen = false }) {
+export function createLegacyAdapter({ storage, settings, mode = 'versioned', reopen = false, integrityCheck = true }) {
   /**
    * Whether the connection is gone: another context upgraded or deleted the database, or
    * Chrome closed the connection itself. A page's only comes back with a reload (#17: pages
@@ -437,8 +442,12 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
       if (mode !== 'versioned') {
         return fresh(Promise.resolve(unavailable('adapter', 'maintenance-needs-versioned-open', false)));
       }
+      const maintained =
+        effect.kind === 'integrity-check'
+          ? storage.runIntegrityCheck()
+          : storage.runStartupMaintenance({ integrityCheck });
       return fresh(
-        storage.runStartupMaintenance().then(
+        maintained.then(
           () => work.done(),
           error => unavailableFrom(storageError(error)),
         ),

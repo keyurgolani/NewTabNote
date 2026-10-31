@@ -95,6 +95,43 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.notEqual(frames[0].coordinatorId, first.frames[0].coordinatorId);
   });
 
+  it("welcomes with the coordinator's id and what it says now, and tells it of each session (#35)", async () => {
+    const fake = createChromeFake();
+    /** @type {Array<{surface: string, sessionId: string}>} */
+    const opened = [];
+    /** @type {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} */
+    let status = { status: 'degraded', reason: 'starting' };
+    fake.worker.install(chrome => {
+      installWorkerRouter({
+        runtime: chrome.runtime,
+        coordinatorId: 'coordinator-1',
+        status: () => status,
+        sessions: { opened: session => opened.push({ ...session }) },
+      });
+    });
+    /** @param {string} sessionId */
+    const welcomeOf = async sessionId => {
+      const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+      /** @type {Array<Record<string, any>>} */
+      const frames = [];
+      port.onMessage.addListener((/** @type {string} */ text) => {
+        frames.push(/** @type {Record<string, any>} */ (decode(text)));
+      });
+      port.postMessage(encode(hello('popup', sessionId)));
+      await settle();
+      await settle();
+      const [welcome] = frames;
+      return [welcome.coordinatorId, welcome.status, welcome.reason];
+    };
+    assert.deepEqual(await welcomeOf('s1'), ['coordinator-1', 'degraded', 'starting']);
+    status = { status: 'ready' };
+    assert.deepEqual(await welcomeOf('s2'), ['coordinator-1', 'ready', undefined]);
+    assert.deepEqual(opened, [
+      { surface: 'popup', sessionId: 's1' },
+      { surface: 'popup', sessionId: 's2' },
+    ]);
+  });
+
   it("never throws, where the runtime can't take its listener, and reports why", () => {
     /** @type {unknown[]} */
     const reported = [];
