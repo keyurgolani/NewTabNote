@@ -2,15 +2,6 @@
  * Main application entry point
  */
 
-/**
- * The shared DatabaseManager from storage.js. The bare `Storage` global also
- * names the DOM's Web Storage type, so typed calls go through this.
- * @returns {DatabaseManager}
- */
-function appStorage() {
-  return /** @type {any} */ (globalThis).Storage;
-}
-
 /** What the new tab shows when it can't open the notes database, by the codes Storage.init threw. */
 const STORAGE_GUARD_TEXT = {
   NEWER_SCHEMA: {
@@ -76,10 +67,18 @@ class App {
    * backups through. `events` are the tab's failure events
    * (js/kernel/composition/lazy-failure-events.js), which init gives the logger the
    * controllers share, as its `event` method, and Embeddings. `removal` is the tab's
-   * removeNotes (js/kernel/composition/removal.js).
-   * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any}} [options]
+   * removeNotes (js/kernel/composition/removal.js). `storageState` is what the tab knows of its
+   * database outside the kernel, whether it's open and which stores it lacks; `recovery` the
+   * storage guard's raw export; `validateBackup` an import's check of a backup, which writes
+   * nothing; and `legacyStorage` js/storage.js's, which the graph view (#22), the search index
+   * and vectors (#22), and sync (#19) still go through until their issues move them.
+   * @param {{kernel?: any, documentClient?: any, settings?: any, ai?: any, noteList?: any, events?: any, removal?: any,
+   *   storageState?: any, recovery?: any, validateBackup?: any, legacyStorage?: any}} [options]
    */
-  constructor({ kernel, documentClient, settings, ai, noteList, events = null, removal } = {}) {
+  constructor({
+    kernel, documentClient, settings, ai, noteList, events = null, removal,
+    storageState, recovery, validateBackup, legacyStorage,
+  } = {}) {
     this.kernel = kernel;
     // removeNotes (js/kernel/composition/removal.js): every path that takes notes out of the
     // active set goes through it, and it moves this tab's panes around the write
@@ -89,11 +88,12 @@ class App {
     this.ai = ai;
     this.noteList = noteList;
     this.events = events;
+    this.storageState = storageState;
+    this.recovery = recovery;
+    this.validateBackup = validateBackup;
+    this.legacyStorage = legacyStorage;
     this.editor = null;
     this.secondaryEditor = null;
-    // Whether the sidebar and the AI sidebar are open, as Stats, Graph, and the palette read it
-    this.sidebarOpen = true;
-    this.aiSidebarOpen = false;
     // Tab management
     this._openTabs = []; // Until TabController exists; see the openTabs accessor
     // Search Indexer
@@ -220,16 +220,19 @@ class App {
       this.reportMissingStores();
       // Every controller exists before init binds a listener, so a click while they start reaches its own
       this.buildControllers();
+      // The theme engine reads the saved theme and the custom themes through the settings port,
+      // from before any other tab's theme change can reach it
+      Themes.connect({ settings: this.settings });
 
       // The export notice decides now, before any note renders and before a first note exists
       this.exportNotice = new ExportNotice({
-        storage: appStorage(),
+        storageState: this.storageState,
         settings: this.settings,
         onExport: () => this.settingsController.exportAll(),
         onClose: (returnFocus) => this.focusAfterExportNotice(returnFocus),
       });
       const startupReads = Promise.all([
-        Onboarding.hasCompleted(),
+        Onboarding.hasCompleted(this.settings),
         this.exportNotice.isDue().catch((error) => {
           console.error('Export notice: could not decide whether to show it', error);
           return false;
@@ -429,7 +432,7 @@ class App {
    * @returns {void}
    */
   reportMissingStores() {
-    const features = appStorage().missingStores
+    const features = this.storageState.missingStores
       .map((store) => MISSING_STORE_FEATURES[store])
       .filter(Boolean);
     if (features.length === 0) return;
@@ -499,7 +502,7 @@ class App {
   async exportRawCopy(button) {
     if (button) button.disabled = true;
     try {
-      const raw = await appStorage().exportRawStores();
+      const raw = await this.recovery.exportRawStores();
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       Utils.downloadFile(JSON.stringify(raw, null, 2), `newtabnote-raw-v${raw.onDiskVersion}-${timestamp}.json`);
       Utils.showToast('Exported a copy of your notes. Settings are left out.', 'success');
@@ -659,11 +662,11 @@ class App {
    */
   buildControllers() {
     this.sidebarController = new SidebarController({
-      storage: Storage,
       settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
       documentClient: this.documentClient,
+      storageState: this.storageState,
     });
 
     this.sidebarController.searchEngine = this.searchEngine;
@@ -687,10 +690,10 @@ class App {
     this.sidebarController.removal = this.removal;
 
     this.tabController = new TabController({
-      storage: Storage,
       settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
+      documentClient: this.documentClient,
     });
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -701,7 +704,6 @@ class App {
     this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
     this.aiChatController = new AIChatController({
-      storage: Storage,
       settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
@@ -732,8 +734,9 @@ class App {
     };
 
     this.settingsController = new SettingsController({
-      storage: Storage,
       settings: this.settings,
+      documentClient: this.documentClient,
+      validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -761,7 +764,7 @@ class App {
     // Settings sync callbacks
     this.settingsController.onSidebarStateChanged = (key, value) => {
       if (key === 'sidebarOpen') {
-        this.sidebarOpen = value;
+        // Another tab's open state isn't this sidebar's, which stays as it is, as in 1.4.x
         this.updateSidebarState();
       } else if (key === 'sidebarWidth') {
         this.applySidebarWidth();
@@ -778,7 +781,7 @@ class App {
         this.aiChatController.aiSidebarWidth = value;
       }
       const aiSidebar = document.getElementById('ai-sidebar');
-      if (aiSidebar && this.aiSidebarOpen) {
+      if (aiSidebar && this.aiChatController.aiSidebarOpen) {
         aiSidebar.style.width = value + 'px';
       }
     };
@@ -793,7 +796,8 @@ class App {
     };
 
     this.notesManager = new NotesManager({
-      storage: Storage,
+      // The search index and vectors (#22)
+      storage: this.legacyStorage,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: this.ai,
@@ -817,7 +821,6 @@ class App {
     this.notesManager.onSaveTabs = () => this.saveTabs();
 
     this.shortcutsManager = new ShortcutsManager({
-      storage: Storage,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -841,11 +844,11 @@ class App {
     };
     this.shortcutsManager.getEditor = () => this.getEditor();
     this.shortcutsManager.getOpenTabs = () => this.openTabs;
-    this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
-    this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
+    // The palette's Show and Hide labels say what the sidebars show
+    this.shortcutsManager.getSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.shortcutsManager.getAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
 
     this.exportImportService = new ExportImportService({
-      storage: Storage,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -860,7 +863,6 @@ class App {
     this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
 
     this.themeBuilderController = new ThemeBuilderController({
-      storage: Storage,
       settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
@@ -870,14 +872,13 @@ class App {
     this.themeBuilderController.onApplyTheme = () => this.applyTheme();
 
     this.analyticsController = new AnalyticsController({
-      storage: Storage,
       domRefs: this.domRefs,
       logger: this.logger,
     });
 
-    // Wire callbacks so the controller can query App-level state
-    this.analyticsController.onGetSidebarOpen = () => this.sidebarOpen;
-    this.analyticsController.onGetAISidebarOpen = () => this.aiSidebarOpen;
+    // Closing Stats puts back the sidebars as they are, however they were opened or closed
+    this.analyticsController.onGetSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.analyticsController.onGetAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -887,8 +888,6 @@ class App {
     // The note list it renders, once per change
     this.sidebarController.noteList = this.noteList;
     await this.sidebarController.init();
-    // Whether the sidebar is open, which Stats, Graph, and the palette read
-    this.sidebarOpen = this.sidebarController.sidebarOpen;
   }
 
   /**
@@ -903,8 +902,6 @@ class App {
    */
   async initAIChatController() {
     await this.aiChatController.init();
-    // Whether the AI sidebar is open, which Stats, Graph, and the palette read
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -935,13 +932,15 @@ class App {
     if (typeof GraphView === 'undefined') return;
 
     this.graphView = new GraphView({
-      storage: Storage,
+      // The notes and links it draws (#22)
+      storage: this.legacyStorage,
       logger: this.logger,
     });
 
     this.graphView.onOpenNote = (noteId) => this.openNoteInNewTab(noteId);
-    this.graphView.onGetSidebarOpen = () => this.sidebarOpen;
-    this.graphView.onGetAISidebarOpen = () => this.aiSidebarOpen;
+    // Closing Graph puts back the sidebars as they are, however they were opened or closed
+    this.graphView.onGetSidebarOpen = () => this.sidebarController.sidebarOpen;
+    this.graphView.onGetAISidebarOpen = () => this.aiChatController.aiSidebarOpen;
 
     await this.graphView.init();
   }
@@ -953,7 +952,8 @@ class App {
     if (typeof SyncService === 'undefined') return;
 
     this.syncService = new SyncService({
-      storage: Storage,
+      // Sync's settings and data (#19)
+      storage: this.legacyStorage,
       logger: this.logger,
     });
 
@@ -1138,7 +1138,6 @@ class App {
    */
   async toggleSidebar(force) {
     await this.sidebarController.toggleSidebar(force);
-    this.sidebarOpen = this.sidebarController.sidebarOpen;
   }
 
   toggleFocusMode(force) {
@@ -1274,7 +1273,6 @@ class App {
    */
   toggleAISidebar() {
     this.aiChatController.toggleAISidebar();
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -1282,7 +1280,6 @@ class App {
    */
   closeAISidebar() {
     this.aiChatController.closeAISidebar();
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
   }
 
   /**
@@ -1333,7 +1330,7 @@ class App {
    * Apply theme
    */
   async applyTheme() {
-    const theme = await Storage.getSetting('theme', 'system');
+    const { theme } = await this.settings.preferencesOr({ theme: 'system' });
     await Themes.applyTheme(theme);
   }
 

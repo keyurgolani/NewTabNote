@@ -3,13 +3,11 @@
  * command palette activation, and focus mode toggling.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class ShortcutsManager {
-  constructor({ storage, domRefs, logger }) {
-    this.storage = storage;
+  constructor({ domRefs, logger }) {
     this.domRefs = domRefs;
     this.logger = logger;
 

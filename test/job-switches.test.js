@@ -107,8 +107,9 @@ async function setup() {
   });
   manager.getEditor = () => null;
   const settings = new (env.get('SettingsController'))({
-    storage: Storage,
     settings: env.settingsClient,
+    documentClient: env.documentClient,
+    validateBackup: env.validateBackup,
     domRefs: null,
     logger: quietLogger,
   });

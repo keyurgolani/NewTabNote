@@ -4,16 +4,22 @@
  * width selector pill, cross-tab settings sync, and backup status checks.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
  * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
- *   which every preference, backup record, auto-backup, and import here goes through
+ *   which every preference, backup record, export file, auto-backup, and import here goes through
+ * @param {Object} deps.documentClient - The page's document client
+ *   (js/kernel/composition/document.js), which the notes, templates, and blocks here are read
+ *   through, as stored
+ * @param {(data: unknown) => {ok: boolean, reason?: string, counts?: Object}} deps.validateBackup - An
+ *   import's check of a parsed backup, which writes nothing (js/kernel/composition/newtab.js)
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class SettingsController {
-  constructor({ storage, settings, domRefs, logger }) {
-    this.storage = storage;
+  constructor({ settings, documentClient, validateBackup, domRefs, logger }) {
     this.settings = settings;
+    /** @type {any} */
+    this.documentClient = documentClient;
+    this.validateBackup = validateBackup;
     this.domRefs = domRefs;
     this.logger = logger;
 
@@ -519,13 +525,22 @@ class SettingsController {
   }
 
   async updateSettingsUI() {
-    const storage = this.storage;
+    // Each as stored, or its default where nothing is or the read fails
+    const stored = await this.settings.preferencesOr({
+      theme: 'system',
+      font: 'default',
+      width: 'default',
+      autoBackupEnabled: false,
+      autoBackupFrequency: 7,
+      trashRetention: 30,
+      dailyNoteTemplate: '',
+    });
 
     // Theme
     const themeSelect = document.getElementById('theme-select');
     if (themeSelect && typeof Themes !== 'undefined') {
       const options = await Themes.getThemeOptions();
-      const currentTheme = await storage.getSetting('theme', 'system');
+      const currentTheme = stored.theme;
 
       themeSelect.innerHTML = '';
       options.forEach(opt => {
@@ -540,18 +555,18 @@ class SettingsController {
     }
 
     // Font
-    const font = await storage.getSetting('font', 'default');
+    const font = stored.font;
     const fontSelect = document.getElementById('font-select');
     if (fontSelect) fontSelect.value = font;
 
     // Width
-    const width = await storage.getSetting('width', 'default');
+    const width = stored.width;
     const widthSelect = document.getElementById('width-select');
     if (widthSelect) widthSelect.value = width;
 
     // Auto Backup settings
-    const autoBackupEnabled = await storage.getSetting('autoBackupEnabled', false);
-    const autoBackupFrequency = await storage.getSetting('autoBackupFrequency', 7);
+    const autoBackupEnabled = stored.autoBackupEnabled;
+    const autoBackupFrequency = stored.autoBackupFrequency;
 
     const autoBackupToggle = document.getElementById('auto-backup-toggle');
     const backupFrequencySelect = document.getElementById('backup-frequency-select');
@@ -566,14 +581,14 @@ class SettingsController {
     // Trash retention
     const trashRetentionSelect = document.getElementById('trash-retention-select');
     if (trashRetentionSelect) {
-      trashRetentionSelect.value = (await storage.getSetting('trashRetention', 30)).toString();
+      trashRetentionSelect.value = stored.trashRetention.toString();
     }
 
     // Daily Note Template
     const dailyNoteTemplateSelect = document.getElementById('daily-note-template-select');
     if (dailyNoteTemplateSelect) {
-      const templates = await storage.getTemplates();
-      const currentTemplateId = await storage.getSetting('dailyNoteTemplate', '');
+      const templates = await this.documentClient.templates();
+      const currentTemplateId = stored.dailyNoteTemplate;
 
       dailyNoteTemplateSelect.innerHTML = '<option value="">No template</option>';
       templates.forEach(t => {
@@ -597,7 +612,7 @@ class SettingsController {
     const list = document.getElementById('pages-list');
     if (!list) return;
 
-    const notes = await this.storage.getAllNotes();
+    const notes = await this.documentClient.activeNotes();
     const editor = this.getEditor ? this.getEditor() : null;
 
     list.innerHTML = '';
@@ -630,12 +645,12 @@ class SettingsController {
   // ─── Font / Width / Theme ───
 
   async applyFont() {
-    const font = await this.storage.getSetting('font', 'default');
+    const { font } = await this.settings.preferencesOr({ font: 'default' });
     document.documentElement.dataset.font = font;
   }
 
   async applyWidth() {
-    const width = await this.storage.getSetting('width', 'default');
+    const { width } = await this.settings.preferencesOr({ width: 'default' });
     document.documentElement.dataset.width = width;
     this.updateWidthSelectorPill(width);
 
@@ -716,14 +731,14 @@ class SettingsController {
   // ─── Export / Import / Backup ───
 
   /**
-   * Export JSON: download the full export (Storage.exportAllAsBlob) as a file,
+   * Export JSON: download the full export (the settings port's exportBackup) as a file,
    * after the open editors have written their pending edits.
    * @returns {Promise<boolean>} True once the file is handed to the browser
    */
   async exportAll() {
     try {
       if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
-      const file = await this.storage.exportAllAsBlob();
+      const file = await this.settings.exportBackup({ backup: false });
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       Utils.downloadFile(file, `new-tab-note-export-${timestamp}.json`);
     } catch (error) {
@@ -757,12 +772,12 @@ class SettingsController {
       const zip = new JSZip();
       const folder = zip.folder("NewTabNote-Export");
 
-      const notes = await this.storage.getAllNotes();
+      const notes = await this.documentClient.activeNotes();
 
       for (const note of notes) {
         if (note.isTrash) continue;
 
-        const blocks = await this.storage.getElementsByNote(note.id);
+        const blocks = await this.documentClient.blocksAsStored(note.id);
         const sortedBlocks = blocks.sort((a, b) => (a.order || 0) - (b.order || 0));
 
         let markdown = `# ${note.name || 'Untitled'}\n\n`;
@@ -805,8 +820,8 @@ class SettingsController {
         return;
       }
 
-      const note = await this.storage.getNote(editor.noteId);
-      const blocks = await this.storage.getElementsByNote(editor.noteId);
+      const note = await this.documentClient.readNote(editor.noteId);
+      const blocks = await this.documentClient.blocksAsStored(editor.noteId);
 
       const data = {
         version: 1,
@@ -835,11 +850,8 @@ class SettingsController {
   async createBackup() {
     try {
       if (this.onSaveOpenEditors) await this.onSaveOpenEditors();
-      const file = await this.storage.exportAllAsBlob({
-        backupType: 'full-backup',
-        backupCreatedAt: new Date().toISOString(),
-        backupVersion: 1,
-      });
+      // With the fields 1.4.x's backup file has, stamped by the kernel's clock
+      const file = await this.settings.exportBackup({ backup: true });
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       Utils.downloadFile(file, `new-tab-note-backup-${timestamp}.json`);
     } catch (error) {
@@ -878,7 +890,7 @@ class SettingsController {
       return;
     }
 
-    const check = this.storage.validateImport(data);
+    const check = this.validateBackup(data);
     if (check.ok === false) {
       this._showImportFailed(check.reason);
       return;
@@ -940,7 +952,7 @@ class SettingsController {
    */
   async _firstActiveNote(ids) {
     for (const id of ids) {
-      const note = await this.storage.getNote(id);
+      const note = await this.documentClient.readNote(id);
       if (note && !note.archived && !note.isTemplate && !note.trashed) return id;
     }
     return null;
@@ -967,8 +979,8 @@ class SettingsController {
    * @returns {Promise<boolean>}
    */
   async _confirmReplaceAll() {
-    const activeCount = (await this.storage.getAllNotes()).length;
-    const retention = Number(await this.storage.getSetting('trashRetention', 30));
+    const activeCount = (await this.documentClient.activeNotes()).length;
+    const retention = Number((await this.settings.preferencesOr({ trashRetention: 30 })).trashRetention);
     const moves = activeCount === 1
       ? '1 active note moves to trash, where it stays'
       : `${activeCount} active notes move to trash, where they stay`;
@@ -1130,21 +1142,24 @@ class SettingsController {
   // ─── Cross-tab settings sync ───
 
   setupSettingsSync() {
-    // settings.changed names the keys only, so each value applied is read again, from the
-    // storage the listener is on (#12 slice 7's settings port replaces both)
-    const storage = this.storage;
-    storage.onSettingsChange(async ({ keys }) => {
+    // settings.changed names the keys only, so each value applied is read again, through the
+    // settings port the notice came from
+    const preferences = (keys) => this.settings.preferences(keys);
+    const workspaceData = (keys) => this.settings.workspaceData(keys);
+    this.settings.onChanged(async ({ keys }) => {
       const changed = new Set(keys);
       /**
-       * Reads `key` again and gives its value to `apply`, unless the read fails: a value it
-       * couldn't read is left as this tab has it, never applied as missing
+       * Reads `key` again through `read` and gives its value to `apply`, undefined when nothing
+       * is stored, unless the read fails: a value it couldn't read is left as this tab has it,
+       * never applied as missing
        * @param {string} key
+       * @param {(keys: Array<string>) => Promise<Object>} read - the settings port's preferences or workspaceData
        * @param {(value: *) => void} apply
        */
-      const reread = async (key, apply) => {
+      const reread = async (key, read, apply) => {
         let value;
         try {
-          value = await storage.readSetting(key);
+          value = (await read([key]))[key];
         } catch (error) {
           this.logger?.warn?.('SettingsController', `Couldn't read ${key} again after another tab changed it`, error);
           return;
@@ -1170,13 +1185,15 @@ class SettingsController {
       // Apply sidebar state changes (delegate to App for backward compat)
       for (const key of ['sidebarOpen', 'sidebarWidth', 'sidebarViewMode', 'sidebarSortMode']) {
         if (changed.has(key) && this.onSidebarStateChanged) {
-          await reread(key, (value) => this.onSidebarStateChanged(key, value));
+          await reread(key, preferences, (value) => this.onSidebarStateChanged(key, value));
         }
       }
 
       // Apply AI sidebar width changes
       if (changed.has('aiSidebarWidth')) {
-        if (this.onAISidebarWidthChanged) await reread('aiSidebarWidth', (value) => this.onAISidebarWidthChanged(value));
+        if (this.onAISidebarWidthChanged) {
+          await reread('aiSidebarWidth', preferences, (value) => this.onAISidebarWidthChanged(value));
+        }
       }
 
       // Reinitialize LLM if provider settings changed
@@ -1186,7 +1203,7 @@ class SettingsController {
 
       if (changed.has('aiPromptTemplates')) {
         if (this.onAIPromptTemplatesChanged) {
-          await reread('aiPromptTemplates', (value) => this.onAIPromptTemplatesChanged(value));
+          await reread('aiPromptTemplates', workspaceData, (value) => this.onAIPromptTemplatesChanged(value));
         }
       }
 
@@ -1205,11 +1222,14 @@ class SettingsController {
   // ─── Backup status check ───
 
   async checkBackupStatus() {
-    const enabled = await this.storage.getSetting('autoBackupEnabled', false);
+    // Each as stored, or its default where nothing is or the read fails
+    const { autoBackupEnabled: enabled, autoBackupFrequency: frequency } = await this.settings.preferencesOr({
+      autoBackupEnabled: false,
+      autoBackupFrequency: 1, // default: daily
+    });
     if (!enabled) return;
 
-    const frequency = await this.storage.getSetting('autoBackupFrequency', 1); // default: daily
-    const lastBackup = await this.storage.getSetting('lastBackupAt', 0);
+    const { lastBackupAt: lastBackup } = await this.settings.workspaceDataOr({ lastBackupAt: 0 });
     const now = Date.now();
     const daysSinceBackup = (now - lastBackup) / (1000 * 60 * 60 * 24);
 

@@ -5,16 +5,35 @@
  * 1.4.x's Storage.setSetting wrote, so a pair saved together lands together, and every other
  * open tab hears of it, as before. Outcomes name the keys or ids they changed and never
  * carry what was saved.
+ *
+ * Slice 7's queries read them back: getWorkspaceData each key from the area its command
+ * writes, listThemes the custom themes, and exportBackup the export file Export JSON and
+ * Create Backup download.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
-import { committed, rejected, unavailable } from '../contracts/outcomes.js';
-import { isThemeProperties, savedTheme } from '../domain/theme.js';
+import { committed, empty, failed, ready, rejected, unavailable } from '../contracts/outcomes.js';
+import { isThemeProperties, savedTheme, themesInListOrder } from '../domain/theme.js';
+import {
+  BACKUP_KEYS,
+  CHAT_KEYS,
+  ONBOARDING_KEY,
+  PROMPT_TEMPLATES_KEY,
+  WORKSPACE_DATA_KEYS,
+  workspaceDataArea,
+} from '../domain/workspace-data.js';
 import { unitsWork } from './work.js';
+
+export { BACKUP_KEYS, CHAT_KEYS, ONBOARDING_KEY, PROMPT_TEMPLATES_KEY };
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
  * @typedef {import('./work.js').CommandHandler<T>} CommandHandler
+ */
+
+/**
+ * @template {import('../contracts/queries.js').QueryType} T
+ * @typedef {import('./work.js').QueryHandler<T>} QueryHandler
  */
 
 /** @typedef {import('../ports/repository.js').SettingsArea} SettingsArea */
@@ -24,28 +43,6 @@ const invalid = () => rejected('validation', 'invalid-command');
 
 /** The code a backup task answers with on an adapter that can't run it */
 export const BACKUPS_UNAVAILABLE = 'backups-need-legacy-storage';
-
-/**
- * The keys each of AI chat's conversations is saved under: its history, then its messages
- * @type {Readonly<Record<'note' | 'global', readonly [string, string]>>}
- */
-export const CHAT_KEYS = Object.freeze({
-  note: Object.freeze(/** @type {const} */ (['aiChatHistory', 'noteChatMessages'])),
-  global: Object.freeze(/** @type {const} */ (['globalChatHistory', 'globalChatMessages'])),
-});
-
-/** The key the prompt templates are saved under */
-export const PROMPT_TEMPLATES_KEY = 'aiPromptTemplates';
-
-/** The key that says the first run finished */
-export const ONBOARDING_KEY = 'hasCompletedOnboarding';
-
-/** The keys the backup bookkeeping is saved under */
-export const BACKUP_KEYS = Object.freeze({
-  fullExport: 'lastFullExportAt',
-  backup: 'lastBackupAt',
-  exportNotice: 'preMigrationNotice',
-});
 
 /**
  * The work for a settings write of `values` in `area`
@@ -153,6 +150,46 @@ export const workspaceDataCommands = {
       done: receipt =>
         committed('backup-imported', receipt ? [...receipt.importedIds, ...receipt.addedFolderIds, ...receipt.trashedIds] : []),
     };
+  },
+};
+
+/**
+ * @type {{
+ *   getWorkspaceData: QueryHandler<'getWorkspaceData'>,
+ *   listThemes: QueryHandler<'listThemes'>,
+ *   exportBackup: QueryHandler<'exportBackup'>,
+ * }}
+ */
+export const workspaceDataQueries = {
+  // Each key from the area its command writes it in, as Storage.getSetting read them
+  async getWorkspaceData({ keys = [...WORKSPACE_DATA_KEYS] }, { adapter, clock }) {
+    if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string')) return failed('validation', 'invalid-query');
+    if (keys.some(key => !WORKSPACE_DATA_KEYS.includes(key))) return failed('validation', 'unknown-workspace-data');
+    /** @type {Map<'chat' | 'onboarding' | 'backup', string[]>} */
+    const byArea = new Map();
+    for (const key of keys) {
+      const area = workspaceDataArea(key);
+      byArea.set(area, [...(byArea.get(area) || []), key]);
+    }
+    /** @type {Record<string, unknown>} */
+    const values = {};
+    for (const [area, inArea] of byArea) Object.assign(values, await adapter.readSettings(area, inArea));
+    return Object.keys(values).length > 0 ? ready(clock.now(), values) : empty(clock.now());
+  },
+
+  async listThemes(query, { adapter, clock }) {
+    const themes = themesInListOrder(await adapter.read(['themes'], tx => tx.getAll('themes')));
+    return themes.length > 0 ? ready(clock.now(), themes) : empty(clock.now());
+  },
+
+  // Create Backup adds the fields 1.4.x's createBackup gave the file, stamped by the kernel clock
+  async exportBackup({ backup }, { adapter, clock }) {
+    if (typeof backup !== 'boolean') return failed('validation', 'invalid-query');
+    if (!adapter.flags.backups) return failed('adapter', BACKUPS_UNAVAILABLE);
+    const extra = backup
+      ? { backupType: 'full-backup', backupCreatedAt: new Date(clock.now()).toISOString(), backupVersion: 1 }
+      : {};
+    return ready(clock.now(), await adapter.exportBackup(extra));
   },
 };
 

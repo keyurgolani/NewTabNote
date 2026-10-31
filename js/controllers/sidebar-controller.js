@@ -4,19 +4,23 @@
  * context menus, and multi-select.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
+ * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+ *   which its preferences are read and saved through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} [deps.documentClient] - What the sidebar's note writes go through
  *   (js/kernel/composition/document.js): new notes, the Daily Note, pins, a dropped block's
  *   append, folders, and moving a note into one, as kernel commands. The note list shows each
  *   one from the commit feed, with no refresh.
+ * @param {{missingStores: readonly string[]}} deps.storageState - What the page knows of its
+ *   database outside the kernel (js/kernel/composition/newtab.js): the stores it lacks
  */
 class SidebarController {
-  constructor({ storage, settings, domRefs, logger, documentClient = null }) {
-    this.storage = storage;
-    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are saved through */
+  constructor({ settings, domRefs, logger, documentClient = null, storageState }) {
+    /** @type {any} The page's settings port (js/kernel/composition/settings.js), which its preferences are read and saved through */
     this.settings = settings;
+    /** @type {{missingStores: readonly string[]}} The stores the page's database lacks, read when asked */
+    this.storageState = storageState;
     this.domRefs = domRefs;
     this.logger = logger;
     this.documentClient = documentClient;
@@ -172,12 +176,17 @@ class SidebarController {
 
   /** Initialize sidebar: load persisted state, wire DOM listeners. */
   async init() {
-    const storage = this.storage;
-
-    this.sidebarOpen = await storage.getSetting('sidebarOpen', true);
-    this.sidebarWidth = await storage.getSetting('sidebarWidth', 260);
-    this.sidebarSortMode = await storage.getSetting('sidebarSortMode', 'updated');
-    this.sidebarViewMode = await storage.getSetting('sidebarViewMode', 'list');
+    // Each as stored, or its default where nothing is or the read fails
+    const stored = await this.settings.preferencesOr({
+      sidebarOpen: true,
+      sidebarWidth: 260,
+      sidebarSortMode: 'updated',
+      sidebarViewMode: 'list',
+    });
+    this.sidebarOpen = stored.sidebarOpen;
+    this.sidebarWidth = stored.sidebarWidth;
+    this.sidebarSortMode = stored.sidebarSortMode;
+    this.sidebarViewMode = stored.sidebarViewMode;
 
     const sortSelect = document.getElementById('sidebar-sort');
     if (sortSelect) sortSelect.value = this.sidebarSortMode;
@@ -918,7 +927,8 @@ class SidebarController {
   async runTrashCleanup() {
     // Skipped while any store is missing, as it always was: nothing is deleted for good on a
     // database an older build left damaged
-    if (this.storage.missingStores && this.storage.missingStores.length > 0) return;
+    const { missingStores } = this.storageState;
+    if (missingStores && missingStores.length > 0) return;
     const outcome = await this.removal.removeNotes({ type: 'runTrashCleanup' });
     if (outcome.kind !== 'committed') {
       this.logger.warn('SidebarController', `Trash cleanup didn't run (${outcome.kind}: ${outcome.code})`);
@@ -1489,18 +1499,20 @@ class SidebarController {
     // its own, and only the ones that committed count.
     const outcome = await this.removal.removeNotes({ type: 'runBulkAction', action, noteIds: ids });
     const done = SidebarController.bulkDone(action, outcome);
+    const gone = SidebarController.bulkGone(action, outcome);
     const message = SidebarController.bulkMessage(action, outcome);
     if (outcome.kind !== 'bulk') {
       console.error('Bulk action failed:', outcome.kind, outcome.code);
-    } else if (done.length < outcome.items.length) {
+    } else if (done.length + gone.length < outcome.items.length) {
       // Codes and ids, never what the notes hold
-      const failed = outcome.items.filter((item) => !done.includes(item.id));
+      const failed = outcome.items.filter((item) => !done.includes(item.id) && !gone.includes(item.id));
       console.error('Bulk action left notes as they were:', failed.map((item) => [item.id, item.outcome.kind, item.outcome.code]));
     }
     Utils.showToast(message.text, message.kind);
     if (outcome.kind !== 'bulk') return;
-    // Only the notes it couldn't change stay selected, so the user can try them again
-    for (const id of done) this.selectedNoteIds.delete(id);
+    // Only the notes it couldn't change stay selected, so the user can try them again: not the
+    // ones another tab deleted, which no try changes
+    for (const id of [...done, ...gone]) this.selectedNoteIds.delete(id);
     if (this.selectedNoteIds.size === 0) this.exitSelectionMode();
     else this.updateSelectionUI();
   }
@@ -1524,36 +1536,75 @@ class SidebarController {
   }
 
   /**
+   * The notes an archive, restore, or unarchive found deleted, by another tab: no try can
+   * change them, so they leave the selection, and the toast counts them apart. A trash or a
+   * delete counts them as done (bulkDone).
+   * @param {string} action
+   * @param {{kind: string, items?: Array<{id: string, outcome: {kind: string, reason?: string}}>}} outcome
+   * @returns {Array<string>}
+   */
+  static bulkGone(action, outcome) {
+    if (outcome.kind !== 'bulk' || action === 'trash' || action === 'delete') return [];
+    return outcome.items
+      .filter(({ outcome: item }) => item.kind === 'rejected' && item.reason === 'not-found')
+      .map((item) => item.id);
+  }
+
+  /**
    * What a bulk action's toast says, one pattern for every action: how many notes it changed,
-   * or how many of them it couldn't, which stay selected
+   * or how many of them it couldn't, which stay selected, and how many another tab deleted
    * @param {string} action
    * @param {{kind: string, items?: Array<Object>}} outcome
    * @returns {{text: string, kind: 'success' | 'error'}}
    */
   static bulkMessage(action, outcome) {
+    const copy = SidebarController.BULK_COPY[action];
     if (outcome.kind !== 'bulk') {
-      return { text: Utils.writeFailureMessage(SidebarController.BULK_COPY[action].failed, outcome), kind: 'error' };
+      return { text: Utils.writeFailureMessage(copy.failed, outcome), kind: 'error' };
     }
     const total = outcome.items.length;
-    const failed = total - SidebarController.bulkDone(action, outcome).length;
-    const { done, undone } = SidebarController.BULK_COPY[action];
+    const done = SidebarController.bulkDone(action, outcome).length;
+    const gone = SidebarController.bulkGone(action, outcome).length;
+    const failed = total - done - gone;
     const notes = (n) => `${n} ${n === 1 ? 'note' : 'notes'}`;
-    if (failed === 0) return { text: `${notes(total)} ${done}`, kind: 'success' };
+    const were = (n) => (n === 1 ? 'was' : 'were');
+    if (gone === total) {
+      // Every one is deleted, said as one note's write says it (Utils.writeFailureMessage)
+      const deleted = outcome.items[0].outcome;
+      const text = total === 1
+        ? Utils.writeFailureMessage(copy.failedOne, deleted)
+        : Utils.writeFailureMessage(copy.failed, deleted, 'they were deleted');
+      return { text, kind: 'error' };
+    }
+    if (failed === 0 && gone === 0) return { text: `${notes(total)} ${copy.done}`, kind: 'success' };
+    if (failed === 0) return { text: `${done} of ${notes(total)} ${copy.done}. ${gone} ${were(gone)} deleted.`, kind: 'success' };
     const still = failed === 1 ? "It's still selected." : "They're still selected.";
-    if (total === 1) return { text: `The note couldn't be ${undone}. ${still}`, kind: 'error' };
-    return { text: `${failed} of ${total} notes couldn't be ${undone}. ${still}`, kind: 'error' };
+    if (total === 1) return { text: `The note couldn't be ${copy.undone}. ${still}`, kind: 'error' };
+    const others = gone === 0 ? '' : ` ${gone} ${gone === 1 ? 'other' : 'others'} ${were(gone)} deleted.`;
+    return { text: `${failed} of ${total} notes couldn't be ${copy.undone}. ${still}${others}`, kind: 'error' };
   }
 
   /**
-   * What each bulk action did to a note, what it couldn't, and what it says when it never ran
+   * What each bulk action did to a note, what it couldn't, and what it says when it never ran,
+   * or found the one note it ran on deleted (failedOne)
    * @private
    */
   static get BULK_COPY() {
     return {
-      archive: { done: 'archived', undone: 'archived', failed: 'Failed to archive notes' },
-      unarchive: { done: 'restored from Archive', undone: 'restored from Archive', failed: 'Failed to restore notes from Archive' },
+      archive: { done: 'archived', undone: 'archived', failed: 'Failed to archive notes', failedOne: 'Failed to archive note' },
+      unarchive: {
+        done: 'restored from Archive',
+        undone: 'restored from Archive',
+        failed: 'Failed to restore notes from Archive',
+        failedOne: 'Failed to restore note from Archive',
+      },
       trash: { done: 'moved to Trash', undone: 'moved to Trash', failed: 'Failed to move notes to Trash' },
-      restore: { done: 'restored from Trash', undone: 'restored from Trash', failed: 'Failed to restore notes from Trash' },
+      restore: {
+        done: 'restored from Trash',
+        undone: 'restored from Trash',
+        failed: 'Failed to restore notes from Trash',
+        failedOne: 'Failed to restore note from Trash',
+      },
       delete: { done: 'permanently deleted', undone: 'permanently deleted', failed: 'Failed to permanently delete notes' },
     };
   }

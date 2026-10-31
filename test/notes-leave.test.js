@@ -46,10 +46,21 @@ async function openPage(env, { open = ['A'], split = false, ready = true } = {})
   return page;
 }
 
+// Each with what App gives it of the page (bootNewTab's wire adds the rest)
 const controllers = {
   notes: (env, Storage) => new (env.get('NotesManager'))({ storage: Storage, domRefs: null, logger: null, llm: null }),
-  sidebar: (env, Storage) => new (env.get('SidebarController'))({ storage: Storage, domRefs: null, logger: null }),
-  settings: (env, Storage) => new (env.get('SettingsController'))({ storage: Storage, domRefs: null, logger: null }),
+  sidebar: (env) => new (env.get('SidebarController'))({
+    settings: env.settingsClient,
+    storageState: env.storageState,
+    domRefs: null,
+    logger: null,
+  }),
+  settings: (env) => new (env.get('SettingsController'))({
+    settings: env.settingsClient,
+    validateBackup: env.validateBackup,
+    domRefs: null,
+    logger: null,
+  }),
 };
 
 /** The sidebar over the page's note list, with the view tab and the list it renders into. */

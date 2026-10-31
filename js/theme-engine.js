@@ -4,6 +4,8 @@
 class ThemeEngine {
     constructor() {
         this.currentTheme = null;
+        /** @type {any} The page's settings port (js/kernel/composition/settings.js), set by connect */
+        this.settings = null;
         this.defaultProperties = {
             '--bg-primary': '#ffffff',
             '--bg-secondary': '#f7f7f7',
@@ -37,11 +39,22 @@ class ThemeEngine {
     }
 
     /**
+     * The page's settings port (js/kernel/composition/settings.js), which the saved theme and
+     * the custom themes are read through. The new tab connects it before init, and before any
+     * other tab's theme change can reach applyTheme.
+     * @param {{settings: Object}} ports
+     * @returns {void}
+     */
+    connect({ settings }) {
+        this.settings = settings;
+    }
+
+    /**
      * Initialize and apply the saved theme.
      * @returns {Promise<void>}
      */
     async init() {
-        const themeId = await Storage.getSetting('theme', 'light');
+        const { theme: themeId } = await this.settings.preferencesOr({ theme: 'light' });
         await this.applyTheme(themeId);
     }
 
@@ -65,7 +78,7 @@ class ThemeEngine {
             document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
         } else {
             // Custom theme
-            const customThemes = await Storage.getCustomThemes();
+            const customThemes = await this.settings.themes();
             const theme = customThemes.find(t => t.id === themeId);
             if (theme && theme.properties) {
                 properties = theme.properties;
@@ -116,7 +129,7 @@ class ThemeEngine {
      * Get all available theme options for dropdowns
      */
     async getThemeOptions() {
-        const customThemes = await Storage.getCustomThemes();
+        const customThemes = await this.settings.themes();
         const options = [
             { id: 'light', name: 'Light' },
             { id: 'dark', name: 'Dark' },
@@ -131,5 +144,7 @@ class ThemeEngine {
     }
 }
 
-// Global instance
-window.Themes = new ThemeEngine();
+// Global instance, declared as js/analytics.js declares Analytics, so the scripts that call it
+// name a declared global
+const Themes = new ThemeEngine();
+window.Themes = Themes;

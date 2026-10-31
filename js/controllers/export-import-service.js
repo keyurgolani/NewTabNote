@@ -4,13 +4,11 @@
  * (single note export/import, markdown conversion).
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class ExportImportService {
-  constructor({ storage, domRefs, logger }) {
-    this.storage = storage;
+  constructor({ domRefs, logger }) {
     this.domRefs = domRefs;
     this.logger = logger;
 

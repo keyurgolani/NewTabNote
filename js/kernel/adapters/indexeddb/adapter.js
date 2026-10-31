@@ -485,6 +485,9 @@ export function createIndexedDbAdapter({
       }
     },
 
+    // The export file runs only on 1.4.x's Storage until #18's engine (the `backups` flag)
+    exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
+
     async readSettings(area, keys) {
       if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));

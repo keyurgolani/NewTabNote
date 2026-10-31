@@ -104,6 +104,17 @@ export const snapshotRecord = v.looseObject({
 });
 
 /**
+ * A custom theme, as IndexedDB's `themes` store holds it (domain/theme.js): its name, the CSS
+ * custom properties it sets, and when it was last saved. Its name is content.
+ */
+export const themeRecord = v.looseObject({
+  id,
+  name: v.optional(content(v.string())),
+  properties: v.optional(v.looseObject({})),
+  updatedAt: v.optional(timestamp),
+});
+
+/**
  * One entry of #17's change log, which #13's CommitFeed reads from a cursor. #17 defines each
  * op (its slice 4), and #19 fills `parentRevisionIds` and `originDeviceId`.
  */
@@ -123,5 +134,6 @@ export const changeRecord = v.looseObject({
 /** @typedef {v.InferOutput<typeof blockInput>} BlockInputEntity */
 /** @typedef {v.InferOutput<typeof folderRecord>} FolderEntity */
 /** @typedef {v.InferOutput<typeof snapshotRecord>} SnapshotEntity */
+/** @typedef {v.InferOutput<typeof themeRecord>} ThemeEntity */
 /** @typedef {v.InferOutput<typeof changeRecord>} ChangeEntity */
 /** @typedef {v.InferOutput<typeof searchEntryRecord>} SearchEntryEntity */

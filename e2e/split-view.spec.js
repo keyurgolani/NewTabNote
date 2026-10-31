@@ -28,7 +28,7 @@ test("split view closing onto the right pane's note keeps the left pane's edits 
   const { alphaId, betaId } = await page.evaluate(async () => {
     const beta = await Storage.createNote('Beta');
     await Storage.saveElement({ id: Utils.generateId(), canvasId: beta.id, type: 'text', content: 'beta body', order: 0 });
-    await app.refreshNotesList();
+    await app.sidebarController.reloadLists();
     await app.tabController.toggleSplitView();
     return { alphaId: app.editor.noteId, betaId: app.secondaryEditor.noteId };
   });

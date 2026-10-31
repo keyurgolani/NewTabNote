@@ -19,6 +19,8 @@ describe("App's sync indicator (#13)", () => {
     const shown = [];
     const app = {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
+      // The page's Storage, which the new tab's root gives App for sync (#19)
+      legacyStorage: env.get('Storage'),
       _updateSyncStatusUI: (state) => shown.push(state),
     };
     await env.get('App').prototype.initSyncService.call(app);

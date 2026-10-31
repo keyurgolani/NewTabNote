@@ -3,16 +3,18 @@
  * closing, split-view, and Picture-in-Picture.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
  * @param {Object} deps.settings - The page's settings port (js/kernel/composition/settings.js),
  *   which the workspace session is read and saved through
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
+ * @param {Object} deps.documentClient - The page's document client
+ *   (js/kernel/composition/document.js), which the notes a tab or pane opens are read through
  */
 class TabController {
-  constructor({ storage, settings, domRefs, logger }) {
-    this.storage = storage;
+  constructor({ settings, domRefs, logger, documentClient }) {
     this.settings = settings;
+    /** @type {any} The page's document client (js/kernel/composition/document.js): the notes it reads as stored, other tabs' included */
+    this.documentClient = documentClient;
     /** @type {Promise<Object|null>|null} The session as stored, read once for a start (_savedSession) */
     this._startupSession = null;
     this.domRefs = domRefs;
@@ -357,7 +359,7 @@ class TabController {
 
     // Edits typed into a leaving note land in it, or show the pane that it's deleted.
     await Promise.all(this.getOpenEditors().filter(onGone).map((editor) => editor.flushSave()));
-    const notes = (await this.storage.getAllNotes()).filter((note) => !gone.has(note.id));
+    const notes = (await this.documentClient.activeNotes()).filter((note) => !gone.has(note.id));
     // Before the write, a pane with nowhere to go but a new note waits, and so does its tab
     if (!create && notes.length === 0) return;
     /** @param {BlockEditor|null} editor */
@@ -430,7 +432,7 @@ class TabController {
     const tab = this.openTabs[this.activeTabIndex];
     let skipped = false;
     if (tab && tab.noteId !== otherId && !staying.has(tab.noteId)) {
-      const record = await this.storage.getNote(tab.noteId);
+      const record = await this.documentClient.readNote(tab.noteId);
       if (record && !record.trashed && !record.archived) {
         if ((await active.loadNote(tab.noteId)) || active.noteGone) return;
       } else {
@@ -621,7 +623,7 @@ class TabController {
    */
   async _restorableNote(noteId) {
     if (typeof noteId !== 'string' || noteId === '') return null;
-    const note = await this.storage.getNote(noteId);
+    const note = await this.documentClient.readNote(noteId);
     return note && !note.trashed ? note : null;
   }
 
@@ -815,7 +817,7 @@ class TabController {
     const goneId = editor.noteGone ? editor.noteId : null;
 
     if (!(await editor.loadNote(tab.noteId))) {
-      if (tab.noteId !== editor.noteId && !(await this.storage.getNote(tab.noteId))) await this._dropDeletedTab(tab);
+      if (tab.noteId !== editor.noteId && !(await this.documentClient.readNote(tab.noteId))) await this._dropDeletedTab(tab);
       else this.renderTabs();
       return false;
     }
@@ -834,7 +836,7 @@ class TabController {
    * is loaded.
    */
   async openNoteInNewTab(noteId) {
-    const note = await this.storage.getNote(noteId);
+    const note = await this.documentClient.readNote(noteId);
     if (!note) return;
 
     // Check if already open
@@ -920,7 +922,7 @@ class TabController {
       next = this.openTabs[at + 1] || this.openTabs[at - 1];
       if (!next) return;
       if (await editor.loadNote(next.noteId)) break;
-      if (next.noteId === editor.noteId || (await this.storage.getNote(next.noteId))) {
+      if (next.noteId === editor.noteId || (await this.documentClient.readNote(next.noteId))) {
         this.renderTabs();
         return;
       }
@@ -1022,7 +1024,7 @@ class TabController {
       if (!note || note.archived) continue;
       if ((await right.loadNote(id)) || right.noteGone) return true;
     }
-    const other = (await this.storage.getAllNotes()).find((note) => note.id !== leftId);
+    const other = (await this.documentClient.activeNotes()).find((note) => note.id !== leftId);
     if (other && ((await right.loadNote(other.id)) || right.noteGone)) return true;
     // No note for it: no hidden copy of the left pane's note either
     if (right.noteId && right.noteId === leftId) await right.unload();

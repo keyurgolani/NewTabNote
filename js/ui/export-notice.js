@@ -19,10 +19,10 @@
  * here changes a note.
  */
 
-/** Storage.getSetting key of the recorded outcome */
+/** The settings key of the recorded outcome */
 const EXPORT_NOTICE_SETTING = 'preMigrationNotice';
 
-/** Storage.getSetting key that Export JSON and Create Backup write once the browser has the file */
+/** The settings key that Export JSON and Create Backup write once the browser has the file */
 const EXPORT_RECEIPT_SETTING = 'lastFullExportAt';
 
 /** This notice's version. A later notice bumps it, so a profile sees that one once too. */
@@ -63,15 +63,17 @@ const EXPORT_NOTICE_TEXT = Object.freeze({
 class ExportNotice {
   /**
    * @param {Object} deps
-   * @param {DatabaseManager} deps.storage
-   * @param {{recordExportNotice: (version: number, outcome: string) => Promise<unknown>}} deps.settings - The
-   *   page's settings port (js/kernel/composition/settings.js), which records the outcome
+   * @param {{openState: string, missingStores: readonly string[]}} deps.storageState - What the
+   *   page knows of its database outside the kernel (js/kernel/composition/newtab.js): whether
+   *   it's open, and the stores it lacks
+   * @param {any} deps.settings - The page's settings port (js/kernel/composition/settings.js),
+   *   which the record and the export receipt are read through, and the outcome recorded
    * @param {() => Promise<boolean>} deps.onExport - Export JSON; resolves true once the browser has the file
    * @param {((returnFocus: ReturnFocus|null) => void)|null} [deps.onClose] - Runs when the notice
    *   closes while it holds focus, with where focus was before it moved into the notice
    */
-  constructor({ storage, settings, onExport, onClose = null }) {
-    this.storage = storage;
+  constructor({ storageState, settings, onExport, onClose = null }) {
+    this.storageState = storageState;
     this.settings = settings;
     this.onExport = onExport;
     this.onClose = onClose;
@@ -103,12 +105,15 @@ class ExportNotice {
    * @returns {Promise<boolean>}
    */
   async isDue() {
-    const storage = this.storage;
-    if (storage.openState !== 'open') return false;
-    if (EXPORT_AUX_STORES.some((store) => storage.missingStores.includes(store))) return false;
-    if (ExportNotice.isRecorded(await storage.readSetting(EXPORT_NOTICE_SETTING))) return false;
-    if (await this._holdsSomething()) {
-      this.exportedEarlier = Boolean(await storage.getSetting(EXPORT_RECEIPT_SETTING, null));
+    const { openState, missingStores } = this.storageState;
+    if (openState !== 'open') return false;
+    if (EXPORT_AUX_STORES.some((store) => missingStores.includes(store))) return false;
+    if (ExportNotice.isRecorded(await this._recorded())) return false;
+    // Whether the profile has a note outside trash with a title or a block that holds
+    // something, by the rule trash goes by (the kernel's profileHoldsContent)
+    if (await this.settings.holdsContent()) {
+      const stored = await this.settings.workspaceDataOr({ [EXPORT_RECEIPT_SETTING]: null });
+      this.exportedEarlier = Boolean(stored[EXPORT_RECEIPT_SETTING]);
       return true;
     }
     await this.record('not-needed');
@@ -116,19 +121,11 @@ class ExportNotice {
   }
 
   /**
-   * Whether the profile has a note outside trash with a title or a block that
-   * holds something, by the rule trash goes by (Storage.isNoteEmpty). Stops at
-   * the first.
-   * @returns {Promise<boolean>}
+   * The recorded outcome as stored, undefined when there's none. Rejects when the read fails.
+   * @returns {Promise<*>}
    */
-  async _holdsSomething() {
-    const storage = this.storage;
-    const notes = [...(await storage.getAllNotes(true)), ...(await storage.getTemplates())];
-    for (const note of notes) {
-      if (!storage.isNoteUntitled(note)) return true;
-      if (!(await storage.isNoteEmpty(note.id))) return true;
-    }
-    return false;
+  async _recorded() {
+    return (await this.settings.workspaceData([EXPORT_NOTICE_SETTING]))[EXPORT_NOTICE_SETTING];
   }
 
   /**
@@ -149,7 +146,7 @@ class ExportNotice {
    */
   async record(outcome) {
     const write = async () => {
-      const current = await this.storage.readSetting(EXPORT_NOTICE_SETTING);
+      const current = await this._recorded();
       if (ExportNotice.isRecorded(current) && !(outcome === 'exported' && current.outcome === 'dismissed')) return;
       // { version, outcome, at }, stamped by the kernel's clock
       await this.settings.recordExportNotice(EXPORT_NOTICE_VERSION, outcome);
@@ -204,12 +201,11 @@ class ExportNotice {
 
     card.addEventListener('focusin', this.onFocusIn);
     // settings.changed names the keys only, so the choice another tab recorded is read again,
-    // from the storage the listener is on
-    const storage = this.storage;
-    this.unsubscribe = storage.onSettingsChange(async ({ keys }) => {
+    // through the settings port the notice came from: none, when the read fails
+    this.unsubscribe = this.settings.onChanged(async ({ keys }) => {
       if (keys.includes(EXPORT_NOTICE_SETTING)) {
-        const recorded = await storage.getSetting(EXPORT_NOTICE_SETTING, undefined);
-        if (ExportNotice.isRecorded(recorded)) {
+        const stored = await this.settings.workspaceDataOr({ [EXPORT_NOTICE_SETTING]: null });
+        if (ExportNotice.isRecorded(stored[EXPORT_NOTICE_SETTING])) {
           this.close();
           return;
         }

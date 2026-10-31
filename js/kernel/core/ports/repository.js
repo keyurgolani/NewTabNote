@@ -198,10 +198,11 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   sent at once, and a resend runs again, so each item that committed or conflicted answers
  *   from its own record and each other item runs again.
  * @property {boolean} backups
- *   The adapter runs the legacy backup tasks (BackupTask): the import and auto-backup run
- *   1.4.x's Storage code, recovery copy, keys, retention, and record shapes included. One
- *   without answers `unavailable`, `adapter`, `backups-need-legacy-storage`, and writes
- *   nothing, until #18's backup engine runs on every adapter.
+ *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
+ *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery
+ *   copy, keys, retention, and record shapes included. One without answers `unavailable`,
+ *   `adapter`, `backups-need-legacy-storage`, and writes nothing, until #18's backup engine
+ *   runs on every adapter.
  */
 
 /**
@@ -222,4 +223,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  * @property {(area: ReadableSettingsArea, keys: readonly string[]) => Promise<Record<string, unknown>>} readSettings
  *   The keys that have a stored value. A key outside IDB_SETTINGS_KEYS from `idbSettings` rejects
  *   with an UnavailableError, code `setting-not-served`.
+ * @property {(extra: Record<string, unknown>) => Promise<Blob>} exportBackup
+ *   1.4.x's export file (Storage.exportAllAsBlob), with `extra` as more top-level fields: every
+ *   note outside trash with its blocks and media, and every folder. Only an adapter with the
+ *   `backups` flag makes one. One without rejects with an UnavailableError, `adapter`,
+ *   `backups-need-legacy-storage`, as its backup tasks answer.
  */

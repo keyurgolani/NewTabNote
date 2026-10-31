@@ -18,7 +18,6 @@ function smartTab() {
   env.document.stub(['ai-sidebar', 'ai-floating-btn', 'ai-chat-input']);
   const calls = [];
   const chat = new (env.get('AIChatController'))({
-    storage: null,
     settings: null,
     domRefs: null,
     logger: { debug() {}, info() {}, warn() {}, error() {} },

@@ -2469,6 +2469,138 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe("the reads the new tab's controllers make in place of Storage (#12 slice 7)", () => {
+      it("getWorkspaceData reads each key from the area its command writes, and leaves out what isn't stored", async () => {
+        assert.equal((await kernel.query({ type: 'getWorkspaceData' })).kind, 'empty');
+        const history = [{ role: 'user', content: 'Plan the week' }];
+        const templates = [{ id: 't1', label: 'Sum', prompt: 'Summarize', scope: 'note' }];
+        await run(cmd('saveChatHistory', { chat: 'note', history, messages: [] }));
+        await run(cmd('savePromptTemplates', { templates }));
+        await run(cmd('completeOnboarding', {}));
+        await run(cmd('recordBackup', { fullExport: false, backup: true }));
+        await run(cmd('recordExportNotice', { version: 1, outcome: 'dismissed' }));
+        const some = await kernel.query({
+          type: 'getWorkspaceData',
+          keys: [
+            'aiChatHistory',
+            'globalChatHistory',
+            'aiPromptTemplates',
+            'hasCompletedOnboarding',
+            'lastFullExportAt',
+            'lastBackupAt',
+            'preMigrationNotice',
+          ],
+        });
+        assert.deepEqual(some.kind === 'ready' && some.data, {
+          aiChatHistory: history,
+          aiPromptTemplates: templates,
+          hasCompletedOnboarding: true,
+          lastBackupAt: NOW,
+          preMigrationNotice: { version: 1, outcome: 'dismissed', at: NOW },
+        });
+        const all = await kernel.query({ type: 'getWorkspaceData' });
+        assert.deepEqual(all.kind === 'ready' && Object.keys(all.data).sort(), [
+          'aiChatHistory',
+          'aiPromptTemplates',
+          'hasCompletedOnboarding',
+          'lastBackupAt',
+          'noteChatMessages',
+          'preMigrationNotice',
+        ]);
+        assert.deepEqual(await kernel.query({ type: 'getWorkspaceData', keys: [/** @type {any} */ ('theme')] }), {
+          kind: 'failed',
+          cause: 'validation',
+          code: 'unknown-workspace-data',
+        });
+      });
+
+      it('listThemes lists the custom themes, the last saved first', async () => {
+        assert.equal((await kernel.query({ type: 'listThemes' })).kind, 'empty');
+        await run(cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }));
+        ctx.clock.advance(1000);
+        await run(cmd('saveTheme', { themeId: 'th2', name: 'Dawn', properties: {} }));
+        ctx.clock.advance(1000);
+        // A save of Dusk makes it the last saved again
+        await run(cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#202020' } }));
+        const state = await kernel.query({ type: 'listThemes' });
+        assert.deepEqual(state.kind === 'ready' && state.data.map(theme => [theme.id, theme.name, theme.updatedAt]), [
+          ['th1', 'Dusk', NOW + 2000],
+          ['th2', 'Dawn', NOW + 1000],
+        ]);
+      });
+
+      it(
+        flags.backups
+          ? "exportBackup makes 1.4.x's export file, with Create Backup's fields when it asks for them"
+          : 'no backups: exportBackup is failed',
+        async () => {
+          const noteId = await createNote({ name: 'Plan', blocks: [{ id: 'b1', type: 'text', content: 'Line' }] });
+          const plain = await kernel.query({ type: 'exportBackup', backup: false });
+          if (!flags.backups) {
+            assert.deepEqual(plain, { kind: 'failed', cause: 'adapter', code: 'backups-need-legacy-storage' });
+            return;
+          }
+          assert.equal(plain.kind, 'ready', JSON.stringify(plain));
+          const file = JSON.parse(await /** @type {Blob} */ (plain.kind === 'ready' && plain.data).text());
+          assert.deepEqual(Object.keys(file), ['version', 'exportedAt', 'canvases', 'elements', 'media', 'folders']);
+          assert.deepEqual(
+            file.canvases.map(/** @param {NoteRecord} note */ note => note.id),
+            [noteId],
+          );
+          assert.deepEqual(
+            file.elements.map(/** @param {BlockRecord} block */ block => block.content),
+            ['Line'],
+          );
+          const backup = await kernel.query({ type: 'exportBackup', backup: true });
+          const backupFile = JSON.parse(await /** @type {Blob} */ (backup.kind === 'ready' && backup.data).text());
+          assert.deepEqual(Object.keys(backupFile).slice(-3), ['backupType', 'backupCreatedAt', 'backupVersion']);
+          assert.deepEqual(
+            [backupFile.backupType, backupFile.backupCreatedAt, backupFile.backupVersion],
+            ['full-backup', new Date(NOW).toISOString(), 1],
+          );
+        },
+      );
+
+      it('profileHoldsContent is false until a note outside trash has a title or a block that holds something', async () => {
+        const holds = async () => {
+          const state = await kernel.query({ type: 'profileHoldsContent' });
+          assert.equal(state.kind, 'ready', JSON.stringify(state));
+          return state.kind === 'ready' && state.data;
+        };
+        assert.equal(await holds(), false);
+        await createNote({ name: 'Untitled 2', blocks: [{ id: 'b0', type: 'text', content: '<br>&nbsp; ' }] });
+        assert.equal(await holds(), false, 'an untitled note of empty text blocks holds nothing');
+        const titled = await createNote({ name: 'Plan' });
+        assert.equal(await holds(), true);
+        await run(cmd('trashNote', { noteId: titled }));
+        assert.equal(await holds(), false, 'a note in trash is not exported');
+        const divider = await createNote({ name: '', blocks: [{ id: 'b1', type: 'divider' }] });
+        assert.equal(await holds(), true, 'a block that is not text holds something');
+        await run(cmd('trashNote', { noteId: divider }));
+        const template = await createNote({ name: 'Weekly' });
+        await run(cmd('convertNoteToTemplate', { noteId: template }));
+        assert.equal(await holds(), true, 'a template is exported too');
+      });
+
+      it('runs from the new tab only', async () => {
+        for (const surface of /** @type {const} */ (['popup', 'sidepanel'])) {
+          const reader = ctx.kernel(CALLERS[surface]);
+          for (const query of /** @type {any[]} */ ([
+            { type: 'getWorkspaceData' },
+            { type: 'listThemes' },
+            { type: 'exportBackup', backup: false },
+            { type: 'profileHoldsContent' },
+          ])) {
+            assert.deepEqual(
+              await reader.query(query),
+              { kind: 'failed', cause: 'policy', code: 'not-on-surface' },
+              surface + ' ' + query.type,
+            );
+          }
+        }
+      });
+    });
+
     describe('queries', () => {
       it('lists each view in the order Storage lists it', async () => {
         await createNote({ noteId: 'old', name: 'Old' });

@@ -529,8 +529,9 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
     await startEditorClient(env);
     const SettingsController = env.get('SettingsController');
     const settings = new SettingsController({
-      storage: Storage,
       settings: env.settingsClient,
+      documentClient: env.documentClient,
+      validateBackup: env.validateBackup,
       domRefs: null,
       logger: loggerWith(events),
     });
@@ -791,8 +792,9 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
     await startEditorClient(env);
     const SettingsController = env.get('SettingsController');
     const settings = new SettingsController({
-      storage: Storage,
       settings: env.settingsClient,
+      documentClient: env.documentClient,
+      validateBackup: env.validateBackup,
       domRefs: null,
       logger: loggerWith(events),
     });

@@ -37,6 +37,12 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/list-snapshots.js').ListSnapshots} ListSnapshots */
 /** @typedef {import('./operations/get-snapshot.js').GetSnapshot} GetSnapshot */
 /** @typedef {import('./operations/find-daily-note.js').FindDailyNote} FindDailyNote */
+/** @typedef {import('./operations/get-workspace-data.js').GetWorkspaceData} GetWorkspaceData */
+/** @typedef {import('./operations/list-themes.js').ListThemes} ListThemes */
+/** @typedef {import('./operations/export-backup.js').ExportBackup} ExportBackup */
+/** @typedef {import('./operations/profile-holds-content.js').ProfileHoldsContent} ProfileHoldsContent */
+/** @typedef {import('./settings.js').WorkspaceDataValues} WorkspaceDataValues */
+/** @typedef {import('./entities.js').ThemeEntity} ThemeEntity */
 /** @typedef {import('../domain/snapshot.js').SnapshotRecord} SnapshotRecord */
 /** @typedef {import('../domain/snapshot.js').SnapshotSummary} SnapshotSummary */
 
@@ -44,7 +50,8 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | GetNoteList | GetNotesByIds | ListSearchEntries
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
- *   | ListSnapshots | GetSnapshot | FindDailyNote} Query
+ *   | ListSnapshots | GetSnapshot | FindDailyNote
+ *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -73,6 +80,10 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {SnapshotSummary[]} listSnapshots
  * @property {SnapshotRecord} getSnapshot
  * @property {{note: NoteRecord}} findDailyNote
+ * @property {WorkspaceDataValues} getWorkspaceData
+ * @property {ThemeEntity[]} listThemes
+ * @property {Blob} exportBackup
+ * @property {boolean} profileHoldsContent
  */
 
 /**
@@ -148,6 +159,13 @@ export const QUERIES = Object.freeze({
   getSnapshot: entry('get-snapshot', ['snapshot'], NEW_TAB),
   // The new tab reads the Daily Note it opens after ensureDailyNote
   findDailyNote: entry('find-daily-note', [], NEW_TAB),
+  // The new tab's controllers read back what slice 6's commands write (#12 slice 7)
+  getWorkspaceData: entry('get-workspace-data', [], NEW_TAB),
+  listThemes: entry('list-themes', [], NEW_TAB),
+  // Export JSON and Create Backup. The file is a Blob, which only an in-page kernel hands over
+  exportBackup: entry('export-backup', [], NEW_TAB),
+  // The export notice decides once whether the profile has anything to export
+  profileHoldsContent: entry('profile-holds-content', [], NEW_TAB),
 });
 
 /** @type {readonly QueryType[]} */

@@ -17,9 +17,12 @@
  * the calling task.
  */
 
+import { compareKeys } from '../core/domain/note.js';
+
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../core/domain/note.js').BlockRecord} BlockRecord */
+/** @typedef {import('../core/domain/note.js').SearchEntry} SearchEntry */
 /** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../core/domain/snapshot.js').SnapshotRecord} SnapshotRecord */
 /** @typedef {import('../core/domain/snapshot.js').SnapshotSummary} SnapshotSummary */
@@ -72,6 +75,11 @@
  * @property {() => Promise<string[]>} noteNames - the names a wiki link can take, as Storage.getNoteNames lists them
  * @property {() => Promise<NoteRecord[]>} templates
  * @property {(noteId: string) => Promise<BlockRecord[]>} blocksOf - a note's blocks in note order
+ * @property {(noteId: string) => Promise<BlockRecord[]>} blocksAsStored
+ *   A note's blocks in the order IndexedDB's canvasId index lists them, by block id, as
+ *   Storage.getElementsByNote read them: the order the search index, the embeddings, and the
+ *   single-note export have always been made in
+ * @property {() => Promise<SearchEntry[]>} searchEntries - every note's search entry, as stored
  * @property {() => string} newId - an id for a note or block the editor makes
  * @property {(noteId: string, name: string, contentHash?: string) => Promise<Outcome>} deriveTitle
  *   A title a job derived (applyDerivedTitle): dropped, `title-kept`, when the note has a title
@@ -221,6 +229,11 @@ export function createDocumentClient(
     templates: () => read({ type: 'listNotes', view: 'templates' }, []),
 
     blocksOf: noteId => read({ type: 'getNoteBlocks', noteId }, []),
+
+    blocksAsStored: async noteId =>
+      [...(await read({ type: 'getNoteBlocks', noteId }, []))].sort((a, b) => compareKeys(a.id, b.id)),
+
+    searchEntries: () => read({ type: 'listSearchEntries' }, []),
 
     newId: () => client.ids.next(),
 

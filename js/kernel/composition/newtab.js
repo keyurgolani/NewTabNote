@@ -32,11 +32,31 @@ import { createNoteRemoval } from './removal.js';
  */
 
 /**
+ * What the page knows of its database outside the kernel (#12 slice 7): whether it's open,
+ * and which stores it lacks, as js/storage.js keeps them, read when asked
+ * @typedef {Readonly<{openState: string, missingStores: readonly string[]}>} StorageState
+ */
+
+/**
+ * The storage guard's raw export, which reads every store but settings from a database the
+ * kernel can't open, and changes nothing
+ * @typedef {Readonly<{exportRawStores: () => Promise<Record<string, unknown>>}>} Recovery
+ */
+
+/**
+ * An import's check of a parsed backup, which writes nothing (Storage.validateImport)
+ * @typedef {(data: unknown) => unknown} ValidateBackup
+ */
+
+/**
  * The legacy App class app.js puts on window, and the instance the controllers still read as
- * window.app until #12 slice 7 removes it
+ * window.app until #12 slice 7 removes it. `legacyStorage` is js/storage.js's, which the graph
+ * view and the search index and vectors (#22), and sync (#19), still go through until their
+ * issues move them.
  * @typedef {object} NewTabPage
  * @property {new (options: {kernel: Client, documentClient: DocumentClient, settings: SettingsClient, ai: AIPort,
- *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval}) => NewTabApp} App
+ *   noteList: NoteList, events: PageFailureEvents, removal: NoteRemoval, storageState: StorageState,
+ *   recovery: Recovery, validateBackup: ValidateBackup, legacyStorage: unknown}) => NewTabApp} App
  * @property {unknown} [app]
  */
 
@@ -119,20 +139,60 @@ export function createNewTabRemoval(kernel, noteList, page) {
 }
 
 /**
- * The tab's settings port on `kernel` (#12 slice 6): its controllers' preferences, workspace
- * session, AI chat history, themes, onboarding, and backups go through it.
+ * The tab's settings port on `kernel` (#12 slices 6 and 7): its controllers' preferences,
+ * workspace session, AI chat history, themes, onboarding, backups, and the export file go
+ * through it, and it hears of each settings change through js/storage.js's onSettingsChange,
+ * as the controllers did.
  * @param {Client} kernel
+ * @param {LegacyHost} host - the one the kernel was built on
  * @returns {SettingsClient}
  */
-export function createNewTabSettingsClient(kernel) {
-  return createSettingsClient(kernel);
+export function createNewTabSettingsClient(kernel, host) {
+  return createSettingsClient(kernel, { onSettingsChange: listener => host.storage.onSettingsChange(listener) });
+}
+
+/**
+ * Whether the tab's database is open, and which stores it lacks, read from `host`'s storage
+ * when asked, as App, the sidebar, and the export notice read them
+ * @param {LegacyHost} host
+ * @returns {StorageState}
+ */
+export function createNewTabStorageState(host) {
+  return Object.freeze({
+    get openState() {
+      return host.storage.openState;
+    },
+    get missingStores() {
+      return host.storage.missingStores;
+    },
+  });
+}
+
+/**
+ * The storage guard's raw export, on `host`'s storage
+ * @param {LegacyHost} host
+ * @returns {Recovery}
+ */
+export function createNewTabRecovery(host) {
+  return Object.freeze({ exportRawStores: () => host.storage.exportRawStores() });
+}
+
+/**
+ * An import's check of a backup, on `host`'s storage
+ * @param {LegacyHost} host
+ * @returns {ValidateBackup}
+ */
+export function createNewTabBackupCheck(host) {
+  return data => host.storage.validateImport(data);
 }
 
 /**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
  * client, its document client, its settings client, its AI port, its note list, its failure
- * events, and its removeNotes, and becomes window.app before init runs. The listener answers with init's
- * promise, which a page ignores and a test can wait for.
+ * events, its removeNotes, its database's state and recovery, its import's backup check, and
+ * the legacy storage the graph view, the search index, and sync still go through, and becomes
+ * window.app before init runs. The listener answers with init's promise, which a page ignores
+ * and a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -146,11 +206,15 @@ export function startNewTab() {
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
-      settings: createNewTabSettingsClient(kernel),
+      settings: createNewTabSettingsClient(kernel, host),
       ai: createAIPort(),
       noteList,
       events: createNewTabFailureEvents(),
       removal: createNewTabRemoval(kernel, noteList, () => built),
+      storageState: createNewTabStorageState(host),
+      recovery: createNewTabRecovery(host),
+      validateBackup: createNewTabBackupCheck(host),
+      legacyStorage: host.storage,
     });
     built = app;
     page.app = app;

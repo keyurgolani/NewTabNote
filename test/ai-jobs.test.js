@@ -129,10 +129,9 @@ function notesManager(env, Storage, { ai, editor, tabs = [] }) {
 const jobsOn = (env) => env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true, setting_insightsEnabled: true });
 
 /** AIChatController as App wires it, with its chat log reduced to a list */
-function aiChat(env, Storage, { ai, editor, tabs = [] }) {
+function aiChat(env, { ai, editor, tabs = [] }) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
-    storage: Storage,
     settings: env.settingsClient,
     domRefs: null,
     logger: quietLogger,
@@ -247,7 +246,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
   });
 
   it("AI chat's Extract insights puts them on the note the chat read", async () => {
-    const chat = aiChat(env, Storage, { ai: ai.port, editor });
+    const chat = aiChat(env, { ai: ai.port, editor });
     chat.getNoteContent = () => LONG_A;
     const job = chat.extractInsightsFromChat();
     await switchThenAnswer('extractInsights', { todos: ['Buy milk'] });
@@ -257,7 +256,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
   });
 
   it("AI chat's generated title goes to the note the chat was about, after its confirm", async () => {
-    const chat = aiChat(env, Storage, { ai: ai.port, editor });
+    const chat = aiChat(env, { ai: ai.port, editor });
     const confirm = deferred();
     env.global.confirmDialog = () => confirm.promise;
     // The chat answered about A; the user switches to B before confirming
@@ -534,7 +533,7 @@ describe('T4: insights write the insight fields only', () => {
   });
 
   it("AI chat's Extract insights keeps a pin made in the sidebar, and writes only attachInsights", async () => {
-    const chat = aiChat(env, Storage, { ai: ai.port, editor });
+    const chat = aiChat(env, { ai: ai.port, editor });
     chat.getNoteContent = () => LONG_A;
     const job = chat.extractInsightsFromChat();
     await ai.answer('extractInsights', { todos: ['Call'] });
@@ -655,7 +654,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
     await list.settled();
     assert.deepEqual(sidebarView(sidebar), { name: 'Groceries', first: 'A' });
 
-    const chat = aiChat(env, Storage, { ai: ai.port, editor });
+    const chat = aiChat(env, { ai: ai.port, editor });
     await drive(env, chat.applyGeneratedTitle('Weekly shop', 'A'));
     await list.settled();
     assert.deepEqual(sidebarView(sidebar), { name: 'Weekly shop', first: 'A' });

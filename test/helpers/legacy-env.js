@@ -646,6 +646,8 @@ function createChromeStub() {
     failNextSet(error = new Error('Resource::kQuotaBytes quota exceeded')) { setFailures.push(error); },
     /** Make the next chrome.storage.local.get fail with `error` (via runtime.lastError). */
     failNextGet(error = new Error('IO error: storage read failed')) { getFailures.push(error); },
+    /** Let the next chrome.storage.local.get through, so a failNextGet after this fails the one after it. */
+    passNextGet() { getFailures.push(null); },
     /** set and remove calls, which are the writes. */
     writes() { return calls.filter((c) => c.method === 'set' || c.method === 'remove'); },
   };
@@ -983,6 +985,8 @@ function testDocumentClient(client) {
     noteNames: copied(client.noteNames),
     templates: copied(client.templates),
     blocksOf: copied(client.blocksOf),
+    blocksAsStored: copied(client.blocksAsStored),
+    searchEntries: copied(client.searchEntries),
     saveContent: (save) => client.saveContent(save),
     deleteBlocks: (noteId, blockIds) => client.deleteBlocks(noteId, blockIds),
     createNote: (fields) => client.createNote(fields),
@@ -1034,7 +1038,7 @@ function testDocumentClient(client) {
 async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
-  const { kernel, documentClient, noteList, removalFor, settingsClient } = pageClientsFor({
+  const { kernel, documentClient, noteList, removalFor, settingsClient, storageState, recovery, validateBackup } = pageClientsFor({
     storage: env.get('Storage'),
     settings: env.chrome.api.storage.local,
     onListQuery,
@@ -1049,6 +1053,11 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) 
   env.removalFor = removalFor;
   // The page's settings port (js/kernel/composition/settings.js), which controllers take as `settings`
   env.settingsClient = settingsClient;
+  // What App gives the controllers of the page's Storage: its state, the storage guard's raw
+  // export, and an import's backup check (js/kernel/composition/newtab.js)
+  env.storageState = storageState;
+  env.recovery = recovery;
+  env.validateBackup = validateBackup;
   return env.documentClient;
 }
 
@@ -1069,7 +1078,7 @@ async function startNewTabKernel(env) {
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
   env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, host));
   env.noteList = root.createNewTabNoteList(kernel);
-  env.settingsClient = root.createNewTabSettingsClient(kernel);
+  env.settingsClient = root.createNewTabSettingsClient(kernel, host);
   return env.documentClient;
 }
 
@@ -1192,7 +1201,12 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuer
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
+  const tabs = new TabController({
+    settings: env.settingsClient,
+    documentClient: env.documentClient,
+    domRefs: null,
+    logger: null,
+  });
   // As App's port, the tab of a note saved as a new one follows it
   const navigation = () => ({
     ...quietNavigation(),

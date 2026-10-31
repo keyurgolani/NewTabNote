@@ -46,9 +46,19 @@ async function openPage(env, { open = ['A'], split = false } = {}) {
   env.get('Utils').showToast = (message, kind) => { page.toasts.push({ message, kind }); };
   if (!env.document.getElementById('sidebar-tab-notes')) env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
   page.notes = page.wire(new (env.get('NotesManager'))({ storage: page.Storage, domRefs: null, logger: null, llm: null }));
-  page.sidebar = page.wire(new (env.get('SidebarController'))({ storage: page.Storage, domRefs: null, logger: null }));
+  page.sidebar = page.wire(new (env.get('SidebarController'))({
+    settings: env.settingsClient,
+    storageState: env.storageState,
+    domRefs: null,
+    logger: null,
+  }));
   page.sidebar.getEditor = () => page.tabs.getEditor();
-  page.settings = page.wire(new (env.get('SettingsController'))({ storage: page.Storage, domRefs: null, logger: null }));
+  page.settings = page.wire(new (env.get('SettingsController'))({
+    settings: env.settingsClient,
+    validateBackup: env.validateBackup,
+    domRefs: null,
+    logger: null,
+  }));
   return page;
 }
 
@@ -472,21 +482,73 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     assert.equal(page.sidebar.selectionMode, false);
   });
 
-  it('a bulk archive counts a note another tab already deleted as one it couldn\'t archive, and keeps it selected', async () => {
+  // #12 slice 7b, with the copy signed off for it: a note another tab deleted leaves the
+  // selection, since no try can archive it, and the toast counts it apart. 1.4.x kept it
+  // selected as one it couldn't archive, and said to try again.
+  it('a bulk archive drops a note another tab already deleted from the selection, and says it was deleted', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
     await page.Storage.permanentlyDeleteNote('C');
     page.sidebar.selectionMode = true;
-    page.sidebar.selectedNoteIds = new Set(['B', 'C']);
+    page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C']);
 
     const archived = page.sidebar.performBulkAction('archive');
     await confirmIn(env, 'Confirm');
     await runUntil(env, archived);
 
-    assert.equal((await stored(env)).notes.B.archived, true);
-    assert.deepEqual(page.toasts, [{ message: "1 of 2 notes couldn't be archived. It's still selected.", kind: 'error' }]);
-    assert.deepEqual(plain([...page.sidebar.selectedNoteIds]), ['C']);
+    const { notes } = await stored(env);
+    assert.deepEqual([notes.A.archived, notes.B.archived], [true, true]);
+    assert.deepEqual(page.toasts, [{ message: '2 of 3 notes archived. 1 was deleted.', kind: 'success' }]);
+    assert.equal(page.sidebar.selectionMode, false);
+    assert.deepEqual(plain([...page.sidebar.selectedNoteIds]), []);
+  });
+
+  it("a bulk archive keeps only the note it couldn't archive selected, and counts the one another tab deleted apart", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { open: ['A'] });
+    await page.Storage.permanentlyDeleteNote('C');
+    page.sidebar.selectionMode = true;
+    page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C', 'D']);
+    failNextWrite(page.Storage, 'canvases', (record) => record && record.id === 'B' && record.archived === true);
+
+    const archived = page.sidebar.performBulkAction('archive');
+    await confirmIn(env, 'Confirm');
+    await runUntil(env, archived);
+
+    const { notes } = await stored(env);
+    assert.deepEqual([notes.A.archived, Boolean(notes.B.archived), notes.D.archived], [true, false, true]);
+    assert.deepEqual(page.toasts, [{
+      message: "1 of 4 notes couldn't be archived. It's still selected. 1 other was deleted.",
+      kind: 'error',
+    }]);
+    assert.equal(page.sidebar.selectionMode, true);
+    assert.deepEqual(plain([...page.sidebar.selectedNoteIds]), ['B']);
+  });
+
+  it('a bulk archive, unarchive, or restore of notes another tab all deleted says so, and leaves selection mode', async () => {
+    for (const [action, one, many] of [
+      ['archive', 'Failed to archive note: it was deleted.', 'Failed to archive notes: they were deleted.'],
+      ['unarchive', 'Failed to restore note from Archive: it was deleted.', 'Failed to restore notes from Archive: they were deleted.'],
+      ['restore', 'Failed to restore note from Trash: it was deleted.', 'Failed to restore notes from Trash: they were deleted.'],
+    ]) {
+      for (const [ids, message] of [[['C'], one], [['C', 'D'], many]]) {
+        const env = createLegacyEnv();
+        await createProfile(env.indexedDB);
+        const page = await openPage(env, { open: ['A'] });
+        for (const id of ids) await page.Storage.permanentlyDeleteNote(id);
+        page.sidebar.selectionMode = true;
+        page.sidebar.selectedNoteIds = new Set(ids);
+
+        const ran = page.sidebar.performBulkAction(action);
+        if (action === 'archive') await confirmIn(env, 'Confirm');
+        await runUntil(env, ran);
+
+        assert.deepEqual(page.toasts, [{ message, kind: 'error' }], `${action} ${ids}`);
+        assert.equal(page.sidebar.selectionMode, false, `${action} ${ids}`);
+      }
+    }
   });
 
   it('Empty trash puts back a pane on a note another tab restored first, and deletes the rest', async () => {

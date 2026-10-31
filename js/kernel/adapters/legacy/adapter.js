@@ -10,8 +10,8 @@
  *   saving one note's blocks race until #35's coordinator serializes them.
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
- * - backups: true. The legacy import and auto-backup run here, through Storage's own code,
- *   which #18's backup engine replaces; the other adapters don't run them yet.
+ * - backups: true. The legacy import, auto-backup, and export file run here, through
+ *   Storage's own code, which #18's backup engine replaces; the other adapters don't run them yet.
  *
  * The new tab and the service worker open it `versioned`: Storage.open, which upgrades an
  * older database to version 8 as Storage.init always has, and watches the connection. Their kernels set
@@ -57,6 +57,12 @@ import { settingKey } from '../indexeddb/settings.js';
  * @property {(data: unknown, mode: 'merge' | 'replace') => Promise<import('../../core/ports/repository.js').ImportReceipt>} importData
  *   1.4.x's import, recovery copy before Replace all included, in one transaction
  * @property {() => Promise<void>} createAutoBackup - 1.4.x's automatic backup, keeping the newest three
+ * @property {(extra?: Record<string, unknown>) => Promise<Blob>} exportAllAsBlob - 1.4.x's export file, with `extra` fields
+ * @property {string[]} missingStores - the stores the open database lacks
+ * @property {() => Promise<Record<string, unknown>>} exportRawStores - every store but settings, read as it is
+ * @property {(data: unknown) => unknown} validateImport - a parsed backup's check, which writes nothing
+ * @property {(listener: (notice: Readonly<{type: 'settings.changed', keys: readonly string[]}>) => void) => () => void} onSettingsChange
+ *   Runs `listener` with the keys of each chrome.storage settings change, and answers the function that stops it
  */
 
 /**
@@ -448,6 +454,17 @@ export function createLegacyAdapter({ storage, settings, mode = 'versioned', reo
         const names = presentStores(storage, stores);
         const tx = names.length > 0 ? storage.transaction(names, 'readonly') : null;
         return await body(view(storage, tx, stores));
+      } catch (error) {
+        throw databaseError(error);
+      }
+    },
+
+    async exportBackup(extra) {
+      // Export JSON and Create Backup run in the new tab, which opens the database versioned
+      if (mode !== 'versioned') throw new UnavailableError('adapter', 'backup-needs-versioned-open', false);
+      if (mustReconnect()) await reconnect();
+      try {
+        return await storage.exportAllAsBlob(extra);
       } catch (error) {
         throw databaseError(error);
       }

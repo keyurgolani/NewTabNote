@@ -64,7 +64,7 @@ import { contentChanged, unitsWork } from './work.js';
 
 /**
  * @typedef {'listNotes' | 'getNote' | 'getNoteBlocks' | 'getBacklinks' | 'getNoteList' | 'getNotesByIds'
- *   | 'listSearchEntries' | 'findDailyNote'}
+ *   | 'listSearchEntries' | 'findDailyNote' | 'profileHoldsContent'}
  *   NoteQueryType
  */
 
@@ -902,5 +902,19 @@ export const noteQueries = {
   async listSearchEntries(query, { adapter, clock }) {
     const entries = await adapter.read(['searchIndex'], tx => tx.getAll('searchIndex'));
     return entries.length > 0 ? ready(clock.now(), entries) : empty(clock.now());
+  },
+
+  // The notes Export JSON exports, active and archived ones then templates, as the export
+  // notice read them, each judged by the rule trash goes by; it stops at the first that holds something
+  async profileHoldsContent(query, { adapter, clock }) {
+    const holds = await adapter.read(['notes', 'blocks'], async tx => {
+      const notes = await tx.getAll('notes');
+      for (const note of [...notesInView(notes, 'withArchived'), ...notesInView(notes, 'templates')]) {
+        if (!isUntitled(note)) return true;
+        if (!isEmpty(await tx.getAllByIndex('blocks', 'canvasId', note.id))) return true;
+      }
+      return false;
+    });
+    return ready(clock.now(), holds);
   },
 };

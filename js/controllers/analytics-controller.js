@@ -3,13 +3,11 @@
  * chart initialization, and data aggregation from notes/folders.
  *
  * @param {Object} deps
- * @param {DatabaseManager} deps.storage
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class AnalyticsController {
-  constructor({ storage, domRefs, logger }) {
-    this.storage = storage;
+  constructor({ domRefs, logger }) {
     this.domRefs = domRefs;
     this.logger = logger;
 

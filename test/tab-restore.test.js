@@ -70,7 +70,12 @@ async function start(env) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, settings: env.settingsClient, domRefs: null, logger: null });
+  const tabs = new TabController({
+    settings: env.settingsClient,
+    documentClient: env.documentClient,
+    domRefs: null,
+    logger: null,
+  });
   tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
   tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   // App passes the tab's note list, which has read every list once its kernel was ready
