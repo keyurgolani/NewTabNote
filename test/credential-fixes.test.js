@@ -1,7 +1,7 @@
 'use strict';
 
 // #21 slice 1a, the credential fixes in today's code: Gemini's key goes in the
-// x-goog-api-key header, never the URL (KD-007's regression test, below in
+// x-goog-api-key header, never the URL (KD-007's old test is its regression test in
 // provider-secrets.test.js); switching providers never sends the previous provider's key to
 // the new one, nor lists its models with it; sync's export skips the IndexedDB `settings`
 // store, which held the plaintext key up to 1.1.2; and the key and Ollama hints say where the

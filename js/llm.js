@@ -55,10 +55,30 @@ const PROVIDER_ENDPOINTS = {
   ],
 };
 
+/**
+ * The command that starts Ollama trusting this extension, and no other (#21): its own
+ * origin, from chrome.runtime, or a placeholder where there's none
+ * @returns {string}
+ */
+function ollamaOriginsCommand() {
+  let origin = "chrome-extension://<this extension's ID>";
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) origin = `chrome-extension://${chrome.runtime.id}`;
+  } catch {
+    // No extension context: the placeholder says what to put
+  }
+  return `OLLAMA_ORIGINS=${origin} ollama serve`;
+}
+
 class LLMService {
   constructor() {
     this.provider = 'none';
+    // The key for the provider in use: the saved key when it was saved for this provider, and
+    // '' otherwise, so a switch never sends one provider's key to another (#21)
     this.apiKey = '';
+    // The one saved key, and the provider it was saved for
+    this.savedKey = '';
+    this.keyProvider = null;
     this.model = '';
     this.endpoint = 'default'; // Selected endpoint ID
     this.ollamaUrl = 'http://localhost:11434';
@@ -68,10 +88,25 @@ class LLMService {
 
   async init() {
     this.provider = await Storage.getSetting('llmProvider', 'none');
-    this.apiKey = await Storage.getSetting('llmApiKey', '');
+    this.savedKey = await Storage.getSetting('llmApiKey', '');
+    this.keyProvider = await Storage.getSetting('llmApiKeyProvider', null);
+    // 1.4.x saved one key with no provider: it belongs to the provider it's used with now
+    if (this.savedKey && !this.keyProvider && this.provider !== 'none') {
+      this.keyProvider = this.provider;
+      await Storage.setSetting('llmApiKeyProvider', this.keyProvider);
+    }
+    this.apiKey = this.keyFor(this.provider);
     this.model = await Storage.getSetting('llmModel', '');
     this.endpoint = await Storage.getSetting('llmEndpoint', this.getDefaultEndpointForProvider(this.provider));
     this.ollamaUrl = await Storage.getSetting('ollamaUrl', 'http://localhost:11434');
+  }
+
+  /**
+   * The command that starts Ollama trusting this extension only (#21)
+   * @returns {string}
+   */
+  ollamaOriginsCommand() {
+    return ollamaOriginsCommand();
   }
 
   /**
@@ -403,9 +438,10 @@ class LLMService {
 
   async fetchGeminiModels(apiKey) {
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
-      );
+      // The key goes in its header, never the URL (#21)
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': apiKey },
+      });
       
       if (!response.ok) {
         console.warn('Failed to fetch Gemini models, using fallback');
@@ -606,7 +642,7 @@ class LLMService {
       
       if (!response.ok) {
         if (response.status === 403) {
-          console.warn('Ollama CORS error: Run Ollama with OLLAMA_ORIGINS=chrome-extension://* ollama serve');
+          console.warn(`Ollama CORS error: Run Ollama with ${ollamaOriginsCommand()}`);
         }
         throw new Error('Failed to connect to Ollama');
       }
@@ -654,8 +690,19 @@ class LLMService {
     return defaults[provider] || '';
   }
 
+  /**
+   * The saved key when it was saved for `provider`, and '' otherwise
+   * @param {string} provider
+   * @returns {string}
+   */
+  keyFor(provider) {
+    return this.savedKey && this.keyProvider === provider ? this.savedKey : '';
+  }
+
   async setProvider(provider) {
     this.provider = provider;
+    // The saved key stays saved, for the provider it belongs to; another provider has none
+    this.apiKey = this.keyFor(provider);
     await Storage.setSetting('llmProvider', provider);
     
     // Clear cached models for this provider to force refresh
@@ -668,7 +715,10 @@ class LLMService {
 
   async setApiKey(apiKey) {
     this.apiKey = apiKey;
+    this.savedKey = apiKey;
+    this.keyProvider = apiKey ? this.provider : null;
     await Storage.setSetting('llmApiKey', apiKey);
+    await Storage.setSetting('llmApiKeyProvider', this.keyProvider);
     
     // Clear cached models to force refresh with new key
     delete this.cachedModels[this.provider];
@@ -798,10 +848,10 @@ class LLMService {
 
     const model = this.model || 'gemini-1.5-flash';
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify({
           contents,
           systemInstruction: systemMessage ? { parts: [{ text: systemMessage }] } : undefined,
@@ -1057,7 +1107,7 @@ class LLMService {
       if (response.status === 403) {
         throw new Error(
           'Ollama blocked the request (403 Forbidden). ' +
-          'To fix this, restart Ollama with: OLLAMA_ORIGINS=chrome-extension://* ollama serve'
+          `To fix this, restart Ollama with: ${ollamaOriginsCommand()}`
         );
       }
       const errorMessage = response.data?.error || response.error || `Ollama API error (status: ${response.status})`;
@@ -1267,11 +1317,11 @@ class LLMService {
     }));
 
     const model = this.model || 'gemini-2.0-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
       body: JSON.stringify({
         contents,
         systemInstruction: systemMessage ? { parts: [{ text: systemMessage }] } : undefined,
@@ -1337,7 +1387,7 @@ class LLMService {
       if (response.status === 403) {
         throw new Error(
           'Ollama blocked the request (403 Forbidden). ' +
-          'To fix this, restart Ollama with: OLLAMA_ORIGINS=chrome-extension://* ollama serve'
+          `To fix this, restart Ollama with: ${ollamaOriginsCommand()}`
         );
       }
       const errorData = await response.json().catch(() => ({}));

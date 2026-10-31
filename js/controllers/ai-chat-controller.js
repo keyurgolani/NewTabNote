@@ -2222,9 +2222,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     if (!providerSelect) return;
 
+    // The Ollama hint names this extension's own origin (#21)
+    const ollamaCommand = document.getElementById('ollama-origins-command');
+    if (ollamaCommand && typeof this.llm.ollamaOriginsCommand === 'function') ollamaCommand.textContent = this.llm.ollamaOriginsCommand();
+
     providerSelect.addEventListener('change', async (e) => {
       const provider = e.target.value;
       await this.llm.setProvider(provider);
+      // The new provider's key, which is none unless one was saved for it: the old provider's
+      // key is never shown for it, nor sent to it to list its models (#21)
+      document.querySelectorAll('#llm-api-key').forEach(el => { el.value = this.llm.apiKey; });
       this.updateLLMSettingsVisibility(provider);
       await this.loadAndPopulateModels(provider, this.llm.apiKey);
       this.updateAISidebarState();

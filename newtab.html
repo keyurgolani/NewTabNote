@@ -924,15 +924,15 @@
                   </div>
                 </div>
                 <p class="setting-hint api-key-warning llm-api-key-row hidden">
-                  ⚠️ API keys are stored in the browser's IndexedDB. They are accessible to this extension but are not encrypted at rest. Avoid using keys with broad permissions.
+                  ⚠️ API keys are stored in this browser's extension storage (chrome.storage.local). This extension can read them, and they are not encrypted at rest. Avoid using keys with broad permissions.
                 </p>
                 <div class="setting-row llm-ollama-url-row hidden">
                   <label>Ollama URL</label>
                   <input type="text" id="ollama-url" placeholder="http://localhost:11434" />
                 </div>
                 <p class="setting-hint llm-ollama-hint hidden">
-                  <strong>Important:</strong> Start Ollama with CORS enabled:<br>
-                  <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
+                  <strong>Important:</strong> Start Ollama with CORS enabled for this extension only:<br>
+                  <code id="ollama-origins-command">OLLAMA_ORIGINS=chrome-extension://&lt;this extension's ID&gt; ollama serve</code>
                 </p>
                 <div class="setting-row llm-model-row hidden">
                   <label>Model</label>

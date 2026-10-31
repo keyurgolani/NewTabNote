@@ -1,11 +1,13 @@
 'use strict';
 
 // Known defects in how production code keeps and sends provider secrets: the WebDAV password
-// (js/services/sync-service.js) and the Gemini API key (js/llm.js). Each is an expected
-// failure under its test/known-defects.json entry, so the run fails once the defect is fixed
+// (js/services/sync-service.js), an expected failure under its test/known-defects.json
+// entry, and the Gemini API key (js/llm.js), fixed by #21 slice 1a and kept as a regression
+// test. An expected failure stays one so the run fails once the defect is fixed
 // and the entry stays. The secrets are synthetic canaries, and no assertion message prints
 // one. A step that goes wrong for another reason throws a plain Error, not an assertion.
 
+const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createLegacyEnv, dumpDatabase } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
@@ -40,7 +42,8 @@ expectFailure('KD-006 connecting WebDAV stores no plaintext copy of the password
   assert.deepEqual(copies.filter(([, copy]) => atRest.includes(copy)).map(([how]) => how), [], 'the password is stored');
 });
 
-expectFailure('KD-007 Gemini requests carry the API key outside their URL', async () => {
+// Was KD-007 (#21 slice 1a moved the key to x-goog-api-key): a regression test now
+test('Gemini requests carry the API key outside their URL', async () => {
   const key = canary('gemini');
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
