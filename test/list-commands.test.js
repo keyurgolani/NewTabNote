@@ -268,7 +268,7 @@ describe("the sidebar's new notes and Daily Notes", () => {
 
   it("Add Note to Folder makes the note in the folder in one write, and opens it", async () => {
     const { env, page, sidebar, reloads } = await openPage();
-    await sidebar.showFolderContextMenu({ pageX: 0, pageY: 0 }, page.noteList.folders()[0]);
+    await sidebar.showFolderContextMenu({ clientX: 0, clientY: 0 }, page.noteList.folders()[0]);
     const items = env.document.querySelectorAll('.context-menu-item');
     items[2].click();
     await waitFor(() => page.tabs.openTabs.length === 2, { message: 'the new note to open' });
@@ -284,7 +284,7 @@ describe("the sidebar's new notes and Daily Notes", () => {
     const folder = page.noteList.folders()[0];
     await Storage.deleteFolder(folder.id);
     env.global.console = { ...console, error: () => {} };
-    await sidebar.showFolderContextMenu({ pageX: 0, pageY: 0 }, folder);
+    await sidebar.showFolderContextMenu({ clientX: 0, clientY: 0 }, folder);
     env.document.querySelectorAll('.context-menu-item')[2].click();
     await waitFor(() => toasts.length > 0, { message: 'the toast' });
     assert.deepEqual(plain(toasts), [{ message: 'Failed to create note: that folder no longer exists.', kind: 'error' }]);
