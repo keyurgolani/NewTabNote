@@ -92,6 +92,10 @@ const LEGACY_STORES = Object.freeze(Object.keys(STORE_SCHEMAS));
  * @property {() => string[]} missingStores
  *   The legacy stores the database lacks, once an open found it, the one it refused for its
  *   notes or blocks too, as Storage's missingStores names them. None before then.
+ * @property {() => boolean} upgraded
+ *   Whether the database is open at this build's version, which since #17 PR 1b only the
+ *   worker's run brings it to, as Storage's isUpgraded answered: false before it opens, and once
+ *   it's gone
  */
 
 /**
@@ -445,5 +449,7 @@ export function createConnection({
     },
 
     missingStores: () => [...missing],
+
+    upgraded: () => state === 'open' && db !== null && db.version >= DB_VERSION,
   });
 }

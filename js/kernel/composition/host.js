@@ -48,6 +48,33 @@ export function chromeSettings() {
 }
 
 /**
+ * #13's settings.changed notice from chrome.storage.onChanged, as js/storage.js's
+ * onSettingsChange gave it to the new tab until #17 PR 4a: the keys of each change to
+ * chrome.storage.local's `setting_` keys, by name only, so no listener is handed a value, not
+ * llmApiKey's either, and reads what it needs again. chrome.storage is read when a listener is
+ * added, and the answer stops it.
+ * @returns {import('./settings.js').SettingsChanges}
+ */
+export function chromeSettingsChanges() {
+  return listener => {
+    /**
+     * @param {Record<string, unknown>} changes - chrome.storage's, whose values go no further
+     * @param {string} areaName
+     */
+    const heard = (changes, areaName) => {
+      if (areaName !== 'local') return;
+      const keys = Object.keys(changes)
+        .filter(key => key.startsWith('setting_'))
+        .map(key => key.slice('setting_'.length));
+      if (keys.length > 0) listener(Object.freeze({ type: 'settings.changed', keys: Object.freeze(keys) }));
+    };
+    const { onChanged } = chrome.storage;
+    onChanged.addListener(heard);
+    return () => onChanged.removeListener(heard);
+  };
+}
+
+/**
  * The `Storage` global js/storage.js sets, and chrome.storage.local, both read when a call
  * reaches them
  * @returns {LegacyHost}
@@ -144,11 +171,13 @@ const consoleLogger = Object.freeze({
  * One context's kernel on `adapter`, which starts opening now, and its client. Its caller is
  * `surface` with an id of its own, which the policy checks on every command and query.
  * `maintainOnOpen` runs startup maintenance before anything else, as the new tab's and the
- * worker's Storage.init did. Every id it and its client make is a UUID (ids.js).
- * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean}} options
+ * worker's Storage.init did. `ready` is what the kernel waits on before it runs anything, the
+ * adapter's open unless the root has more to open (the new tab's). Every id it and its client
+ * make is a UUID (ids.js).
+ * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean, ready?: Promise<unknown>}} options
  * @returns {Client}
  */
-export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
+export function kernelClient({ adapter, surface, maintainOnOpen = false, ready = adapter.open() }) {
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
@@ -156,7 +185,7 @@ export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
     ids: randomIds,
     clock: systemClock,
     logger: consoleLogger,
-    ready: adapter.open(),
+    ready,
     maintainOnOpen,
   });
   return Object.freeze({

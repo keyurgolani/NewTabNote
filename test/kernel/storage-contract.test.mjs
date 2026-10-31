@@ -1,7 +1,7 @@
 // #12's contract suite on #17's IndexedDB adapter (#17 slice 1: "This issue's IndexedDB
 // adapter passes #12's contract suite alongside the in-memory adapter"), over fake-indexeddb
-// behind the fault-injecting wrapper. And which composition roots load it since #17 PR 1b:
-// the service worker, Popup, and Side Panel.
+// behind the fault-injecting wrapper. And which composition roots load it: the service worker,
+// Popup, and Side Panel since #17 PR 1b, and the new tab since #17 PR 4a.
 
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 /** @type {{readScriptGraph: (root: string, options: {pages: string[]}) => {modules: Set<string>, workerFiles: Set<string>, pageModules: Map<string, Array<{file: string}>>, problems: unknown[]}}} */
 const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/script-graph.js');
 
-it('only these roots load the IndexedDB adapter: the service worker, Popup, and Side Panel; only the worker runs migrations', () => {
+it('every root loads the IndexedDB adapter, and none the legacy one; only the worker runs migrations', () => {
   const ADAPTER = 'js/kernel/adapters/indexeddb/adapter.js';
   const RUNNER = 'js/kernel/adapters/indexeddb/migrate.js';
   const all = readScriptGraph(ROOT, { pages: ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html'] });
@@ -37,17 +37,18 @@ it('only these roots load the IndexedDB adapter: the service worker, Popup, and 
     assert.ok(!modules.has(RUNNER), `${page} never loads the runner`);
     assert.ok(!modules.has('js/kernel/adapters/legacy/adapter.js'), `${page} is off the legacy adapter`);
   }
-  // The new tab stays on the legacy adapter until #12 moves its writers, and reads the
-  // pre-update copy (legacy-export.js) for Settings, but never the adapter or the runner. What
-  // it loads is the boot root's graph and the workspace chunk's, which the root loads at once
-  // through the loader (#27 slice 3)
+  // The new tab opens it as it is too since #17 PR 4a, and reads the pre-update copy
+  // (legacy-export.js) for Settings, but never runs a migration. What it loads is the boot
+  // root's graph and the workspace chunk's, which the root loads at once through the loader
+  // (#27 slice 3)
   const workspace = [...importGraph(path.join(ROOT, 'js', 'workspace.js'))].map(file =>
     path.relative(ROOT, file).split(path.sep).join('/'),
   );
   const newtab = new Set([...modulesOf('newtab.html'), ...workspace]);
   assert.ok(newtab.has('js/kernel/composition/newtab.js'), "the new tab's graph reaches its composition root");
-  assert.ok(!newtab.has(ADAPTER), 'the new tab is on the legacy adapter');
+  assert.ok(newtab.has(ADAPTER), 'the new tab loads the adapter');
   assert.ok(!newtab.has(RUNNER), 'the new tab never loads the runner');
+  assert.ok(!newtab.has('js/kernel/adapters/legacy/adapter.js'), 'the new tab is off the legacy adapter');
   assert.ok(newtab.has('js/kernel/adapters/indexeddb/legacy-export.js'), 'the new tab exports the pre-update copy');
   // The offscreen document only makes #21's API requests, and opens no storage
   assert.deepEqual(

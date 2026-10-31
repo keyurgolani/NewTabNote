@@ -159,15 +159,17 @@ import { createVersionTracker } from './versions.js';
  *   beforeClose: (flush: () => void) => () => void,
  *   openState: () => OpenState,
  *   missingStores: () => string[],
+ *   upgraded: () => boolean,
  *   ledger: IdempotencyLedger,
  *   commitLog: CommitLog,
  *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
  * }} IndexedDbAdapter
  *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
  *   `sweepLedger` their retention (ledger.js), which only the worker runs. `beforeClose`,
- *   `openState`, and `missingStores` are the connection's (connection.js), what the new tab
- *   read of js/storage.js's: a flush before another context's upgrade closes it, the state App
- *   and the export notice read, and the legacy stores a degraded database lacks.
+ *   `openState`, `missingStores`, and `upgraded` are the connection's (connection.js), what
+ *   the new tab read of js/storage.js's: a flush before another context's upgrade closes it,
+ *   the state App and the export notice read, the legacy stores a degraded database lacks, and
+ *   whether it's at this build's version.
  */
 
 /** @type {IDBTransactionOptions} */
@@ -836,6 +838,7 @@ export function createIndexedDbAdapter({
     beforeClose: flush => connection.beforeClose(flush),
     openState: () => connection.openState(),
     missingStores: () => connection.missingStores(),
+    upgraded: () => connection.upgraded(),
 
     // What commit keeps is in IndexedDB, which nothing reads synchronously, so a command's own
     // record answers from commit. Only a bulk command's reservation, which no transaction

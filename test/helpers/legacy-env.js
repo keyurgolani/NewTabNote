@@ -1128,21 +1128,24 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
 }
 
 /**
- * Start the page's kernel the way the new tab's root does (js/kernel/composition/newtab.js):
- * it opens Storage itself, versioned and watching its connection, and runs startup
- * maintenance. Its document client becomes the one makeEditor gives editors. Storage must not
- * have started.
+ * Start the page's kernel the way the new tab's root does (js/kernel/composition/newtab.js),
+ * from the page's globals: #17's adapter, opened as the database is, with startup maintenance,
+ * and Storage opened beside it, watching its connection, for the holders that still call it.
+ * Its document client becomes the one makeEditor gives editors, and `env.adapter` the adapter.
+ * Storage must not have started.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @returns {Promise<Object>} the document client, once the kernel is ready
  */
 async function startNewTabKernel(env) {
   const { loadPageModule } = require('./page-module');
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-  const host = { storage: env.get('Storage'), settings: env.chrome.api.storage.local };
-  const kernel = root.createNewTabClient(host);
+  const host = root.newTabHost();
+  const adapter = root.createNewTabAdapter(host);
+  const kernel = root.createNewTabClient(adapter, host);
   const failure = await kernel.whenReady();
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
-  env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, host));
+  env.adapter = adapter;
+  env.documentClient = testDocumentClient(root.createNewTabDocumentClient(kernel, adapter));
   env.noteList = root.createNewTabNoteList(kernel);
   env.settingsClient = root.createNewTabSettingsClient(kernel, host);
   return env.documentClient;
