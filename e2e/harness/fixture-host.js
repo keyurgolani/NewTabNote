@@ -14,11 +14,15 @@
  *
  * A database the target already holds at a version past the fixture's is deleted before the
  * load (deleteNewer): since #17 PR 1b the worker makes CanvasTabDB at 9 as the extension
- * installs, and a 1.4.x fixture holds it at 8.
+ * installs, and a 1.4.x fixture holds it at 8. It's deleted only once the worker's run at install
+ * migrated, and after the load the harness updates the extension in place, so the new worker
+ * upgrades the fixture as an update to this build does, and that run has to migrate too
+ * (upgradeAsUpdated). A spec then opens its pages on the upgraded database.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { harnessFor } = require('./extension');
 
 const LOADER = path.join(__dirname, '..', '..', 'test', 'fixtures', 'storage', 'load-fixture.mjs');
 
@@ -49,8 +53,10 @@ function runIn(target, call, args) {
  * Deletes each database `wanted` names that `target` already holds at a version past the one
  * wanted, once the worker's migration run at install is in (test code only: nothing under js/
  * deletes a database). Since #17 PR 1b that run makes CanvasTabDB at 9, and indexedDB.open
- * refuses a 1.4.x fixture's 8 with a VersionError. One at the wanted version or below is
- * loaded into, as before, so a 1.4.x package is seeded as it was. Answers the names it deleted.
+ * refuses a 1.4.x fixture's 8 with a VersionError. It deletes only what a run that migrated
+ * made: after any other run, or with no run to read (a page), it rejects and deletes nothing,
+ * so the spec fails where it seeded. One at the wanted version or below is loaded into, as
+ * before, so a 1.4.x package is seeded as it was. Answers the names it deleted.
  * @param {{evaluate: Function}} target
  * @param {Array<{name: string, version: number}>} wanted
  * @returns {Promise<string[]>}
@@ -58,21 +64,40 @@ function runIn(target, call, args) {
 function deleteNewer(target, wanted) {
   return target.evaluate(async list => {
     // The worker's run at install (#17 PR 1b); a page, and a 1.4.x worker, have none
-    if (self.storageUpgrade) await self.storageUpgrade;
+    const run = self.storageUpgrade ? await self.storageUpgrade : null;
     const held = new Map((await indexedDB.databases()).map(db => [db.name, db.version]));
-    const deleted = [];
-    for (const { name, version } of list) {
-      const at = held.get(name);
-      if (at === undefined || at <= version) continue;
+    const newer = list.filter(({ name, version }) => held.has(name) && held.get(name) > version).map(({ name }) => name);
+    if (newer.length === 0) return [];
+    const status = run ? run.status : null;
+    if (status !== 'migrated') {
+      throw new Error(`the worker's migration run at install answered ${JSON.stringify(status)}, not "migrated", so ${newer.join(', ')} stays`);
+    }
+    for (const name of newer) {
       await new Promise((resolve, reject) => {
         const request = indexedDB.deleteDatabase(name);
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error);
       });
-      deleted.push(name);
     }
-    return deleted;
+    return newer;
   }, wanted);
+}
+
+/**
+ * Has the worker upgrade what was loaded over the install's database, as an update to this
+ * build does: the harness loads the extension again in place, at the version it has
+ * (ExtensionSession.update), and the new worker's run has to answer `migrated`
+ * @param {{evaluate: Function}} target - the worker deleteNewer ran in
+ */
+async function upgradeAsUpdated(target) {
+  const session = harnessFor(target);
+  if (!session) throw new Error("fixtureHost: a load over the install's database needs the harness's worker, to update the extension in place");
+  await session.update({ version: await target.evaluate(() => chrome.runtime.getManifest().version) });
+  const status = await session.worker.evaluate(async () => {
+    const run = await self.storageUpgrade;
+    return run ? run.status : null;
+  });
+  if (status !== 'migrated') throw new Error(`fixtureHost: the updated worker's migration run answered ${JSON.stringify(status)}, not "migrated"`);
 }
 
 /**
@@ -89,12 +114,14 @@ function fixtureHost(target) {
       refuseFactory(options);
       const { names = {}, canaries, storage = true } = options;
       const databases = Array.isArray(fixture && fixture.databases) ? fixture.databases : [];
-      await deleteNewer(target, databases.map(db => ({ name: names[db.name] ?? db.name, version: db.version })));
-      return runIn(
+      const deleted = await deleteNewer(target, databases.map(db => ({ name: names[db.name] ?? db.name, version: db.version })));
+      const loaded = await runIn(
         target,
         'loadFixture(args.fixture, { factory: indexedDB, names: args.names, canaries: args.canaries, storage: args.storage ? chrome.storage.local : undefined })',
         { fixture, names, canaries, storage },
       );
+      if (deleted.length > 0) await upgradeAsUpdated(target);
+      return loaded;
     },
     async dumpFixture(options = {}) {
       refuseFactory(options);
