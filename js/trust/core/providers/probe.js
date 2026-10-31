@@ -143,7 +143,22 @@ export const storage = Object.freeze({
       outcome = unavailableFrom(error);
     }
     const failure = failureOf(outcome);
-    if (!failure) return { status: 'verified', capture: 'safe' };
+    if (!failure) {
+      // NewTabNoteTrust is storage too: while it won't take writes, the records layer holds
+      // its `storage/open-failed/NewTabNoteTrust` incident, and this check says so rather than
+      // verify. A verified receipt resolves that incident only once NewTabNoteTrust took it.
+      const trust = /** @type {{state?: unknown} | undefined} */ (context.trust);
+      if (trust && typeof trust.state === 'function' && trust.state() === 'fallback') {
+        return {
+          status: 'degraded',
+          capture: 'safe',
+          evidence: { subjectId: 'NewTabNoteTrust' },
+          consequenceKey: 'storage.trust-records-unavailable',
+          preserved: ['capture', 'editing', 'reading'],
+        };
+      }
+      return { status: 'verified', capture: 'safe' };
+    }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     if (failure.kind === 'action') {
       const faultCode = /** @type {'quota' | 'version-too-new'} */ (failure.code);
