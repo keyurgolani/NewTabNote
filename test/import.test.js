@@ -703,6 +703,33 @@ describe('the fields #17 PR 3 writes beside the flags (Q8)', () => {
     assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases').A.dailyKey, '2026-10-20');
   });
 
+  it('Export Current Note writes its note without them too, as every other export does (#17 PR 3b, review R88)', async () => {
+    const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
+    const { env, Storage } = await setup();
+    const fields = { placement: { kind: 'daily', dateKey: '2026-10-20' }, kind: 'note', lifecycle: 'active', dailyKey: '2026-10-20', dailyTimeZone: 'UTC', dailyDuplicateOf: null };
+    await new Promise((resolve, reject) => {
+      const tx = Storage.db.transaction('canvases', 'readwrite');
+      const store = tx.objectStore('canvases');
+      const request = store.get('A');
+      request.onsuccess = () => store.put({ ...request.result, ...fields, isDaily: true, dateStr: '2026-10-20' });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    const downloads = [];
+    env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
+    const settings = makeController(env, Storage);
+    settings.getEditor = () => ({ noteId: 'A' });
+    await settings.exportCurrentNote();
+    assert.equal(downloads.length, 1);
+    const file = JSON.parse(downloads[0].data);
+    assert.equal(file.exportType, 'single-note');
+    assert.deepEqual([file.note.id, file.note.isDaily, file.note.dateStr], ['A', true, '2026-10-20']);
+    for (const field of NEW_NOTE_FIELDS) assert.equal(field in file.note, false, field);
+    assert.deepEqual(file.blocks.map((b) => b.id).sort(), ['a1', 'a2']);
+    // The database keeps them
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases').A.dailyKey, '2026-10-20');
+  });
+
   it('Replace all moves a lifecycle the kernel wrote to trashed with the note, and leaves a note without one as it was', async () => {
     const { env, Storage } = await setup();
     const group = { placement: { kind: 'collection', folderId: 'F2' }, kind: 'note', lifecycle: 'active' };
