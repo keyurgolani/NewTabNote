@@ -2222,9 +2222,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     if (!providerSelect) return;
 
+    // The Ollama hint names this extension's own origin (#21)
+    const ollamaCommand = document.getElementById('ollama-origins-command');
+    if (ollamaCommand && typeof this.llm.ollamaOriginsCommand === 'function') ollamaCommand.textContent = this.llm.ollamaOriginsCommand();
+
     providerSelect.addEventListener('change', async (e) => {
       const provider = e.target.value;
       await this.llm.setProvider(provider);
+      // The new provider's key, which is none unless one was saved for it: the old provider's
+      // key is never shown for it, nor sent to it to list its models (#21)
+      document.querySelectorAll('#llm-api-key').forEach(el => { el.value = this.llm.apiKey; });
       this.updateLLMSettingsVisibility(provider);
       await this.loadAndPopulateModels(provider, this.llm.apiKey);
       this.updateAISidebarState();
@@ -2348,8 +2355,11 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    * Populate LLM settings values when settings modal opens.
    */
   async updateLLMSettingsUI() {
-    const provider = await this.storage.getSetting('llmProvider', 'none');
-    const apiKey = await this.storage.getSetting('llmApiKey', '');
+    // The LLM's own read, so the key shown and probed is the provider's own, never the key
+    // saved for another provider (#21)
+    await this.llm.init();
+    const provider = this.llm.provider;
+    const apiKey = this.llm.apiKey;
     const model = await this.storage.getSetting('llmModel', '');
     const ollamaUrl = await this.storage.getSetting('ollamaUrl', 'http://localhost:11434');
 

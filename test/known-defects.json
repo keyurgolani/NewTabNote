@@ -53,14 +53,6 @@
       ]
     },
     {
-      "id": "KD-007",
-      "ownerIssue": 21,
-      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/llm.js#L802-L805",
-      "tests": [
-        "KD-007 Gemini requests carry the API key outside their URL"
-      ]
-    },
-    {
       "id": "KD-008",
       "ownerIssue": 14,
       "evidence": "https://github.com/keyurgolani/NewTabNote/blob/2064b327b1b6784438e89a3a4ae4462eb14bd1fc/js/editor.js#L3398-L3401",
