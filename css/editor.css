@@ -1085,7 +1085,7 @@ body.focus-mode .block:focus-within {
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
   width: 280px;
-  max-height: 320px;
+  max-height: min(320px, calc(100vh - 16px));
   overflow-y: auto;
   z-index: 1000;
 }
@@ -2080,6 +2080,8 @@ body.focus-mode .block:focus-within {
   border-radius: 8px;
   padding: 4px 0;
   min-width: 180px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
 }
@@ -3092,7 +3094,7 @@ body.focus-mode .block:focus-within {
   color: var(--accent-color);
 }
 
-/* Context Menu */
+/* Context Menu: in a window shorter than it, it scrolls (Utils.placeMenu keeps its top in view) */
 .context-menu {
   position: fixed;
   background: var(--bg-primary);
@@ -3100,6 +3102,8 @@ body.focus-mode .block:focus-within {
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
   min-width: 160px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 6px;
   z-index: 1100;
 }
@@ -3151,6 +3155,8 @@ body.focus-mode .block:focus-within {
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
   min-width: 160px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 6px;
   z-index: 1100;
 }
@@ -3206,7 +3212,7 @@ body.focus-mode .block:focus-within {
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
   min-width: 180px;
-  max-height: 360px;
+  max-height: min(360px, calc(100vh - 16px));
   overflow-y: auto;
   padding: 6px;
   z-index: 1101;
@@ -5085,12 +5091,6 @@ body.focus-mode .block:focus-within {
 
 .editor-pane.hidden {
   display: none;
-}
-
-/* Floating menus inside panes */
-.editor-pane .slash-menu {
-  position: absolute;
-  z-index: 1000;
 }
 
 /* Shortcuts Modal Styles */

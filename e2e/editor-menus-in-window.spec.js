@@ -165,8 +165,9 @@ for (const viewport of WINDOWS) {
     await expect(page.locator('#page-title')).toHaveText(NOTE.name);
     if (viewport.width <= 480) {
       // An open sidebar covers the whole window there
-      await page.locator('#sidebar-toggle').click();
-      await expect(page.locator('#sidebar')).toHaveClass(/collapsed/);
+      const sidebar = page.locator('#sidebar');
+      if (!(await sidebar.evaluate(element => element.classList.contains('collapsed')))) await page.locator('#sidebar-toggle').click();
+      await expect(sidebar).toHaveClass(/collapsed/);
     }
     await expect(page.locator('#blocks-container > .block')).toHaveCount(NOTE.blocks.length);
 
