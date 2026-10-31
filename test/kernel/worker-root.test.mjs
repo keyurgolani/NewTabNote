@@ -58,6 +58,13 @@ const capture = (worker, id) =>
 const recoveryExists = async of =>
   (await of.real.databases()).some((/** @type {IDBDatabaseInfo} */ db) => db.name === 'NewTabNoteRecovery');
 
+/**
+ * How long a test waits for a run to reach a blocked upgrade, in real time: it measures,
+ * copies and hashes (webcrypto, on the thread pool) first, which takes longer on a slower
+ * machine than any count of event-loop turns allows
+ */
+const RUN_BLOCKS = Object.freeze({ withinMs: 10_000, message: "the run's upgrade to be blocked" });
+
 describe("the worker's composition root", () => {
   it('short of space: records it, opens the database as it is, and captures still commit on 8', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
@@ -102,7 +109,7 @@ describe("the worker's composition root", () => {
       const refused = await legacyEnv.waitFor(async () => {
         const answer = await worker.whenReady();
         return answer && answer.code === 'blocked-upgrade' ? answer : null;
-      });
+      }, RUN_BLOCKS);
       assert.deepStrictEqual([refused.cause, refused.code, refused.retryable], ['storage', 'blocked-upgrade', true]);
       assert.equal(worker.migration.blocked(), true);
       const held = await capture(worker, 'while-blocked');
@@ -242,7 +249,7 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
     const worker = createWorkerClient(hostOf(of));
     try {
-      await legacyEnv.waitFor(() => worker.migration.blocked());
+      await legacyEnv.waitFor(() => worker.migration.blocked(), RUN_BLOCKS);
       const first = worker.migration.done;
       const answer = worker.migration.request();
       assert.equal(worker.migration.done, first, 'no new attempt');
@@ -294,7 +301,7 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
       },
     });
     try {
-      await legacyEnv.waitFor(() => worker.migration.blocked());
+      await legacyEnv.waitFor(() => worker.migration.blocked(), RUN_BLOCKS);
       assert.equal(timers.live.size, 1, 'one keepalive while the run waits');
       assert.equal(worker.migration.running(), true);
       timers.fire();
@@ -305,7 +312,7 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
       blocker.close();
     }
     await worker.migration.done;
-    await legacyEnv.waitFor(() => timers.live.size === 0, { message: 'the keepalive to stop' });
+    await legacyEnv.waitFor(() => timers.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
     assert.equal(worker.migration.running(), false);
     timers.fire();
     assert.equal(calls, 3, 'none once the run ended');

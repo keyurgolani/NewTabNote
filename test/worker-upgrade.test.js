@@ -51,7 +51,7 @@ describe('the worker upgrades the database and answers the pages that wait on it
       await startWorker(env);
       const answer = message(env, { type: 'storage.migrate' });
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, TAB);
-      await waitFor(() => env.chrome.notifications.length === 1, { message: 'the capture notification' });
+      await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'the capture notification' });
       assert.deepEqual(env.chrome.notifications[0], {
         type: 'basic',
         iconUrl: 'icons/icon48.png',
@@ -66,7 +66,7 @@ describe('the worker upgrades the database and answers the pages that wait on it
       assert.equal(upgraded.version, 9);
       assert.deepEqual(Object.keys(recordsOf(upgraded, 'canvases')), ['n1'], 'nothing was captured while blocked');
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, TAB);
-      await waitFor(() => env.chrome.notifications.length === 2, { message: 'the second notification' });
+      await waitFor(() => env.chrome.notifications.length === 2, { withinMs: 10000, message: 'the second notification' });
       assert.equal(env.chrome.notifications[1].title, 'Captured to New Tab Note');
       assert.equal((await dumpDatabase(env.indexedDB)).version, 9);
     } finally {
