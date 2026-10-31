@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
+import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
 import {
   DEFAULT_LIMITS,
   POINTS_LOCK,
@@ -292,6 +292,21 @@ function filledNote(before) {
     };
   }
   return { ...before, .../** @type {Record<string, any>} */ (BASIC_GROUPS)[before.name] };
+}
+
+/**
+ * #17's adapter over `of` as the new tab's root opens it since #17 PR 4a (createNewTabAdapter):
+ * the database as it is, with its maintenance, #33's copy and the backup tasks, and no wait on
+ * the worker, whose run the case has already run or left out
+ * @param {Profile} of
+ */
+function newTabAdapterOn(of) {
+  return createNewTabAdapter({
+    indexedDB: of.faults.factory,
+    settings: of.chrome.api.storage.local,
+    awaitUpgrade: async () => {},
+    locks: null,
+  });
 }
 
 describe('logical 2 (#17 PR 3a)', () => {
@@ -1181,15 +1196,13 @@ describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (
   };
 
   /**
-   * The new tab's kernel on the legacy adapter over `of`, as App runs its startup cleanup
+   * The new tab's kernel over `of`, on #17's adapter as its root opens it since #17 PR 4a, as App
+   * runs its startup cleanup
    * @param {Profile} of
    * @param {number} now
    */
   const newTab = async (of, now) => {
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    const adapter = newTabAdapterOn(of);
     await adapter.open();
     const kernel = createKernel({
       adapter,
@@ -1198,7 +1211,7 @@ describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (
       ids: { next: () => `tab-${(commandCount += 1)}` },
       clock: { now: () => now },
     });
-    open.push({ close: () => storage.db && storage.db.close() });
+    open.push(adapter);
     return kernel;
   };
 
@@ -1269,10 +1282,7 @@ describe('below version 10, where 1.4.1 still opens the database, no command wri
   it("the new tab's kernel on a database the run didn't reach writes none, so the transform takes the flags 1.4.1 left", async () => {
     const of = await profileWith(BASIC);
     // This build's new tab on the database as it is, at 8: the run was short of space, say
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    const adapter = newTabAdapterOn(of);
     await adapter.open();
     const ids = { next: () => `p3-${(commandCount += 1)}` };
     const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
@@ -1283,7 +1293,7 @@ describe('below version 10, where 1.4.1 still opens the database, no command wri
       const made = await kernel.execute({ type: 'createNote', commandId: ids.next(), noteId, name });
       assert.equal(made.kind, 'committed', JSON.stringify(made));
     }
-    storage.db.close();
+    adapter.close();
     const at8 = await notesIn(of);
     for (const id of ['made-at-8', 'moved-later']) assert.deepEqual(groupOf(at8[id]), {}, id);
 

@@ -1,6 +1,6 @@
 /**
  * The repository port: what a kernel adapter offers the use cases. Stores go by domain
- * names here, and each adapter maps them to its own (the legacy adapter's `notes` is
+ * names here, and each adapter maps them to its own (#17's adapter's `notes` is
  * IndexedDB's `canvases`).
  *
  * A command's writes come as units. A unit names its stores, reads committed state, checks
@@ -240,8 +240,10 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
  * What an adapter guarantees. The contract suite expects the documented difference for
- * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger.
- * #17's adapter has `backups` where its root asks for it, the new tab's (#17 PR 4a).
+ * each flag. A shipped adapter that lacks one records it as a `declared-gap` row in the
+ * ledger, and none does since #17 PR 4a: #17's adapter has every flag, `backups` where its
+ * root asks for it, the new tab's, and the legacy adapter, which lacked atomicMultiStore,
+ * revisions, and idempotency, is deleted. The memory adapter runs no backup tasks.
  * @typedef {object} AdapterFlags
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions

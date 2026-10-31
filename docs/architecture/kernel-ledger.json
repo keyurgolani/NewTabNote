@@ -219,46 +219,6 @@
       "verify": "npm run check:boundaries"
     },
     {
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "rule": "declared-gap",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the atomicMultiStore check (a command's stores commit together or not at all), so the gap lasts as long as the legacy adapter ships",
-      "verify": "npm run test:kernel: the atomicMultiStore check in test/kernel/contract.mjs"
-    },
-    {
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "rule": "declared-gap",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the idempotency check (a resent commandId gets its first outcome and writes nothing), so the gap lasts as long as the legacy adapter ships",
-      "verify": "npm run test:kernel: the idempotency check in test/kernel/contract.mjs"
-    },
-    {
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "rule": "declared-gap",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the revisions check (a save from a stale revision is a conflict: nothing changes in the note or its blocks, and it writes only its conflicts record and its operations row, with no change entry), so the gap lasts as long as the legacy adapter ships",
-      "verify": "npm run test:kernel: the revisions check in test/kernel/contract.mjs"
-    },
-    {
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "rule": "declared-gap",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "No composition root uses the legacy adapter. #17's IndexedDB adapter already passes the two contexts check (when two contexts save one note's blocks from the revision they loaded, the later save is a conflict), so the gap lasts as long as the legacy adapter ships",
-      "verify": "npm run test:kernel: the two contexts check in test/kernel/contract.mjs"
-    },
-    {
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "rule": "objectStore",
-      "count": 1,
-      "owner": 17,
-      "removeWhen": "#17 slice 6 deletes #12's legacy adapter, once every composition root uses #17's IndexedDB adapter",
-      "verify": "npm run check:boundaries"
-    },
-    {
       "file": "js/llm.js",
       "rule": "LLM",
       "count": 1,

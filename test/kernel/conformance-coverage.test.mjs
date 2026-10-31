@@ -271,8 +271,8 @@ describe("conformance coverage fails a run that doesn't run the suite", () => {
 describe('conformance coverage keeps its lists true', () => {
   it('a helper its implementation no longer loads, and a composer that loads none of what it names', () => {
     assertFlags(
-      problemsWith({}, { HELPERS: { ...inventory.HELPERS, 'js/kernel/core/memory/fingerprint.js': ['js/kernel/adapters/legacy/adapter.js'] } }),
-      /^the helper js\/kernel\/core\/memory\/fingerprint\.js names js\/kernel\/adapters\/legacy\/adapter\.js, which doesn't load it/,
+      problemsWith({}, { HELPERS: { ...inventory.HELPERS, 'js/kernel/core/memory/fingerprint.js': ['js/kernel/adapters/indexeddb/changes.js'] } }),
+      /^the helper js\/kernel\/core\/memory\/fingerprint\.js names js\/kernel\/adapters\/indexeddb\/changes\.js, which doesn't load it/,
     );
     assertFlags(
       problemsWith({}, { COMPOSERS: { ...inventory.COMPOSERS, 'test/kernel/legacy-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/core/memory/adapter.js'] } } }),
