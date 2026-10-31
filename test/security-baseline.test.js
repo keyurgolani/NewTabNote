@@ -1,0 +1,189 @@
+'use strict';
+
+// #21 slice 1b, PR 3: the security baseline (scripts/build/security-baseline.js), which the
+// build and npm run check:security-baseline run. The manifest's CSP and permissions, the
+// offscreen document's reasons, the destination registry, the network ledger, and the
+// sources that hold the network rules change only with a security/changes.json entry that
+// records them, names what changed and says why. security/permissions.json and the manifest
+// agree both ways, the required set stays 1.4.0's, externally_connectable stays absent, and
+// 'unsafe-inline' goes once #16's counts reach zero.
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { checkSecurityBaseline, recordOf, cspOf, offscreenReasons, SOURCES } = require('../scripts/build/security-baseline.js');
+
+const ROOT = path.join(__dirname, '..');
+const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const MANIFEST = JSON.parse(read('manifest.json'));
+
+/** The checker on the tree, with `edits` (a path to its new text) and `manifest` changed */
+function check({ manifest = MANIFEST, edits = {} } = {}) {
+  const inputs = { manifest, read: (file) => (Object.hasOwn(edits, file) ? edits[file] : read(file)) };
+  return { problems: checkSecurityBaseline(inputs), inputs };
+}
+
+const codes = (problems) => [...new Set(problems.map(({ code }) => code))].sort();
+
+/** security/changes.json with an entry recording `inputs` appended, naming `files` */
+function withEntry(inputs, { files, issue = 21, rationale = [{ change: 'a change', why: 'a reason' }] } = {}) {
+  const changes = JSON.parse(read('security/changes.json'));
+  const record = recordOf(inputs);
+  const before = changes.entries.at(-1).parts;
+  const touched = Object.keys(record.parts).filter((name) => before[name] !== record.parts[name]);
+  changes.entries.push({ issue, files: files || touched, rationale, ...record });
+  return JSON.stringify(changes);
+}
+
+/** That `change` fails as drift without an entry, and passes with one that records it */
+function driftsThenPasses(change, expected = ['security/drift']) {
+  const without = check(change);
+  assert.deepEqual(codes(without.problems), expected, JSON.stringify(without.problems));
+  const edits = { ...(change.edits || {}), 'security/changes.json': withEntry(without.inputs) };
+  const withIt = check({ ...change, edits });
+  assert.deepEqual(codes(withIt.problems), expected.filter((code) => code !== 'security/drift'), JSON.stringify(withIt.problems));
+}
+
+describe('the security baseline (scripts/build/security-baseline.js)', () => {
+  it('passes on the tree as it is: the latest entry records it', () => {
+    assert.deepEqual(check().problems, []);
+  });
+
+  it('fails on a CSP change with no entry, and passes with one', () => {
+    const manifest = structuredClone(MANIFEST);
+    manifest.content_security_policy.extension_pages += ' https://example.test';
+    driftsThenPasses({ manifest });
+  });
+
+  it('fails on a permission or a host added with no entry, and on its own when security/permissions.json lacks it', () => {
+    const permission = structuredClone(MANIFEST);
+    permission.permissions.push('tabs');
+    driftsThenPasses({ manifest: permission }, ['security/drift', 'security/permissions']);
+    const host = structuredClone(MANIFEST);
+    host.host_permissions.push('https://example.test/*');
+    driftsThenPasses({ manifest: host }, ['security/drift', 'security/permissions']);
+  });
+
+  it('fails on externally_connectable, entry or not', () => {
+    const manifest = structuredClone(MANIFEST);
+    manifest.externally_connectable = { matches: ['https://example.test/*'] };
+    driftsThenPasses({ manifest }, ['security/drift', 'security/externally-connectable']);
+  });
+
+  it('fails on a destination row or a ledger row added with no entry, and passes with one', () => {
+    const registry = JSON.parse(read('security/destinations.json'));
+    registry.destinations.push({ ...registry.destinations[0], id: 'example', origin: 'https://example.test' });
+    driftsThenPasses({ edits: { 'security/destinations.json': JSON.stringify(registry) } });
+    const ledger = JSON.parse(read('security/network-ledger.json'));
+    const [listName] = Object.keys(ledger).filter((key) => Array.isArray(ledger[key]));
+    ledger[listName].push({ ...ledger[listName][0], line: 9999 });
+    driftsThenPasses({ edits: { 'security/network-ledger.json': JSON.stringify(ledger) } });
+  });
+
+  it('fails on an edit to each source that holds the network rules with no entry, and passes with one', () => {
+    assert.deepEqual(SOURCES, [
+      'js/kernel/composition/destinations.js',
+      'js/kernel/composition/destination-match.js',
+      'js/kernel/composition/network-guard.js',
+      'js/kernel/composition/network-guard-install.js',
+      'js/kernel/composition/api-request.js',
+      'js/background.js',
+      'js/offscreen.js',
+    ]);
+    for (const file of SOURCES) driftsThenPasses({ edits: { [file]: `${read(file)}\n// an edit\n` } });
+  });
+
+  it('fails on an offscreen reason added with no entry, and when security/permissions.json lacks it', () => {
+    const background = read('js/background.js').replace("reasons: ['DOM_SCRAPING']", "reasons: ['DOM_SCRAPING', 'BLOBS']");
+    assert.deepEqual(offscreenReasons(background), ['BLOBS', 'DOM_SCRAPING']);
+    driftsThenPasses({ edits: { 'js/background.js': background } }, ['security/drift', 'security/permissions']);
+  });
+
+  it("fails on an entry that doesn't name a part it changes, its issue, or why", () => {
+    const manifest = structuredClone(MANIFEST);
+    manifest.content_security_policy.extension_pages += ' https://example.test';
+    const { inputs } = check({ manifest });
+    for (const entry of [{ files: [] }, { issue: 0 }, { rationale: [] }, { rationale: [{ change: 'x' }] }]) {
+      const problems = check({ manifest, edits: { 'security/changes.json': withEntry(inputs, entry) } }).problems;
+      assert.deepEqual(codes(problems), ['security/drift'], JSON.stringify(entry));
+    }
+  });
+
+  it("fails on a file in security/ that doesn't read as its shape", () => {
+    assert.deepEqual(codes(check({ edits: { 'security/changes.json': 'not json' } }).problems), ['security/file']);
+    assert.deepEqual(codes(check({ edits: { 'security/changes.json': '{"entries": []}' } }).problems), ['security/file']);
+    assert.deepEqual(codes(check({ edits: { 'security/permissions.json': '{}' } }).problems), ['security/file']);
+  });
+
+  it("fails once #16's counts of style attributes and <style> blocks reach zero while style-src allows 'unsafe-inline'", () => {
+    const design = JSON.parse(read('test/fixtures/design-token-baseline.json'));
+    assert.ok(Object.values(design.files).some((counts) => counts['style-attribute'] > 0), 'today some are left');
+    for (const counts of Object.values(design.files)) {
+      delete counts['style-attribute'];
+      delete counts['inline-style-block'];
+    }
+    const edits = { 'test/fixtures/design-token-baseline.json': JSON.stringify(design) };
+    assert.deepEqual(codes(check({ edits }).problems), ['security/unsafe-inline']);
+    const manifest = structuredClone(MANIFEST);
+    manifest.content_security_policy.extension_pages = manifest.content_security_policy.extension_pages.replace(" 'unsafe-inline'", '');
+    assert.deepEqual(codes(check({ manifest, edits }).problems), ['security/drift'], 'taken out, the CSP change needs its entry, and nothing else fails');
+  });
+});
+
+describe('security/permissions.json', () => {
+  const declared = JSON.parse(read('security/permissions.json'));
+
+  it('lists each permission, host and offscreen reason with its issue, warning, request point and rationale, and the manifest asks for exactly those', () => {
+    assert.deepEqual(declared.permissions.map((entry) => entry.name).sort(), [...MANIFEST.permissions].sort());
+    assert.deepEqual(declared.hosts.map((entry) => entry.pattern).sort(), [...MANIFEST.host_permissions].sort());
+    assert.deepEqual(declared.offscreenReasons.map((entry) => entry.reason), offscreenReasons(read('js/background.js')));
+    for (const entry of [...declared.permissions, ...declared.hosts]) {
+      assert.ok(Number.isSafeInteger(entry.issue) && entry.rationale.length > 10 && entry.requestedAt === 'install' && entry.required === true, JSON.stringify(entry));
+    }
+    // A field missing from an entry fails
+    const broken = structuredClone(declared);
+    delete broken.permissions[0].rationale;
+    assert.deepEqual(codes(check({ edits: { 'security/permissions.json': JSON.stringify(broken) } }).problems), ['security/permissions']);
+    // And so does an entry the manifest doesn't ask for
+    const extra = structuredClone(declared);
+    extra.permissions.push({ ...declared.permissions[0], name: 'tabs' });
+    assert.deepEqual(codes(check({ edits: { 'security/permissions.json': JSON.stringify(extra) } }).problems), ['security/permissions']);
+  });
+
+  it("keeps the required set 1.4.0's, so no install warning is new, and externally_connectable absent", () => {
+    const release = JSON.parse(read('test/fixtures/security/manifest-1.4.0-permissions.json'));
+    assert.equal(release.version, '1.4.0');
+    assert.deepEqual(declared.permissions.filter((entry) => entry.required).map((entry) => entry.name).sort(), [...release.permissions].sort());
+    assert.deepEqual(declared.hosts.filter((entry) => entry.required).map((entry) => entry.pattern).sort(), [...release.host_permissions].sort());
+    assert.deepEqual([...(MANIFEST.optional_permissions || []), ...(MANIFEST.optional_host_permissions || [])], []);
+    assert.equal(declared.externallyConnectable, false);
+    assert.equal(Object.hasOwn(MANIFEST, 'externally_connectable'), false);
+  });
+});
+
+describe("the extension pages' CSP (manifest.json)", () => {
+  const csp = cspOf(MANIFEST);
+
+  it('writes out what default-src would block, and allows no more than the pages use', () => {
+    assert.deepEqual(csp['default-src'], ["'self'"]);
+    assert.deepEqual(csp['script-src'], ["'self'", "'wasm-unsafe-eval'"]);
+    assert.deepEqual(csp['object-src'], ["'none'"]);
+    assert.deepEqual(csp['base-uri'], ["'none'"]);
+    assert.deepEqual(csp['form-action'], ["'none'"]);
+    assert.deepEqual(csp['frame-src'], ['https://player.vimeo.com', 'https://www.youtube.com']);
+    assert.deepEqual(csp['img-src'], ["'self'", 'blob:', 'data:', 'http:', 'https:']);
+    assert.deepEqual(csp['style-src'], ["'self'", "'unsafe-inline'"]);
+    assert.deepEqual(csp['font-src'], ["'self'", 'data:']);
+    assert.deepEqual(csp['media-src'], ["'self'", 'blob:', 'data:']);
+  });
+
+  it("reaches the registry's fetch origins and loopback in connect-src, and nothing wider: no remote WebDAV server", () => {
+    const registry = JSON.parse(read('security/destinations.json')).destinations;
+    const remote = [...new Set(registry.filter((row) => row.reachedBy === 'fetch' && row.location === 'remote').map((row) => row.origin))];
+    const sources = csp['connect-src'];
+    assert.deepEqual(sources.filter((source) => source.startsWith('https:')).sort(), [...remote].sort());
+    assert.ok(sources.includes('http://localhost:*') && sources.includes('http://127.0.0.1:*'));
+    assert.ok(!sources.some((source) => ['https:', 'https://*', '*', 'http:'].includes(source)), sources.join(' '));
+  });
+});

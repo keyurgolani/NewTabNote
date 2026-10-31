@@ -1,0 +1,12 @@
+{
+  "rule": "security/changes.json doesn't read as its shape",
+  "expect": [
+    "security/file"
+  ],
+  "edits": [
+    {
+      "file": "security/changes.json",
+      "write": "not json\n"
+    }
+  ]
+}

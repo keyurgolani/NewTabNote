@@ -1,0 +1,12 @@
+{
+  "rule": "style-src keeps 'unsafe-inline' after #16's counts of style attributes and <style> blocks reach zero",
+  "expect": [
+    "security/unsafe-inline"
+  ],
+  "edits": [
+    {
+      "file": "test/fixtures/design-token-baseline.json",
+      "write": "{\"about\": \"#16's counts, all at zero\", \"patterns\": {}, \"files\": {}}\n"
+    }
+  ]
+}
