@@ -118,6 +118,10 @@ export const incidentSchema = v.strictObject({
   // The copy lineages already replayed into it, each with the highest count applied, newest
   // last, so a replay never counts twice (incidents.js)
   appliedOps: v.pipe(v.array(v.strictObject({ lineage: recordId, count })), v.maxLength(64)),
+  // The contexts (each records instance's random id) that sighted it since it was last
+  // resolved, at most 8: the records resolve their own write-failed only when it's one, the
+  // context resolving (trust-records.js)
+  sightedBy: v.optional(v.pipe(v.array(recordId), v.maxLength(8))),
 });
 
 /** @typedef {v.InferOutput<typeof incidentSchema>} Incident */

@@ -7,7 +7,8 @@
  * and how long the receipt stays fresh.
  *
  * `looked` is what lets a check resolve: only the provider's open incidents that match an
- * entry, that the check no longer reports, and that were last seen before it started resolve.
+ * entry, that the check no longer reports, and that had no new sighting while it ran (their
+ * occurrences unchanged since just before it) resolve.
  * An entry names a fault from the provider's `observes`, and a subject when the check looked
  * at that subject only (no `subjectId` means every subject; `null` the incident without one).
  * A check that couldn't read leaves the fault out, and a missing or empty `looked` resolves

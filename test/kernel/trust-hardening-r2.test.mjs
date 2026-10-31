@@ -119,8 +119,10 @@ describe("#68's second review round", () => {
     const incident = await captureIn(records);
     assert.equal(incident?.state, 'open');
     const summary = await summaryOf(records, clock);
-    // The capture incident and the failed write
-    assert.equal(summary.actionRequired, 2);
+    // The capture incident; the failed write resolved once a write landed (part 3)
+    assert.equal(summary.actionRequired, 1);
+    const failed = (await records.incidents()).find(item => item.key === 'storage/write-failed/-');
+    assert.deepEqual([failed?.state, failed?.occurrences], ['resolved', 1]);
     assert.equal(summary.capture, 'at-risk');
     // and a fresh context agrees, counting it once
     const fresh = databaseOn(profile);
@@ -183,8 +185,10 @@ describe("#68's second review round", () => {
     const after = (await a.records.incidents()).find(item => item.key === 'sync/conflict/-');
     assert.equal(after?.occurrences, 2);
     assert.equal(after?.dismissed, false);
-    // The conflict and the failed write
-    assert.equal((await summaryOf(a.records, clock)).actionRequired, 2);
+    // The conflict; the failed write resolved once A's write landed (part 3)
+    assert.equal((await summaryOf(a.records, clock)).actionRequired, 1);
+    const failed = (await a.records.incidents()).find(item => item.key === 'storage/write-failed/-');
+    assert.deepEqual([failed?.state, failed?.occurrences], ['resolved', 1]);
   });
 
   it('S4: no provider, remediation, subject, or command id holds free text', async () => {
