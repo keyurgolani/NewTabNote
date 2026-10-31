@@ -43,10 +43,13 @@
  *   sighting, resolves the sightings no later than that open (`openedAt`), in the transaction
  *   that replays them; a later sighting, from a context that still can't open, stays open. A
  *   plain reconnect that never failed resolves nothing.
- * - `storage/write-failed` resolves the same way: the first write that commits after this
- *   context held a sighting of it resolves it, when it was last seen no later than that write
- *   started and nothing that write replayed came from another context's failed writes. Another
- *   context's failure stays open until that context's own write lands, and one that comes later
+ * - `storage/write-failed` resolves by counting, not by clocks. Every write that lands here
+ *   notes the incident's stored occurrences as this context's baseline, and the context counts
+ *   its own failed writes since (an unreadable copy's extra one included). A write that lands
+ *   after this context's failures resolves it, after its replay, only when the occurrences are
+ *   exactly the baseline plus this context's own: any other context's failure, replayed by
+ *   anyone, makes the count larger, so it stays open until a count matches again. A context
+ *   with no baseline yet (no write has landed here) resolves nothing. One that fails later
  *   reopens it, as any held sighting does.
  * - Nothing outside the records resolves their own two incidents: `records.resolve` skips them
  *   whoever calls it, a check whatever its `looked` says, and no check may observe
@@ -257,9 +260,11 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   let openedAt = null;
   /** Set when the store first opens in this context: the next write resolves open-failed */
   let resolveOpenFailed = false;
-  /** How many write-failed sightings this context has held, and how many a write has settled */
-  let writeFailedHeld = 0;
-  let writeFailedSettled = 0;
+  /** write-failed's stored occurrences as of this context's last landed write, or null */
+  /** @type {number | null} */
+  let writeFailedBaseline = null;
+  /** This context's own write-failed occurrences since that baseline */
+  let writeFailedOwn = 0;
   /** Whether this context held an open-failed sighting since the store last opened here */
   let heldOpenFailed = false;
   /** Since when the adapter has answered that it's still connecting, or null */
@@ -399,6 +404,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         const failed = held.get(WRITE_FAILED_KEY);
         if (failed) failed.remainder += 1;
         else held.set(WRITE_FAILED_KEY, { ...writeFailedEntry(when, 'unreadable'), remainder: 1 });
+        writeFailedOwn++;
       }
       return entry;
     } finally {
@@ -445,8 +451,9 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   const failedWrite = async error => {
     if (state !== 'fallback') failureCode = codeOf(error);
     state = 'fallback';
-    writeFailedHeld++;
     await holdSighting(WRITE_FAILED_KEY, writeFailedSighting(codeOf(error)), clock.now());
+    // Counted once it's held, so a write that reads it held counts it too, or neither does
+    writeFailedOwn++;
     // It failed because the store won't open here: so is NewTabNoteTrust's own incident
     if (openFails(error)) await holdOpenFailed(error, true);
   };
@@ -639,31 +646,32 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   const write = async (stores, unit) => {
     const go = async () => {
       const { ops, copied, tracked, read } = await heldOps();
-      const started = clock.now();
       const ending = resolveOpenFailed;
-      // This context's failed writes since a write last settled them, unless what this write
-      // replays holds another context's: that one resolves its own when its write lands
-      const writesFailed = writeFailedHeld > writeFailedSettled ? writeFailedHeld : 0;
-      const own = held.get(WRITE_FAILED_KEY);
-      const foreign = ops.some(
-        op => op.key === WRITE_FAILED_KEY && (!own || (op.opId !== own.copied && op.opId !== own.remainderId)),
-      );
+      const baseline = writeFailedBaseline;
+      const own = writeFailedOwn;
+      // Every write reads write-failed, to keep this context's baseline
       const names = /** @type {TrustStoreName[]} */ ([
         ...new Set([
           ...stores,
-          ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['incidents', 'journal']) : []),
-          ...(ending || writesFailed ? /** @type {TrustStoreName[]} */ (['incidents']) : []),
+          'incidents',
+          ...(ops.length > 0 ? /** @type {TrustStoreName[]} */ (['journal']) : []),
         ]),
       ]);
+      /** @type {number} */
+      let after = 0;
       const done = await run(names, 'readwrite', async tx => {
         if (ops.length > 0) await replay(tx, ops, tracked);
         if (ending) await resolveOwn(tx, OPEN_FAILED_KEY, /** @type {number} */ (openedAt));
-        if (writesFailed && !foreign) await resolveOwn(tx, WRITE_FAILED_KEY, started);
-        return unit(tx);
+        if (baseline !== null && own > 0) await resolveWriteFailed(tx, baseline + own);
+        const value = await unit(tx);
+        const [failed] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', WRITE_FAILED_KEY));
+        after = failed ? failed.occurrences : 0;
+        return value;
       });
       if (!done.ok) return done;
       if (ending) resolveOpenFailed = false;
-      if (writesFailed) writeFailedSettled = Math.max(writeFailedSettled, writesFailed);
+      writeFailedBaseline = after;
+      writeFailedOwn -= own;
       state = 'open';
       failureCode = null;
       await settle(ops, copied, read);
@@ -676,11 +684,29 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   };
 
   /**
-   * Resolves one of the records' own incidents, `key`: `storage/open-failed/NewTabNoteTrust`
-   * once the store has opened in this context, or `storage/write-failed` once a write landed
-   * after this context's failed ones. After the replay, so a held sighting of it is counted
-   * first, and only when every sighting is no later than `by` (the open, or the write's start),
-   * since a later one is a context that still fails
+   * Resolves `storage/write-failed` when, after this write's replay, its occurrences are exactly
+   * `expected`: this context's baseline plus its own failed writes since, so every occurrence
+   * since the baseline is this context's
+   * @param {TrustTx} tx
+   * @param {number} expected
+   */
+  const resolveWriteFailed = async (tx, expected) => {
+    const [existing] = /** @type {Incident[]} */ (await tx.getAllByIndex('incidents', 'key', WRITE_FAILED_KEY));
+    if (!existing || existing.state === 'resolved' || existing.occurrences !== expected) return;
+    const next = applyResolve(existing, {
+      opId: ids.next(),
+      kind: 'resolve',
+      at: directAt(existing, 'resolve', clock.now()),
+      key: WRITE_FAILED_KEY,
+    });
+    if (next && next.state === 'resolved') tx.put('incidents', parseRecord(incidentSchema, next, 'incident'));
+  };
+
+  /**
+   * Resolves one of the records' own incidents, `key` (`storage/open-failed/NewTabNoteTrust`),
+   * once the store has opened in this context. After the replay, so a held sighting of it is
+   * counted first, and only when every sighting is no later than `by` (the open), since a later
+   * one is a context that still fails
    * @param {TrustTx} tx
    * @param {string} key
    * @param {number} by
