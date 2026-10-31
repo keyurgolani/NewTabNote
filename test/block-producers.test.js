@@ -342,6 +342,45 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     ]);
   });
 
+  it("a block dropped on the sidebar keeps its markup only when this page's editor started the drag, and any other drag's markup is stored as text", async () => {
+    const { env, page, sidebar } = await openPage();
+    const editor = page.tabs.editor;
+    editor.getBlockById('a1').content = '<b>Kept</b>';
+    /** A drag's data, as a DataTransfer holds it */
+    const transfer = (entries = {}) => {
+      const data = new Map(Object.entries(entries));
+      return { setData: (type, value) => data.set(type, value), getData: type => data.get(type) ?? '', get types() { return [...data.keys()]; } };
+    };
+    const drop = dataTransfer => runUntil(env, sidebar._onSidebarDrop({ dataTransfer, preventDefault() {}, stopPropagation() {}, target: { closest: () => null } }));
+    const contentsOf = async name => {
+      const ids = (await storedNotes(env)).filter(n => n.name === name).map(n => n.id);
+      return (await storedBlocks(env)).filter(b => ids.includes(b.canvasId)).map(b => b.content);
+    };
+
+    // A drag the page's editor started, dropped while it lasts
+    const own = transfer();
+    const blockEl = { dataset: { id: 'a1' }, classList: { add() {}, remove() {} } };
+    editor.onDragStart({ target: { closest: () => blockEl }, dataTransfer: own });
+    await drop(own);
+    assert.deepEqual(await contentsOf('Kept'), ['<b>Kept</b>']);
+    // The same data once that drag has ended
+    editor.onDragEnd({});
+    await drop(own);
+    assert.deepEqual((await contentsOf('Kept')).sort(), ['&lt;b&gt;Kept&lt;/b&gt;', '<b>Kept</b>']);
+
+    // Drags from anywhere else, with or without a token of their own
+    const foreign = { 'application/x-block-content': 'Foreign', 'application/x-block-type': 'text', 'application/x-block-html': '<i>Foreign</i> <u>x</u>' };
+    await drop(transfer(foreign));
+    await drop(transfer({ ...foreign, 'application/x-block-drag-token': 'forged' }));
+    assert.deepEqual(await contentsOf('Foreign'), [
+      '&lt;i&gt;Foreign&lt;/i&gt; &lt;u&gt;x&lt;/u&gt;',
+      '&lt;i&gt;Foreign&lt;/i&gt; &lt;u&gt;x&lt;/u&gt;',
+    ]);
+    // A drag with text alone is its text, escaped, from anywhere
+    await drop(transfer({ 'application/x-block-content': 'a < b', 'application/x-block-type': 'text' }));
+    assert.deepEqual(await contentsOf('a < b'), ['a &lt; b']);
+  });
+
   it("paste: Markdown whose blocks wouldn't decode pastes nothing, and says so in an event and a toast", async () => {
     const { env, page, events } = await openPage();
     const editor = page.tabs.editor;
