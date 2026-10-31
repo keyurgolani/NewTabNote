@@ -148,6 +148,33 @@ describe('how the closure check follows paths', () => {
     assert.ok(problems.every(({ message }) => /built at run time/.test(message)), problems.map(({ message }) => message).join('\n'));
   });
 
+  it('fails on a tabs.create url or an iconUrl from any call but getURL, on options it can\'t read, and on a spread', () => {
+    // #89's delta review: each of these passed, since both kinds skipped every call
+    const cases = [
+      ["chrome.tabs.create({ url: helper('x.html') });", "helper("],
+      ['chrome.notifications.create({ iconUrl: icon() });', 'icon()'],
+      ["const opts = { url: 'gone.html' }; chrome.tabs.create(opts);", 'opts);'],
+      ["const o = { url: 'gone.html' }; chrome.tabs.create({ ...o });", '{ ...o }'],
+    ];
+    const pkg = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': cases.map(([line]) => line).join('\n'),
+    });
+    const expected = cases.map(([line, at], i) => `closure/non-literal js/a.js:${i + 1}:${line.indexOf(at) + 1}`);
+    assert.deepEqual(found(checkClosure(pkg, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), [...expected].sort());
+
+    // getURL is the one call it reads through: its own reference covers the path
+    const named = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': "chrome.tabs.create({ url: chrome.runtime.getURL('page.html') }); chrome.notifications.create({ iconUrl: chrome.runtime.getURL('i.png') });",
+      'page.html': '',
+      'i.png': '',
+    });
+    assert.deepEqual(checkClosure(named, { staticAssets: NO_ASSETS, vendored: new Set() }).problems, []);
+  });
+
   it('resolves a worker from the page that runs the script, and importScripts from the worker', () => {
     // From js/a.js on a root page, 'w.js' is the root's w.js, not js/w.js
     const pkg = packageOf({

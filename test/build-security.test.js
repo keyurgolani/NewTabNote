@@ -246,6 +246,22 @@ describe('the environment check (AC9)', () => {
       'env/reference js/c.js:3:11 process',
     ]);
   });
+
+  it('leaves process alone in a file that declares its own process', () => {
+    // #89's delta review: a local binding named process failed as the global
+    const own = packageOf({
+      'js/function.js': 'function process(items) { return items; } export const run = (x) => process(x);',
+      'js/const.js': 'const process = (x) => x; export const run = (x) => process(x);',
+      'js/param.js': 'export function run(process) { return process.step(); }',
+      'js/shorthand.js': 'export function make(process) { return { process }; }',
+      'js/import.js': "import { process } from './function.js'; export const run = () => process(1);",
+    });
+    assert.deepEqual(checkEnvironment(own, NONE), []);
+    // process.env still counts there, since it reads like the global's
+    const text = 'function process() {} const key = process.env.API_KEY;';
+    const mixed = packageOf({ 'js/mixed.js': text });
+    assert.deepEqual(checkEnvironment(mixed, NONE).map(({ subject }) => subject), [`js/mixed.js:1:${text.indexOf('process.env') + 1}`]);
+  });
 });
 
 describe('the canary scan (AC9)', () => {
