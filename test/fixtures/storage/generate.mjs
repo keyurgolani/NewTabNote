@@ -39,7 +39,11 @@ const GENERATOR = 'test/fixtures/storage/generate.mjs';
  * @property {Record<string, unknown>} defaultSettings - the chrome.storage.local entries production's initializeDefaultSettings writes
  */
 
-/** Bytes that count, deterministic, base64 */
+/**
+ * `length` deterministic bytes
+ * @param {number} length
+ * @param {number} [salt]
+ */
 function bytes(length, salt = 0) {
   const out = Buffer.alloc(length);
   for (let i = 0; i < length; i++) out[i] = (i * 31 + salt * 17) & 0xff;
@@ -50,7 +54,13 @@ const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a
 const blobOf = (/** @type {Buffer} */ data, mime = 'image/png') => ({ $type: 'Blob', mime, base64: data.toString('base64') });
 const dataUrl = (/** @type {string} */ mime, /** @type {Buffer} */ data) => `data:${mime};base64,${data.toString('base64')}`;
 
-/** A note as 1.4.x's createNote writes it */
+/**
+ * A note as 1.4.x's createNote writes it
+ * @param {string} id
+ * @param {unknown} name
+ * @param {Record<string, unknown>} [fields]
+ * @returns {Record<string, any>}
+ */
 function note(id, name, fields = {}) {
   return {
     id,
@@ -76,7 +86,15 @@ function note(id, name, fields = {}) {
   };
 }
 
-/** A block as 1.4.x's editor saves it, by a serializer standing in for production's */
+/**
+ * A block as 1.4.x's editor saves it, by a serializer standing in for production's
+ * @param {string} id
+ * @param {string} canvasId
+ * @param {unknown} order
+ * @param {unknown} content
+ * @param {Record<string, unknown>} [fields]
+ * @returns {Record<string, any>}
+ */
 const plainBlock = (id, canvasId, order, content, fields = {}) => ({
   id,
   type: 'text',
@@ -292,6 +310,7 @@ export function maximalProblems(fixture, { shapes, blockTypes, defaultSettings }
  * @param {{shapes: any}} inputs
  */
 export function corruptFixtures({ shapes }) {
+  /** @returns {Record<string, Array<Record<string, any>>>} */
   const base = () => ({
     canvases: [note('note-a', 'Alpha'), note('note-b', 'Beta')],
     elements: [plainBlock('block-a1', 'note-a', 0, 'Alpha one'), plainBlock('block-b1', 'note-b', 0, 'Beta one')],

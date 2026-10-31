@@ -57,6 +57,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -79,6 +81,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -101,6 +105,8 @@
                 "archivedAt": 1760000005000,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -123,6 +129,8 @@
                 "archivedAt": null,
                 "titleManuallySet": false,
                 "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
                 "viewport": {
                   "scale": 1,
                   "offsetX": 0,
@@ -131,7 +139,9 @@
                 "settings": {
                   "gridType": "dots",
                   "backgroundColor": "#fafafa"
-                }
+                },
+                "trashed": true,
+                "trashedAt": 1760000006000
               }
             }
           ]

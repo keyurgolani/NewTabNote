@@ -566,9 +566,9 @@
               "value": {
                 "id": "1760000336838-ipg4entci",
                 "name": "Dusk",
-                "colors": {
-                  "background": "#101820",
-                  "text": "#f2f2f2"
+                "properties": {
+                  "--bg-primary": "#101820",
+                  "--text-primary": "#f2f2f2"
                 },
                 "updatedAt": 1760000000000
               }
