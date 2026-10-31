@@ -109,7 +109,7 @@ export const WITHOUT_SUITE = Object.freeze({
   'js/kernel/core/ports/policy.js': {
     types: ['PolicyPort'],
     implementations: { 'js/kernel/core/ports/policy.js': 'test/kernel/policy.test.mjs' },
-    reason: "the baseline policy is the only one until #21 replaces it behind the same port",
+    reason: 'the baseline policy is the only one until #21 replaces it behind the same port',
   },
   'js/kernel/core/ports/runtime.js': {
     types: [],
@@ -143,9 +143,18 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
 export const HELPERS = Object.freeze({
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/requests.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
+  'js/kernel/adapters/indexeddb/requests.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/schema.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/settings.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
   'js/kernel/core/memory/fingerprint.js': ['js/kernel/core/memory/adapter.js', 'js/kernel/core/memory/ledger.js'],
 });
 
@@ -244,7 +253,8 @@ export const EXEMPT = Object.freeze({
     port: 'chrome-storage-local',
     within: 'chrome_mock_',
     owner: '#17',
-    reason: 'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged '
-      + "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
+    reason:
+      'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged ' +
+      "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
   },
 });

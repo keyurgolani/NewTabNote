@@ -59,6 +59,19 @@ const EXPORT_NOTICE_TEXT = Object.freeze({
 });
 
 /**
+ * The words a notice in #export-notice shows, #47's and its space-blocked variant's
+ * @typedef {Object} NoticeText
+ * @property {string} title
+ * @property {string} body
+ * @property {string} confirm - the check step's body
+ * @property {string} export
+ * @property {string} exportAgain
+ * @property {string} done
+ * @property {string} dismiss
+ * @property {string} recordFailed
+ */
+
+/**
  * @typedef {Object} ReturnFocus
  * @property {Element|null} element - What had focus before it moved into the notice
  * @property {Range|null} range - The selection then, to put the caret back
@@ -218,7 +231,10 @@ class ExportNotice {
     return 'pre-migration';
   }
 
-  /** This notice's words */
+  /**
+   * This notice's words
+   * @returns {NoticeText}
+   */
   get text() {
     return EXPORT_NOTICE_TEXT;
   }
@@ -434,6 +450,7 @@ class SpaceNotice extends ExportNotice {
     return 'space-blocked';
   }
 
+  /** @returns {NoticeText} */
   get text() {
     return SPACE_NOTICE_TEXT;
   }

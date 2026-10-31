@@ -611,7 +611,10 @@ export async function keepVerified({ recovery, point, clock, io }) {
 export async function dropOlderCopies({ recovery, point, io }) {
   const older = (await listPoints(recovery)).filter(
     other =>
-      other.id !== point.id && other.kind === point.kind && other.status === 'verified' && other.target === point.target,
+      other.id !== point.id &&
+      other.kind === point.kind &&
+      other.status === 'verified' &&
+      other.target === point.target,
   );
   if (older.length === 0) return point;
   let kept = point;

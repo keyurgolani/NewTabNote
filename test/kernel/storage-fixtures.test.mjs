@@ -372,6 +372,14 @@ describe('the frozen release files (Q11)', () => {
         source.files.map((/** @type {any} */ f) => f.path),
         ['js/storage.js', 'js/utils.js'],
       );
+      // Nothing else is under the tag's folder, which eslint, prettier, and the scanners all skip
+      // (carry-over 2 from #61's review)
+      const listed = fs
+        .readdirSync(dir, { recursive: true, withFileTypes: true })
+        .filter(entry => !entry.isDirectory())
+        .map(entry => path.relative(dir, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
+        .sort();
+      assert.deepStrictEqual(listed, ['SOURCE.json', ...source.files.map((/** @type {any} */ f) => f.path)].sort());
       for (const file of source.files) {
         const bytes = fs.readFileSync(path.join(dir, file.path));
         assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);

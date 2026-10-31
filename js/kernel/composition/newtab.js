@@ -64,7 +64,8 @@ export function createPreUpdateCopy({
       const point = await exportablePointRecord({ indexedDB });
       return point ? { id: point.id, createdAt: point.createdAt } : null;
     },
-    export: (/** @type {string} */ pointId) => exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId }),
+    export: (/** @type {string} */ pointId) =>
+      exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId }),
   });
 }
 
