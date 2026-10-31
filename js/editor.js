@@ -1775,6 +1775,8 @@ class BlockEditor {
     this.wikiMenuVisible = true;
     this.wikiMenuIndex = 0;
     this.wikiFilter = '';
+    // It opens under the caret when it fits there, then stays on the side it's on (renderWikiMenu)
+    this.wikiMenuAbove = false;
 
     // It opens from the caret, or from its block when the caret has no box of its own
     const selection = this.doc.defaultView.getSelection();
@@ -1816,8 +1818,15 @@ class BlockEditor {
       this.wikiMenuItems.appendChild(item);
     });
 
-    // Under the caret, or above it near the bottom, measured first (Utils.placeMenuBeside)
-    if (this.wikiMenuVisible && this.wikiMenuAnchor) Utils.placeMenuBeside(this.wikiMenu, this.wikiMenuAnchor, { gap: 0 });
+    // Under the caret, or above it near the bottom, measured first (Utils.placeMenuBeside). It
+    // stays on the side it's on while it fits there, so the list changing as you type doesn't
+    // move it across the caret, and the highlighted name stays in view as the arrow keys move it
+    if (this.wikiMenuVisible && this.wikiMenuAnchor) {
+      const { top } = Utils.placeMenuBeside(this.wikiMenu, this.wikiMenuAnchor, { gap: 0, above: this.wikiMenuAbove });
+      this.wikiMenuAbove = top < this.wikiMenuAnchor.top;
+      const active = this.wikiMenuItems.querySelector('.slash-menu-item.active');
+      if (active) active.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /**
@@ -1930,6 +1939,8 @@ class BlockEditor {
     this.templateMenuVisible = true;
     this.templateMenuIndex = 0;
     this.templateFilter = '';
+    // It opens under the block when it fits there, then stays on the side it's on (renderTemplateMenu)
+    this.templateMenuAbove = false;
     this.templateMenuAnchor = blockEl.getBoundingClientRect();
 
     this.renderTemplateMenu();
@@ -1967,8 +1978,15 @@ class BlockEditor {
       this.templateMenuItems.appendChild(item);
     });
 
-    // Under the block, or above it near the bottom, measured first (Utils.placeMenuBeside)
-    if (this.templateMenuVisible && this.templateMenuAnchor) Utils.placeMenuBeside(this.templateMenu, this.templateMenuAnchor, { gap: 0 });
+    // Under the block, or above it near the bottom, measured first (Utils.placeMenuBeside). Like
+    // the link menu, it stays on the side it's on while it fits there, and keeps the highlighted
+    // template in view
+    if (this.templateMenuVisible && this.templateMenuAnchor) {
+      const { top } = Utils.placeMenuBeside(this.templateMenu, this.templateMenuAnchor, { gap: 0, above: this.templateMenuAbove });
+      this.templateMenuAbove = top < this.templateMenuAnchor.top;
+      const active = this.templateMenuItems.querySelector('.slash-menu-item.active');
+      if (active) active.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /**

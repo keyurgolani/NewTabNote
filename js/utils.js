@@ -367,23 +367,32 @@ const Utils = {
    * Where a menu of `size` that opens from `anchor`, the box of what it opens from, goes so all
    * of it stays in `viewport`, `margin` from each edge: `gap` under the anchor with their left
    * edges lined up, or over it when `above` is set, as for a bar at the bottom. It flips to the
-   * other side when it doesn't fit on its own and fits there, and is otherwise pulled in from
-   * the edge it would cross. A menu bigger than the window keeps its top left in view.
+   * other side when it doesn't fit on its own and fits there. When neither side has room for
+   * all of it, it goes on the side with more room, and `maxHeight` caps it to that room, so it
+   * scrolls there instead of covering what it opens from. Only with no room on either side, as
+   * from something that fills the window, is it pulled in from the edge it would cross, over
+   * the anchor. A menu wider than the window keeps its left in view.
    * @param {{left: number, top: number, right: number, bottom: number}} anchor
    * @param {{width: number, height: number}} size
    * @param {{width: number, height: number}} viewport
    * @param {{above?: boolean, gap?: number, margin?: number}} [options]
-   * @returns {{left: number, top: number}}
+   * @returns {{left: number, top: number, maxHeight?: number}}
    */
   menuBeside(anchor, size, viewport, { above = false, gap = 4, margin = 8 } = {}) {
-    const under = anchor.bottom + gap;
-    const over = anchor.top - gap - size.height;
-    return {
-      left: this.menuAxis(anchor.left, null, size.width, viewport.width, margin),
-      top: above
-        ? this.menuAxis(over, under, size.height, viewport.height, margin)
-        : this.menuAxis(under, over, size.height, viewport.height, margin),
-    };
+    const left = this.menuAxis(anchor.left, null, size.width, viewport.width, margin);
+    // Each side's room in the window: under the anchor down to the bottom margin, and over it
+    // up to the top margin
+    const underTop = Math.max(anchor.bottom + gap, margin);
+    const overBottom = Math.min(anchor.top - gap, viewport.height - margin);
+    const under = { room: viewport.height - margin - underTop, top: underTop };
+    const over = { room: overBottom - margin, top: overBottom - size.height };
+    const [first, second] = above ? [over, under] : [under, over];
+    if (size.height <= first.room) return { left, top: first.top };
+    if (size.height <= second.room) return { left, top: second.top };
+    const roomier = second.room > first.room ? second : first;
+    if (roomier.room > 0) return { left, top: roomier === under ? underTop : margin, maxHeight: roomier.room };
+    const start = above ? anchor.top - gap - size.height : anchor.bottom + gap;
+    return { left, top: this.menuAxis(start, null, size.height, viewport.height, margin) };
   },
 
   /**
@@ -429,9 +438,10 @@ const Utils = {
    * @param {HTMLElement} menu
    * @param {number} x
    * @param {number} y
+   * @returns {{left: number, top: number}} where it went
    */
   placeMenu(menu, x, y) {
-    this.showMeasuredMenu(menu, (size, viewport) => this.menuPosition(x, y, size, viewport));
+    return this.showMeasuredMenu(menu, (size, viewport) => this.menuPosition(x, y, size, viewport));
   },
 
   /**
@@ -440,9 +450,10 @@ const Utils = {
    * @param {HTMLElement} menu
    * @param {{left: number, top: number, right: number, bottom: number}} anchor
    * @param {{above?: boolean, gap?: number}} [options]
+   * @returns {{left: number, top: number}} where it went
    */
   placeMenuBeside(menu, anchor, options) {
-    this.showMeasuredMenu(menu, (size, viewport) => this.menuBeside(anchor, size, viewport, options));
+    return this.showMeasuredMenu(menu, (size, viewport) => this.menuBeside(anchor, size, viewport, options));
   },
 
   /**
@@ -451,32 +462,39 @@ const Utils = {
    * @param {HTMLElement} menu
    * @param {{left: number, top: number, right: number, bottom: number}} anchor
    * @param {{gap?: number}} [options]
+   * @returns {{left: number, top: number}} where it went
    */
   placeSubmenu(menu, anchor, options) {
-    this.showMeasuredMenu(menu, (size, viewport) => this.submenuBeside(anchor, size, viewport, options));
+    return this.showMeasuredMenu(menu, (size, viewport) => this.submenuBeside(anchor, size, viewport, options));
   },
 
   /**
    * Show `menu` where `place(size, viewport)` puts it, all in this task: it's laid out hidden at
    * the window's top left first, so its size is known before it's seen, and it never shows for
    * a frame in a place it won't stay. The viewport is the menu's own window's: the
-   * picture-in-picture editor's menus are in its window, not the page's. The service worker
-   * shares this file and has no window (#27's background/dom), so there it shows nothing.
+   * picture-in-picture editor's menus are in its window, not the page's. A `maxHeight` from
+   * `place` caps the menu to the room it has, so it scrolls there, and it's measured each time
+   * without the cap an earlier placing gave it. The service worker shares this file and has no
+   * window (#27's background/dom), so there it shows nothing.
    * @param {HTMLElement} menu
-   * @param {(size: {width: number, height: number}, viewport: {width: number, height: number}) => {left: number, top: number}} place
+   * @param {(size: {width: number, height: number}, viewport: {width: number, height: number}) => {left: number, top: number, maxHeight?: number}} place
+   * @returns {{left: number, top: number}} where it went
    */
   showMeasuredMenu(menu, place) {
     if (typeof window === 'undefined') return;
     menu.style.visibility = 'hidden';
     menu.style.left = '0px';
     menu.style.top = '0px';
+    menu.style.maxHeight = '';
     menu.classList.remove('hidden');
     const { width, height } = menu.getBoundingClientRect();
     const view = (menu.ownerDocument && menu.ownerDocument.defaultView) || window;
-    const { left, top } = place({ width, height }, { width: view.innerWidth, height: view.innerHeight });
+    const { left, top, maxHeight } = place({ width, height }, { width: view.innerWidth, height: view.innerHeight });
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
+    if (maxHeight !== undefined) menu.style.maxHeight = `${maxHeight}px`;
     menu.style.visibility = '';
+    return { left, top };
   },
 
   /**
