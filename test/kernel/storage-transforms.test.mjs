@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
+import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import {
   DEFAULT_LIMITS,
   POINTS_LOCK,
@@ -436,6 +437,107 @@ describe("a trashed note's time in the trash (#17 PR 3a, the lead's rule)", () =
     await withCommands(of, send => send({ type: 'emptyTrash' }));
     assert.equal('x-trash-old' in (await notesIn(of)), false);
   });
+});
+
+describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (review R88)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  /** The new tab's clock: an hour after the run's, so a time the transform gave is recent */
+  const TAB = NOW + 60 * 60 * 1000;
+  const HIDDEN = ['hidden-none', 'hidden-null', 'hidden-old', 'hidden-recent'];
+
+  /** v8.basic at 8 with a listed note trashed 40 days ago, four 1.4.x never listed, and an active one */
+  const profile = async () => {
+    const of = await profileWith(BASIC);
+    const base = legacyNote('base', { createdAt: NOW - 90 * DAY }, ['updatedAt']);
+    const notes = [
+      { ...base, id: 'visible-old', trashed: true, trashedAt: NOW - 40 * DAY, updatedAt: NOW - 50 * DAY },
+      { ...base, id: 'hidden-old', trashed: true, trashedAt: NOW - 40 * DAY },
+      { ...base, id: 'hidden-null', trashed: true, trashedAt: NOW - 40 * DAY, updatedAt: null },
+      { ...base, id: 'hidden-none', trashed: true },
+      { ...base, id: 'hidden-recent', trashed: true, trashedAt: NOW - 2 * DAY },
+      { ...base, id: 'active-x', updatedAt: NOW - DAY },
+    ];
+    const db = await done(of.real.open('CanvasTabDB'));
+    const tx = db.transaction(['canvases', 'elements'], 'readwrite');
+    for (const note of notes) {
+      tx.objectStore('canvases').put(note);
+      tx.objectStore('elements').put({
+        id: `${note.id}-b1`,
+        canvasId: note.id,
+        type: 'text',
+        content: 'Body',
+        order: 0,
+      });
+    }
+    await committed(tx);
+    db.close();
+    return of;
+  };
+
+  /**
+   * The new tab's kernel on the legacy adapter over `of`, as App runs its startup cleanup
+   * @param {Profile} of
+   * @param {number} now
+   */
+  const newTab = async (of, now) => {
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    await adapter.open();
+    const kernel = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: { next: () => `tab-${(commandCount += 1)}` },
+      clock: { now: () => now },
+    });
+    open.push({ close: () => storage.db && storage.db.close() });
+    return kernel;
+  };
+
+  /**
+   * The trash as the kernel lists it, and what a startup cleanup deletes
+   * @param {import('../../js/kernel/core/application/kernel.js').Kernel} kernel
+   */
+  const cleanUp = async kernel => {
+    const trash = await kernel.query({ type: 'listNotes', view: 'trashed' });
+    const cleaned = await kernel.execute({ type: 'runTrashCleanup', commandId: `clean-${(commandCount += 1)}` });
+    assert.equal(cleaned.kind, 'committed', JSON.stringify(cleaned));
+    return {
+      listed: trash.kind === 'ready' ? trash.data.map(note => note.id) : [],
+      deleted: cleaned.kind === 'committed' ? [...cleaned.changedIds].sort() : [],
+    };
+  };
+
+  /** v8.basic's own trashed note, Thrown away, which 1.4.x listed and trashed long ago */
+  const THROWN = recordsIn(BASIC, 'CanvasTabDB', 'canvases')
+    .map(({ value }) => value)
+    .find(note => note.trashed).id;
+
+  for (const scenario of /** @type {const} */ (['A', 'B', 'C'])) {
+    const label = {
+      A: 'no run, so the database stays at 8 (short of space, or blocked)',
+      B: "the run is in, and the cleanup comes before the worker's transforms",
+      C: 'the run and the transforms are in',
+    }[scenario];
+    it(`${scenario}: ${label}: the hidden notes survive and list in Trash, and a listed expired note is still deleted`, async () => {
+      const of = await profile();
+      if (scenario !== 'A') assert.equal((await run(of)).status, 'migrated');
+      if (scenario === 'C') assert.equal((await transform(of)).status, 'transformed');
+      const { listed, deleted } = await cleanUp(await newTab(of, TAB));
+      for (const id of HIDDEN) assert.ok(listed.includes(id), `${id} lists in Trash`);
+      assert.deepEqual(deleted, [THROWN, 'visible-old'].sort());
+      const notes = await notesIn(of);
+      for (const id of HIDDEN) assert.ok(notes[id], `${id} is still there`);
+      if (scenario === 'C') {
+        // Their clock starts at the run: a cleanup inside a window keeps them, one past it takes them
+        for (const id of HIDDEN) assert.equal(notes[id].trashedAt, NOW, id);
+        assert.deepEqual((await cleanUp(await newTab(of, NOW + 29 * DAY))).deleted, []);
+        assert.deepEqual((await cleanUp(await newTab(of, NOW + 31 * DAY))).deleted, HIDDEN);
+      }
+    });
+  }
 });
 
 describe('batches, yields, and the commits between them', () => {

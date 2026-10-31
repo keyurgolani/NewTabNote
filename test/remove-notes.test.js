@@ -489,6 +489,38 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     assert.deepEqual(plain([...page.sidebar.selectedNoteIds]), ['C']);
   });
 
+  it("Empty trash's confirmation counts a trashed note 1.4.x never listed, which now shows in Trash, and deletes it with the rest (#17 PR 3a)", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    // In the trash since long ago, with no updatedAt, so 1.4.x's Trash never showed it
+    const db = await new Promise((resolve, reject) => {
+      const request = env.indexedDB.open('CanvasTabDB');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('canvases', 'readwrite');
+      const hidden = note('HID', { name: 'Hidden in trash', trashed: true, trashedAt: 6 });
+      delete hidden.updatedAt;
+      tx.objectStore('canvases').put(hidden);
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+    const page = await openPage(env);
+    assert.deepEqual(plain(page.sidebar.trashedNotes.map((n) => n.id)).sort(), ['HID', 'TR'], 'Trash lists it');
+
+    const emptied = page.sidebar.emptyTrash();
+    const overlay = await waitFor(() => env.document.querySelectorAll('.confirm-dialog-overlay')
+      .find((o) => o.getAttribute('aria-label') === 'Empty Trash') || null, { message: 'dialog Empty Trash' });
+    assert.equal(overlay.querySelector('.confirm-dialog-message').textContent, 'Permanently delete 2 note(s)? This cannot be undone.');
+    overlay.querySelector('.confirm-dialog-confirm').click();
+    await runUntil(env, emptied);
+
+    const { notes } = await stored(env);
+    assert.deepEqual([notes.HID, notes.TR], [undefined, undefined]);
+  });
+
   it('Empty trash puts back a pane on a note another tab restored first, and deletes the rest', async () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
