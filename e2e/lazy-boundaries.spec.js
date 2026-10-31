@@ -6,9 +6,10 @@
  * install or an update under an open page leaves it, each lands where a failure there landed
  * before (R1): Stats and search on "An unexpected error occurred", through App's path and never
  * an unhandled rejection; the export on "Export failed"; the model on its load failure. The
- * loader logs a line with the build, the library, and the reason, and typing still saves. A
- * build-info.json of another build reads as build-mismatch, and a workspace chunk that's gone
- * leaves the shell the page shows today, with the boot guard's line.
+ * loader logs a line with the build, the library, and the reason, and typing still saves. Under
+ * a build-info.json of another build, a library doesn't run: build-mismatch. A workspace chunk
+ * that's gone, or a start that throws before App takes over, leaves the shell the page shows
+ * today, with the boot guard's line; a rejection that doesn't stop the start is no failed start.
  */
 
 const fs = require('fs');
@@ -189,9 +190,9 @@ test("the embedding model with js/lib/transformers.js gone fails its load as bef
   });
 });
 
-test("a library gone under another build's build-info.json reads as build-mismatch, which still lands on Stats' toast", async ({ playwright, headless }, testInfo) => {
+test("a library under another build's build-info.json doesn't run: build-mismatch, which still lands on Stats' toast", async ({ playwright, headless }, testInfo) => {
+  // Chart.js stays at its path, as a newer build's would after an update under the page
   const changes = {
-    remove: ['js/lib/chart.js'],
     edit: { 'build-info.json': (text) => text.replace(/"buildId": "[^"]+"/, '"buildId": "an-update-under-the-page"') },
   };
   await withChangedBuild({ playwright, headless }, testInfo, changes, async (extension) => {
@@ -206,10 +207,50 @@ test("a library gone under another build's build-info.json reads as build-mismat
     await expect.poll(() => page.evaluate(() => window.__ntnToasts.map(({ text }) => text))).toContain('An unexpected error occurred');
     // The page's own build, which the build wrote into the loader, against the one on disk
     await expect.poll(() => lines.map(({ detail }) => detail)).toContainEqual({ buildId, chunk: 'chart', reason: 'build-mismatch' });
-    // Under another build, the loader doesn't retry
-    expect(asked).toEqual(['js/lib/chart.js']);
+    // The loader checks before it puts the library in, so the page asks for no file
+    expect(asked).toEqual([]);
+    expect(await page.evaluate(() => typeof Chart)).toBe('undefined');
     await closeStats(page);
     expect(await typedAndSaved(page, 'still typing')).toEqual(['still typing']);
+    await expectNoUncaught(extension, page);
+  });
+});
+
+test("a rejection that doesn't stop the start is no failed start: the boot guard logs nothing, and the tab starts", async ({ playwright, headless }, testInfo) => {
+  const root = chunkFile(resolveDist(), 'newtab');
+  const message = 'a rejection the start does not wait on';
+  const changes = { edit: { [root]: (text) => `Promise.reject(new Error(${JSON.stringify(message)}));\n${text}` } };
+  await withChangedBuild({ playwright, headless }, testInfo, changes, async (extension) => {
+    const guard = consoleLines(extension, 'NewTabNote: the new tab did not start');
+    await extension.seedOnboarded();
+    const page = await driver.openNewTab(extension);
+    await untilIdleWorkRan(page);
+    expect(await typedAndSaved(page, 'still typing')).toEqual(['still typing']);
+    expect(guard).toEqual([]);
+    // The one uncaught rejection is the edit's own
+    const own = (await extension.uncaught()).filter((error) => error.message.includes(message));
+    expect(own).toHaveLength(1);
+    await expectNoUncaught(extension, page, new Map([[own[0].message, ['the edit above']]]));
+  });
+});
+
+test('a start that throws before App runs init is a failed start: the page keeps the shell, and the boot guard logs why', async ({ playwright, headless }, testInfo) => {
+  const workspace = chunkFile(resolveDist(), 'workspace');
+  // App never reaches the page, so the composition root's start throws as it constructs it
+  const noApp = "Object.defineProperty(window, 'App', { configurable: true, get: () => undefined, set: () => {} });\n";
+  await withChangedBuild({ playwright, headless }, testInfo, { edit: { [workspace]: (text) => `${noApp}${text}` } }, async (extension, dist) => {
+    const { buildId } = JSON.parse(fs.readFileSync(path.join(dist, 'build-info.json'), 'utf8'));
+    const guard = consoleLines(extension, 'NewTabNote: the new tab did not start');
+    const lines = consoleLines(extension, 'NewTabNote loader:');
+    await extension.seedOnboarded();
+    const page = await driver.openNewTab(extension, { wait: false });
+    await expect.poll(() => guard.map(({ detail }) => detail)).toEqual([{ buildId, chunk: 'workspace', reason: 'evaluation-failed' }]);
+    // The chunk loaded: the loader has nothing to say
+    expect(lines).toEqual([]);
+    expect(await page.evaluate(() => typeof window.app)).toBe('undefined');
+    await expect(page.locator('#editor-container')).toBeAttached();
+    await expect(page.getByText('Failed to initialize')).toHaveCount(0);
+    // The root caught the throw: nothing went unhandled
     await expectNoUncaught(extension, page);
   });
 });

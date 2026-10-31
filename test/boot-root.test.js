@@ -3,7 +3,8 @@
 // #27 slice 3, "Entries": the new tab's boot root (js/entries/newtab.js, js/entries/boot.js),
 // which holds ntn-boot while the tab starts and loads the workspace chunk through the loader,
 // and the boot guard (js/entries/boot-guard.js), which watches for a start that fails before
-// the root calls boot(). State 1's seam, showBootFailure, logs one line and shows nothing.
+// the workspace chunk's boot() has returned. State 1's seam, showBootFailure, logs one line and
+// shows nothing.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -138,17 +139,23 @@ describe('the boot root loads the workspace chunk and calls its boot() (js/entri
     };
   }
 
-  it("tells the boot guard, then calls boot() with the loader, once the chunk loaded", async () => {
+  /** What the boot guard on `target` hears, in order: ntn:boot, and each ntn:boot-failed's detail */
+  function listen(target) {
+    const heard = [];
+    target.addEventListener('ntn:boot', () => heard.push('ntn:boot'));
+    target.addEventListener('ntn:boot-failed', (event) => heard.push(event.detail));
+    return heard;
+  }
+
+  it('calls boot() with the loader once the chunk loaded, and tells the boot guard ntn:boot once boot() has returned', async () => {
     const { bootWorkspace } = await boot();
     const { createLoader } = await lazy();
     const loader = createLoader(fakeHost());
     const target = new EventTarget();
-    const order = [];
-    target.addEventListener('ntn:boot', () => order.push('ntn:boot'));
-    target.addEventListener('ntn:boot-failed', () => order.push('ntn:boot-failed'));
-    const result = await bootWorkspace({ loader, target, load: async () => ({ boot: (handed) => order.push(handed === loader ? 'boot(loader)' : 'boot(?)') }) });
-    assert.equal(result.status, 'loaded');
-    assert.deepEqual(order, ['ntn:boot', 'boot(loader)']);
+    const heard = listen(target);
+    const booted = await bootWorkspace({ loader, target, load: async () => ({ boot: (handed) => heard.push(handed === loader ? 'boot(loader)' : 'boot(?)') }) });
+    assert.equal(booted, true);
+    assert.deepEqual(heard, ['boot(loader)', 'ntn:boot']);
   });
 
   it("tells it ntn:boot-failed with the build, the chunk, and the reason when the chunk didn't load, and calls nothing", async () => {
@@ -159,17 +166,47 @@ describe('the boot root loads the workspace chunk and calls its boot() (js/entri
       [fakeHost({ fetchJson: async () => ({ buildId: 'build-b', chunks: {} }) }), 'build-mismatch'],
     ]) {
       const target = new EventTarget();
-      const heard = [];
-      target.addEventListener('ntn:boot', () => heard.push('ntn:boot'));
-      target.addEventListener('ntn:boot-failed', (event) => heard.push(event.detail));
-      const result = await bootWorkspace({
+      const heard = listen(target);
+      const booted = await bootWorkspace({
         loader: createLoader(host),
         target,
         load: async () => { throw new TypeError('Failed to fetch dynamically imported module: chrome-extension://ntn/assets/workspace-A1.js'); },
       });
-      assert.equal(result.reason, reason);
+      assert.equal(booted, false);
       assert.deepEqual(heard, [{ buildId: 'build-a', chunk: 'workspace', reason }]);
     }
+  });
+
+  it('tells it ntn:boot-failed, as evaluation-failed, when boot() throws before App takes over, and never ntn:boot', async () => {
+    const { bootWorkspace } = await boot();
+    const { createLoader } = await lazy();
+    const target = new EventTarget();
+    const heard = listen(target);
+    const booted = await bootWorkspace({
+      loader: createLoader(fakeHost()),
+      target,
+      load: async () => ({ boot: () => { throw new TypeError('note text'); } }),
+    });
+    assert.equal(booted, false);
+    assert.deepEqual(heard, [{ buildId: 'build-a', chunk: 'workspace', reason: 'evaluation-failed' }]);
+    assert.doesNotMatch(JSON.stringify(heard), /note text/);
+  });
+
+  it("starts through startWorkspace, which tells the boot guard a failure of the root's own as ntn:boot-failed and never rejects", async () => {
+    const { startWorkspace } = await boot();
+    const { createLoader } = await lazy();
+    const target = new EventTarget();
+    const heard = listen(target);
+    assert.equal(await startWorkspace({ loader: createLoader(fakeHost()), target, load: async () => ({ boot() {} }) }), true);
+    assert.deepEqual(heard, ['ntn:boot']);
+
+    // A seam that throws makes the loader's own answer reject
+    const loader = createLoader(fakeHost());
+    loader.seams.loading = () => { throw new Error('a seam that throws'); };
+    const failing = new EventTarget();
+    const failed = listen(failing);
+    assert.equal(await startWorkspace({ loader, target: failing, load: async () => ({ boot() {} }) }), false);
+    assert.deepEqual(failed, [{ buildId: 'build-a', chunk: 'newtab', reason: 'uncaught' }]);
   });
 
   it('is the one module newtab.html loads, after the classic boot guard, and loads js/workspace.js as the workspace chunk', () => {
@@ -179,7 +216,9 @@ describe('the boot root loads the workspace chunk and calls its boot() (js/entri
       ['js/entries/newtab.js', 'module'],
     ]);
     const root = read('js/entries/newtab.js');
-    assert.match(root, /load: \(\) => import\('\.\.\/workspace\.js'\)/);
+    // The root starts through startWorkspace, so no promise of its own goes unhandled
+    assert.match(root, /^startWorkspace\(\{ loader: pageLoader\(\), target: window, load: \(\) => import\('\.\.\/workspace\.js'\) \}\);$/m);
+    assert.doesNotMatch(root, /bootWorkspace/);
     // The loader names the chunk by its module's file, as build-info.json's chunks does
     assert.match(read('js/entries/boot.js'), /loader\.loadChunk\('workspace', load\)/);
     assert.match(read('js/workspace.js'), /^export \{ boot \} from '\.\/main\.js';$/m);
@@ -260,9 +299,9 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
 
   const lines = (logged) => logged.map(([message, failure]) => [message, { ...failure }]);
 
-  it("listens from script start: errors at capture, rejections, and the root's two events", () => {
+  it("listens from script start: errors at capture, and the root's two events", () => {
     const { listeners } = guard();
-    assert.deepEqual([...listeners.keys()].sort(), ['error capture', 'ntn:boot', 'ntn:boot-failed', 'unhandledrejection']);
+    assert.deepEqual([...listeners.keys()].sort(), ['error capture', 'ntn:boot', 'ntn:boot-failed']);
   });
 
   it("logs a line and shows nothing when the root's module script doesn't load", () => {
@@ -280,24 +319,27 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
     assert.deepEqual(lines(logged), [['NewTabNote: the new tab did not start', { buildId: 'build-a', chunk: 'workspace', reason: 'build-mismatch' }]]);
   });
 
-  it('counts an uncaught error or an unhandled rejection before boot(), and no other element\'s error', () => {
+  it("counts an uncaught error before boot() has returned, and no other element's error", () => {
     const uncaught = guard();
     uncaught.fire('error', { target: new uncaught.Element() }, true);
     assert.deepEqual(uncaught.logged, [], "an image's or a stylesheet's error isn't the start's");
     uncaught.fire('error', { target: {}, message: 'note text' }, true);
     assert.deepEqual(lines(uncaught.logged), [['NewTabNote: the new tab did not start', { buildId: null, chunk: 'newtab', reason: 'uncaught' }]]);
     assert.doesNotMatch(JSON.stringify(uncaught.logged), /note text/);
-
-    const unhandled = guard();
-    unhandled.fire('unhandledrejection', { reason: new Error('note text') });
-    assert.deepEqual(lines(unhandled.logged), [['NewTabNote: the new tab did not start', { buildId: null, chunk: 'newtab', reason: 'unhandled' }]]);
   });
 
-  it('takes its listeners off once the root calls boot(), so a later error is the app\'s', () => {
+  it("doesn't count a rejection on the page, which may not stop the start: the root tells it of its own (startWorkspace)", () => {
+    const { fire, logged, listeners } = guard();
+    fire('unhandledrejection', { reason: new Error('x') });
+    assert.deepEqual(logged, []);
+    assert.equal(listeners.size, 3, 'it still watches the start');
+  });
+
+  it("takes its listeners off once boot() has returned (ntn:boot), so a later error is the app's", () => {
     const { fire, logged, listeners } = guard();
     fire('ntn:boot');
     assert.equal(listeners.size, 0);
-    fire('unhandledrejection', { reason: new Error('x') });
+    fire('error', { target: {}, message: 'x' }, true);
     fire('ntn:boot-failed', { detail: {} });
     assert.deepEqual(logged, []);
   });
