@@ -403,17 +403,18 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   };
 
   /**
-   * Writes the commit log and the ledger for an outcome the adapter keeps, and answers it with
+   * Writes the commit log, and the ledger for a catalog command's outcome, and answers it with
    * its commitSeq when the log took a change
    * @param {Work} work
    * @param {Applied} applied
+   * @param {boolean} keyed - whether the work is a catalog command, which the ledger keeps
    * @returns {Outcome}
    */
-  const log = (work, applied) => {
+  const log = (work, applied, keyed) => {
     const { outcome } = applied;
     const changes = commitLog ? changesOf(applied) : [];
     const kept = changes.length > 0 ? { ...outcome, commitSeq: commitLog?.append(changes) } : outcome;
-    if (kept.kind === 'committed' || kept.kind === 'conflict') ledger?.record(work.command, kept);
+    if (keyed && (kept.kind === 'committed' || kept.kind === 'conflict')) ledger?.record(work.command, kept);
     return kept;
   };
 
@@ -450,8 +451,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
     commit(work) {
       return serial(async () => {
+        // Only a catalog command has a key to keep: other work, such as #20's storage probe,
+        // runs each time and keeps no record, as on #17's adapter
+        const keyed = Object.hasOwn(COMMANDS, work.command.type);
         // A send of the same command that committed while this one waited its turn
-        const kept = keptFor(work.commandId, work.command);
+        const kept = keyed ? keptFor(work.commandId, work.command) : undefined;
         if (kept) return { outcome: kept, replayed: kept.kind !== 'rejected' };
         /** @type {Applied} */
         let applied;
@@ -462,8 +466,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         }
         let { outcome } = applied;
         if (outcome.kind === 'committed' || outcome.kind === 'conflict') {
-          outcome = log(work, applied);
-          outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
+          outcome = log(work, applied, keyed);
+          if (keyed) outcomes.set(work.commandId, { fingerprint: digestOf(work.command), outcome: clone(outcome) });
         }
         return { outcome, replayed: false };
       });
