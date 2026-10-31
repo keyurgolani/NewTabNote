@@ -66,6 +66,14 @@
       "tests": [
         "KD-008 a URL pasted with focus in a block with text becomes a bookmark right after that block"
       ]
+    },
+    {
+      "id": "KD-009",
+      "ownerIssue": 15,
+      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/ddbc59a7c25523ed754ec39813c3c8204cb64e56/js/services/sync-service.js#L170-L171",
+      "tests": [
+        "KD-009 WebDAV connect stays disconnected when the server answers 403, 404, or 500"
+      ]
     }
   ]
 }

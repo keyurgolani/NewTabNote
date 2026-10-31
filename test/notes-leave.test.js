@@ -341,6 +341,22 @@ describe('a note leaving the active set, in this new tab', () => {
     assert.deepEqual(env.chrome.local.setting_openTabs.map((tab) => tab.noteId), ['C']);
   });
 
+  it("two notes leaving at once, one in each pane, are handled one after the other, so the panes end on two active notes", async () => {
+    const env = createLegacyEnv();
+    await createProfile(env.indexedDB);
+    const page = await openPage(env, { split: true });
+    assert.deepEqual([page.tabs.editor.noteId, page.tabs.secondaryEditor.noteId], ['A', 'B']);
+    await page.Storage.trashNote('A');
+    await page.Storage.trashNote('B');
+
+    await runUntil(env, Promise.all([page.tabs.forgetNotes(['A']), page.tabs.forgetNotes(['B'])]));
+
+    const panes = [page.tabs.editor.noteId, page.tabs.secondaryEditor.noteId];
+    assert.equal(page.tabs.splitViewEnabled, true);
+    assert.notEqual(panes[0], panes[1], `the panes show ${panes.join(' and ')}`);
+    assert.deepEqual([...panes].sort(), ['C', 'D']);
+  });
+
   for (const [label, noticedFirst] of [['right after typing there', false], ['with its notice already showing', true]]) {
     it(`turning split view off ${label}, with the right pane's note deleted, keeps split view, the text, and the notice in view`, async () => {
       const env = createLegacyEnv();

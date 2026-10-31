@@ -1,0 +1,685 @@
+{
+  "about": "The mutation review (#28, AC4). Each mutant is one exact edit to one file: `find` occurs exactly once in `file`, and `replace` takes its place. With it made, the test `name` in `test` has to fail. `name` is the test's own name, or its suites' names and its own joined by ' > ' where its own isn't unique in the file. `behavior` is the approved test plan's behavior the mutant samples, and `protects` says what breaks. `pending` lists behaviors whose code hasn't landed, with the issue that lands it. scripts/mutants.js runs them, and docs/testing.md says how to add one.",
+  "pending": [
+    {
+      "behavior": "sanitizer rules",
+      "protects": "Pasted and imported HTML loses scripts, event handlers, and unsafe URLs before it renders or is stored.",
+      "waitsFor": 21,
+      "why": "No test loads js/sanitize.js yet (#28 slice 1 found it). #21 rewrites the sanitizer with its suite, and that PR adds the mutants."
+    },
+    {
+      "behavior": "placeholder health",
+      "protects": "#20's interim providers report connected or verified only after they verify.",
+      "waitsFor": 20,
+      "why": "The interim providers aren't on next yet. The PR that adds them adds their mutants."
+    },
+    {
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes links, custom themes, and note snapshots.",
+      "waitsFor": 18,
+      "why": "exportAll leaves them out today (KD-005), so there is nothing to break yet. The PR that fixes KD-005 adds a mutant per record type."
+    }
+  ],
+  "mutants": [
+    {
+      "id": "commit-wait-idb-answer-before-complete",
+      "behavior": "commit waits",
+      "protects": "A command on the IndexedDB adapter answers only once its transaction fires complete.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      const end = await ended;\n      if (end.committed) return answered(work.done());",
+      "replace": "      const end = { committed: true };\n      if (end.committed) return answered(work.done());",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "a command answers only after its transaction fires complete"
+    },
+    {
+      "id": "commit-wait-idb-abort-reads-committed",
+      "behavior": "commit waits",
+      "protects": "A transaction that aborts after its requests succeeded answers unavailable, never committed.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));",
+      "replace": "tx.addEventListener('abort', () => resolve({ committed: true }));",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "a transaction that aborts after its requests succeeded answers unavailable, and stores none of them"
+    },
+    {
+      "id": "commit-wait-idb-relaxed-durability",
+      "behavior": "commit waits",
+      "protects": "Every write transaction on the IndexedDB adapter is opened with durability 'strict'.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "const STRICT = Object.freeze({ durability: 'strict' });",
+      "replace": "const STRICT = Object.freeze({ durability: 'relaxed' });",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "every write runs in one readwrite transaction with durability strict, opened in the task that sends it"
+    },
+    {
+      "id": "commit-wait-idb-stop-keeps-earlier-writes",
+      "behavior": "commit waits",
+      "protects": "A unit that stops its command aborts the transaction, so nothing an earlier unit wrote commits.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      if (first.stop) {\n        abort(tx);",
+      "replace": "      if (first.stop) {",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "a command whose later unit stops it or throws aborts its transaction, so nothing an earlier unit wrote stays"
+    },
+    {
+      "id": "commit-wait-idb-retry-over-later-write",
+      "behavior": "commit waits",
+      "protects": "A failed write doesn't run again once this context sent a later write to the same store, so it can't land over it.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      if (overtaken) return unavailable('storage', 'transaction-failed', true);\n",
+      "replace": "",
+      "test": "test/kernel/storage-failures.test.mjs",
+      "name": "doesn't run a failed write again once this context sent a later one, so it can't land over the later one"
+    },
+    {
+      "id": "commit-wait-legacy-answer-before-complete",
+      "behavior": "commit waits",
+      "protects": "A unit on the legacy adapter answers only once its transaction commits.",
+      "file": "js/kernel/adapters/legacy/adapter.js",
+      "find": "      await committed;\n      return undefined;",
+      "replace": "      return undefined;",
+      "test": "test/kernel/legacy.test.mjs",
+      "name": "a write whose transaction aborts as it commits is unavailable, never committed"
+    },
+    {
+      "id": "commit-wait-idb-throw-keeps-earlier-writes",
+      "behavior": "commit waits",
+      "protects": "A unit that throws aborts its command's transaction, so nothing an earlier unit wrote commits.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      if ('error' in first) {\n        abort(tx);",
+      "replace": "      if ('error' in first) {",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "a command whose later unit stops it or throws aborts its transaction, so nothing an earlier unit wrote stays"
+    },
+    {
+      "id": "commit-wait-idb-readonly-unit-writes",
+      "behavior": "commit waits",
+      "protects": "A unit declared readonly can't write on the IndexedDB adapter, even in a command whose transaction is readwrite.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "    if (!writable) throw new UnavailableError('adapter', 'write-in-readonly-transaction', false);\n",
+      "replace": "",
+      "test": "test/kernel/storage-commit.test.mjs",
+      "name": "a unit declared readonly can't write, even in a command another unit makes readwrite"
+    },
+    {
+      "id": "schema-codec-accepts-getter",
+      "behavior": "schema fields",
+      "protects": "The codec refuses a getter or setter, which could give JSON another value than the check saw.",
+      "file": "js/kernel/core/contracts/codec.js",
+      "find": "  if (!('value' in descriptor)) throw new CodecError('a getter or setter', path);\n",
+      "replace": "",
+      "test": "test/kernel/codec.test.mjs",
+      "name": "refuses cycles, symbol keys, getters, hidden properties, holes, and array extras"
+    },
+    {
+      "id": "schema-codec-accepts-class-instance",
+      "behavior": "schema fields",
+      "protects": "The codec refuses an object whose prototype isn't Object.prototype or null.",
+      "file": "js/kernel/core/contracts/codec.js",
+      "find": "    if (proto !== Object.prototype && proto !== null) throw new CodecError(\"an object that isn't plain\", path);\n",
+      "replace": "",
+      "test": "test/kernel/codec.test.mjs",
+      "name": "refuses an object or array that inherits from anything else, which would change what JSON writes"
+    },
+    {
+      "id": "schema-codec-accepts-hidden-property",
+      "behavior": "schema fields",
+      "protects": "The codec refuses a property that isn't enumerable, which JSON would drop.",
+      "file": "js/kernel/core/contracts/codec.js",
+      "find": "  if (!descriptor.enumerable) throw new CodecError('a hidden property', path);\n",
+      "replace": "",
+      "test": "test/kernel/codec.test.mjs",
+      "name": "refuses cycles, symbol keys, getters, hidden properties, holes, and array extras"
+    },
+    {
+      "id": "schema-command-payload-loose",
+      "behavior": "schema fields",
+      "protects": "A command payload schema refuses a field it doesn't declare.",
+      "file": "js/kernel/core/contracts/operation.js",
+      "find": "export const commandPayload = (type, entries) => v.strictObject(",
+      "replace": "export const commandPayload = (type, entries) => v.looseObject(",
+      "test": "test/kernel/contract-schema-lint.test.mjs",
+      "name": "passes every operation payload"
+    },
+    {
+      "id": "schema-request-frame-loose",
+      "behavior": "schema fields",
+      "protects": "A request frame refuses a field the envelope doesn't declare.",
+      "file": "js/kernel/core/contracts/envelope.js",
+      "find": "export const requestSchema = v.strictObject({",
+      "replace": "export const requestSchema = v.looseObject({",
+      "test": "test/kernel/contract-schema-lint.test.mjs",
+      "name": "passes every frame, with only its payload and result left to the operation schemas"
+    },
+    {
+      "id": "schema-request-unchecked-payload",
+      "behavior": "schema fields",
+      "protects": "checkRequest refuses a payload its operation's schema refuses.",
+      "file": "js/kernel/core/contracts/validate.js",
+      "find": "  if (!payload.ok) return { ok: false, code: 'invalid-payload', issues: payload.issues };\n  return { ok: true, operation, payload: request.payload };",
+      "replace": "  return { ok: true, operation, payload: request.payload };",
+      "test": "test/kernel/envelope.test.mjs",
+      "name": "says what a payload's schema refused, never the value or a key the sender chose"
+    },
+    {
+      "id": "schema-preferences-loose",
+      "behavior": "schema fields",
+      "protects": "setPreferences names only the setting keys the contract lists.",
+      "file": "js/kernel/core/contracts/settings.js",
+      "find": "export const preferenceValues = v.strictObject({",
+      "replace": "export const preferenceValues = v.looseObject({",
+      "test": "test/kernel/contract-schema-lint.test.mjs",
+      "name": "passes every operation payload"
+    },
+    {
+      "id": "schema-codec-decode-any-depth",
+      "behavior": "schema fields",
+      "protects": "decode refuses a message nested deeper than MAX_DEPTH.",
+      "file": "js/kernel/core/contracts/codec.js",
+      "find": "  checkDepth(value);\n  return value;",
+      "replace": "  return value;",
+      "test": "test/kernel/codec.test.mjs",
+      "name": "nests up to MAX_DEPTH objects and arrays, both ways, and no deeper"
+    },
+    {
+      "id": "backup-drops-archived-notes",
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes archived notes.",
+      "file": "js/storage.js",
+      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
+      "replace": "    const notes = [...(await this.getAllNotes(false)), ...(await this.getTemplates())];",
+      "test": "test/export.test.js",
+      "name": "includes active and archived notes, templates, folders, and their media; not trash"
+    },
+    {
+      "id": "backup-drops-templates",
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes templates.",
+      "file": "js/storage.js",
+      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
+      "replace": "    const notes = [...(await this.getAllNotes(true))];",
+      "test": "test/export.test.js",
+      "name": "includes active and archived notes, templates, folders, and their media; not trash"
+    },
+    {
+      "id": "backup-drops-folders",
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes every folder.",
+      "file": "js/storage.js",
+      "find": "    return { notes, elements, media, folders: await this.getAllFolders() };",
+      "replace": "    return { notes, elements, media, folders: [] };",
+      "test": "test/export.test.js",
+      "name": "includes active and archived notes, templates, folders, and their media; not trash"
+    },
+    {
+      "id": "backup-drops-media",
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes the media of the notes it exports.",
+      "file": "js/storage.js",
+      "find": "      media: mediaWithBase64,\n      folders,\n    };",
+      "replace": "      media: [],\n      folders,\n    };",
+      "test": "test/export.test.js",
+      "name": "includes active and archived notes, templates, folders, and their media; not trash"
+    },
+    {
+      "id": "backup-drops-blocks",
+      "behavior": "backup inclusion",
+      "protects": "exportAll includes every exported note's blocks.",
+      "file": "js/storage.js",
+      "find": "      elements.push(...(await this.getElementsByNote(note.id)));",
+      "replace": "      if (!note.archived) elements.push(...(await this.getElementsByNote(note.id)));",
+      "test": "test/export.test.js",
+      "name": "round-trips through Replace all into an empty profile with folder placement intact (AC5)"
+    },
+    {
+      "id": "backup-blob-drops-folders",
+      "behavior": "backup inclusion",
+      "protects": "Export JSON as a file holds the folders exportAll holds.",
+      "file": "js/storage.js",
+      "find": "    list('folders', folders);",
+      "replace": "    list('folders', []);",
+      "test": "test/export.test.js",
+      "name": "holds the same JSON as exportAll, without indentation, with extra fields last"
+    },
+    {
+      "id": "backup-includes-trash",
+      "behavior": "backup inclusion",
+      "protects": "exportAll leaves out notes in trash.",
+      "file": "js/storage.js",
+      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
+      "replace": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates()), ...(await this.getTrashedNotes())];",
+      "test": "test/export.test.js",
+      "name": "includes active and archived notes, templates, folders, and their media; not trash"
+    },
+    {
+      "id": "placeholder-gdrive-connects",
+      "behavior": "placeholder health",
+      "protects": "GoogleDriveProvider.connect() rejects with not-implemented and never sets connected.",
+      "file": "js/services/sync-service.js",
+      "find": "    throw notImplementedError('Google Drive');",
+      "replace": "    this.connected = true;",
+      "test": "test/sync-service.test.js",
+      "name": "GoogleDriveProvider > connect rejects with not-implemented and leaves it disconnected"
+    },
+    {
+      "id": "placeholder-dropbox-connects",
+      "behavior": "placeholder health",
+      "protects": "DropboxProvider.connect() rejects with not-implemented and never sets connected.",
+      "file": "js/services/sync-service.js",
+      "find": "    throw notImplementedError('Dropbox');",
+      "replace": "    this.connected = true;",
+      "test": "test/sync-service.test.js",
+      "name": "DropboxProvider > connect rejects with not-implemented and leaves it disconnected"
+    },
+    {
+      "id": "placeholder-service-keeps-provider",
+      "behavior": "placeholder health",
+      "protects": "SyncService.connect stores no provider when the provider's connect fails.",
+      "file": "js/services/sync-service.js",
+      "find": "    await provider.connect();\n    this.activeProvider = provider;",
+      "replace": "    await provider.connect().catch(() => {});\n    this.activeProvider = provider;",
+      "test": "test/sync-service.test.js",
+      "name": "connect('gdrive') rejects with not-implemented and connects nothing"
+    },
+    {
+      "id": "placeholder-gdrive-upload-unconnected",
+      "behavior": "placeholder health",
+      "protects": "The Google Drive placeholder refuses an upload while it isn't connected.",
+      "file": "js/services/sync-service.js",
+      "find": "    if (!this.connected) throw new Error('Google Drive not connected');\n    // Placeholder: Would use Google Drive API v3 to upload/update file",
+      "replace": "    // Placeholder: Would use Google Drive API v3 to upload/update file",
+      "test": "test/sync-service.test.js",
+      "name": "GoogleDriveProvider > upload and download throw, since it never connects"
+    },
+    {
+      "id": "placeholder-webdav-connects-on-401",
+      "behavior": "placeholder health",
+      "protects": "WebDAV connect() refuses a server that answers 401, and stays disconnected.",
+      "file": "js/services/sync-service.js",
+      "find": "      if (response.status === 401) throw new Error('WebDAV authentication failed');\n",
+      "replace": "",
+      "test": "test/sync-service.test.js",
+      "name": "connects only once the server takes the credentials: a 401 rejects and leaves it disconnected"
+    },
+    {
+      "id": "auth-sender-other-extension",
+      "behavior": "auth checks",
+      "protects": "principalOf refuses a sender with another extension's id.",
+      "file": "js/kernel/adapters/messaging/runtime-port.js",
+      "find": "  if (id !== extensionId) return null;\n",
+      "replace": "",
+      "test": "test/kernel/runtime-port.test.mjs",
+      "name": "refuses every sender that isn't one of this extension's pages"
+    },
+    {
+      "id": "auth-sender-other-origin",
+      "behavior": "auth checks",
+      "protects": "principalOf refuses a sender whose origin isn't this extension's.",
+      "file": "js/kernel/adapters/messaging/runtime-port.js",
+      "find": "  if (origin !== undefined && origin !== own) return null;\n",
+      "replace": "",
+      "test": "test/kernel/runtime-port.test.mjs",
+      "name": "refuses every sender that isn't one of this extension's pages"
+    },
+    {
+      "id": "auth-sender-unknown-page",
+      "behavior": "auth checks",
+      "protects": "principalOf names only this extension's own pages, and refuses any other path.",
+      "file": "js/kernel/adapters/messaging/runtime-port.js",
+      "find": "  return Object.hasOwn(PAGES, path) ? PAGES[path] : null;",
+      "replace": "  return Object.hasOwn(PAGES, path) ? PAGES[path] : 'newtab';",
+      "test": "test/kernel/runtime-port.test.mjs",
+      "name": "refuses every sender that isn't one of this extension's pages"
+    },
+    {
+      "id": "auth-hello-claims-other-surface",
+      "behavior": "auth checks",
+      "protects": "The router closes a connection whose hello claims a surface the transport didn't verify.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    if (peer.phase !== 'new' || frame.surface !== peer.surface) {",
+      "replace": "    if (peer.phase !== 'new') {",
+      "test": "test/kernel/router.test.mjs",
+      "name": "holds a hello to the surface the transport verified, and closes a connection that claims another"
+    },
+    {
+      "id": "auth-request-before-hello",
+      "behavior": "auth checks",
+      "protects": "The router refuses a request before the hello.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    if (peer.phase === 'new') return refuse(peer, requestId, 'unauthorized-sender');\n",
+      "replace": "",
+      "test": "test/kernel/router.test.mjs",
+      "name": "refuses a request before the hello, and closes a connection that says hello twice"
+    },
+    {
+      "id": "auth-router-ignores-policy",
+      "behavior": "auth checks",
+      "protects": "The router refuses a request its policy denies.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    if (denied) return refuse(peer, requestId, denied);\n",
+      "replace": "",
+      "test": "test/kernel/router.test.mjs",
+      "name": "asks the policy with the caller it verified, the transport's surface and the hello's session, and maps its denials"
+    },
+    {
+      "id": "auth-router-policy-not-strict",
+      "behavior": "auth checks",
+      "protects": "The router allows only a policy answer of allowed: true.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "        if (allowed === true) return null;",
+      "replace": "        if (allowed !== false) return null;",
+      "test": "test/kernel/router.test.mjs",
+      "name": "asks the policy with the caller it verified, the transport's surface and the hello's session, and maps its denials"
+    },
+    {
+      "id": "auth-router-skips-scope",
+      "behavior": "auth checks",
+      "protects": "The router refuses a payload outside its operation's entity and destination scope.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    if (!inScope(operation, payload)) return refuse(peer, requestId, 'forbidden-for-surface');\n",
+      "replace": "",
+      "test": "test/kernel/router.test.mjs",
+      "name": "refuses an id of a type the operation's entry doesn't declare, and a destination it doesn't list"
+    },
+    {
+      "id": "auth-scope-any-entity-type",
+      "behavior": "auth checks",
+      "protects": "createScopeCheck refuses an entity id of a type the entry doesn't declare.",
+      "file": "js/kernel/core/messaging/scope.js",
+      "find": "        if (mark.entity !== null && !entityTypes.includes(mark.entity)) return false;\n",
+      "replace": "",
+      "test": "test/kernel/router.test.mjs",
+      "name": "refuses an id of a type the operation's entry doesn't declare, and a destination it doesn't list"
+    },
+    {
+      "id": "auth-scope-any-destination",
+      "behavior": "auth checks",
+      "protects": "createScopeCheck refuses a destination the entry doesn't list.",
+      "file": "js/kernel/core/messaging/scope.js",
+      "find": "        return !mark.destination || destinations.includes(value);",
+      "replace": "        return true;",
+      "test": "test/kernel/router.test.mjs",
+      "name": "refuses an id of a type the operation's entry doesn't declare, and a destination it doesn't list"
+    },
+    {
+      "id": "auth-scope-unreadable-schema-passes",
+      "behavior": "auth checks",
+      "protects": "createScopeCheck holds a schema it can't read all of out of scope.",
+      "file": "js/kernel/core/messaging/scope.js",
+      "find": "    if (marks === null) return false;",
+      "replace": "    if (marks === null) return true;",
+      "test": "test/kernel/router.test.mjs",
+      "name": "refuses an id of a type the operation's entry doesn't declare, and a destination it doesn't list"
+    },
+    {
+      "id": "auth-check-request-any-version",
+      "behavior": "auth checks",
+      "protects": "checkRequest refuses a catalog version other than the one served.",
+      "file": "js/kernel/core/contracts/validate.js",
+      "find": "  if (request.version !== operation.entry.version) return { ok: false, code: 'unsupported-version', issues: [] };\n",
+      "replace": "",
+      "test": "test/kernel/envelope.test.mjs",
+      "name": "refuses an operation the catalog lacks, and a version it no longer serves"
+    },
+    {
+      "id": "auth-check-request-any-size",
+      "behavior": "auth checks",
+      "protects": "checkRequest holds a request to its operation's maxBytes.",
+      "file": "js/kernel/core/contracts/validate.js",
+      "find": "  if (bytes > operation.entry.maxBytes) return",
+      "replace": "  if (bytes > Infinity) return",
+      "test": "test/kernel/envelope.test.mjs",
+      "name": "holds a request to its operation's maxBytes before its schema, the limit itself included"
+    },
+    {
+      "id": "auth-baseline-policy-any-surface",
+      "behavior": "auth checks",
+      "protects": "The baseline policy allows a request only from the surfaces its catalog entry lists.",
+      "file": "js/kernel/core/ports/policy.js",
+      "find": "      return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');",
+      "replace": "      return ALLOW;",
+      "test": "test/kernel/policy.test.mjs",
+      "name": "allows each surface exactly today's commands and reads"
+    },
+    {
+      "id": "auth-kernel-policy-not-strict",
+      "behavior": "auth checks",
+      "protects": "The kernel allows a command only when its policy answers allowed: true.",
+      "file": "js/kernel/core/application/kernel.js",
+      "find": "      if (isRecord(decision) && decision.allowed === true) return ALLOW;",
+      "replace": "      if (isRecord(decision) && decision.allowed !== false) return ALLOW;",
+      "test": "test/kernel/kernel.test.mjs",
+      "name": "denies unless the policy answers allowed: true, whatever else it answers"
+    },
+    {
+      "id": "auth-sender-url-prefix",
+      "behavior": "auth checks",
+      "protects": "principalOf refuses a sender whose URL isn't under this extension's origin.",
+      "file": "js/kernel/adapters/messaging/runtime-port.js",
+      "find": "  if (typeof url !== 'string' || !url.startsWith(`${own}/`)) return null;",
+      "replace": "  if (typeof url !== 'string') return null;",
+      "test": "test/kernel/runtime-port.test.mjs",
+      "name": "refuses every sender that isn't one of this extension's pages"
+    },
+    {
+      "id": "conflict-stale-save-overwrites",
+      "behavior": "conflict branches",
+      "protects": "A save sent with a stale expectedRevision is a conflict, and the newer save stays.",
+      "file": "js/kernel/core/application/notes.js",
+      "find": "        if (expectedRevision !== undefined && revision !== undefined && revision !== expectedRevision) {",
+      "replace": "        if (false) {",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "two contexts: when both save one note's blocks from the revision they loaded, the later save is a conflict"
+    },
+    {
+      "id": "conflict-adapter-key-reuse-replays",
+      "behavior": "conflict branches",
+      "protects": "A commandId sent again with another command is rejected as key reuse, and nothing runs.",
+      "file": "js/kernel/core/memory/adapter.js",
+      "find": "    if (kept.fingerprint !== digestOf(command)) return rejected('validation', 'idempotency-key-reuse');\n",
+      "replace": "",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "idempotency: a commandId sent again with another command is rejected as key reuse, and nothing runs"
+    },
+    {
+      "id": "conflict-ledger-key-reuse",
+      "behavior": "conflict branches",
+      "protects": "The idempotency ledger answers key-reuse for a key it holds for another command.",
+      "file": "js/kernel/core/memory/ledger.js",
+      "find": "    if (kept.fingerprint !== digestOf(command)) return { status: 'key-reuse' };\n",
+      "replace": "",
+      "test": "test/kernel/idempotency-ledger.test.mjs",
+      "name": "answers key reuse for the same key with another command, by its canonical form, not its key order"
+    },
+    {
+      "id": "conflict-client-resends-on-key-reuse",
+      "behavior": "conflict branches",
+      "protects": "A lost reply whose key the ledger holds for another command fails closed, and nothing is sent again.",
+      "file": "js/kernel/core/messaging/client.js",
+      "find": "      if (read?.status === 'key-reuse') return settle(call, rejected('validation', 'idempotency-key-reuse'));",
+      "replace": "      if (read?.status === 'key-reuse') return resend(call);",
+      "test": "test/kernel/outcome-resolution.test.mjs",
+      "name": "fails closed on a key the ledger holds for another command, and sends nothing again"
+    },
+    {
+      "id": "conflict-ledger-overwrites-first-record",
+      "behavior": "conflict branches",
+      "protects": "The ledger keeps a key's first record: a second one leaves it as it was.",
+      "file": "js/kernel/core/memory/ledger.js",
+      "find": "      if (!records.has(commandId)) {\n        records.set(",
+      "replace": "      {\n        records.set(",
+      "test": "test/kernel/idempotency-ledger.test.mjs",
+      "name": "keeps the first record for a key: a second one leaves it as it was"
+    },
+    {
+      "id": "conflict-revision-never-moves",
+      "behavior": "conflict branches",
+      "protects": "A content save moves its note's revision, so a save from the revision before it is a conflict.",
+      "file": "js/kernel/core/memory/adapter.js",
+      "find": "      revisions.set(id, (revisions.get(id) || 0) + 1);",
+      "replace": "      revisions.set(id, revisions.get(id) || 1);",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "two contexts: when both save one note's blocks from the revision they loaded, the later save is a conflict"
+    },
+    {
+      "id": "conflict-client-resends-again",
+      "behavior": "conflict branches",
+      "protects": "A command whose reply was lost is sent again once at most.",
+      "file": "js/kernel/core/messaging/client.js",
+      "find": "      if (read?.status === 'absent' && !call.resent && phase",
+      "replace": "      if (read?.status === 'absent' && phase",
+      "test": "test/kernel/outcome-resolution.test.mjs",
+      "name": "allows one resend only: one lost too reads the ledger again, and stays unknown while it has no record"
+    },
+    {
+      "id": "save-splits-note-and-blocks",
+      "behavior": "#33 save fixes",
+      "protects": "saveNoteContent writes a note's fields and its blocks in one unit, so a save of a deleted note writes neither.",
+      "file": "js/kernel/core/application/notes.js",
+      "find": "    /** @type {Unit[]} */\n    const units = [save];",
+      "replace": "    /** @type {Unit[]} */\n    const units = [\n      { stores: ['blocks'], async run(tx) { for (const block of records) tx.put('blocks', block); } },\n      { ...save, stores: ['notes'], run: tx => save.run({ ...tx, put: (store, record) => (store === 'blocks' ? undefined : tx.put(store, record)) }) },\n    ];",
+      "test": "test/kernel/legacy.test.mjs",
+      "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
+    },
+    {
+      "id": "save-resurrects-deleted-note",
+      "behavior": "#33 save fixes",
+      "protects": "A save of a note deleted since the editor loaded it writes nothing.",
+      "file": "js/kernel/core/application/notes.js",
+      "find": "        if (!note) return noteNotFound();\n        const revision = tx.revision('notes', noteId);",
+      "replace": "        if (!note) { tx.put('notes', { id: noteId, updatedAt: now }); return undefined; }\n        const revision = tx.revision('notes', noteId);",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
+    },
+    {
+      "id": "save-editor-unavailable-reads-saved",
+      "behavior": "#33 save fixes",
+      "protects": "The editor never shows a save as saved unless the kernel answered committed.",
+      "file": "js/editor.js",
+      "find": "      throw new Error(`The save was not stored (${outcome.kind}: ${outcome.code})`);",
+      "replace": "      return 'saved';",
+      "test": "test/editor-save.test.js",
+      "name": "a second failure of that copy shows the error toast"
+    },
+    {
+      "id": "save-editor-gone-reads-saved",
+      "behavior": "#33 save fixes",
+      "protects": "The editor keeps a deleted note's unsaved text on screen with its notice, instead of reporting it saved.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'gone';",
+      "replace": "      if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'saved';",
+      "test": "test/editor-save.test.js",
+      "name": "an edit still pending when the note is deleted does not bring it back, and stays on screen with a notice"
+    },
+    {
+      "id": "save-takes-note-out-of-trash",
+      "behavior": "#33 save fixes",
+      "protects": "A save into a trashed note keeps it in trash.",
+      "file": "js/kernel/core/application/notes.js",
+      "find": "        const next = { ...note, updatedAt: now };",
+      "replace": "        const next = { ...note, trashed: false, trashedAt: null, updatedAt: now };",
+      "test": "test/kernel/memory.test.mjs",
+      "name": "a save into a trashed note commits what was typed, and the note stays in the trash (#33)"
+    },
+    {
+      "id": "leave-active-pane-stays",
+      "behavior": "#46 note-leave rules",
+      "protects": "Trashing the open note moves its pane off it.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    if (moves(active)) {\n      await this._moveActivePane(",
+      "replace": "    if (false) {\n      await this._moveActivePane(",
+      "test": "test/notes-leave.test.js",
+      "name": "trashing the open note writes its pending edit first, then its tab and pane go to the next note"
+    },
+    {
+      "id": "leave-no-flush-first",
+      "behavior": "#46 note-leave rules",
+      "protects": "A pane on a leaving note writes its pending edit before forgetNotes decides what moves, so one that finds its note deleted keeps its notice and its tab.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    await Promise.all(this.getOpenEditors().filter(onGone).map((editor) => editor.flushSave()));\n",
+      "replace": "",
+      "test": "test/notes-leave.test.js",
+      "name": "leaving a deleted note's notice for another tab takes that note's tab away"
+    },
+    {
+      "id": "leave-split-pane-stays",
+      "behavior": "#46 note-leave rules",
+      "protects": "Trashing the split note moves the right pane to a note the left pane doesn't show.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "(moves(other) || !other.noteId || other.noteId === active.noteId)",
+      "replace": "(!other.noteId || other.noteId === active.noteId)",
+      "test": "test/notes-leave.test.js",
+      "name": "trashing the split note moves the right pane to a note the left pane does not show"
+    },
+    {
+      "id": "leave-hidden-pane-keeps-note",
+      "behavior": "#46 note-leave rules",
+      "protects": "The hidden right pane lets go of a note that left.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    if (moves(hidden)) await hidden.unload();\n",
+      "replace": "",
+      "test": "test/notes-leave.test.js",
+      "name": "archiving the hidden right pane's note lets go of it, so turning split view on shows an active note"
+    },
+    {
+      "id": "leave-pip-stays-open",
+      "behavior": "#46 note-leave rules",
+      "protects": "PiP on a leaving note closes.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    if (this.pipWindow && moves(this.pipEditor)) {",
+      "replace": "    if (false) {",
+      "test": "test/import.test.js",
+      "name": "after Replace all no pane stays on a trashed note, and none can save one back to active"
+    },
+    {
+      "id": "leave-tabs-kept",
+      "behavior": "#46 note-leave rules",
+      "protects": "A leaving note's tab goes.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    const kept = this.openTabs.map((tab) => !gone.has(tab.noteId) || staying.has(tab.noteId));",
+      "replace": "    const kept = this.openTabs.map(() => true);",
+      "test": "test/notes-leave.test.js",
+      "name": "trashing the open note writes its pending edit first, then its tab and pane go to the next note"
+    },
+    {
+      "id": "leave-restores-trashed-tab",
+      "behavior": "#46 note-leave rules",
+      "protects": "Startup reopens no saved tab whose note is in trash.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    return note && !note.trashed ? note : null;",
+      "replace": "    return note || null;",
+      "test": "test/tab-restore.test.js",
+      "name": "skips saved tabs whose notes are in trash or gone, and stays on the active tab"
+    },
+    {
+      "id": "leave-calls-not-serialized",
+      "behavior": "#46 note-leave rules",
+      "protects": "forgetNotes calls run one at a time, in order.",
+      "file": "js/controllers/tab-controller.js",
+      "find": "    const done = this._forgetQueue.then(run, run);",
+      "replace": "    const done = run();",
+      "test": "test/notes-leave.test.js",
+      "name": "two notes leaving at once, one in each pane, are handled one after the other, so the panes end on two active notes"
+    },
+    {
+      "id": "conformance-inventory-drops-run",
+      "behavior": "conformance runs",
+      "protects": "Every implementation of a port is bound to a run of its conformance suite.",
+      "file": "test/kernel/conformance-inventory.mjs",
+      "find": "      { module: 'js/kernel/adapters/indexeddb/adapter.js', run: 'test/kernel/storage-contract.test.mjs' },\n",
+      "replace": "",
+      "test": "test/kernel/conformance-coverage.test.mjs",
+      "name": "binds every implementation to a suite run, and every suite to an implementation"
+    },
+    {
+      "id": "conformance-skipped-run-counts",
+      "behavior": "conformance runs",
+      "protects": "A suite run inside a describe skipped by its options doesn't count as a run.",
+      "file": "test/kernel/conformance-coverage.mjs",
+      "find": "  if (skipped) return false;\n",
+      "replace": "",
+      "test": "test/kernel/conformance-coverage.test.mjs",
+      "name": "when it calls the runner only in a describe with skip in its options"
+    }
+  ]
+}
