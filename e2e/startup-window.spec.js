@@ -1,10 +1,11 @@
 /**
  * A click while the new tab starts reaches the controller that owns it (#12 slice 7a). App
  * builds every controller before it binds a listener, so Focus mode and the sidebar's Import
- * work as they do once the tab has started. Before, a click in that window, before the later
- * controllers existed, ran App's own copy of their code, now removed: Focus mode set App's
- * copy of the state, which ShortcutsManager never read, so Escape didn't leave it, and an
- * import wrote the note with Storage.createNote, outside the kernel. Each test holds
+ * and note menu work as they do once the tab has started. Before, a click in that window,
+ * before the later controllers existed, ran App's own copy of their code, now removed, or
+ * threw: Focus mode set App's copy of the state, which ShortcutsManager never read, so
+ * Escape didn't leave it, an import wrote the note with Storage.createNote, outside the
+ * kernel, and Move to trash threw on the missing NotesManager. Each test holds
  * SettingsController's init, which runs after the sidebar's, so the window stays open, and
  * fails on an uncaught exception that test/known-defects.json doesn't list.
  */
@@ -87,5 +88,17 @@ test('Import, clicked in the sidebar while the new tab starts, makes the note th
   await release(page);
   await driver.waitForApp(page);
   expect(await driver.listedNoteNames(page)).toContain('Window note');
+  await expectNoUncaught(extension, page);
+});
+
+test("Move to trash, from a note's menu while the new tab starts, moves the note to trash", async ({ extension }) => {
+  const page = await openHeld(extension);
+  await driver.openNoteMenu(page, 'Alpha');
+  await page.locator('#ctx-delete-note').click();
+  await expect(page.locator('.toast.success').last()).toHaveText('Note moved to trash');
+
+  await release(page);
+  await driver.waitForApp(page);
+  await expect.poll(() => driver.listedNoteNames(page)).toEqual(['Beta']);
   await expectNoUncaught(extension, page);
 });
