@@ -7,7 +7,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, FakeDocument } = require('./helpers/legacy-env');
+const { createLegacyEnv, FakeDocument, settingsOf } = require('./helpers/legacy-env');
 
 const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
 
@@ -25,8 +25,7 @@ async function settingsPage(provider, { slow = [] } = {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   env.global.ResizablePanel = class {};
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
-  const storage = env.get('Storage');
-  await storage.init();
+  const storage = settingsOf(env);
   await storage.setSetting('llmProvider', provider);
   const llm = env.get('LLM');
   await llm.init();
@@ -47,7 +46,7 @@ async function settingsPage(provider, { slow = [] } = {}) {
     return [{ id: `${listed}-model`, name: `${listed}-model` }];
   };
   const AIChatController = env.get('AIChatController');
-  const chat = new AIChatController({ storage, domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
+  const chat = new AIChatController({ domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
   chat.updateLLMSettingsVisibility = () => {};
   chat.updateAISidebarState = () => {};
   chat.setupLLMSettings();

@@ -15,7 +15,8 @@ const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient, watchTransactions,
+  createLegacyEnv, createDatabase, dumpDatabase, note, block, plain, FakeDocument, startEditorClient, startNewTabKernel,
+  watchTransactions, settingsOf,
 } = require('./helpers/legacy-env');
 const { loadBackground } = require('./helpers/load-background');
 
@@ -518,9 +519,7 @@ async function page() {
     },
   });
   env.load(...PAGE_FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
-  return { env, Storage };
+  return { env };
 }
 
 /** A logger with only the level methods, and `event` when events are given */
@@ -562,10 +561,11 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
    * that fails as `fail` makes it
    */
   async function failedBackup(events, fail = ({ env }) => env.chrome.failNextSet(canaryError())) {
-    const { env, Storage } = await page();
-    await Storage.setSetting('autoBackupEnabled', true);
-    // The page's settings port, which runs the auto-backup command (#12 slice 6)
-    await startEditorClient(env);
+    const { env } = await page();
+    await settingsOf(env).setSetting('autoBackupEnabled', true);
+    // The page's settings port, which runs the auto-backup command (#12 slice 6), on the root's
+    // own host, whose settings area is the one the backup tasks write and prune with
+    await startNewTabKernel(env);
     const SettingsController = env.get('SettingsController');
     const settings = new SettingsController({
       settings: env.settingsClient,
@@ -574,10 +574,10 @@ describe('auto-backup reports a failed backup (js/controllers/settings-controlle
       domRefs: null,
       logger: loggerWith(events),
     });
-    fail({ env, Storage });
+    fail({ env });
     await settings.checkBackupStatus();
     if (events) await events.flush();
-    return { env, Storage };
+    return { env };
   }
 
   it('is a backup.auto-failed event and data-risk incident, with no canary', async () => {
@@ -662,12 +662,14 @@ describe("the indexer's start reports a worker that won't start (js/controllers/
   }
 
   async function manager(events, options) {
-    const { env, Storage } = await page();
+    const { env } = await page();
+    // The page's kernel, whose search index handle App gives NotesManager (#17 PR 4b)
+    await startEditorClient(env);
     const made = fakeWorkers(env, options);
     const NotesManager = env.get('NotesManager');
     // App hands NotesManager the composition root's starter (js/kernel/composition/workers.js)
     const startIndexer = () => new env.global.Worker('js/workers/indexer.js', { type: 'module' });
-    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
+    const notes = new NotesManager({ storage: env.stores.searchIndex, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     notes.initIndexer();
     await new Promise(resolve => setImmediate(resolve));
     return { env, notes, made };
@@ -802,7 +804,10 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
   const eventsOver = host => trust.createFailureEvents({ surface: 'newtab', host: () => host });
 
   it("the indexer's first INDEX_COMPLETE is an indexer.started event, which resolves an earlier start failure", async () => {
-    const { env, Storage } = await page();
+    const { env } = await page();
+    // The page's kernel, whose search index handle App gives NotesManager (#17 PR 4b)
+    await startEditorClient(env);
+    const searchIndex = env.stores.searchIndex;
     const host = trustHost();
     const events = eventsOver(host);
     const made = [];
@@ -819,14 +824,14 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
     const NotesManager = env.get('NotesManager');
     // The composition root hands NotesManager the indexer's starter (js/kernel/composition/workers.js)
     const startIndexer = () => new env.global.Worker('js/workers/indexer.js', { type: 'module' });
-    const notes = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
+    const notes = new NotesManager({ storage: searchIndex, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     notes.initIndexer();
     made[0].onerror({ message: MESSAGE, error: canaryError('SyntaxError') });
     await events.flush();
     let seen = await inspect(host.indexedDB, host.settings.items);
     assert.deepEqual(incidentsOf(seen.incidents), [['index', 'indexer-start-failed', null, 'degraded', 1]]);
     // Another tab's indexer starts and answers: a later success at the same site
-    const later = new NotesManager({ storage: Storage, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
+    const later = new NotesManager({ storage: searchIndex, domRefs: null, logger: loggerWith(events), llm: null, startIndexer });
     later.initIndexer();
     await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
     await made[1].onmessage({ data: { type: 'INDEX_COMPLETE', data: [] } });
@@ -841,11 +846,12 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
   });
 
   it('a backup that saves after one that failed is a backup.auto-succeeded event, which resolves it', async () => {
-    const { env, Storage } = await page();
+    const { env } = await page();
     const host = trustHost();
     const events = eventsOver(host);
-    await Storage.setSetting('autoBackupEnabled', true);
-    await startEditorClient(env);
+    await settingsOf(env).setSetting('autoBackupEnabled', true);
+    // On the root's own host, as failedBackup's are
+    await startNewTabKernel(env);
     const SettingsController = env.get('SettingsController');
     const settings = new SettingsController({
       settings: env.settingsClient,
