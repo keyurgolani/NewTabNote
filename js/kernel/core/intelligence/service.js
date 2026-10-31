@@ -116,10 +116,10 @@ import { addLocalDays, isTimeZone, startOfLocalDay } from './time.js';
 /**
  * The note-command port: the one way the domain changes a note, a todo block's `checked`.
  * It answers #12's outcome. `expectedRevision` is the revision the signal read its anchor at,
- * so a note that changed since conflicts. `sourceStates` says for each source a new signal
+ * so a note that changed since conflicts. The domain never sends one without it. `sourceStates` says for each source a new signal
  * cites whether its note and block are there and available, so an upsert never cites what's
  * gone or misses what's trashed; one it can't answer refuses the upsert.
- * @typedef {{commandId: string, noteId: string, blockId: string, checked: boolean, expectedRevision: number | null}} NoteCommand
+ * @typedef {{commandId: string, noteId: string, blockId: string, checked: boolean, expectedRevision: number}} NoteCommand
  * @typedef {'available' | 'missing' | 'note-trashed' | 'note-archived' | 'template'} SourceState
  * @typedef {object} NoteCommandPort
  * @property {(command: NoteCommand) => Promise<Outcome>} setTodoChecked
@@ -438,19 +438,19 @@ export function createIntelligence({
         };
         const signal = tx.signal(command.signalId);
         // A retry of a task's complete or reopen whose note command went out sends that note
-        // command again, unchanged, so the note kernel answers it from its own record
+        // command again, unchanged, so the note kernel answers it from its own record. Not once
+        // another decision has committed since: the user decided after this command, so it's
+        // their decision that stands, and the retry gets the conflict a first send would
         const sent = tx.pendingNote(command.commandId);
         if (sent) {
           if (sent.fingerprint !== fingerprint) return { outcome: rejected('validation', 'idempotency-key-reuse') };
           if (!signal) return answer(rejected('not-found', 'signal-not-found'));
+          const current = decisionStateOf(signal, tx.decision(signal.id), now);
+          if (command.expectedDecisionRevision !== current.decisionRevision) {
+            return answer(signalConflict('signal-decision-conflict', current));
+          }
           return {
-            note: {
-              signal,
-              checked: sent.noteCommand.checked,
-              current: decisionStateOf(signal, tx.decision(signal.id), now),
-              noteCommand: sent.noteCommand,
-              resent: true,
-            },
+            note: { signal, checked: sent.noteCommand.checked, current, noteCommand: sent.noteCommand, resent: true },
           };
         }
         if (!signal) return answer(rejected('not-found', 'signal-not-found'));
@@ -467,6 +467,11 @@ export function createIntelligence({
           return answer(signalConflict('signal-decision-conflict', current));
         }
         if (isObjectiveTask(signal) && (action === 'complete' || (action === 'reopen' && signal.checked === true))) {
+          // A note command with no revision to expect would overwrite the block whatever the
+          // user did to it since, so a signal that never recorded its anchor's revision can't
+          // send one. A re-derive that reads the revision makes the task actionable again.
+          const expectedRevision = anchorRevisionOf(signal);
+          if (expectedRevision === null) return answer(rejected('validation', 'anchor-revision-unknown'));
           const anchorBlockId = /** @type {string} */ (signal.identity.anchorBlockId);
           /** @type {NoteCommand} */
           const noteCommand = {
@@ -474,7 +479,7 @@ export function createIntelligence({
             noteId: signal.identity.noteId,
             blockId: anchorBlockId,
             checked: action === 'complete',
-            expectedRevision: anchorRevisionOf(signal),
+            expectedRevision,
           };
           tx.keepPendingNote(command.commandId, { fingerprint, noteCommand });
           return { note: { signal, checked: noteCommand.checked, current, noteCommand, resent: false } };
