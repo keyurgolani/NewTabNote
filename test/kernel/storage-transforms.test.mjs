@@ -114,6 +114,8 @@ const CASES = Object.freeze({
   'x-daily': {
     note: legacyNote('x-daily', { name: 'Daily Note - Oct 9, 2025', isDaily: true, dateStr: '2025-10-09' }),
     group: { placement: { kind: 'daily', dateKey: '2025-10-09' }, kind: 'note', lifecycle: 'active' },
+    // Logical 3's key (#17 PR 3b): made during its UTC date, so it keeps it
+    daily: { dailyKey: '2025-10-09', dailyTimeZone: null, dailyDuplicateOf: null },
   },
   'x-undated': {
     note: legacyNote('x-undated', { name: 'Daily', isDaily: true, dateStr: null }),
@@ -270,14 +272,20 @@ async function withCommands(of, body, clock = later) {
 }
 
 /**
- * The note as logical 2 leaves it: its group, and its filled updatedAt, over what it was
+ * The note as logical 2 and 3 leave it: its group, its filled updatedAt, and a Daily Note's key,
+ * over what it was
  * @param {Record<string, any>} before
  * @returns {Record<string, any>}
  */
 function filledNote(before) {
-  const one = Object.values(CASES).find(({ note }) => note.id === before.id);
+  const one = /** @type {any} */ (Object.values(CASES).find(({ note }) => note.id === before.id));
   if (one) {
-    return { ...before, ...one.group, ...('updatedAt' in one ? { updatedAt: one.updatedAt } : {}) };
+    return {
+      ...before,
+      ...one.group,
+      ...('updatedAt' in one ? { updatedAt: one.updatedAt } : {}),
+      ...(one.daily || {}),
+    };
   }
   return { ...before, .../** @type {Record<string, any>} */ (BASIC_GROUPS)[before.name] };
 }
@@ -288,13 +296,18 @@ describe('logical 2 (#17 PR 3a)', () => {
     const before = await dump(of);
     const notes = await notesIn(of);
     const outcome = await transform(of, { clock: later });
+    // Logical 2 fills all 14, and logical 3 keys the one Daily Note with a date
     assert.deepEqual(
       [outcome.status, outcome.steps, outcome.filled, outcome.failure],
-      ['transformed', ['logical-2'], 14, null],
+      ['transformed', ['logical-2', 'logical-3'], 15, null],
     );
     const after = await notesIn(of);
     assert.deepEqual(Object.keys(after).sort(), Object.keys(notes).sort());
     for (const [id, note] of Object.entries(notes)) assert.deepEqual(after[id], filledNote(note), id);
+    assert.deepEqual(
+      recordsIn(await dump(of), 'CanvasTabDB', 'daily_index').map(({ value }) => value),
+      [{ dailyKey: '2025-10-09', noteId: 'x-daily' }],
+    );
     // No other store moves, blocks included, and no change entry or version
     const dumped = await dump(of);
     for (const store of [...UNTOUCHED, 'changes', 'operations', 'conflicts', 'tombstones']) {
@@ -308,7 +321,7 @@ describe('logical 2 (#17 PR 3a)', () => {
     const outcome = await transform(of, { clock: later });
     assert.equal(outcome.recoveryPointId, point.id, 'the run reused the run’s point');
     const meta = await metaIn(of);
-    assert.deepEqual(meta.schema, { key: 'schema', structuralVersion: 10, logicalVersion: 2 });
+    assert.deepEqual(meta.schema, { key: 'schema', structuralVersion: 11, logicalVersion: 3 });
     assert.equal(TRANSFORM_KEY in meta, false, 'no progress');
     const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-2');
     assert.deepEqual(receipt, {
@@ -321,6 +334,17 @@ describe('logical 2 (#17 PR 3a)', () => {
       recoveryPointId: point.id,
       failure: null,
       counts: { read: 14, filled: 14, staleFolder: 1, dailyWithoutDate: 1 },
+    });
+    assert.deepEqual((await receiptsIn(of)).find(found => found.id === 'logical-3'), {
+      id: 'logical-3',
+      from: 2,
+      to: 3,
+      status: 'completed',
+      startedAt: RUN_START,
+      completedAt: RUN_START,
+      recoveryPointId: point.id,
+      failure: null,
+      counts: { read: 14, filled: 1, rekeyed: 0, duplicates: 0 },
     });
     const settled = await dump(of);
     const again = await transform(of, { clock: later });
@@ -339,7 +363,8 @@ describe('logical 2 (#17 PR 3a)', () => {
     tx.objectStore('canvases').put(legacyNote('x-moved', { name: 'Moved at 10', placementVersion: 2 }, ['updatedAt']));
     await committed(tx);
     db.close();
-    assert.equal((await run(of)).status, 'current');
+    // Step 11 takes it from 10 (#17 PR 3b)
+    assert.equal((await run(of)).status, 'migrated');
     const notes = await notesIn(of);
     const outcome = await transform(of, { clock: later });
     assert.equal(outcome.status, 'transformed');
@@ -669,28 +694,33 @@ describe('batches, yields, and the commits between them', () => {
       },
     });
     assert.equal(outcome.status, 'transformed');
-    // 14 notes, 3 at a time: five batches, and a yield between each two
-    assert.equal(progress.length, 5);
-    assert.equal(yields, 4);
+    // 14 notes, 3 at a time: five batches a step, logical 2's then logical 3's, and a yield
+    // between each two of a step
+    const steps = progress.map(record => record.id);
+    assert.deepEqual(steps, [...Array(5).fill('logical-2'), ...Array(5).fill('logical-3')]);
+    assert.equal(yields, 8);
     const ids = Object.keys(await notesIn(of)).sort();
+    for (const id of ['logical-2', 'logical-3']) {
+      assert.deepEqual(
+        progress.filter(record => record.id === id).map(record => [record.after, record.counts.read]),
+        [
+          [ids[2], 3],
+          [ids[5], 6],
+          [ids[8], 9],
+          [ids[11], 12],
+          [ids[13], 14],
+        ],
+        id,
+      );
+    }
     assert.deepEqual(
-      progress.map(record => [record.after, record.counts.read]),
-      [
-        [ids[2], 3],
-        [ids[5], 6],
-        [ids[8], 9],
-        [ids[11], 12],
-        [ids[13], 14],
-      ],
-    );
-    assert.deepEqual(
-      progress.map(record => [record.id, record.recoveryPointId, record.startedAt]),
-      progress.map(() => ['logical-2', outcome.recoveryPointId, RUN_START]),
+      progress.map(record => [record.recoveryPointId, record.startedAt]),
+      progress.map(() => [outcome.recoveryPointId, RUN_START]),
     );
     const batches = of.faults.transactions.filter(
       opened => opened.mode === 'readwrite' && opened.names.includes('canvases') && opened.names.includes('meta'),
     );
-    assert.equal(batches.length, 5);
+    assert.equal(batches.length, 10);
     for (const batch of batches) assert.equal(batch.durability, 'strict');
   });
 
@@ -707,7 +737,7 @@ describe('batches, yields, and the commits between them', () => {
       },
     });
     assert.equal(outcome.status, 'transformed');
-    assert.equal(batches, 14, 'one note a batch');
+    assert.equal(batches, 28, 'one note a batch, for each of the two steps');
     for (const note of Object.values(await notesIn(of))) assert.ok(note.placement, note.id);
   });
 
@@ -764,7 +794,7 @@ describe('batches, yields, and the commits between them', () => {
     release();
     await reading;
     assert.equal((await running).status, 'transformed');
-    assert.equal((await metaIn(of)).schema.logicalVersion, 2);
+    assert.equal((await metaIn(of)).schema.logicalVersion, 3);
   });
 });
 
@@ -805,18 +835,22 @@ describe('cut off, and run again', () => {
       assert.equal(first.status, 'failed', `${at}: ${cut.reached.labels.at(-1)}`);
       const second = await transform(of, { clock: later, limits });
       const label = `cut at ${at} (${cut.reached.labels.at(-1)})`;
-      // Cut after the step's receipt went in, there's nothing left to do
-      assert.equal(second.status, cut.reached.labels.at(-1) === 'step-done' ? 'current' : 'transformed', label);
+      // Cut after the last step's receipt went in, there's nothing left to do
+      const finished = cut.reached.labels.filter(found => found === 'step-done').length === 2;
+      assert.equal(second.status, finished ? 'current' : 'transformed', label);
       assert.deepEqual(await ended(of), target, label);
       const points = await pointsIn(of);
       assert.ok(
         points.every(point => point.status === 'verified' && point.verifies),
         label,
       );
-      const own = points.filter(point => point.logicalTarget === 2);
+      const own = points.filter(point => point.logicalTarget === 3);
       assert.equal(own.length, 1, label);
-      const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-2');
-      assert.equal(receipt.recoveryPointId, own[0].id, label);
+      // Both steps' receipts name it, a cut between the two included
+      for (const id of ['logical-2', 'logical-3']) {
+        const receipt = (await receiptsIn(of)).find(found => found.id === id);
+        assert.equal(receipt.recoveryPointId, own[0].id, `${label}: ${id}`);
+      }
       // The point holds the notes as the transform found them: the renamed one, without a group
       const file = await exportPoint({
         indexedDB: of.real,
@@ -863,8 +897,8 @@ describe('its recovery point (Q9)', () => {
         point.verifies,
       ]),
       [
-        [pinned.id, true, 10, null, 'verified', true],
-        [outcome.recoveryPointId, false, null, 2, 'verified', true],
+        [pinned.id, true, 11, null, 'verified', true],
+        [outcome.recoveryPointId, false, null, 3, 'verified', true],
       ],
     );
     // It holds the notes before the transform: the pin, and no group
@@ -896,7 +930,7 @@ describe('its recovery point (Q9)', () => {
       status: 'space-blocked',
       code: 'space-short',
       at: RUN_START,
-      target: 2,
+      target: 3,
     });
     assert.equal(meta.schema.logicalVersion, 1);
     assert.deepEqual(
@@ -919,7 +953,7 @@ describe('its recovery point (Q9)', () => {
     const ran = await transform(of, { clock: { now: () => RUN_START + TRANSFORM_RETRY_AFTER_MS } });
     assert.equal(ran.status, 'transformed');
     assert.equal(TRANSFORM_STOP_KEY in (await metaIn(of)), false);
-    assert.equal((await metaIn(of)).schema.logicalVersion, 2);
+    assert.equal((await metaIn(of)).schema.logicalVersion, 3);
   });
 
   it('a disk that fills during the copy drops the partial point, and the run stops as short of space', async () => {
@@ -931,7 +965,7 @@ describe('its recovery point (Q9)', () => {
     assert.deepEqual([outcome.status, outcome.failure], ['space-blocked', { code: 'quota' }]);
     assert.deepEqual(
       (await pointsIn(of)).map(point => point.target),
-      [10],
+      [11],
       'only the run’s point',
     );
     assert.equal((await metaIn(of))[TRANSFORM_STOP_KEY]?.code, 'quota');
@@ -940,7 +974,7 @@ describe('its recovery point (Q9)', () => {
   it('with nothing to fill, it writes its receipt without a point, and makes no recovery database', async () => {
     const of = newProfile();
     assert.equal((await run(of)).status, 'migrated');
-    // Notes the kernel made carry their group already
+    // Notes the kernel made carry their group already, and a Daily Note its key
     await withCommands(of, async send => {
       await send({ type: 'createNote', noteId: 'n1', name: 'Plan' });
       await send({ type: 'ensureDailyNote', noteId: 'd1' });
@@ -948,24 +982,30 @@ describe('its recovery point (Q9)', () => {
     const outcome = await transform(of, { clock: later });
     assert.deepEqual(
       [outcome.status, outcome.steps, outcome.filled, outcome.recoveryPointId],
-      ['transformed', ['logical-2'], 0, null],
+      ['transformed', ['logical-2', 'logical-3'], 0, null],
     );
-    const receipt = (await receiptsIn(of)).find(found => found.id === 'logical-2');
+    const receipts = await receiptsIn(of);
     assert.deepEqual(
-      [receipt.recoveryPointId, receipt.counts],
-      [null, { read: 2, filled: 0, staleFolder: 0, dailyWithoutDate: 0 }],
+      ['logical-2', 'logical-3'].map(id => {
+        const receipt = receipts.find(found => found.id === id);
+        return [receipt.recoveryPointId, receipt.counts];
+      }),
+      [
+        [null, { read: 2, filled: 0, staleFolder: 0, dailyWithoutDate: 0 }],
+        [null, { read: 2, filled: 0, rekeyed: 0, duplicates: 0 }],
+      ],
     );
-    assert.equal((await metaIn(of)).schema.logicalVersion, 2);
+    assert.equal((await metaIn(of)).schema.logicalVersion, 3);
     const names = (await dump(of)).databases.map(db => db.name);
     assert.equal(names.includes(RECOVERY_DB_NAME), false);
   });
 });
 
 describe("the point's export after the transform (#17 PR 3a, Q8)", () => {
-  it('writes every note as 1.4.1 stores one, without the group, from a point taken after it', async () => {
+  it("writes every note as 1.4.1 stores one, without the group or a Daily Note's key, from a point taken after it", async () => {
     const of = await upgraded();
     assert.equal((await transform(of, { clock: later })).status, 'transformed');
-    // A point a later run takes, as #17 PR 3b's step 11 will, holds the filled notes
+    // A point a later run takes, as a later build's step past 11 will, holds the filled notes
     const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, DB_NAME));
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     try {
@@ -974,9 +1014,9 @@ describe("the point's export after the transform (#17 PR 3a, Q8)", () => {
         kind: 'pre-migration',
         sourceShape: 'current',
         sourceVersion: source.version,
-        structuralVersion: 10,
-        logicalVersion: 2,
-        target: 11,
+        structuralVersion: 11,
+        logicalVersion: 3,
+        target: 12,
         stores: storesToCopy(source),
         createdAt: RUN_START + 1,
       });

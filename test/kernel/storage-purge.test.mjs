@@ -255,6 +255,7 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
     assert.deepEqual(Object.keys(OWNERS).sort(), [
       'canvases',
       'conflicts',
+      'daily_index',
       'elements',
       'folders',
       'links',
@@ -384,7 +385,7 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
 
   it('purges every point, the pinned one and a later one, and leaves every other row as it was', async () => {
     const { of, notes } = await deletedProfile({ deleteIt: false });
-    // A second verified point beside the pinned one, as a 9 profile's update to 10 leaves
+    // A second verified point beside the pinned one, as a later build's update past 11 leaves
     const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     try {
@@ -393,9 +394,9 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
         kind: 'pre-migration',
         sourceShape: 'current',
         sourceVersion: source.version,
-        structuralVersion: 10,
+        structuralVersion: 11,
         logicalVersion: 1,
-        target: 11,
+        target: 12,
         stores: storesToCopy(source),
         createdAt: NOW + 1,
       });
@@ -562,9 +563,9 @@ describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, rev
         kind: 'pre-migration',
         sourceShape: 'current',
         sourceVersion: source.version,
-        structuralVersion: 10,
+        structuralVersion: 11,
         logicalVersion: 1,
-        target: 11,
+        target: 12,
         stores: storesToCopy(source),
         createdAt,
       });

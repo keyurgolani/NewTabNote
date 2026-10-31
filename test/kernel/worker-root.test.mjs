@@ -80,13 +80,13 @@ const RUN_BLOCKS = Object.freeze({ withinMs: 10_000, message: "the run's upgrade
 
 describe("the worker's composition root", () => {
   it("sweeps the adapter's ledger once its kernel is ready, and not again within a day (#17 PR 2a)", async () => {
-    // v10.basic's ledger rows are from 2025, past the 30 days a row is kept
+    // v10.basic's ledger rows are from 2025, past the 30 days a row is kept; its run takes it to 11
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v10.basic')));
     assert.equal((await recordsOf(of, 'operations')).length, 3);
     const swept = async () => (await recordsOf(of, 'meta')).find(record => record.key === SWEPT_KEY);
     const worker = createWorkerClient(hostOf(of));
     assert.equal(await worker.whenReady(), null);
-    assert.equal((await worker.migration.done).status, 'current');
+    assert.equal((await worker.migration.done).status, 'migrated');
     // The sweep runs behind the kernel, so the test waits on it in real time
     const deadline = Date.now() + 10_000;
     while (!(await swept()) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
@@ -702,8 +702,9 @@ describe("the worker's data transforms (#17 PR 3a)", () => {
     assert.equal(await worker.whenReady(), null);
     assert.equal((await worker.transforms.done)?.status, 'transformed');
     assert.equal((await worker.purge.done)?.status, 'nothing');
-    assert.deepEqual(released, [1, 2, 2]);
-    assert.deepEqual(await state(of), { logicalVersion: 2, grouped: true });
+    // The transforms take it through logical 2 and 3 (#17 PR 3b) in one run
+    assert.deepEqual(released, [1, 3, 3]);
+    assert.deepEqual(await state(of), { logicalVersion: 3, grouped: true });
     // The keepalive spans each: the run, the transforms, and the sweep
     assert.equal(kept, 3);
     await legacyEnv.waitFor(() => base.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
@@ -713,7 +714,7 @@ describe("the worker's data transforms (#17 PR 3a)", () => {
     assert.equal((await next.transforms.done)?.status, 'current');
   });
 
-  it('on a database the run left below 10 it runs none, and reads nothing for them', async () => {
+  it('on a database the run left below 11 it runs none, and reads nothing for them', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
     assert.equal((await worker.migration.done).status, 'space-blocked');
