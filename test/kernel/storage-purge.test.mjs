@@ -20,6 +20,7 @@ import {
   ROWS_STORE,
   committed,
   copyPoint,
+  discardPoint,
   keepVerified,
   listPoints,
   openRecovery,
@@ -31,6 +32,7 @@ import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
+  DELETED_AT,
   KeyRange,
   dump,
   killAt,
@@ -50,6 +52,8 @@ import { CALLERS, NOW } from './support.mjs';
 const crypto = /** @type {any} */ (webcrypto);
 const FIXTURES = synthesized();
 const clock = { now: () => NOW };
+/** A minute after the run's point: when the notes here are deleted, and the sweeps run */
+const later = { now: () => DELETED_AT };
 const io = { keyRange: KeyRange, crypto, limits: DEFAULT_LIMITS };
 const DOOMED = 'doomed-note';
 
@@ -110,13 +114,13 @@ async function deleteNote(of, noteId) {
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
-    clock,
+    clock: later,
   });
   await adapter.open();
   try {
     let count = 0;
     const ids = { next: () => `purge-${noteId}-${(count += 1)}` };
-    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
     assert.equal(
       (await kernel.execute(/** @type {any} */ ({ type: 'trashNote', commandId: ids.next(), noteId }))).kind,
       'committed',
@@ -141,7 +145,7 @@ const purge = (of, options = {}) =>
     keyRange: KeyRange,
     locks: legacyEnv.createLockManager(),
     crypto,
-    clock,
+    clock: later,
     logger: { warn: (event, detail) => of.logs.push({ event, detail }) },
     ...options,
   });
@@ -495,7 +499,14 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
   it('with nothing pending, or no database, it does nothing, and without Web Locks it purges nothing', async () => {
     const { of } = await deletedProfile({ deleteIt: false });
     const before = await dump(of);
-    assert.deepEqual(await purge(of), { status: 'nothing', tombstones: 0, rows: 0, failure: null });
+    assert.deepEqual(await purge(of), {
+      status: 'nothing',
+      tombstones: 0,
+      rows: 0,
+      failure: null,
+      backedOff: false,
+      cleared: [],
+    });
     assert.deepStrictEqual(await dump(of), before);
     const none = newProfile();
     const nothing = await purgeRecoveryPoints({
@@ -531,5 +542,202 @@ describe('the recovery-point purge (#17 PR 2b)', () => {
     assert.equal((await points(of))[0].manifest.canvases.purged.length, 0);
     assert.equal((await purge(of)).status, 'purged');
     assert.deepEqual(await rowsOfNote(of, DOOMED), []);
+  });
+});
+
+describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, review R93)', () => {
+  /**
+   * A verified point made at `createdAt` beside the ones there are, as a run after a later
+   * update makes one
+   * @param {Profile} of
+   * @param {number} createdAt
+   * @returns {Promise<string>} its id
+   */
+  async function laterPoint(of, createdAt) {
+    const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.real, 'CanvasTabDB'));
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    try {
+      const { point, progress } = await startPoint(recovery, {
+        id: `pre-migration-${createdAt}`,
+        kind: 'pre-migration',
+        sourceShape: 'current',
+        sourceVersion: source.version,
+        structuralVersion: 10,
+        logicalVersion: 1,
+        target: 11,
+        stores: storesToCopy(source),
+        createdAt,
+      });
+      await copyPoint({ source, recovery, point, progress, io });
+      const stored = /** @type {Point} */ ((await listPoints(recovery)).find(candidate => candidate.id === point.id));
+      assert.deepEqual(await verifyPoint({ recovery, point: stored, io }), { ok: true });
+      await keepVerified({ recovery, point: stored, clock: { now: () => createdAt }, io });
+      return stored.id;
+    } finally {
+      source.close();
+      recovery.close();
+    }
+  }
+
+  /**
+   * Commands on #17's adapter at `at`, as a page sends them
+   * @param {Profile} of
+   * @param {number} at
+   * @param {Array<Record<string, unknown>>} commands
+   */
+  async function sendAt(of, at, commands) {
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.faults.factory,
+      settings: of.chrome.api.storage.local,
+      keyRange: KeyRange,
+      clock: { now: () => at },
+    });
+    await adapter.open();
+    try {
+      let count = 0;
+      const ids = { next: () => `sent-${at}-${(count += 1)}` };
+      const kernel = createKernel({
+        adapter,
+        policy: createBaselinePolicy(),
+        caller: CALLERS.newtab,
+        ids,
+        clock: { now: () => at },
+      });
+      for (const command of commands) {
+        const sent = await kernel.execute(/** @type {any} */ ({ commandId: ids.next(), ...command }));
+        assert.equal(sent.kind, 'committed', JSON.stringify(sent));
+      }
+    } finally {
+      adapter.close();
+    }
+  }
+
+  /**
+   * The keys of `noteId`'s rows in one point, by store
+   * @param {Profile} of
+   * @param {string} pointId
+   * @param {string} noteId
+   */
+  const heldBy = async (of, pointId, noteId) =>
+    (await rowsOfNote(of, noteId)).filter(row => row.startsWith(`${pointId} `));
+
+  /** The readonly transactions on NewTabNoteRecovery's rows since `from` */
+  const rowReads = (/** @type {Profile} */ of, /** @type {number} */ from) =>
+    of.faults.transactions.slice(from).filter(tx => tx.names.includes(ROWS_STORE) && tx.mode === 'readonly').length;
+
+  /** The recorded stop in `meta`, or null */
+  const recordedStop = async (/** @type {Profile} */ of) => {
+    const [stop] = recordsIn(await dump(of), 'CanvasTabDB', 'meta').filter(record => record.key === 'purge-stop');
+    return stop ? stop.value : null;
+  };
+
+  it('takes from a point only what deletes after it was made took, so a note made again since keeps its rows', async () => {
+    // Deleted a minute after the run's point, then made again under its id, as #17's adapter
+    // allows, and a point made after that, all before a sweep
+    const { of } = await deletedProfile();
+    await sendAt(of, DELETED_AT + 1000, [
+      {
+        type: 'createNote',
+        noteId: DOOMED,
+        name: 'Made again',
+        blocks: [{ id: 'again-b1', type: 'text', content: 'Live again', order: 0 }],
+      },
+    ]);
+    const later = await laterPoint(of, DELETED_AT + 2000);
+    const [pinned] = (await points(of)).filter(point => point.pinned);
+    const before = await heldBy(of, later, DOOMED);
+    assert.deepEqual(before.length > 0 && (await heldBy(of, pinned.id, DOOMED)).length > 0, true);
+
+    const purged = await purge(of);
+    assert.equal(purged.status, 'purged');
+    // The note, its three blocks, and its search entry, from the point made before the delete
+    assert.equal(purged.rows, 5);
+    assert.deepEqual(await heldBy(of, pinned.id, DOOMED), []);
+    assert.deepEqual(await heldBy(of, later, DOOMED), before);
+    assert.deepEqual(await allVerify(of), [{ ok: true }, { ok: true }]);
+    assert.deepEqual(await pendingOf(of), { [DOOMED]: null });
+  });
+
+  it('reads no point whole for a note no point holds', async () => {
+    const { of } = await deletedProfile({ deleteIt: false });
+    // A note made after the run's point, then deleted for good
+    await sendAt(of, DELETED_AT, [
+      {
+        type: 'createNote',
+        noteId: 'made-after',
+        name: 'Made after',
+        blocks: [{ id: 'after-b1', type: 'text', content: 'x', order: 0 }],
+      },
+      { type: 'trashNote', noteId: 'made-after' },
+      { type: 'deleteNotePermanently', noteId: 'made-after' },
+    ]);
+    /** @type {string[]} */
+    const labels = [];
+    const purged = await purge(of, { hooks: { between: label => void labels.push(label) } });
+    assert.deepEqual([purged.status, purged.rows], ['purged', 0]);
+    assert.ok(labels.includes('point-matched'));
+    assert.equal(labels.includes('point-verified'), false, 'it verified a point that holds nothing to purge');
+    assert.deepEqual(await pendingOf(of), { 'made-after': null });
+  });
+
+  it("records a point that doesn't verify, backs off reading no row until the points change, and clears it once the point goes", async () => {
+    const { of } = await deletedProfile();
+    const [pinned] = await points(of);
+    // One of the point's rows of a note that stays no longer matches its hash
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    try {
+      const tx = recovery.transaction(ROWS_STORE, 'readwrite');
+      const rows = tx.objectStore(ROWS_STORE);
+      const range = KeyRange.bound([pinned.id, 'canvases'], [pinned.id, 'canvases\u0000'], false, true);
+      const all = /** @type {any[]} */ (await done(rows.getAll(range)));
+      const kept = /** @type {any} */ (all.find(row => row.key !== DOOMED));
+      rows.put({ ...kept, value: { ...kept.value, name: 'Bit rot' } });
+      await committed(tx);
+    } finally {
+      recovery.close();
+    }
+
+    const first = await purge(of);
+    assert.deepEqual(
+      [first.status, first.failure, first.backedOff, first.cleared],
+      ['stopped', { code: 'record-mismatch', pointId: pinned.id }, false, []],
+    );
+    const stop = await recordedStop(of);
+    assert.deepEqual(
+      [stop?.pointId, stop?.code, stop?.at, stop?.points],
+      [pinned.id, 'record-mismatch', DELETED_AT, `${pinned.id}:verified`],
+    );
+
+    // Each later sweep, a wake's or a start's, backs off at once
+    for (let n = 0; n < 2; n++) {
+      const from = of.faults.transactions.length;
+      const again = await purge(of);
+      assert.deepEqual(
+        [again.status, again.failure, again.backedOff],
+        ['stopped', { code: 'record-mismatch', pointId: pinned.id }, true],
+      );
+      assert.equal(rowReads(of, from), 0, 'a sweep that backs off read the point');
+    }
+    assert.deepEqual(await pendingOf(of), { [DOOMED]: 'pending' });
+
+    // A point made since: the points changed, so the next sweep reads them, and stops again
+    const later = await laterPoint(of, DELETED_AT + 1000);
+    const from = of.faults.transactions.length;
+    const third = await purge(of);
+    assert.deepEqual([third.status, third.backedOff, third.cleared], ['stopped', false, []]);
+    assert.ok(rowReads(of, from) > 0);
+    assert.equal((await recordedStop(of))?.points, [`${later}:verified`, `${pinned.id}:verified`].sort().join(','));
+
+    // The damaged point dropped: the next sweep finishes, and ends the stop it recorded
+    const store = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
+    try {
+      await discardPoint(store, pinned.id, io);
+    } finally {
+      store.close();
+    }
+    const fourth = await purge(of);
+    assert.deepEqual([fourth.status, fourth.backedOff, fourth.cleared], ['purged', false, [pinned.id]]);
+    assert.equal(await recordedStop(of), null);
+    assert.deepEqual(await pendingOf(of), { [DOOMED]: null });
   });
 });

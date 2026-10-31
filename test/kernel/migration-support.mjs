@@ -177,9 +177,15 @@ export async function writeHistory(of) {
 }
 
 /**
+ * When these tests delete for good: a minute after the upgrade's point, which a run makes at
+ * NOW, since the purge takes from a point only what deletes after it was made took (purge.js)
+ */
+export const DELETED_AT = NOW + 60_000;
+
+/**
  * Deletes the profile's first note (by id) and its first folder for good on #17's adapter, as a
- * page would, then purges the recovery points of both, as the worker does (#17 PR 2b). Answers
- * their ids and the purge's outcome.
+ * page would, a minute after the run, then purges the recovery points of both, as the worker
+ * does (#17 PR 2b). Answers their ids and the purge's outcome.
  * @param {Profile} of
  * @returns {Promise<{noteId: string, folderId: string | null, purged: import('../../js/kernel/adapters/indexeddb/purge.js').PurgeOutcome}>}
  */
@@ -188,7 +194,7 @@ export async function deleteAndPurge(of) {
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
-    clock: { now: () => NOW },
+    clock: { now: () => DELETED_AT },
   });
   await adapter.open();
   /** @type {string} */
@@ -203,7 +209,7 @@ export async function deleteAndPurge(of) {
       policy: createBaselinePolicy(),
       caller: CALLERS.newtab,
       ids,
-      clock: { now: () => NOW },
+      clock: { now: () => DELETED_AT },
     });
     const notes = await tab.query({ type: 'listNotes', view: 'active' });
     const folders = await tab.query({ type: 'listFolders' });
@@ -225,7 +231,7 @@ export async function deleteAndPurge(of) {
     keyRange: KeyRange,
     locks: legacyEnv.createLockManager(),
     crypto: /** @type {any} */ (webcrypto),
-    clock: { now: () => NOW },
+    clock: { now: () => DELETED_AT },
     logger: { warn: (event, detail) => of.logs.push({ event, detail }) },
   });
   return { noteId, folderId, purged };

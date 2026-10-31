@@ -54,11 +54,21 @@ export const providerId = v.picklist(PROVIDER_IDS);
 /** A remediation's id, from the registered ones (codes.js) */
 export const remediationId = v.picklist(REMEDIATION_IDS);
 
-/** What an incident is about: a record's id, a named database, store, or permission, or a legacy copy's key */
+/**
+ * A #17 recovery point's id (recovery-points.js), as `next` has it since #20 slice 3:
+ * `pre-migration-1760000000000` or `pre-repair-1760000000000-2`
+ */
+export const pointId = v.pipe(v.string(), v.regex(/^pre-(?:migration|repair)-[0-9]{10,16}(?:-[0-9]{1,3})?$/));
+
+/**
+ * What an incident is about: a record's id, a named database, store, or permission, a legacy
+ * copy's key, or a #17 recovery point's id
+ */
 export const subjectId = v.union([
   recordId,
   v.picklist(SUBJECT_NAMES),
   v.pipe(v.string(), v.regex(/^(?:auto|recovery)_backup_[0-9]{10,16}$/)),
+  pointId,
 ]);
 
 /** An Error's or DOMException's name, from the known ones, never its message */

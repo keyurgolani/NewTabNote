@@ -12,25 +12,32 @@
 // Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { MIGRATE_MESSAGE, PURGE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import {
+  MIGRATE_MESSAGE,
+  PURGE_MESSAGE,
+  createWorkerClient,
+  installWorkerRouter,
+  workerHost,
+} from './kernel/composition/background.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 
 /** When the worker started opening the database, for how long a failed open took */
 const openStartedAt = Date.now();
 
 /**
+ * The worker's failure events (#20, "Diagnostic journal"): a failed open, a failed capture, and
+ * a stopped recovery-point purge go to the diagnostic journal and raise their incidents in
+ * NewTabNoteTrust, which opens only when the first one happens. Best effort: nothing here
+ * changes what the worker does or logs.
+ */
+const failureEvents = createFailureEvents({ surface: 'worker-internal' });
+
+/**
  * The worker's kernel. It starts #17's migration run now, which upgrades the notes database
  * after a verified recovery point, then opens the database and runs startup maintenance, and a
  * capture waits for all of it, except while an older build's open page blocks the upgrade.
  */
-const kernel = createWorkerClient();
-
-/**
- * The worker's failure events (#20, "Diagnostic journal"): a failed open and a failed capture
- * go to the diagnostic journal and raise their incidents in NewTabNoteTrust, which opens only
- * when the first one happens. Best effort: nothing here changes what the worker does or logs.
- */
-const failureEvents = createFailureEvents({ surface: 'worker-internal' });
+const kernel = createWorkerClient({ ...workerHost(), events: failureEvents });
 
 // The worker's storage init: an open that failed is a storage incident now, not only when a
 // capture finds it
