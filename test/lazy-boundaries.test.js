@@ -294,6 +294,19 @@ describe('loadLibrary (js/runtime/lazy.js)', () => {
     assert.equal(calls.fetched.length, 1, 'and reads nothing');
   });
 
+  it("answers failed, and never rejects, when the library's URL can't be built because the extension's context is gone", async () => {
+    const { createLoader } = await lazy();
+    const { host, seen, calls } = scripted(['define']);
+    host.libraries = { chart: { url: () => { throw new TypeError('chrome.runtime.getURL is not a function'); }, global: 'Chart' } };
+    const loader = createLoader(host);
+    const result = await loader.loadLibrary('chart');
+    assert.equal(result.status, 'failed');
+    assert.equal(result.reason, 'chunk-missing');
+    assert.equal(typeof result.retry, 'function');
+    assert.deepEqual(seen, [], 'no script goes in');
+    assert.deepEqual(calls.warned.map(([message]) => message), ['NewTabNote loader: chunk-missing']);
+  });
+
   it("doesn't run a library under another build's build-info.json: it's build-mismatch before any script goes in", async () => {
     const { createLoader } = await lazy();
     const { host, seen, calls } = scripted(['define']);
@@ -412,29 +425,42 @@ describe('loadLibrary (js/runtime/lazy.js)', () => {
 });
 
 describe('the reload guards (js/runtime/lazy.js)', () => {
-  it('reloads once every guard has finished, a guard that fails included, and not before', async () => {
+  it('reloads once every guard answers that it saved, and not before', async () => {
     const { createLoader } = await lazy();
     const { host, calls } = fakeHost();
     const loader = createLoader(host);
     let finish;
     const order = [];
-    loader.registerReloadGuard(() => new Promise((resolve) => { finish = () => { order.push('flushed'); resolve(); }; }));
-    loader.registerReloadGuard(async () => { throw new Error('a guard that fails'); });
+    loader.registerReloadGuard(() => new Promise((resolve) => { finish = () => { order.push('flushed'); resolve(true); }; }));
+    loader.registerReloadGuard(() => true);
     const reloading = loader.reloadAfterGuards();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls.reloads, 0, 'it waits for the guard');
     finish();
-    await reloading;
+    assert.deepEqual(await reloading, { reloaded: true });
     assert.deepEqual(order, ['flushed']);
     assert.equal(calls.reloads, 1);
   });
 
-  it('runs no guard once it is unregistered, and reloads after its time limit when a guard never finishes', async () => {
+  it("doesn't reload when a guard answers that it failed, throws, or answers anything but true, and answers the failure", async () => {
+    const { createLoader } = await lazy();
+    for (const guard of [() => false, async () => { throw new Error('a guard that fails'); }, () => undefined, async () => 'saved']) {
+      const { host, calls } = fakeHost();
+      const loader = createLoader(host);
+      loader.registerReloadGuard(() => true);
+      loader.registerReloadGuard(guard);
+      assert.deepEqual(await loader.reloadAfterGuards(), { reloaded: false }, String(guard));
+      assert.equal(calls.reloads, 0, String(guard));
+    }
+  });
+
+  it("counts a guard that hasn't answered in 10 seconds as failed, and runs none once it is unregistered", async () => {
     const { createLoader, RELOAD_GUARD_MS } = await lazy();
+    assert.equal(RELOAD_GUARD_MS, 10_000);
     const { host, calls } = fakeHost();
     const loader = createLoader(host);
     let ran = 0;
-    const stop = loader.registerReloadGuard(() => { ran += 1; });
+    const stop = loader.registerReloadGuard(() => { ran += 1; return true; });
     stop();
     loader.registerReloadGuard(() => new Promise(() => {}));
     const reloading = loader.reloadAfterGuards();
@@ -442,19 +468,29 @@ describe('the reload guards (js/runtime/lazy.js)', () => {
     assert.equal(calls.reloads, 0, 'it waits for the guard');
     assert.deepEqual(calls.timers.map(({ ms }) => ms), [RELOAD_GUARD_MS]);
     calls.timers[0].fn();
-    await reloading;
+    assert.deepEqual(await reloading, { reloaded: false });
     assert.equal(ran, 0);
-    assert.equal(calls.reloads, 1);
+    assert.equal(calls.reloads, 0, 'no timer reloads over a guard still running');
   });
 
-  it('reloads once, however many ways it finishes', async () => {
+  it('answers once, however many ways it finishes', async () => {
     const { createLoader } = await lazy();
     const { host, calls } = fakeHost();
     const loader = createLoader(host);
-    const reloading = loader.reloadAfterGuards();
-    await reloading;
+    assert.deepEqual(await loader.reloadAfterGuards(), { reloaded: true }, 'no guards: nothing to save');
     calls.timers[0].fn();
     assert.equal(calls.reloads, 1);
+  });
+
+  it('reloadNow reloads without the guards, for "Reload anyway"', async () => {
+    const { createLoader } = await lazy();
+    const { host, calls } = fakeHost();
+    const loader = createLoader(host);
+    let ran = 0;
+    loader.registerReloadGuard(() => { ran += 1; return false; });
+    loader.reloadNow();
+    assert.equal(calls.reloads, 1);
+    assert.equal(ran, 0);
   });
 });
 
