@@ -10,6 +10,7 @@
 import { BULK_ACTIONS } from '../contracts/commands.js';
 import { isId, isIdList, isIdOrNull, isRecord } from '../contracts/checks.js';
 import { bulk, committed, conflict, empty, failed, ready, rejected } from '../contracts/outcomes.js';
+import { dailyHolder, holdsKey, withAssignedKey } from '../domain/daily.js';
 import {
   NOTE_VIEWS,
   blocksFromTemplate,
@@ -18,7 +19,6 @@ import {
   dailyNoteName,
   dailyNoteNameFor,
   expiredInTrash,
-  findDailyNoteFor,
   inBlockOrder,
   insertLinkText,
   isDateStr,
@@ -33,8 +33,9 @@ import {
   trashRetentionDays,
   wikiLinkNames,
 } from '../domain/note.js';
-import { withPlacementGroup } from '../domain/placement.js';
+import { isDateKey, withPlacementGroup } from '../domain/placement.js';
 import { newTombstone } from '../domain/tombstone.js';
+import { zoneOf } from '../ports/runtime.js';
 import { contentChanged, unitsWork } from './work.js';
 
 /** @typedef {import('../domain/note.js').NoteRecord} NoteRecord */
@@ -45,6 +46,7 @@ import { contentChanged, unitsWork } from './work.js';
 /** @typedef {import('../contracts/outcomes.js').BulkItem} BulkItem */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Tx} Tx */
+/** @typedef {import('../ports/repository.js').ReadTx} ReadTx */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../domain/tombstone.js').TombstoneReason} TombstoneReason */
 
@@ -152,7 +154,7 @@ function changeNote(noteId, change, expected = {}) {
 /**
  * The stores a note deleted for good is deleted from (#17 PR 2b): what
  * Storage.permanentlyDeleteNote deleted, and its search entry, links, conflict records, and
- * tombstone
+ * tombstone, and since #17 PR 3b its daily index entry
  */
 const DELETED_WITH_NOTE = /** @type {StoreName[]} */ ([
   'notes',
@@ -164,11 +166,12 @@ const DELETED_WITH_NOTE = /** @type {StoreName[]} */ ([
   'links',
   'conflicts',
   'tombstones',
+  'dailyIndex',
 ]);
 
 /**
- * Delete a note for good in `tx` (#17 PR 2b, Q16): every row it owns, its blocks, media,
- * vectors, snapshots, search entry, links both ways, and conflict records, then the note, and
+ * Delete a note for good in `tx` (#17 PR 2b, Q16): every row it owns, its daily index entry,
+ * blocks, media, vectors, snapshots, search entry, links both ways, and conflict records, then the note, and
  * its tombstone in the same transaction, which has the worker purge it from every recovery
  * point (adapters/indexeddb/purge.js). Nothing on screen reads a gone note's search entry or
  * links (the sidebar's search lists only listed notes, and backlinks and the graph skip notes
@@ -181,6 +184,12 @@ const DELETED_WITH_NOTE = /** @type {StoreName[]} */ ([
  * @returns {Promise<void>}
  */
 async function deleteNoteIn(tx, noteId, { reason, now, blocks }) {
+  // The daily index's entry for its date, when it names this note (#17 PR 3b)
+  const note = await tx.get('notes', noteId);
+  if (note && isDateKey(note.dailyKey)) {
+    const entry = await tx.get('dailyIndex', note.dailyKey);
+    if (entry && entry.noteId === noteId) tx.delete('dailyIndex', note.dailyKey);
+  }
   for (const block of blocks || (await tx.getAllByIndex('blocks', 'canvasId', noteId))) tx.delete('blocks', block.id);
   for (const key of await tx.getKeysByIndex('media', 'canvasId', noteId)) tx.delete('media', key);
   tx.delete('vectors', noteId);
@@ -319,22 +328,53 @@ function isCapture(value) {
 }
 
 /**
- * The Daily Note for `dateStr`, found or made in `tx`, which spans the notes store: the one
- * Storage.ensureDailyNote and ensureDailyNoteForDate would find, or else a new one with id
- * `noteId`, `isDaily`, and `dateStr` in one put. Two of these at once can't both make one,
- * since each transaction that writes the notes store waits for the one before it to finish,
- * and the later one finds the note the earlier one made. Capture and ensureDailyNote both
- * find their Daily Note here.
- * @param {Tx} tx
- * @param {{noteId: string, dateStr: string, name: string, now: number}} daily
- * @returns {Promise<{dailyId: string, created: boolean} | Rejected>}
+ * The Daily Note that holds `key` in `tx`, which spans the notes and the daily index (#17 PR
+ * 3b): the one the index names while it still holds the key (domain/daily.js, holdsKey), else
+ * the one #17's rules give the key among every note, found by one scan. The scan runs on a
+ * day's first lookup, for a Daily Note a legacy path wrote, and once a trash, a template, or a
+ * deletion left the entry stale. With `repair`, on a database that has the index, the note it
+ * found gets its key and the index its entry in the same transaction, so the next lookup reads
+ * the index alone. Below version 11 the index isn't there, and every lookup scans, as 1.4.x's.
+ * @param {ReadTx} tx
+ * @param {string} key
+ * @param {string} zone
+ * @param {boolean} repair
+ * @returns {Promise<{note: NoteRecord, repaired: boolean} | undefined>}
  */
-async function findOrMakeDailyNote(tx, { noteId, dateStr, name, now }) {
-  const found = findDailyNoteFor(await tx.getAll('notes'), dateStr);
-  if (found) return { dailyId: found.id, created: false };
+async function dailyNoteIn(tx, key, zone, repair) {
+  const entry = await tx.get('dailyIndex', key);
+  if (entry && isId(entry.noteId)) {
+    const indexed = await tx.get('notes', entry.noteId);
+    if (indexed && holdsKey(indexed, key)) return { note: indexed, repaired: false };
+  }
+  const found = dailyHolder(await tx.getAll('notes'), key, zone);
+  if (!found) return undefined;
+  if (!repair || !tx.has('dailyIndex')) return { note: found.note, repaired: false };
+  const write = /** @type {Tx} */ (tx);
+  const keyed = withAssignedKey(found.note, found.assignment);
+  if (keyed !== found.note) write.put('notes', keyed);
+  write.put('dailyIndex', { dailyKey: key, noteId: keyed.id });
+  return { note: keyed, repaired: keyed !== found.note };
+}
+
+/**
+ * The Daily Note for `dailyKey`, found or made in `tx`, which spans the notes and the daily
+ * index: the one that holds the key (dailyNoteIn), or else a new one with id `noteId`, keyed by
+ * that day (newDailyNoteRecord), in one put, with its index entry. Two of these at once can't
+ * both make one, since each transaction that writes the notes store waits for the one before it
+ * to finish, and the later one finds the note the earlier one made. Capture and ensureDailyNote
+ * both find their Daily Note here.
+ * @param {Tx} tx
+ * @param {{noteId: string, dailyKey: string, name: string, now: number, zone: string}} daily
+ * @returns {Promise<{dailyId: string, created: boolean, repaired: boolean} | Rejected>}
+ */
+async function findOrMakeDailyNote(tx, { noteId, dailyKey, name, now, zone }) {
+  const found = await dailyNoteIn(tx, dailyKey, zone, true);
+  if (found) return { dailyId: found.note.id, created: false, repaired: found.repaired };
   if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
-  tx.put('notes', newDailyNoteRecord({ id: noteId, name, dateStr, now }));
-  return { dailyId: noteId, created: true };
+  tx.put('notes', newDailyNoteRecord({ id: noteId, name, dailyKey, zone, now }));
+  tx.put('dailyIndex', { dailyKey, noteId });
+  return { dailyId: noteId, created: true, repaired: false };
 }
 
 /**
@@ -827,20 +867,23 @@ export const noteCommands = {
     // The template setting lives outside the note stores, so it's read before any unit runs
     const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
     const now = clock.now();
-    // Today's, keyed by the UTC date and named with the local one, as background.js always had it
-    const dailyName = dailyNoteName(now);
+    // Today's, keyed and named by its local date in the clock's zone (#17 PR 3b), where 1.4.x's
+    // background.js keyed it by the UTC date
+    const zone = zoneOf(clock);
+    const dailyName = dailyNoteName(now, zone);
+    const dailyKey = dailyDateStr(now, zone);
     let dailyId = noteId;
     let created = false;
     /** @type {Unit[]} */
     const units = [
       {
-        stores: ['notes'],
+        stores: ['notes', 'dailyIndex'],
         async run(tx) {
           // The later units follow what this one decides, and each run decides afresh, since
           // an adapter may run the units again (ports/repository.js, Unit)
           dailyId = noteId;
           created = false;
-          const daily = await findOrMakeDailyNote(tx, { noteId, dateStr: dailyDateStr(now), name: dailyName, now });
+          const daily = await findOrMakeDailyNote(tx, { noteId, dailyKey, name: dailyName, now, zone });
           if ('kind' in daily) return daily;
           ({ dailyId, created } = daily);
         },
@@ -883,27 +926,30 @@ export const noteCommands = {
     // The template setting lives outside the note stores, so it's read before the unit runs
     const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
     const now = clock.now();
-    // With no day, today's: keyed by the UTC date and named with the local one, as
-    // Storage.ensureDailyNote has it. A calendar day's is keyed and named by that day, as
-    // Storage.ensureDailyNoteForDate has it.
+    // With no day, today's: keyed and named by its local date in the clock's zone (#17 PR 3b),
+    // where Storage.ensureDailyNote keyed it by the UTC date. A calendar day's is keyed and named
+    // by that day, as Storage.ensureDailyNoteForDate has it.
+    const zone = zoneOf(clock);
     const today = at === undefined ? now : at;
-    const day = dateStr === undefined ? dailyDateStr(today) : dateStr;
-    const name = dateStr === undefined ? dailyNoteName(today) : dailyNoteNameFor(dateStr);
+    const day = dateStr === undefined ? dailyDateStr(today, zone) : dateStr;
+    const name = dateStr === undefined ? dailyNoteName(today, zone) : dailyNoteNameFor(dateStr);
     let dailyId = noteId;
     let created = false;
+    let repaired = false;
     // One transaction finds the Daily Note or makes it whole: the record with its isDaily and
-    // dateStr, its search entry, and the template's blocks, which 1.4.x wrote in four steps, so
-    // a note never stays half made and two calls at once make one Daily Note
+    // dateStr, its search entry, the template's blocks, which 1.4.x wrote in four steps, and its
+    // daily index entry, so a note never stays half made and two calls at once make one Daily Note
     /** @type {Unit} */
     const ensure = {
-      stores: ['notes', 'searchIndex', 'blocks'],
+      stores: ['notes', 'dailyIndex', 'searchIndex', 'blocks'],
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         dailyId = noteId;
         created = false;
-        const daily = await findOrMakeDailyNote(tx, { noteId, dateStr: day, name, now });
+        repaired = false;
+        const daily = await findOrMakeDailyNote(tx, { noteId, dailyKey: day, name, now, zone });
         if ('kind' in daily) return daily;
-        ({ dailyId, created } = daily);
+        ({ dailyId, created, repaired } = daily);
         if (!created) return;
         tx.put('searchIndex', newSearchEntry({ id: noteId, name }, now));
         const copies = await dailyTemplateBlocks(tx, templateId, {
@@ -915,14 +961,17 @@ export const noteCommands = {
         for (const block of copies) tx.put('blocks', block);
       },
     };
-    // Only a Daily Note it made changed anything. One it found changes nothing, so it names no
-    // id, writes no change entry, and moves no revision: the caller reads the Daily Note with
-    // findDailyNote either way
+    // A Daily Note it made changed something, and one it found changes nothing, so that names no
+    // id, writes no change entry, and moves no revision, unless it gave the note its key on the
+    // way (dailyNoteIn), which names it. The caller reads the Daily Note with findDailyNote
+    // either way.
     return unitsWork(
       command,
       [ensure],
       () =>
-        created ? committed('daily-note-created', [dailyId]) : committed('daily-note-exists', [], { severity: 'info' }),
+        created
+          ? committed('daily-note-created', [dailyId])
+          : committed('daily-note-exists', repaired ? [dailyId] : [], { severity: 'info' }),
       { primary: () => ({ store: 'notes', key: dailyId }), revised: () => created },
     );
   },
@@ -1027,9 +1076,9 @@ export const noteQueries = {
 
   async findDailyNote({ dateStr }, { adapter, clock }) {
     if (!isDateStr(dateStr)) return failed('validation', 'invalid-query');
-    // The first in the withArchived list with that day, as ensureDailyNote finds it
-    const note = findDailyNoteFor(await adapter.read(['notes'], tx => tx.getAll('notes')), dateStr);
-    return note ? ready(clock.now(), { note }) : empty(clock.now());
+    // The one ensureDailyNote finds, through the daily index, without its repair
+    const found = await adapter.read(['notes', 'dailyIndex'], tx => dailyNoteIn(tx, dateStr, zoneOf(clock), false));
+    return found ? ready(clock.now(), { note: found.note }) : empty(clock.now());
   },
 
   async listSearchEntries(query, { adapter, clock }) {

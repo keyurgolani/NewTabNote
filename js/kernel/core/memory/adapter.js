@@ -293,6 +293,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         if (!got.has(revisionKey(store, key))) throw new UnavailableError('adapter', 'revision-before-get', false);
         return committedVersions(store, key);
       },
+      // Every store is here, as on a database at this build's version
+      has: store => {
+        scoped(store);
+        return true;
+      },
       put: (store, record) =>
         write(store, /** @type {string} */ (keyOf(store, /** @type {Record<string, unknown>} */ (record))), record),
       delete: (store, key) => write(store, /** @type {string} */ (keyString(store, key)), undefined),

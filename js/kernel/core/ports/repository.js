@@ -26,7 +26,9 @@
  * Each store and the field, or fields, that key its records. `conflicts` and `tombstones` are
  * #17's (#17 PR 2b): deleting a note drops its conflict records and puts its tombstone, in the
  * delete's own unit. A database below version 10 has neither, and an adapter skips writes to
- * them there (LATER_STORES).
+ * them there (LATER_STORES). `dailyIndex` is #17 PR 3b's: `{dailyKey, noteId}` for each local
+ * date, naming the Daily Note that holds it (domain/daily.js), which a database below version
+ * 11 lacks.
  */
 export const STORES = Object.freeze({
   notes: Object.freeze({ keyPath: 'id' }),
@@ -39,17 +41,19 @@ export const STORES = Object.freeze({
   links: Object.freeze({ keyPath: 'id' }),
   conflicts: Object.freeze({ keyPath: 'id' }),
   tombstones: Object.freeze({ keyPath: Object.freeze(['entityType', 'id']) }),
+  dailyIndex: Object.freeze({ keyPath: 'dailyKey' }),
 });
 
 /** @typedef {keyof typeof STORES} StoreName */
 
 /**
- * The stores a database below version 10 lacks, whose writes an adapter skips there, as
- * commands committed before step 10: no conflict record and no tombstone, so a note deleted
- * there stays in its recovery point (#17 PR 2b's declared gap)
+ * The stores a database below their version lacks, whose writes an adapter skips there, as
+ * commands committed before the step that made them: below 10 no conflict record and no
+ * tombstone, so a note deleted there stays in its recovery point (#17 PR 2b's declared gap), and
+ * below 11 no daily index entry, so each Daily Note lookup there scans (#17 PR 3b)
  * @type {readonly StoreName[]}
  */
-export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflicts', 'tombstones']));
+export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflicts', 'tombstones', 'dailyIndex']));
 
 /**
  * @typedef {object} StoreRecords
@@ -63,6 +67,7 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @property {import('../domain/note.js').LinkRecord} links
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} conflicts
  * @property {import('../domain/tombstone.js').TombstoneRecord} tombstones
+ * @property {{dailyKey: string, noteId?: unknown} & Record<string, unknown>} dailyIndex
  */
 
 /**
@@ -84,6 +89,9 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  *   The note's three committed versions (#17, "Versions"), each 0 for a record that has none
  *   yet, or undefined from an adapter without revisions or for a record the get found nothing
  *   for. Ask only after a `get` of the same key in the same transaction, as with `revision`.
+ * @property {(store: StoreName) => boolean} has
+ *   Whether the database has `store`, so a write to it lands: false for a LATER_STORES store a
+ *   database below its version lacks, or for a store a damaged one lacks
  */
 
 /**

@@ -16,9 +16,10 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
  * them, so a commit an editor or a job makes reaches the list's feed
  * @param {{storage: any, settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
- *   pageNow?: () => number}} host - the page's Storage and chrome.storage.local, what to tell of
- *   each query the note list makes, and the kernel's and the document client's clocks, the
- *   system's unless given
+ *   pageNow?: () => number, zone?: string}} host - the page's Storage and chrome.storage.local,
+ *   what to tell of each query the note list makes, the kernel's and the document client's
+ *   clocks, the system's unless given, and the zone both take today's Daily Note in, the host's
+ *   unless given (#17 PR 3b)
  * @returns {{
  *   kernel: import('../../js/kernel/composition/host.js').Client,
  *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient,
@@ -29,14 +30,15 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
  */
-export function pageClientsFor({ storage, settings, onListQuery = () => {}, kernelNow, pageNow }) {
+export function pageClientsFor({ storage, settings, onListQuery = () => {}, kernelNow, pageNow, zone }) {
   const adapter = createLegacyAdapter({ storage, settings, mode: 'versioned' });
+  const zoneNow = zone ? () => zone : systemClock.zone;
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
     caller: Object.freeze({ surface: 'newtab', contextId: 'newtab-test' }),
     ids: legacyIds,
-    clock: kernelNow ? { now: kernelNow } : systemClock,
+    clock: { now: kernelNow || systemClock.now, zone: zoneNow },
   });
   const client = Object.freeze({
     execute: kernel.execute,
@@ -53,7 +55,7 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
   const noteList = createNewTabNoteList({ ...client, query: listQuery });
   return {
     kernel: client,
-    documentClient: createDocumentClient(client, pageNow ? { now: pageNow } : {}),
+    documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
   };

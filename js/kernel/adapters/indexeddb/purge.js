@@ -78,7 +78,8 @@ import { openWithoutUpgrade } from './shapes.js';
 /**
  * Which entity owns a row of each store a point copies: the one its key names, or the one a
  * field of its value names. A store not listed holds nothing of a deleted note's or folder's:
- * `themes`, `meta`, `migrations`, and step 10's content-free stores.
+ * `themes`, `meta`, `migrations`, and step 10's content-free stores. Step 11's daily index
+ * (#17 PR 3b) names its Daily Note in `noteId`.
  * @type {Readonly<Record<string, Readonly<{entity: TombstoneEntity, fields: readonly string[] | null}>>>}
  */
 export const OWNERS = Object.freeze({
@@ -90,6 +91,7 @@ export const OWNERS = Object.freeze({
   snapshots: Object.freeze({ entity: 'note', fields: Object.freeze(['noteId']) }),
   links: Object.freeze({ entity: 'note', fields: Object.freeze(['fromNoteId', 'toNoteId']) }),
   conflicts: Object.freeze({ entity: 'note', fields: Object.freeze(['noteId']) }),
+  daily_index: Object.freeze({ entity: 'note', fields: Object.freeze(['noteId']) }),
   folders: Object.freeze({ entity: 'folder', fields: null }),
 });
 

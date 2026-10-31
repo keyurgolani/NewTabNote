@@ -283,6 +283,7 @@ function view(db, tx, scope, writable, tracker) {
       handle(store);
       return store === 'notes' ? tracker.versions(key) : undefined;
     },
+    has: store => handle(store) !== null,
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {

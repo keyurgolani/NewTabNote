@@ -73,12 +73,18 @@ if (typeof chrome === 'undefined' || !chrome.storage) {
  * @property {Array<string>} importedIds - The new IDs of the notes it added, in backup order
  */
 
+/**
+ * The fields #17 PR 3 writes beside a note's flags, js/kernel/core/domain/placement.js's
+ * NEW_NOTE_FIELDS (test/import.test.js keeps the two lists the same), which 1.4.x doesn't know
+ */
+const NEW_NOTE_FIELDS = Object.freeze(['placement', 'kind', 'lifecycle', 'dailyKey', 'dailyTimeZone', 'dailyDuplicateOf']);
+
 class DatabaseManager {
   constructor() {
     this.dbName = 'CanvasTabDB';
-    // The newest version this build opens, #17's structural version 10 since #17 PR 2a, which
+    // The newest version this build opens, #17's structural version 11 since #17 PR 3b, which
     // only the service worker upgrades to (js/kernel/adapters/indexeddb/schema.js's DB_VERSION)
-    this.dbVersion = 10;
+    this.dbVersion = 11;
     /** How long a page waits on the worker's migration run before it opens what's there (#17, Q12) */
     this.workerUpgradeWaitMs = 5000;
     this.db = null;
@@ -197,9 +203,9 @@ class DatabaseManager {
    *
    * Since #17 PR 1b only the service worker upgrades the database, through
    * #17's migration runner after a verified recovery point, so this opens it at
-   * whatever version is on disk, up to this build's (10), and aborts any
+   * whatever version is on disk, up to this build's (11), and aborts any
    * upgrade: on a profile with no database it makes none and rejects with code
-   * NO_DATABASE. A page that finds no database, or one below 10, first wakes the
+   * NO_DATABASE. A page that finds no database, or one below 11, first wakes the
    * worker and waits up to 5 seconds for its run (#17, Q12), then opens what's
    * there: a version-8 database (the run was short of space, say) runs as it
    * is, and an older one runs with the stores it lacks off.
@@ -2174,7 +2180,9 @@ class DatabaseManager {
    * @returns {Promise<{notes: Array<Object>, elements: Array<Object>, media: Array<Object>, folders: Array<Object>}>}
    */
   async _readExport() {
-    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];
+    // As 1.4.x stores them, without #17 PR 3's fields (_withoutNewFields)
+    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())].map((note) =>
+      this._withoutNewFields(note));
     const noteIds = new Set(notes.map((note) => note.id));
     const elements = [];
     for (const note of notes) {
@@ -2183,6 +2191,21 @@ class DatabaseManager {
     // Only media whose note is exported (1.4.0 exported the whole store)
     const media = (await this._getAllMedia()).filter((m) => noteIds.has(m.canvasId));
     return { notes, elements, media, folders: await this.getAllFolders() };
+  }
+
+  /**
+   * A note without the fields #17 PR 3 writes beside its flags (NEW_NOTE_FIELDS): its
+   * placement, kind, and lifecycle, and a Daily Note's dailyKey, dailyTimeZone, and
+   * dailyDuplicateOf. Export JSON and the single-note export write a note without them, and an
+   * import drops them, so a trip through 1.4.x, which keeps a field it doesn't know while it
+   * changes the flags, can't bring one back stale (#17 PR 3, Q8).
+   * @param {Object} note
+   * @returns {Object}
+   */
+  _withoutNewFields(note) {
+    const copy = { ...note };
+    for (const field of NEW_NOTE_FIELDS) delete copy[field];
+    return copy;
   }
 
   /**
@@ -2211,7 +2234,8 @@ class DatabaseManager {
    * Export single note
    */
   async exportNote(noteId) {
-    const note = await this.getNote(noteId);
+    const stored = await this.getNote(noteId);
+    const note = stored && this._withoutNewFields(stored);
     const elements = await this.getElementsByNote(noteId);
 
     // Get media for this note
@@ -2470,13 +2494,15 @@ class DatabaseManager {
       }
     }
 
-    // The fields #17 PR 3 writes beside the flags (js/kernel/core/domain/placement.js's
-    // PLACEMENT_FIELDS), which a backup from this build or a later one carries: an import drops
-    // them, so the flags it sets are all a note says, and the kernel derives the rest from those.
-    const flagFields = ['placement', 'kind', 'lifecycle'];
+    // The fields #17 PR 3 writes beside the flags (NEW_NOTE_FIELDS), which a backup from a
+    // build before Export JSON dropped them, or a later one, carries: an import drops them, so
+    // the flags it sets are all a note says, and the kernel derives the rest from those.
     for (const packageNote of plan.notes) {
-      const imported = { ...packageNote, id: plan.noteIds.get(packageNote.id), folderId: resolveFolder(packageNote.folderId) };
-      for (const field of flagFields) delete imported[field];
+      const imported = this._withoutNewFields({
+        ...packageNote,
+        id: plan.noteIds.get(packageNote.id),
+        folderId: resolveFolder(packageNote.folderId),
+      });
       // Imported notes start outside trash, so an import never queues anything for deletion.
       delete imported.trashed;
       delete imported.trashedAt;

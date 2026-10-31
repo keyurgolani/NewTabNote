@@ -17,6 +17,9 @@
  * the calling task.
  */
 
+import { dailyDateStr } from '../core/domain/note.js';
+import { systemClock, zoneOf } from '../core/ports/runtime.js';
+
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../core/domain/note.js').BlockRecord} BlockRecord */
@@ -115,13 +118,20 @@
  *   beforeConnectionCloses?: DocumentClient['beforeConnectionCloses'],
  *   connectionOpen?: DocumentClient['connectionOpen'],
  *   now?: () => number,
+ *   zone?: () => string,
  * }} [connection] What the page's connection runs before it closes for another context's
- *   upgrade, and whether it's open, and the page's clock, which decides today's Daily Note
+ *   upgrade, and whether it's open, and the page's clock and zone, which decide today's Daily
+ *   Note: the zone the page's kernel keys it in, the host's unless a test names another
  * @returns {DocumentClient}
  */
 export function createDocumentClient(
   client,
-  { beforeConnectionCloses = () => () => {}, connectionOpen = () => true, now = () => Date.now() } = {},
+  {
+    beforeConnectionCloses = () => () => {},
+    connectionOpen = () => true,
+    now = () => Date.now(),
+    zone = () => zoneOf(systemClock),
+  } = {},
 ) {
   /**
    * A query's data, or `none` when it found nothing. Its kernel is ready once the page has
@@ -156,10 +166,10 @@ export function createDocumentClient(
     createNote: note => client.execute({ ...note, type: 'createNote', commandId: client.ids.next() }),
 
     async ensureDailyNote(dateStr) {
-      // Today's is decided once, here: the ensure gets the instant, which keys it by the UTC date
-      // and names it with the local one as 1.4.x did, and the read gets that instant's UTC date
+      // Today's is decided once, here: the ensure gets the instant, which it keys and names by
+      // its local date (#17 PR 3b), and the read gets that instant's local date
       const at = now();
-      const day = dateStr === undefined ? new Date(at).toISOString().split('T')[0] : dateStr;
+      const day = dateStr === undefined ? dailyDateStr(at, zone()) : dateStr;
       const outcome = await client.execute({
         type: 'ensureDailyNote',
         commandId: client.ids.next(),

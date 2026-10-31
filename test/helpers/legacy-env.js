@@ -1076,11 +1076,12 @@ function testDocumentClient(client) {
  * starts reading. It takes test/helpers/page-module.js, so node runs with
  * --experimental-vm-modules (npm test passes it).
  * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {{onListQuery?: (query: Object) => void, kernelNow?: () => number, pageNow?: () => number}} [options]
- *   told of each query the note list makes, and the kernel's and the document client's clocks
+ * @param {{onListQuery?: (query: Object) => void, kernelNow?: () => number, pageNow?: () => number, zone?: string}} [options]
+ *   told of each query the note list makes, the kernel's and the document client's clocks, and
+ *   the zone both take today's Daily Note in
  * @returns {Promise<Object>} the client
  */
-async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) {
+async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
   const { kernel, documentClient, noteList, removalFor } = pageClientsFor({
@@ -1089,6 +1090,7 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow } = {}) 
     onListQuery,
     kernelNow,
     pageNow,
+    zone,
   });
   // The kernel client too, so a test can pin, trash, or rename the way another part of the page does
   env.kernel = kernel;
@@ -1222,14 +1224,15 @@ const NEW_TAB_FILES = [
  * query the note list makes.
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @param {{files?: Array<string>, ready?: boolean, onListQuery?: (query: Object) => void,
- *   kernelNow?: () => number, pageNow?: () => number}} [options] - `kernelNow` and `pageNow` are
- *   the page kernel's and its document client's clocks
+ *   kernelNow?: () => number, pageNow?: () => number, zone?: string}} [options] - `kernelNow` and
+ *   `pageNow` are the page kernel's and its document client's clocks, and `zone` the zone both
+ *   take today's Daily Note in, the host's unless given
  */
-async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuery, kernelNow, pageNow } = {}) {
+async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true, onListQuery, kernelNow, pageNow, zone } = {}) {
   env.load(...files);
   const Storage = env.get('Storage');
   await Storage.init();
-  await startEditorClient(env, { onListQuery, kernelNow, pageNow });
+  await startEditorClient(env, { onListQuery, kernelNow, pageNow, zone });
   const panes = env.document.stub([
     'note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle',
     'settings-modal', 'sidebar-trash-actions',

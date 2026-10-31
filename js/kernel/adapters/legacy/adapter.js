@@ -191,6 +191,7 @@ function view(storage, tx, scope) {
       handle(store);
       return undefined;
     },
+    has: store => handle(store) !== null,
     // A database without a derived store skips its writes, and one below version 10 the
     // tombstone a deletion puts (LATER_STORES), so a note deleted there stays in its recovery
     // point (#17 PR 2b's declared gap). At 10 the tombstone goes in the delete's own
