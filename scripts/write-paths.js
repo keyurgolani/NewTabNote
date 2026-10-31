@@ -22,11 +22,12 @@
  * that isn't a literal, a DatabaseManager write name called on a receiver it can't place,
  * and an object store or chrome.storage area bound with anything but const.
  *
- * RULES give each call its command, and COMMANDS give each command its slice or the issue
- * it's ledgered to. A call no rule matches fails the check, so a new write path can't land
- * without a decision. One status comes from the code instead: "no live caller" for writes in
- * methods nothing refers to, App's included, since #12 slice 7 deleted App's copies of
- * controller paths.
+ * RULES give each call its command, and COMMANDS give each command the #12 slice or the PR
+ * that routes it, or the issue it's ledgered to. A call no rule matches fails the check, so a
+ * new write path can't land without a decision. A rule can give its calls a status of its own:
+ * "no live path" for calls on a handle that has no such method (#17 PR 4b). One status comes
+ * from the code instead: "no live caller" for writes in methods nothing refers to, App's
+ * included, since #12 slice 7 deleted App's copies of controller paths.
  *
  *   npm run check:write-paths              fail when the doc and the code differ, line numbers aside
  *   npm run check:write-paths -- --write   rewrite the doc
@@ -92,6 +93,14 @@ const READS = new Set([
 const UNDEFINED_WRITES = {
   importNote: "sync-service's remote-only merge calls it, so that path throws today (#19)",
   importAll: "sync-service's remote apply checks for it first, so that path never runs (#19)",
+};
+
+/**
+ * Reads a holder's handle answers that DatabaseManager doesn't define: the facade's queries
+ * (js/kernel/composition/storage-facade.js), until js/storage.js is the facade's shell (#17 PR 4b)
+ */
+const HANDLE_READS = {
+  listLinks: "GraphView's links, the listLinks query",
 };
 
 /** Write names too common to flag on receivers the scanner can't place */
@@ -170,12 +179,13 @@ const COMMANDS = {
   snoozeSpaceNotice: { slice: 6 },
   createAutoBackup: { slice: 6 },
   importBackup: { slice: 6 },
+  // #22's derived writes, which the search index handle runs as commands (#17 PR 4b's facade)
+  updateSearchIndex: { pr: '#17 PR 4b' },
+  saveVector: { pr: '#17 PR 4b' },
   // Left outside the kernel for their own issues
   saveProviderSettings: { ledger: 11 },
   saveSyncSettings: { ledger: 19 },
   applyRemoteChanges: { ledger: 19 },
-  updateSearchIndex: { ledger: 22 },
-  saveVector: { ledger: 22 },
 };
 
 /** Settings that are preferences, which the kernel's settings port owns (#25 owns their schemas) */
@@ -226,7 +236,8 @@ const RULES = [
   { command: 'saveVector', op: 'saveVector' },
   { command: 'saveProviderSettings', op: 'setSetting', key: PROVIDER_KEYS },
   { command: 'saveSyncSettings', op: 'setSetting', key: SYNC_KEYS },
-  { command: 'applyRemoteChanges', file: 'js/services/sync-service.js', op: ['importNote', 'importAll', 'saveElement'] },
+  // Sync's handle has none of the three (js/kernel/composition/newtab.js): sync has never applied a remote note (#17 PR 4b)
+  { command: 'applyRemoteChanges', file: 'js/services/sync-service.js', op: ['importNote', 'importAll', 'saveElement'], status: 'no live path' },
   { command: 'saveWorkspaceSession', op: ['setSetting', 'set'], key: SESSION_KEYS },
   { command: 'saveChatHistory', op: 'setSetting', key: CHAT_KEYS },
   { command: 'savePromptTemplates', op: 'setSetting', key: 'aiPromptTemplates' },
@@ -246,7 +257,9 @@ const STATUSES = [
   ['kernel command, slice 4', '#12 slice 4 (notes and blocks) routes it through the command.'],
   ['kernel command, slice 5', '#12 slice 5 (folders, templates, trash) routes it through the command.'],
   ['kernel command, slice 6', '#12 slice 6 (preferences and session) routes it through the command.'],
+  ['kernel command, #17 PR 4b', "#17 PR 4b's facade (`js/kernel/composition/storage-facade.js`) runs it as the command on the new tab's kernel, under the name its holder has always called."],
   ['no live caller', 'Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become.'],
+  ['no live path', "The holder's handle has no such method (`js/kernel/composition/newtab.js`), so the call throws or is skipped and never writes. Sync has never applied a remote note, and its paths stay as they are until #19 wires the command."],
   ['ledgered to #11', "Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows)."],
   ['ledgered to #19', "The sync service, which #19's sync engine replaces."],
   ['ledgered to #22', "The search index and vectors, which #22's pipelines own."],
@@ -634,7 +647,9 @@ function scanSource(file, text, { members = null } = {}) {
         // The pass above counts transactions
       } else if (root) {
         const shown = (args.length > 0 ? '…' : '');
-        if (members && !members.has(op) && !Object.hasOwn(UNDEFINED_WRITES, op)) {
+        if (Object.hasOwn(HANDLE_READS, op)) {
+          // A read, which the facade answers on the holder's handle
+        } else if (members && !members.has(op) && !Object.hasOwn(UNDEFINED_WRITES, op)) {
           // Whatever the lists say: they named the writers #17 PR 4a deleted until R88's read
           problem(n, `calls ${root}.${op}, which DatabaseManager doesn't define: fix the call, or list it in UNDEFINED_WRITES`);
         } else if (WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) {
@@ -768,11 +783,17 @@ function matches(want, value) {
   return want === value;
 }
 
-function statusOf(command, hit) {
+/** A command's status in the Commands table: the slice or PR that routes it, or the issue it's ledgered to */
+function commandStatus(entry) {
+  if (entry.ledger) return `ledgered to #${entry.ledger}`;
+  return entry.pr ? `kernel command, ${entry.pr}` : `kernel command, slice ${entry.slice}`;
+}
+
+function statusOf(rule, hit) {
   if (hit.noLiveCaller) return 'no live caller';
+  if (rule.status) return rule.status;
   if (Object.hasOwn(LEDGERED_FILES, hit.file)) return `ledgered to #${LEDGERED_FILES[hit.file]}`;
-  const entry = COMMANDS[command];
-  return entry.ledger ? `ledgered to #${entry.ledger}` : `kernel command, slice ${entry.slice}`;
+  return commandStatus(COMMANDS[rule.command]);
 }
 
 /** The hit with its command and status, or with command null when no rule matches */
@@ -781,7 +802,7 @@ function classify(hit) {
     && matches(r.key, hit.key) && (r.fields === undefined || (hit.fields || []).includes(r.fields)));
   const { holder, ...row } = hit;
   if (!rule) return { ...row, command: null, status: null };
-  return { ...row, command: rule.command, status: statusOf(rule.command, hit) };
+  return { ...row, command: rule.command, status: statusOf(rule, hit) };
 }
 
 /** The other writes the scan finds, which RULES may name besides DatabaseManager's */
@@ -801,6 +822,9 @@ function staleListings(members) {
       for (const op of list) {
         if (!members.has(op)) problems.push(`${name} in scripts/write-paths.js lists ${op}, which DatabaseManager doesn't define: drop it`);
       }
+    }
+    for (const op of Object.keys(HANDLE_READS)) {
+      if (members.has(op)) problems.push(`HANDLE_READS in scripts/write-paths.js lists ${op}, which DatabaseManager defines: move it to READS`);
     }
   }
   for (const rule of RULES) {
@@ -863,12 +887,9 @@ function renderDoc(rows) {
     '',
     '| Command | Status | Rows |',
     '| --- | --- | --- |',
-    ...Object.entries(COMMANDS).map(([command, entry]) => {
-      const status = entry.ledger ? `ledgered to #${entry.ledger}` : `kernel command, slice ${entry.slice}`;
-      return `| \`${command}\` | ${status} | ${count('command', command)} |`;
-    }),
+    ...Object.entries(COMMANDS).map(([command, entry]) => `| \`${command}\` | ${commandStatus(entry)} | ${count('command', command)} |`),
     '',
-    'Rows marked "no live caller" are counted under the command the call would become.',
+    'Rows marked "no live caller" or "no live path" are counted under the command the call would become.',
     '',
     "Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.",
     '',
@@ -961,6 +982,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, COMPONENTS,
-  LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, staleListings, classify, collect, renderDoc, withoutLines, check, main,
+  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, PROVIDER_KEYS, SYNC_KEYS,
+  COMPONENTS, LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, staleListings, classify, collect, renderDoc,
+  withoutLines, check, main,
 };

@@ -335,34 +335,14 @@ class SyncService {
    * @returns {Promise<Object>}
    */
   async _exportLocalData() {
+    // Every folder is in the export already (#17 PR 4b). Never the IndexedDB `settings` store:
+    // releases up to 1.1.2 kept every setting there, the AI key in plaintext included (#21)
     const exportData = await this.storage.exportAll();
-    // Augment with folders for full sync. Never the IndexedDB `settings` store: releases up
-    // to 1.1.2 kept every setting there, the AI key in plaintext included (#21)
-    const folders = await this._getAllFromStore('folders');
     return {
       ...exportData,
-      folders,
       syncVersion: 1,
       syncedAt: Date.now(),
     };
-  }
-
-  /**
-   * Read all entries from an IndexedDB store.
-   * @param {string} storeName
-   * @returns {Promise<Array>}
-   */
-  async _getAllFromStore(storeName) {
-    return new Promise((resolve, reject) => {
-      try {
-        const store = this.storage.getStore(storeName);
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      } catch (e) {
-        resolve([]);
-      }
-    });
   }
 
   /**

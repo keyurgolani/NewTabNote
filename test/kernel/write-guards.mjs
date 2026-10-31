@@ -116,9 +116,11 @@ export const WRITE_GUARDS = Object.freeze({
     'NotesManager.runInsightsExtraction',
     'AIChatController.extractInsightsFromChat',
   ]),
-  // #22's indexer, through the facade after 4a: each entry says the revision it was made from
-  updateSearchIndex: guarded('derived', 'entries.[].sourceRevision'),
-  saveVector: guarded('derived', 'sourceRevision'),
+  // #22's indexer and embeddings, through the facade's setSearchIndex, setSearchIndexEntry,
+  // removeSearchIndexEntry, and saveVector (storage-facade.js), which know no revision until
+  // #22's pipeline makes them from one
+  updateSearchIndex: guarded('derived', 'entries.[].sourceRevision', ['NotesManager.initIndexer']),
+  saveVector: guarded('derived', 'sourceRevision', ['NotesManager.updateMissingEmbeddings']),
 
   // Writes to notes no version guards, each with why
   createNote: unguarded(

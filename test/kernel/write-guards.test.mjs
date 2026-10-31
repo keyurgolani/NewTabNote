@@ -68,6 +68,18 @@ const CLIENT_METHODS = {
 };
 
 /**
+ * The search index handle's writes NotesManager calls on `this.storage`, and the command each
+ * one sends since #17 PR 4b (js/kernel/composition/storage-facade.js)
+ * @type {Record<string, CommandType>}
+ */
+const FACADE_METHODS = {
+  setSearchIndex: 'updateSearchIndex',
+  setSearchIndexEntry: 'updateSearchIndex',
+  removeSearchIndexEntry: 'updateSearchIndex',
+  saveVector: 'saveVector',
+};
+
+/**
  * Every page file: js/ but its libraries and the kernel, which the callers reach through
  * @returns {string[]} paths from the repository's root
  */
@@ -91,8 +103,9 @@ function pageFiles() {
 
 /**
  * Each call a page makes that sends a guarded command, as `Class.method` with the command it
- * sends: a document client method, or removeNotes with the command's type. A method is a
- * class's method at two spaces in, as every page class holds its methods.
+ * sends: a document client method, removeNotes with the command's type, or one of the
+ * facade's writes on a handle. A method is a class's method at two spaces in, as every page
+ * class holds its methods.
  * @returns {Map<CommandType, string[]>}
  */
 function pageCallers() {
@@ -114,6 +127,9 @@ function pageCallers() {
       }
       for (const match of line.matchAll(/removeNotes\(\{\s*type: '(\w+)'/g))
         sent.push(/** @type {CommandType} */ (match[1]));
+      for (const match of line.matchAll(/\bstorage\.(\w+)\(/g)) {
+        if (Object.hasOwn(FACADE_METHODS, match[1])) sent.push(FACADE_METHODS[match[1]]);
+      }
       for (const type of sent) {
         const list = callers.get(type) || [];
         list.push(`${className}.${method}`);

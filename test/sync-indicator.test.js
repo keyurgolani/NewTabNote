@@ -16,13 +16,16 @@ describe("App's sync indicator (#13)", () => {
     const env = createLegacyEnv({ document: new FakeDocument() });
     await createDatabase(env.indexedDB, {});
     env.load(...FILES);
-    await env.get('Storage').init();
-    const { createNewTabLegacyStores } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+    const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+    const host = root.newTabHost();
+    const adapter = root.createNewTabAdapter(host);
+    const kernel = root.createNewTabClient(adapter, host);
+    assert.equal(await kernel.whenReady(), null);
     const shown = [];
     const app = {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
-      // Sync's handle on the page's Storage, as the new tab's root gives it to App (#19)
-      syncStore: createNewTabLegacyStores({ storage: env.get('Storage') }).sync,
+      // Sync's handle on the tab's kernel, as the new tab's root gives it to App (#19, #17 PR 4b)
+      syncStore: root.createNewTabLegacyStores(kernel, host, root.createNewTabStorageState(adapter)).sync,
       _updateSyncStatusUI: (state) => shown.push(state),
     };
     await env.get('App').prototype.initSyncService.call(app);
