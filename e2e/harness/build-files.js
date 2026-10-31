@@ -52,4 +52,20 @@ function chunkFile(dist, name) {
   return chunks[name];
 }
 
-module.exports = { moduleMap, builtFiles, chunkFile };
+/**
+ * Why a self-test whose edit replaces `pattern` in `file` doesn't run on the build in `dist`, or
+ * null when it runs. The pattern is that code as this checkout builds it, so a build from
+ * elsewhere (`external`, as NTN_DIST names one), such as a release tag's own build, may not have
+ * it in the file or any chunk that holds it, and the self-test skips there. On this checkout's
+ * own build it always runs, so an edit that stops matching fails, and a change to the code it
+ * edits can't retire it without a word.
+ * @param {{dist: string, file: string, pattern: RegExp, external: boolean}} options
+ * @returns {string | null}
+ */
+function editSkipReason({ dist, file, pattern, external }) {
+  if (!external) return null;
+  if (builtFiles(dist, file).some((built) => pattern.test(fs.readFileSync(path.join(dist, built), 'utf8')))) return null;
+  return `the build under test has no ${pattern} in ${file}, the code this self-test edits as this checkout builds it`;
+}
+
+module.exports = { moduleMap, builtFiles, chunkFile, editSkipReason };
