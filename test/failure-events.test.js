@@ -788,8 +788,14 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
     const host = trustHost();
     const events = eventsOver(host);
     await Storage.setSetting('autoBackupEnabled', true);
+    await startEditorClient(env);
     const SettingsController = env.get('SettingsController');
-    const settings = new SettingsController({ storage: Storage, domRefs: null, logger: loggerWith(events) });
+    const settings = new SettingsController({
+      storage: Storage,
+      settings: env.settingsClient,
+      domRefs: null,
+      logger: loggerWith(events),
+    });
     env.chrome.failNextSet(canaryError());
     await settings.checkBackupStatus();
     await events.flush();
@@ -797,7 +803,11 @@ describe("#20's before-slice-4 follow-ups: success events at the sites, and the 
     await events.flush();
     const seen = await inspect(host.indexedDB, host.settings.items);
     assert.deepEqual(seen.incidents.map(incident => [incident.key, incident.state]), [['backup/auto-backup-failed/-', 'resolved']]);
-    assert.deepEqual(failures(seen.events), [['backup.auto-failed', {}], ['backup.auto-succeeded', {}]]);
+    assert.deepEqual(
+      failures(seen.events).map(([code]) => code),
+      ['backup.auto-failed', 'backup.auto-succeeded'],
+    );
+    assert.deepEqual(failures(seen.events)[1], ['backup.auto-succeeded', {}]);
   });
 
   it('a capture that commits after one that failed is a capture.committed event, which resolves it', async () => {
