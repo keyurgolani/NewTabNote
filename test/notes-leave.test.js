@@ -52,13 +52,10 @@ const controllers = {
   settings: (env, Storage) => new (env.get('SettingsController'))({ storage: Storage, domRefs: null, logger: null }),
 };
 
-/** The sidebar, with its list refresh reduced to the reads emptyTrash needs. */
+/** The sidebar over the page's note list, with the view tab and the list it renders into. */
 function sidebarOf(env, page) {
-  const sidebar = page.wire(controllers.sidebar(env, page.Storage));
-  sidebar.refreshNotesList = async () => {
-    sidebar.trashedNotes = await page.Storage.getTrashedNotes();
-  };
-  return sidebar;
+  if (!env.document.getElementById('sidebar-tab-notes')) env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
+  return page.wire(controllers.sidebar(env, page.Storage));
 }
 
 function type(editor, text) {

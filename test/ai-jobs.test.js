@@ -589,29 +589,31 @@ describe('the editor shows committed titles and insights without saving', () => 
 });
 
 describe("the sidebar lists a committed title (review F1, as 4b1's save showed it)", () => {
-  /** App's note arrays and the sidebar's, wired to the editor as App.editorNavigation wires them */
+  /**
+   * The page's note list, which App and the sidebar read (#12 slice 4c1), and a stand-in for
+   * the sidebar that counts the renders a change to the list makes, as SidebarController's
+   * listener renders once per change
+   */
   async function appWithSidebar() {
     const { env, Storage } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
-    env.load('js/core/dom-refs.js', 'js/core/logger.js', 'js/search.js', 'js/app.js');
-    const App = env.get('App');
-    const listed = async () => plain(await Storage.getAllNotes());
-    const sidebar = { notes: await listed(), archivedNotes: [], renders: 0, renderNotesList() { sidebar.renders += 1; } };
-    const page = { notes: await listed(), archivedNotes: [], sidebarController: sidebar, renderNotesList: () => sidebar.renderNotesList() };
-    const ai = heldAI();
-    const editor = makeEditor(env, env.document, {
-      navigation: {
-        ...quietNavigation(),
-        noteSaved: (saved) => App.prototype.updateSidebarNotePreview.call(page, saved),
-      },
+    const list = env.noteList;
+    await list.settled();
+    const sidebar = { get notes() { return list.view('active'); }, renders: 0 };
+    list.subscribe((change) => {
+      if (change.reason !== 'search') sidebar.renders += 1;
     });
+    const page = { get notes() { return list.view('active'); } };
+    const ai = heldAI();
+    const editor = makeEditor(env, env.document);
     editor.ai = ai.port;
     await drive(env, editor.loadNote('A'));
-    return { env, Storage, ai, editor, page, sidebar };
+    await list.settled();
+    return { env, Storage, ai, editor, page, sidebar, list };
   }
 
-  /** What the sidebar's array says of A, and whether A sorts first by updatedAt */
+  /** What the sidebar's list says of A, and whether A sorts first by updatedAt */
   function sidebarView(sidebar) {
     const a = sidebar.notes.find((n) => n.id === 'A');
     const newest = [...sidebar.notes].sort((x, y) => y.updatedAt - x.updatedAt)[0];
@@ -619,39 +621,47 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   }
 
   it('after the auto-title job names the open note', async () => {
-    const { env, Storage, ai, editor, page, sidebar } = await appWithSidebar();
+    const { env, Storage, ai, editor, page, sidebar, list } = await appWithSidebar();
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
     const job = manager.runAutoTitle();
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
+    await list.settled();
     assert.deepEqual(sidebarView(sidebar), { name: 'Groceries', first: 'A' });
     assert.equal(page.notes.find((n) => n.id === 'A').name, 'Groceries');
     assert.ok(sidebar.renders > 0);
   });
 
   it("after Generate title and AI chat's confirmed title", async () => {
-    const { env, Storage, ai, editor, sidebar } = await appWithSidebar();
+    const { env, Storage, ai, editor, sidebar, list } = await appWithSidebar();
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
     const job = manager.generateTitleForNote('A');
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
+    await list.settled();
     assert.deepEqual(sidebarView(sidebar), { name: 'Groceries', first: 'A' });
 
     const chat = aiChat(env, Storage, { ai: ai.port, editor });
     await drive(env, chat.applyGeneratedTitle('Weekly shop', 'A'));
+    await list.settled();
     assert.deepEqual(sidebarView(sidebar), { name: 'Weekly shop', first: 'A' });
   });
 
   it('not after a title kept out by a hand-set one, which changed nothing', async () => {
-    const { env, Storage, ai, editor, sidebar } = await appWithSidebar();
+    const { env, Storage, ai, editor, sidebar, list } = await appWithSidebar();
     const manager = notesManager(env, Storage, { ai: ai.port, editor });
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
     await execute(env, 'renameNote', { noteId: 'A', name: 'Mine' });
+    await list.settled();
+    // The hand-set title's own commit is what the list shows
+    assert.equal(sidebar.notes.find((n) => n.id === 'A').name, 'Mine');
+    const renders = sidebar.renders;
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
-    assert.equal(sidebar.notes.find((n) => n.id === 'A').name, 'Untitled');
-    assert.equal(sidebar.renders, 0);
+    await list.settled();
+    assert.equal(sidebar.notes.find((n) => n.id === 'A').name, 'Mine');
+    assert.equal(sidebar.renders, renders, 'the kept title changed nothing, so nothing renders');
   });
 });
 

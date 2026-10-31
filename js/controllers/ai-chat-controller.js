@@ -62,7 +62,8 @@ class AIChatController {
     this.onGetOpenTabs = null;       // () => Array
     this.onRenderTabs = null;        // () => void
     this.onSaveTabs = null;          // () => Promise<void>
-    this.onGetNotes = null;          // () => Note[]
+    /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
+    this.noteList = null;
     this.onTriggerIndexing = null;   // () => void
     this.onLoadEmbeddingsModel = null; // () => void
   }
@@ -2940,7 +2941,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const relatedContainer = document.getElementById('ai-related-notes');
     if (relatedContainer) {
       relatedContainer.innerHTML = '';
-      const notes = this.onGetNotes ? this.onGetNotes() : [];
+      const notes = this.noteList ? this.noteList.view('active') : [];
       if (related.length > 0) {
         related.forEach(res => {
           const note = notes.find(n => n.id === res.id);

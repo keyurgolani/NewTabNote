@@ -8,6 +8,7 @@
 
 import { createAIPort } from '../../services/ai-port.mjs';
 import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
+import { createNoteList } from '../core/application/note-list.js';
 import { createDocumentClient } from './document.js';
 import { kernelClient, legacyHost } from './host.js';
 
@@ -15,12 +16,13 @@ import { kernelClient, legacyHost } from './host.js';
 /** @typedef {import('./host.js').LegacyHost} LegacyHost */
 /** @typedef {import('./document.js').DocumentClient} DocumentClient */
 /** @typedef {import('../../services/ai-port.mjs').AIPort} AIPort */
+/** @typedef {import('../core/application/note-list.js').NoteList} NoteList */
 
 /**
  * The legacy App class app.js puts on window, and the instance the controllers still read as
  * window.app until #12 slice 7 removes it
  * @typedef {object} NewTabPage
- * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort}) => {init(): Promise<void>}} App
+ * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList}) => {init(): Promise<void>}} App
  * @property {unknown} [app]
  */
 
@@ -53,9 +55,26 @@ export function createNewTabDocumentClient(kernel, host) {
 }
 
 /**
+ * The tab's note-list projection on `kernel`: the one copy of the note lists App, its
+ * controllers, the palette, and analytics read. It starts reading as soon as the kernel is
+ * ready, so the lists are there when App first renders them.
+ * @param {Client} kernel
+ * @returns {NoteList}
+ */
+export function createNewTabNoteList(kernel) {
+  return createNoteList({
+    query: kernel.query,
+    subscribe: kernel.subscribe,
+    whenReady: kernel.whenReady,
+    logger: { warn: (event, detail) => console.warn(`NewTabNote note list: ${event}`, detail) },
+  });
+}
+
+/**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
- * client, its document client, and its AI port, and becomes window.app before init runs. The
- * listener answers with init's promise, which a page ignores and a test can wait for.
+ * client, its document client, its AI port, and its note list, and becomes window.app before
+ * init runs. The listener answers with init's promise, which a page ignores and a test can
+ * wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -67,6 +86,7 @@ export function startNewTab() {
       kernel,
       documentClient: createNewTabDocumentClient(kernel, host),
       ai: createAIPort(),
+      noteList: createNewTabNoteList(kernel),
     });
     page.app = app;
     return app.init().catch(error => {

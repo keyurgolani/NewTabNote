@@ -5,17 +5,24 @@
 
 import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
+import { createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 
 /**
- * The page's kernel client, and the document client over it
- * @param {{storage: any, settings: any}} host - the page's Storage and chrome.storage.local
- * @returns {{kernel: import('../../js/kernel/composition/host.js').Client,
- *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient}}
+ * The page's kernel client, the document client over it, and its note list
+ * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
+ * them, so a commit an editor or a job makes reaches the list's feed
+ * @param {{storage: any, settings: any, onListQuery?: (query: any) => void}} host - the page's
+ *   Storage and chrome.storage.local, and what to tell of each query the note list makes
+ * @returns {{
+ *   kernel: import('../../js/kernel/composition/host.js').Client,
+ *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient,
+ *   noteList: import('../../js/kernel/core/application/note-list.js').NoteList,
+ * }}
  */
-export function editorKernelFor({ storage, settings }) {
+export function pageClientsFor({ storage, settings, onListQuery = () => {} }) {
   const adapter = createLegacyAdapter({ storage, settings, mode: 'versioned' });
   const kernel = createKernel({
     adapter,
@@ -31,7 +38,27 @@ export function editorKernelFor({ storage, settings }) {
     whenReady: kernel.whenReady,
     ids: legacyIds,
   });
-  return { kernel: client, documentClient: createDocumentClient(client) };
+  /** @type {typeof kernel.query} */
+  const listQuery = query => {
+    onListQuery(query);
+    return kernel.query(query);
+  };
+  return {
+    kernel: client,
+    documentClient: createDocumentClient(client),
+    noteList: createNewTabNoteList({ ...client, query: listQuery }),
+  };
+}
+
+/**
+ * The page's kernel client, and the document client over it
+ * @param {{storage: any, settings: any}} host - the page's Storage and chrome.storage.local
+ * @returns {{kernel: import('../../js/kernel/composition/host.js').Client,
+ *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient}}
+ */
+export function editorKernelFor(host) {
+  const { kernel, documentClient } = pageClientsFor(host);
+  return { kernel, documentClient };
 }
 
 /**
@@ -39,5 +66,5 @@ export function editorKernelFor({ storage, settings }) {
  * @returns {import('../../js/kernel/composition/document.js').DocumentClient}
  */
 export function editorClientFor(host) {
-  return editorKernelFor(host).documentClient;
+  return pageClientsFor(host).documentClient;
 }

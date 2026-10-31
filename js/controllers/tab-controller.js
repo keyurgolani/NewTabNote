@@ -35,7 +35,8 @@ class TabController {
     this.onCreateNote = null;       // () => Promise<Note>
     this.onRefreshNotesList = null;  // () => Promise<void>
     this.onRenderNotesList = null;   // () => Promise<void>
-    this.onGetNotes = null;          // () => Note[]
+    /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
+    this.noteList = null;
     this.onUpdateEmptyState = null;  // () => void
 
     /** @type {BroadcastChannel|null} Tells the other new tabs which notes left the active set, so they refresh their lists */
@@ -560,7 +561,7 @@ class TabController {
       await this.switchToTab(this.activeTabIndex);
     } else {
       // No saved tabs or all invalid - create initial tab with first note
-      const notes = this.onGetNotes ? this.onGetNotes() : [];
+      const notes = this.noteList ? this.noteList.view('active') : [];
       if (notes.length > 0) {
         this.openTabs = [{ noteId: notes[0].id, name: notes[0].name || 'Untitled' }];
         this.activeTabIndex = 0;

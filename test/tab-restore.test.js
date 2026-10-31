@@ -73,9 +73,9 @@ async function start(env) {
   const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
   tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
   tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
-  // App passes its active notes, from Storage.getAllNotes()
-  const activeNotes = await Storage.getAllNotes();
-  tabs.onGetNotes = () => activeNotes;
+  // App passes the tab's note list, which has read every list once its kernel was ready
+  await env.noteList.settled();
+  tabs.noteList = env.noteList;
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   return { Storage, tabs, toasts };

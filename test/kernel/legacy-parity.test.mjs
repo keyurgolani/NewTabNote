@@ -10,6 +10,7 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+import { createNoteList } from '../../js/kernel/core/application/note-list.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
 import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { testIds } from './support.mjs';
@@ -579,7 +580,9 @@ describe("the kernel's copies of production rules, run both ways", () => {
     ];
     const { viaStorage, viaKernel, kernel } = await twin({ folders });
     viaStorage.env.load('js/controllers/sidebar-controller.js');
-    const sidebar = Object.assign(Object.create(viaStorage.env.get('SidebarController').prototype), { folders });
+    // The sidebar lists the folders its note list lists
+    const noteList = { folders: () => folders, subscribe: () => () => {} };
+    const sidebar = Object.assign(Object.create(viaStorage.env.get('SidebarController').prototype), { noteList });
     for (const dragged of folders) {
       for (const target of folders) {
         assert.equal(
@@ -631,6 +634,84 @@ describe("the kernel's copies of production rules, run both ways", () => {
         view,
       );
     }
+  });
+
+  it("the note list's views list what Storage lists, in its order, at load and after each commit", async () => {
+    const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
+    const context = legacyContext();
+    opened.push(context);
+    await legacyEnv.createDatabase(context.env.indexedDB, {
+      records: {
+        canvases: [
+          legacyEnv.note('a', { updatedAt: at(5) }),
+          legacyEnv.note('b', { updatedAt: at(5) }),
+          legacyEnv.note('c', { updatedAt: at(9), pinned: true }),
+          legacyEnv.note('archived-1', { updatedAt: at(1), archived: true, archivedAt: at(30) }),
+          legacyEnv.note('archived-2', { updatedAt: at(2), archived: true, archivedAt: null }),
+          legacyEnv.note('trashed-1', { updatedAt: at(3), trashed: true, trashedAt: at(10) }),
+          legacyEnv.note('trashed-2', { updatedAt: at(4), trashed: true, trashedAt: at(40), archived: true }),
+          legacyEnv.note('template-1', { updatedAt: at(6), isTemplate: true }),
+          legacyEnv.note('template-2', { updatedAt: at(8), isTemplate: true }),
+          legacyEnv.note('template-trashed', { updatedAt: at(11), isTemplate: true, trashed: true, trashedAt: at(1) }),
+          legacyEnv.note('no-time', { updatedAt: undefined }),
+        ],
+        folders: [folder('f2', null), folder('f1', 'f2')],
+        search_index: [
+          { noteId: 'a', name: 'a', content: 'alpha', updatedAt: at(5) },
+          { noteId: 'c', name: 'c', content: 'gamma', updatedAt: at(9) },
+        ],
+      },
+    });
+    const adapter = adapterFor(context);
+    await adapter.open();
+    const kernel = kernelFor(adapter, { ids: testIds('k'), clock: { now: () => Date.now() } });
+    const list = createNoteList({ query: kernel.query, subscribe: kernel.subscribe, whenReady: kernel.whenReady });
+    const { storage } = context;
+    /** @type {Array<[NoteView, () => Promise<Array<{id: string}>>]>} */
+    const views = [
+      ['active', () => storage.getAllNotes()],
+      ['withArchived', () => storage.getAllNotes(true)],
+      ['archived', () => storage.getArchivedNotes()],
+      ['trashed', () => storage.getTrashedNotes()],
+      ['templates', () => storage.getTemplates()],
+    ];
+    const sameAsStorage = async (/** @type {string} */ when) => {
+      await list.settled();
+      for (const [view, read] of views) {
+        assert.deepEqual(legacyEnv.plain(list.view(view)), legacyEnv.plain(await read()), `${view} ${when}`);
+      }
+      assert.deepEqual(
+        legacyEnv.plain(list.folders()),
+        legacyEnv.plain(await storage.getAllFolders()),
+        `folders ${when}`,
+      );
+      const byNote = (/** @type {Array<{noteId: string}>} */ entries) =>
+        [...entries].sort((x, y) => x.noteId.localeCompare(y.noteId));
+      assert.deepEqual(
+        byNote(legacyEnv.plain(list.searchEntries())),
+        byNote(legacyEnv.plain(await storage.getSearchIndex())),
+        `search entries ${when}`,
+      );
+    };
+    await sameAsStorage('at load');
+    let count = 0;
+    /** @param {Record<string, unknown> & {type: string}} command */
+    const run = async command => {
+      // Apart in time, so each commit's updatedAt orders the lists
+      await new Promise(resolve => setTimeout(resolve, 2));
+      assertCommitted(await kernel.execute(/** @type {any} */ ({ ...command, commandId: `c${++count}` })));
+      await sameAsStorage(`after ${command.type}`);
+    };
+    await run({ type: 'renameNote', noteId: 'b', name: 'Renamed' });
+    await run({ type: 'saveNoteContent', noteId: 'a', blocks: [legacyEnv.block('a1', 'a', 0, 'saved')] });
+    await run({ type: 'setPinned', noteId: 'b', pinned: true });
+    await run({ type: 'archiveNote', noteId: 'c' });
+    await run({ type: 'unarchiveNote', noteId: 'archived-2' });
+    await run({ type: 'trashNote', noteId: 'a' });
+    await run({ type: 'restoreNote', noteId: 'trashed-1' });
+    await run({ type: 'createNote', noteId: 'new', name: 'New', folderId: 'f1' });
+    await run({ type: 'createFolder', folderId: 'f3', name: 'f3', parentId: null });
+    await run({ type: 'moveFolder', folderId: 'f3', parentId: 'f1' });
   });
 
   it('getNoteBlocks lists blocks in the order the editor loads them', async () => {

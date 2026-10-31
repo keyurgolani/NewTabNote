@@ -7,7 +7,7 @@ class VirtualScroller {
    * @param {HTMLElement} options.container - The scrollable container element
    * @param {number} options.itemHeight - Fixed height of each item in pixels
    * @param {function(Object, number): HTMLElement} options.renderItem - Function to create a DOM element for an item
-   * @param {Array<Object>} [options.items=[]] - All items to render
+   * @param {ReadonlyArray<Object>} [options.items=[]] - All items to render, which it never changes
    * @param {number} [options.buffer=3] - Number of extra items to render above/below viewport
    */
   constructor(options) {
@@ -37,7 +37,7 @@ class VirtualScroller {
 
   /**
    * Replace the items array and re-render.
-   * @param {Array<Object>} items - New items array
+   * @param {ReadonlyArray<Object>} items - New items array, which it never changes
    * @returns {void}
    */
   setItems(items) {

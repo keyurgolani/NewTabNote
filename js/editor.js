@@ -855,9 +855,9 @@ class BlockEditor {
    * Show a title the kernel committed for `noteId` (a derived or generated one), without
    * saving anything: only while this editor holds that note, and not over a title the user
    * typed that no save has stored yet, which wins once its save lands. A generated title
-   * waiting to save is dropped, since the committed one is newer. The page hears of it as it
-   * heard of the save that carried the title before #12 slice 4b2a, so the sidebar lists the
-   * new name and moves the note up. #12 slice 4c's note-list projection takes that over.
+   * waiting to save is dropped, since the committed one is newer. The sidebar lists the new
+   * name, and moves the note up, from the page's note list, which reads the commit from the
+   * commit feed (#12 slice 4c1).
    * @param {string} noteId
    * @param {string} name
    * @returns {'shown'|'typed-title-pending'|'not-open'}
@@ -873,7 +873,6 @@ class BlockEditor {
     // The commit moved updatedAt, as the save did
     this.noteData.updatedAt = Date.now();
     this.titleEl.textContent = name;
-    this.navigation.noteSaved(this.noteData);
     return 'shown';
   }
 

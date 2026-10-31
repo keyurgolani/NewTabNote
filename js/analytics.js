@@ -1,21 +1,42 @@
 /**
- * Analytics Manager - handles data aggregation for stats and insights
+ * Analytics Manager - handles data aggregation for stats and insights. It counts what the new
+ * tab's note list lists (js/kernel/core/application/note-list.js), and reads each note's
+ * blocks through the page's document client; App gives it both with connect().
  */
 class AnalyticsManager {
     constructor() {
-        this.storage = null;
+        /** @type {{view(name: string): ReadonlyArray<any>} | null} */
+        this.noteList = null;
+        /** @type {((noteId: string) => Promise<Array<any>>) | null} */
+        this.getNoteBlocks = null;
     }
 
     /**
-     * Lazily resolve the Storage reference.
-     * @returns {DatabaseManager}
+     * Give it the note list it counts, and the reader of a note's blocks.
+     * @param {{noteList: {view(name: string): ReadonlyArray<any>}, getNoteBlocks: (noteId: string) => Promise<Array<any>>}} sources
+     * @returns {void}
      */
-    _getStorage() {
-        if (!this.storage) {
-            // `Storage` is also the DOM's Web Storage type, so read it untyped.
-            this.storage = /** @type {any} */ (typeof window !== 'undefined' ? window : self).Storage;
-        }
-        return this.storage;
+    connect({ noteList, getNoteBlocks }) {
+        this.noteList = noteList;
+        this.getNoteBlocks = getNoteBlocks;
+    }
+
+    /**
+     * A view of the note list, or no notes before connect()
+     * @param {string} name
+     * @returns {ReadonlyArray<any>}
+     */
+    _view(name) {
+        return this.noteList ? this.noteList.view(name) : [];
+    }
+
+    /**
+     * A note's blocks, or none before connect()
+     * @param {string} noteId
+     * @returns {Promise<Array<any>>}
+     */
+    async _blocksOf(noteId) {
+        return this.getNoteBlocks ? this.getNoteBlocks(noteId) : [];
     }
 
     /**
@@ -23,17 +44,16 @@ class AnalyticsManager {
      * @returns {Promise<{totalNotes: number, archivedNotes: number, trashedNotes: number, totalWords: number}>} Overview statistics
      */
     async getGlobalStats() {
-        const storage = this._getStorage();
-        const notes = await storage.getAllNotes();
-        const archived = await storage.getArchivedNotes();
-        const trashed = await storage.getTrashedNotes();
+        const notes = this._view('active');
+        const archived = this._view('archived');
+        const trashed = this._view('trashed');
 
         // Total word count (rough estimate from text blocks)
         let totalWords = 0;
         const allNotes = [...notes, ...archived, ...trashed];
 
         for (const note of allNotes) {
-            const elements = await storage.getElementsByNote(note.id);
+            const elements = await this._blocksOf(note.id);
             for (const el of elements) {
                 if (el.type === 'text' && el.content) {
                     totalWords += el.content.trim().split(/\s+/).length;
@@ -55,9 +75,8 @@ class AnalyticsManager {
      * @returns {Promise<Array<{date: string, created: number, updated: number}>>} Activity data sorted by date
      */
     async getActivityData(days = 30) {
-        const storage = this._getStorage();
-        const notes = await storage.getAllNotes();
-        const archived = await storage.getArchivedNotes();
+        const notes = this._view('active');
+        const archived = this._view('archived');
         const allNotes = [...notes, ...archived];
 
         const activityMap = {};
@@ -94,12 +113,11 @@ class AnalyticsManager {
      * @returns {Promise<Array<[string, number]>>} Top 10 tags as [tag, count] pairs
      */
     async getTagDistribution() {
-        const storage = this._getStorage();
-        const notes = await storage.getAllNotes();
+        const notes = this._view('active');
         const tagCounts = {};
 
         for (const note of notes) {
-            const elements = await storage.getElementsByNote(note.id);
+            const elements = await this._blocksOf(note.id);
             const textContent = elements
                 .filter(el => el.type === 'text')
                 .map(el => el.content)
@@ -121,8 +139,7 @@ class AnalyticsManager {
      * @returns {Promise<Object<string, number>>} Block type counts
      */
     async getContentTypeBreakdown() {
-        const storage = this._getStorage();
-        const notes = await storage.getAllNotes();
+        const notes = this._view('active');
         const typeCounts = {
             text: 0,
             image: 0,
@@ -134,7 +151,7 @@ class AnalyticsManager {
         };
 
         for (const note of notes) {
-            const elements = await storage.getElementsByNote(note.id);
+            const elements = await this._blocksOf(note.id);
             elements.forEach(el => {
                 if (typeCounts.hasOwnProperty(el.type)) {
                     typeCounts[el.type]++;
