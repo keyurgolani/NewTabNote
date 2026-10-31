@@ -4,9 +4,13 @@
  * the incident's provider's check (trust.verify, `verify-now`), and only a pass resolves it.
  * `result` says what the check found:
  * - `fixed`: the incident is resolved (by this check, or already was);
- * - `still-there`: the check answered and still reports it, or saw a new sighting while it ran;
- * - `not-checked`: the check timed out, threw, or answered outside its schema, or its provider
- *   isn't registered here or doesn't observe the fault, so nothing was decided either way.
+ * - `still-there`: the check answered and still reports it, or it was sighted while the check
+ *   ran;
+ * - `not-checked`: nothing was decided either way. `retryable` when asking again may decide
+ *   it: the check timed out, threw, or answered outside its schema, or the count read before it
+ *   failed, so it couldn't resolve. Not retryable when its provider isn't registered here,
+ *   doesn't observe the fault, or answered without looking at it.
+ * A read after the check that couldn't reach the store or the settings copy answers unavailable.
  * A check whose receipt or incidents wouldn't write answers unavailable `not-recorded`.
  */
 
@@ -24,6 +28,7 @@ export const checkedSchema = v.strictObject({
   incidentId: recordId,
   providerId,
   result: v.picklist(CHECK_RESULTS),
+  retryable: v.boolean(),
   // The receipt the check stored, null when none ran
   receiptId: v.nullable(recordId),
 });

@@ -108,13 +108,24 @@ import {
   applyOp,
   applyRaise,
   applyResolve,
+  causesOf,
   directAt,
+  MAX_CAUSES,
   inOrder,
   raiseOp,
   raiseOpSchema,
 } from './incidents.js';
 import { SETTINGS_KEYS } from './ports.js';
-import { BOUNDS, incidentKey, incidentSchema, journalEventSchema, parseRecord, receiptSchema, runSchema } from './records.js';
+import {
+  BOUNDS,
+  incidentKey,
+  incidentSchema,
+  journalEventSchema,
+  parseRecord,
+  receiptSchema,
+  runSchema,
+  worseSeverity,
+} from './records.js';
 import { FINISHED_RUN_STATES, SEVERITIES, STORAGE_PROVIDERS } from './vocabulary.js';
 
 /** @typedef {import('./ports.js').TrustStore} TrustStore */
@@ -190,6 +201,7 @@ export const storageCopySchema = v.strictObject({
  * @property {readonly string[]} [affected]
  * @property {readonly string[]} [preserved]
  * @property {Readonly<Record<string, unknown>>} [evidence]
+ * @property {'check'} [from] - a check found it, rather than a failure event (incidents.js)
  */
 
 /**
@@ -391,22 +403,35 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     }).catch(() => ({ ok: false, unreadable: false }));
 
   /**
-   * Whether `next` changes the problem `held` describes: a worse severity, or a cause other
-   * than its own
+   * What a held entry's sighting says once `next` joins `held`: the newer one's evidence and
+   * capabilities, the worse severity, every cause either named, and a check's mark only when
+   * both were a check's
    * @param {Sighting} held
    * @param {Sighting} next
+   * @param {boolean} newer - `next` is at or after what the entry holds
+   * @returns {Sighting}
    */
-  const changedSighting = (held, next) =>
-    SEVERITIES.indexOf(next.severity) < SEVERITIES.indexOf(held.severity) ||
-    (typeof next.evidence.errorCode === 'string' && next.evidence.errorCode !== held.evidence.errorCode);
+  const mergedSighting = (held, next, newer) => {
+    const base = { ...(newer ? next : held) };
+    delete base.from;
+    delete base.causes;
+    const named = [...new Set([...causesOf(held), ...causesOf(next)])].slice(0, MAX_CAUSES);
+    return {
+      ...base,
+      severity: worseSeverity(held.severity, next.severity),
+      ...(named.length > 1 ? { causes: /** @type {any} */ (named) } : {}),
+      ...(held.from === 'check' && next.from === 'check' ? { from: /** @type {const} */ ('check') } : {}),
+    };
+  };
 
   /**
    * Holds one sighting of storage incident `key`: in the copy, or counted in memory when the
    * copy can't take it. Its time is no earlier than what the store's record holds, when the
    * store can be read, so a clock that stepped back can't file it behind a resolution. The
-   * entry keeps its newest sighting, or a later one that changed the problem (a worse severity
-   * or another cause) whatever the clocks say, so a dismissal sees the change. Answers null
-   * when this context already holds HELD_KEYS other keys, besides the records' own.
+   * entry keeps what every sighting it holds says, whatever order they came in, so a dismissal
+   * sees any change: the newest one's evidence, the worst severity, every cause any of them
+   * named (`causes`), and a check's mark only when every one was a check's. Answers null when
+   * this context already holds HELD_KEYS other keys, besides the records' own.
    * @param {string} key
    * @param {Sighting} sighting
    * @param {number} at
@@ -429,9 +454,9 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
         if (!OWN_KEYS.has(key) && others >= HELD_KEYS) return null;
         entry = { key, incidentId: ids.next(), at: when, sighting, copied: null, remainder: 0, remainderId: ids.next() };
         held.set(key, entry);
-      } else if (when >= entry.at || changedSighting(entry.sighting, sighting)) {
+      } else {
+        entry.sighting = mergedSighting(entry.sighting, sighting, when >= entry.at);
         entry.at = Math.max(entry.at, when);
-        entry.sighting = sighting;
       }
       const added = await addToCopy(entry);
       if (!added.ok) entry.remainder += 1;
@@ -871,6 +896,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
       affected: [...(input.affected || [])],
       preserved: [...(input.preserved || [])],
       evidence: evidence.value,
+      ...(input.from === 'check' ? { from: 'check' } : {}),
     });
   };
 

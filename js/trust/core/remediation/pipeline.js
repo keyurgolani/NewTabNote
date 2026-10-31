@@ -300,6 +300,9 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
     let saved = first.saved;
     /** @type {string | undefined} */
     let noteId = first.noteId;
+    // What a secret removal took out and what's still there
+    /** @type {{removed: RemediationRun['removed'], kept: RemediationRun['kept']} | null} */
+    let places = first.removed || first.kept ? { removed: first.removed || [], kept: first.kept || [] } : null;
     /** @param {readonly Unreadable[]} list */
     const setUnreadable = list => {
       unreadable = list.slice(0, MAX_UNREADABLE);
@@ -333,6 +336,7 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       fileMayBeEmpty,
       ...(saved ? { saved: { ...saved } } : {}),
       ...(noteId ? { noteId } : {}),
+      ...(places ? { removed: [...(places.removed || [])], kept: [...(places.kept || [])] } : {}),
       ...(run.recoveryPointId ? { recoveryPointId: run.recoveryPointId } : {}),
       recorded,
       messageKey: `remediation.${run.state}`,
@@ -357,6 +361,7 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
         ...(fileMayBeEmpty ? { fileMayBeEmpty } : {}),
         ...(saved ? { saved } : {}),
         ...(noteId ? { noteId } : {}),
+        ...(places ? { removed: places.removed, kept: places.kept } : {}),
       });
       note({
         runId: run.id,
@@ -532,6 +537,9 @@ export function createRemediationPipeline({ records, journal, clock, ids, locks,
       if (verdict && verdict.ok === false && verdict.fileMayBeEmpty === true) fileMayBeEmpty = true;
       if (verdict && verdict.ok === true && verdict.saved) saved = verdict.saved;
       if (verdict && verdict.ok === true && typeof verdict.noteId === 'string') noteId = verdict.noteId;
+      if (verdict && Array.isArray(verdict.removed) && Array.isArray(verdict.kept)) {
+        places = { removed: /** @type {any} */ ([...verdict.removed]), kept: /** @type {any} */ ([...verdict.kept]) };
+      }
       if (!verdict || verdict.ok !== true) {
         return finish('failed', outcomeCode(verdict && /** @type {{code?: unknown}} */ (verdict).code, 'not-verified'));
       }

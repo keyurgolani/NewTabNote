@@ -171,6 +171,17 @@ export const REMEDIATION_CLASSES = Object.freeze(
 /** @typedef {(typeof REMEDIATION_CLASSES)[number]} RemediationClass */
 
 /**
+ * Where 1.4.x and releases up to 1.1.2 kept a plaintext secret (the legacy secret reader's
+ * places): the AI key (with its owner setting) and the WebDAV password in
+ * chrome.storage.local, and the AI key 1.1 left in CanvasTabDB's `settings` store
+ */
+export const SECRET_PLACES = Object.freeze(
+  /** @type {const} */ (['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings']),
+);
+
+/** @typedef {(typeof SECRET_PLACES)[number]} SecretPlace */
+
+/**
  * The providers whose incidents count as storage incidents: the one kind that survives in
  * chrome.storage.local while IndexedDB won't open (#20, "Records")
  */

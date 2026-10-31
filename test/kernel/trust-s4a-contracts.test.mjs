@@ -109,8 +109,16 @@ async function center(answers, { context = {} } = {}) {
   const resolution = root.resolve();
   const runtime = createRuntime(resolution);
   await runtime.probe();
+  // What a test breaks in the records the use cases read, by method
+  /** @type {Record<string, (...args: any[]) => Promise<any>>} */
+  const broken = {};
+  /** @type {any} */
+  const read = { ...records };
+  for (const name of ['occurrencesOf', 'incidentsRead']) {
+    read[name] = (/** @type {any[]} */ ...args) => (broken[name] || /** @type {any} */ (records)[name])(...args);
+  }
   const trust = createTrustUseCases({
-    records,
+    records: read,
     journal,
     clock,
     timers: realTimers,
@@ -118,7 +126,7 @@ async function center(answers, { context = {} } = {}) {
     registry: { resolution, runtime, context },
     versions: { extension: '1.4.1', browser: null, canvasSchema: 8, trustSchema: 1 },
   });
-  return { clock, records, trust };
+  return { clock, records, trust, broken };
 }
 
 /**
@@ -882,14 +890,16 @@ describe('what a run answers for the views (#20 slice 4a, item 5)', () => {
     files.cancel = true;
     const closed = /** @type {any} */ (await pipeline.run(runOf('export-diagnostics')));
     assert.equal(closed.state, 'cancelled');
-    // A report that won't build fails after the pick
+    // No previewed report, nothing to save: it doesn't open the picker
+    const none = memoryFiles();
     const broken = await remediationCenter({
       contributions: /** @type {any} */ (REMEDIATIONS),
-      ports: { files: memoryFiles(), diagnostics: async () => unavailable('storage', 'not-open', true) },
+      ports: { files: none, diagnostics: async () => unavailable('storage', 'not-open', true) },
     });
     const failed = /** @type {any} */ (await broken.pipeline.run(runOf('export-diagnostics')));
     assert.equal(failed.state, 'failed');
-    assert.equal(failed.outcome, 'build-failed');
+    assert.equal(failed.outcome, 'not-applicable');
+    assert.equal(none.picks, 0);
   });
 });
 
@@ -1445,22 +1455,15 @@ describe('recovery.check says still there only when it is (#100 review)', () => 
 
   it('a passing check whose count read before it failed answers not-checked, to try again', async () => {
     const answers = /** @type {Record<string, any>} */ ({ ...allPassing(), index: lagging() });
-    const { trust, records } = await center(answers);
+    const { trust, records, broken } = await center(answers);
     await trust.verify(verifyNow(['index']));
     const [incident] = await records.incidents();
     answers.index = allPassing().index;
-    const original = records.occurrencesOf;
-    /** @type {any} */ (records).occurrencesOf = async () => ({ ok: false });
-    try {
-      const answer = checked(
-        'recovery.check',
-        await trust.check(command('recovery.check', { incidentId: incident.id })),
-      );
-      assert.equal(answer.result, 'not-checked');
-      assert.equal(answer.retryable, true);
-    } finally {
-      /** @type {any} */ (records).occurrencesOf = original;
-    }
+    broken.occurrencesOf = async () => ({ ok: false });
+    const answer = checked('recovery.check', await trust.check(command('recovery.check', { incidentId: incident.id })));
+    delete broken.occurrencesOf;
+    assert.equal(answer.result, 'not-checked');
+    assert.equal(answer.retryable, true);
     assert.equal((await records.incidents())[0].state, 'open');
   });
 
@@ -1486,25 +1489,18 @@ describe('recovery.check says still there only when it is (#100 review)', () => 
 
   it("an after-read that couldn't reach the settings copy decides nothing", async () => {
     const answers = /** @type {Record<string, any>} */ ({ ...allPassing(), index: lagging() });
-    const { trust, records } = await center(answers);
+    const { trust, records, broken } = await center(answers);
     await trust.verify(verifyNow(['index']));
     const [incident] = await records.incidents();
     answers.index = allPassing().index;
-    const original = records.incidentsRead;
     let reads = 0;
-    /** @type {any} */ (records).incidentsRead = async () => {
-      const read = await original();
+    broken.incidentsRead = async () => {
+      const read = await records.incidentsRead();
       return ++reads > 1 ? { ...read, copyRead: false } : read;
     };
-    try {
-      const answer = checked(
-        'recovery.check',
-        await trust.check(command('recovery.check', { incidentId: incident.id })),
-      );
-      assert.equal(answer.kind, 'unavailable');
-    } finally {
-      /** @type {any} */ (records).incidentsRead = original;
-    }
+    const answer = checked('recovery.check', await trust.check(command('recovery.check', { incidentId: incident.id })));
+    delete broken.incidentsRead;
+    assert.equal(answer.kind, 'unavailable');
   });
 });
 

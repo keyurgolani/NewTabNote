@@ -29,6 +29,9 @@ export const REPAIRS = Object.freeze(
     { providerId: 'storage', faultCode: 'open-failed', remediationId: 'retry-open', kind: 'repair' },
     { providerId: 'storage', faultCode: 'probe-failed', remediationId: 'retry-open', kind: 'repair' },
     { providerId: 'capture', faultCode: 'probe-failed', remediationId: 'retry-open', kind: 'repair' },
+    // Out of space: "Free up some space on this device, then choose Try again"
+    { providerId: 'storage', faultCode: 'quota', remediationId: 'retry-open', kind: 'repair' },
+    { providerId: 'capture', faultCode: 'quota', remediationId: 'retry-open', kind: 'repair' },
     { providerId: 'credentials', faultCode: 'legacy-secret', remediationId: 'remove-saved-key', kind: 'repair' },
     { providerId: 'local-inference', faultCode: 'load-failed', remediationId: 'safe-disable', kind: 'mitigation' },
   ]).map(repair => Object.freeze(repair)),

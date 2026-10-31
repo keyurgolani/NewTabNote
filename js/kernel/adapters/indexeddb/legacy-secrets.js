@@ -17,11 +17,17 @@
  *   the one key in one readonly transaction, and closes the connection.
  * - The reader writes nothing anywhere. Removing a key is `remove-saved-key`'s, through the
  *   remover below (#20 slice 4a), which takes out exactly the entries it's named and nothing
- *   beside them: the `setting_llmApiKey` key, the `password` field of
- *   `setting_syncWebdavConfig` (its server and user name stay, so Sync asks for the password
- *   again), and the `llmApiKey` row of CanvasTabDB's `settings` store, never another row, a
- *   note, or anything the user made. It reads no value it removes, and fails the same way the
- *   reader does, with a code and no message from what it called.
+ *   beside them:
+ *   - `setting_llmApiKey`: the key, and with it its owner, `setting_llmApiKeyProvider` (#94),
+ *     in one call, as LLMService.setApiKey('') clears both;
+ *   - `setting_syncWebdavConfig`: the `password` field (its server and user name stay, so Sync
+ *     asks for the password again). It reads the config to write the rest back, and keeps,
+ *     returns, and logs none of it;
+ *   - `settings`: the `llmApiKey` row of CanvasTabDB's `settings` store, never another row, a
+ *     note, or anything the user made.
+ *   It tries every place it's named, each on its own, so one that fails doesn't keep the rest,
+ *   then fails the same way the reader does, with the first failure's code and no message
+ *   from what it called. The remediation reads the places again to say which went.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -166,22 +172,28 @@ export function createLegacySecretRemover({ indexedDB, settings }) {
       if (!Array.isArray(places) || !places.every(place => PLACES.includes(place))) {
         throw new UnavailableError('adapter', 'not-applicable', false);
       }
-      if (places.includes('setting_llmApiKey') || places.includes('setting_syncWebdavConfig')) {
+      /** @type {string | null} */
+      let failed = null;
+      // Each place on its own; what chrome.storage or IndexedDB threw stays here
+      /** @type {Array<[string, () => Promise<void>, string]>} */
+      const steps = [
+        [
+          'setting_llmApiKey',
+          () => settings.remove(['setting_llmApiKey', 'setting_llmApiKeyProvider']),
+          'settings-write-failed',
+        ],
+        ['setting_syncWebdavConfig', () => removeWebdavPassword(settings), 'settings-write-failed'],
+        ['settings', () => removeIdbKey(indexedDB), 'transaction-failed'],
+      ];
+      for (const [place, step, code] of steps) {
+        if (!places.includes(place)) continue;
         try {
-          if (places.includes('setting_llmApiKey')) await settings.remove(['setting_llmApiKey']);
-          if (places.includes('setting_syncWebdavConfig')) await removeWebdavPassword(settings);
+          await step();
         } catch {
-          // What chrome.storage threw stays here
-          throw new UnavailableError('storage', 'settings-write-failed', true);
+          if (failed === null) failed = code;
         }
       }
-      if (places.includes('settings')) {
-        try {
-          await removeIdbKey(indexedDB);
-        } catch {
-          throw new UnavailableError('storage', 'transaction-failed', true);
-        }
-      }
+      if (failed !== null) throw new UnavailableError('storage', failed, true);
     },
   });
 }

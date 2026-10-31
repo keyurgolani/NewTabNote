@@ -209,7 +209,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
    *   outcome: string,
    *   looked: readonly {faultCode: string, subjectId?: string | null}[],
    *   still: string[],
-   * }>} - also how the check ended, what it looked at, and the keys it still reports
+   *   resolveRan: boolean,
+   * }>} - also how the check ended, what it looked at, the keys it still reports, and whether
+   *   its resolve ran (it doesn't when the count read before the check failed)
    */
   const verifyOne = async provider => {
     const loaded = await registry.runtime.load(provider.ref);
@@ -243,12 +245,13 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     const recorded = await records.record(run.receipt);
     let complete = recorded.recorded;
     for (const fault of run.faults) {
-      // Held isn't stored: the check answers not recorded until a write stores it
-      const raised = await records.raise(fault);
+      // Held isn't stored: the check answers not recorded until a write stores it. A check's
+      // sighting never ends a capture-risk dismissal by itself (incidents.js).
+      const raised = await records.raise({ ...fault, from: 'check' });
       if (!raised.recorded) complete = false;
     }
     const still = run.faults.map(fault => incidentKey(fault.providerId, fault.faultCode, fault.subjectId));
-    const ran = { outcome: run.outcome, looked: run.looked, still };
+    const ran = { outcome: run.outcome, looked: run.looked, still, resolveRan: false };
     if (!recorded.recorded) return { receipt: null, complete: false, ...ran };
     const { receipt } = recorded;
     if (run.outcome === 'answered' && run.looked.length > 0 && seen.ok) {
@@ -257,6 +260,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         seen: /** @type {{counts: Record<string, number>}} */ (seen).counts,
       });
       if (!resolved.recorded) return { receipt, complete: false, ...ran };
+      ran.resolveRan = true;
       for (const incident of resolved.resolved) {
         note('incident.resolved', {
           incidentId: incident.id,
@@ -279,9 +283,11 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
 
   /**
    * What every status page reads: each provider's status, the incidents, and what they add up
-   * to. Dismissed incidents stay listed but leave Needs action, the cards, and capture at
-   * risk: a dismissal never makes capture safe (only a fresh core receipt does), but a problem
-   * the user dismissed doesn't hold the cards at risk by itself.
+   * to. Dismissed incidents stay listed but leave Needs action and the cards. Capture risk
+   * stays strict: capture reads `safe` only on a fresh core receipt verified after the latest
+   * sighting of every open capture-risk incident, dismissed ones included, so a dismissed one
+   * reads `unknown` until a later probe passes, never `safe`, and a new failure ends its
+   * dismissal (incidents.js).
    * @param {number} now
    */
   const assess = async now => {
@@ -297,7 +303,12 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     const atRisk =
       fresh.some(({ receipt }) => receipt && receipt.capture === 'at-risk') ||
       needsAction.some(incident => incident.severity === 'capture-risk');
-    const safe = fresh.some(({ receipt }) => receipt && receipt.capture === 'safe');
+    // The latest sighting of any open capture-risk incident, dismissed or not
+    const riskSeenAt = Math.max(
+      -1,
+      ...open.filter(incident => incident.severity === 'capture-risk').map(incident => incident.lastSeenAt),
+    );
+    const safe = fresh.some(({ receipt }) => receipt && receipt.capture === 'safe' && receipt.verifiedAt > riskSeenAt);
     return { all, listed, copyRead, recordsRead, open, blind, needsAction, core, atRisk, safe };
   };
 
@@ -500,13 +511,15 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         /**
          * @param {Checked['result']} result
          * @param {HealthReceipt | null} receipt
+         * @param {boolean} [retryable]
          * @returns {Checked}
          */
-        const answer = (result, receipt) => ({
+        const answer = (result, receipt, retryable = false) => ({
           kind: 'checked',
           incidentId,
           providerId: /** @type {any} */ (found.providerId),
           result,
+          retryable,
           receiptId: receipt ? receipt.id : null,
         });
         if (found.state === 'resolved') return answer('fixed', null);
@@ -515,14 +528,21 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
         if (!provider || !provider.observes.includes(found.faultCode)) return answer('not-checked', null);
         const ran = await verifyLocked(provider);
         if (!ran.complete) return unavailable('storage', 'not-recorded', true);
-        if (ran.outcome !== 'answered') return answer('not-checked', ran.receipt);
+        if (ran.outcome !== 'answered') return answer('not-checked', ran.receipt, true);
         const after = await records.incidentsRead();
-        if (!after.recordsRead) return unavailable('storage', 'unreadable', true);
+        // An incident only the settings copy holds is missing from a read that couldn't reach it
+        if (!after.recordsRead || !after.copyRead) return unavailable('storage', 'unreadable', true);
         const current = after.incidents.find(incident => incident.id === incidentId);
         // Open incidents are always kept, so one that's gone was resolved and pruned
         if (!current || current.state === 'resolved') return answer('fixed', ran.receipt);
-        if (ran.still.includes(found.key) || lookedAt(ran.looked, found)) return answer('still-there', ran.receipt);
-        return answer('not-checked', ran.receipt);
+        // Still there only when the check still reports it, or it was sighted while the check ran
+        if (ran.still.includes(found.key) || current.occurrences !== found.occurrences) {
+          return answer('still-there', ran.receipt);
+        }
+        // Nothing decided. A check that looked at it but whose resolve couldn't run (the count
+        // read before it failed) may decide next time; one that didn't look at it, or looked at
+        // one no check resolves (the records' own), won't.
+        return answer('not-checked', ran.receipt, lookedAt(ran.looked, found) && !ran.resolveRan);
       } catch (error) {
         return unavailableFrom(error);
       }

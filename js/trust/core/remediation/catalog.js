@@ -21,9 +21,9 @@
  * - `save-recovery-file` (non-destructive): Save as file for a restore point, a legacy copy or
  *   a verified #17 point, the `pre-repair` points a repair makes included, by its id.
  * - `save-salvage-file` (non-destructive): the salvage file (salvage-file.js).
- * - `export-diagnostics` (non-destructive, slice 4a): the diagnostic report, as
- *   diagnostics.export builds it, built again once the user picked where it goes, so it may
- *   hold journal events newer than the preview, within the same schema.
+ * - `export-diagnostics` (non-destructive, slice 4a): the diagnostic report the user
+ *   previewed (diagnostics.export's answer, which the view holds), never built again, so the
+ *   file is exactly what they read. With no previewed report it doesn't run.
  * All three save through the picker and verify by reading the file back (saved-file.js), and
  * answer how much they saved.
  * - `remove-saved-key` (secret-removal, slice 4a): "Remove saved keys". Its preview lists each
@@ -90,8 +90,9 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
  * What verify answers: passed, passed short of everything (`saved-partial`, naming what
  * couldn't be read), or failed with its code. A pass may say how much a saved file holds
  * (`saved`), and name the note the run made (`noteId`).
- * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[], saved?: import('../records.js').Saved, noteId?: string}
- *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean}} Verdict
+ * A secret removal names the places it removed and kept, either way.
+ * @typedef {{ok: true, outcome?: 'saved-partial', unreadable?: import('./salvage-file.js').Unreadable[], saved?: import('../records.js').Saved, noteId?: string, removed?: string[], kept?: string[]}
+ *   | {ok: false, code: string, unreadable?: import('./salvage-file.js').Unreadable[], fileMayBeEmpty?: boolean, removed?: string[], kept?: string[]}} Verdict
  */
 
 /** What an apply answers when the user closed the picker: not a failure, and nothing changed */
@@ -529,22 +530,25 @@ const diagnosticsName = now => `newtabnote-diagnostics-${new Date(now).toISOStri
 /** @type {RemediationSteps} */
 const exportDiagnostics = {
   recordOptional: true,
+  // The previewed report, taken once here and carried to apply, so nothing built later reaches the file
   async preview(context) {
-    port(context, 'diagnostics');
-    return { preview: { changes: [{ target: 'file', creates: 1, updates: 0, deletes: 0 }] }, plan: null };
+    const exported = /** @type {{kind?: unknown, serialized?: unknown} | null} */ (
+      await port(context, 'diagnostics')()
+    );
+    if (!exported || exported.kind !== 'diagnostics' || typeof exported.serialized !== 'string') {
+      throw new UnavailableError('adapter', 'not-applicable', false);
+    }
+    return {
+      preview: { changes: [{ target: 'file', creates: 1, updates: 0, deletes: 0 }] },
+      plan: exported.serialized,
+    };
   },
-  async apply(context) {
-    const build = port(context, 'diagnostics');
+  async apply(context, plan) {
+    const text = /** @type {string} */ (plan);
     const written = await writeText({
       files: context.ports.files,
       suggestedName: diagnosticsName(context.clock.now()),
-      build: async () => {
-        const exported = /** @type {{kind?: unknown, serialized?: unknown} | null} */ (await build());
-        if (!exported || exported.kind !== 'diagnostics' || typeof exported.serialized !== 'string') {
-          throw new UnavailableError('storage', 'build-failed', true);
-        }
-        return exported.serialized;
-      },
+      build: async () => text,
     });
     if (written.status === 'cancelled') return CANCELLED_BY_USER;
     if (written.status === 'failed') {
@@ -589,17 +593,27 @@ const removeSavedKey = {
     };
   },
   destroys: (_context, plan) => [.../** @type {string[]} */ (plan)],
+  // A removal that fails partway still goes to verify, which reads the places again and names
+  // what went and what's still there, never a value
   async apply(context, plan) {
     const places = /** @type {string[]} */ (plan);
-    await port(context, 'secrets').remove(places);
-    return places;
+    /** @type {string | null} */
+    let code = null;
+    try {
+      await port(context, 'secrets').remove(places);
+    } catch (error) {
+      const given = error && typeof error === 'object' ? /** @type {{code?: unknown}} */ (error).code : undefined;
+      code = typeof given === 'string' ? given : 'apply-failed';
+    }
+    return { places, code };
   },
   async verify(context, applied) {
-    const left = placesOf(await port(context, 'secrets').present());
-    const removed = /** @type {string[]} */ (applied);
-    return removed.some(place => /** @type {readonly string[]} */ (left).includes(place))
-      ? { ok: false, code: 'not-verified' }
-      : { ok: true };
+    const { places, code } = /** @type {{places: string[], code: string | null}} */ (applied);
+    const left = /** @type {readonly string[]} */ (placesOf(await port(context, 'secrets').present()));
+    const removed = places.filter(place => !left.includes(place));
+    const kept = places.filter(place => left.includes(place));
+    if (kept.length > 0) return { ok: false, code: code || 'not-verified', removed, kept };
+    return { ok: true, removed, kept };
   },
 };
 

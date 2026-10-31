@@ -18,6 +18,9 @@
 import * as v from '../../../lib/valibot/index.mjs';
 import { count } from '../../../kernel/core/contracts/fields.js';
 import { capabilities } from '../records.js';
+import { SECRET_PLACES } from '../vocabulary.js';
+
+export { SECRET_PLACES };
 
 /**
  * What a remediation can change: CanvasTabDB's stores, the preferences in chrome.storage.local,
@@ -41,16 +44,7 @@ export const PREVIEW_TARGETS = Object.freeze(
   ]),
 );
 
-/**
- * Where 1.4.x and releases up to 1.1.2 kept a plaintext secret (the legacy secret reader's
- * places): the AI key and the WebDAV password in chrome.storage.local, and the AI key 1.1 left
- * in CanvasTabDB's `settings` store
- */
-export const SECRET_PLACES = Object.freeze(
-  /** @type {const} */ (['setting_llmApiKey', 'setting_syncWebdavConfig', 'settings']),
-);
-
-/** @typedef {(typeof SECRET_PLACES)[number]} SecretPlace */
+/** @typedef {import('../vocabulary.js').SecretPlace} SecretPlace */
 
 /** What stops working once each place's secret is removed: nothing reads the 1.1 one */
 export const SECRET_STOPS = Object.freeze({

@@ -53,8 +53,10 @@
  */
 
 /**
- * The diagnostic report as diagnostics.export builds it (use-cases.js's exportDiagnostics)
- * @typedef {() => Promise<unknown>} DiagnosticsPort
+ * The diagnostic report the user previewed: diagnostics.export's answer, which the view holds
+ * in the same page while it shows the preview, or null when there's none. Never built again
+ * here, so what's saved is exactly what the user read.
+ * @typedef {() => unknown} DiagnosticsPort
  */
 
 /**

@@ -172,7 +172,7 @@ describe("#68's third review round", () => {
     assert.equal((await records.incidents())[0].state, 'open');
   });
 
-  it('P3b: a changed sighting written after a dismissal in the same millisecond undismisses', async () => {
+  it('P3b: a sighting that ends a dismissal, written in the same millisecond, undismisses', async () => {
     const profile = trustProfile();
     const database = databaseOn(profile);
     opened.push(database);
@@ -180,10 +180,10 @@ describe("#68's third review round", () => {
     const { incident } = await records.raise(CAP);
     clock.advance(10);
     await records.dismiss(/** @type {any} */ (incident).id, true);
-    // The same problem keeps it dismissed (#20 slice 4a); another cause, in the same millisecond, doesn't
-    await records.raise(CAP);
+    // A check's re-sighting keeps it dismissed (#20 slice 4a); a failed capture, in the same millisecond, doesn't
+    await records.raise({ ...CAP, from: 'check' });
     assert.equal((await records.incidents())[0].dismissed, true);
-    await records.raise({ ...CAP, evidence: { errorCode: 'quota' } });
+    await records.raise(CAP);
     assert.equal((await records.incidents())[0].dismissed, false);
   });
 

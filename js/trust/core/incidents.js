@@ -23,6 +23,11 @@
  *   same fault, subject, cause and severity sighted again keeps it, and so does a sighting
  *   that names no cause (a check's), so a check on every Trust Center open never undoes it. A
  *   resolution clears it, so a fault that's fixed and comes back is a problem to see again.
+ *   Capture risk is the exception: any new sighting of a capture-risk incident from a failure
+ *   event (a failed capture, a failed open) ends its dismissal, since each one may be a note
+ *   that wasn't saved. Only a check's re-sighting of the same standing fault (`from: 'check'`)
+ *   keeps it. A sighting held from several (trust-records.js) lists every cause it saw
+ *   (`causes`), and any one other than the dismissed one counts as a change.
  * - A resolution applies only if it's later than every sighting.
  * - A dismissal or undismissal applies only if it's later than every sighting and than the
  *   last dismiss change (`dismissChangedAt`), so an older one replayed late changes nothing.
@@ -35,7 +40,7 @@
 
 import * as v from '../../lib/valibot/index.mjs';
 import { count, timestamp } from '../../kernel/core/contracts/fields.js';
-import { evidenceSchema, faultCode, providerId, recordId, subjectId } from './evidence.js';
+import { errorCode, evidenceSchema, faultCode, providerId, recordId, subjectId } from './evidence.js';
 import { capabilities, incidentKey, incidentKeySchema, refOf, worseSeverity } from './records.js';
 import { SEVERITIES } from './vocabulary.js';
 
@@ -57,9 +62,16 @@ export const sightingSchema = v.strictObject({
   affected: capabilities,
   preserved: capabilities,
   evidence: evidenceSchema,
+  // A check's sighting, which never ends a capture-risk dismissal; absent for a failure event's
+  from: v.optional(v.literal('check')),
+  // Every cause the sightings held together named, when there was more than one
+  causes: v.optional(v.pipe(v.array(errorCode), v.maxLength(8))),
 });
 
 /** @typedef {v.InferOutput<typeof sightingSchema>} Sighting */
+
+/** How many causes a held sighting remembers */
+export const MAX_CAUSES = 8;
 
 /**
  * A sighting as an operation: `count` occurrences, the latest at `at`. `incidentId` is the id
@@ -203,7 +215,10 @@ export function applyRaise(record, op, { track = false, unseen = false } = {}) {
   const reopens = record.state === 'resolved' && added > 0 && (late || at >= (record.resolvedAt ?? 0));
   const staysResolved = record.state === 'resolved' && !reopens;
   const undismisses =
-    record.dismissed && added > 0 && (late || at >= (record.dismissChangedAt ?? 0)) && changesProblem(record, sighting);
+    record.dismissed &&
+    added > 0 &&
+    (late || at >= (record.dismissChangedAt ?? 0)) &&
+    (changesProblem(record, sighting) || newCaptureRisk(record, sighting));
   return {
     ...(undismisses ? withoutCause(record) : record),
     severity: reopens ? sighting.severity : staysResolved ? record.severity : worseSeverity(record.severity, sighting.severity),
@@ -247,11 +262,31 @@ const causeOf = held => (typeof held.evidence.errorCode === 'string' ? held.evid
  */
 export function changesProblem(record, sighting) {
   if (SEVERITIES.indexOf(sighting.severity) < SEVERITIES.indexOf(record.severity)) return true;
-  const cause = causeOf(sighting);
-  if (cause === null) return false;
+  const causes = causesOf(sighting);
+  if (causes.length === 0) return false;
   const dismissedWith = record.dismissedCause !== undefined ? record.dismissedCause : causeOf(record);
-  return cause !== dismissedWith;
+  return causes.some(cause => cause !== dismissedWith);
 }
+
+/**
+ * Every cause a sighting names: those a held one gathered, or its evidence's
+ * @param {Sighting} sighting
+ * @returns {string[]}
+ */
+export function causesOf(sighting) {
+  if (sighting.causes && sighting.causes.length > 0) return [...sighting.causes];
+  const cause = causeOf(sighting);
+  return cause === null ? [] : [cause];
+}
+
+/**
+ * Whether `sighting` is a failure event's new sighting of a capture-risk incident, which ends
+ * its dismissal whatever its cause
+ * @param {Incident} record
+ * @param {Sighting} sighting
+ */
+const newCaptureRisk = (record, sighting) =>
+  sighting.from !== 'check' && (record.severity === 'capture-risk' || sighting.severity === 'capture-risk');
 
 /**
  * `record` without `dismissedCause`, which only a dismissed incident holds

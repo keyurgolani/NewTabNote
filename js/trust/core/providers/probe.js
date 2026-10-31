@@ -26,7 +26,9 @@
  * Every capture-risk fault says whether reading still works (slice 4a, the one `preserved`
  * list): after a probe that didn't commit, one readonly read of the probe's key tries, and
  * `reading` goes in the fault's `preserved` when it answered, in its `affected` when it didn't,
- * and the receipt's `preserved` says the same.
+ * and the receipt's `preserved` says the same. The read has its own deadline (READ_WITHIN_MS,
+ * on the context's timers), so one that never answers counts as not reading, and the finding
+ * still lands well inside the check's timeout.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
  * nothing either way, so it's `unverified` with its code. A record already under the probe's
@@ -138,18 +140,33 @@ function failureOf(outcome) {
   return { kind: 'unverified', evidence: failureEvidence({ code }), code };
 }
 
+/** How long the read after a failed probe may take before it counts as not reading */
+export const READ_WITHIN_MS = 1000;
+
 /**
  * Whether reading still works after a probe that didn't commit: one readonly read of the
- * probe's key, which no record holds, answered or not
+ * probe's key, which no record holds, answered within READ_WITHIN_MS when the context has
+ * timers (checks.js passes them), or not
  * @param {KernelAdapter} adapter
+ * @param {Readonly<Record<string, unknown>>} context
  */
-async function readsStill(adapter) {
+async function readsStill(adapter, context) {
   const key = /** @type {string} */ (/** @type {unknown} */ ([...PROBE_KEY]));
+  const read = adapter.read(['notes'], tx => tx.get('notes', key)).then(
+    () => true,
+    () => false,
+  );
+  const timers = /** @type {import('../ports.js').Timers | undefined} */ (context.timers);
+  if (!timers || typeof timers.set !== 'function') return read;
+  /** @type {unknown} */
+  let handle;
+  const late = new Promise(resolve => {
+    handle = timers.set(() => resolve(false), READ_WITHIN_MS);
+  });
   try {
-    await adapter.read(['notes'], tx => tx.get('notes', key));
-    return true;
-  } catch {
-    return false;
+    return /** @type {boolean} */ (await Promise.race([read, late]));
+  } finally {
+    timers.clear(handle);
   }
 }
 
@@ -186,7 +203,7 @@ export const capture = Object.freeze({
     if (!failure) return { status: 'verified', capture: 'safe', looked: lookedAll() };
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
     const faultCode = failure.code === 'quota' || failure.code === 'version-too-new' ? failure.code : 'probe-failed';
-    const risk = riskTo(['capture'], await readsStill(adapter));
+    const risk = riskTo(['capture'], await readsStill(adapter, context));
     return {
       status: failure.kind === 'action' ? 'action-required' : 'failed',
       capture: 'at-risk',
@@ -232,7 +249,7 @@ export const storage = Object.freeze({
       return { status: 'verified', capture: 'safe', looked: lookedAll(['open-failed']) };
     }
     if (failure.kind === 'unverified') return { status: 'unverified', evidence: failure.evidence };
-    const risk = riskTo(['capture', 'editing'], await readsStill(adapter));
+    const risk = riskTo(['capture', 'editing'], await readsStill(adapter, context));
     if (failure.kind === 'action') {
       const faultCode = /** @type {'quota' | 'version-too-new'} */ (failure.code);
       return {

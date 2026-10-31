@@ -500,8 +500,8 @@ const userRows = rows => {
  * - a legacy copy, by its key, only when the file kept at least one of its user rows and left
  *   out nothing of it as an unknown store or field (`unknown-store`, `unknown-field`
  *   omissions under its key); its secrets are left out by design;
- * - a #17 point, by its id, only when no `unreadable` entry names it and the file holds at
- *   least one of its user rows;
+ * - a #17 point, by its id, only when no `unreadable` entry names it, the file left out
+ *   nothing of it as an unknown store or field, and it holds at least one of its user rows;
  * - a record, by its id, only when it's in CanvasTabDB's lists as the file holds them now,
  *   never because an old copy or point holds it.
  * No subject (null) is never held: what the run destroys must be named.
@@ -547,23 +547,24 @@ export function readOf(file, subjectId = null) {
  */
 function holds(file, subjectId, { copies, points, current, unreadable }) {
   if (subjectId === null || subjectId === '') return false;
-  if (LEGACY_COPY_KEY.test(subjectId)) {
-    if (!Object.prototype.hasOwnProperty.call(copies, subjectId)) return false;
-    const at = `legacyCopies.${subjectId}`;
-    const omissions = Array.isArray(file.omissions) ? file.omissions : [];
-    const dropped = omissions.some(
+  const omissions = Array.isArray(file.omissions) ? file.omissions : [];
+  /** Whether the file left out anything under `at` as an unknown store or field @param {string} at */
+  const dropped = at =>
+    omissions.some(
       omission =>
         isObject(omission) &&
         (omission.reason === 'unknown-store' || omission.reason === 'unknown-field') &&
         typeof omission.at === 'string' &&
         (omission.at === at || omission.at.startsWith(`${at}.`)),
     );
-    return !dropped && userRows(copies[subjectId]) > 0;
+  if (LEGACY_COPY_KEY.test(subjectId)) {
+    if (!Object.prototype.hasOwnProperty.call(copies, subjectId)) return false;
+    return !dropped(`legacyCopies.${subjectId}`) && userRows(copies[subjectId]) > 0;
   }
   if (POINT_ID.test(subjectId)) {
     const point = points.find(candidate => candidate.id === subjectId);
     if (!point || unreadable.some(item => item.pointId === subjectId)) return false;
-    return userRows(point.stores) > 0;
+    return !dropped(`recoveryPoints.${subjectId}`) && userRows(point.stores) > 0;
   }
   return current.has(subjectId);
 }

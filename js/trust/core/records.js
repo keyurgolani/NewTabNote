@@ -30,6 +30,7 @@ import {
   RECEIPT_STATUSES,
   RUN_STATES,
   RUN_STEPS,
+  SECRET_PLACES,
   SEVERITIES,
 } from './vocabulary.js';
 
@@ -196,6 +197,9 @@ export const savedSchema = v.strictObject({
 
 /** @typedef {v.InferOutput<typeof savedSchema>} Saved */
 
+/** The saved-key places a secret removal names, by name, never a value */
+export const placesSchema = v.pipe(v.array(v.picklist(SECRET_PLACES)), v.maxLength(SECRET_PLACES.length));
+
 /**
  * A RemediationRun: one remediation's run, written before its first mutation (slice 3's
  * pipeline). `commandId` is the remediation's id. `step` is the step it's on or stopped at,
@@ -221,6 +225,9 @@ export const runSchema = v.strictObject({
   // answers as it finished
   saved: v.optional(savedSchema),
   noteId: v.optional(recordId),
+  // What a secret removal took out, and what it found still there after
+  removed: v.optional(placesSchema),
+  kept: v.optional(placesSchema),
   outcome: v.nullable(v.picklist(RUN_OUTCOMES)),
   startedAt: timestamp,
   updatedAt: timestamp,
