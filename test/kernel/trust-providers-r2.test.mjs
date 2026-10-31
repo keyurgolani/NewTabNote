@@ -25,6 +25,9 @@ import { hexIds, lockManager, manualClock, realTimers } from './trust-support.mj
 
 /** @typedef {import('./trust-provider-support.mjs').Profile} Profile */
 
+/** A migration reader at the latest version, for the probes these tests drive (#20 slice 4 prerequisites, part 2) */
+const AT_LATEST = Object.freeze({ read: async () => ({ version: 9, latest: 9, status: 'migrated', code: null }) });
+
 /**
  * One provider's check, as its descriptor declares it, against `context`
  * @param {string} id
@@ -35,7 +38,7 @@ async function checkOf(id, context) {
   const implementation = /** @type {any} */ (await descriptor.load());
   return runCheck(
     { ...descriptor, timeoutMs: 5000, check: (/** @type {Readonly<Record<string, unknown>>} */ given) => implementation.check(given) },
-    { context, clock: manualClock(), timers: realTimers },
+    { context: { migration: AT_LATEST, ...context }, clock: manualClock(), timers: realTimers },
   );
 }
 

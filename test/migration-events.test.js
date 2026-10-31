@@ -110,11 +110,15 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
       opens: false,
       setup: async env => {
         await profileAt8(env);
-        env.global.navigator.locks = {
-          request: () => {
-            throw new DOMException('no locks', 'InvalidStateError');
-          },
-        };
+        // A recovery database without its stores, which the run refuses before it copies
+        await new Promise((resolve, reject) => {
+          const request = env.indexedDB.open('NewTabNoteRecovery', 1);
+          request.onsuccess = () => {
+            request.result.close();
+            resolve(undefined);
+          };
+          request.onerror = () => reject(request.error);
+        });
       },
     });
     await worker.drain();
