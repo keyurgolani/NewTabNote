@@ -9,10 +9,16 @@
  * @param {Logger} deps.logger
  */
 class SettingsController {
-  constructor({ storage, domRefs, logger }) {
+  /**
+   * @param {{storage: any, domRefs: any, logger: any, onOpened?: (() => Promise<void>)|null}} deps - `onOpened`
+   *   runs each time Settings opens, for sections that read their state then (#17 PR 1b)
+   */
+  constructor({ storage, domRefs, logger, onOpened = null }) {
     this.storage = storage;
     this.domRefs = domRefs;
     this.logger = logger;
+    /** @type {(() => Promise<void>)|null} */
+    this.onSettingsOpened = onOpened;
 
     // App-level callbacks (set by App after construction)
     this.onApplyTheme = null;
@@ -36,8 +42,6 @@ class SettingsController {
     this.onRenderAIPromptTemplateSettings = null;
     /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
     this.onSaveOpenEditors = null;
-    /** @type {(() => Promise<void>)|null} Settings opened: sections that read their state then do (#17 PR 1b) */
-    this.onSettingsOpened = null;
     /** @type {function|null} */
     this._settingsFocusTrapCleanup = null;
     /** @type {function|null} */

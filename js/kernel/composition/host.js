@@ -58,6 +58,23 @@ export function legacyHost() {
   };
 }
 
+/**
+ * What Popup's and Side Panel's storage runs on (#17 PR 1b: #17's IndexedDB adapter), read
+ * from the page's globals unless a test passes it
+ * @typedef {object} PageHost
+ * @property {IDBFactory} indexedDB
+ * @property {SettingsStore} settings
+ * @property {() => Promise<unknown>} awaitUpgrade - the wait on the worker's migration run (#17, Q12)
+ */
+
+/**
+ * The page's own storage host
+ * @returns {PageHost}
+ */
+export function pageHost() {
+  return { indexedDB: globalThis.indexedDB, settings: chromeSettings(), awaitUpgrade: () => waitForWorkerUpgrade() };
+}
+
 /** What a page sends to wake the service worker and hear its migration run's status (#17, Q12) */
 export const MIGRATE_MESSAGE = 'storage.migrate';
 

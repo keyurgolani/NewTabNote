@@ -39,14 +39,18 @@ const KERNEL_STORES = /** @type {Record<string, StoreName>} */ (
  */
 
 /**
- * A page context running the production storage scripts, the way a new tab, Popup, or Side
- * Panel loads them. Pass another context's `env` to share its IndexedDB and chrome.*.
+ * A page context running the production storage scripts, the way the new tab loads them. Pass
+ * another context's `env` to share its IndexedDB and chrome.*. `worker: false` leaves its wake
+ * of the worker unanswered (legacy-env's workerRun), as with no worker.
  * @param {any} [sharedWith]
+ * @param {{worker?: boolean}} [options]
  * @returns {LegacyContext}
  */
-export function legacyContext(sharedWith) {
+export function legacyContext(sharedWith, { worker = true } = {}) {
   const env = legacyEnv.createLegacyEnv(
-    sharedWith ? { context: 'page', indexedDB: sharedWith.indexedDB, chrome: sharedWith.chrome } : { context: 'page' },
+    sharedWith
+      ? { context: 'page', indexedDB: sharedWith.indexedDB, chrome: sharedWith.chrome, worker }
+      : { context: 'page', worker },
   );
   env.load('js/utils.js', 'js/storage.js');
   const storage = env.get('Storage');

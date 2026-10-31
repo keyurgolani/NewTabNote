@@ -68,12 +68,15 @@ describe('scripts/check-dist.js', () => {
     const { code, output } = run(dir);
     assert.equal(code, 0, output);
     assert.match(output, /^check:dist: OK, .* resolves all \d+ references: 4 pages, \d+ ES modules, \d+ classic scripts, and a module service worker \(js\/background\.js, \d+ files\)$/);
-    // The worker loads its root, and through it the kernel on the legacy adapter
+    // The worker loads its root, and through it #17's migration runner and the kernel on #17's
+    // adapter (#17 PR 1b), and no longer the legacy adapter
     const { workerFiles } = readScriptGraph(dir, { pages: checkDist.pagesIn(dir) });
     for (const file of ['js/background.js', 'js/utils.js', 'js/storage.js', 'js/kernel/composition/background.js',
-      'js/kernel/adapters/legacy/adapter.js', 'js/kernel/core/application/kernel.js']) {
+      'js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/indexeddb/migrate.js',
+      'js/kernel/core/application/kernel.js']) {
       assert.ok(workerFiles.has(file), `the worker loads ${file}`);
     }
+    assert.ok(!workerFiles.has('js/kernel/adapters/legacy/adapter.js'), 'the worker no longer loads the legacy adapter');
   });
 
   it('fails when a kernel file is missing, naming the import that needs it', () => {
@@ -186,11 +189,11 @@ describe('scripts/check-dist.js', () => {
   });
 
   it("fails when a page's module preloads and its module graph differ", () => {
-    const first = '<link rel="modulepreload" href="js/kernel/adapters/legacy/adapter.js">';
+    const first = '<link rel="modulepreload" href="js/kernel/adapters/indexeddb/connection.js">';
     assertFails(
       run(packageCopy({ 'popup.html': text => text.replace(first, '') })),
       'check:dist failed: 1 problem in ',
-      "popup.html doesn't preload js/kernel/adapters/legacy/adapter.js, which its module graph reaches two or more imports deep",
+      "popup.html doesn't preload js/kernel/adapters/indexeddb/connection.js, which its module graph reaches two or more imports deep",
     );
     assertFails(
       run(packageCopy({

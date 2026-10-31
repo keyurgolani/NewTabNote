@@ -208,11 +208,8 @@ class ExportNotice {
     // from the storage the listener is on
     const storage = this.storage;
     this.unsubscribe = storage.onSettingsChange(async ({ keys }) => {
-      if (await this._closesOn(keys)) {
-        this.close();
-        return;
-      }
       if (keys.includes(EXPORT_RECEIPT_SETTING)) this._askToConfirm();
+      if (await this._closesOn(keys, storage)) this.close();
     });
   }
 
@@ -237,11 +234,12 @@ class ExportNotice {
   /**
    * Whether a settings change another tab made closes this one: it recorded an outcome
    * @param {readonly string[]} keys
+   * @param {DatabaseManager} storage - the storage the listener is on
    * @returns {Promise<boolean>}
    */
-  async _closesOn(keys) {
+  async _closesOn(keys, storage) {
     if (!keys.includes(EXPORT_NOTICE_SETTING)) return false;
-    return ExportNotice.isRecorded(await this.storage.getSetting(EXPORT_NOTICE_SETTING, undefined));
+    return ExportNotice.isRecorded(await storage.getSetting(EXPORT_NOTICE_SETTING, undefined));
   }
 
   /**
@@ -407,6 +405,14 @@ function isSpaceBlocked(record) {
 }
 
 /**
+ * What the space notice reads and writes, through App (#12 slice 7 gives the notices ports in
+ * place of storage)
+ * @typedef {Object} SpaceNoticeSettings
+ * @property {(key: string) => Promise<*>} read - Storage.readSetting, which rejects on a failed read
+ * @property {() => Promise<void>} snooze - records now as `spaceNoticeSnoozedAt`
+ */
+
+/**
  * #47's notice, in the same #export-notice region and form, for a profile whose upgrade
  * stopped short of space (#17 PR 1b, Q9): the service worker couldn't make the recovery copy
  * it needs first, so nothing changed, and it tries again on its own. While the upgrade stays
@@ -416,6 +422,14 @@ function isSpaceBlocked(record) {
  * check step follows, with Done.
  */
 class SpaceNotice extends ExportNotice {
+  /**
+   * @param {ConstructorParameters<typeof ExportNotice>[0] & {settings: SpaceNoticeSettings}} deps
+   */
+  constructor(deps) {
+    super(deps);
+    this.settings = deps.settings;
+  }
+
   get kind() {
     return 'space-blocked';
   }
@@ -425,15 +439,14 @@ class SpaceNotice extends ExportNotice {
   }
 
   /**
-   * Whether this new tab shows it: the database opened, the worker's last run stopped short
-   * of space, and nothing put the notice off in the last 7 days. A failed read rejects.
+   * Whether this new tab shows it, which App asks once the tab's storage has opened: the
+   * worker's last run stopped short of space, and nothing put the notice off in the last 7
+   * days. A failed read rejects.
    * @returns {Promise<boolean>}
    */
   async isDue() {
-    const storage = this.storage;
-    if (storage.openState !== 'open') return false;
-    if (!isSpaceBlocked(await storage.readSetting(UPGRADE_RECORD_SETTING))) return false;
-    const snoozedAt = Number(await storage.readSetting(SPACE_NOTICE_SETTING));
+    if (!isSpaceBlocked(await this.settings.read(UPGRADE_RECORD_SETTING))) return false;
+    const snoozedAt = Number(await this.settings.read(SPACE_NOTICE_SETTING));
     if (Number.isFinite(snoozedAt) && snoozedAt > 0 && Date.now() - snoozedAt < SPACE_NOTICE_SNOOZE_MS) return false;
     return true;
   }
@@ -459,7 +472,7 @@ class SpaceNotice extends ExportNotice {
    */
   async _closesOn(keys) {
     if (keys.includes(UPGRADE_RECORD_SETTING)) {
-      if (!isSpaceBlocked(await this.storage.getSetting(UPGRADE_RECORD_SETTING, undefined))) return true;
+      if (!isSpaceBlocked(await this.settings.read(UPGRADE_RECORD_SETTING))) return true;
     }
     return keys.includes(SPACE_NOTICE_SETTING);
   }
@@ -471,7 +484,7 @@ class SpaceNotice extends ExportNotice {
    */
   async _decide() {
     try {
-      await this.storage.setSetting(SPACE_NOTICE_SETTING, Date.now());
+      await this.settings.snooze();
       this.close();
     } catch (error) {
       console.error('Space notice: the choice was not saved', error);

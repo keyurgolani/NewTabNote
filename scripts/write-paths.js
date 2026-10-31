@@ -78,7 +78,7 @@ const READS = new Set([
   '_readAux', 'getTodayNote', 'getAllNotes', 'getNoteNames', 'getArchivedNotes', 'getTemplates', 'getSearchIndex',
   'isNoteEmpty', 'isNoteUntitled', 'isEmptyTextBlock', 'getTrashedNotes', 'getElements', 'getNote',
   '_keepStoredNoteState', 'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
-  'readSetting', 'getAllSettings', 'onSettingsChange', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
+  'readSetting', 'getAllSettings', 'isUpgraded', 'onSettingsChange', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
   '_getAllMedia', 'exportNote', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
   'getSnapshots',
 ]);
@@ -170,6 +170,7 @@ const COMMANDS = {
   completeOnboarding: { slice: 6 },
   recordBackup: { slice: 6 },
   recordExportNotice: { slice: 6 },
+  snoozeSpaceNotice: { slice: 6 },
   createAutoBackup: { slice: 6 },
   importBackup: { slice: 6 },
   // Left outside the kernel for their own issues
@@ -249,6 +250,8 @@ const RULES = [
   { command: 'recordBackup', op: 'setSetting', key: ['lastBackupAt', 'lastFullExportAt'] },
   // The pre-migration export notice's outcome (#18 slice 0)
   { command: 'recordExportNotice', op: 'setSetting', key: 'preMigrationNotice' },
+  // The space-blocked notice's Not now and Done (#17 PR 1b)
+  { command: 'snoozeSpaceNotice', op: 'setSetting', key: 'spaceNoticeSnoozedAt' },
   { command: 'createAutoBackup', op: 'createAutoBackup' },
   { command: 'importBackup', op: 'importData' },
   { command: 'setPreferences', op: 'setSetting', key: PREFERENCE_KEYS },

@@ -42,6 +42,7 @@ const JS_FILES = [
   'js/ui/formatting-toolbar.js',
   'js/ui/graph-view.js',
   'js/ui/export-notice.js',
+  'js/ui/pre-update-copy.js',
   'js/storage.js',
   'js/theme-engine.js',
   'js/virtual-scroller.js',

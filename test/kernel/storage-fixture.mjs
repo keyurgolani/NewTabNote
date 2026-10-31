@@ -72,17 +72,22 @@ export function closeAll(of) {
 }
 
 /**
- * A contract-suite context over a fresh profile, or over a version-8 database without
- * `missing`'s stores.
+ * A contract-suite context over a fresh profile, opened `versioned` as the service worker
+ * opens it once its run has made the database, or over a version-8 database without
+ * `missing`'s stores, opened as it is, as the worker does when its run left the database as
+ * it was, and as Popup does (#17 PR 1b: a versioned open would give it the stores it lacks).
  * @param {StoreName[]} missing
  * @returns {ReturnType<ContractFixture['start']>}
  */
 async function startIndexedDb(missing) {
   const first = profile();
+  /** @type {Partial<IndexedDbOptions>} */
+  const options = {};
   if (missing.length > 0) {
     await legacyEnv.createDatabase(first.real, { omit: missing.map(store => IDB_STORES[store]) });
+    options.mode = 'existing';
   }
-  const adapter = adapterOn(first);
+  const adapter = adapterOn(first, options);
   await adapter.open();
   const clock = testClock();
   const ids = testIds();
@@ -92,7 +97,7 @@ async function startIndexedDb(missing) {
     ids,
     kernel: (caller = CALLERS.newtab) => kernelOn(adapter, { ids, clock }, caller),
     async secondContext() {
-      const second = adapterOn(first);
+      const second = adapterOn(first, options);
       await second.open();
       return {
         kernel: (caller = CALLERS.newtab) =>

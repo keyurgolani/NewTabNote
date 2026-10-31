@@ -284,7 +284,13 @@ class App {
       };
       this.exportNotice = new ExportNotice(noticeDeps);
       // #17 PR 1b: while the upgrade waits for free space, its notice takes the region instead
-      this.spaceNotice = new SpaceNotice(noticeDeps);
+      this.spaceNotice = new SpaceNotice({
+        ...noticeDeps,
+        settings: {
+          read: (key) => appStorage().readSetting(key),
+          snooze: () => appStorage().setSetting('spaceNoticeSnoozedAt', Date.now()),
+        },
+      });
       /** @param {any} notice */
       const decide = (notice) => notice.isDue().catch((error) => {
         console.error('Export notice: could not decide whether to show it', error);
@@ -853,20 +859,22 @@ class App {
    * Initialize the SettingsController and wire callbacks.
    */
   async initSettingsController() {
-    this.settingsController = new SettingsController({
-      storage: Storage,
-      domRefs: this.domRefs,
-      logger: this.logger,
-    });
-
     // Settings > Data & Backup's copy from before the update (#17 PR 1b) reads its state each
     // time Settings opens
     const preUpdateSection = document.getElementById('pre-update-copy');
     if (preUpdateSection && this.preUpdateCopy) {
-      this.preUpdateCopySection = new PreUpdateCopySection({ storage: appStorage(), copy: this.preUpdateCopy });
+      this.preUpdateCopySection = new PreUpdateCopySection({
+        copy: this.preUpdateCopy,
+        readUpgrade: () => appStorage().readSetting('storageUpgrade'),
+      });
       this.preUpdateCopySection.mount(preUpdateSection);
-      this.settingsController.onSettingsOpened = () => this.preUpdateCopySection.refresh();
     }
+    this.settingsController = new SettingsController({
+      storage: Storage,
+      domRefs: this.domRefs,
+      logger: this.logger,
+      onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
+    });
 
     // Wire callbacks so the controller can trigger App-level actions
     this.settingsController.getEditor = () => this.getEditor();
