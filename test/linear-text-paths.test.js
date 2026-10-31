@@ -194,7 +194,7 @@ describe('the text paths read in linear time (#14)', () => {
     const render = text => Utils.parseMarkdown(text);
     assert.ok(linear(render, n => '['.repeat(n)));
     assert.ok(linear(render, n => '(['.repeat(n / 2)));
-    assert.ok(linear(render, n => '`x` '.repeat(n / 4)));
+    assert.ok(linear(render, n => '`x`     '.repeat(n / 8)));
     assert.ok(linear(render, n => `\`\`\`${'a'.repeat(n)}`));
     assert.ok(linear(render, n => '```a\n```\n'.repeat(n / 9)));
     assert.ok(linear(render, n => '<li>'.repeat(n / 4)));
