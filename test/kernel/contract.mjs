@@ -4456,6 +4456,13 @@ export function runContractSuite(fixture) {
             cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 1 }),
             cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'], expectedRevision: 1 }),
             cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), expectedRevision: 1 }),
+            // AI chat's insert and the auto-title job may send the revision they read (#17 PR 4b, Q3)
+            cmd('insertBlocks', {
+              noteId: 'n1',
+              blocks: [{ id: 'n1-inserted', type: 'text', content: 'Mine' }],
+              expectedRevision: 1,
+            }),
+            cmd('applyDerivedTitle', { noteId: 'n1', name: 'Derived', expectedRevision: 1 }),
             cmd('setPinned', { noteId: 'n1', pinned: false, expectedPlacementVersion: 0 }),
             cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
             cmd('trashNote', { noteId: 'n1', expectedPlacementVersion: 0 }),

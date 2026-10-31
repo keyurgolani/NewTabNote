@@ -755,8 +755,9 @@ export const noteCommands = {
   },
 
   insertBlocks(command, { clock, ids }) {
-    const { noteId, blocks, atOrder } = command;
+    const { noteId, blocks, atOrder, expectedRevision } = command;
     if (!isId(noteId) || (atOrder !== undefined && !(Number.isSafeInteger(atOrder) && atOrder >= 0))) return invalid();
+    if (!isOptionalVersion(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     if (records.length === 0) return invalid();
@@ -771,6 +772,8 @@ export const noteCommands = {
         linkedNames.length = 0;
         const note = await tx.get('notes', noteId);
         if (!note) return noteNotFound();
+        const stale = versionConflict(tx, noteId, { expectedRevision });
+        if (stale) return stale;
         for (const block of records) {
           const stored = await tx.get('blocks', block.id);
           if (stored && stored.canvasId !== noteId) return rejected('validation', 'block-of-another-note');
@@ -811,22 +814,27 @@ export const noteCommands = {
   },
 
   applyDerivedTitle(command, { clock }) {
-    const { noteId, name, contentHash } = command;
+    const { noteId, name, contentHash, expectedRevision } = command;
     if (!isId(noteId) || typeof name !== 'string' || !isOptionalString(contentHash)) return invalid();
+    if (!isOptionalVersion(expectedRevision)) return invalid();
     const now = clock.now();
     let kept = false;
     let renamed = false;
-    const derive = changeNote(noteId, note => {
-      // A title set by hand stays, so the derived one is dropped. Each run decides both afresh,
-      // since an adapter may run the unit again (ports/repository.js, Unit)
-      kept = Boolean(note.titleManuallySet);
-      renamed = !kept && note.name !== name;
-      if (kept) return null;
-      /** @type {NoteRecord} */
-      const next = { ...note, name, lastAutoTitleAt: now, updatedAt: now };
-      if (contentHash !== undefined) next.lastTitleContentHash = contentHash;
-      return next;
-    });
+    const derive = changeNote(
+      noteId,
+      note => {
+        // A title set by hand stays, so the derived one is dropped. Each run decides both afresh,
+        // since an adapter may run the unit again (ports/repository.js, Unit)
+        kept = Boolean(note.titleManuallySet);
+        renamed = !kept && note.name !== name;
+        if (kept) return null;
+        /** @type {NoteRecord} */
+        const next = { ...note, name, lastAutoTitleAt: now, updatedAt: now };
+        if (contentHash !== undefined) next.lastTitleContentHash = contentHash;
+        return next;
+      },
+      { expectedRevision },
+    );
     return unitsWork(
       command,
       [derive, { ...renameSearchEntry(noteId, name, now), when: () => !kept }],
