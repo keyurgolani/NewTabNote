@@ -366,9 +366,14 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
     assert.deepEqual(removed, []);
   });
 
-  it('runs: export works without media, and media imports are refused before any change', async () => {
-    const { env, Storage } = await start();
-    const exported = plain(await Storage.exportAll());
+  it("runs through the new tab's root on #17's adapter: export works without media, and media imports are refused before any change (#17 PR 4a)", async () => {
+    const env = createLegacyEnv();
+    await fixture(env.indexedDB, { omit: ['media'] });
+    env.load(...STORAGE_FILES);
+    const { client } = await newTabRootOn(env);
+    const file = await client.query({ type: 'exportBackup', backup: false });
+    assert.equal(file.kind, 'ready', JSON.stringify(plain(file)));
+    const exported = JSON.parse(await file.data.text());
     assert.deepEqual(exported.media, []);
     assert.deepEqual(exported.canvases.map((n) => n.id), ['n1']);
 
@@ -379,10 +384,17 @@ describe('startup: version 8 without media, with an expired trashed note', () =>
       elements: [],
       media: [{ id: 'pm', canvasId: 'p1', blob: 'data:text/plain;base64,', type: 'text/plain' }],
     };
-    await assert.rejects(Storage.importData(withMedia, 'merge'), { code: 'IMPORT_INVALID', message: "this profile's media store is missing" });
+    const refused = plain(await client.execute({ type: 'importBackup', commandId: 'import-media', backup: withMedia, mode: 'merge' }));
+    assert.deepEqual([refused.kind, refused.reason, refused.code], ['rejected', 'validation', 'media-store-missing'], JSON.stringify(refused));
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
-    const result = plain(await Storage.importData({ version: 1, canvases: [note('p2')], elements: [] }, 'merge'));
-    assert.equal(result.notes, 1);
+    const imported = plain(await client.execute({
+      type: 'importBackup',
+      commandId: 'import-plain',
+      backup: { version: 1, canvases: [note('p2')], elements: [] },
+      mode: 'merge',
+    }));
+    assert.equal(imported.kind, 'committed', JSON.stringify(imported));
+    assert.equal(imported.changedIds.length, 1, 'one note imported');
   });
 
   it("a missing auxiliary store does not stop note and block writes, through the new tab's root on #17's adapter (#17 PR 4a)", async () => {
