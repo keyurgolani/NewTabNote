@@ -160,6 +160,9 @@ export const COMPOSERS = Object.freeze({
     port: 'messaging-transport',
     of: ['js/kernel/core/messaging/in-process.js', 'js/kernel/adapters/messaging/runtime-port.js'],
   },
+  // #20 slice 1b: a context's failure events, on NewTabNoteTrust (js/kernel/composition/
+  // lazy-failure-events.js, the new tab's, only imports this one and composes nothing itself)
+  'js/kernel/composition/trust.js': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
   'test/kernel/legacy-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/legacy/adapter.js'] },
   'test/kernel/storage-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   'test/kernel/trust-support.mjs': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },

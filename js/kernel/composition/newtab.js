@@ -11,18 +11,20 @@ import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
 import { createNoteList } from '../core/application/note-list.js';
 import { createDocumentClient } from './document.js';
 import { kernelClient, legacyHost } from './host.js';
+import { lazyFailureEvents } from './lazy-failure-events.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./host.js').LegacyHost} LegacyHost */
 /** @typedef {import('./document.js').DocumentClient} DocumentClient */
 /** @typedef {import('../../services/ai-port.mjs').AIPort} AIPort */
 /** @typedef {import('../core/application/note-list.js').NoteList} NoteList */
+/** @typedef {ReturnType<typeof lazyFailureEvents>} PageFailureEvents */
 
 /**
  * The legacy App class app.js puts on window, and the instance the controllers still read as
  * window.app until #12 slice 7 removes it
  * @typedef {object} NewTabPage
- * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList}) => {init(): Promise<void>}} App
+ * @property {new (options: {kernel: Client, documentClient: DocumentClient, ai: AIPort, noteList: NoteList, events: PageFailureEvents}) => {init(): Promise<void>}} App
  * @property {unknown} [app]
  */
 
@@ -71,10 +73,21 @@ export function createNewTabNoteList(kernel) {
 }
 
 /**
+ * The tab's failure events (#20, "Diagnostic journal"): the embedding model's load,
+ * auto-backup, and the indexer's start report through them. Trust code loads with import()
+ * only when the first failure does, so the tab's module graph gains one small module and no
+ * trust code.
+ * @returns {PageFailureEvents}
+ */
+export function createNewTabFailureEvents() {
+  return lazyFailureEvents({ surface: 'newtab' });
+}
+
+/**
  * Start the new tab when its DOM is ready, as app.js's bootstrap did: App gets the tab's
- * client, its document client, its AI port, and its note list, and becomes window.app before
- * init runs. The listener answers with init's promise, which a page ignores and a test can
- * wait for.
+ * client, its document client, its AI port, its note list, and its failure events, and
+ * becomes window.app before init runs. The listener answers with init's promise, which a page
+ * ignores and a test can wait for.
  * @returns {void}
  */
 export function startNewTab() {
@@ -87,6 +100,7 @@ export function startNewTab() {
       documentClient: createNewTabDocumentClient(kernel, host),
       ai: createAIPort(),
       noteList: createNewTabNoteList(kernel),
+      events: createNewTabFailureEvents(),
     });
     page.app = app;
     return app.init().catch(error => {

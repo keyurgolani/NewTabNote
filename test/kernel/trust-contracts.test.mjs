@@ -1,8 +1,9 @@
 // #20 slice 1's contracts (AC1): trust.summary, trust.report, recovery.incidents,
 // trust.verify, recovery.raise, recovery.run, and diagnostics.export as versioned #13
 // operations, held to #13's schema lint, read by #13's validators, and answered by the use
-// cases within their result schemas. No shipped page or the worker reaches js/trust/ or
-// NewTabNoteTrust's adapter yet (R1: no visible change), and capture-critical.js never does.
+// cases within their result schemas. Only the worker's failure events reach js/trust/ and
+// NewTabNoteTrust's adapter statically, the new tab's only through import() after a failure
+// (#20 slice 1b, R1: no visible change), and capture-critical.js never does.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,10 +31,10 @@ import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
 import { health } from '../../js/trust/core/families.js';
 import { lint } from './contract-schema-lint.test.mjs';
-import { importGraph } from './import-graph.mjs';
+import { dynamicImportsIn, importGraph } from './import-graph.mjs';
 import { hexIds, manualClock, realTimers, settingsArea } from './trust-support.mjs';
 
-/** @type {{readScriptGraph: (root: string, options?: {pages?: string[]}) => {modules: Set<string>, classic: Set<string>, workerFiles: Set<string>, problems: unknown[]}}} */
+/** @type {{readScriptGraph: (root: string, options?: {pages?: string[]}) => {modules: Set<string>, classic: Set<string>, workerFiles: Set<string>, pageModules: Map<string, Array<{file: string, depth: number}>>, problems: unknown[]}}} */
 const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/script-graph.js');
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
@@ -233,20 +234,84 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
   });
 });
 
-describe('where trust code loads (#20 slice 1, R1)', () => {
+describe('where trust code loads (#20 slice 1b, R1)', () => {
   const isTrust = (/** @type {string} */ file) =>
     file.startsWith('js/trust/') || file === 'js/kernel/adapters/indexeddb/trust.js';
 
-  it('is reached from no shipped page or the service worker, so nothing users see changes', () => {
+  /** What the failure events load: the journal, the records, and NewTabNoteTrust's adapter */
+  const FAILURE_EVENTS_GRAPH = [
+    'js/kernel/adapters/indexeddb/trust.js',
+    'js/trust/core/codes.js',
+    'js/trust/core/event-codes.js',
+    'js/trust/core/evidence.js',
+    'js/trust/core/incidents.js',
+    'js/trust/core/journal.js',
+    'js/trust/core/ports.js',
+    'js/trust/core/records.js',
+    'js/trust/core/trust-records.js',
+    'js/trust/core/vocabulary.js',
+  ];
+
+  it('is reached statically only from the service worker, through its failure events, and from no page', () => {
     const pages = ['offscreen.html'].filter(page => fs.existsSync(path.join(ROOT, page)));
     const graph = readScriptGraph(ROOT, { pages });
-    const loaded = [...graph.modules, ...graph.classic, ...graph.workerFiles];
-    assert.ok(loaded.length > 20, 'the script graph found too little to mean anything');
-    assert.deepEqual(loaded.filter(isTrust), []);
+    const pageLoaded = [...[...graph.pageModules.values()].flat().map(({ file }) => file), ...graph.classic];
+    assert.ok(pageLoaded.length > 20, 'the script graph found too little to mean anything');
+    assert.ok(graph.pageModules.has('newtab.html') && graph.pageModules.has('sidepanel.html'));
+    assert.deepEqual(pageLoaded.filter(isTrust), []);
+    assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), FAILURE_EVENTS_GRAPH);
+    const events = path.join(ROOT, 'js', 'kernel', 'composition', 'trust.js');
+    assert.deepEqual(
+      [...importGraph(events)]
+        .map(file => path.relative(ROOT, file))
+        .filter(isTrust)
+        .sort(),
+      FAILURE_EVENTS_GRAPH,
+    );
   });
 
-  it("is never reached from capture-critical.js, Moment's import of #13", () => {
+  it('reaches the new tab only through import(), after its first failure', () => {
+    const graph = readScriptGraph(ROOT, { pages: [] });
+    const newtab = (graph.pageModules.get('newtab.html') || []).map(({ file }) => file);
+    assert.ok(newtab.includes('js/kernel/composition/lazy-failure-events.js'));
+    assert.deepEqual(newtab.filter(isTrust), []);
+    assert.ok(!newtab.includes('js/kernel/composition/trust.js'));
+    // The one import() in the tab's graph is the failure events' own, of ./trust.js
+    const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)));
+    assert.equal(dynamic.length, 1, dynamic.join('\n'));
+    assert.ok(dynamic[0].startsWith(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js:')));
+    const source = fs.readFileSync(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js'), 'utf8');
+    assert.ok(source.includes("import('./trust.js')"));
+  });
+
+  it("is never reached from capture-critical.js, Moment's import of #13, whose graph is what it was before slice 1b", () => {
     const entry = path.join(ROOT, 'js', 'kernel', 'core', 'messaging', 'capture-critical.js');
+    const graph = [...importGraph(entry)].map(file => path.relative(ROOT, file)).sort();
+    assert.deepEqual(graph.filter(isTrust), []);
+    assert.deepEqual(graph, [
+      'js/kernel/core/contracts/checks.js',
+      'js/kernel/core/contracts/clone.js',
+      'js/kernel/core/contracts/codec.js',
+      'js/kernel/core/contracts/envelope.js',
+      'js/kernel/core/contracts/fields.js',
+      'js/kernel/core/contracts/hint-channel.js',
+      'js/kernel/core/contracts/limits.js',
+      'js/kernel/core/contracts/outcome-schemas.js',
+      'js/kernel/core/contracts/outcomes.js',
+      'js/kernel/core/contracts/surfaces.js',
+      'js/kernel/core/contracts/transport-codes.js',
+      'js/kernel/core/contracts/upcast.js',
+      'js/kernel/core/contracts/validate.js',
+      'js/kernel/core/messaging/capture-critical.js',
+      'js/kernel/core/messaging/client.js',
+      'js/kernel/core/messaging/operations.js',
+      'js/kernel/core/ports/runtime.js',
+      'js/lib/valibot/index.mjs',
+    ]);
+  });
+
+  it("is never reached from the worker's kernel, which captures: the failure events sit beside it in js/background.js", () => {
+    const entry = path.join(ROOT, 'js', 'kernel', 'composition', 'background.js');
     const graph = [...importGraph(entry)].map(file => path.relative(ROOT, file));
     assert.deepEqual(graph.filter(isTrust), []);
   });

@@ -1080,6 +1080,8 @@ class SettingsController {
       } catch (error) {
         console.warn('Auto-backup failed:', error);
         Utils.showToast('Auto-backup failed. Consider exporting manually.', 'error');
+        // A data-risk incident (#20, "Diagnostic journal"), with the error's name and never its message
+        if (this.logger && typeof this.logger.event === 'function') this.logger.event('backup.auto-failed', {}, error);
       }
     }
   }

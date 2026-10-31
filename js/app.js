@@ -70,14 +70,17 @@ class App {
    * every editor reads and writes its note through (js/kernel/composition/document.js), the
    * AI port every editor and NotesManager call the provider through (js/services/ai-port.mjs),
    * and the tab's note list (js/kernel/core/application/note-list.js), the one copy of the note
-   * lists that App, the controllers, the palette, and analytics read.
-   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any}} [options]
+   * lists that App, the controllers, the palette, and analytics read. `events` are the tab's
+   * failure events (js/kernel/composition/lazy-failure-events.js), which init gives the logger
+   * the controllers share, as its `event` method, and Embeddings.
+   * @param {{kernel?: any, documentClient?: any, ai?: any, noteList?: any, events?: any}} [options]
    */
-  constructor({ kernel, documentClient, ai, noteList } = {}) {
+  constructor({ kernel, documentClient, ai, noteList, events = null } = {}) {
     this.kernel = kernel;
     this.documentClient = documentClient;
     this.ai = ai;
     this.noteList = noteList;
+    this.events = events;
     this.editor = null;
     this.secondaryEditor = null;
     this.pipWindow = null;
@@ -238,12 +241,25 @@ class App {
   }
 
   /**
+   * The failure sites report through the tab's failure events (#20, "Diagnostic journal"):
+   * the controllers through `logger.event`, and the embedding model's load through
+   * Embeddings.events. Without events the logger has no `event`, and each site does only
+   * what it did before.
+   */
+  attachFailureEvents() {
+    if (!this.events) return;
+    this.logger.event = this.events.event;
+    if (typeof Embeddings !== 'undefined') Embeddings.events = this.events;
+  }
+
+  /**
    * Initialize the application
    */
   async init() {
     try {
       // Initialize core infrastructure
       this.logger = createLogger();
+      this.attachFailureEvents();
       this.domRefs = createDomRefs();
 
       // The tab's kernel opens storage and runs startup maintenance, as Storage.init did here

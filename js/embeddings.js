@@ -7,6 +7,16 @@ class EmbeddingManager {
         this.pipeline = null;
         this.isLoading = false;
         this.isReady = false;
+        /**
+         * The page's failure events (#20, "Diagnostic journal"), which App sets: a model that
+         * won't load is an `embeddings.load-failed` event, with the error's name and never its
+         * message. Null until set, and then a failed load does only what it did before.
+         * @type {{event: (code: string, fields?: Object, failure?: unknown) => void} | null}
+         */
+        this.events = null;
+        // generateEmbedding tries the load again for every note it embeds, so only the first
+        // failure on this page is reported
+        this.loadFailureReported = false;
     }
 
     /**
@@ -17,6 +27,7 @@ class EmbeddingManager {
         if (this.pipeline || this.isLoading) return;
 
         this.isLoading = true;
+        const startedAt = Date.now();
         console.debug('Embeddings: Loading model...', this.modelName);
 
         try {
@@ -32,6 +43,10 @@ class EmbeddingManager {
             console.debug('Embeddings: Model loaded successfully');
         } catch (error) {
             console.error('Embeddings: Failed to load model:', error);
+            if (this.events && !this.loadFailureReported) {
+                this.loadFailureReported = true;
+                this.events.event('embeddings.load-failed', { durationMs: Math.max(0, Date.now() - startedAt) }, error);
+            }
         } finally {
             this.isLoading = false;
         }

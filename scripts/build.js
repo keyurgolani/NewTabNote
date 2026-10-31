@@ -88,11 +88,13 @@ const JS_FILES = [
 ];
 
 // Directories shipped without a list: every .js and .mjs file under each, sorted, after
-// JS_FILES. Nothing else in them ships, so js/kernel/package.json (Node's "type": "module")
-// stays out of dist/, and so do Valibot's index.d.mts declarations and vendor.json. Valibot's
-// license ships through STATIC_FILES.
+// JS_FILES. Nothing else in them ships, so js/kernel/package.json and js/trust/package.json
+// (Node's "type": "module") stay out of dist/, and so do Valibot's index.d.mts declarations
+// and vendor.json. Valibot's license ships through STATIC_FILES. js/trust/ is #20's trust
+// core, which the worker imports and the new tab loads with import() on its first failure.
 const JS_DIRS = [
   'js/kernel/',
+  'js/trust/',
   'js/lib/valibot/',
 ];
 
