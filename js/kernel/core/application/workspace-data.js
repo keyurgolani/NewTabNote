@@ -152,6 +152,10 @@ export const workspaceDataCommands = {
     return {
       commandId: command.commandId,
       command,
+      // Replace all moves every active note to trash, which is where a note sits, so on an
+      // adapter with revisions each one it trashes moves its placement version (#17 PR 4a).
+      // Merge only adds notes and folders.
+      scope: mode === 'replace' ? 'placement' : 'content',
       effect: { kind: 'backup', action: 'import', mode, backup },
       // Only once the import's one transaction committed: the notes it added, in backup order,
       // then the folders it added, then the notes Replace all trashed

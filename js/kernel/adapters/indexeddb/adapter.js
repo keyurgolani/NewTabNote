@@ -65,11 +65,19 @@
  */
 
 import { COMMANDS } from '../../core/contracts/commands.js';
-import { UnavailableError, committed, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import {
+  STORAGE_EXCEPTIONS,
+  UnavailableError,
+  committed,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../../core/contracts/outcomes.js';
 import { withoutPlacement } from '../../core/domain/placement.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
+import { createAutoBackup, exportFile, prepareImport, readExport } from './backups.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
@@ -132,6 +140,11 @@ import { createVersionTracker } from './versions.js';
  *   An `existing` open saves #33's recovery copy of a database at 8 that lacks some legacy
  *   store before it opens it, as js/storage.js's page open did: the new tab's (#17 PR 4a,
  *   recovery-copies.js)
+ * @property {boolean} [backups]
+ *   It runs 1.4.x's backup tasks and makes the export file (backups.js): the new tab's, which
+ *   passes chrome.storage.local as `settings`, for the automatic backups and the recovery copy
+ *   (#17 PR 4a, the lead's Q1). Popup, Side Panel, and the service worker run none, as the
+ *   policy has it, so their adapters answer each as one without the `backups` flag does.
  * @property {import('./recovery-copies.js').CopyLocks | null} [locks]
  *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
@@ -420,6 +433,7 @@ export function createIndexedDbAdapter({
   awaitUpgrade = null,
   maintains = false,
   copiesMissingStores = false,
+  backups = false,
   locks = null,
   clock = systemClock,
   keyRange,
@@ -739,6 +753,53 @@ export function createIndexedDbAdapter({
   };
 
   /**
+   * chrome.storage.local, as the backup tasks use it: a root that turns `backups` on passes it,
+   * with its get of every key and its remove
+   */
+  const backupStore = /** @type {import('./backups.js').BackupStore} */ (/** @type {unknown} */ (settings));
+
+  /**
+   * A legacy backup task (backups.js), on an adapter that runs them. The automatic backup goes
+   * to chrome.storage.local, as Storage's did. The import commits as one unit of its command, in
+   * one transaction with its ledger row, its notes' versions, and its changes, after Replace
+   * all's recovery copy; its outcome names what it added and trashed. A resend of one that
+   * committed answers from its record and imports nothing, though Replace all's copy, which
+   * comes before that commit, is saved again. A refused backup, or a recovery copy that
+   * couldn't be saved, writes nothing to IndexedDB. A task that fails before any commit (the
+   * automatic backup, or an import's reads) names the storage exception it failed with, as the
+   * legacy adapter's did, so #20's `backup.auto-failed` keeps it; the import's commit answers
+   * as every command's does.
+   * @param {Work} work
+   * @param {import('../../core/ports/repository.js').BackupTask} task
+   * @returns {Promise<CommitResult>}
+   */
+  const commitBackup = async (work, task) => {
+    // Popup, Side Panel, and the service worker run none, until #18's backup engine (the `backups` flag)
+    if (!backups) return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false };
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      return { outcome: unavailableFrom(startFailure(error)), replayed: false };
+    }
+    try {
+      if (task.action === 'auto') {
+        await createAutoBackup({ db, settings: backupStore, clock });
+        return { outcome: work.done(), replayed: false };
+      }
+      const prepared = await prepareImport({ db, settings: backupStore, clock, backup: task.backup, mode: task.mode });
+      if ('refused' in prepared) return { outcome: prepared.refused, replayed: false };
+      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);
+    } catch (error) {
+      const outcome = unavailableFrom(failureOf(error));
+      const name = nameOf(error);
+      if (name !== undefined && STORAGE_EXCEPTIONS.includes(name)) outcome.exception = name;
+      return { outcome, replayed: false };
+    }
+  };
+
+  /**
    * Each bulk command's digest, by commandId, from its first recall in this adapter
    * @type {Map<string, string>}
    */
@@ -750,7 +811,7 @@ export function createIndexedDbAdapter({
   return Object.freeze({
     name: 'indexeddb',
     mode,
-    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
+    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups }),
 
     open: () => connection.open(),
     close: () => connection.close(),
@@ -778,10 +839,8 @@ export function createIndexedDbAdapter({
         if (effect.kind === 'units') pending = commitUnits(work, effect.units);
         else if (effect.kind === 'settings') {
           pending = commitSettings(work, effect.area, effect.values).then(outcome => ({ outcome, replayed: false }));
-        } else if (effect.kind === 'backup') {
-          // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
-          pending = Promise.resolve({ outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false });
-        } else pending = maintain(work).then(outcome => ({ outcome, replayed: false }));
+        } else if (effect.kind === 'backup') pending = commitBackup(work, effect);
+        else pending = maintain(work).then(outcome => ({ outcome, replayed: false }));
       } catch (error) {
         pending = Promise.resolve({ outcome: unavailableFrom(failureOf(error)), replayed: false });
       }
@@ -813,8 +872,23 @@ export function createIndexedDbAdapter({
       }
     },
 
-    // The export file runs only on 1.4.x's Storage until #18's engine (the `backups` flag)
-    exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
+    // Export JSON's file, and Create Backup's with its fields, on an adapter that runs the
+    // backup tasks (backups.js), read in one readonly transaction
+    async exportBackup(extra) {
+      if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
+      /** @type {IDBDatabase} */
+      let db;
+      try {
+        db = connection.database();
+      } catch (error) {
+        throw startFailure(error);
+      }
+      try {
+        return await exportFile(await readExport(db), clock.now(), extra);
+      } catch (error) {
+        throw failureOf(error);
+      }
+    },
 
     async readSettings(area, keys) {
       if (area === 'idbSettings') return readIdbSettings(keys);

@@ -2919,7 +2919,7 @@ export function runContractSuite(fixture) {
 
       it(
         flags.backups
-          ? "backups: createAutoBackup and importBackup run 1.4.x's Storage code, and an import counts only what committed"
+          ? "backups: createAutoBackup and importBackup do what 1.4.x's Storage did, and an import counts only what committed"
           : 'no backups: createAutoBackup and importBackup are unavailable and write nothing',
         async () => {
           const backup = {

@@ -12,7 +12,8 @@
  * - idempotency: false. Nothing keeps a commandId's outcome, so a resent command runs again.
  * Each gap is a declared-gap row in docs/architecture/kernel-ledger.json, owned by #17.
  * - backups: true. The legacy import, auto-backup, and export file run here, through
- *   Storage's own code, which #18's backup engine replaces; the other adapters don't run them yet.
+ *   Storage's own code, which #18's backup engine replaces. #17's adapter runs backups.js's port
+ *   of it where its root asks (#17 PR 4a); the in-memory adapter runs none.
  *
  * The new tab opens it `versioned`: Storage.open, which since #17 PR 1b upgrades nothing (only
  * the service worker does, through #17's migration runner, and the worker has its own kernel on

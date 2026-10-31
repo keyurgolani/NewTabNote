@@ -219,14 +219,6 @@
       "verify": "npm run check:boundaries"
     },
     {
-      "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "rule": "declared-gap",
-      "count": 1,
-      "owner": 18,
-      "removeWhen": "#18's backup engine runs the import and auto-backup on #17's IndexedDB adapter, so createAutoBackup and importBackup commit there as they do on the legacy adapter, which runs 1.4.x's Storage code for them until then",
-      "verify": "npm run test:kernel: the backups check in test/kernel/contract.mjs"
-    },
-    {
       "file": "js/kernel/adapters/legacy/adapter.js",
       "rule": "declared-gap",
       "count": 1,

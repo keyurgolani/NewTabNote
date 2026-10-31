@@ -23,7 +23,7 @@
  * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
  * hits: count 1, an adapter module that declares gaps as file, which has to exist, and the
  * issue that closes them as owner (DECLARED_GAP_OWNERS): #17 for the legacy adapter's, which
- * #17's adapter closes, and #18 for #17's adapter's one, the backup tasks #18's engine brings.
+ * #17's adapter closes. #17's adapter declares none since its PR 4a runs the backup tasks.
  * A module's gaps are told apart by verify. A rule whose messages name what they found
  * (NAMED_RULES: app-callback names the callback, legacy-store the handle) may have rows that
  * each name one (`name`), which count that one's hits; the file and rule's row without a name
@@ -87,11 +87,10 @@ const RULES = {
 };
 const DECLARED_GAP = 'declared-gap';
 // The modules that declare gaps (their adapter flags), each with the issue that closes them: the
-// legacy adapter's, which #17's adapter closes, and #17's adapter's one, the legacy backup tasks
-// it doesn't run, which #18's backup engine closes
+// legacy adapter's, which #17's adapter closes. #17's adapter has every flag since its PR 4a,
+// which runs the legacy backup tasks there, so it declares none
 const DECLARED_GAP_OWNERS = Object.freeze({
   'js/kernel/adapters/legacy/adapter.js': 17,
-  'js/kernel/adapters/indexeddb/adapter.js': 18,
 });
 const DECLARED_GAP_FILES = Object.keys(DECLARED_GAP_OWNERS);
 // The raw access a blind write may replace in the same file under a shrinkOnly rule: an
