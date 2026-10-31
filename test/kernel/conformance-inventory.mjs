@@ -34,18 +34,24 @@ export const PORTS = Object.freeze({
       { module: 'js/kernel/adapters/indexeddb/adapter.js', run: 'test/kernel/storage-contract.test.mjs' },
     ],
   },
-  // #13 slice 3's port suites, which #17's durable ledger and log run when they land
+  // #13 slice 3's port suites, on the in-memory ledger and log and on #17's durable ones (#17 PR 2a)
   'idempotency-ledger': {
     contract: 'js/kernel/core/ports/idempotency-ledger.js',
     types: ['IdempotencyLedger'],
     suite: { module: 'test/kernel/idempotency-ledger-suite.mjs', runner: 'describeIdempotencyLedger' },
-    implementations: [{ module: 'js/kernel/core/memory/ledger.js', run: 'test/kernel/idempotency-ledger.test.mjs' }],
+    implementations: [
+      { module: 'js/kernel/core/memory/ledger.js', run: 'test/kernel/idempotency-ledger.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/ledger.js', run: 'test/kernel/storage-ledger.test.mjs' },
+    ],
   },
   'commit-log': {
     contract: 'js/kernel/core/ports/commit-log.js',
     types: ['CommitLog'],
     suite: { module: 'test/kernel/commit-log-suite.mjs', runner: 'describeCommitLog' },
-    implementations: [{ module: 'js/kernel/core/memory/commit-log.js', run: 'test/kernel/commit-log.test.mjs' }],
+    implementations: [
+      { module: 'js/kernel/core/memory/commit-log.js', run: 'test/kernel/commit-log.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/changes.js', run: 'test/kernel/storage-ledger.test.mjs' },
+    ],
   },
   // #13's messaging conformance on each transport (approved AC2: runtime and message)
   'messaging-transport': {
@@ -149,13 +155,21 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const HELPERS = Object.freeze({
+  // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
+  'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/failures.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/changes.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
+  ],
   // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
   // Storage's
   'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/changes.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
     'js/kernel/adapters/legacy/adapter.js',
   ],
   'js/kernel/adapters/indexeddb/schema.js': [
@@ -166,7 +180,14 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/legacy/adapter.js',
   ],
-  'js/kernel/core/memory/fingerprint.js': ['js/kernel/core/memory/adapter.js', 'js/kernel/core/memory/ledger.js'],
+  'js/kernel/adapters/indexeddb/versions.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // The digest #17's ledger keeps too, so a command is the same command on every adapter
+  'js/kernel/core/memory/fingerprint.js': [
+    'js/kernel/core/memory/adapter.js',
+    'js/kernel/core/memory/ledger.js',
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/indexeddb/ledger.js',
+  ],
 });
 
 /**

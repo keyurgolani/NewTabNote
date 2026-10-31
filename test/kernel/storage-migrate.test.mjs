@@ -14,7 +14,13 @@ import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { committed, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { LATEST_STRUCTURAL, LEGACY_STORE_NAMES, STEPS, legacySchema, schemaAt } from '../../js/kernel/adapters/indexeddb/registry.js';
+import {
+  LATEST_STRUCTURAL,
+  LEGACY_STORE_NAMES,
+  STEPS,
+  legacySchema,
+  schemaAt,
+} from '../../js/kernel/adapters/indexeddb/registry.js';
 import { detectShape, inspect, openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import {
@@ -527,7 +533,6 @@ const ALLOWED = new Set([
 ]);
 
 describe('step 9 inside its versionchange', () => {
-
   for (const [id, fixture] of FIXTURES) {
     const kind = fixture.header.shape;
     if (
@@ -587,8 +592,14 @@ describe('step 10 inside its versionchange (#17 PR 2a)', () => {
     );
     for (const store of db.stores) {
       assert.deepStrictEqual(
-        { keyPath: store.keyPath, indexes: store.indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]) },
-        { keyPath: ten[store.name].keyPath, indexes: ten[store.name].indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]) },
+        {
+          keyPath: store.keyPath,
+          indexes: store.indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]),
+        },
+        {
+          keyPath: ten[store.name].keyPath,
+          indexes: ten[store.name].indexes.map((/** @type {any} */ index) => [index.name, index.keyPath]),
+        },
         store.name,
       );
     }

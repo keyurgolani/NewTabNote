@@ -477,9 +477,15 @@ describe('the worker reports background capture and storage init (js/background.
       await captureCanary(broken);
       const a = await observed(working);
       const b = await observed(broken);
-      // Today's Daily Note's ids and times differ run to run; everything else is the same
+      // Today's Daily Note's ids and times differ run to run, and so do the ledger's times and
+      // digests of commands that carry them (#17 PR 2a); everything else is the same
       const shape = value => {
-        const shaped = JSON.parse(JSON.stringify(value).replace(/[0-9]{13}-[a-z0-9]{0,9}/g, 'ID').replace(/pre-migration-[0-9]+/g, 'pre-migration-ID').replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order|startedAt|completedAt)":[^,}]+/g, '"$1":0'));
+        const shaped = JSON.parse(JSON.stringify(value)
+          .replace(/[0-9]{13}-[a-z0-9]{0,9}/g, 'ID')
+          .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'ID')
+          .replace(/pre-migration-[0-9]+/g, 'pre-migration-ID')
+          .replace(/"digest":"[0-9a-f]{64}"/g, '"digest":"DIGEST"')
+          .replace(/"(createdAt|updatedAt|dateStr|lastOpenedAt|order|startedAt|completedAt|at)":[^,}]+/g, '"$1":0'));
         // Records come in key order, and keys differ run to run
         for (const { records } of Object.values(shaped.notes.stores)) records.sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1));
         return shaped;

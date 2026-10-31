@@ -52,6 +52,10 @@ function spyTx(log, records) {
       log.push(`revision ${store} ${key}`);
       return undefined;
     },
+    versions: (store, key) => {
+      log.push(`versions ${store} ${key}`);
+      return undefined;
+    },
     put: (store, record) => {
       log.push(`put ${store} ${record.id ?? record.noteId}`);
     },
@@ -112,7 +116,31 @@ describe('saveNoteContent', () => {
     // Nothing is awaited before the puts: they're in the log as soon as the unit starts
     assert.deepEqual(log, ['put blocks b1', 'put blocks b2', 'get notes n1']);
     await running;
-    assert.deepEqual(log.slice(3), ['revision notes n1', 'put notes n1']);
+    assert.deepEqual(log.slice(3), ['put notes n1']);
+  });
+
+  it('with an expected revision, reads the note and checks its versions before it puts anything (#17 PR 2a)', async () => {
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('saveNoteContent runs no other command'),
+    };
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'saveNoteContent'>} */
+    const command = {
+      type: 'saveNoteContent',
+      commandId: 'c1',
+      noteId: 'n1',
+      blocks: [{ id: 'b1' }, { id: 'b2' }],
+      expectedRevision: 4,
+    };
+    const work = /** @type {Work} */ (noteCommands.saveNoteContent(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    /** @type {string[]} */
+    const log = [];
+    await unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
+    assert.deepEqual(log, ['get notes n1', 'versions notes n1', 'put blocks b1', 'put blocks b2', 'put notes n1']);
   });
 });
 
