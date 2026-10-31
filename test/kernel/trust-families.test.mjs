@@ -11,18 +11,17 @@ import * as v from '../../js/lib/valibot/index.mjs';
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
 import { runCheck } from '../../js/trust/core/checks.js';
-import { checkEvidence } from '../../js/trust/core/evidence.js';
 import { health, remediation } from '../../js/trust/core/families.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
 import { summarySchema } from '../../js/trust/core/operations/trust-summary.js';
 import { reportSchema } from '../../js/trust/core/operations/trust-report.js';
-import { receiptSchema } from '../../js/trust/core/records.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases, runsOn } from '../../js/trust/core/use-cases.js';
-import { PROVIDER_IDS, REMEDIATION_IDS } from '../../js/trust/core/codes.js';
+import { REMEDIATION_IDS } from '../../js/trust/core/codes.js';
 import { REMEDIATION_CLASSES } from '../../js/trust/core/vocabulary.js';
 import { describeRegistryConformance } from './registry-conformance.mjs';
+import { truthfulReceipt } from './trust-receipt-fixture.mjs';
 import { hexIds, lockManager, manualClock, realTimers, settingsArea } from './trust-support.mjs';
 
 /** @typedef {import('../../js/kernel/registry/validate.js').Descriptor} Descriptor */
@@ -164,46 +163,7 @@ describeRegistryConformance('health (#20)', {
   builtIns: PROVIDERS,
   sample: (id, rank) => provider(id, 'recovery', rank, () => ({ status: 'unverified' })),
   fixtures: {
-    'truthful-receipt': async (contribution, implementation) => {
-      const data = /** @type {Record<string, any>} */ (contribution.data);
-      // A provider's id is registered with it, or none of its receipts could be written
-      assert.ok(
-        PROVIDER_IDS.includes(/** @type {string} */ (contribution.id)),
-        `${contribution.ref} isn't in PROVIDER_IDS`,
-      );
-      const clock = manualClock();
-      const run = await runCheck(
-        {
-          id: /** @type {string} */ (contribution.id),
-          operation: data.operation,
-          costClass: data.costClass,
-          timeoutMs: data.timeoutMs,
-          freshnessMs: data.freshnessMs,
-          core: data.core === true,
-          observes: data.observes,
-          check: context => /** @type {any} */ (implementation).check(context),
-        },
-        { clock, timers: realTimers },
-      );
-      const receipt = {
-        ...run.receipt,
-        id: '00000000-0000-4000-8000-000000000001',
-        installId: '00000000-0000-4000-8000-000000000002',
-        transition: true,
-      };
-      assert.ok(v.is(receiptSchema, receipt), `${contribution.ref} made a receipt outside the schema`);
-      assert.equal(receipt.operation, data.operation, 'a receipt carries its declared operation');
-      assert.equal(receipt.freshnessMs, data.freshnessMs, 'a receipt carries its declared freshness');
-      assert.ok(checkEvidence(receipt.evidence).ok);
-      assert.notEqual(run.outcome, 'invalid', `${contribution.ref} answered something a receipt can't hold`);
-      // A check reports only faults it declares it observes, so its passing check can resolve them
-      for (const fault of run.faults) {
-        assert.ok(
-          data.observes.includes(fault.faultCode),
-          `${contribution.ref} reported ${fault.faultCode}, which it doesn't list in observes`,
-        );
-      }
-    },
+    'truthful-receipt': truthfulReceipt(),
   },
 });
 
