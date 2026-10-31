@@ -165,6 +165,10 @@ describe('license notices (AC8)', () => {
     // entry covered emoji-regex-xs, whose regex Valibot's build holds
     const notices = read('THIRD_PARTY_NOTICES');
     assert.match(notices, /^In: {8}assets\/trust-\*\.js and js\/background\.js: dist\/index\.mjs from the valibot package, bundled and minified/m);
+    // #99's delta: trust-* is the trust chunk, which the pages load for their failure events;
+    // the pages' shared chunk is host-*
+    assert.match(notices, /^In: .*bundled and minified into the chunks that import it: the trust chunk, which a page loads only for its failure events \(\* is its content hash\), and the service worker\./m);
+    assert.doesNotMatch(notices, /shared chunk/);
     assert.match(notices, /^ {2}20\. emoji-regex-xs 1\.0\.0 \(MIT\)$/m);
     assert.match(notices, /^Copyright: Copyright \(c\) 2024 Steven Levithan$/m);
     assert.match(notices, /^MIT License\n\nCopyright \(c\) 2024 Steven Levithan\n\nPermission is hereby granted/m);
