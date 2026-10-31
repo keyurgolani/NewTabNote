@@ -266,6 +266,7 @@ describe("the probe's edges (#78 nits 4 to 6)", () => {
     const swapping = {
       readSettings: async () => ({}),
       commit: async (/** @type {any} */ work) => {
+        /** @type {unknown} */
         let stored;
         const tx = {
           get: async () => (stored === undefined ? undefined : { id: 'something-else' }),
