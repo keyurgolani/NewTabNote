@@ -78,7 +78,7 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  * @property {KernelAdapter} [storage]
  *   The repository adapter on the path capture uses, which capture and storage probe: #17's
  *   `existing` open below the latest version (the worker's, since PR 1b), `versioned` at it
- * @property {{read(): Promise<{version: number, latest: number, status: string | null, code: string | null}>}} [migration]
+ * @property {{current(): Promise<{version: number, latest: number, status: string | null, code: string | null}>}} [migration]
  *   CanvasTabDB's version, the latest, and the worker's last recorded run, for storage below 9
  * @property {SettingsPort} [settings] - chrome.storage.local, for the legacy facts legacy.js lists
  * @property {SecretReader} [secrets]
