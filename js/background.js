@@ -19,7 +19,13 @@ import { contextGuard } from './kernel/composition/network-guard-first.js';
 // Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { MIGRATE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import {
+  MIGRATE_MESSAGE,
+  createWorkerClient,
+  installWorkerRouter,
+  migrationEvents,
+  workerHost,
+} from './kernel/composition/background.js';
 import {
   coordinatorHandlers,
   coordinatorInstanceId,
@@ -44,7 +50,7 @@ const instanceId = coordinatorInstanceId();
  * the migration. The kernel it builds starts #17's migration run, which upgrades the notes
  * database after a verified recovery point, then opens the database and runs startup
  * maintenance, and a capture waits for all of it, except while an older build's open page
- * blocks the upgrade.
+ * blocks the upgrade. Each run it makes goes to the journal as its own migration event (#20).
  */
 let coordinator = unavailableCoordinator(instanceId);
 
@@ -345,7 +351,11 @@ try {
 // senders only. Every event comes after this file has run, the coordinator's build included.
 installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus } });
 try {
-  coordinator = createCoordinator({ instanceId, makeKernel: () => createWorkerClient(), events: failureEvents });
+  coordinator = createCoordinator({
+    instanceId,
+    makeKernel: () => createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event) }),
+    events: failureEvents,
+  });
 } catch (error) {
   // The stand-in stays, every capture says it couldn't open the notes, and #20 hears why
   console.error("NewTabNote: the background coordinator couldn't be built", error);
