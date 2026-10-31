@@ -103,6 +103,12 @@ const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
  * @property {'typed'|'generated'} origin - typed by the user, or set by the AI (setTitleProgrammatically)
  */
 
+/** The note icon the wiki-link and template pickers show, packaged markup */
+const NOTE_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+  <polyline points="14 2 14 8 20 8"></polyline>
+</svg>`;
+
 class BlockEditor {
   constructor(config = {}) {
     this.root = config.root || document;
@@ -983,9 +989,44 @@ class BlockEditor {
    */
   stripHtmlTags(html) {
     if (!html) return '';
-    const div = this.doc.createElement('div');
+    // Parsed in a document of its own, never an element of the page's
+    const inert = this.doc.implementation.createHTMLDocument('');
+    const div = inert.createElement('div');
     div.innerHTML = html;
-    return div.textContent || div.innerText || '';
+    return div.textContent || '';
+  }
+
+  /**
+   * One picker item, as the slash menu, the wiki-link picker, and the template picker show it:
+   * `iconHtml` is packaged markup, and the title and description are set as text, so a name
+   * shows exactly as typed
+   * @param {string} className
+   * @param {string} iconHtml
+   * @param {string} title
+   * @param {string} [description]
+   * @returns {HTMLElement}
+   */
+  _pickerItem(className, iconHtml, title, description) {
+    const item = this.doc.createElement('div');
+    item.className = className;
+    const icon = this.doc.createElement('div');
+    icon.className = 'slash-menu-item-icon';
+    icon.innerHTML = iconHtml;
+    const text = this.doc.createElement('div');
+    text.className = 'slash-menu-item-text';
+    const titleEl = this.doc.createElement('div');
+    titleEl.className = 'slash-menu-item-title';
+    titleEl.textContent = title;
+    text.appendChild(titleEl);
+    if (description !== undefined) {
+      const desc = this.doc.createElement('div');
+      desc.className = 'slash-menu-item-desc';
+      desc.textContent = description;
+      text.appendChild(desc);
+    }
+    item.appendChild(icon);
+    item.appendChild(text);
+    return item;
   }
 
   /**
@@ -1775,19 +1816,7 @@ class BlockEditor {
     }
 
     filtered.forEach((name, index) => {
-      const item = this.doc.createElement('div');
-      item.className = `slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`;
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-        </div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${name}</div>
-        </div>
-      `;
+      const item = this._pickerItem(`slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`, NOTE_ICON, name);
       item.addEventListener('click', () => this.selectWikiMenuItem(name));
       this.wikiMenuItems.appendChild(item);
     });
@@ -1940,19 +1969,7 @@ class BlockEditor {
     }
 
     filtered.forEach((template, index) => {
-      const item = this.doc.createElement('div');
-      item.className = `slash-menu-item ${index === this.templateMenuIndex ? 'active' : ''}`;
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-        </div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${template.name}</div>
-        </div>
-      `;
+      const item = this._pickerItem(`slash-menu-item ${index === this.templateMenuIndex ? 'active' : ''}`, NOTE_ICON, template.name);
       item.addEventListener('click', () => this.selectTemplateItem(template.id));
       this.templateMenuItems.appendChild(item);
     });
@@ -2991,18 +3008,10 @@ class BlockEditor {
 
     types.forEach((type, index) => {
       const info = BlockTypes[type];
-      const item = this.doc.createElement('div');
-      item.className = 'slash-menu-item';
+      // The icon is packaged markup; the name and description are set as text
+      const item = this._pickerItem('slash-menu-item', info.icon, info.name, info.description);
       item.dataset.type = type;
-      item.dataset.index = index;
-
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">${info.icon}</div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${info.name}</div>
-          <div class="slash-menu-item-desc">${info.description}</div>
-        </div>
-      `;
+      item.dataset.index = String(index);
 
       this.slashMenuItems.appendChild(item);
     });
