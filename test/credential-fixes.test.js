@@ -163,6 +163,41 @@ const settle = async () => {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
 };
 
+/**
+ * The new tab's AI settings on `provider`, its key `key` saved for it: the provider list and
+ * the key field, with each model listing recorded as [provider, key]
+ */
+async function settingsPage(provider, key) {
+  const env = createLegacyEnv({ document: new FakeDocument() });
+  env.global.ResizablePanel = class {};
+  env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
+  const storage = env.get('Storage');
+  await storage.init();
+  await storage.setSetting('llmProvider', provider);
+  if (key) {
+    await storage.setSetting('llmApiKey', key);
+    await storage.setSetting('llmApiKeyProvider', provider);
+  }
+  const llm = env.get('LLM');
+  await llm.init();
+  const doc = env.document;
+  const select = doc.createElement('select');
+  select.id = 'llm-provider-select';
+  const field = doc.createElement('input');
+  field.id = 'llm-api-key';
+  doc.body.appendChild(select);
+  doc.body.appendChild(field);
+  const AIChatController = env.get('AIChatController');
+  const chat = new AIChatController({ storage, domRefs: { get: () => null }, logger: { debug() {}, info() {}, warn() {}, error() {} }, llm });
+  /** @type {Array<[string, string]>} */
+  const listed = [];
+  chat.loadAndPopulateModels = async (shown, apiKey) => { listed.push([shown, apiKey]); };
+  chat.updateLLMSettingsVisibility = () => {};
+  chat.updateAISidebarState = () => {};
+  chat.setupLLMSettings();
+  return { env, storage, llm, select, field, listed };
+}
+
 describe("a key's provider is recorded safely (#21 slice 1a)", () => {
   it("a failed write of the key's provider at start leaves the start working, the provider held in memory", async () => {
     const key = canary('owner-write');
@@ -218,6 +253,47 @@ describe("a key's provider is recorded safely (#21 slice 1a)", () => {
     assert.equal(listed.some(([provider, apiKey]) => provider === 'anthropic' && apiKey === key), false, 'the key was used for the provider shown');
     await llm.setProvider('openai');
     assert.equal(llm.apiKey, key);
+  });
+
+  it("a provider change never sends another provider's key, however fast the changes come", async () => {
+    const key = canary('quick-changes');
+    const { env, llm, select, listed, field } = await settingsPage('openai', key);
+    for (const sequence of [['anthropic', 'openai'], ['openai', 'groq', 'openai'], ['mistral', 'openai', 'anthropic']]) {
+      for (const provider of sequence) {
+        select.value = provider;
+        select.dispatchEvent({ type: 'change' });
+      }
+      await settle();
+      env.clock.tick(10);
+      await settle();
+      assert.deepEqual(listed.filter(([provider, apiKey]) => apiKey === key && provider !== 'openai'), [], sequence.join(' > '));
+      assert.equal(field.value, llm.keyFor(llm.provider), `${sequence.join(' > ')}: the field shows the shown provider's key`);
+    }
+  });
+
+  it('a saved key that is not a string is no key, and the start goes on', async () => {
+    const { storage, llm } = await llmPage();
+    await storage.setSetting('llmProvider', 'openai');
+    await storage.setSetting('llmApiKey', 12345);
+    await llm.init();
+    assert.equal(llm.provider, 'openai');
+    assert.equal(llm.apiKey, '');
+  });
+
+  it("after a switch away and back before the key's save lands, the field shows the key once it does", async () => {
+    const key = canary('away-and-back');
+    const { env, llm, select, field } = await settingsPage('openai', '');
+    field.value = key;
+    field.dispatchEvent({ type: 'input' });
+    for (const provider of ['anthropic', 'openai']) {
+      select.value = provider;
+      select.dispatchEvent({ type: 'change' });
+      await settle();
+    }
+    env.clock.tick(800);
+    await settle();
+    assert.equal(llm.apiKey, key);
+    assert.equal(field.value, key);
   });
 
   it('a saved key with no provider yet is given the one its prefix names, before the provider in use', async () => {
