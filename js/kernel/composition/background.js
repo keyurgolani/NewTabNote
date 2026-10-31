@@ -11,12 +11,12 @@
  * Since #17 PR 1b the worker is the one context that upgrades CanvasTabDB: at worker start it
  * runs the migration runner (migrate.js) under Web Lock `storage.migrate`, which makes the
  * verified `pre-migration` recovery point and then opens the database at this build's version
- * (10 since #17 PR 2a). Its kernel is on #17's IndexedDB adapter, opened once the run has
+ * (11 since #17 PR 3b). Its kernel is on #17's IndexedDB adapter, opened once the run has
  * finished: `versioned`, with startup maintenance, when the database is at that version, and
  * `existing` when the run left it as it was (short of space, refused, or failed), so captures
- * keep working on the shape that's there. Once it's open at version 10, the worker sweeps the
- * adapter's ledger, at most once a day (ledger.js), runs the data transforms its database
- * still needs (transforms.js, #17 PR 3a) at every start, and purges what was deleted for good
+ * keep working on the shape that's there. Once it's open at this build's version, the worker
+ * sweeps the adapter's ledger, at most once a day (ledger.js), runs the data transforms its
+ * database still needs (transforms.js, #17 PR 3) at every start, and purges what was deleted for good
  * from the recovery points (purge.js, #17 PR 2b): at every start, after the transforms, and
  * again when a page that deleted something wakes it with `storage.purge`.
  * PURGE_RECOVERY_POINTS turns the purge off.

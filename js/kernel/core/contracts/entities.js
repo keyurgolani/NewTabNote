@@ -54,6 +54,10 @@ export const noteRecord = v.looseObject({
   placement: v.optional(placement),
   kind: v.optional(v.picklist(['note', 'template'])),
   lifecycle: v.optional(v.picklist(['active', 'archived', 'trashed'])),
+  // #17 PR 3b's, a Daily Note's local date beside its dateStr (domain/daily.js)
+  dailyKey: v.optional(dateStr),
+  dailyTimeZone: v.optional(v.nullable(v.string())),
+  dailyDuplicateOf: v.optional(v.nullable(entityId('note'))),
 });
 
 /**

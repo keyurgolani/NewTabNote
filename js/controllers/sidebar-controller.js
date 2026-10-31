@@ -698,12 +698,16 @@ class SidebarController {
     const monthDate = new Date(year, month, 1);
     monthLabel.textContent = monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
+    // Each Daily Note's local date (#17 PR 3b), else its dateStr, for one #17's transform hasn't keyed yet
     const dailyNoteDates = new Set();
     const allNotes = [...this.notes, ...this.archivedNotes];
-    allNotes.forEach(n => { if (n.isDaily && n.dateStr) dailyNoteDates.add(n.dateStr); });
+    allNotes.forEach(n => {
+      const key = n.isDaily && (n.dailyKey || n.dateStr);
+      if (key) dailyNoteDates.add(key);
+    });
 
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    // The local day, where 1.4.x took the UTC one (#17 PR 3b)
+    const todayStr = Utils.localDateKey(new Date());
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const daysInPrevMonth = new Date(year, month, 0).getDate();

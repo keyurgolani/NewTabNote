@@ -3,9 +3,11 @@
  * a record's shape (#12, "Data and migration"), so the field names stay: a block names its
  * note in `canvasId`. Stored records can lack fields (Popup wrote four-field notes until
  * slice 4), and every function here takes that into account. #17 PR 3a adds placement, kind,
- * and lifecycle beside the flags (placement.js), and every flag stays.
+ * and lifecycle beside the flags (placement.js), PR 3b a Daily Note's local key beside its
+ * `isDaily` and `dateStr` (daily.js), and every flag stays.
  */
 
+import { dailyHolder, localKeyIn } from './daily.js';
 import { withNewPlacement } from './placement.js';
 
 /**
@@ -35,6 +37,9 @@ import { withNewPlacement } from './placement.js';
  * @property {import('./placement.js').Placement} placement - #17 PR 3a's, beside the flags
  * @property {import('./placement.js').NoteKind} kind
  * @property {import('./placement.js').Lifecycle} lifecycle
+ * @property {string} dailyKey - #17 PR 3b's, a Daily Note's local date (daily.js)
+ * @property {string | null} dailyTimeZone
+ * @property {string | null} dailyDuplicateOf
  */
 
 /** @typedef {{id: string} & Partial<NoteFields> & Record<string, unknown>} NoteRecord */
@@ -471,21 +476,30 @@ export function insertLinkText(blocks) {
 // ============ Daily Notes ============
 
 /**
- * The `dateStr` of the Daily Note for `now`. It's the UTC date, as background.js has always
- * computed it, while the note's name uses the local date.
+ * The key of the Daily Note for `now`: its local date in `zone` (#17 PR 3b, domain/daily.js),
+ * the date its name has always given. 1.4.x keyed it by the UTC date, so from local midnight to
+ * UTC midnight "today" was the wrong day.
  * @param {number} now
+ * @param {string} zone
  * @returns {string}
  */
-export function dailyDateStr(now) {
-  return new Date(now).toISOString().split('T')[0];
+export function dailyDateStr(now, zone) {
+  return localKeyIn(now, zone);
 }
 
 /**
+ * The name of the Daily Note for `now`, with its local date in `zone`
  * @param {number} now
+ * @param {string} zone
  * @returns {string}
  */
-export function dailyNoteName(now) {
-  const date = new Date(now).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+export function dailyNoteName(now, zone) {
+  const date = new Date(now).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: zone,
+  });
   return `Daily Note - ${date}`;
 }
 
@@ -510,39 +524,56 @@ export function isDateStr(value) {
  * @returns {string}
  */
 export function dailyNoteNameFor(dateStr) {
-  return dailyNoteName(new Date(`${dateStr}T00:00:00`).getTime());
+  // The host's midnight of that day, read in the host's zone: that day, in any zone
+  const date = new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return `Daily Note - ${date}`;
 }
 
 /**
- * The Daily Note for `dateStr` among `notes`, as Storage.ensureDailyNoteForDate finds it: the
- * first in the `withArchived` list with that `dateStr`.
- * @param {NoteRecord[]} notes
+ * The Daily Note for the key `dateStr` among `notes`: the one that holds it by #17's rules
+ * (domain/daily.js, dailyHolder), archived included, not in the trash or a template. Where two
+ * hold one date, the earliest made, where 1.4.x opened the latest updated (Q7).
+ * @param {NoteRecord[]} notes - every stored note
  * @param {string} dateStr
+ * @param {string} zone
  * @returns {NoteRecord | undefined}
  */
-export function findDailyNoteFor(notes, dateStr) {
-  return notesInView(notes, 'withArchived').find(note => note.isDaily && note.dateStr === dateStr);
+export function findDailyNoteFor(notes, dateStr, zone) {
+  return dailyHolder(notes, dateStr, zone)?.note;
 }
 
 /**
- * Today's Daily Note among `notes`, as Storage.getTodayNote finds it: the first in the
- * `withArchived` list whose `dateStr` is today's.
+ * Today's Daily Note among `notes`, in `zone`
  * @param {NoteRecord[]} notes
  * @param {number} now
+ * @param {string} zone
  * @returns {NoteRecord | undefined}
  */
-export function findDailyNote(notes, now) {
-  return findDailyNoteFor(notes, dailyDateStr(now));
+export function findDailyNote(notes, now, zone) {
+  return findDailyNoteFor(notes, dailyDateStr(now, zone), zone);
 }
 
 /**
  * A new Daily Note: the record Storage.createNote writes, with the `isDaily` and `dateStr` that
- * 1.4.x's ensureDailyNote wrote over it in a second write, here in the first.
- * @param {{id: string, name: string, dateStr: string, now: number}} fields
+ * 1.4.x's ensureDailyNote wrote over it in a second write, here in the first, and #17 PR 3b's
+ * key beside them: `dateStr` and `dailyKey` both the day's local date (Q2), and the zone it's
+ * in (domain/daily.js)
+ * @param {{id: string, name: string, dailyKey: string, zone: string, now: number}} fields
  * @returns {NoteRecord}
  */
-export function newDailyNoteRecord({ id, name, dateStr, now }) {
-  return withNewPlacement({ ...newNoteRecord({ id, name, now }), isDaily: true, dateStr });
+export function newDailyNoteRecord({ id, name, dailyKey, zone, now }) {
+  return withNewPlacement({
+    ...newNoteRecord({ id, name, now }),
+    isDaily: true,
+    dateStr: dailyKey,
+    dailyKey,
+    dailyTimeZone: zone,
+    dailyDuplicateOf: null,
+  });
 }
 
 /**

@@ -197,19 +197,34 @@ describe('notes', () => {
 });
 
 describe('Daily Notes', () => {
-  it('names the note after the local date and keys it by the UTC date, as background.js always has', () => {
-    assert.equal(dailyDateStr(NOW), '2026-10-20');
-    assert.equal(dailyNoteName(NOW), 'Daily Note - Oct 20, 2026');
+  it('keys and names the note by its local date in the zone, where 1.4.x keyed it by the UTC date (#17 PR 3b)', () => {
+    // 01:30 UTC on Oct 21: still the evening of Oct 20 in Los Angeles
+    const evening = Date.UTC(2026, 9, 21, 1, 30);
+    for (const [zone, day] of [
+      ['America/Los_Angeles', 20],
+      ['UTC', 21],
+      ['Asia/Tokyo', 21],
+    ]) {
+      assert.deepEqual(
+        [dailyDateStr(evening, String(zone)), dailyNoteName(evening, String(zone))],
+        [`2026-10-${day}`, `Daily Note - Oct ${day}, 2026`],
+        String(zone),
+      );
+    }
   });
 
   it("finds today's Daily Note among archived notes too, but not in the trash or among templates", () => {
     const today = { isDaily: true, dateStr: '2026-10-20' };
     assert.equal(
-      findDailyNote([note('t', { ...today, trashed: true }), note('x', { isDaily: true, dateStr: '2026-10-19' })], NOW),
+      findDailyNote(
+        [note('t', { ...today, trashed: true }), note('x', { isDaily: true, dateStr: '2026-10-19' })],
+        NOW,
+        'UTC',
+      ),
       undefined,
     );
-    assert.equal(findDailyNote([note('a', { ...today, archived: true })], NOW)?.id, 'a');
-    assert.equal(findDailyNote([note('tpl', { ...today, isTemplate: true })], NOW), undefined);
+    assert.equal(findDailyNote([note('a', { ...today, archived: true })], NOW, 'UTC')?.id, 'a');
+    assert.equal(findDailyNote([note('tpl', { ...today, isTemplate: true })], NOW, 'UTC'), undefined);
   });
 
   it('copies template blocks with new ids and the variables filled in, tables included', () => {
