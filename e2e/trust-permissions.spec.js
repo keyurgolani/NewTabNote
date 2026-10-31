@@ -42,6 +42,7 @@ async function checkPermissions() {
     {
       id: 'permissions',
       operation: 'permissions.compare-manifest',
+      observes: ['grant-missing', 'permission-changed'],
       costClass: 'local-cheap',
       timeoutMs: 5000,
       freshnessMs: 86_400_000,

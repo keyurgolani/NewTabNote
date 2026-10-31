@@ -42,7 +42,11 @@ export const messaging = Object.freeze({
     const answer = await client.query({ type: 'system.messagingHealth' });
     if (answer.kind === 'ready' && v.is(messagingHealth, answer.data)) {
       const health = v.parse(messagingHealth, answer.data);
-      return { status: 'verified', evidence: { count: health.handshakes, attempts: health.reconnects } };
+      return {
+        status: 'verified',
+        evidence: { count: health.handshakes, attempts: health.reconnects },
+        looked: [{ faultCode: 'unreachable', subjectId: null }],
+      };
     }
     // A failed query is the coordinator's answer that it can't: unreachable, refused, or late
     if (answer.kind === 'failed') {
@@ -52,6 +56,7 @@ export const messaging = Object.freeze({
         consequenceKey: 'platform.coordinator-unreachable',
         preserved: [...WITHOUT_COORDINATOR],
         faults: [{ faultCode: 'unreachable', subjectId: null, severity: 'degraded', preserved: [...WITHOUT_COORDINATOR] }],
+        looked: [{ faultCode: 'unreachable', subjectId: null }],
       };
     }
     // An answer its schema refuses, or one still loading: nothing was verified
@@ -87,15 +92,17 @@ function reportOf(context, family) {
  */
 function fromRows(rows, group) {
   // No root, or no contribution in any, is nothing to verify
-  if (rows.length === 0) return { status: 'not-configured', evidence: { records: 0 } };
+  const looked = [{ faultCode: 'contribution-unavailable', subjectId: null }];
+  if (rows.length === 0) return { status: 'not-configured', evidence: { records: 0 }, looked };
   const unavailable = rows.filter(row => /** @type {readonly string[]} */ (UNAVAILABLE_STATES).includes(row.state));
   const evidence = { records: rows.length, count: unavailable.length };
-  if (unavailable.length === 0) return { status: 'verified', evidence };
+  if (unavailable.length === 0) return { status: 'verified', evidence, looked };
   return {
     status: 'degraded',
     evidence,
     consequenceKey: `${group}.contribution-unavailable`,
     faults: [{ faultCode: 'contribution-unavailable', subjectId: null, severity: 'degraded' }],
+    looked,
   };
 }
 
@@ -116,7 +123,9 @@ export const blockTypes = Object.freeze({
    */
   check(context) {
     const { rows, families } = reportOf(context, BLOCK_FAMILY);
-    if (!families.has(BLOCK_FAMILY)) return { status: 'not-configured', evidence: { records: 0 } };
+    if (!families.has(BLOCK_FAMILY)) {
+      return { status: 'not-configured', evidence: { records: 0 }, looked: [{ faultCode: 'contribution-unavailable', subjectId: null }] };
+    }
     return fromRows(rows, 'platform');
   },
 });

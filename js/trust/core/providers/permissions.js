@@ -109,6 +109,8 @@ export const permissions = Object.freeze({
     const manifest = portOf(context, 'manifest');
     const found = comparePermissions(await reader.getAll(), manifest);
     const evidence = { count: found.granted, records: UNCOVERED_EGRESS.length };
+    // Chrome and the manifest both answered: every grant and every extra one was looked at
+    const looked = [{ faultCode: 'grant-missing' }, { faultCode: 'permission-changed' }];
     /** @type {NonNullable<Faults>} */
     const faults = [];
     for (const name of found.missingApis) {
@@ -128,6 +130,7 @@ export const permissions = Object.freeze({
         evidence: { ...evidence, pending: found.missingApis.length + found.missingOrigins.length },
         consequenceKey: 'permissions.changed',
         faults: found.missingOrigins.length > 0 ? [...faults, missingOriginsFault()] : faults,
+        looked,
       };
     }
     if (found.missingOrigins.length > 0) {
@@ -137,9 +140,10 @@ export const permissions = Object.freeze({
         consequenceKey: 'permissions.site-access-limited',
         preserved: ['capture', 'editing', 'reading', 'search'],
         faults: [missingOriginsFault()],
+        looked,
       };
     }
-    return { status: 'verified', evidence };
+    return { status: 'verified', evidence, looked };
   },
 });
 

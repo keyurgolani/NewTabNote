@@ -22,6 +22,9 @@ const position = value => {
   return value;
 };
 
+/** What it looked at once the head and every checkpoint were read */
+const LOOKED = () => [{ faultCode: 'lagging', subjectId: null }, { faultCode: 'stalled', subjectId: null }];
+
 export const indexLag = Object.freeze({
   /**
    * @param {Readonly<Record<string, unknown>>} context
@@ -30,7 +33,7 @@ export const indexLag = Object.freeze({
   async check(context) {
     // A root with no pipelines passes an empty list; one that passes none can't say
     const pipelines = portOf(context, 'pipelines');
-    if (pipelines.length === 0) return { status: 'not-configured', evidence: { records: 0 } };
+    if (pipelines.length === 0) return { status: 'not-configured', evidence: { records: 0 }, looked: LOOKED() };
     const head = position(await portOf(context, 'commitLog').head());
     let lag = 0;
     let lagging = 0;
@@ -48,22 +51,25 @@ export const indexLag = Object.freeze({
       if (behind > pipeline.windowSeq) lagging += 1;
     }
     const evidence = { records: pipelines.length, lag, ...(head > 0 ? { seq: head } : {}) };
+    const looked = LOOKED();
     if (ahead > 0) {
       return {
         status: 'degraded',
         evidence: { ...evidence, count: ahead },
         consequenceKey: 'indexing.resync-required',
+        looked,
         preserved: ['capture', 'editing', 'reading'],
         faults: [
           { faultCode: 'stalled', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },
         ],
       };
     }
-    if (lagging === 0) return { status: 'verified', evidence };
+    if (lagging === 0) return { status: 'verified', evidence, looked };
     return {
       status: 'degraded',
       evidence: { ...evidence, count: lagging },
       consequenceKey: 'indexing.lagging',
+      looked,
       preserved: ['capture', 'editing', 'reading'],
       faults: [
         { faultCode: 'lagging', subjectId: null, severity: 'degraded', affected: ['search'], preserved: ['capture', 'editing', 'reading'] },

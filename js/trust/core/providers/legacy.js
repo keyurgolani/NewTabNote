@@ -139,9 +139,12 @@ export const localInference = interim(async context => {
       consequenceKey: 'inference.load-failed',
       preserved: ['capture', 'editing', 'reading'],
       faults: [{ faultCode: 'load-failed', subjectId: null, severity: 'degraded', affected: ['ai', 'search'], preserved: ['capture', 'editing', 'reading'] }],
+      looked: [{ faultCode: 'load-failed', subjectId: null }],
     };
   }
-  return vectors.stored ? { status: 'unverified', consequenceKey: 'inference.not-verified' } : { status: 'not-configured' };
+  // The journal and the store both answered, so the failure was looked for and isn't there
+  const looked = [{ faultCode: 'load-failed', subjectId: null }];
+  return vectors.stored ? { status: 'unverified', consequenceKey: 'inference.not-verified', looked } : { status: 'not-configured', looked };
 });
 
 /**
@@ -169,13 +172,16 @@ export const credentials = interim(async context => {
     throw new TypeError('not a list of secret places');
   }
   const sources = /** @type {SecretSource[]} */ ([...new Set(answer)]);
-  if (sources.length === 0) return { status: 'not-configured', evidence: { count: 0 } };
+  // The reader answered for all three places, so each was looked at
+  const looked = [{ faultCode: /** @type {const} */ ('legacy-secret') }];
+  if (sources.length === 0) return { status: 'not-configured', evidence: { count: 0 }, looked };
   return {
     status: 'action-required',
     evidence: { count: sources.length },
     consequenceKey: 'vault.legacy-secret',
     preserved: ['capture', 'editing', 'reading', 'ai', 'sync'],
     nextAction: 'remove-saved-key',
+    looked,
     faults: sources.map(source => ({
       faultCode: /** @type {const} */ ('legacy-secret'),
       subjectId: SECRET_SUBJECTS[source],

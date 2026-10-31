@@ -135,6 +135,7 @@ describe('the legacy secret reader (#20 slice 2, Credentials)', () => {
       {
         id: 'credentials',
         operation: 'credentials.find-legacy-secrets',
+        observes: ['legacy-secret'],
         costClass: 'local-cheap',
         timeoutMs: 5000,
         freshnessMs: 60_000,
