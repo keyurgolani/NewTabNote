@@ -1,8 +1,8 @@
 {
   "format": "ntn-storage-fixture/1",
   "header": {
-    "id": "v8.extra-store.v9",
-    "purpose": "After the registry runs to 9 on v8.extra-store.",
+    "id": "v8.extra-store.v10",
+    "purpose": "After the registry runs to 10 on v8.extra-store.",
     "shape": "v8",
     "releases": [
       "v1.3.0",

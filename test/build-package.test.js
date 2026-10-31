@@ -126,9 +126,9 @@ describe('build-info.json and asset-manifest.json', () => {
     assert.equal(info.version, '1.2.3');
     assert.equal(info.SOURCE_DATE_EPOCH, EPOCH);
     assert.deepEqual(info.protocolVersion, { major: 1, minor: 0 });
-    // CanvasTabDB's version, the schema module's DB_VERSION, which #17 PR 1b took to 9
+    // CanvasTabDB's version, the schema module's DB_VERSION, which #17 PR 2a took to 10
     assert.equal(info.schemaVersion, (await kernelVersions(ROOT)).schemaVersion);
-    assert.equal(info.schemaVersion, 9);
+    assert.equal(info.schemaVersion, 10);
     assert.deepEqual(readBuildInfo(files).problems, []);
     assert.equal(assetManifest(files), files.text('asset-manifest.json'));
   });

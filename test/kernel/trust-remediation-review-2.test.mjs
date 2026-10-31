@@ -260,8 +260,8 @@ describe('#82 round 2, 5: a resend of a finished run answers as it finished', ()
 describe('#82 round 2, 6: rebuild-index rechecks each note at apply', () => {
   it('writes no entry for a note trashed between the preview and the apply', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.orphans')));
-    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at 9
-    // before #17's adapter opens it versioned
+    // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
+    // build's version before #17's adapter opens it versioned
     assert.equal((await run(of)).status, 'migrated');
     const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
     await adapter.open();

@@ -17,7 +17,7 @@ import { webcrypto } from 'node:crypto';
 
 import { exportPoint, exportablePoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery, verifyPoint, DEFAULT_LIMITS } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { schemaAt } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { LATEST_STRUCTURAL, schemaAt } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import {
   BATCH_BYTES,
@@ -202,12 +202,12 @@ describe('the maximal profile', () => {
     );
   });
 
-  it('migrates to 9 with every store, and a verified point that counts every record but the settings store', async () => {
+  it(`migrates to ${LATEST_STRUCTURAL} with every store, and a verified point that counts every record but the settings store`, async () => {
     const { of, pointId } = await migratedAndExported(fixture);
     const after = await dump(of);
     const db = /** @type {any} */ (after.databases.find(candidate => candidate.name === 'CanvasTabDB'));
-    assert.equal(db.version, 9);
-    assert.deepStrictEqual(db.stores.map((/** @type {any} */ s) => s.name), Object.keys(/** @type {object} */ (schemaAt(9))).sort());
+    assert.equal(db.version, LATEST_STRUCTURAL);
+    assert.deepStrictEqual(db.stores.map((/** @type {any} */ s) => s.name), Object.keys(/** @type {object} */ (schemaAt(LATEST_STRUCTURAL))).sort());
     // The ten legacy stores keep every record as it was
     for (const store of fixture.databases[0].stores) {
       assert.deepStrictEqual(recordsIn(after, 'CanvasTabDB', store.name), fillCanaries(store.records), store.name);
@@ -271,7 +271,7 @@ describe('the corrupt profiles', () => {
   });
 
   for (const [id, { fixture }] of CORRUPT) {
-    it(`${id}: migrates to 9 with a verified point of every record, and leaves the records as they were`, async () => {
+    it(`${id}: migrates to ${LATEST_STRUCTURAL} with a verified point of every record, and leaves the records as they were`, async () => {
       const { of, pointId } = await migratedAndExported(fixture);
       const after = await dump(of);
       for (const store of fixture.databases[0].stores) {
