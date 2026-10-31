@@ -14,11 +14,18 @@
 // Going back to 1.4.1 for real means a file it imports: the pre-update copy Settings exports
 // (Q8), and this build's own Export JSON, both through the frozen v1.4.1 importData into a
 // fresh 1.4.1 profile.
+//
+// Since #17 PR 4a the new tab writes through #17's adapter too (the plan's section 7): a profile
+// it wrote, with the version fields, ledger rows, and change rows that adds, is refused and left
+// as it was by both releases, and its Export JSON, which #17's adapter makes, imports through
+// the frozen v1.4.1.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
-const { createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain, waitFor } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain, waitFor, block,
+} = require('./helpers/legacy-env');
 const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -91,6 +98,59 @@ async function capture(worker) {
   assert.equal(worker.chrome.notifications[count].title, 'Captured to New Tab Note');
 }
 
+/**
+ * The new tab on `worker`'s profile, as its root opens it since #17 PR 4a: #17's adapter, with
+ * the holders' Storage beside it, once it's ready
+ */
+async function newTab(worker) {
+  const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
+  page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
+  const root = await loadPageModule(page, 'js/kernel/composition/newtab.js');
+  const host = root.newTabHost();
+  const adapter = root.createNewTabAdapter(host);
+  const client = root.createNewTabClient(adapter, host);
+  const failure = await runUntil(page, client.whenReady());
+  assert.equal(failure, null, JSON.stringify(plain(failure)));
+  /** Closes both of the tab's connections, as closing the tab does */
+  const close = () => {
+    adapter.close();
+    const { db } = page.get('Storage');
+    if (db) db.close();
+  };
+  return { page, adapter, client, close };
+}
+
+/** Export JSON's file, as the new tab makes it on #17's adapter */
+async function exportJson(client) {
+  const state = await client.query({ type: 'exportBackup', backup: false });
+  assert.equal(state.kind, 'ready', JSON.stringify(plain(state)));
+  return JSON.parse(await state.data.text());
+}
+
+/**
+ * What a user does in the new tab after the update, each through #17's adapter, which commits it
+ * with its ledger row, its changes, and its notes' versions: a note typed into and pinned, filed
+ * in a new folder, and a second note made and moved to trash
+ */
+async function writeInNewTab(client) {
+  const run = async (command) => {
+    const outcome = plain(await client.execute(command));
+    assert.equal(outcome.kind, 'committed', `${command.type}: ${JSON.stringify(outcome)}`);
+  };
+  await run({ type: 'createNote', commandId: 'tab-1', noteId: 'tab-note', name: 'Written in the new tab' });
+  await run({
+    type: 'saveNoteContent',
+    commandId: 'tab-2',
+    noteId: 'tab-note',
+    blocks: [block('tab-b1', 'tab-note', 0, 'typed after the update')],
+  });
+  await run({ type: 'setPinned', commandId: 'tab-3', noteId: 'tab-note', pinned: true });
+  await run({ type: 'createFolder', commandId: 'tab-4', folderId: 'tab-folder', name: 'After the update', parentId: null });
+  await run({ type: 'moveNoteToFolder', commandId: 'tab-5', noteId: 'tab-note', folderId: 'tab-folder' });
+  await run({ type: 'createNote', commandId: 'tab-6', noteId: 'tab-gone', name: 'Trashed in the new tab' });
+  await run({ type: 'trashNote', commandId: 'tab-7', noteId: 'tab-gone' });
+}
+
 /** The v1.4.1 Storage on a fresh 1.4.1 profile, as a user who reinstalled 1.4.1 has it */
 async function release141() {
   const env = createLegacyEnv({ worker: false });
@@ -157,6 +217,56 @@ describe('a profile the shipped worker migrated to 11 and captured into, opened 
   }
 });
 
+describe("a profile the new tab wrote through #17's adapter after the update, opened by a 1.4.x build (#17 PR 4a, section 7)", () => {
+  for (const tag of ['v1.4.0', 'v1.4.1']) {
+    it(`v8.basic, written in the new tab at 11, then ${tag}: refused, and nothing changed or deleted`, async () => {
+      const { worker, dump } = await migrated('v8.basic');
+      const tab = await newTab(worker);
+      await writeInNewTab(tab.client);
+      tab.close();
+      const before = await dump();
+      const canvas = before.databases.find((db) => db.name === 'CanvasTabDB');
+      const rows = (name) => canvas.stores.find((found) => found.name === name).records;
+      for (const store of ['operations', 'changes']) assert.ok(rows(store).length > 0, `the new tab left ${store} rows`);
+      const written = rows('canvases').find((record) => record.key === 'tab-note').value;
+      assert.deepStrictEqual([written.pinned, written.folderId, typeof written.revision], [true, 'tab-folder', 'number']);
+      const { error } = await rollBack(worker, tag);
+      if (tag === 'v1.4.0') assert.equal(error && error.name, 'VersionError', String(error));
+      else assert.equal(error && error.code, 'NEWER_SCHEMA', String(error));
+      const after = await dump();
+      assert.deepStrictEqual(after.databases, before.databases);
+      assert.deepStrictEqual(after.chromeStorageLocal, before.chromeStorageLocal);
+    });
+  }
+
+  it("its Export JSON, which #17's adapter makes, holds what the new tab wrote, and imports through the frozen v1.4.1 importData", async () => {
+    const { worker } = await migrated('v8.basic');
+    const tab = await newTab(worker);
+    await writeInNewTab(tab.client);
+    const file = await exportJson(tab.client);
+    tab.close();
+    const written = file.canvases.find((note) => note.id === 'tab-note');
+    assert.deepStrictEqual([written.pinned, written.folderId], [true, 'tab-folder']);
+    assert.ok(!file.canvases.some((note) => note.id === 'tab-gone'), 'the trashed note stays out');
+    assert.ok(file.folders.some((folder) => folder.id === 'tab-folder'));
+    for (const note of file.canvases) {
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, `${note.id}: ${field}`);
+    }
+    const { env, Storage } = await release141();
+    const check = Storage.validateImport(file);
+    assert.equal(check.ok, true, check.reason);
+    const result = plain(await Storage.importData(file, 'merge'));
+    assert.equal(result.notes, file.canvases.length);
+    assert.equal(result.blocks, file.elements.length);
+    const imported = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'canvases'));
+    assert.deepStrictEqual(imported.map((n) => n.name).sort(), file.canvases.map((n) => n.name).sort());
+    const copy = imported.find((n) => n.name === 'Written in the new tab');
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'folders')[copy.folderId].name, 'After the update');
+    const blocks = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements')).filter((el) => el.canvasId === copy.id);
+    assert.deepStrictEqual(blocks.map((el) => el.content), ['typed after the update']);
+  });
+});
+
 describe('going back to 1.4.1 with a file it imports', () => {
   it("the pre-update copy Settings exports imports through the frozen v1.4.1 importData", async () => {
     const { worker } = await migrated('v8.basic');
@@ -218,14 +328,11 @@ describe('going back to 1.4.1 with a file it imports', () => {
 
   it("this build's Export JSON, taken after the upgrade, holds no field 1.4.x doesn't know, and imports through the frozen v1.4.1 importData too", async () => {
     const { worker } = await migrated('v8.evening-daily-notes');
-    // The new tab's own Storage, on the version-11 database
-    const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
-    page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
-    const Current = page.get('Storage');
-    await Current.init();
-    assert.equal(Current.db.version, 11);
-    const blob = await Current.exportAllAsBlob();
-    const file = JSON.parse(await blob.text());
+    // The new tab's Export JSON, which #17's adapter makes since #17 PR 4a, on the version-11 database
+    const tab = await newTab(worker);
+    assert.equal(tab.adapter.upgraded(), true);
+    const file = await exportJson(tab.client);
+    tab.close();
     assert.ok(file.canvases.length > 0);
     for (const note of file.canvases) {
       for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, `${note.id}: ${field}`);
@@ -245,11 +352,10 @@ describe('going back to 1.4.1 with a file it imports', () => {
   it("this build's Export JSON, with a note #17's adapter gave versions, imports through the frozen v1.4.1 importData (#17 PR 2a)", async () => {
     const { worker } = await migrated('v8.basic');
     await capture(worker);
-    const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
-    page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
-    const Current = page.get('Storage');
-    await Current.init();
-    const file = JSON.parse(await (await Current.exportAllAsBlob()).text());
+    // The new tab's Export JSON, which #17's adapter makes since #17 PR 4a
+    const tab = await newTab(worker);
+    const file = await exportJson(tab.client);
+    tab.close();
     const daily = file.canvases.find((note) => note.isDaily);
     assert.deepStrictEqual([daily.revision, daily.placementVersion, daily.sourceRevision], [1, 0, 0]);
     const { env, Storage } = await release141();
