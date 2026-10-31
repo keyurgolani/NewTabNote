@@ -245,3 +245,25 @@ describe('COPY_AS_IS', () => {
     assert.equal(build.isCopiedAsIs('js/vendor.js.map', list), false);
   });
 });
+
+describe('minifyCSS', () => {
+  // #89's review: CleanCSS reports a syntax error as a warning, not an error, and drops the
+  // rule it couldn't read, so these built with exit 0
+  it('refuses a stylesheet CleanCSS only warns about, at level 2 and at level 1', () => {
+    const level2 = build.minifyCSS(LEVEL_2_CSS, '.ntn-strict {{ color: red }\n');
+    assert.equal(level2.problem && level2.problem.code, 'build/css', JSON.stringify(level2));
+    assert.match(level2.problem.message, /warning/);
+    const empty = build.minifyCSS(LEVEL_2_CSS, '.ntn-strict { color: ; }\n');
+    assert.equal(empty.problem && empty.problem.code, 'build/css', JSON.stringify(empty));
+    const level1 = build.minifyCSS(build.CSS_LEVEL_1[0], '.ntn-strict { color: red\n');
+    assert.equal(level1.problem && level1.problem.code, 'build/css', JSON.stringify(level1));
+  });
+
+  it('minifies every listed stylesheet at its level with no warning, as today', () => {
+    for (const file of build.CSS_FILES) {
+      const result = build.minifyCSS(file, fs.readFileSync(path.join(ROOT, file), 'utf8'));
+      assert.equal(result.problem, undefined, `${file}: ${result.problem && result.problem.message}`);
+      assert.ok(result.styles.length > 0, file);
+    }
+  });
+});

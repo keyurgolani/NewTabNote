@@ -126,6 +126,36 @@ describe('the CSP check (AC6)', () => {
     ]);
   });
 
+  it('fails an inline script of any type but a JSON data block', () => {
+    // #89's review: text/ecmascript isn't on a list of JavaScript types, and it runs
+    const scripts = [
+      '<script type="text/ecmascript">1</script>',
+      '<script type=" TEXT/JavaScript ">2</script>',
+      '<script type="text/plain">3</script>',
+      '<script type="application/ld+json">{}</script>',
+      '<script type="application/json">{}</script>',
+      '<script type="module"></script>',
+    ];
+    const html = scripts.join('');
+    const at = (/** @type {number} */ i) => `csp/inline-script d.html:1:${html.indexOf(scripts[i]) + 1}`;
+    assert.deepEqual(found(checkPages(packageOf({ 'd.html': html }))), [at(0), at(1), at(2)].sort());
+  });
+
+  it('fails on the Function constructor reached through the global object or a function\'s constructor', () => {
+    // #89's review: ESLint's no-new-func knows only the bare global
+    const lines = [
+      'new self.Function("x");',
+      'new globalThis.Function("x");',
+      'window.Function("x")();',
+      '(() => {}).constructor("x")();',
+      '(function () {}).constructor("x");',
+      'new (async () => {}).constructor("x");',
+      'thing.constructor("fine");',
+    ];
+    const problems = checkDynamicCode(packageOf({ 'js/b.js': lines.join('\n') }), { allowlist: [], ...NONE });
+    assert.deepEqual(problems.map(({ code, subject, message }) => `${code} ${subject} ${message.split(':')[0]}`), [1, 2, 3, 4, 5, 6].map((line) => `csp/dynamic-code js/b.js:${line}:1 no-new-func`));
+  });
+
   it('fails on first-party eval, the Function constructor, and string timers, wherever they reach the global', () => {
     const pkg = packageOf({
       'js/a.js': [
@@ -196,6 +226,24 @@ describe('the environment check (AC9)', () => {
       'env/reference js/a.js:3:6 process.env',
       'env/reference js/a.js:4:19 process.env',
       'env/reference js/a.js:5:14 import.meta.env',
+    ]);
+  });
+
+  it('fails on process.env through the global object, import.meta[\'env\'], and process read on its own', () => {
+    // #89's review: each of these read the environment and passed
+    const refused = packageOf({
+      'js/c.js': [
+        'const a = globalThis.process.env.X;',
+        "const b = import.meta['env'];",
+        'const p = process; const c = p.env.X;',
+        'const d = self.process.env.NODE_ENV;',
+        "const e = typeof process !== 'undefined';",
+      ].join('\n'),
+    });
+    assert.deepEqual(checkEnvironment(refused, NONE).map(({ code, subject, message }) => `${code} ${subject} ${message.split(' in ')[0]}`), [
+      'env/reference js/c.js:1:11 process.env.X',
+      'env/reference js/c.js:2:11 import.meta.env',
+      'env/reference js/c.js:3:11 process',
     ]);
   });
 });

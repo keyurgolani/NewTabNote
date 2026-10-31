@@ -1,0 +1,15 @@
+{
+  "rule": "first-party code starts a worker from a path in a variable. Development only: production's terser folds the constant into a literal, which closure/missing then catches, while a development build ships the source as written.",
+  "expect": [
+    "closure/non-literal"
+  ],
+  "modes": [
+    "development"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "append": "\nconst ntnFixtureWorker = 'js/workers/ntn-fixture.js';\nwindow.ntnFixtureStarted = new Worker(ntnFixtureWorker);\n"
+    }
+  ]
+}
