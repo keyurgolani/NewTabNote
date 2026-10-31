@@ -465,6 +465,8 @@ describe('the background checks (scripts/build/background.js)', () => {
       "function f() { if (typeof document === 'undefined') return; document.title = 'x'; }",
       "for (;;) { if (typeof document === 'undefined') break; document.title = 'x'; }",
       "function f() { if (typeof document === 'undefined') { throw new Error('no page'); } return document.title; }",
+      // Made after the exit, so it reads only where the check passed
+      "function f() { if (typeof window === 'undefined') return null; const g = () => window.name; return g; }",
       'function f(document) { return document.title; }',
       'function f({ window }) { return window.name; }',
       'function f() { const window = {}; return window.name; }',
@@ -485,6 +487,8 @@ describe('the background checks (scripts/build/background.js)', () => {
       ["const t = typeof document !== 'undefined' || document.title;", 'document'],
       ["if (typeof document !== 'undefined') {} else { document.title = 'x'; }", 'document'],
       ["function f() { if (typeof document !== 'undefined') return; document.title = 'x'; }", 'document'],
+      // #99's delta: a function declaration is hoisted, so it exists, and can run, before the exit
+      ["function f() { if (typeof window === 'undefined') return g; function g() { return window.name; } return null; }", 'window'],
       // A local of a block the read is outside of is gone by then
       ['function f(x) { if (x) { const document = 1; } return document.title; }', 'document'],
       ['function f() { { let window = 1; } return window.name; }', 'window'],
@@ -531,7 +535,9 @@ describe('the graphs in the sources, as the bundler folds them', () => {
     // never gets its global (#27 slice 2's first extension run: "createLogger is not defined").
     // Any other read of module would be undefined.exports, which throws (#99's review).
     const modules = [...new Set([...pages, ...background])].map((file) => ({ file, text: read(file) }));
-    assert.deepEqual(checkCommonJs(modules), []);
+    // The vendored ones too, Valibot's build today (#99's delta), as the build checks them
+    assert.deepEqual(checkCommonJs(all.map((file) => ({ file, text: read(file) }))), []);
+    assert.ok(all.includes('js/lib/valibot/index.mjs'));
     const dual = modules.filter(({ text }) => /typeof module !== 'undefined' && module\.exports/.test(text));
     assert.ok(dual.length >= 20, `${dual.length} files with the dual export`);
     for (const pass of [config.pagesConfig(passOptions()), config.backgroundConfig(passOptions())]) assert.equal(pass.define.module, 'undefined');
@@ -569,7 +575,7 @@ describe('the graphs in the sources, as the bundler folds them', () => {
 describe('the CommonJS checks (scripts/build/commonjs.js, scripts/build/bundle.js)', () => {
   const found = (text) => checkCommonJs([{ file: 'js/a.js', text }]).map(({ code, subject, message }) => `${code} ${subject} ${message.split(',')[0]}`);
 
-  it('pass the dual export, a parameter or local named module or require, and typeof on its own', () => {
+  it('pass the dual export, a parameter or local named module or require, and typeof module or exports on its own', () => {
     assert.deepEqual(found([
       'function f() {}',
       "if (typeof module !== 'undefined' && module.exports) {",
@@ -580,24 +586,30 @@ describe('the CommonJS checks (scripts/build/commonjs.js, scripts/build/bundle.j
       "export const node = typeof module !== 'undefined' ? module.exports : null;",
       'export const load = (module) => module.default;',
       'export function local() { const require = (x) => x; return require(1); }',
-      "export const commonJs = typeof require === 'function' && typeof exports === 'object';",
+      "export function local2(require) { return typeof require === 'function'; }",
+      "export const commonJs = typeof exports === 'object';",
     ].join('\n')), []);
   });
 
-  it("fail a module.exports outside the typeof check, module read on its own, and a free exports or require", () => {
+  it("fail a module.exports outside the typeof check, module read on its own, a free exports or require, and typeof require", () => {
     // #99's review: with module defined as undefined, the first two read undefined.exports and
-    // throw, and the bundler wraps a file that names exports or require
-    assert.deepEqual(found([
+    // throw, and the bundler wraps a file that names exports or require. #99's delta: it swaps
+    // a free require for its require shim, a function, so typeof require takes the Node branch
+    // on a page.
+    const lines = [
       "if (typeof module !== 'undefined' && module.exports) module.exports = { f };",
       'module.exports.extra = 1;',
       'const m = module;',
       'exports.g = 2;',
       "const h = require('./h.js');",
-    ].join('\n')), [
+      "export const node = typeof require === 'function';",
+    ];
+    assert.deepEqual(found(lines.join('\n')), [
       'build/commonjs js/a.js:2:1 reads module outside a typeof check',
       'build/commonjs js/a.js:3:11 reads module outside a typeof check',
       'build/commonjs js/a.js:4:1 names exports',
       'build/commonjs js/a.js:5:11 names require',
+      `build/commonjs js/a.js:6:${lines[5].indexOf('require') + 1} checks typeof require`,
     ]);
   });
 
@@ -645,6 +657,29 @@ describe("the indexer's starter (js/kernel/composition/workers.js)", () => {
     assert.match(read('js/kernel/composition/newtab.js'), /import \{ startIndexer \} from '\.\/workers\.js';/);
     assert.match(read('js/app.js'), /new NotesManager\(\{[^}]*startIndexer: this\.startIndexer,/);
     assert.match(read('js/controllers/notes-manager.js'), /this\.indexerWorker = this\.startIndexer\(\);/);
+  });
+
+  it("is in what the composition root hands App, and App keeps it, since without it nothing indexes and nothing says so", () => {
+    // #99's delta: #97's rebase rewrote both lines
+    const ts = require('typescript');
+    const text = read('js/kernel/composition/newtab.js');
+    const source = ts.createSourceFile('newtab.js', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const handed = [];
+    const visit = (node) => {
+      if (ts.isNewExpression(node) && node.expression.getText(source) === 'page.App' && node.arguments && ts.isObjectLiteralExpression(node.arguments[0])) {
+        for (const property of node.arguments[0].properties) handed.push(property.getText(source));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    assert.ok(handed.includes('startIndexer'), handed.join(', '));
+    const { createLegacyEnv } = require('./helpers/legacy-env');
+    const env = createLegacyEnv();
+    env.load('js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js', 'js/ui/export-notice.js', 'js/storage.js', 'js/search.js', 'js/app.js');
+    const App = env.get('App');
+    const starter = () => null;
+    assert.equal(new App({ startIndexer: starter }).startIndexer, starter);
+    assert.equal(new App({}).startIndexer, null);
   });
 });
 

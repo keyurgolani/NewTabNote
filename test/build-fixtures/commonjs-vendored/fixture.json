@@ -1,0 +1,13 @@
+{
+  "rule": "a vendored module the bundle holds checks typeof require, which the bundler's require shim answers as Node on a page",
+  "expect": [
+    "build/commonjs",
+    "vendor/mismatch"
+  ],
+  "edits": [
+    {
+      "file": "js/lib/valibot/index.mjs",
+      "append": "\nglobalThis.ntnFixtureNode = typeof require === 'function';\n"
+    }
+  ]
+}
