@@ -13,7 +13,7 @@ import { createNoteList } from '../core/application/note-list.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
-import { kernelClient, legacyHost } from './host.js';
+import { kernelClient, legacyHost, wakeWorkerToPurge } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
 import { startIndexer } from './workers.js';
@@ -101,14 +101,16 @@ const LEGACY_STORE_CALLS = Object.freeze({
  */
 
 /**
- * The new tab's pre-update copy, over the page's IndexedDB
- * @param {{indexedDB?: IDBFactory, keyRange?: typeof IDBKeyRange, crypto?: import('../adapters/indexeddb/records.js').Digester}} [host]
+ * The new tab's pre-update copy, over the page's IndexedDB, read under the page's Web Locks
+ * (exportPoint takes the points lock shared, so the worker's purge never cuts through it)
+ * @param {{indexedDB?: IDBFactory, keyRange?: typeof IDBKeyRange, crypto?: import('../adapters/indexeddb/records.js').Digester, locks?: import('../adapters/indexeddb/legacy-export.js').SharedLocks | null}} [host]
  * @returns {PreUpdateCopy}
  */
 export function createPreUpdateCopy({
   indexedDB = globalThis.indexedDB,
   keyRange = globalThis.IDBKeyRange,
   crypto = /** @type {any} */ (globalThis.crypto),
+  locks = /** @type {any} */ (globalThis.navigator && globalThis.navigator.locks) || null,
 } = {}) {
   return Object.freeze({
     async find() {
@@ -116,7 +118,7 @@ export function createPreUpdateCopy({
       return point ? { id: point.id, createdAt: point.createdAt } : null;
     },
     export: (/** @type {string} */ pointId) =>
-      exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId }),
+      exportPoint({ indexedDB, keyRange, crypto, clock: systemClock, pointId, locks }),
   });
 }
 
@@ -133,6 +135,50 @@ export function createPreUpdateCopy({
 export function createNewTabClient(host = legacyHost()) {
   const adapter = createLegacyAdapter({ ...host, mode: 'versioned' });
   return kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true });
+}
+
+/** The codes of a committed command that deleted notes or folders for good, leaving tombstones */
+const DELETED_CODES = Object.freeze(['note-deleted', 'trash-emptied', 'trash-cleaned', 'folder-deleted']);
+
+/**
+ * Whether `outcome` deleted something for good: a note (a permanent delete, or a trash of an
+ * empty untitled note), Empty trash or trash retention that deleted any, a folder, or a bulk
+ * delete any item of which did
+ * @param {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} outcome
+ * @returns {boolean}
+ */
+function deletedSomething(outcome) {
+  if (outcome.kind === 'bulk') return outcome.items.some(item => deletedSomething(item.outcome));
+  return outcome.kind === 'committed' && DELETED_CODES.includes(outcome.code) && outcome.changedIds.length > 0;
+}
+
+/**
+ * `client`, which wakes the worker to purge (#17 PR 2b) after each command that deleted
+ * something for good, whatever path ran it: removeNotes, a folder's delete, or any other.
+ * The wake is best effort, and never changes the outcome.
+ * @param {Client} client
+ * @param {() => void} wake
+ * @returns {Client}
+ */
+export function withPurgeWake(client, wake) {
+  return Object.freeze({
+    ...client,
+    execute: /** @type {Client['execute']} */ (
+      /** @type {unknown} */ (
+        async (/** @type {import('../core/contracts/commands.js').Command} */ command) => {
+          const outcome = await client.execute(command);
+          if (deletedSomething(/** @type {any} */ (outcome))) {
+            try {
+              wake();
+            } catch {
+              // The worker sweeps at its next start
+            }
+          }
+          return outcome;
+        }
+      )
+    ),
+  });
 }
 
 /**
@@ -298,7 +344,7 @@ export function startNewTab({ loader = null } = {}) {
   const start = () => {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = legacyHost();
-    const kernel = createNewTabClient(host);
+    const kernel = withPurgeWake(createNewTabClient(host), () => wakeWorkerToPurge());
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;

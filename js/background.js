@@ -21,6 +21,7 @@ import './utils.js';
 import './storage.js';
 import {
   MIGRATE_MESSAGE,
+  PURGE_MESSAGE,
   createWorkerClient,
   installWorkerRouter,
   migrationEvents,
@@ -93,6 +94,11 @@ workerGlobal.captureToDailyNote = captureToDailyNote;
  * it's in. It starts the coordinator, whose kernel starts the run.
  */
 Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => migrationDone(), configurable: true });
+/**
+ * The latest recovery-point purge's outcome (#17 PR 2b), for #34's harness. It starts the
+ * coordinator too, as storageUpgrade does, so reading it never throws before the start.
+ */
+Object.defineProperty(workerGlobal, 'storagePurge', { get: () => purgeDone(), configurable: true });
 
 /**
  * The migration run of the coordinator's kernel (#17 PR 1b), after starting the coordinator:
@@ -113,6 +119,24 @@ function migrationDone() {
 }
 
 /**
+ * The recovery-point purge of the coordinator's kernel (#17 PR 2b), after starting the
+ * coordinator, as migration() reads its run. Null when it has no kernel, since building it
+ * threw.
+ * @returns {WorkerClient['purge'] | null}
+ */
+function purge() {
+  coordinator.start();
+  const client = /** @type {Partial<WorkerClient>} */ (coordinator.client());
+  return client.purge || null;
+}
+
+/** @returns {WorkerClient['purge']['done'] | null} */
+function purgeDone() {
+  const sweep = purge();
+  return sweep ? sweep.done : null;
+}
+
+/**
  * What a page that found no database, or an older one, hears when it waits on the migration
  * (#17, Q12): the attempt in progress, or after one that was short of space or failed, a new
  * one. Only its status goes back, never anything stored. js/kernel/composition/worker-network.js
@@ -126,6 +150,23 @@ function migrationStatus() {
   if (!run) return Promise.resolve({ status: 'failed' });
   return run.request().then(
     outcome => ({ status: outcome.status }),
+    () => ({ status: 'failed' }),
+  );
+}
+
+/**
+ * What a page of this extension that deleted something for good hears when it wakes the
+ * worker with storage.purge (#17 PR 2b): the status of the sweep it asks for. The message
+ * carries nothing, since the sweep goes by the tombstones the delete left, and only the status
+ * goes back. js/kernel/composition/worker-network.js runs it for this extension's own senders
+ * only, as it runs migrationStatus, and answers any other sender `{error: 'request-refused'}`.
+ * @returns {Promise<{status: string}>}
+ */
+function purgeStatus() {
+  const sweep = purge();
+  if (!sweep) return Promise.resolve({ status: 'failed' });
+  return sweep.request().then(
+    outcome => ({ status: outcome ? outcome.status : 'skipped' }),
     () => ({ status: 'failed' }),
   );
 }
@@ -347,9 +388,10 @@ try {
 }
 // The worker's network (#21 slice 1b): its one onMessage listener, the request proxy, and the
 // guard's wiring, which journals what the guard refused into the events above. It never throws.
-// It hands a page's wait on the migration (#17) to migrationStatus, from this extension's own
-// senders only. Every event comes after this file has run, the coordinator's build included.
-installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus } });
+// It hands a page's wait on the migration (#17) to migrationStatus, and a page's storage.purge
+// after a delete for good (#17 PR 2b) to purgeStatus, from this extension's own senders only.
+// Every event comes after this file has run, the coordinator's build included.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus } });
 try {
   coordinator = createCoordinator({
     instanceId,

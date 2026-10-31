@@ -35,7 +35,7 @@ import {
   unavailable,
   unavailableFrom,
 } from '../../core/contracts/outcomes.js';
-import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
+import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 // The store names, setting keys, and request helpers #17's adapter uses, so the two agree
 import { abort, indexValue, result } from '../indexeddb/requests.js';
 import { DERIVED_STORES, IDB_STORES } from '../indexeddb/schema.js';
@@ -198,10 +198,16 @@ function view(storage, tx, scope) {
       handle(store);
       return undefined;
     },
+    // A database without a derived store skips its writes, and one below version 10 the
+    // tombstone a deletion puts (LATER_STORES), so a note deleted there stays in its recovery
+    // point (#17 PR 2b's declared gap). At 10 the tombstone goes in the delete's own
+    // transaction, without the revision and seq #17's adapter adds, since this one keeps neither.
     put: (store, record) => {
       const objectStore = handle(store);
       if (objectStore) objectStore.put(record);
-      else if (!DERIVED_STORES.includes(store)) throw new UnavailableError('storage', 'store-unavailable', false);
+      else if (!DERIVED_STORES.includes(store) && !LATER_STORES.includes(store)) {
+        throw new UnavailableError('storage', 'store-unavailable', false);
+      }
     },
     delete: (store, key) => {
       const objectStore = handle(store);
