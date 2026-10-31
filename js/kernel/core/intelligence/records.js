@@ -122,53 +122,88 @@ export const HISTORY_ACTIONS = Object.freeze(
 );
 
 /**
- * The top-level domains a bare `host.tld` counts as a link under, so a file name such as
- * `README.md/CHANGELOG.md` stays text: the common generic and country ones, the reserved test
- * ones, punycode, and any non-ASCII one
+ * The top-level domains a bare `host.tld/path` counts as a link under, in lowercase, so a
+ * file name such as `README.md/CHANGELOG.md` or `ASP.NET/Core` stays text: the common generic
+ * and country ones, the ones link shorteners use, the reserved test ones, punycode, and any
+ * non-ASCII one. A host with a port, a query, or a fragment is a link whatever its TLD.
  */
 const TLDS =
   'com|net|org|edu|gov|mil|int|io|co|ai|app|dev|info|biz|me|us|uk|de|fr|es|it|nl|ru|cn|jp|in|br|au|ca|ch|se|no|fi|' +
   'dk|pl|cz|at|be|ie|nz|za|kr|tw|hk|sg|mx|ar|tr|ua|il|eu|xyz|online|site|tech|store|cloud|page|link|live|news|blog|' +
-  'shop|example|test|invalid|local|localdomain|internal|onion';
+  'shop|ly|to|gg|gl|gd|sh|cc|tv|fm|so|ws|vc|ms|lc|li|lu|im|is|la|ga|cf|tk|ml|zip|top|click|mov|su|ir|vn|id|my|ph|' +
+  'th|pk|ng|ke|eg|sa|ae|example|test|invalid|local|localdomain|internal|onion';
 
 const LABEL = '[\\p{L}\\p{N}-]+';
 const TLD = `(?:${TLDS}|xn--[a-z0-9-]+|(?:(?![\\x00-\\x7f])\\p{L}){2,})`;
-const HOST = `(?:${LABEL}\\.)+${TLD}`;
+const KNOWN_HOST = `(?:${LABEL}\\.)+${TLD}`;
+const ANY_HOST = `(?:${LABEL}\\.)+${LABEL}`;
 const IPV4 = '\\d{1,3}(?:\\.\\d{1,3}){3}';
-const USERINFO = '(?:[\\p{L}\\p{N}._~%+-]+(?::[^\\s@/]*)?@)';
-// A bare host is a link only with a port, a path, a query, or a fragment after it, so a plain
-// email or a word with a dot stays text
-const AFTER_HOST = '(?::\\d{1,5}(?:[/?#]\\S*)?|[/?#]\\S*)';
-// Not right after a letter, digit, colon, dot, or hyphen, so `re:sms:send` and `a.b` stay text
-const START = '(?<![\\p{L}\\p{N}:._@-])';
+const IPV6 = '\\[[0-9a-fA-F]*:[0-9a-fA-F:.]*\\]';
+const PORT = ':\\d{1,5}';
+const USER = '[\\p{L}\\p{N}._~%+-]+';
+// Not right after a letter, digit, dot, or hyphen, so `a.b.c` and `x-y.z` stay whole words
+const BARE_START = '(?<![\\p{L}\\p{N}.-])';
+// A scheme also not right after a colon, so `re:sms:send` stays text
+const SCHEME_START = '(?<![\\p{L}\\p{N}:._-])';
 
 /**
- * A link in text:
- * - any `word:` followed by `//` or `?` (`https://`, `chrome-extension://`, `magnet:?`)
+ * The patterns a link matches, each with its own flags. Schemes match in any case. Bare hosts
+ * match case-sensitively, so a TLD has to be written in lowercase to count.
+ * - any `word:` followed by `//` or `\\` (`https://`, `chrome-extension://`), and a web scheme
+ *   with one slash or backslash (`https:/x`)
  * - a scheme that needs neither: `javascript:`, `vbscript:`, `mailto:`, `data:` with a media
- *   type, `file:/`, `blob:`, `about:`, `tel:` and `sms:` with a number, `skype:`, `callto:`,
- *   `facetime:`, `irc:`, `sip:`
- * - a `www.` host, or a bare host, IPv4 address, or `localhost` with a port, path, query, or
- *   fragment after it, and any userinfo before it
+ *   type, `file:/`, `blob:`, `magnet:?`, the browser's own `about:` pages, `tel:` and `sms:`
+ *   with a number, `skype:`, `callto:`, `facetime:` and `irc:` with a target
+ * - a `www.` host
+ * - userinfo with a password before a host (`user:pw@host`), and a bracketed IPv6 host
+ * - a bare host, IPv4 address, or `localhost` with a port, a query, or a fragment; or a known
+ *   TLD, an IPv4 address, or `localhost` with a path; with any userinfo before it
  */
-const LINK = new RegExp(
-  [
-    `${START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\?)\\S*`,
-    `${START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
-      'about:[a-z]\\S*|(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|(?:skype|callto|facetime|irc|sip):\\S+)',
-    `${START}www\\.\\S+`,
-    `${START}${USERINFO}?(?:${HOST}|${IPV4}|localhost)${AFTER_HOST}`,
-  ].join('|'),
-  'giu',
-);
+const LINK_PATTERNS = Object.freeze([
+  new RegExp(
+    [
+      `${SCHEME_START}[a-z][a-z0-9+.-]*:(?:\\/\\/|\\\\\\\\)\\S*`,
+      `${SCHEME_START}(?:https?|ftps?|wss?):[\\/\\\\]\\S+`,
+      `${SCHEME_START}(?:javascript:\\S+|vbscript:\\S+|mailto:\\S+|data:(?:[a-z]+\\/|,)\\S*|file:\\/\\S*|blob:[a-z]\\S*|` +
+        'magnet:\\?\\S+|about:(?:blank|config|newtab|home|preferences|settings|debugging|addons|srcdoc)\\b\\S*|' +
+        '(?:tel|sms):\\+?\\d[\\d-]{2,}\\S*|skype:[a-z0-9._-]+\\S*|callto:\\S+|facetime:[+\\d]\\S*|irc:\\S+)',
+      `${SCHEME_START}www\\.\\S+`,
+    ].join('|'),
+    'giu',
+  ),
+  new RegExp(
+    [
+      `${BARE_START}${USER}:[^\\s@/]*@(?:${ANY_HOST}|${IPV4}|${IPV6}|localhost)(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
+      `${BARE_START}${IPV6}(?:${PORT})?(?:[/?#\\\\]\\S*)?`,
+      `${BARE_START}(?:${USER}@)?(?:${ANY_HOST}|${IPV4}|localhost)(?:${PORT}(?:[/?#\\\\]\\S*)?|[?#]\\S+)`,
+      `${BARE_START}(?:${USER}@)?(?:${KNOWN_HOST}|${IPV4}|localhost)[/\\\\]\\S*`,
+    ].join('|'),
+    'gu',
+  ),
+]);
 
 /** What a redacted link reads as */
 export const LINK_PLACEHOLDER = '[link]';
 
-const LINK_IN_TEXT = new RegExp(LINK.source, 'iu');
+/** Dots other scripts write, which a host can use in place of `.` */
+const OTHER_DOTS = /[。．｡]/g;
+
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+const IGNORABLES = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * `text` as link matching reads it: every default-ignorable code point (zero-width
+ * characters, joiners, bidi marks, variation selectors, tag characters, fillers) removed, and
+ * the ideographic and fullwidth dots read as `.`
+ * @param {string} text
+ */
+const forMatching = text => text.replace(IGNORABLES, '').replace(OTHER_DOTS, '.');
 
 /** @param {string} text */
-const hasLink = text => LINK_IN_TEXT.test(text);
+const hasLink = text => {
+  const read = forMatching(text);
+  return LINK_PATTERNS.some(pattern => new RegExp(pattern.source, pattern.flags.replace('g', '')).test(read));
+};
 
 /**
  * A link's match without the punctuation that ends the sentence around it: a final `.`, `,`,
@@ -189,37 +224,27 @@ const splitTrailing = match => {
 };
 
 /**
- * Invisible characters that change how text reads without showing: the soft hyphen, the
- * Arabic letter mark, zero-width spaces and joiners, the left-to-right and right-to-left
- * marks, the bidi embeddings, overrides, and isolates, the invisible operators, and the
- * byte-order mark
- * @param {number} unit
+ * Whether a code point can't sit in plain text: a control character other than a tab, the
+ * line and paragraph separators, and every default-ignorable code point, which changes how
+ * text reads without showing
+ * @param {string} character - one code point
  */
-const isInvisibleUnit = unit =>
-  unit === 0x00ad ||
-  unit === 0x061c ||
-  unit === 0x180e ||
-  (unit >= 0x200b && unit <= 0x200f) ||
-  (unit >= 0x202a && unit <= 0x202e) ||
-  (unit >= 0x2060 && unit <= 0x2064) ||
-  (unit >= 0x2066 && unit <= 0x2069) ||
-  unit === 0xfeff;
-
-/**
- * Whether a UTF-16 unit can't sit in plain text: a control character other than a tab, the
- * line and paragraph separators, and the invisible characters above
- * @param {number} unit
- */
-const isUnsafeUnit = unit =>
-  (unit < 0x20 && unit !== 0x09) || unit === 0x7f || unit === 0x2028 || unit === 0x2029 || isInvisibleUnit(unit);
+const isUnsafe = character => {
+  const point = /** @type {number} */ (character.codePointAt(0));
+  return (
+    (point < 0x20 && point !== 0x09) ||
+    point === 0x7f ||
+    point === 0x2028 ||
+    point === 0x2029 ||
+    IGNORABLE.test(character)
+  );
+};
 
 /**
  * @param {string} text
  */
 const hasControl = text => {
-  for (let index = 0; index < text.length; index += 1) {
-    if (isUnsafeUnit(text.charCodeAt(index))) return true;
-  }
+  for (const character of text) if (isUnsafe(character)) return true;
   return false;
 };
 
@@ -536,8 +561,9 @@ export const isCorrection = value => v.is(correctionRecord, value);
 const MAX_SOURCE_TEXT = 4000;
 
 /**
- * `text` as plain text up to `max` characters: invisible characters removed, each link
- * replaced by LINK_PLACEHOLDER (the punctuation after it kept), control characters and line
+ * `text` as plain text up to `max` characters: invisible characters removed and other dots
+ * read as `.` (forMatching), each link replaced by LINK_PLACEHOLDER (the punctuation after it
+ * kept), control characters and line
  * separators turned to spaces, whitespace collapsed, and clipped with an ellipsis. A note's own text, a todo with a link included, still makes a
  * signal, and the signal keeps no URL. Text that only says something, like "password:
  * hunter2", passes as written, and so does a plain email address, the user's own text: this
@@ -547,15 +573,16 @@ const MAX_SOURCE_TEXT = 4000;
  * @returns {string}
  */
 export function redactText(text, max) {
-  const visible = [...String(text).slice(0, MAX_SOURCE_TEXT)]
-    .filter(character => !isInvisibleUnit(character.charCodeAt(0)))
-    .join('');
-  const redacted = visible.replace(LINK, match => {
-    const [, after] = splitTrailing(match);
-    return `${LINK_PLACEHOLDER}${after}`;
-  });
+  const redacted = LINK_PATTERNS.reduce(
+    (current, pattern) =>
+      current.replace(pattern, match => {
+        const [, after] = splitTrailing(match);
+        return `${LINK_PLACEHOLDER}${after}`;
+      }),
+    forMatching(String(text).slice(0, MAX_SOURCE_TEXT)),
+  );
   const plain = [...redacted]
-    .map(character => (hasControl(character) ? ' ' : character))
+    .map(character => (isUnsafe(character) ? ' ' : character))
     .join('')
     .replace(/\s+/g, ' ')
     .trim();
