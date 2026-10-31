@@ -156,6 +156,10 @@ const folderTypesMatch = true;
  *   listSnapshots: typeof import('../../js/kernel/core/contracts/operations/list-snapshots.js').result,
  *   getSnapshot: typeof import('../../js/kernel/core/contracts/operations/get-snapshot.js').result,
  *   findDailyNote: typeof import('../../js/kernel/core/contracts/operations/find-daily-note.js').result,
+ *   getWorkspaceData: typeof import('../../js/kernel/core/contracts/operations/get-workspace-data.js').result,
+ *   listThemes: typeof import('../../js/kernel/core/contracts/operations/list-themes.js').result,
+ *   exportBackup: typeof import('../../js/kernel/core/contracts/operations/export-backup.js').result,
+ *   profileHoldsContent: typeof import('../../js/kernel/core/contracts/operations/profile-holds-content.js').result,
  * }} ResultSchemas
  */
 
@@ -183,6 +187,10 @@ const queryDataMatches = {
   listSnapshots: true,
   getSnapshot: true,
   findDailyNote: true,
+  getWorkspaceData: true,
+  listThemes: true,
+  exportBackup: true,
+  profileHoldsContent: true,
 };
 
 /**

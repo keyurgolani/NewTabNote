@@ -389,6 +389,9 @@ describe('the contract schema lint (#13, AC5)', () => {
       // A search entry holds a note's name and text, and the tags found in it
       searchEntryRecord: ['(root)'],
       snapshotRecord: ['blocks', 'title'],
+      // A custom theme's name, and AI chat's conversations and prompt templates as they're read back
+      themeRecord: ['name'],
+      workspaceDataValues: ['aiChatHistory', 'aiPromptTemplates', 'globalChatHistory', 'globalChatMessages', 'noteChatMessages'],
       workspaceSession: ['openTabs.[]'],
     });
   });

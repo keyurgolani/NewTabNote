@@ -40,7 +40,7 @@ import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
 import { sessionCommands, sessionQueries } from './session.js';
 import { snapshotCommands, snapshotQueries } from './snapshots.js';
-import { workspaceDataCommands } from './workspace-data.js';
+import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/commands.js').CommandType} CommandType */
@@ -106,6 +106,7 @@ const QUERY_HANDLERS = Object.freeze({
   ...sessionQueries,
   ...jobQueries,
   ...snapshotQueries,
+  ...workspaceDataQueries,
 });
 
 /**

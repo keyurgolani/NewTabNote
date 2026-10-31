@@ -1160,6 +1160,128 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await themes(viaKernel), await themes(viaStorage));
   });
 
+  it('getWorkspaceData reads what Storage.readSetting reads under each 1.4.x key, and leaves out what has none', async () => {
+    const { viaKernel, kernel } = await twin();
+    const storage = viaKernel.storage;
+    // What 1.4.x's AI chat, onboarding, Settings, and the export notice wrote
+    await storage.setSetting('aiChatHistory', [{ role: 'user', content: 'Plan the week' }]);
+    await storage.setSetting('globalChatMessages', []);
+    await storage.setSetting('aiPromptTemplates', [{ id: 't1', label: 'Sum', prompt: 'Summarize', scope: 'note' }]);
+    await storage.setSetting('hasCompletedOnboarding', true);
+    await storage.setSetting('lastBackupAt', SEEDED_AT);
+    await storage.setSetting('preMigrationNotice', { version: 1, outcome: 'dismissed', at: SEEDED_AT });
+    const keys = /** @type {const} */ ([
+      'aiChatHistory',
+      'noteChatMessages',
+      'globalChatHistory',
+      'globalChatMessages',
+      'aiPromptTemplates',
+      'hasCompletedOnboarding',
+      'lastFullExportAt',
+      'lastBackupAt',
+      'preMigrationNotice',
+    ]);
+    /** @type {Record<string, unknown>} */
+    const read = {};
+    for (const key of keys) {
+      const value = await storage.readSetting(key);
+      if (value !== undefined) read[key] = value;
+    }
+    assert.deepEqual(Object.keys(read), [
+      'aiChatHistory',
+      'globalChatMessages',
+      'aiPromptTemplates',
+      'hasCompletedOnboarding',
+      'lastBackupAt',
+      'preMigrationNotice',
+    ]);
+    const state = await kernel.query({ type: 'getWorkspaceData', keys: [...keys] });
+    assert.deepEqual(state.kind === 'ready' && legacyEnv.plain(state.data), legacyEnv.plain(read));
+  });
+
+  it('listThemes lists what Storage.getCustomThemes lists, in its order', async () => {
+    const { viaKernel, kernel } = await twin({
+      themes: [
+        { id: 'old', name: 'Old', properties: {}, updatedAt: SEEDED_AT },
+        // The updatedAt index leaves out a theme with no time, so Storage never listed it
+        { id: 'untimed', name: 'No time', properties: {} },
+      ],
+    });
+    const storage = viaKernel.storage;
+    await storage.saveCustomTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
+    await new Promise(resolve => setTimeout(resolve, 2));
+    await storage.saveCustomTheme({ name: 'Dawn', properties: { '--bg-primary': '#fafafa' } });
+    const listed = legacyEnv.plain(await storage.getCustomThemes());
+    assert.deepEqual(
+      listed.map((/** @type {{name: string}} */ theme) => theme.name),
+      ['Dawn', 'Dusk', 'Old'],
+    );
+    const state = await kernel.query({ type: 'listThemes' });
+    assert.deepEqual(state.kind === 'ready' && legacyEnv.plain(state.data), listed);
+  });
+
+  it('exportBackup makes the file Storage.exportAllAsBlob makes for Export JSON and for Create Backup', async () => {
+    const { viaKernel, kernel } = await twin({
+      canvases: [
+        legacyEnv.note('n1', { name: 'Plan', folderId: 'f1' }),
+        legacyEnv.note('a1', { name: 'Kept', archived: true }),
+        legacyEnv.note('t1', { name: 'Weekly', isTemplate: true }),
+        legacyEnv.note('x1', { name: 'Gone', trashed: true, trashedAt: SEEDED_AT }),
+      ],
+      elements: [legacyEnv.block('b1', 'n1', 0, 'Line'), legacyEnv.block('bx', 'x1', 0, 'Trashed line')],
+      folders: [folder('f1', null)],
+    });
+    const storage = viaKernel.storage;
+    /**
+     * The file's fields in order, with the times it was made at taken out
+     * @param {Blob} file
+     */
+    const fileOf = async file => {
+      const parsed = JSON.parse(await file.text());
+      delete parsed.exportedAt;
+      if (parsed.backupCreatedAt) parsed.backupCreatedAt = 'made';
+      return { keys: Object.keys(parsed), parsed };
+    };
+    const exported = await kernel.query({ type: 'exportBackup', backup: false });
+    assert.equal(exported.kind, 'ready', JSON.stringify(exported));
+    assert.deepEqual(
+      await fileOf(/** @type {Blob} */ (exported.kind === 'ready' && exported.data)),
+      await fileOf(await storage.exportAllAsBlob()),
+    );
+    // SettingsController.createBackup's fields, in its order
+    const backup = await kernel.query({ type: 'exportBackup', backup: true });
+    const expected = await storage.exportAllAsBlob({
+      backupType: 'full-backup',
+      backupCreatedAt: new Date().toISOString(),
+      backupVersion: 1,
+    });
+    assert.deepEqual(await fileOf(/** @type {Blob} */ (backup.kind === 'ready' && backup.data)), await fileOf(expected));
+  });
+
+  it("profileHoldsContent decides what the export notice decided with Storage's isNoteUntitled and isNoteEmpty", async () => {
+    for (const records of /** @type {Array<Record<string, unknown[]>>} */ ([
+      {},
+      { canvases: [legacyEnv.note('u1', { name: 'Untitled' })], elements: [legacyEnv.block('b1', 'u1', 0, '<br>&nbsp;')] },
+      { canvases: [legacyEnv.note('u1', { name: 'Untitled 3' })], elements: [legacyEnv.block('b1', 'u1', 0, 'Words')] },
+      { canvases: [legacyEnv.note('x1', { name: 'Plan', trashed: true, trashedAt: SEEDED_AT })] },
+      { canvases: [legacyEnv.note('a1', { name: 'Kept', archived: true })] },
+      { canvases: [legacyEnv.note('t1', { name: 'Weekly', isTemplate: true })] },
+    ])) {
+      const { viaKernel, kernel } = await twin(records);
+      const storage = viaKernel.storage;
+      // ExportNotice._holdsSomething as 1.4.1 ran it: every note outside trash, templates last
+      let expected = false;
+      for (const note of [...(await storage.getAllNotes(true)), ...(await storage.getTemplates())]) {
+        if (!storage.isNoteUntitled(note) || !(await storage.isNoteEmpty(note.id))) {
+          expected = true;
+          break;
+        }
+      }
+      const state = await kernel.query({ type: 'profileHoldsContent' });
+      assert.equal(state.kind === 'ready' && state.data, expected, JSON.stringify(records));
+    }
+  });
+
   it('createAutoBackup keeps the newest three backups and the time, under the keys Storage.createAutoBackup uses', async () => {
     const { viaStorage, viaKernel, kernel } = await twin({
       canvases: [legacyEnv.note('n1', { name: 'Plan' })],

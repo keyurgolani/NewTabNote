@@ -4,6 +4,8 @@
  * `theme` preference, which names a built-in theme or one of these.
  */
 
+import { compareKeys, isIndexKey } from './note.js';
+
 /**
  * The CSS custom properties a custom theme sets: the ones js/theme-engine.js's light theme
  * has, which the Theme Builder offers a color picker for
@@ -54,4 +56,18 @@ export function savedTheme(stored, { id, name, properties, now }) {
 export function isThemeProperties(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value).every(([key, item]) => THEME_PROPERTIES.includes(key) && typeof item === 'string');
+}
+
+/**
+ * The custom themes in the order Storage.getCustomThemes listed them: the last saved first.
+ * It read through the `updatedAt` index, which leaves out a theme without a usable updatedAt,
+ * so this does too.
+ * @param {ThemeRecord[]} themes
+ * @returns {ThemeRecord[]}
+ */
+export function themesInListOrder(themes) {
+  return themes
+    .filter(theme => isIndexKey(theme.updatedAt))
+    .sort((a, b) => compareKeys(a.updatedAt, b.updatedAt) || compareKeys(a.id, b.id))
+    .reverse();
 }
