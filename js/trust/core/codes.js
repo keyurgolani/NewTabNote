@@ -175,6 +175,8 @@ export const FAULT_CODES = Object.freeze([
   'legacy-secret',
   // Recovery readiness, messaging, and the registry's resolution report (slice 2's providers)
   'point-unverified',
+  // #17's recovery-point purge, stopped at a point that didn't verify (event-codes.js)
+  'purge-stopped',
   'unreachable',
   'contribution-unavailable',
   // #35's coordinator, whose kernel the worker couldn't build

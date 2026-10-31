@@ -78,6 +78,14 @@ import { hostTimers, randomIds } from './messaging.js';
  *   blocked, and when it ends, never for a record it keeps without running. Best effort: a
  *   report that throws changes nothing the run does.
  * @property {boolean} [purgeRecoveryPoints] - PURGE_RECOVERY_POINTS unless a test says otherwise
+ * @property {PurgeEvents | null} [events] - the worker's failure events (#20), which a stopped
+ *   purge and its end go to
+ */
+
+/**
+ * Where the worker's purge journals a stop and its end: the worker's failure events
+ * (composition/trust.js), best effort
+ * @typedef {{event: (code: string, fields?: Record<string, unknown>, failure?: unknown) => void}} PurgeEvents
  */
 
 /**
@@ -118,10 +126,37 @@ function recordedOf(stored) {
  * @returns {PurgeOutcome}
  */
 function combined(first, then) {
-  const totals = { tombstones: first.tombstones + then.tombstones, rows: first.rows + then.rows };
+  const totals = {
+    tombstones: first.tombstones + then.tombstones,
+    rows: first.rows + then.rows,
+    cleared: [...new Set([...first.cleared, ...then.cleared])],
+  };
   if (then.status === 'stopped' || then.status === 'failed') return { ...then, ...totals };
-  if (first.status === 'purged' || then.status === 'purged') return { status: 'purged', failure: null, ...totals };
-  return then;
+  if (first.status === 'purged' || then.status === 'purged') {
+    return { status: 'purged', failure: null, backedOff: false, ...totals };
+  }
+  return { ...then, ...totals };
+}
+
+/**
+ * Journals what one sweep stopped at and what it ended (#20): `storage.purge-stopped` for a
+ * stop it found, not one it backed off on, and `storage.purge-completed` for each recorded stop
+ * it finished or found gone. Codes and ids only.
+ * @param {PurgeEvents | null | undefined} events
+ * @param {PurgeOutcome} outcome
+ */
+function journalPurge(events, outcome) {
+  if (!events) return;
+  try {
+    for (const pointId of outcome.cleared) events.event('storage.purge-completed', { subjectId: pointId });
+    const { failure } = outcome;
+    if (outcome.status === 'stopped' && !outcome.backedOff && failure && failure.pointId) {
+      // The code goes as the failure's, so the journal keeps it only when it's a registered one
+      events.event('storage.purge-stopped', { subjectId: failure.pointId }, { code: failure.code });
+    }
+  } catch {
+    // Best effort: the purge never hears of the journal's
+  }
 }
 
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
@@ -500,6 +535,7 @@ export function createWorkerClient(host = workerHost()) {
           clock: systemClock,
           logger: storageLogger,
         });
+        journalPurge(host.events, next);
         ended = ended ? combined(ended, next) : next;
       } while (sweepAgain);
       // The loop runs at least once

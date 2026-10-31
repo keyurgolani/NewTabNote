@@ -14,18 +14,26 @@
  *
  * One sweep handles every pending tombstone at once:
  * 1. Read the pending tombstones (the `purge` index). None: nothing to do.
- * 2. For each point, oldest first, verify it. One that doesn't verify stops the purge, and is
- *    left as it was, with every tombstone still pending: the purge never purges a point it
- *    can't check, and never discards one.
- * 3. Find the rows the tombstones' entities own (OWNERS), by key or by a field of the row, read
- *    in bounded readonly batches and hashed outside any transaction.
- * 4. Purge them in strict batches of at most 100 rows or 2 MB (recovery-points.js's
+ * 2. For each point, oldest first, take the tombstones of deletes after it was made. A point
+ *    made at or after a delete holds nothing that delete took, so its rows under that id are a
+ *    note made again since, which stays.
+ * 3. Find the rows those tombstones' entities own (OWNERS), by key or by a field of the row,
+ *    read in bounded readonly batches. A point that holds none is done, unread past that.
+ * 4. Verify a point that holds some. One that doesn't verify stops the purge, and is left as
+ *    it was, with every tombstone still pending: the purge never purges a point it can't check,
+ *    and never discards one.
+ * 5. Purge them in strict batches of at most 100 rows or 2 MB (recovery-points.js's
  *    purgeRows), each of which leaves the point verifying, and verify the point again after
  *    each. A point that doesn't verify after a batch gets that batch back, rows and record, so
  *    it's as it was before the batch, which it verified as, and the purge stops.
- * 5. Once every point is purged, the tombstones lose their `purge` field (deletion.js).
+ * 6. Once every point is done, the tombstones lose their `purge` field (deletion.js).
  * Cut off anywhere, the next sweep finishes the rest: a batch commits whole or not at all, and a
  * tombstone stays pending until every point is purged of it.
+ *
+ * A sweep that stops records where, in `meta` (PURGE_STOP_KEY: the point's id, the code, and
+ * the points as they were), and every later sweep backs off at once, reading no row, until the
+ * points change: a point made, verified, or dropped. The worker root journals the stop and its
+ * end (`storage.purge-stopped`, `storage.purge-completed`), with ids and codes only.
  *
  * Only a tombstone drives it, never a difference between a point and the live database, since
  * a point exists to recover what the live database lost, and a note that's in a point but
@@ -52,6 +60,7 @@ import {
   rowRange,
   verifyPoint,
 } from './recovery-points.js';
+import { META_STORE } from './registry.js';
 import { result } from './requests.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
@@ -110,7 +119,7 @@ export const OWNERS = Object.freeze({
  * - `purged`: every pending tombstone's entity is out of every point, and the tombstones say so
  * - `nothing`: no tombstone was pending
  * - `stopped`: a point didn't verify, before a batch or after one, and was left as it was; the
- *   tombstones stay pending
+ *   tombstones stay pending. Also what a sweep that backed off answers (`backedOff`).
  * - `failed`: IndexedDB or the lock failed; the tombstones stay pending
  * @typedef {'purged' | 'nothing' | 'stopped' | 'failed'} PurgeStatus
  */
@@ -121,13 +130,76 @@ export const OWNERS = Object.freeze({
  * @property {number} tombstones - the pending ones the sweep took
  * @property {number} rows - the rows it purged from the points
  * @property {{code: string, pointId: string | null} | null} failure
+ * @property {boolean} backedOff - it stopped as the recorded sweep did, reading no row, since
+ *   the points are as they were then
+ * @property {string[]} cleared - the point a recorded stop named, once this sweep finished it
+ *   or found it gone
  */
 
 /**
  * @param {Partial<PurgeOutcome> & {status: PurgeStatus}} fields
  * @returns {PurgeOutcome}
  */
-const outcome = fields => ({ tombstones: 0, rows: 0, failure: null, ...fields });
+const outcome = fields => ({ tombstones: 0, rows: 0, failure: null, backedOff: false, cleared: [], ...fields });
+
+/** `meta`'s record of the sweep that stopped, which later sweeps back off on */
+export const PURGE_STOP_KEY = 'purge-stop';
+
+/**
+ * Where a sweep stopped: the point, the code, when, and the points as they were (stampOf)
+ * @typedef {{key: typeof PURGE_STOP_KEY, pointId: string, code: string, at: number, points: string}} StopRecord
+ */
+
+/** @type {IDBTransactionOptions} */
+const STRICT = Object.freeze({ durability: 'strict' });
+
+/**
+ * What changes when a point is made, verified, or dropped: each point's id and status. A purge
+ * batch changes neither.
+ * @param {readonly Point[]} points
+ * @returns {string}
+ */
+export function stampOf(points) {
+  return points
+    .map(point => `${point.id}:${point.status}`)
+    .sort()
+    .join(',');
+}
+
+/**
+ * The recorded stop, or null
+ * @param {IDBDatabase} db - CanvasTabDB
+ * @returns {Promise<StopRecord | null>}
+ */
+async function readStop(db) {
+  if (!db.objectStoreNames.contains(META_STORE)) return null;
+  const tx = db.transaction(META_STORE, 'readonly');
+  const stored = /** @type {StopRecord | undefined} */ (await result(tx.objectStore(META_STORE).get(PURGE_STOP_KEY)));
+  return stored && typeof stored.pointId === 'string' && typeof stored.points === 'string' ? stored : null;
+}
+
+/**
+ * Puts `stop` as the recorded stop, or drops the one there is, in one strict transaction
+ * @param {IDBFactory} indexedDB
+ * @param {StopRecord | null} stop
+ */
+async function recordStop(indexedDB, stop) {
+  const db = await openWithoutUpgrade(indexedDB, DB_NAME);
+  if (!db) return;
+  try {
+    if (!db.objectStoreNames.contains(META_STORE)) return;
+    const tx = db.transaction(META_STORE, 'readwrite', STRICT);
+    const done = new Promise((resolve, reject) => {
+      tx.addEventListener('complete', () => resolve(undefined));
+      tx.addEventListener('abort', () => reject(tx.error || new DOMException('The transaction aborted', 'AbortError')));
+    });
+    if (stop) tx.objectStore(META_STORE).put(stop);
+    else tx.objectStore(META_STORE).delete(PURGE_STOP_KEY);
+    await done;
+  } finally {
+    db.close();
+  }
+}
 
 /** Thrown inside a sweep when a point doesn't verify, so the sweep stops where it is */
 class Stop extends Error {
@@ -143,7 +215,7 @@ class Stop extends Error {
 }
 
 /**
- * The ids each kind of entity has pending
+ * The ids each kind of entity has pending among `tombstones`
  * @param {readonly TombstoneRecord[]} tombstones
  * @returns {Record<TombstoneEntity, Set<string>>}
  */
@@ -154,6 +226,19 @@ function doomedOf(tombstones) {
     if (Object.hasOwn(doomed, entityType) && typeof id === 'string') doomed[entityType].add(id);
   }
   return doomed;
+}
+
+/**
+ * Whether `tombstone`'s delete came after `point` was made, so the point can hold what it took.
+ * A point started at or after the delete copied the database without it: rows it holds under
+ * that id belong to a note made again since. A copy started before the delete is still purged.
+ * @param {TombstoneRecord} tombstone
+ * @param {Point} point
+ */
+function deletedAfter(tombstone, point) {
+  const deletedAt = typeof tombstone.deletedAt === 'number' ? tombstone.deletedAt : Infinity;
+  const createdAt = typeof point.createdAt === 'number' ? point.createdAt : -Infinity;
+  return createdAt < deletedAt;
 }
 
 /**
@@ -173,27 +258,95 @@ function owned(row, fields, ids) {
 }
 
 /**
- * The rows of `store` in `point` whose keys are among `ids`, read in one readonly transaction
+ * The rows of `store` in `point` under `keys`, read in one readonly transaction
  * @param {IDBDatabase} recovery
  * @param {Point} point
  * @param {string} store
- * @param {readonly string[]} ids
+ * @param {readonly IDBValidKey[]} keys
  * @returns {Promise<PointRow[]>}
  */
-async function rowsByKey(recovery, point, store, ids) {
+async function rowsByKey(recovery, point, store, keys) {
   const tx = recovery.transaction(ROWS_STORE, 'readonly');
   const rows = tx.objectStore(ROWS_STORE);
-  const found = await Promise.all(ids.map(id => result(rows.get([point.id, store, id]))));
+  const found = await Promise.all(keys.map(key => result(rows.get([point.id, store, key]))));
   return /** @type {PointRow[]} */ (found.filter(Boolean));
 }
 
 /**
- * Purges one point of what `doomed` names, batch by batch, verifying it before the first and
- * after each. Answers the number of rows it purged. Throws Stop when it doesn't verify.
- * @param {{recovery: IDBDatabase, point: Point, doomed: Record<TombstoneEntity, Set<string>>, io: Io, between: (label: string) => Promise<void>}} options
+ * Which of `keys` `point` holds rows of `store` under, in one readonly transaction
+ * @param {IDBDatabase} recovery
+ * @param {Point} point
+ * @param {string} store
+ * @param {readonly string[]} keys
+ * @returns {Promise<string[]>}
+ */
+async function heldKeys(recovery, point, store, keys) {
+  const tx = recovery.transaction(ROWS_STORE, 'readonly');
+  const rows = tx.objectStore(ROWS_STORE);
+  const counts = await Promise.all(keys.map(key => result(rows.count([point.id, store, key]))));
+  return keys.filter((_, index) => counts[index] > 0);
+}
+
+/**
+ * The keys of the rows `point` holds of what `doomed` names, store by store, each with the
+ * row's approximate size, so the purge reads them back in bounded batches. Rows owned by key
+ * are counted, never read; rows owned by a field are read in bounded readonly batches and kept
+ * only by key.
+ * @param {{recovery: IDBDatabase, point: Point, doomed: Record<TombstoneEntity, Set<string>>, io: Io}} options
+ * @returns {Promise<Array<{store: string, keys: Array<{key: IDBValidKey, bytes: number}>}>>}
+ */
+async function matchesIn({ recovery, point, doomed, io }) {
+  /** @type {Array<{store: string, keys: Array<{key: IDBValidKey, bytes: number}>}>} */
+  const matches = [];
+  for (const store of point.stores) {
+    if (!Object.hasOwn(OWNERS, store)) continue;
+    const { entity, fields } = OWNERS[store];
+    const ids = doomed[entity];
+    if (ids.size === 0) continue;
+    /** @type {Array<{key: IDBValidKey, bytes: number}>} */
+    const keys = [];
+    if (fields === null) {
+      const all = [...ids];
+      for (let from = 0; from < all.length; from += io.limits.records) {
+        for (const key of await heldKeys(recovery, point, store, all.slice(from, from + io.limits.records))) {
+          // Read back one batch of these at a time, which holds a record each
+          keys.push({ key, bytes: 0 });
+        }
+      }
+    } else {
+      /** @type {IDBValidKey | null} */
+      let after = null;
+      const range = rowRange(io.keyRange, point.id, store);
+      for (;;) {
+        const read = await readBatch(recovery, ROWS_STORE, after, range, io);
+        for (const { value } of read.entries) {
+          const row = /** @type {PointRow} */ (value);
+          if (owned(row, fields, ids))
+            keys.push({ key: row.key, bytes: approximateBytes(row.value) + approximateBytes(row.key) });
+        }
+        if (read.entries.length > 0) after = read.entries[read.entries.length - 1].key;
+        if (read.end || read.entries.length === 0) break;
+      }
+    }
+    if (keys.length > 0) matches.push({ store, keys });
+  }
+  return matches;
+}
+
+/**
+ * Purges one point of what the tombstones of deletes after it was made name, batch by batch.
+ * It reads the point whole only when it holds some of that: verified before the first batch
+ * and after each. Answers the number of rows it purged. Throws Stop when it doesn't verify.
+ * @param {{recovery: IDBDatabase, point: Point, tombstones: readonly TombstoneRecord[], io: Io, between: (label: string) => Promise<void>}} options
  * @returns {Promise<number>}
  */
-async function purgePoint({ recovery, point: found, doomed, io, between }) {
+async function purgePoint({ recovery, point: found, tombstones, io, between }) {
+  const doomed = doomedOf(tombstones.filter(tombstone => deletedAfter(tombstone, found)));
+  if (doomed.note.size === 0 && doomed.folder.size === 0) return 0;
+  const matches = await matchesIn({ recovery, point: found, doomed, io });
+  await between('point-matched');
+  if (matches.length === 0) return 0;
+
   const verdict = await verifyPoint({ recovery, point: found, io });
   if (!verdict.ok) throw new Stop(verdict.code, found.id);
   await between('point-verified');
@@ -230,33 +383,25 @@ async function purgePoint({ recovery, point: found, doomed, io, between }) {
     bytes += size;
   };
 
-  for (const store of point.stores) {
-    if (!Object.hasOwn(OWNERS, store)) continue;
-    const { entity, fields } = OWNERS[store];
-    const ids = doomed[entity];
-    if (ids.size === 0) continue;
-    if (fields === null) {
-      const all = [...ids];
-      for (let from = 0; from < all.length; from += io.limits.records) {
-        for (const row of await rowsByKey(recovery, point, store, all.slice(from, from + io.limits.records))) {
-          await take(row);
-        }
+  for (const { store, keys } of matches) {
+    // Read back in chunks a batch could hold, by count and by the sizes the scan saw
+    let from = 0;
+    while (from < keys.length) {
+      let to = from;
+      let size = 0;
+      while (
+        to < keys.length &&
+        to - from < io.limits.records &&
+        (to === from || size + keys[to].bytes <= io.limits.bytes)
+      ) {
+        size += keys[to].bytes;
+        to += 1;
       }
-    } else {
-      /** @type {IDBValidKey | null} */
-      let after = null;
-      const range = rowRange(io.keyRange, point.id, store);
-      for (;;) {
-        const read = await readBatch(recovery, ROWS_STORE, after, range, io);
-        for (const { value } of read.entries) {
-          const row = /** @type {PointRow} */ (value);
-          if (owned(row, fields, ids)) await take(row);
-        }
-        if (read.entries.length > 0) after = read.entries[read.entries.length - 1].key;
-        if (read.end || read.entries.length === 0) break;
-      }
+      const chunk = keys.slice(from, to).map(({ key }) => key);
+      for (const row of await rowsByKey(recovery, point, store, chunk)) await take(row);
+      from = to;
     }
-    // A store's rows go before the next store is read, so a batch holds one store's
+    // A store's rows go before the next store's are read, so a batch holds one store's
     await flush();
   }
   await flush();
@@ -281,30 +426,58 @@ async function sweep(options) {
   if (!source) return outcome({ status: 'nothing' });
   /** @type {TombstoneRecord[]} */
   let tombstones;
+  /** @type {StopRecord | null} */
+  let stop = null;
   try {
     tombstones = await pendingTombstones(source);
+    if (tombstones.length > 0) stop = await readStop(source);
   } finally {
     source.close();
   }
   if (tombstones.length === 0) return outcome({ status: 'nothing' });
   await between('pending-read');
 
-  const doomed = doomedOf(tombstones);
   let rows = 0;
+  /** The points this sweep got past */
+  const finished = new Set();
   const recovery = await openRecovery(indexedDB, { create: false });
   if (recovery) {
     try {
-      for (const point of await listPoints(recovery)) {
-        rows += await purgePoint({ recovery, point, doomed, io, between });
+      const points = await listPoints(recovery);
+      const stamp = stampOf(points);
+      // The points are as they were when it stopped, so it would stop there again
+      if (stop && stop.points === stamp) {
+        return outcome({
+          status: 'stopped',
+          tombstones: tombstones.length,
+          failure: { code: stop.code, pointId: stop.pointId },
+          backedOff: true,
+        });
       }
-    } catch (error) {
-      if (!(error instanceof Stop)) throw error;
-      return outcome({
-        status: 'stopped',
-        tombstones: tombstones.length,
-        rows,
-        failure: { code: error.code, pointId: error.pointId },
-      });
+      const gone = stop !== null && !points.some(point => point.id === /** @type {StopRecord} */ (stop).pointId);
+      try {
+        for (const point of points) {
+          rows += await purgePoint({ recovery, point, tombstones, io, between });
+          finished.add(point.id);
+        }
+      } catch (error) {
+        if (!(error instanceof Stop)) throw error;
+        await recordStop(indexedDB, {
+          key: PURGE_STOP_KEY,
+          pointId: error.pointId,
+          code: error.code,
+          at: clock.now(),
+          points: stamp,
+        });
+        const ended = stop !== null && stop.pointId !== error.pointId && (gone || finished.has(stop.pointId));
+        return outcome({
+          status: 'stopped',
+          tombstones: tombstones.length,
+          rows,
+          failure: { code: error.code, pointId: error.pointId },
+          cleared: ended ? [/** @type {StopRecord} */ (stop).pointId] : [],
+        });
+      }
     } finally {
       recovery.close();
     }
@@ -323,8 +496,9 @@ async function sweep(options) {
   } finally {
     db.close();
   }
+  if (stop) await recordStop(indexedDB, null);
   await between('tombstones-marked');
-  return outcome({ status: 'purged', tombstones: tombstones.length, rows });
+  return outcome({ status: 'purged', tombstones: tombstones.length, rows, cleared: stop ? [stop.pointId] : [] });
 }
 
 /**
