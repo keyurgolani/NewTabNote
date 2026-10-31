@@ -159,7 +159,7 @@ describe('plain text written into rich content is escaped (#14 slice 2, declared
     }
   });
 
-  it("templates in the editor: a value is escaped into rich content and stays as it is in a table's cells", async () => {
+  it("templates in the editor: a value is escaped into rich content, for its text and its attributes, and stays as it is in a table's cells", async () => {
     const env = codePage();
     const BlockEditor = env.get('BlockEditor');
     const Block = env.get('Block');
@@ -167,12 +167,13 @@ describe('plain text written into rich content is escaped (#14 slice 2, declared
     const blockEl = { dataset: { id: 'b1' }, querySelector: () => null };
     const editor = Object.assign(Object.create(BlockEditor.prototype), {
       noteId: 'N',
-      noteData: { name: 'A <b> & B' },
+      noteData: { name: 'A <b> & B "q" \'s\'' },
       blocks: [current],
       documentClient: {
         blocksOf: async () => [
           { id: 't1', type: 'text', content: 'For {{title}}' },
           { id: 't2', type: 'table', content: '', tableData: [['{{title}}']], rows: 1, cols: 1 },
+          { id: 't3', type: 'text', content: '<a href="https://a.test/{{title}}" title="{{title}}" data-note-name="{{title}}">x</a> <a title=\'{{title}}\'>y</a>' },
         ],
       },
       doc: { defaultView: { getSelection: () => ({ rangeCount: 1, getRangeAt: () => ({ startContainer: { parentElement: { closest: () => blockEl } } }) }) } },
@@ -183,23 +184,34 @@ describe('plain text written into rich content is escaped (#14 slice 2, declared
       focusBlock() {},
     });
     await editor.selectTemplateItem('T');
-    const [, text, table] = editor.blocks;
-    assert.equal(text.content, 'For A &lt;b&gt; &amp; B');
-    assert.deepEqual(plain(table.tableData), [['A <b> & B']]);
-    for (const made of [text, table]) assert.ok(known(stateOf(env, made.serialize())), made.type);
+    const [, text, table, linked] = editor.blocks;
+    assert.equal(text.content, 'For A &lt;b&gt; &amp; B &quot;q&quot; &#39;s&#39;');
+    assert.deepEqual(plain(table.tableData), [['A <b> & B "q" \'s\'']]);
+    const asAttribute = 'A &lt;b&gt; &amp; B &quot;q&quot; &#39;s&#39;';
+    assert.equal(
+      linked.content,
+      `<a href="https://a.test/${asAttribute}" title="${asAttribute}" data-note-name="${asAttribute}">x</a> <a title='${asAttribute}'>y</a>`,
+    );
+    for (const made of [text, table, linked]) assert.ok(known(stateOf(env, made.serialize())), made.type);
   });
 
   it("templates in the kernel (a new Daily Note's template blocks): the same", async () => {
     const { blocksFromTemplate } = await kernelModule('js/kernel/core/domain/note.js');
-    const [text, table] = blocksFromTemplate(
+    const [text, table, linked] = blocksFromTemplate(
       [
         { id: 't1', type: 'text', content: 'For {{title}}' },
         { id: 't2', type: 'table', content: '', tableData: [['{{title}}']] },
+        { id: 't3', type: 'text', content: '<a href="https://a.test/{{title}}" title="{{title}}" data-note-name="{{title}}">x</a> <a title=\'{{title}}\'>y</a>' },
       ],
-      { noteId: 'N', title: 'A <b> & B', now: 5, nextId: (() => { let n = 0; return () => `n${++n}`; })() },
+      { noteId: 'N', title: 'A <b> & B "q" \'s\'', now: 5, nextId: (() => { let n = 0; return () => `n${++n}`; })() },
     );
-    assert.equal(text.content, 'For A &lt;b&gt; &amp; B');
-    assert.deepEqual(table.tableData, [['A <b> & B']]);
+    assert.equal(text.content, 'For A &lt;b&gt; &amp; B &quot;q&quot; &#39;s&#39;');
+    assert.deepEqual(table.tableData, [['A <b> & B "q" \'s\'']]);
+    const asAttribute = 'A &lt;b&gt; &amp; B &quot;q&quot; &#39;s&#39;';
+    assert.equal(
+      linked.content,
+      `<a href="https://a.test/${asAttribute}" title="${asAttribute}" data-note-name="${asAttribute}">x</a> <a title='${asAttribute}'>y</a>`,
+    );
   });
 });
 
@@ -330,9 +342,11 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     ]);
   });
 
-  it("paste: Markdown whose blocks wouldn't decode pastes nothing, and says so in an event", async () => {
+  it("paste: Markdown whose blocks wouldn't decode pastes nothing, and says so in an event and a toast", async () => {
     const { env, page, events } = await openPage();
     const editor = page.tabs.editor;
+    const toasts = [];
+    env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
     editor.logger = { event: (code, fields) => events.push([code, fields]) };
     env.get('AIResponseUtils').markdownToBlocks = () => [{ type: 'gadget', content: 'x' }];
     const before = editor.blocks.length;
@@ -347,6 +361,7 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     assert.equal(event.prevented, true);
     assert.equal(editor.blocks.length, before);
     assert.deepEqual(plain(events), [['block.refused', { errorCode: 'block-unknown-type' }]]);
+    assert.deepEqual(toasts, [{ message: 'Failed to paste content', kind: 'error' }]);
   });
 });
 

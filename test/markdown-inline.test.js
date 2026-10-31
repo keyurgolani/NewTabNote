@@ -136,4 +136,12 @@ describe("AIResponseUtils' inline Markdown reads in linear time (#14 slice 1)", 
     }
     assert.ok(linear(markdownToBlocks, n => '['.repeat(n)));
   });
+
+  it("reads a link's address in linear time", () => {
+    for (const run of [' ', '\t']) {
+      assert.ok(linear(markdownInlineToHtml, n => `[a](b${run.repeat(n)}c)`), JSON.stringify(run));
+      assert.ok(linear(markdownToBlocks, n => `[a](b${run.repeat(n)}c)`), JSON.stringify(run));
+      assert.ok(linear(markdownToBlocks, n => `- [a](b${run.repeat(n)}c)`), JSON.stringify(run));
+    }
+  });
 });

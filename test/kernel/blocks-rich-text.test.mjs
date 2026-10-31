@@ -9,10 +9,33 @@ import assert from 'node:assert/strict';
 
 import { legacyRendering } from '../../js/kernel/adapters/rendering/legacy.js';
 import { decodeBlock, pageReaders, builtInCatalog, producedBlockRefusal, refusalOf } from '../../js/kernel/core/blocks/index.js';
-import { escapePlainText, isLinkHref, LINK_SCHEMES } from '../../js/kernel/core/blocks/rich-text.js';
+import { escapeAttributeText, escapePlainText, isLinkHref, LINK_SCHEMES } from '../../js/kernel/core/blocks/rich-text.js';
 import { textContent } from '../../js/kernel/core/blocks/html-text.js';
 import { ERROR_CODES } from '../../js/trust/core/codes.js';
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
+
+/**
+ * How long one call takes, the fastest of three
+ * @param {(value: string) => unknown} fn
+ * @param {string} value
+ */
+const timeOf = (fn, value) => {
+  let best = Number.POSITIVE_INFINITY;
+  for (let k = 0; k < 3; k++) {
+    const start = performance.now();
+    fn(value);
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+};
+
+/**
+ * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
+ * the sixteen times a quadratic read would
+ * @param {(value: string) => unknown} fn
+ * @param {(n: number) => string} make
+ */
+const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
 
 describe('the legacy rendering adapter (#14 slice 2)', () => {
   it("renders by assigning the markup as it is, and normalizes nothing", () => {
@@ -28,6 +51,7 @@ describe('the legacy rendering adapter (#14 slice 2)', () => {
   it("carries the model layer's plain-text escape and link rule", () => {
     const port = legacyRendering();
     assert.equal(port.escapePlainText, escapePlainText);
+    assert.equal(port.escapeAttributeText, escapeAttributeText);
     assert.equal(port.isLinkHref, isLinkHref);
     assert.ok(Object.isFrozen(port));
   });
@@ -53,6 +77,12 @@ describe('plain text into rich text (#14 slice 2)', () => {
       for (let j = 1 + random(10); j > 0; j--) text += pieces[random(pieces.length)];
       assert.equal(textContent(escapePlainText(text)), text, JSON.stringify(text));
     }
+  });
+
+  it('escapes both quotes too for text that may land inside an attribute, and shows the same in text', () => {
+    const text = 'a "b" \'c\' & <d>\u00a0';
+    assert.equal(escapeAttributeText(text), 'a &quot;b&quot; &#39;c&#39; &amp; &lt;d&gt;&nbsp;');
+    assert.equal(textContent(escapeAttributeText(text)), text);
   });
 
   it('reads null and undefined as empty, and anything else as its string', () => {
@@ -91,6 +121,14 @@ describe("the inline schema's link rule (#14 slice 2)", () => {
       'c:/x',
     ]) {
       assert.equal(isLinkHref(href), false, JSON.stringify(href));
+    }
+  });
+
+  it('reads an address in linear time', () => {
+    for (const run of [' ', '\t', '\u0001']) {
+      for (const make of [(/** @type {number} */ n) => `a${run.repeat(n)}b`, (/** @type {number} */ n) => `javascript:${run.repeat(n)}x`, (/** @type {number} */ n) => run.repeat(n)]) {
+        assert.ok(linear(isLinkHref, make), JSON.stringify(run));
+      }
     }
   });
 

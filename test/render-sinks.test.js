@@ -77,6 +77,81 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
       ['document.write', 'dynamic', 'old'],
     ]);
   });
+
+  it('finds an assignment however the member is named and whatever assigns it', () => {
+    const found = scanSource(`
+      function keyed(el, html) { el['innerHTML'] = html; }
+      function orElse(el, html) { el.innerHTML ||= html; }
+      function nullish(el, html) { el.outerHTML ??= html; }
+      function andAlso(el, html) { el.srcdoc &&= html; }
+      function wrapped(el, html) { (el.innerHTML) = html; (el)['innerHTML'] += '<hr>'; }
+      function cleared(el) { el['innerHTML'] = ''; el.innerHTML ||= ''; }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['innerHTML', 'dynamic', 'keyed'],
+      ['innerHTML', 'dynamic', 'orElse'],
+      ['outerHTML', 'dynamic', 'nullish'],
+      ['srcdoc', 'dynamic', 'andAlso'],
+      ['innerHTML', 'dynamic', 'wrapped'],
+      ['innerHTML', 'static', 'wrapped'],
+    ]);
+  });
+
+  it('finds an assignment through Object.assign and Reflect.set', () => {
+    const found = scanSource(`
+      function assigned(el, innerHTML) { Object.assign(el, { innerHTML }); }
+      function assignedMany(el, html) { Object.assign(el, { id: 'x' }, { 'outerHTML': html, srcdoc: '<p></p>' }); }
+      function reflected(el, html) { Reflect.set(el, 'innerHTML', html); }
+      function neither(el, data) { Object.assign(el, { id: data }); Reflect.set(el, 'id', data); Object.assign(el, { innerHTML: '' }); }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['Object.assign innerHTML', 'dynamic', 'assigned'],
+      ['Object.assign outerHTML', 'dynamic', 'assignedMany'],
+      ['Object.assign srcdoc', 'static', 'assignedMany'],
+      ['Reflect.set innerHTML', 'dynamic', 'reflected'],
+    ]);
+  });
+
+  it("finds a call however the method is named, and a document's write on any receiver named for one", () => {
+    const found = scanSource(`
+      function keyed(el, html) { el['insertAdjacentHTML']('beforeend', html); (el).setHTMLUnsafe(html); }
+      function local(doc, html) { doc.write(html); }
+      class Frame { fill(html) { this.doc.writeln(html); this.frame.contentDocument['write'](html); } }
+      function stream(out, html) { out.write(html); navigator.clipboard.write([html]); }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['insertAdjacentHTML', 'dynamic', 'keyed'],
+      ['setHTMLUnsafe', 'dynamic', 'keyed'],
+      ['document.write', 'dynamic', 'local'],
+      ['document.writeln', 'dynamic', 'fill'],
+      ['document.write', 'dynamic', 'fill'],
+    ]);
+  });
+
+  it('finds execCommand with a command that is not a literal, unless it is given no value', () => {
+    const found = scanSource(`
+      function any(doc, command, html) { doc.execCommand(command, false, html); }
+      function keyed(doc, html) { doc['execCommand'](\`insert\${'HTML'}\`, false, html); }
+      function formats(doc, command) { doc.execCommand(command, false, null); doc.execCommand(command); doc.execCommand(command, false, undefined); }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['execCommand', 'dynamic', 'any'],
+      ['execCommand', 'dynamic', 'keyed'],
+    ]);
+  });
+
+  it('finds markup parsed into nodes the page can adopt', () => {
+    const found = scanSource(`
+      function parsed(el, html) { el.append(...new DOMParser().parseFromString(html, 'text/html').body.childNodes); }
+      function unsafe(el, html) { el.replaceChildren(Document.parseHTMLUnsafe(html).body); }
+      function packaged(parser) { return parser.parseFromString('<svg></svg>', 'image/svg+xml'); }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['parseFromString', 'dynamic', 'parsed'],
+      ['parseHTMLUnsafe', 'dynamic', 'unsafe'],
+      ['parseFromString', 'static', 'packaged'],
+    ]);
+  });
 });
 
 describe('blocks render their rich text through the port (#14 slice 2)', () => {
