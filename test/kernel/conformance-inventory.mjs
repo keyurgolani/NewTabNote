@@ -65,6 +65,8 @@ export const PORTS = Object.freeze({
     suite: { module: 'test/kernel/registry-conformance.mjs', runner: 'describeRegistryConformance' },
     implementations: [
       { module: 'test/kernel/registry-fixtures.mjs', run: 'test/kernel/registry-conformance-fixtures.test.mjs' },
+      // #20's health and remediation families
+      { module: 'js/trust/core/families.js', run: 'test/kernel/trust-families.test.mjs' },
     ],
   },
   // The stub every legacy test runs on, held to Chromium (#28 slice 2)
@@ -76,6 +78,17 @@ export const PORTS = Object.freeze({
     implementations: [
       { module: 'test/helpers/legacy-env.js', run: 'test/chrome-storage-conformance.test.js' },
       { host: 'chromium', via: 'e2e/harness/index.js', run: 'e2e/chrome-storage.spec.js' },
+    ],
+  },
+  // #20's trust store: NewTabNoteTrust on #17's adapter, and the memory store, through the
+  // records layer's bounds and repeat rule (#20 slice 1)
+  'trust-store': {
+    contract: 'js/trust/core/ports.js',
+    types: ['TrustStore'],
+    suite: { module: 'test/kernel/trust-store-suite.mjs', runner: 'describeTrustStore' },
+    implementations: [
+      { module: 'js/trust/core/memory-store.js', run: 'test/kernel/trust-store.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/trust.js', run: 'test/kernel/trust-store.test.mjs' },
     ],
   },
 });
@@ -149,6 +162,7 @@ export const COMPOSERS = Object.freeze({
   },
   'test/kernel/legacy-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/legacy/adapter.js'] },
   'test/kernel/storage-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
+  'test/kernel/trust-support.mjs': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
 });
 
 /**

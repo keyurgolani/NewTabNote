@@ -63,6 +63,9 @@ const RULES = {
   // #15's registry kit, host-neutral like core (#15 slice 1)
   'registry-global': 'a browser API or legacy global in js/kernel/registry/',
   'registry-import': 'an import into js/kernel/registry/ from outside it and js/lib/valibot/',
+  // #20's trust core, host-neutral like core (#20 slice 1)
+  'trust-global': 'a browser API or legacy global in js/trust/core/',
+  'trust-import': 'an import into js/trust/core/ from outside it, kernel core, the registry kit, and js/lib/valibot/',
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
   'declared-gap': 'a gap no rule sees, written by hand (count 1, file is the legacy adapter module)',
@@ -138,16 +141,20 @@ function byRowKey(a, b) {
   return byFileThenRule(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
 }
 
-/** Where no-undef counts under registry-global rather than core-global */
+/** Where no-undef counts under registry-global or trust-global rather than core-global */
 const REGISTRY_DIR = 'js/kernel/registry/';
+const TRUST_DIR = 'js/trust/core/';
 
 /**
  * The ledger rule an ESLint message in `file` counts under, or null when it isn't a boundary
- * message. no-undef runs only in kernel core and the registry kit, so its rule is the one for
- * the directory it's in.
+ * message. no-undef runs only in kernel core, the registry kit, and the trust core, so its
+ * rule is the one for the directory it's in.
  */
 function ruleOf(message, file = '') {
-  if (message.ruleId === 'no-undef') return file.startsWith(REGISTRY_DIR) ? 'registry-global' : 'core-global';
+  if (message.ruleId === 'no-undef') {
+    if (file.startsWith(REGISTRY_DIR)) return 'registry-global';
+    return file.startsWith(TRUST_DIR) ? 'trust-global' : 'core-global';
+  }
   const tag = /\[([^\]\s]+)\]/.exec(message.message || '');
   return tag && Object.hasOwn(RULES, tag[1]) && tag[1] !== DECLARED_GAP ? tag[1] : null;
 }

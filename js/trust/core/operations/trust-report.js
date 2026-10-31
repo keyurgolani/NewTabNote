@@ -1,0 +1,40 @@
+/**
+ * trust.report, catalog version 1 (#20, "Contracts"): every provider the root registered,
+ * with the verification operation and freshness it declares, its latest receipt, and the
+ * status that receipt reads as now (`stale` past its window, `unverified` with no receipt
+ * yet), plus the stored incidents and remediation runs. Ids, codes, counts, and times only.
+ * Slice 2 adds the legacy copies as restore points (approved AC6's).
+ */
+
+import * as v from '../../../lib/valibot/index.mjs';
+import { count } from '../../../kernel/core/contracts/fields.js';
+import { queryPayload } from '../../../kernel/core/contracts/operation.js';
+import { queryStateSchema } from '../../../kernel/core/contracts/outcome-schemas.js';
+import { providerId } from '../evidence.js';
+import { incidentSchema, operationCode, receiptSchema, runSchema } from '../records.js';
+import { COST_CLASSES, HEALTH_GROUPS, PROVIDER_STATUSES } from '../vocabulary.js';
+
+export const payload = queryPayload('trust.report', {});
+
+export const reportSchema = v.strictObject({
+  records: v.picklist(['closed', 'open', 'fallback']),
+  providers: v.array(
+    v.strictObject({
+      providerId,
+      group: v.picklist(HEALTH_GROUPS),
+      core: v.boolean(),
+      operation: operationCode,
+      costClass: v.picklist(COST_CLASSES),
+      freshnessMs: count,
+      status: v.picklist(PROVIDER_STATUSES),
+      receipt: v.nullable(receiptSchema),
+    }),
+  ),
+  incidents: v.array(incidentSchema),
+  runs: v.array(runSchema),
+});
+
+export const result = queryStateSchema(reportSchema);
+
+/** @typedef {v.InferOutput<typeof payload>} TrustReportQuery */
+/** @typedef {v.InferOutput<typeof reportSchema>} TrustReport */
