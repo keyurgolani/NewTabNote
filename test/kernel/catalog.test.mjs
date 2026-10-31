@@ -145,6 +145,10 @@ const QUERY_SAMPLES = {
   listSnapshots: { noteId: 'n1' },
   getSnapshot: { snapshotId: 's1' },
   findDailyNote: { dateStr: '2026-10-19' },
+  getWorkspaceData: { keys: ['lastBackupAt', 'aiPromptTemplates'] },
+  listThemes: {},
+  exportBackup: { backup: true },
+  profileHoldsContent: {},
 };
 
 /** The coordinator's own queries, which take no field */
@@ -413,7 +417,12 @@ describe('schema modules (#13, AC1)', () => {
       const state = await reader.query(
         /** @type {import('../../js/kernel/core/contracts/queries.js').Query} */ ({ ...fields, type }),
       );
-      assert.ok(state.kind === 'ready' || state.kind === 'empty', `${type}: ${state.kind}`);
+      // The export file is 1.4.x's Storage code, which the memory adapter doesn't run (`backups`)
+      const unavailable = type === 'exportBackup' && !adapter.flags.backups;
+      assert.ok(
+        unavailable ? state.kind === 'failed' : state.kind === 'ready' || state.kind === 'empty',
+        `${type}: ${state.kind}`,
+      );
       const checked = v.safeParse(moduleOf(type).result, state);
       assert.equal(checked.success, true, `${type}: ${JSON.stringify(state)}`);
     }

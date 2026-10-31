@@ -14,8 +14,8 @@
  *   other item runs again. The same command is the same SHA-256 of its canonical JSON, keys
  *   sorted (memory/fingerprint.js), the digest #17 keeps, so no record holds the command.
  *
- * - backups: false. The legacy import and auto-backup are 1.4.x's Storage code, so they answer
- *   `unavailable` here, until #18's backup engine runs on every adapter.
+ * - backups: false. The legacy import, auto-backup, and export file are 1.4.x's Storage code,
+ *   so they answer `unavailable` here, until #18's backup engine runs on every adapter.
  *
  * Transactions run one at a time, in the order they open, as IndexedDB runs readwrite
  * transactions over the same stores. Everything goes in and out as a copy.
@@ -413,6 +413,9 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         return values;
       });
     },
+
+    // The export file is 1.4.x's Storage code (the `backups` flag)
+    exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
 
     conflicts: () => clone(conflicts),
   });

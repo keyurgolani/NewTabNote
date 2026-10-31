@@ -1,12 +1,13 @@
 /**
  * Schemas for the settings the kernel writes: the preferences (domain/preferences.js), each
- * with the type the legacy settings code writes, and the workspace session
- * (domain/session.js). #25 (settings routes) owns the preference schemas from here on. Only
+ * with the type the legacy settings code writes, the workspace session (domain/session.js),
+ * and the workspace data getWorkspaceData reads back (domain/workspace-data.js). #25
+ * (settings routes) owns the preference schemas from here on. Only
  * the keys listed here are accepted, so no command names a setting it doesn't own.
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
-import { content, count, entityId } from './fields.js';
+import { content, count, entityId, timestamp } from './fields.js';
 
 const text = v.pipe(v.string(), v.maxLength(256));
 
@@ -42,6 +43,34 @@ export const workspaceSession = v.strictObject({
 });
 
 /**
+ * What the new tab keeps beside its preferences (domain/workspace-data.js), as slice 6's
+ * commands write it: AI chat's two conversations and its prompt templates, as the chat saved
+ * them, whether the first run finished, the last full export and backup, and the export
+ * notice's outcome
+ */
+export const workspaceDataValues = v.strictObject({
+  aiChatHistory: v.optional(content(v.array(v.unknown()))),
+  noteChatMessages: v.optional(content(v.array(v.unknown()))),
+  globalChatHistory: v.optional(content(v.array(v.unknown()))),
+  globalChatMessages: v.optional(content(v.array(v.unknown()))),
+  aiPromptTemplates: v.optional(content(v.array(v.unknown()))),
+  hasCompletedOnboarding: v.optional(v.boolean()),
+  lastFullExportAt: v.optional(timestamp),
+  lastBackupAt: v.optional(timestamp),
+  preMigrationNotice: v.optional(
+    v.looseObject({
+      version: v.optional(v.number()),
+      outcome: v.optional(v.string()),
+      at: v.optional(v.number()),
+    }),
+  ),
+});
+
+/**
  * The preferences a getPreferences answer holds and a setPreferences command sets
  * @typedef {v.InferOutput<typeof preferenceValues>} PreferenceValues
+ */
+/**
+ * What a getWorkspaceData answer holds
+ * @typedef {v.InferOutput<typeof workspaceDataValues>} WorkspaceDataValues
  */

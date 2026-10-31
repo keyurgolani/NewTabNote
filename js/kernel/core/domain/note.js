@@ -228,7 +228,7 @@ export const NOTE_VIEWS = Object.freeze([
  * @param {unknown} b
  * @returns {number}
  */
-function compareKeys(a, b) {
+export function compareKeys(a, b) {
   const rank = /** @param {unknown} key */ key => (typeof key === 'number' ? 0 : key instanceof Date ? 1 : 2);
   if (rank(a) !== rank(b)) return rank(a) - rank(b);
   const left = a instanceof Date ? a.getTime() : /** @type {number | string} */ (a);
@@ -240,7 +240,7 @@ function compareKeys(a, b) {
  * @param {unknown} value
  * @returns {boolean} whether an IndexedDB index on the field lists the record
  */
-function isIndexKey(value) {
+export function isIndexKey(value) {
   if (typeof value === 'number') return !Number.isNaN(value);
   if (typeof value === 'string') return true;
   return (

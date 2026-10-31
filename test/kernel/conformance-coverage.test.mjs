@@ -106,6 +106,7 @@ describe('conformance coverage finds an implementation', () => {
         '  async commit() { return { outcome: { kind: "committed" }, replayed: false }; }',
         '  async read() { return undefined; }',
         '  async readSettings() { return {}; }',
+        '  async exportBackup() { return new Blob([]); }',
         '}',
       ]),
     });
