@@ -783,6 +783,30 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
     assert.deepEqual(await dailyState(of), expected);
   });
 
+  it("the run's answer counts no note marked as another's duplicate as a claim, as a lookup doesn't, so the two agree (review R88)", async () => {
+    // Marked before the run's first answer, which nothing a release ships does: the one made
+    // first names the later one, which holds the date
+    const of = await withDaily(
+      [
+        ['marked-oct-20', 'Oct 20', '2025-10-20', Date.UTC(2025, 9, 20, 16)],
+        ['holder-oct-20', 'Oct 20', '2025-10-20', Date.UTC(2025, 9, 20, 18)],
+      ],
+      {
+        'marked-oct-20': { dailyKey: '2025-10-20', dailyDuplicateOf: 'holder-oct-20' },
+        'holder-oct-20': { dailyKey: '2025-10-20', dailyDuplicateOf: null },
+      },
+    );
+    assert.equal((await transform(of, { clock: inLA })).status, 'transformed');
+    const { keys, index } = await dailyState(of);
+    assert.deepEqual(
+      [keys['marked-oct-20'], keys['holder-oct-20'], index['2025-10-20']],
+      [['2025-10-20', '2025-10-20', 'holder-oct-20'], ['2025-10-20', '2025-10-20', null], 'holder-oct-20'],
+    );
+    // A lookup of the date after the run opens the same note
+    const onOct20 = { now: () => Date.UTC(2025, 9, 20, 20), zone: () => 'America/Los_Angeles' };
+    assert.deepEqual(await openDays(of, onOct20, [{ dateStr: '2025-10-20' }]), { '2025-10-20': 'holder-oct-20' });
+  });
+
   it("cut off at any stop, with a page opening each Daily Note and today's while the run is cut, a second run ends where an uncut run does", async () => {
     const days = [
       { dateStr: '2025-10-27' },
