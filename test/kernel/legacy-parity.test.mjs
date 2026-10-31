@@ -200,15 +200,15 @@ const folder = (id, parentId) => ({
 });
 
 describe("the kernel's copies of production rules, run both ways", () => {
-  it('createNote writes the note and the search entry Storage.createNote writes, and its group in Unfiled (#17 PR 3a)', async () => {
+  it('createNote writes the note and the search entry Storage.createNote writes, and on this version-8 database no group (#17 PR 3a, review R88)', async () => {
     const { viaStorage, viaKernel, kernel } = await twin();
     const made = legacyEnv.plain(await viaStorage.storage.createNote('Plan'));
     assertCommitted(await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: made.id, name: 'Plan' }));
     const stores = ['canvases', 'search_index'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
-    assert.deepEqual(await groupsIn(viaKernel), {
-      [made.id]: { placement: { kind: 'collection', folderId: null }, kind: 'note', lifecycle: 'active' },
-    });
+    // 1.4.1 still opens version 8, so the group waits for the run and the transform; the contract
+    // suite checks the one the kernel writes at 10
+    assert.deepEqual(await groupsIn(viaKernel), {});
     assert.deepEqual(await groupsIn(viaStorage), {});
   });
 
@@ -246,9 +246,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
     assert.deepEqual(await searchNames(viaKernel), await searchNames(viaStorage));
-    assert.deepEqual(await groupsIn(viaKernel), {
-      [noteId]: { placement: { kind: 'collection', folderId: 'f1' }, kind: 'note', lifecycle: 'active' },
-    });
+    // No group at version 8 (review R88)
+    assert.deepEqual(await groupsIn(viaKernel), {});
   });
 
   it('createFolder writes the folder Storage.createFolder writes', async () => {
@@ -297,10 +296,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
       return { notes: found.canvases, search: found.search_index, copies };
     };
     assert.deepEqual(await made(viaKernel), await made(viaStorage));
-    // The new Daily Note is under its date; the template, a 1.4.x note, waits for the transform
-    assert.deepEqual(await groupsIn(viaKernel), {
-      [daily.id]: { placement: { kind: 'daily', dateKey: daily.dateStr }, kind: 'note', lifecycle: 'active' },
-    });
+    // At version 8 the new Daily Note waits for the transform for its group too (review R88)
+    assert.deepEqual(await groupsIn(viaKernel), {});
   });
 
   it(
@@ -479,11 +476,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
       'findDailyNote reads the one Storage would find',
     );
     assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id));
-    assert.deepEqual((await groupsIn(viaKernel))[daily.id], {
-      placement: { kind: 'daily', dateKey: daily.dateStr },
-      kind: 'note',
-      lifecycle: 'active',
-    });
+    // No group at version 8 (review R88)
+    assert.equal((await groupsIn(viaKernel))[daily.id], undefined);
   });
 
   it('ensureDailyNote for a calendar day makes what Storage.ensureDailyNoteForDate makes: its name, dateStr, and template', async () => {
@@ -500,7 +494,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       );
       assert.equal(daily.dateStr, dateStr);
       assert.deepEqual(await dailyNoteMade(viaKernel, daily.id), await dailyNoteMade(viaStorage, daily.id), dateStr);
-      assert.deepEqual((await groupsIn(viaKernel))[daily.id]?.placement, { kind: 'daily', dateKey: dateStr }, dateStr);
+      assert.equal((await groupsIn(viaKernel))[daily.id], undefined, dateStr);
     }
   });
 

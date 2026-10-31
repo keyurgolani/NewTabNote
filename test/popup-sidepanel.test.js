@@ -6,7 +6,8 @@
 // and reads insightsEnabled from IndexedDB's settings store, which Storage.setSetting never
 // writes (#4 fixes that). Side Panel reads every note the updatedAt index lists, and
 // InsightsSummary leaves out the ones archived or trashed by date. Since #17 PR 3a both read a
-// note without an updatedAt too, last (KD-011), which 1.4.x's index left out.
+// note without an updatedAt too, last (KD-011), which 1.4.x's index left out, and Popup also
+// leaves out a note archived or trashed by flag alone, which 1.4.x listed (review R88).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -86,16 +87,26 @@ async function sidePanel(records = { canvases: notes() }) {
 }
 
 describe('what Popup shows', () => {
-  it('lists the five latest notes with no archivedAt or trashedAt, templates included', async () => {
+  it('lists the five latest notes not archived or trashed, by flag or by date, templates included', async () => {
     const { recent } = await popup();
-    assert.deepEqual(recent(), ['Newest', 'Template', 'Trashed without a date', 'Archived without a date', 'Older']);
+    // 1.4.x listed a note archived or trashed by flag alone, which review R88 fixed (#17 PR 3a)
+    assert.deepEqual(recent(), ['Newest', 'Template', 'Older', 'Oldest', 'No time']);
+  });
+
+  it("leaves out a trashed or archived note 1.4.x's index never listed, one with no time in either state (#17 PR 3a, review R88)", async () => {
+    const { recent } = await popup({
+      canvases: [
+        note('active', { name: 'Active', updatedAt: AT }),
+        note('trashed-unlisted', { name: 'Trashed, never listed', updatedAt: undefined, trashed: true }),
+        note('archived-unlisted', { name: 'Archived, never listed', updatedAt: undefined, archived: true }),
+      ],
+    });
+    assert.deepEqual(recent(), ['Active']);
   });
 
   it("shows the day's summary only when IndexedDB's settings store says insightsEnabled", async () => {
     const enabled = await popup({ canvases: notes(), settings: [{ key: 'insightsEnabled', value: true }] });
-    assert.deepEqual(enabled.summary(), [
-      '[Newest] todo newest', '[Template] todo template', '[Trashed without a date] todo trash-flag', '[No time] todo no-time',
-    ]);
+    assert.deepEqual(enabled.summary(), ['[Newest] todo newest', '[Template] todo template', '[No time] todo no-time']);
 
     const off = await popup({ canvases: notes(), settings: [{ key: 'insightsEnabled', value: false }] });
     assert.equal(off.summary(), null);
@@ -139,8 +150,9 @@ describe("Popup's quick note", () => {
     const { revision, placementVersion, sourceRevision, placement, kind, lifecycle, ...own } = saved;
     assert.deepEqual(fields(own), fields(reference));
     assert.deepEqual([revision, placementVersion, sourceRevision], [1, 0, 0]);
-    // #17 PR 3a's group beside the flags: Unfiled, a note, active
-    assert.deepEqual([placement, kind, lifecycle], [{ kind: 'collection', folderId: null }, 'note', 'active']);
+    // No #17 PR 3a group beside the flags on this database at version 8, which 1.4.1 still
+    // opens (review R88): #17's transform gives the note its group once the run is in
+    assert.deepEqual([placement, kind, lifecycle], [undefined, undefined, undefined]);
     assert.equal(typeof saved.createdAt, 'number');
     assert.equal(saved.updatedAt, saved.createdAt);
     assert.deepEqual(recordsOf(dump, 'search_index')[saved.id], {

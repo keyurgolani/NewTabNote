@@ -34,7 +34,7 @@ import {
   TRANSFORM_STOP_KEY,
 } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
-import { withoutPlacement } from '../../js/kernel/core/domain/placement.js';
+import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
   KeyRange,
@@ -538,6 +538,116 @@ describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (
       }
     });
   }
+});
+
+describe('below version 10, where 1.4.1 still opens the database, no command writes the group (review R88, p3)', () => {
+  /** @param {Record<string, unknown>} note */
+  const groupOf = note =>
+    Object.fromEntries(PLACEMENT_FIELDS.filter(field => field in note).map(field => [field, note[field]]));
+
+  /**
+   * Frozen 1.4.1 on `of`, which opens version 8 as its own, run as its new tab starts
+   * @param {Profile} of
+   */
+  const release141 = async of => {
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
+    env.load(
+      'test/fixtures/storage/releases/v1.4.1/js/utils.js',
+      'test/fixtures/storage/releases/v1.4.1/js/storage.js',
+    );
+    const storage = env.get('Storage');
+    await storage.init();
+    return storage;
+  };
+
+  it("the new tab's kernel on a database the run didn't reach writes none, so the transform takes the flags 1.4.1 left", async () => {
+    const of = await profileWith(BASIC);
+    // This build's new tab on the database as it is, at 8: the run was short of space, say
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    await adapter.open();
+    const ids = { next: () => `p3-${(commandCount += 1)}` };
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
+    for (const [noteId, name] of [
+      ['made-at-8', 'Made at 8'],
+      ['moved-later', 'Moved later'],
+    ]) {
+      const made = await kernel.execute({ type: 'createNote', commandId: ids.next(), noteId, name });
+      assert.equal(made.kind, 'committed', JSON.stringify(made));
+    }
+    storage.db.close();
+    const at8 = await notesIn(of);
+    for (const id of ['made-at-8', 'moved-later']) assert.deepEqual(groupOf(at8[id]), {}, id);
+
+    // Back on 1.4.1, which changes only the flags
+    const old = await release141(of);
+    const folder = await old.createFolder('A folder');
+    await old.trashNote('made-at-8');
+    await old.moveNoteToFolder('moved-later', folder.id);
+    old.db.close();
+
+    assert.equal((await run(of)).status, 'migrated');
+    assert.equal((await transform(of)).status, 'transformed');
+    const after = await notesIn(of);
+    assert.deepEqual(groupOf(after['made-at-8']), {
+      placement: { kind: 'collection', folderId: null },
+      kind: 'note',
+      lifecycle: 'trashed',
+    });
+    assert.deepEqual(groupOf(after['moved-later']), {
+      placement: { kind: 'collection', folderId: folder.id },
+      kind: 'note',
+      lifecycle: 'active',
+    });
+  });
+
+  it("the worker's kernel, on #17's adapter opened as the database is, writes none there either", async () => {
+    const of = await profileWith(BASIC);
+    // The worker's kernel when its run didn't get in (composition/background.js's `existing` open)
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.faults.factory,
+      settings: of.chrome.api.storage.local,
+      keyRange: KeyRange,
+      clock: later,
+      mode: 'existing',
+      requireCore: true,
+    });
+    await adapter.open();
+    const ids = { next: () => `p3-${(commandCount += 1)}` };
+    const worker = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS['worker-internal'],
+      ids,
+      clock: later,
+    });
+    const captured = await worker.execute({
+      type: 'captureToDailyNote',
+      commandId: ids.next(),
+      noteId: 'captured-at-8',
+      blockId: 'captured-at-8-b1',
+      capture: { type: 'text', content: 'Quote' },
+    });
+    assert.equal(captured.kind, 'committed', JSON.stringify(captured));
+    adapter.close();
+    const at8 = await notesIn(of);
+    assert.deepEqual(groupOf(at8['captured-at-8']), {});
+
+    const old = await release141(of);
+    await old.trashNote('captured-at-8');
+    old.db.close();
+
+    assert.equal((await run(of)).status, 'migrated');
+    assert.equal((await transform(of)).status, 'transformed');
+    const daily = (await notesIn(of))['captured-at-8'];
+    assert.deepEqual(groupOf(daily), {
+      placement: { kind: 'daily', dateKey: daily.dateStr },
+      kind: 'note',
+      lifecycle: 'trashed',
+    });
+  });
 });
 
 describe('batches, yields, and the commits between them', () => {
