@@ -68,7 +68,7 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  * The trust records a provider may read: the journal's events, which slice 1b's failure sites
  * write, and whether NewTabNoteTrust takes writes (`fallback` while it doesn't). No provider
  * reads incidents: a check decides from evidence, never from what an earlier check raised.
- * @typedef {{events(): Promise<readonly import('../records.js').JournalEvent[]>, state?: () => string}} TrustReader
+ * @typedef {{eventsRead(): Promise<{events: readonly import('../records.js').JournalEvent[], ok: boolean}>, state?: () => string}} TrustReader
  */
 
 /**
@@ -79,14 +79,20 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  * @property {SettingsPort} [settings] - chrome.storage.local, for the legacy facts legacy.js lists
  * @property {SecretReader} [secrets]
  * @property {RecoveryReader} [recovery]
- * @property {{latest(): Promise<{stored: boolean, at: number | null}>}} [vectors]
- *   Whether CanvasTabDB's `vectors` store holds a record, and the newest one's `updatedAt`
+ * @property {{stored(): Promise<boolean>, newerThan(at: number): Promise<boolean>}} [vectors]
+ *   Whether CanvasTabDB's `vectors` store holds a record, and whether one was written (its
+ *   `updatedAt`) after `at`
  * @property {PermissionsReader} [permissions]
  * @property {ManifestPermissions} [manifest]
  * @property {CommitLog} [commitLog]
  * @property {readonly Pipeline[]} [pipelines]
+ *   Every pipeline the root registered, an empty list for none. A root that couldn't build the
+ *   list must throw from it or leave the port out, never pass `[]`: index lag can't tell none
+ *   from failed.
  * @property {MessagingClient} [messaging]
- * @property {() => readonly Resolution[]} [resolutions] - each registry root's resolution, or its runtime's snapshot
+ * @property {() => readonly Resolution[]} [resolutions]
+ *   Each registry root's resolution, or its runtime's snapshot. A root that couldn't resolve
+ *   must throw from it, never answer `[]`: contributions can't tell none from failed.
  * @property {TrustReader} [trust]
  */
 

@@ -212,10 +212,10 @@ describe('interim providers never record verified (#20 AC5)', () => {
     }));
     assert.equal((await checkOf('local-inference', context)).receipt.status, 'unverified');
     const failure = { seq: 1, code: 'embeddings.load-failed', at: 2000, fields: {} };
-    const failing = { ...context, trust: { events: async () => [failure] } };
+    const failing = { ...context, trust: { eventsRead: async () => ({ events: [failure], ok: true }) } };
     const { receipt } = await checkOf('local-inference', failing);
     assert.deepEqual([receipt.status, receipt.evidence], ['action-required', { since: 2000 }]);
-    const older = { ...context, trust: { events: async () => [{ ...failure, at: 500 }] } };
+    const older = { ...context, trust: { eventsRead: async () => ({ events: [{ ...failure, at: 500 }], ok: true }) } };
     assert.equal((await checkOf('local-inference', older)).receipt.status, 'unverified');
   });
 });

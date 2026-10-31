@@ -123,16 +123,20 @@ export const aiScopeGrants = interim(() => ({ status: 'not-configured', evidence
  * the model library. A failure the journal has dropped (after 14 days) is no longer seen.
  */
 export const localInference = interim(async context => {
-  const events = /** @type {unknown} */ (await portOf(context, 'trust').events());
-  if (!Array.isArray(events)) throw new TypeError('not a journal');
-  const failedAt = events
+  const read = /** @type {{events?: unknown, ok?: unknown} | null} */ (await portOf(context, 'trust').eventsRead());
+  // A journal the store couldn't read isn't one with no failure in it
+  if (read === null || typeof read !== 'object' || read.ok !== true || !Array.isArray(read.events)) {
+    throw new TypeError('the journal was not read');
+  }
+  const failedAt = read.events
     .filter(event => event && event.code === 'embeddings.load-failed' && isTime(event.at))
     .reduce((latest, event) => Math.max(latest, event.at), -1);
-  const vectors = /** @type {{stored?: unknown, at?: unknown}} */ (await portOf(context, 'vectors').latest());
-  if (vectors === null || typeof vectors !== 'object' || typeof vectors.stored !== 'boolean') throw new TypeError('not a vectors answer');
-  const vectorAt = isTime(vectors.at) ? vectors.at : null;
-  // A failure stands until a vector is written after it; vectors that don't say when can't show that
-  if (failedAt >= 0 && (vectorAt === null || vectorAt <= failedAt)) {
+  const vectors = portOf(context, 'vectors');
+  // A failure stands until a vector is written after it, which only a loaded model writes. With
+  // none journaled, only whether any vector is stored matters, which reads no vector.
+  const recovered = failedAt >= 0 ? await vectors.newerThan(failedAt) : null;
+  if (recovered !== null && typeof recovered !== 'boolean') throw new TypeError('not a vectors answer');
+  if (recovered === false) {
     return {
       status: 'action-required',
       evidence: { since: failedAt },
@@ -142,9 +146,11 @@ export const localInference = interim(async context => {
       looked: [{ faultCode: 'load-failed', subjectId: null }],
     };
   }
+  const stored = recovered === true ? true : await vectors.stored();
+  if (typeof stored !== 'boolean') throw new TypeError('not a vectors answer');
   // The journal and the store both answered, so the failure was looked for and isn't there
   const looked = [{ faultCode: 'load-failed', subjectId: null }];
-  return vectors.stored ? { status: 'unverified', consequenceKey: 'inference.not-verified', looked } : { status: 'not-configured', looked };
+  return stored ? { status: 'unverified', consequenceKey: 'inference.not-verified', looked } : { status: 'not-configured', looked };
 });
 
 /**

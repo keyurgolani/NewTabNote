@@ -58,6 +58,22 @@ export function newestVerified(points) {
 /** What it looked at once the points were listed and each verified: the point-unverified fault */
 const LOOKED = () => [{ faultCode: 'point-unverified', subjectId: 'NewTabNoteRecovery' }];
 
+/**
+ * Whether `value` is a point as the reader lists it: an id, a kind, a status, and times
+ * @param {unknown} value
+ * @returns {value is PointSummary}
+ */
+const isPoint = value => {
+  if (value === null || typeof value !== 'object') return false;
+  const point = /** @type {Record<string, unknown>} */ (value);
+  return (
+    typeof point.id === 'string' &&
+    typeof point.kind === 'string' &&
+    typeof point.status === 'string' &&
+    (point.verifiedAt === null || (typeof point.verifiedAt === 'number' && Number.isSafeInteger(point.verifiedAt)))
+  );
+};
+
 /** What the recovery reader answers for a point that's no longer there */
 const DISCARDED = 'point-discarded';
 
@@ -71,18 +87,21 @@ export const recoveryReadiness = Object.freeze({
     const legacyCopies = context.settings ? await countLegacyCopies(context.settings) : null;
     const legacy = legacyCopies === null ? {} : { records: legacyCopies };
     const listed = /** @type {unknown} */ (await recovery.points());
-    if (!Array.isArray(listed)) throw new TypeError('not a list of points');
+    if (!Array.isArray(listed) || !listed.every(isPoint)) throw new TypeError('not a list of points');
     /** @type {PointSummary[]} */
     const points = [];
     /** @type {string | null} */
     let failedCode = null;
     let failed = 0;
     for (const point of newestVerified(listed)) {
-      const verdict = /** @type {{ok: boolean, code?: string}} */ (await recovery.verify(point.id));
+      const verdict = /** @type {{ok?: unknown, code?: unknown} | null} */ (await recovery.verify(point.id));
+      if (verdict === null || typeof verdict !== 'object' || (verdict.ok !== true && verdict.ok !== false)) {
+        throw new TypeError('not a verdict');
+      }
       // Discarded since it was listed, by #17's run after its own verification: it's gone, not failed
-      if (!verdict.ok && verdict.code === DISCARDED) continue;
+      if (verdict.ok === false && verdict.code === DISCARDED) continue;
       points.push(point);
-      if (!verdict.ok) {
+      if (verdict.ok === false) {
         failed += 1;
         if (failedCode === null && typeof verdict.code === 'string') failedCode = verdict.code;
       }

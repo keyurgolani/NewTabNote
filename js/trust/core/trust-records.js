@@ -1086,13 +1086,20 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
   /** @returns {Promise<RemediationRun[]>} every run, oldest first */
   const runs = async () => /** @type {RemediationRun[]} */ (await readAll('runs', [])).sort(byTime('startedAt'));
 
-  /** @returns {Promise<JournalEvent[]>} every journal event within its bounds, oldest first */
-  const events = async () => {
+  /**
+   * Every journal event within its bounds, oldest first, and whether the store answered, so a
+   * caller can tell an empty journal from one it couldn't read
+   * @returns {Promise<{events: JournalEvent[], ok: boolean}>}
+   */
+  const eventsRead = async () => {
     const cutoff = clock.now() - BOUNDS.journalAgeMs;
-    return /** @type {JournalEvent[]} */ (await readAll('journal', []))
-      .filter(event => event.at >= cutoff)
-      .slice(-BOUNDS.journalEvents);
+    const stored = await readRows('journal');
+    const events = /** @type {JournalEvent[]} */ (stored.rows).filter(event => event.at >= cutoff).slice(-BOUNDS.journalEvents);
+    return { events, ok: stored.ok };
   };
+
+  /** @returns {Promise<JournalEvent[]>} every journal event within its bounds, oldest first, none when the store won't answer */
+  const events = async () => (await eventsRead()).events;
 
   return Object.freeze({
     open,
@@ -1109,6 +1116,7 @@ export function createTrustRecords({ store, settings, clock, ids, locks = null, 
     incidentsRead,
     runs,
     events,
+    eventsRead,
     /** @returns {RecordsState} */
     state: () => state,
     /** @returns {string | null} why NewTabNoteTrust isn't taking writes, as a code */
