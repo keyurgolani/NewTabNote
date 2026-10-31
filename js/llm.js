@@ -156,8 +156,15 @@ class LLMService {
             reject(new Error('Background worker timeout'));
           }, 30000); // 30 second timeout
           
+          // A message never carries a raw credential (#13). The worker and the offscreen
+          // document read only the method and body, so no header goes, whatever its name or
+          // shape. The direct fetch below keeps them.
+          /** @type {{method?: string, body?: string}} */
+          const sent = {};
+          if (options.method !== undefined) sent.method = options.method;
+          if (options.body !== undefined) sent.body = options.body;
           chrome.runtime.sendMessage(
-            { type: 'API_REQUEST', url, options },
+            { type: 'API_REQUEST', url, options: sent },
             (response) => {
               clearTimeout(timeoutId);
               

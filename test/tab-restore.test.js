@@ -70,7 +70,7 @@ async function start(env) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
   tabs.editor = makeEditor(env, env.document, { root: panes['editor-container'] });
   tabs.secondaryEditor = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });
   // App passes its active notes, from Storage.getAllNotes()

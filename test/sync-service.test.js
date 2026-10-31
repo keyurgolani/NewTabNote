@@ -9,7 +9,6 @@ globalThis.confirmDialog = null;
 globalThis.btoa = (s) => Buffer.from(s).toString('base64');
 
 const { SyncService, GoogleDriveProvider, DropboxProvider, WebDAVProvider } = require('../js/services/sync-service.js');
-const { createEventBus } = require('../js/core/event-bus.js');
 
 function createMockStorage() {
   const settings = new Map();
@@ -30,13 +29,12 @@ function createMockLogger() {
 }
 
 describe('SyncService', () => {
-  let service, storage, eventBus, logger;
+  let service, storage, logger;
 
   beforeEach(() => {
     storage = createMockStorage();
-    eventBus = createEventBus();
     logger = createMockLogger();
-    service = new SyncService({ storage, eventBus, logger });
+    service = new SyncService({ storage, logger });
   });
 
   it('initializes with idle state and no provider', async () => {
@@ -90,30 +88,55 @@ describe('SyncService', () => {
     assert.equal(service.getState().status, 'idle');
   });
 
-  it('destroy stops auto sync and drops every listener init added', async () => {
-    // The event bus as the service sees it, counting its listeners per event, so nothing is emitted
-    const bus = createEventBus();
-    const listening = new Map();
-    const counted = {
-      on(event, handler) { listening.set(event, (listening.get(event) || 0) + 1); bus.on(event, handler); },
-      off(event, handler) { listening.set(event, (listening.get(event) || 0) - 1); bus.off(event, handler); },
-      emit: bus.emit,
-    };
-    const watched = new SyncService({ storage, eventBus: counted, logger });
+  it('destroy stops auto sync', async () => {
+    await service.init();
+    service.startAutoSync(60000);
+    assert.notEqual(service._syncInterval, null);
+    service.destroy();
+    assert.equal(service._syncInterval, null);
+  });
+
+  it('applies remote data and tells no one of it, since nothing heard sync:remoteApplied (#13)', async () => {
+    const imported = [];
+    const quiet = new SyncService({ storage: { ...storage, importAll: async (data) => imported.push(data) }, logger });
+    const heard = [];
+    quiet.onStateChanged((event) => heard.push(event));
+    await quiet._applyRemoteData({ version: 1 });
+    assert.deepEqual(imported, [{ version: 1 }]);
+    assert.deepEqual(heard, []);
+  });
+
+  it('tells sync.stateChanged listeners the state without its error text, which getState() still has until #19 (#13)', async () => {
+    await service.init();
+    const heard = [];
+    service.onStateChanged((event) => heard.push(event));
+    await service.sync();
+    assert.deepEqual(heard.map((event) => ({ ...event })), [
+      { type: 'sync.stateChanged', status: 'error', provider: null, pendingChanges: 0, lastSyncAt: null },
+    ]);
+    assert.ok(Object.isFrozen(heard[0]));
+    assert.match(service.getState().errorMessage, /No sync provider/);
+  });
+
+  it('keeps a sync.stateChanged listener that throws from stopping the others, and one that left hears nothing (#13)', async () => {
+    const warnings = [];
+    const watched = new SyncService({ storage, logger: { ...logger, warn: (...args) => warnings.push(args[1]) } });
     await watched.init();
-    assert.ok([...listening.values()].some((n) => n > 0), 'init listens for something');
-    watched.startAutoSync(60000);
-    assert.notEqual(watched._syncInterval, null);
-    watched.destroy();
-    assert.equal(watched._syncInterval, null);
-    assert.deepEqual([...listening].filter(([, n]) => n !== 0), [], 'listeners left after destroy');
+    const heard = [];
+    watched.onStateChanged(() => { throw new Error('a broken listener'); });
+    const leave = watched.onStateChanged(() => heard.push('left'));
+    watched.onStateChanged((event) => heard.push(event.status));
+    leave();
+    await watched.sync();
+    assert.deepEqual(heard, ['error']);
+    assert.equal(warnings.length, 1);
   });
 
   for (const [name, label] of [['gdrive', 'Google Drive'], ['dropbox', 'Dropbox']]) {
     it(`connect('${name}') rejects with not-implemented and connects nothing`, async () => {
       await service.init();
       const changes = [];
-      eventBus.on('sync:stateChanged', (state) => changes.push(state));
+      service.onStateChanged((event) => changes.push(event));
       await assert.rejects(() => service.connect(name), (error) => {
         assert.equal(error.code, 'not-implemented');
         assert.match(error.message, new RegExp(`^${label} sync isn't available yet$`));
@@ -129,12 +152,12 @@ describe('SyncService', () => {
     });
   }
 
-  it('emits sync:stateChanged on disconnect', async () => {
+  it('tells sync.stateChanged listeners of a disconnect', async () => {
     await service.init();
     service.state.provider = 'webdav';
     service.activeProvider = service.providers.webdav;
     let emitted = false;
-    eventBus.on('sync:stateChanged', () => { emitted = true; });
+    service.onStateChanged(() => { emitted = true; });
     await service.disconnect();
     assert.ok(emitted);
   });

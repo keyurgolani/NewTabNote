@@ -107,7 +107,6 @@ function notesManager(env, Storage, { ai, editor, tabs = [] }) {
   const NotesManager = env.get('NotesManager');
   const manager = new NotesManager({
     storage: Storage,
-    eventBus: null,
     domRefs: null,
     logger: quietLogger,
     llm: ai,
@@ -128,7 +127,6 @@ function aiChat(env, Storage, { ai, editor, tabs = [] }) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
     storage: Storage,
-    eventBus: null,
     domRefs: null,
     logger: quietLogger,
     llm: ai,
@@ -596,7 +594,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
     const { env, Storage } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
-    env.load('js/core/event-bus.js', 'js/core/dom-refs.js', 'js/core/logger.js', 'js/search.js', 'js/app.js');
+    env.load('js/core/dom-refs.js', 'js/core/logger.js', 'js/search.js', 'js/app.js');
     const App = env.get('App');
     const listed = async () => plain(await Storage.getAllNotes());
     const sidebar = { notes: await listed(), archivedNotes: [], renders: 0, renderNotesList() { sidebar.renders += 1; } };

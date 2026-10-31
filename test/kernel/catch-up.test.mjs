@@ -263,9 +263,11 @@ describe('catch-up from the commit log (#13, "Idempotency and catch-up")', { tim
     const catchUp = createCatchUp({
       subscribe: () => () => {},
       commitLog: {
+        // It stops saying more after a few reads, so a catch-up without the guard fails here
+        // rather than hanging
         readChangesSince: async cursor => {
           reads += 1;
-          return { kind: 'changes', entries: [], cursor, more: true };
+          return { kind: 'changes', entries: [], cursor, more: reads < 5 };
         },
         head: async () => 3,
       },

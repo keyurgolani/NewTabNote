@@ -500,7 +500,7 @@ function promptDialog(options) {
   document.head.appendChild(style);
 })();
 
-// Dual CommonJS/browser export (same pattern as event-bus.js)
+// Dual CommonJS/browser export (as js/services/sync-service.js does)
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { confirmDialog, promptDialog, choiceDialog };
 } else if (typeof window !== 'undefined') {

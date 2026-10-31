@@ -4,7 +4,6 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
- * @param {EventBus} deps.eventBus
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {Object} deps.llm - The AI port (js/services/ai-port.mjs) the jobs call the provider through
@@ -24,9 +23,8 @@ function notStored(what, outcome) {
 }
 
 class NotesManager {
-  constructor({ storage, eventBus, domRefs, logger, llm, documentClient = null }) {
+  constructor({ storage, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
-    this.eventBus = eventBus;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;

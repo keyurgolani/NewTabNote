@@ -12,8 +12,15 @@ import assert from 'node:assert/strict';
 
 import { principalOf } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { MAX_DEPTH, MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
-import { committed, conflict, failed, rejected, UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
-import { isTransportCode } from '../../js/kernel/core/contracts/transport-codes.js';
+import {
+  committed,
+  conflict,
+  failed,
+  rejected,
+  UnavailableError,
+  unavailable,
+} from '../../js/kernel/core/contracts/outcomes.js';
+import { commandOutcome, isTransportCode } from '../../js/kernel/core/contracts/transport-codes.js';
 import { check, checkResult, readFrame } from '../../js/kernel/core/contracts/validate.js';
 import { createCatchUp } from '../../js/kernel/core/messaging/catch-up.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
@@ -434,6 +441,8 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
         async read(command) {
           const kind = records.get(command.commandId) ?? 'absent';
           if (kind === 'held' || random.chance(0.2)) await new Promise(resolve => held.push(() => resolve(undefined)));
+          // A held record is absent once it answers, so only a resend's answer can settle it
+          if (kind === 'held') return { status: 'absent' };
           if (kind === 'failed') throw new UnavailableError('storage', 'read-failed', true);
           if (kind === 'committed') return { status: 'committed', outcome: committed('fuzzed', []) };
           if (kind === 'conflict') return { status: 'conflict', outcome: conflict('fuzzed', 1) };
@@ -457,8 +466,10 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
         ...scheduler,
         ledger,
       });
-      /** @type {Array<{name: string, settled: number, answer?: unknown}>} */
+      /** @type {Array<{name: string, settled: number, answer?: unknown, commandId?: string}>} */
       const calls = [];
+      /** @type {Map<string, string[]>} what the coordinator answered each command with, as JSON */
+      const sentFor = new Map();
       /** @type {AbortController[]} */
       const controllers = [];
       /** @type {Set<unknown>} */
@@ -473,8 +484,9 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
             random.pick(/** @type {const} */ (['committed', 'conflict', 'failed', 'held', 'absent', 'absent', 'odd'])),
           );
         }
-        /** @type {{name: string, settled: number, answer?: unknown}} */
+        /** @type {{name: string, settled: number, answer?: unknown, commandId?: string}} */
         const entry = { name: base.type, settled: 0 };
+        if (typeof base.commandId === 'string') entry.commandId = base.commandId;
         calls.push(entry);
         const controller = new AbortController();
         controllers.push(controller);
@@ -508,22 +520,43 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
             const requests = last?.requests() ?? [];
             if (!last || requests.length === 0) break;
             const { requestId, payload } = random.pick(requests);
-            const answer = random.pick([
-              () => ({ frame: 'response', requestId, result: committed('fuzzed', []) }),
-              () => ({ frame: 'response', requestId, result: anyValue(random) }),
-              () => ({ frame: 'response', requestId, result: failed('storage', 'fuzzed') }),
-              () => ({
-                frame: 'error',
-                requestId,
-                code: random.pick(['unavailable', 'outcome-unknown', 'invalid-payload']),
-              }),
-              () => ({ frame: 'cancelled', requestId }),
-              () => ({ frame: 'too-late', requestId, outcome: committed('fuzzed', [String(payload?.noteId ?? 'x')]) }),
-            ])();
+            const answer = /** @type {Record<string, any>} */ (
+              random.pick([
+                () => ({ frame: 'response', requestId, result: committed('fuzzed', []) }),
+                () => ({ frame: 'response', requestId, result: anyValue(random) }),
+                () => ({ frame: 'response', requestId, result: failed('storage', 'fuzzed') }),
+                () => ({
+                  frame: 'error',
+                  requestId,
+                  code: random.pick(['unavailable', 'outcome-unknown', 'invalid-payload']),
+                }),
+                () => ({ frame: 'cancelled', requestId }),
+                () => ({
+                  frame: 'too-late',
+                  requestId,
+                  outcome: committed('fuzzed', [String(payload?.noteId ?? 'x')]),
+                }),
+              ])()
+            );
             try {
               last.send(answer);
             } catch {
               // It closed
+              break;
+            }
+            if (typeof payload?.commandId === 'string') {
+              const answers = sentFor.get(payload.commandId) ?? [];
+              if (answer.frame === 'response') answers.push(JSON.stringify(answer.result));
+              if (answer.frame === 'too-late') answers.push(JSON.stringify(answer.outcome));
+              if (answer.frame === 'cancelled' || answer.frame === 'error') {
+                const code = answer.frame === 'cancelled' ? 'cancelled' : answer.code;
+                answers.push(
+                  JSON.stringify(
+                    commandOutcome(/** @type {any} */ (code), { commandId: payload.commandId, mayHaveStarted: false }),
+                  ),
+                );
+              }
+              sentFor.set(payload.commandId, answers);
             }
             break;
           }
@@ -551,12 +584,38 @@ describe('seeded envelope fuzzing (#13, "Test plan")', { timeout: 30_000 }, () =
         for (const go of held.splice(0)) go();
         await settle();
       }
+      /** @type {Map<string, number>} request frames per commandId, across every connection */
+      const sends = new Map();
+      for (const connection of coordinator.connections) {
+        for (const { payload } of connection.requests()) {
+          if (typeof payload?.commandId === 'string')
+            sends.set(payload.commandId, (sends.get(payload.commandId) ?? 0) + 1);
+        }
+      }
       for (const entry of calls) {
         assert.equal(entry.settled, 1, `${entry.name} settled once`);
         assert.ok(
           checkResult(KNOWN[entry.name], entry.answer).ok,
           `${entry.name} answered ${JSON.stringify(entry.answer)}`,
         );
+        if (entry.commandId === undefined) continue;
+        const sent = sends.get(entry.commandId) ?? 0;
+        // The first send and at most one resend with the same key
+        assert.ok(sent <= 2, `${entry.commandId} went ${sent} times`);
+        const record = records.get(entry.commandId);
+        const answer = /** @type {{kind: string}} */ (entry.answer);
+        if (record !== 'held' && record !== 'failed' && record !== 'odd') continue;
+        if (answer.kind === 'unknown') continue;
+        // A record that can't settle anything leaves only the coordinator's answer, or, for a
+        // command that never went, the client's own refusal
+        const fromCoordinator = (sentFor.get(entry.commandId) ?? []).includes(JSON.stringify(answer));
+        const neverWent =
+          sent === 0 &&
+          [
+            JSON.stringify(rejected('validation', 'cancelled')),
+            JSON.stringify(unavailable('coordinator', 'unavailable', true)),
+          ].includes(JSON.stringify(answer));
+        assert.ok(fromCoordinator || neverWent, `${entry.commandId} (${record}) answered ${JSON.stringify(answer)}`);
       }
     }),
   );

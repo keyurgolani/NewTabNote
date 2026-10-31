@@ -5,7 +5,6 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
- * @param {EventBus} deps.eventBus
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  * @param {LLMService} deps.llm
@@ -13,9 +12,8 @@
  *   (js/kernel/composition/document.js): each names its note, and none takes a note record
  */
 class AIChatController {
-  constructor({ storage, eventBus, domRefs, logger, llm, documentClient = null }) {
+  constructor({ storage, domRefs, logger, llm, documentClient = null }) {
     this.storage = storage;
-    this.eventBus = eventBus;
     this.domRefs = domRefs;
     this.logger = logger;
     this.llm = llm;

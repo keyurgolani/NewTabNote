@@ -144,7 +144,6 @@ class App {
     // Sync service
     this.syncService = null;
     // Core infrastructure
-    this.eventBus = null;
     this.domRefs = null;
     this.logger = null;
     // Analytics
@@ -209,7 +208,6 @@ class App {
   async init() {
     try {
       // Initialize core infrastructure
-      this.eventBus = createEventBus();
       this.logger = createLogger();
       this.domRefs = createDomRefs();
 
@@ -607,7 +605,6 @@ class App {
   async initSidebarController() {
     this.sidebarController = new SidebarController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -655,7 +652,6 @@ class App {
   async initTabController() {
     this.tabController = new TabController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -688,7 +684,6 @@ class App {
   async initAIChatController() {
     this.aiChatController = new AIChatController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: LLM,
@@ -731,7 +726,6 @@ class App {
   async initSettingsController() {
     this.settingsController = new SettingsController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -819,7 +813,6 @@ class App {
   async initThemeBuilderController() {
     this.themeBuilderController = new ThemeBuilderController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -836,7 +829,6 @@ class App {
   async initAnalyticsController() {
     this.analyticsController = new AnalyticsController({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -861,7 +853,6 @@ class App {
 
     this.graphView = new GraphView({
       storage: Storage,
-      eventBus: this.eventBus,
       logger: this.logger,
     });
 
@@ -880,15 +871,15 @@ class App {
 
     this.syncService = new SyncService({
       storage: Storage,
-      eventBus: this.eventBus,
       logger: this.logger,
     });
 
     await this.syncService.init();
 
-    // Listen for sync state changes to update UI
-    this.eventBus.on('sync:stateChanged', (state) => {
-      this._updateSyncStatusUI(state);
+    // sync.stateChanged has no error text, so the indicator reads the state, errorMessage
+    // included, from getState() until #19 replaces both
+    this.syncService.onStateChanged(() => {
+      this._updateSyncStatusUI(this.syncService.getState());
     });
 
     // If a provider was previously configured, try reconnecting
@@ -952,7 +943,6 @@ class App {
   async initNotesManager() {
     this.notesManager = new NotesManager({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
       llm: this.ai,
@@ -997,7 +987,6 @@ class App {
   async initShortcutsManager() {
     this.shortcutsManager = new ShortcutsManager({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });
@@ -1041,7 +1030,6 @@ class App {
   async initExportImportService() {
     this.exportImportService = new ExportImportService({
       storage: Storage,
-      eventBus: this.eventBus,
       domRefs: this.domRefs,
       logger: this.logger,
     });

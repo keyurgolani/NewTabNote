@@ -129,11 +129,6 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'PING') {
-    sendResponse({ status: 'ok' });
-    return true;
-  }
-
   if (request.type === 'API_REQUEST') {
     console.debug('Background: Received API_REQUEST for', request.url);
     handleApiRequest(request)

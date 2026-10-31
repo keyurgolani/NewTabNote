@@ -15,13 +15,13 @@ const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(
 
 expectFailure('KD-006 connecting WebDAV stores no plaintext copy of the password', async () => {
   const env = createLegacyEnv();
-  env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/core/event-bus.js', 'js/core/logger.js', 'js/services/sync-service.js');
+  env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/core/logger.js', 'js/services/sync-service.js');
   const storage = env.get('Storage');
   await storage.init();
   // The server answers the connection check
   env.global.fetch = async () => ({ status: 200, ok: true });
   const SyncService = env.get('SyncService');
-  const service = new SyncService({ storage, eventBus: env.get('createEventBus()'), logger: env.get('createLogger("error")') });
+  const service = new SyncService({ storage, logger: env.get('createLogger("error")') });
   await service.init();
 
   const password = canary('webdav');

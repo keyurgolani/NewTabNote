@@ -3,8 +3,8 @@
  * `{aggregate, ids}`, and this context's projections apply those ids. A listener that throws,
  * or returns a promise that rejects, is reported to the logger and never changes the
  * outcome, and neither does a logger that throws while it reports. The feed carries ids only.
- * The kernel emits no note:saved event on the legacy EventBus: sync-service.js listens for
- * one, and #19 decides when it may hear it.
+ * The kernel emits no note:saved event. Nothing listens for one any more (#13 removed
+ * sync-service.js's subscription), and #19 decides how sync hears of commits.
  */
 
 /** @typedef {import('../contracts/commands.js').Aggregate} Aggregate */

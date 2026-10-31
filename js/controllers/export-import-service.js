@@ -5,14 +5,12 @@
  *
  * @param {Object} deps
  * @param {DatabaseManager} deps.storage
- * @param {EventBus} deps.eventBus
  * @param {DomRefs} deps.domRefs
  * @param {Logger} deps.logger
  */
 class ExportImportService {
-  constructor({ storage, eventBus, domRefs, logger }) {
+  constructor({ storage, domRefs, logger }) {
     this.storage = storage;
-    this.eventBus = eventBus;
     this.domRefs = domRefs;
     this.logger = logger;
 

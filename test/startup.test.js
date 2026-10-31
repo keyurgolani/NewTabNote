@@ -21,7 +21,7 @@ const { loadPageModule } = require('./helpers/page-module');
 const TEST_KEY = 'test-only-api-key';
 const STORAGE_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const APP_FILES = [
-  'js/utils.js', 'js/core/storage-error.js', 'js/core/event-bus.js', 'js/core/dom-refs.js', 'js/core/logger.js',
+  'js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js', 'js/core/logger.js',
   'js/ui/export-notice.js', 'js/storage.js', 'js/search.js', 'js/app.js',
 ];
 const GUARD_TITLE = 'Your notes were upgraded by a newer NewTabNote version';

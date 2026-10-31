@@ -114,7 +114,7 @@ async function snapshot(env) {
 
 function makeController(env, Storage) {
   const SettingsController = env.get('SettingsController');
-  return new SettingsController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  return new SettingsController({ storage: Storage, domRefs: null, logger: null });
 }
 
 const fileOf = (data) => new Blob([typeof data === 'string' ? data : JSON.stringify(data)], { type: 'application/json' });
@@ -560,7 +560,7 @@ describe('Replace all (AC4)', () => {
     await reloaded.init();
     await startEditorClient(page);
     page.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
-    const restored = new (page.get('TabController'))({ storage: reloaded, eventBus: null, domRefs: null, logger: null });
+    const restored = new (page.get('TabController'))({ storage: reloaded, domRefs: null, logger: null });
     restored.editor = makeEditor(page, page.document);
     restored.secondaryEditor = makeEditor(page, page.document);
     const activeNotes = await reloaded.getAllNotes();
@@ -777,7 +777,7 @@ async function openEditors(env, Storage) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
   tabs.onCreateNote = () => Storage.createNote('Untitled');
   const primary = makeEditor(env, env.document, { root: panes['editor-container'] });
   const secondary = makeEditor(env, env.document, { root: panes['secondary-editor-container'] });

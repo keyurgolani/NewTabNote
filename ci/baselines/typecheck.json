@@ -32,7 +32,6 @@
         "Cannot find name 'Themes'.": 2,
         "Cannot find name 'confirmDialog'.": 4,
         "Cannot find name 'createDomRefs'.": 1,
-        "Cannot find name 'createEventBus'.": 1,
         "Cannot find name 'createLogger'.": 1,
         "Cannot find name 'promptDialog'.": 1
       },
@@ -132,7 +131,6 @@
         "Cannot find name 'AIPromptTemplates'.": 2,
         "Cannot find name 'AIResponseUtils'.": 4,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ResizablePanel'.": 1,
         "Cannot find name 'SidebarUtils'.": 2,
@@ -167,7 +165,6 @@
       "TS2304": {
         "Cannot find name 'Chart'.": 4,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1
       },
       "TS2322": {
@@ -180,7 +177,6 @@
     "js/controllers/export-import-service.js": {
       "TS2304": {
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1
       },
       "TS2339": {
@@ -191,7 +187,6 @@
       "TS2304": {
         "Cannot find name 'AIResponseUtils'.": 6,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'confirmDialog'.": 1
       },
@@ -203,7 +198,6 @@
       "TS2304": {
         "Cannot find name 'AIResponseUtils'.": 3,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'JSZip'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'Themes'.": 2,
@@ -219,7 +213,7 @@
         "Property 'onAIPromptTemplatesChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'onAISidebarWidthChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'onLLMSettingsChanged' does not exist on type 'SettingsController'.": 2,
-        "Property 'onSidebarStateChanged' does not exist on type 'SettingsController'.": 8,
+        "Property 'onSidebarStateChanged' does not exist on type 'SettingsController'.": 2,
         "Property 'style' does not exist on type 'Element'.": 5,
         "Property 'value' does not exist on type 'EventTarget'.": 8,
         "Property 'value' does not exist on type 'HTMLElement'.": 10
@@ -229,7 +223,6 @@
       "TS2304": {
         "Cannot find name 'CommandPaletteUtils'.": 2,
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ShortcutUtils'.": 2
       },
@@ -245,7 +238,6 @@
     "js/controllers/sidebar-controller.js": {
       "TS2304": {
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ResizablePanel'.": 1,
         "Cannot find name 'SidebarUtils'.": 4,
@@ -270,7 +262,6 @@
     "js/controllers/tab-controller.js": {
       "TS2304": {
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'documentPictureInPicture'.": 1
       },
@@ -284,7 +275,6 @@
     "js/controllers/theme-builder-controller.js": {
       "TS2304": {
         "Cannot find name 'DomRefs'.": 1,
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'Themes'.": 4
       },
@@ -297,11 +287,6 @@
     "js/core/dom-refs.js": {
       "TS2339": {
         "Property 'createDomRefs' does not exist on type 'Window & typeof globalThis'.": 1
-      }
-    },
-    "js/core/event-bus.js": {
-      "TS2339": {
-        "Property 'createEventBus' does not exist on type 'Window & typeof globalThis'.": 1
       }
     },
     "js/core/logger.js": {
@@ -418,7 +403,6 @@
     },
     "js/services/sync-service.js": {
       "TS2304": {
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'confirmDialog'.": 3
       },
@@ -476,7 +460,6 @@
     },
     "js/ui/graph-view.js": {
       "TS2304": {
-        "Cannot find name 'EventBus'.": 1,
         "Cannot find name 'Logger'.": 1
       },
       "TS2339": {

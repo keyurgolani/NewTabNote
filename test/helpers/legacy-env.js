@@ -1148,7 +1148,7 @@ async function bootNewTab(env, { files = NEW_TAB_FILES, ready = true } = {}) {
   panes['editor-container'].className = 'editor-pane active';
   panes['secondary-editor-container'].className = 'editor-pane secondary hidden';
   const TabController = env.get('TabController');
-  const tabs = new TabController({ storage: Storage, eventBus: null, domRefs: null, logger: null });
+  const tabs = new TabController({ storage: Storage, domRefs: null, logger: null });
   // As App's port, the tab of a note saved as a new one follows it
   const navigation = () => ({
     ...quietNavigation(),

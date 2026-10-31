@@ -396,7 +396,11 @@ describe('the notice', () => {
     const { card } = showNotice(env, Storage);
     assert.equal(listeners.length, before + 1);
 
-    listeners.slice().forEach((listener) => listener({ [KEY]: { newValue: { version: 1, outcome: 'dismissed', at: 1 } } }, 'local'));
+    // Another tab writes the choice, and this tab hears which setting changed
+    const recorded = { version: 1, outcome: 'dismissed', at: 1 };
+    await new Promise((resolve) => env.chrome.api.storage.local.set({ [KEY]: recorded }, resolve));
+    listeners.slice().forEach((listener) => listener({ [KEY]: { newValue: recorded } }, 'local'));
+    await waitFor(() => !shown(card));
     assert.equal(shown(card), false);
     assert.equal(listeners.length, before, 'the settings listener is gone');
   });
@@ -448,7 +452,7 @@ describe('the receipt Settings writes after a full export', () => {
     const context = await setup({ files: SETTINGS_FILES });
     const downloads = [];
     context.env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
-    const settings = new (context.env.get('SettingsController'))({ storage: context.Storage, eventBus: null, domRefs: null, logger: null });
+    const settings = new (context.env.get('SettingsController'))({ storage: context.Storage, domRefs: null, logger: null });
     return { ...context, settings, downloads };
   }
 
@@ -510,7 +514,7 @@ describe('the receipt Settings writes after a full export', () => {
 });
 
 describe('focus after the notice closes holding it (App.focusAfterExportNotice)', () => {
-  const APP_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/core/event-bus.js', 'js/core/dom-refs.js',
+  const APP_FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/core/dom-refs.js',
     'js/core/logger.js', 'js/storage.js', 'js/search.js', 'js/app.js'];
 
   /**
