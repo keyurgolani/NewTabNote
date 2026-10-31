@@ -279,6 +279,8 @@ class App {
       const failure = await this.kernel.whenReady();
       if (failure) throw storageFailure(failure);
       this.reportMissingStores();
+      // Every controller exists before init binds a listener, so a click while they start reaches its own
+      this.buildControllers();
 
       // The export notice decides now, before any note renders and before a first note exists
       this.exportNotice = new ExportNotice({
@@ -337,6 +339,10 @@ class App {
         onChange: editorChangeHandler,
         ...this.editorPorts,
       });
+      // Share editor references, and what the PiP editor gets
+      this.tabController.editor = this.editor;
+      this.tabController.secondaryEditor = this.secondaryEditor;
+      this.tabController.editorPorts = this.editorPorts;
 
       // Wire version history button (Req 31.2)
       const versionHistoryBtn = document.getElementById('version-history-btn');
@@ -730,9 +736,15 @@ class App {
   }
 
   /**
-   * Initialize the SidebarController and wire callbacks.
+   * Build every controller and wire its callbacks once the kernel is ready, before init binds a
+   * listener or starts a controller (#12 slice 7a). So each `this.<controller>` App calls
+   * exists from the first click or key on, and one that comes while the later controllers
+   * still start reaches the controller that owns it. The constructors only take their
+   * dependencies, and each controller's init still runs in init's order. A database the tab
+   * can't open stops init before this, as it stopped before the first controller.
+   * @returns {void}
    */
-  async initSidebarController() {
+  buildControllers() {
     this.sidebarController = new SidebarController({
       storage: Storage,
       settings: this.settings,
@@ -741,8 +753,6 @@ class App {
       documentClient: this.documentClient,
     });
 
-    // The note list it renders, once per change
-    this.sidebarController.noteList = this.noteList;
     this.sidebarController.searchEngine = this.searchEngine;
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -763,31 +773,12 @@ class App {
     // Trash, Empty trash, bulk actions, and trash retention take notes out through removeNotes
     this.sidebarController.removal = this.removal;
 
-    await this.sidebarController.init();
-
-    // Sync state back to App for backward compat
-    this.sidebarOpen = this.sidebarController.sidebarOpen;
-    this.sidebarView = this.sidebarController.sidebarView;
-    this.sidebarWidth = this.sidebarController.sidebarWidth;
-    this.sidebarSortMode = this.sidebarController.sidebarSortMode;
-    this.sidebarViewMode = this.sidebarController.sidebarViewMode;
-  }
-
-  /**
-   * Initialize the TabController and wire callbacks.
-   */
-  async initTabController() {
     this.tabController = new TabController({
       storage: Storage,
       settings: this.settings,
       domRefs: this.domRefs,
       logger: this.logger,
     });
-
-    // Share editor references, and what the PiP editor gets
-    this.tabController.editor = this.editor;
-    this.tabController.secondaryEditor = this.secondaryEditor;
-    this.tabController.editorPorts = this.editorPorts;
 
     // Wire callbacks so the controller can trigger App-level actions
     this.tabController.onCreateNote = () => this.createTabNote();
@@ -796,20 +787,6 @@ class App {
     this.tabController.noteList = this.noteList;
     this.tabController.onUpdateEmptyState = () => this.updateEmptyState();
 
-    await this.tabController.init();
-
-    // Sync state back to App for backward compat (openTabs reads the controller's own array)
-    this.activeTabIndex = this.tabController.activeTabIndex;
-    this.splitViewEnabled = this.tabController.splitViewEnabled;
-    this.activeEditorSide = this.tabController.activeEditorSide;
-    this.pipWindow = this.tabController.pipWindow;
-    this.pipEditor = this.tabController.pipEditor;
-  }
-
-  /**
-   * Initialize the AIChatController and wire callbacks.
-   */
-  async initAIChatController() {
     this.aiChatController = new AIChatController({
       storage: Storage,
       settings: this.settings,
@@ -841,19 +818,6 @@ class App {
       if (this.notesManager) this.notesManager.loadEmbeddingsModel();
     };
 
-    await this.aiChatController.init();
-
-    // Sync state back to App for backward compat
-    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
-    this.aiSidebarWidth = this.aiChatController.aiSidebarWidth;
-    this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
-    this.aiInsertPreviewState = this.aiChatController.aiInsertPreviewState;
-  }
-
-  /**
-   * Initialize the SettingsController and wire callbacks.
-   */
-  async initSettingsController() {
     this.settingsController = new SettingsController({
       storage: Storage,
       settings: this.settings,
@@ -934,13 +898,73 @@ class App {
       }
     };
 
-    await this.settingsController.init();
-  }
+    this.notesManager = new NotesManager({
+      storage: Storage,
+      domRefs: this.domRefs,
+      logger: this.logger,
+      llm: this.ai,
+      documentClient: this.documentClient,
+    });
 
-  /**
-   * Initialize the ThemeBuilderController and wire callbacks.
-   */
-  async initThemeBuilderController() {
+    // The note list it reads, and tells when the indexer wrote search entries
+    this.notesManager.noteList = this.noteList;
+    this.notesManager.searchEngine = this.searchEngine;
+
+    // Wire callbacks so the manager can trigger App-level actions
+    this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
+    this.notesManager.onRenderNotesList = () => this.renderNotesList();
+    this.notesManager.removal = this.removal;
+    this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.notesManager.onCreateFirstNote = () => this.createFirstNote();
+    this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
+    this.notesManager.getEditor = () => this.getEditor();
+    this.notesManager.getOpenTabs = () => this.openTabs;
+    this.notesManager.onRenderTabs = () => this.renderTabs();
+    this.notesManager.onSaveTabs = () => this.saveTabs();
+
+    this.shortcutsManager = new ShortcutsManager({
+      storage: Storage,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire callbacks so the manager can trigger App-level actions
+    this.shortcutsManager.onToggleSidebar = () => this.toggleSidebar();
+    this.shortcutsManager.onToggleAISidebar = () => this.toggleAISidebar();
+    this.shortcutsManager.onOpenNewTab = () => this.openNewTab();
+    this.shortcutsManager.onOpenNoteById = (noteId) => this.openNoteById(noteId);
+    this.shortcutsManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+    this.shortcutsManager.onOpenSettingsModal = () => this.openSettingsModal();
+    this.shortcutsManager.onCloseAllModals = () => this.closeAllModals();
+    this.shortcutsManager.onToggleShortcutsModal = () => this.toggleShortcutsModal();
+    // The note list and the empty state show the Daily Note once it's there, with no refresh
+    this.shortcutsManager.onEnsureDailyNote = () => this.ensureDailyNote();
+    this.shortcutsManager.onCycleTab = (dir) => {
+      if (this.tabController) this.tabController.cycleTab(dir);
+    };
+    this.shortcutsManager.onCloseCurrentTab = () => {
+      if (this.tabController) return this.tabController.closeCurrentTab();
+    };
+    this.shortcutsManager.getEditor = () => this.getEditor();
+    this.shortcutsManager.getOpenTabs = () => this.openTabs;
+    this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
+    this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
+
+    this.exportImportService = new ExportImportService({
+      storage: Storage,
+      domRefs: this.domRefs,
+      logger: this.logger,
+    });
+
+    // Wire controller references
+    this.exportImportService.settingsController = this.settingsController;
+    this.exportImportService.notesManager = this.notesManager;
+
+    // Wire App-level callbacks
+    this.exportImportService.getEditor = () => this.getEditor();
+    this.exportImportService.onRefreshNotesList = () => this.refreshNotesList();
+    this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
+
     this.themeBuilderController = new ThemeBuilderController({
       storage: Storage,
       settings: this.settings,
@@ -951,27 +975,81 @@ class App {
     // Wire callbacks so the controller can trigger App-level actions
     this.themeBuilderController.onApplyTheme = () => this.applyTheme();
 
-    await this.themeBuilderController.init();
-  }
-
-  /**
-   * Initialize the AnalyticsController and wire callbacks.
-   */
-  async initAnalyticsController() {
     this.analyticsController = new AnalyticsController({
       storage: Storage,
       domRefs: this.domRefs,
       logger: this.logger,
     });
 
-    // Analytics counts what the note list lists, and reads blocks through the document client
-    this.analyticsController.noteList = this.noteList;
-    Analytics.connect({ noteList: this.noteList, getNoteBlocks: (noteId) => this.documentClient.blocksOf(noteId) });
-
     // Wire callbacks so the controller can query App-level state
     this.analyticsController.onGetSidebarOpen = () => this.sidebarOpen;
     this.analyticsController.onGetAISidebarOpen = () => this.aiSidebarOpen;
+  }
 
+  /**
+   * Start the SidebarController on the tab's note list
+   */
+  async initSidebarController() {
+    // The note list it renders, once per change
+    this.sidebarController.noteList = this.noteList;
+    await this.sidebarController.init();
+
+    // Sync state back to App for backward compat
+    this.sidebarOpen = this.sidebarController.sidebarOpen;
+    this.sidebarView = this.sidebarController.sidebarView;
+    this.sidebarWidth = this.sidebarController.sidebarWidth;
+    this.sidebarSortMode = this.sidebarController.sidebarSortMode;
+    this.sidebarViewMode = this.sidebarController.sidebarViewMode;
+  }
+
+  /**
+   * Start the TabController
+   */
+  async initTabController() {
+    await this.tabController.init();
+
+    // Sync state back to App for backward compat (openTabs reads the controller's own array)
+    this.activeTabIndex = this.tabController.activeTabIndex;
+    this.splitViewEnabled = this.tabController.splitViewEnabled;
+    this.activeEditorSide = this.tabController.activeEditorSide;
+    this.pipWindow = this.tabController.pipWindow;
+    this.pipEditor = this.tabController.pipEditor;
+  }
+
+  /**
+   * Start the AIChatController
+   */
+  async initAIChatController() {
+    await this.aiChatController.init();
+
+    // Sync state back to App for backward compat
+    this.aiSidebarOpen = this.aiChatController.aiSidebarOpen;
+    this.aiSidebarWidth = this.aiChatController.aiSidebarWidth;
+    this.aiPromptTemplates = this.aiChatController.aiPromptTemplates;
+    this.aiInsertPreviewState = this.aiChatController.aiInsertPreviewState;
+  }
+
+  /**
+   * Start the SettingsController
+   */
+  async initSettingsController() {
+    await this.settingsController.init();
+  }
+
+  /**
+   * Start the ThemeBuilderController, after the theme engine
+   */
+  async initThemeBuilderController() {
+    await this.themeBuilderController.init();
+  }
+
+  /**
+   * Start the AnalyticsController, after the first render
+   */
+  async initAnalyticsController() {
+    // Analytics counts what the note list lists, and reads blocks through the document client
+    this.analyticsController.noteList = this.noteList;
+    Analytics.connect({ noteList: this.noteList, getNoteBlocks: (noteId) => this.documentClient.blocksOf(noteId) });
     await this.analyticsController.init();
 
     // Sync state back to App for backward compat
@@ -1069,33 +1147,9 @@ class App {
 
 
   /**
-   * Initialize the NotesManager and wire callbacks.
+   * Start the NotesManager
    */
   async initNotesManager() {
-    this.notesManager = new NotesManager({
-      storage: Storage,
-      domRefs: this.domRefs,
-      logger: this.logger,
-      llm: this.ai,
-      documentClient: this.documentClient,
-    });
-
-    // The note list it reads, and tells when the indexer wrote search entries
-    this.notesManager.noteList = this.noteList;
-    this.notesManager.searchEngine = this.searchEngine;
-
-    // Wire callbacks so the manager can trigger App-level actions
-    this.notesManager.onRefreshNotesList = () => this.refreshNotesList();
-    this.notesManager.onRenderNotesList = () => this.renderNotesList();
-    this.notesManager.removal = this.removal;
-    this.notesManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
-    this.notesManager.onCreateFirstNote = () => this.createFirstNote();
-    this.notesManager.onUpdateEmptyState = () => this.updateEmptyState();
-    this.notesManager.getEditor = () => this.getEditor();
-    this.notesManager.getOpenTabs = () => this.openTabs;
-    this.notesManager.onRenderTabs = () => this.renderTabs();
-    this.notesManager.onSaveTabs = () => this.saveTabs();
-
     await this.notesManager.init();
 
     // Sync state back to App for backward compat
@@ -1107,38 +1161,10 @@ class App {
   }
 
   /**
-   * Initialize the ShortcutsManager and wire callbacks.
+   * Start the ShortcutsManager on the tab's note list
    */
   async initShortcutsManager() {
-    this.shortcutsManager = new ShortcutsManager({
-      storage: Storage,
-      domRefs: this.domRefs,
-      logger: this.logger,
-    });
-
-    // Wire callbacks so the manager can trigger App-level actions
-    this.shortcutsManager.onToggleSidebar = () => this.toggleSidebar();
-    this.shortcutsManager.onToggleAISidebar = () => this.toggleAISidebar();
-    this.shortcutsManager.onOpenNewTab = () => this.openNewTab();
-    this.shortcutsManager.onOpenNoteById = (noteId) => this.openNoteById(noteId);
-    this.shortcutsManager.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
-    this.shortcutsManager.onOpenSettingsModal = () => this.openSettingsModal();
-    this.shortcutsManager.onCloseAllModals = () => this.closeAllModals();
-    this.shortcutsManager.onToggleShortcutsModal = () => this.toggleShortcutsModal();
-    // The note list and the empty state show the Daily Note once it's there, with no refresh
-    this.shortcutsManager.onEnsureDailyNote = () => this.ensureDailyNote();
-    this.shortcutsManager.onCycleTab = (dir) => {
-      if (this.tabController) this.tabController.cycleTab(dir);
-    };
-    this.shortcutsManager.onCloseCurrentTab = () => {
-      if (this.tabController) return this.tabController.closeCurrentTab();
-    };
-    this.shortcutsManager.getEditor = () => this.getEditor();
-    this.shortcutsManager.getOpenTabs = () => this.openTabs;
     this.shortcutsManager.noteList = this.noteList;
-    this.shortcutsManager.getSidebarOpen = () => this.sidebarOpen;
-    this.shortcutsManager.getAISidebarOpen = () => this.aiSidebarOpen;
-
     await this.shortcutsManager.init();
 
     // Sync state back to App for backward compat
@@ -1148,24 +1174,9 @@ class App {
   }
 
   /**
-   * Initialize the ExportImportService and wire controller references.
+   * Start the ExportImportService
    */
   async initExportImportService() {
-    this.exportImportService = new ExportImportService({
-      storage: Storage,
-      domRefs: this.domRefs,
-      logger: this.logger,
-    });
-
-    // Wire controller references
-    this.exportImportService.settingsController = this.settingsController;
-    this.exportImportService.notesManager = this.notesManager;
-
-    // Wire App-level callbacks
-    this.exportImportService.getEditor = () => this.getEditor();
-    this.exportImportService.onRefreshNotesList = () => this.refreshNotesList();
-    this.exportImportService.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
-
     await this.exportImportService.init();
   }
 
