@@ -377,6 +377,38 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
     assert.equal(again.globalChatMessages.length, 2);
   });
 
+  /** AI chat's prompt templates, loaded as App's setup loads them, by id */
+  const loadTemplates = async (env) => {
+    const chat = chatOf(env);
+    chat.renderAIPromptSuggestions = () => {};
+    await chat.loadAIPromptTemplates();
+    return plain(chat.aiPromptTemplates.map((template) => template.id));
+  };
+
+  it('a failed read of the prompt templates shows the defaults and writes nothing over the ones stored (a 1.4.x fix)', async () => {
+    const stored = { aiPromptTemplates: [{ id: 'mine', label: 'Mine', prompt: 'My prompt', scope: 'note', behavior: 'send' }] };
+    const env = await tabWith(stored, { failing: true });
+    const before = env.chrome.writes().length;
+    assert.deepEqual(await loadTemplates(env), DEFAULT_PROMPT_TEMPLATES);
+    assert.equal(readFailures(env), 1);
+    assert.deepEqual(env.chrome.writes().slice(before), [], 'nothing is written');
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates), stored.aiPromptTemplates, 'the stored templates are as they were');
+    // The next read finds them
+    assert.deepEqual(await loadTemplates(env), ['mine']);
+  });
+
+  it('with no prompt templates stored, AI chat shows the defaults and saves them, as 1.4.x did', async () => {
+    const env = await tabWith({});
+    const before = env.chrome.writes().length;
+    assert.deepEqual(await loadTemplates(env), DEFAULT_PROMPT_TEMPLATES);
+    assert.deepEqual(env.chrome.writes().slice(before).map((write) => write.keys), [['setting_aiPromptTemplates']]);
+    assert.deepEqual(plain(env.chrome.local.setting_aiPromptTemplates.map((template) => template.id)), DEFAULT_PROMPT_TEMPLATES);
+    // Saved once: the next read finds them, and writes nothing
+    const again = env.chrome.writes().length;
+    assert.deepEqual(await loadTemplates(env), DEFAULT_PROMPT_TEMPLATES);
+    assert.equal(env.chrome.writes().length, again);
+  });
+
   it('a custom theme the page starts on, and the theme options, come from the themes the port lists', async () => {
     const env = await tabWith({});
     const themeId = await env.settingsClient.saveTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
