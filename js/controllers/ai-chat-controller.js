@@ -2231,7 +2231,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       await this.llm.setProvider(provider);
       // The new provider's key, which is none unless one was saved for it: the old provider's
       // key is never shown for it, nor sent to it to list its models (#21)
-      document.querySelectorAll('#llm-api-key').forEach(el => { el.value = this.llm.apiKey; });
+      /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#llm-api-key')).forEach(el => { el.value = this.llm.apiKey; });
       this.updateLLMSettingsVisibility(provider);
       await this.loadAndPopulateModels(provider, this.llm.apiKey);
       this.updateAISidebarState();

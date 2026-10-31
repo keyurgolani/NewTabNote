@@ -54,6 +54,9 @@ export const DESTINATIONS = Object.freeze([
 ]);
 
 /** The largest body a proxied request may carry: a long chat with its context */
+/** Ollama's URL with nothing stored, as js/llm.js defaults it */
+const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
+
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /** The only hosts that are local */
@@ -85,12 +88,30 @@ export function loopbackOrigin(ollamaUrl) {
 }
 
 /**
+ * The stored Ollama URL's loopback origin (loopbackOrigin), the one local origin a request may
+ * reach, or null. The worker reads it per request, so a URL changed in Settings applies to the
+ * next one; the offscreen document has no chrome.storage and takes the origin the worker checked.
+ * @param {{get(keys: string[]): Promise<Record<string, unknown>>}} [settings] - chrome.storage.local
+ *   unless a test passes another
+ * @returns {Promise<string | null>}
+ */
+export async function storedLoopbackOrigin(settings = { get: keys => chrome.storage.local.get(keys) }) {
+  try {
+    const stored = await settings.get(['setting_ollamaUrl']);
+    const url = stored && stored.setting_ollamaUrl !== undefined ? stored.setting_ollamaUrl : DEFAULT_OLLAMA_URL;
+    return loopbackOrigin(url);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether `sender` is this extension: its id, and a URL on its own origin
  * @param {unknown} sender
- * @param {string} extensionId
+ * @param {string | undefined} [extensionId] - chrome.runtime.id unless a test passes another
  * @returns {boolean}
  */
-export function isOwnSender(sender, extensionId) {
+export function isOwnSender(sender, extensionId = globalThis.chrome?.runtime?.id) {
   if (sender === null || typeof sender !== 'object' || typeof extensionId !== 'string' || extensionId === '') return false;
   const { id, url } = /** @type {{id?: unknown, url?: unknown}} */ (sender);
   if (id !== extensionId) return false;

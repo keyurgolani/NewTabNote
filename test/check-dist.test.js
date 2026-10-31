@@ -163,8 +163,8 @@ describe('scripts/check-dist.js', () => {
       'js/main.js imports "https://cdn.example.test/x.js", which is a URL, not a file in the package');
     assertFails(run(packageCopy({ 'js/main.js': text => `import '../../outside.js';\n${text}` })),
       'js/main.js imports "../../outside.js", which resolves outside the package');
-    assertFails(run(packageCopy({ 'js/offscreen.js': text => `import './utils.js';\n${text}` })),
-      'offscreen.html loads js/offscreen.js as a classic script, but it has import or export statements');
+    assertFails(run(packageCopy({ 'js/insights-summary.js': text => `import './utils.js';\n${text}` })),
+      'sidepanel.html loads js/insights-summary.js as a classic script, but it has import or export statements');
   });
 
   it('follows a classic service worker through importScripts, as the 1.4.x worker loads', () => {

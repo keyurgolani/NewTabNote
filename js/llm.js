@@ -61,14 +61,16 @@ const PROVIDER_ENDPOINTS = {
  * @returns {string}
  */
 function ollamaOriginsCommand() {
-  let origin = "chrome-extension://<this extension's ID>";
-  try {
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) origin = `chrome-extension://${chrome.runtime.id}`;
-  } catch {
-    // No extension context: the placeholder says what to put
-  }
+  const id = /** @type {{chrome?: {runtime?: {id?: string}}}} */ (globalThis).chrome?.runtime?.id;
+  // With no extension context, the placeholder says what to put
+  const origin = id ? `chrome-extension://${id}` : "chrome-extension://<this extension's ID>";
   return `OLLAMA_ORIGINS=${origin} ollama serve`;
 }
+
+/**
+ * The legacy Storage global's setting write, as js/storage.js defines it
+ * @typedef {{setSetting(key: string, value: unknown): Promise<void>}} SettingWriter
+ */
 
 class LLMService {
   constructor() {
@@ -88,17 +90,28 @@ class LLMService {
 
   async init() {
     this.provider = await Storage.getSetting('llmProvider', 'none');
-    this.savedKey = await Storage.getSetting('llmApiKey', '');
-    this.keyProvider = await Storage.getSetting('llmApiKeyProvider', null);
+    // The rest, each with its default as before; the endpoint's depends on the provider
+    const stored = {};
+    for (const [key, fallback] of Object.entries({
+      llmApiKey: '',
+      llmApiKeyProvider: null,
+      llmModel: '',
+      llmEndpoint: this.getDefaultEndpointForProvider(this.provider),
+      ollamaUrl: 'http://localhost:11434',
+    })) {
+      stored[key] = await Storage.getSetting(key, fallback);
+    }
+    this.savedKey = stored.llmApiKey;
+    this.keyProvider = stored.llmApiKeyProvider;
     // 1.4.x saved one key with no provider: it belongs to the provider it's used with now
     if (this.savedKey && !this.keyProvider && this.provider !== 'none') {
       this.keyProvider = this.provider;
-      await Storage.setSetting('llmApiKeyProvider', this.keyProvider);
+      await /** @type {SettingWriter} */ (/** @type {unknown} */ (Storage)).setSetting('llmApiKeyProvider', this.keyProvider);
     }
     this.apiKey = this.keyFor(this.provider);
-    this.model = await Storage.getSetting('llmModel', '');
-    this.endpoint = await Storage.getSetting('llmEndpoint', this.getDefaultEndpointForProvider(this.provider));
-    this.ollamaUrl = await Storage.getSetting('ollamaUrl', 'http://localhost:11434');
+    this.model = stored.llmModel;
+    this.endpoint = stored.llmEndpoint;
+    this.ollamaUrl = stored.ollamaUrl;
   }
 
   /**
@@ -728,7 +741,7 @@ class LLMService {
     this.savedKey = apiKey;
     this.keyProvider = apiKey ? this.provider : null;
     await Storage.setSetting('llmApiKey', apiKey);
-    await Storage.setSetting('llmApiKeyProvider', this.keyProvider);
+    await /** @type {SettingWriter} */ (/** @type {unknown} */ (Storage)).setSetting('llmApiKeyProvider', this.keyProvider);
     
     // Clear cached models to force refresh with new key
     delete this.cachedModels[this.provider];
