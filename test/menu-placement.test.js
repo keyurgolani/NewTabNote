@@ -10,7 +10,8 @@
 //
 // The editor's menus follow (#95's review): the slash, link, and template menus, a block's
 // menu and its Turn into, the Turn into for blocks selected together, and a table's menu.
-// Each opens beside what it opens from (Utils.menuBeside), or at the pointer for the table's,
+// Each opens beside what it opens from (Utils.menuBeside, and Utils.submenuBeside for a
+// block's Turn into), or at the pointer for the table's,
 // flips to the other side when it doesn't fit, is pulled in from an edge otherwise, and is
 // placed in the task that shows it, measured hidden first, never a frame later. A window
 // shorter than a menu gets one that scrolls (css/editor.css).
@@ -262,17 +263,24 @@ describe('Utils.menuBeside', () => {
   });
 
   it('above, it opens above when it fits there and below when only that fits, and keeps its top in a window too short for either', () => {
-    assert.deepEqual(beside(rect(600, 836, 690, 864), SUBMENU, VIEWPORT, { side: 'above', gap: 8 }), { left: 600, top: 836 - 8 - SUBMENU.height });
-    assert.deepEqual(beside(rect(600, 100, 690, 128), SUBMENU, VIEWPORT, { side: 'above', gap: 8 }), { left: 600, top: 128 + 8 });
+    assert.deepEqual(beside(rect(600, 836, 690, 864), SUBMENU, VIEWPORT, { above: true, gap: 8 }), { left: 600, top: 836 - 8 - SUBMENU.height });
+    assert.deepEqual(beside(rect(600, 100, 690, 128), SUBMENU, VIEWPORT, { above: true, gap: 8 }), { left: 600, top: 128 + 8 });
     const short = { width: 1440, height: 300 };
-    assert.equal(beside(rect(600, 236, 690, 264), SUBMENU, short, { side: 'above', gap: 8 }).top, MARGIN);
+    assert.equal(beside(rect(600, 236, 690, 264), SUBMENU, short, { above: true, gap: 8 }).top, MARGIN);
   });
+});
 
-  it("to the right, a submenu flips to the left near the right edge, comes in from it when neither side fits, and moves up near the bottom", () => {
-    assert.deepEqual(beside(rect(400, 300, 560, 332), SUBMENU, VIEWPORT, { side: 'right' }), { left: 564, top: 300 });
-    assert.deepEqual(beside(rect(1262, 646, 1426, 678), SUBMENU, VIEWPORT, { side: 'right' }), { left: 1262 - 4 - SUBMENU.width, top: VIEWPORT.height - SUBMENU.height - MARGIN });
+describe('Utils.submenuBeside', () => {
+  const utils = page(menuDocument(MENU), []).get('Utils');
+  const beside = (...args) => ({ ...utils.submenuBeside(...args) });
+  const SUBMENU = { width: 180, height: 360 };
+  const rect = (left, top, right, bottom) => ({ left, top, right, bottom, width: right - left, height: bottom - top });
+
+  it('opens past its item, tops lined up, flips before it near the right edge, comes in from that edge when neither side fits, and moves up near the bottom', () => {
+    assert.deepEqual(beside(rect(400, 300, 560, 332), SUBMENU, VIEWPORT), { left: 564, top: 300 });
+    assert.deepEqual(beside(rect(1262, 646, 1426, 678), SUBMENU, VIEWPORT), { left: 1262 - 4 - SUBMENU.width, top: VIEWPORT.height - SUBMENU.height - MARGIN });
     const narrow = { width: 360, height: 640 };
-    const position = beside(rect(14, 360, 178, 392), SUBMENU, narrow, { side: 'right' });
+    const position = beside(rect(14, 360, 178, 392), SUBMENU, narrow);
     assert.deepEqual(position, { left: narrow.width - SUBMENU.width - MARGIN, top: narrow.height - SUBMENU.height - MARGIN });
     assert.ok(inside(position, SUBMENU, narrow));
   });
