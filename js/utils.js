@@ -12,6 +12,29 @@ const Utils = {
   },
 
   /**
+   * A note's blocks in the order they were made, as a new array, for the readers that list them
+   * that way: the editor's template insert, and the search index's and the embeddings' text
+   * (NotesManager). 1.4.x read them by id, and each id began with the time generateId made it.
+   * Since #17 PR 2a a new block's id can be a UUID, which says nothing of time. So the key is the
+   * time in the id when it has generateId's form, else the block's createdAt, else its order (a
+   * capture's order is when it was captured); then its order, then its id.
+   * @param {Array<Object>} blocks - block records, each with its id, and createdAt and order when it has them
+   * @returns {Array<Object>} the same records, sorted
+   */
+  inCreationOrder(blocks) {
+    const numberOr = (value, otherwise) => (typeof value === 'number' && Number.isFinite(value) ? value : otherwise);
+    const keyed = blocks.map((block) => {
+      const id = String(block.id);
+      const timed = /^(\d{13})-[0-9a-z]*$/.exec(id);
+      const order = numberOr(block.order, null);
+      const made = timed ? Number(timed[1]) : numberOr(block.createdAt, order === null ? 0 : order);
+      return { block, id, made, order: order === null ? 0 : order };
+    });
+    keyed.sort((a, b) => a.made - b.made || a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return keyed.map(({ block }) => block);
+  },
+
+  /**
    * Deep clone an object
    * @param {*} obj - The object to clone
    * @returns {*} A deep copy of the object

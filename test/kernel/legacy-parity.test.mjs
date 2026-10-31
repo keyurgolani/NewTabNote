@@ -261,7 +261,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
         );
       }
       // Each side gives its blocks its own ids and orders them by the time they landed, which
-      // two captures in one millisecond share, so they line up by type
+      // two captures in one millisecond share, so they line up by type. Since #17 PR 2a that
+      // time is each block's createdAt and updatedAt too, read as 'written' on both sides.
       /** @param {any[]} list */
       const blocks = list =>
         list
@@ -269,7 +270,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           .sort((a, b) => (a.type < b.type ? -1 : 1));
       const { elements } = await recordsIn(viaKernel, ['elements']);
       assert.equal(day && day.blocks.length, 2);
-      assert.deepEqual(blocks(Object.values(elements)), blocks(legacyEnv.plain(day.blocks)));
+      assert.deepEqual(blocks(Object.values(elements)), blocks(stamped(legacyEnv.plain(day.blocks))));
     },
   );
 
