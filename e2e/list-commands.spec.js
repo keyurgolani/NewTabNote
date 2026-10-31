@@ -24,21 +24,27 @@ function storedNotes(page) {
 }
 
 /**
- * Count the full reloads of the note lists from here on: App's refresh and the sidebar's, the
- * only ways the page reads every list again. None of these writes should need one.
+ * Count the full reloads of the note lists from here on: the note list's reload, the one way
+ * the page reads every list again, whoever asks for it (the sidebar, another tab's change,
+ * Settings, Stats). None of these writes should need one.
  */
 async function countReloads(page) {
   await page.evaluate(() => {
     window.__ntnReloads = 0;
-    const count = (target, name) => {
-      const original = target[name].bind(target);
-      target[name] = (...args) => {
-        window.__ntnReloads += 1;
-        return original(...args);
-      };
-    };
-    count(app, 'refreshNotesList');
-    count(app.sidebarController, 'reloadLists');
+    const list = app.noteList;
+    const counted = Object.create(list, {
+      reload: {
+        value: (...args) => {
+          window.__ntnReloads += 1;
+          return list.reload(...args);
+        },
+      },
+    });
+    // The note list as each holder reads it. The sidebar's setter would subscribe it again.
+    for (const holder of [app, app.tabController, app.settingsController, app.aiChatController, app.notesManager, app.analyticsController]) {
+      holder.noteList = counted;
+    }
+    app.sidebarController._noteList = counted;
   });
 }
 

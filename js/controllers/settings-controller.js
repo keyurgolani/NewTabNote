@@ -27,7 +27,8 @@ class SettingsController {
     this.onApplyTheme = null;
     this.onOpenThemeBuilder = null;
     this.onCloseAllModals = null;
-    this.onRefreshNotesList = null;
+    /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
+    this.noteList = null;
     /** @type {((noteId: string) => Promise<void>)|null} After Merge: open a note it imported, unless a pane can't take it */
     this.onOpenImportedNote = null;
     this.getEditor = null;
@@ -39,6 +40,8 @@ class SettingsController {
     this.removal = null;
     this.onUpdateAISidebarState = null;
     this.onRenderNotesList = null;
+    /** @type {(() => Promise<void>)|null} After its notes list opened a note: the sidebar marks it, and the empty state goes */
+    this.onNoteOpened = null;
     this.onUpdateSmartSuggestions = null;
     this.onRenderAIPromptTemplateSettings = null;
     /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
@@ -627,7 +630,10 @@ class SettingsController {
 
       item.addEventListener('click', async () => {
         if (editor) await editor.loadNote(note.id);
-        if (this.onRefreshNotesList) await this.onRefreshNotesList();
+        // This list reads storage fresh, so the note may be one another tab made: the lists read
+        // again, and App shows it (onNoteOpened)
+        if (this.noteList) await this.noteList.reload();
+        if (this.onNoteOpened) await this.onNoteOpened();
         document.getElementById('settings-modal').classList.add('hidden');
       });
 
@@ -930,8 +936,9 @@ class SettingsController {
       const noteId = await this._firstActiveNote(result.importedIds);
       if (noteId) await this.onOpenImportedNote(noteId);
     });
+    // The lists have the notes from the import's commit; they read again for the folders it added
     const listed = await this._afterImport(async () => {
-      if (this.onRefreshNotesList) await this.onRefreshNotesList();
+      if (this.noteList) await this.noteList.reload();
     });
     if (!resumed || !opened || !listed) {
       Utils.showToast("Your notes were imported, but this page didn't finish updating. Reload it to see them.", 'error', 6000);

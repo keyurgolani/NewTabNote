@@ -636,11 +636,11 @@ describe('a note leaving the active set in another new tab', () => {
       const one = await openPage(first, { open: ['B'] }); // the tab in use, saved last
 
       await runUntil(first, act(one, first));
-      await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the lists to refresh' }));
+      await runUntil(second, waitFor(() => two.page.refreshes === 1, { message: 'the lists to refresh' }));
       assert.equal(two.tabs.editor.noteId, 'A', 'the pane stays, as 1.4.0 did');
       assert.deepEqual(tabIds(two.tabs), ['C', 'A']);
       assert.equal(two.tabs.activeTabIndex, 1);
-      assert.equal(two.page.refreshes, 1, 'lists only, nothing else');
+      assert.equal(two.page.refreshes, 1, 'the lists read again once, and nothing else moved');
       assert.ok(!two.page.notes.some((n) => n.id === 'A'), 'the list no longer shows Alpha');
       const workspace = savedTabs(first);
       assert.ok(!workspace.includes('C'), "the saved workspace is the first tab's");
@@ -683,7 +683,7 @@ describe('a note leaving the active set in another new tab', () => {
 
       await runUntil(first, act(one, first));
       assert.equal((await stored(first)).notes.TR, undefined, 'deleted');
-      await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the lists to refresh' }));
+      await runUntil(second, waitFor(() => two.page.refreshes === 1, { message: 'the lists to refresh' }));
       const editor = two.tabs.editor;
       assert.equal(editor.noteId, 'TR', 'the pane stays');
       assert.deepEqual(tabIds(two.tabs), ['A', 'TR']);
@@ -827,7 +827,7 @@ describe('a note leaving the active set in another new tab', () => {
     const notes = one.wire(controllers.notes(first, one.Storage));
     await runUntil(first, notes.trashNoteById('A'));
     await runUntil(first, notes.archiveNote('B'));
-    await runUntil(second, waitFor(() => two.page.listsOnly === 2, { message: 'both refreshes' }));
+    await runUntil(second, waitFor(() => two.page.refreshes === 2, { message: 'both refreshes' }));
     assert.deepEqual(tabIds(two.tabs), ['A', 'B', 'C']);
 
     for (const [index, noteId, flag] of [[0, 'A', 'trashed'], [1, 'B', 'archived']]) {
@@ -848,7 +848,7 @@ describe('a note leaving the active set in another new tab', () => {
     const notes = one.wire(controllers.notes(first, one.Storage));
 
     await runUntil(first, notes.trashNoteById('D'));
-    await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the other tab to hear of it' }));
+    await runUntil(second, waitFor(() => two.page.refreshes === 1, { message: 'the other tab to hear of it' }));
 
     assert.deepEqual(savedTabs(first), ['A', 'B']);
     assert.equal(first.chrome.local.setting_activeTabIndex, 1);
@@ -873,9 +873,9 @@ describe('a note leaving the active set in another new tab', () => {
 
     // It read its lists before the message came, so they refresh once, as it gets its workspace
     two.tabs.workspaceReady();
-    await runUntil(second, waitFor(() => two.page.listsOnly === 1, { message: 'the refresh for the message' }));
+    await runUntil(second, waitFor(() => two.page.refreshes === 1, { message: 'the refresh for the message' }));
     two.tabs.workspaceReady();
     await runUntil(second, settle(20));
-    assert.equal(two.page.listsOnly, 1, 'once');
+    assert.equal(two.page.refreshes, 1, 'once');
   });
 });

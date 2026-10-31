@@ -223,7 +223,6 @@ function aiChat(env, editor) {
   const indexed = [];
   Object.assign(chat, {
     getEditor: () => editor,
-    onRefreshNotesList: async () => {},
     // NotesManager's indexing, as App hands it over
     indexing: { noteChanged: (noteId) => indexed.push(noteId), loadEmbeddingsModel() {} },
     onOpenNoteInNewTab: async () => {},

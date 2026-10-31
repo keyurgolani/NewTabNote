@@ -215,12 +215,12 @@ describe('one note list per new tab', () => {
       Promise.resolve(promise).then(() => `${what} finished`),
       new Promise((resolve) => setTimeout(() => resolve(`${what} hung`), 3000)),
     ]);
-    // Archive, as NotesManager.archiveNote does it: the legacy write, then App's refresh
+    // A write made outside the kernel, which the lists read again with the note list's reload
     await Storage.archiveNote('A');
-    assert.equal(await within('archive', app.refreshNotesList()), 'archive finished');
-    // Another tab's change, which reaches this one as a lists-only refresh
+    assert.equal(await within('archive', noteList.reload()), 'archive finished');
+    // Another tab's change, which reaches this one the same way (TabController._onNotesLeftElsewhere)
     await Storage.trashNote('C');
-    assert.equal(await within('cross-tab', app.refreshNotesList({ listsOnly: true })), 'cross-tab finished');
+    assert.equal(await within('cross-tab', noteList.reload()), 'cross-tab finished');
     // Stats
     env.document.stub(['stat-total-notes', 'stat-total-words', 'stat-daily-notes', 'stat-active-tags']);
     env.global.Chart = class { destroy() {} };
@@ -249,7 +249,7 @@ describe('one note list per new tab', () => {
   });
 
   it('opening Stats leaves the sidebar alone, and only its own refresh starts the virtual scroller over', async () => {
-    const { env, Storage, noteList, sidebar, analytics, app } = await openPage();
+    const { env, Storage, noteList, sidebar, analytics } = await openPage();
     // An Archive view long enough for the virtual scroller
     for (let i = 0; i < 55; i++) await Storage.archiveNote((await Storage.createNote(`Archived ${i}`)).id);
     sidebar.sidebarView = 'archive';
@@ -264,8 +264,10 @@ describe('one note list per new tab', () => {
     await analytics.renderAnalytics();
     assert.equal(renders, 0, 'opening Stats renders no sidebar');
     assert.equal(sidebar.virtualScroller, scroller);
-    // App's refresh renders, as it always did, and keeps the scroller
-    await app.refreshNotesList();
+    // Another tab's change reaches the lists through the note list's reload, which renders them
+    // and keeps the scroller, as App's refresh did
+    await Storage.createNote('From another tab');
+    await noteList.reload();
     assert.equal(renders, 1);
     assert.equal(sidebar.virtualScroller, scroller);
     // A commit renders, and keeps it too
@@ -278,6 +280,76 @@ describe('one note list per new tab', () => {
     assert.equal(renders, 3);
     assert.ok(sidebar.virtualScroller && sidebar.virtualScroller !== scroller);
     assert.equal(noteList.state().kind, 'ready');
+  });
+
+  it("App's empty state follows this tab's commits, and another tab's change, which comes as a reload, leaves it", async () => {
+    const { env, Storage, noteList, app } = await openPage();
+    // App's own, on the page's elements, following the list as init has it do
+    delete app.updateEmptyState;
+    const els = env.document.stub(['empty-state', 'editor-container', 'note-tabs']);
+    els['empty-state'].classList.add('hidden');
+    app.followEmptyState();
+    const shown = () => !els['empty-state'].classList.contains('hidden');
+    const run = async (command) => {
+      const outcome = await env.kernel.execute({ ...command, commandId: env.kernel.ids.next() });
+      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+      await noteList.settled();
+    };
+
+    // This tab moves every active and archived note to trash: the last one shows the empty state
+    for (const noteId of ['A', 'B', 'C', 'D']) await run({ type: 'trashNote', noteId });
+    assert.equal(shown(), false, 'an archived note is left');
+    await run({ type: 'trashNote', noteId: 'R' });
+    assert.equal(shown(), true, 'none is left');
+    assert.equal(els['editor-container'].classList.contains('hidden'), true);
+
+    // Another tab restores one, which this tab hears of only through a reload: the lists have
+    // it, and the editor area stays as it is
+    await Storage.restoreNote('A');
+    await noteList.reload();
+    assert.deepEqual(ids(noteList.view('active')), ['A']);
+    assert.equal(shown(), true);
+
+    // This tab restores another, and the empty state goes
+    await run({ type: 'restoreNote', noteId: 'B' });
+    assert.equal(shown(), false);
+    assert.equal(els['editor-container'].classList.contains('hidden'), false);
+  });
+
+  it("a note another tab made, opened from Settings' notes list, takes the empty state away, as App's refresh did", async () => {
+    const { env, Storage, noteList, app } = await openPage();
+    delete app.updateEmptyState;
+    const els = env.document.stub(['empty-state', 'editor-container', 'note-tabs', 'pages-list', 'settings-modal']);
+    els['empty-state'].classList.add('hidden');
+    app.followEmptyState();
+    const shown = () => !els['empty-state'].classList.contains('hidden');
+    for (const noteId of ['A', 'B', 'C', 'D', 'R']) {
+      const outcome = await env.kernel.execute({ type: 'trashNote', noteId, commandId: env.kernel.ids.next() });
+      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+    }
+    await noteList.settled();
+    assert.equal(shown(), true, 'no note is left');
+
+    // Settings' notes list, wired as App wires it, reads the note another tab made, fresh
+    env.load('js/controllers/settings-controller.js');
+    const settings = new (env.get('SettingsController'))({
+      settings: env.settingsClient, documentClient: env.documentClient, validateBackup: null, domRefs: null, logger: null,
+    });
+    const editor = { noteId: null, async loadNote(noteId) { this.noteId = noteId; } };
+    settings.getEditor = () => editor;
+    settings.noteList = noteList;
+    settings.onNoteOpened = () => app.showOpenedNote();
+    await Storage.createNote('From another tab');
+    await settings.updateNotesList();
+    const item = els['pages-list'].querySelectorAll('.page-item')
+      .find((el) => el.querySelector('.page-item-name').textContent === 'From another tab');
+    item.click();
+
+    await waitFor(() => !shown(), { message: 'the empty state goes' });
+    assert.ok(noteList.view('active').some((record) => record.name === 'From another tab'), 'the lists read it');
+    assert.equal(els['editor-container'].classList.contains('hidden'), false);
+    assert.equal(els['settings-modal'].classList.contains('hidden'), true);
+    assert.equal(editor.noteId, noteList.view('active')[0].id, 'the editor has it');
   });
 
   it('the open palette keeps the selected note selected when a commit moves it', async () => {
