@@ -92,7 +92,7 @@ describe('a load cut off', () => {
 
   it("in a store's second batch, by a record with no key: that batch is out, and the first batch of the same store stays committed", async () => {
     const { fixture } = maximalFixture(await productionInputs());
-    const elements = /** @type {any} */ (fixture.databases[0].stores.find(store => store.name === 'elements'));
+    const elements = /** @type {any} */ (fixture.databases[0].stores.find((/** @type {any} */ store) => store.name === 'elements'));
     // The loader writes 100 records per transaction, so record 106 is in the second
     assert.ok(elements.records.length > 105);
     delete elements.records[105].value.id;

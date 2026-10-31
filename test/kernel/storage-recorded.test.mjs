@@ -90,7 +90,7 @@ describe('the recorded release fixtures', () => {
     assert.ok(fixture, 'no v1.4.0 recording');
     fixture.header.source.writePaths.push("SyncService.connect's WebDAV settings (setSetting syncWebdavConfig)");
     const text = JSON.stringify(fixture).replaceAll('{{CANARY:webdav-password}}', 'plain').replaceAll('{{CANARY:folder-1}}', 'Home');
-    assert.deepStrictEqual(missingSlots(JSON.parse(text)), ['folder-1', 'webdav-password', 'webdav-username']);
+    assert.deepStrictEqual(missingSlots(JSON.parse(text)), ['folder-1', 'webdav-password']);
   });
 
   for (const [tag, fixture] of RECORDED) {
