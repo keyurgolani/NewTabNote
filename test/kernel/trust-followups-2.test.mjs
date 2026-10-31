@@ -353,9 +353,9 @@ describe("#75's follow-ups (part 2)", () => {
     const store = {
       open: () => database.open(),
       close: () => database.close(),
-      // Only the event's own append fails: a write to the journal alone
+      // Only the event's own append fails: the write that touches the journal
       run: (stores, mode, unit) => {
-        if (failAppend && mode === 'readwrite' && stores.length === 1 && stores[0] === 'journal') {
+        if (failAppend && mode === 'readwrite' && stores.includes('journal')) {
           failAppend = false;
           return Promise.reject(new UnavailableError('storage', 'unreadable', false));
         }

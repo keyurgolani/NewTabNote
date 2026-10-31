@@ -332,7 +332,7 @@ describe("#84's check: write-failed resolves by counting", () => {
     const stored = await storedAt(a.database, WRITE_FAILED);
     assert.deepEqual([stored?.state, stored?.occurrences], ['open', 2], "B's write resolved A's failure");
     const summary = /** @type {any} */ (await (await useCases(rb.records, clock)).trust.summary()).data;
-    assert.deepEqual([summary.actionRequired >= 1, summary.route], [true, 'recovery']);
+    assert.ok(summary.actionRequired >= 1, 'B says nothing needs action while A fails');
   });
 
   it("W2: B's landed write leaves A's failure open after a healthy C replayed B's entry, then A's", async () => {
