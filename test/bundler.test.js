@@ -145,7 +145,24 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     // Both passes write into the one staging directory, which the build empties itself
     for (const pass of [pages, background]) assert.deepEqual([pass.build.outDir, pass.build.emptyOutDir], ['/repo/.dist-staging-x', false]);
     // Chrome 116 has modulepreload, so the polyfill would only add code
-    assert.deepEqual(pages.build.modulePreload, { polyfill: false });
+    assert.equal(pages.build.modulePreload.polyfill, false);
+  });
+
+  it("preloads nothing beside close-drafts-chunk, which Popup and Side Panel import on a start that finds a draft, and every other import's own list (#33, the lead's trim 2)", () => {
+    const { resolveDependencies } = config.pagesConfig(passOptions()).build.modulePreload;
+    const deps = ['assets/close-drafts-BkxcNLcj.js', 'assets/checks-RYHEq65f.js', 'assets/host-Bn7ueUNG.js'];
+    for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/close-drafts-on-demand-q82KhsV5.js']) {
+      assert.deepEqual(resolveDependencies('assets/close-drafts-chunk-B9pzC2hb.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
+    }
+    // The applier the chunk imports, the new tab's lazy chunks, and a page's own entry keep theirs
+    for (const [filename, hostType] of [
+      ['assets/close-drafts-BkxcNLcj.js', 'js'],
+      ['assets/workspace-6rz5AjPO.js', 'js'],
+      ['assets/trust-BxBa-zUr.js', 'js'],
+      ['assets/newtab-DctDvCBY.js', 'html'],
+    ]) {
+      assert.deepEqual(resolveDependencies(filename, [...deps], { hostId: 'assets/newtab-DctDvCBY.js', hostType }), deps, filename);
+    }
   });
 
   it("minifies JavaScript with terser in production only and CSS with lightningcss in both, writes no source map, reads no config or .env file, and inlines NODE_ENV and the build's ID alone, with no CommonJS module", () => {
