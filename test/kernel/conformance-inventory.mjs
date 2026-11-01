@@ -151,6 +151,9 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
 export const HELPERS = Object.freeze({
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
+  // Storage's
+  'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/legacy/adapter.js',

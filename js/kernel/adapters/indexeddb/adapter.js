@@ -43,6 +43,7 @@ import { UnavailableError, committed, unavailable, unavailableFrom } from '../..
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
 import { createConnection } from './connection.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
+import { runIntegrityCheck } from './integrity.js';
 import { abort, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
@@ -55,6 +56,7 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 /** @typedef {import('../../core/ports/repository.js').Work} Work */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
+/** @typedef {import('./integrity.js').IntegrityLog} IntegrityLog */
 
 /**
  * chrome.storage.local, or anything with its promise-returning get and set
@@ -73,12 +75,24 @@ import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What an `existing` open waits on first when there's no database or an older one: a page's
  *   wait on the worker's migration run (connection.js)
+ * @property {IntegrityLog} [integrityLog]
+ *   Where the read-only integrity check reports (integrity.js): the context's console unless a
+ *   test passes another
  */
 
 /** @typedef {KernelAdapter & {mode: OpenMode, open: () => Promise<void>, close: () => void}} IndexedDbAdapter */
 
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
+
+/**
+ * The context's console, read when the check reports, not when this module loads
+ * @type {IntegrityLog}
+ */
+const contextConsole = Object.freeze({
+  info: (message, detail) => globalThis.console.info(message, detail),
+  warn: (message, error) => globalThis.console.warn(message, error),
+});
 
 /**
  * How a transaction ended: committed, or aborted with its error, which is null when this
@@ -231,6 +245,7 @@ export function createIndexedDbAdapter({
   openWithinMs,
   requireCore = false,
   awaitUpgrade = null,
+  integrityLog = contextConsole,
 }) {
   const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
 
@@ -399,10 +414,29 @@ export function createIndexedDbAdapter({
   };
 
   /**
+   * The read-only integrity check (integrity.js), which only reports what it finds, so it
+   * commits whatever that is. The worker runs it after an install or an update, as
+   * runIntegrityCheck (#35 slice 1), never as it starts.
+   * @param {Work} work
+   * @returns {Promise<Outcome>}
+   */
+  const checkIntegrity = async work => {
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      throw startFailure(error);
+    }
+    await runIntegrityCheck(db, integrityLog);
+    return work.done();
+  };
+
+  /**
    * Startup maintenance: the settings Storage writes on a profile's first run, each one only
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
-   * database is blocked too. #17's read-only integrity scan moves to the worker root, at most
-   * daily, and then to #35's job host.
+   * database is blocked too. The read-only integrity check is an effect of its own
+   * (checkIntegrity), which the worker runs after an install or an update.
    *
    * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
    * it opens answers every call with maintenance's failure: when chrome.storage fails it, it
@@ -447,8 +481,7 @@ export function createIndexedDbAdapter({
         else if (effect.kind === 'settings') outcome = commitSettings(work, effect.area, effect.values);
         // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
         else if (effect.kind === 'backup') outcome = Promise.resolve(unavailable('adapter', 'backups-need-legacy-storage', false));
-        // No integrity check here until #17's scan exists (#35 slice 1): it commits and checks nothing
-        else if (effect.kind === 'integrity-check') outcome = Promise.resolve(work.done());
+        else if (effect.kind === 'integrity-check') outcome = checkIntegrity(work);
         else outcome = maintain(work);
       } catch (error) {
         outcome = Promise.resolve(unavailableFrom(failureOf(error)));
