@@ -450,3 +450,82 @@ describe("review R79's delta: shared retries, one connection, what counts as cos
     assert.deepStrictEqual(ready && [ready.cause, ready.code], ['storage', 'open-failed']);
   });
 });
+
+/** @param {Profile} of - every database the profile holds, as name@version */
+const databasesOf = async of =>
+  (await of.real.databases()).map((/** @type {IDBDatabaseInfo} */ db) => `${db.name}@${db.version}`).sort();
+
+/**
+ * Runs `body` with console.warn and console.info recorded, and what they said
+ * @template T
+ * @param {() => Promise<T>} body
+ * @returns {Promise<{value: T, said: Array<[string, string]>}>}
+ */
+async function recording(body) {
+  /** @type {Array<[string, string]>} */
+  const said = [];
+  const { warn, info } = console;
+  console.warn = (/** @type {unknown[]} */ ...args) => said.push(['warn', String(args[0])]);
+  console.info = (/** @type {unknown[]} */ ...args) => said.push(['info', String(args[0])]);
+  try {
+    return { value: await body(), said };
+  } finally {
+    console.warn = warn;
+    console.info = info;
+  }
+}
+
+/** A worker client whose run took a v8 profile to 9, with that attempt's end and its record */
+async function migratedWorker() {
+  const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+  const worker = createWorkerClient(hostOf(of));
+  assert.equal(await worker.whenReady(), null);
+  const first = worker.migration.done;
+  assert.equal((await first).status, 'migrated');
+  return { of, worker, first, record: structuredClone(of.chrome.local[UPGRADE_RECORD_KEY]) };
+}
+
+// R88's probe of 9bd44a23, at the worker client, where the retry lives (#35 slice 1, the
+// rebase onto next): the e2e fixture host deletes the install's database under the worker
+describe("the worker's integrity check once another context deleted the database", () => {
+  it('warns and commits, as Storage.runIntegrityCheck does: no retry, no other attempt, and no database made', async () => {
+    const { of, worker, first, record } = await migratedWorker();
+    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'));
+    await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
+    assert.ok(!(await databasesOf(of)).some(name => name.startsWith('CanvasTabDB@')), 'deleted');
+
+    const { value: checked, said } = await recording(async () => {
+      const outcome = await worker.execute({ type: 'runIntegrityCheck', commandId: 'check-1' });
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      return outcome;
+    });
+    // Every property at once, so a failure shows each one that broke
+    assert.deepEqual(
+      {
+        answer: checked.kind === 'committed' && checked.code,
+        said: said.filter(([, message]) => message.startsWith('Integrity check')),
+        sameAttempt: worker.migration.done === first,
+        running: worker.migration.running(),
+        recordUnchanged: JSON.stringify(of.chrome.local[UPGRADE_RECORD_KEY]) === JSON.stringify(record),
+        notesDatabases: (await databasesOf(of)).filter(name => name.startsWith('CanvasTabDB@')),
+      },
+      {
+        answer: 'integrity-checked',
+        said: [['warn', 'Integrity check encountered an error:']],
+        sameAttempt: true,
+        running: false,
+        recordUnchanged: true,
+        notesDatabases: [],
+      },
+    );
+  });
+
+  it('control: a capture after the same delete starts an attempt, which makes the database again', async () => {
+    const { of, worker, first } = await migratedWorker();
+    await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
+    const outcome = await capture(worker, 'after');
+    assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+    assert.notEqual(worker.migration.done, first, 'a new attempt');
+    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'), `made again: ${await databasesOf(of)}`);
+  });
+});
