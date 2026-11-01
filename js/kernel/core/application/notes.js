@@ -671,6 +671,11 @@ export const noteCommands = {
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         titleKept = false;
+        // The note's blocks as stored, read once ahead of the puts, so the change log's ops name
+        // only the blocks this save changed, where every save puts every block (#17 PR 4c). It's
+        // issued, not awaited, so the puts still go out before anything is awaited, and a
+        // failure of it is the transaction's, which the note's read below answers.
+        tx.getAllByIndex('blocks', 'canvasId', noteId).catch(() => undefined);
         // Without an expected revision, the block puts go out before anything is awaited, as in
         // Storage.saveNoteWithBlocks, so a page-hide flush still stores them if the page goes
         // before the read returns. With one, the revision is checked first, so a conflict

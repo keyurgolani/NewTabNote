@@ -4,9 +4,12 @@
  * `[seq, entityType, entityId]` and indexed by entity, with the log's `head` and `floor` in
  * `meta`'s `changes` record. The adapter appends a commit's rows in the commit's transaction
  * (adapter.js), at the seq after the head, so seqs run from 1 with no gaps, and a commit that
- * wrote no note or folder appends none. `ops` stays empty until #17 PR 4 defines each op (the
- * lead's Q4: metadata only), and `position` keeps the order the commit wrote them in. Rows
- * hold ids, types, revisions, and the commandId, never content.
+ * wrote no note or folder appends none. `ops` holds what the commit did to the entity (#17 PR
+ * 4c, domain/changes.js): content-free, the op's name and a block's id or the names of the
+ * fields that changed (the lead's Q4), as contracts/entities.js's changeOp pins them. `position`
+ * keeps the order the commit wrote them in. Rows hold ids, types, revisions, field names, and
+ * the commandId, never content, and the CommitLog's reads hand on none of the ops (the lead,
+ * 4c's Q4): #19 adds the reader its merge needs.
  *
  * Nothing prunes it before #19 sets the floor; pruneChanges is that retention's step.
  */
@@ -17,6 +20,8 @@ import { CHANGES_KEY, CHANGES_STORE, META_STORE } from './registry.js';
 import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/ports/commit-log.js').Change} Change */
+/** @typedef {import('../../core/ports/commit-log.js').LoggedChange} LoggedChange */
+/** @typedef {import('../../core/contracts/entities.js').ChangeOp} ChangeOp */
 /** @typedef {import('../../core/ports/commit-log.js').ChangeEntry} ChangeEntry */
 /** @typedef {import('../../core/ports/commit-log.js').CommitLog} CommitLog */
 
@@ -27,7 +32,7 @@ import { committed, result } from './requests.js';
 
 /**
  * A change log row
- * @typedef {Change & {seq: number, opId: string, ops: unknown[], position: number}} ChangeRow
+ * @typedef {Change & {seq: number, opId: string, ops: ChangeOp[], position: number}} ChangeRow
  */
 
 /** @type {IDBTransactionOptions} */
@@ -54,16 +59,16 @@ export function logHead(record) {
  * answers the commit's seq. `head` is the log's head as this transaction read it.
  * @param {IDBTransaction} tx
  * @param {LogHead} head
- * @param {readonly Change[]} changes - one or more
+ * @param {readonly LoggedChange[]} changes - one or more, each with its ops, none when it has none
  * @param {string} opId
  * @returns {number}
  */
 export function writeChanges(tx, head, changes, opId) {
   const seq = head.head + 1;
   const rows = tx.objectStore(CHANGES_STORE);
-  changes.forEach(({ entityType, entityId, revision }, position) => {
+  changes.forEach(({ entityType, entityId, revision, ops = [] }, position) => {
     /** @type {ChangeRow} */
-    const row = { seq, entityType, entityId, revision, opId, ops: [], position };
+    const row = { seq, entityType, entityId, revision, opId, ops: [...ops], position };
     rows.put(row);
   });
   tx.objectStore(META_STORE).put({ ...head, head: seq });
@@ -77,7 +82,7 @@ const completion = committed;
  * Appends one commit's changes in a transaction of its own, as the adapter does in a commit's,
  * and answers its seq. For #13's port suite and for repairs, never for a command's writes.
  * @param {IDBDatabase} db
- * @param {readonly Change[]} changes
+ * @param {readonly LoggedChange[]} changes
  * @param {string} opId
  * @returns {Promise<number>}
  */
