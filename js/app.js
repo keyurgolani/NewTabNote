@@ -440,12 +440,12 @@ class App {
     const catchUp = /** @type {any} */ (globalThis).StartCatchUp;
     if (!catchUp) return;
     try {
-      const checkedAt = await Storage.getSetting(catchUp.CHECKED_SETTING, null);
+      const checkedAt = await appStorage().getSetting(catchUp.CHECKED_SETTING, null);
       if (!catchUp.due(checkedAt, Date.now())) return;
       const run = async (lock) => {
         if (lock === null) return null;
         const result = await catchUp.fullPass({ db: appStorage().db });
-        await Storage.setSetting(catchUp.CHECKED_SETTING, Date.now());
+        await appStorage().setSetting(catchUp.CHECKED_SETTING, Date.now());
         return result;
       };
       const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;

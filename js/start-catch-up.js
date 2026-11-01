@@ -80,7 +80,7 @@ const StartCatchUp = (function initStartCatchUp() {
 
   /**
    * Keep the notes a Popup or Side Panel start's drafts named for the next new tab. Never throws.
-   * @param {{dropped?: Array<string>, gone?: Array<string>}|undefined} result - CloseDrafts.apply's
+   * @param {any} result - CloseDrafts.apply's, or nothing when it failed
    * @param {Storage|undefined} [storage]
    */
   function remember(result, storage = pageStorage()) {
@@ -158,8 +158,9 @@ const StartCatchUp = (function initStartCatchUp() {
   function derive(note, blocks, links, { textOf, targets }) {
     const ordered = blocks.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
     const derived = { record: null, links: null };
-    if (typeof SidebarUtils !== 'undefined') {
-      const meta = SidebarUtils.buildNoteSaveMetadata(ordered);
+    const Sidebar = /** @type {any} */ (globalThis).SidebarUtils;
+    if (Sidebar) {
+      const meta = Sidebar.buildNoteSaveMetadata(ordered);
       const todo = note.todoProgress === undefined ? null : note.todoProgress;
       if (meta.preview !== (note.preview || '') || JSON.stringify(meta.todoProgress) !== JSON.stringify(todo)) {
         derived.record = { ...note, preview: meta.preview, todoProgress: meta.todoProgress };
@@ -346,7 +347,7 @@ const StartCatchUp = (function initStartCatchUp() {
     const named = NAMED.filter(([store]) => db.objectStoreNames.contains(store));
     const tx = db.transaction(['elements', ...named.map(([store]) => store)], 'readonly');
     const lists = await Promise.all([namedIds(tx, 'elements', 'canvasId'), ...named.map(([store, index]) => namedIds(tx, store, index))]);
-    const orphans = [...new Set(lists.flat())].filter((id) => typeof id === 'string' && !known.has(id));
+    const orphans = /** @type {Array<string>} */ ([...new Set(lists.flat())].filter((id) => typeof id === 'string' && !known.has(id)));
     result.removed = await sweep(db, orphans, { now, graceMs: GRACE_MS });
 
     console.info(`Start catch-up, full pass: ${result.notes} note(s) read, ${result.rebuilt} caught up, ${result.removed} record(s) of deleted notes removed`);
