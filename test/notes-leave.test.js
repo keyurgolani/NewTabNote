@@ -707,7 +707,7 @@ describe('a note leaving the active set in another new tab', () => {
     assert.deepEqual(tabIds(two.tabs), ['C', copyId], 'the tab follows the new note');
     assert.equal(two.tabs.activeTabIndex, 1);
     assert.deepEqual(shownTabs(second), ['Gamma', 'Beta']);
-    assert.equal(editor.root.querySelector('.note-gone-notice'), null);
+    assert.ok(editor.root.querySelector('.note-gone-notice') === null, 'no deleted-note notice');
   });
 
   it('with no message between the tabs at all, a save keeps the trash flag, and a note deleted for good shows the notice', async () => {
