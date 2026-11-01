@@ -23,9 +23,10 @@
  * and a note deleted for good is either all there, before its purge, or not there at all.
  *
  * Each note goes as 1.4.1 stores one: without #17 PR 3's fields beside its flags (placement,
- * `kind`, and `lifecycle`; domain/placement.js), which a point taken after the transform holds.
- * The flags already say what those do, and 1.4.1 keeps a field it doesn't know while it
- * changes the flags, so one left in would come back stale on the next upgrade (#17 PR 3, Q8).
+ * `kind`, `lifecycle`, and a Daily Note's `dailyKey`, `dailyTimeZone`, and `dailyDuplicateOf`;
+ * domain/placement.js's NEW_NOTE_FIELDS), which a point taken after the transforms holds. The
+ * flags and `dateStr` already say what those do, and 1.4.1 keeps a field it doesn't know while
+ * it changes the flags, so one left in would come back stale on the next upgrade (#17 PR 3, Q8).
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';

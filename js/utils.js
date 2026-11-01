@@ -462,6 +462,19 @@ const Utils = {
   },
 
   /**
+   * The local YYYY-MM-DD date of a moment, the key a Daily Note is found by since #17 PR 3b, as
+   * #1's localDateKey (js/product/placement.js) gives it. 1.4.x's calendar took toISOString's
+   * UTC date, which is tomorrow from about 5 PM in the Pacific.
+   * @param {Date | number} when - a Date or ms since the epoch
+   * @returns {string}
+   */
+  localDateKey(when) {
+    const date = typeof when === 'number' ? new Date(when) : when;
+    const pad = (/** @type {number} */ value, /** @type {number} */ width) => String(value).padStart(width, '0');
+    return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1, 2)}-${pad(date.getDate(), 2)}`;
+  },
+
+  /**
    * Format date
    * @param {number|string|Date} date - Date value to format
    * @returns {string} Formatted date string

@@ -36,7 +36,7 @@ async function createProfile(factory) {
  * A new tab with A open, the sidebar and NotesManager wired as App wires them, and a count
  * of every refresh and reload of the lists, which none of these writes should need
  */
-async function openPage({ kernelNow, pageNow } = {}) {
+async function openPage({ kernelNow, pageNow, zone } = {}) {
   const env = createLegacyEnv();
   await createProfile(env.indexedDB);
   const listQueries = [];
@@ -45,6 +45,7 @@ async function openPage({ kernelNow, pageNow } = {}) {
     onListQuery: (query) => listQueries.push(query.type),
     kernelNow,
     pageNow,
+    zone,
   });
   const page = { ...booted, noteList: booted.page.noteList, get refreshes() { return booted.page.refreshes; } };
   await page.tabs.openNoteInNewTab('A');
@@ -179,7 +180,10 @@ describe("the sidebar's new notes and Daily Notes", () => {
     const daily = Object.values(notes).filter((n) => n.isDaily);
     assert.equal(daily.length, 1);
     const today = new Date();
-    assert.equal(daily[0].dateStr, today.toISOString().split('T')[0], "keyed by the UTC date, as 1.4.x's");
+    // The host's local date, as #1's localDateKey gives it, where 1.4.x keyed it by the UTC date (#17 PR 3b)
+    const pad = (n) => String(n).padStart(2, '0');
+    const localDate = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    assert.equal(daily[0].dateStr, localDate, 'keyed by the local date');
     assert.equal(
       daily[0].name,
       `Daily Note - ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
@@ -191,22 +195,34 @@ describe("the sidebar's new notes and Daily Notes", () => {
     assertNoRefresh(reloads);
   });
 
-  it("today's Daily Note asked for just before UTC midnight opens, though the kernel runs just after", async () => {
-    // The page decides the day at 23:59:59.900 UTC; its kernel's clock already reads the next day
+  it("today's Daily Note asked for just before midnight opens, though the kernel runs just after", async () => {
+    // The page decides the day at 23:59:59.900 in UTC; its kernel's clock already reads the next day
     const asked = Date.UTC(2026, 9, 30, 23, 59, 59, 900);
-    const { env, page, sidebar, toasts } = await openPage({ pageNow: () => asked, kernelNow: () => asked + 200 });
+    const { env, page, sidebar, toasts } = await openPage({ pageNow: () => asked, kernelNow: () => asked + 200, zone: 'UTC' });
     const noteId = await runUntil(env, sidebar.ensureDailyNote());
     assert.ok(noteId, 'the ensure and the read agree on the day');
     await runUntil(env, sidebar.onOpenNoteInNewTab(noteId));
     assert.equal(page.tabs.editor.noteId, noteId, 'it opens');
     const daily = Object.values((await stored(env)).notes).filter((n) => n.isDaily);
-    const name = `Daily Note - ${new Date(asked).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', name]],
-      'keyed by the UTC date and named with the local one, both of the moment it was asked for');
+    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', 'Daily Note - Oct 30, 2026']],
+      'keyed and named by the date of the moment it was asked for');
     assert.deepEqual(plain(toasts), [], 'no failure toast');
     // Asked again a moment later, still from before midnight, it finds that note
     assert.equal(await runUntil(env, sidebar.ensureDailyNote()), noteId);
     assert.deepEqual(plain(toasts), []);
+  });
+
+  it("after 5 PM in Los Angeles, today's Daily Note is the one named for today, keyed by the local date (#17 PR 3b)", async () => {
+    // 18:30 on Oct 30 in Los Angeles is 01:30 on Oct 31 in UTC, which 1.4.x took for today
+    const evening = Date.UTC(2026, 9, 31, 1, 30);
+    const { env, sidebar } = await openPage({ pageNow: () => evening, kernelNow: () => evening, zone: 'America/Los_Angeles' });
+    const noteId = await runUntil(env, sidebar.ensureDailyNote());
+    assert.ok(noteId);
+    // This profile is at version 8, so the note's key fields wait for the run (review R88)
+    const daily = Object.values((await stored(env)).notes).filter((n) => n.isDaily);
+    assert.deepEqual(plain(daily.map((n) => [n.id, n.dateStr, n.name])), [[noteId, '2026-10-30', 'Daily Note - Oct 30, 2026']]);
+    // A capture or a second click that evening finds the same note
+    assert.equal(await runUntil(env, sidebar.ensureDailyNote()), noteId);
   });
 
   it("a calendar day's Daily Note is keyed and named by that day, and clicking it twice opens one note", async () => {
@@ -290,6 +306,51 @@ describe("the sidebar's new notes and Daily Notes", () => {
     assert.deepEqual(plain(toasts), [{ message: 'Failed to create note: that folder no longer exists.', kind: 'error' }]);
     assert.ok(!Object.values((await stored(env)).notes).some((n) => n.name === 'New Note'));
     assert.equal(page.tabs.openTabs.length, 1);
+  });
+});
+
+describe("the calendar's today and its dots (#17 PR 3b)", () => {
+  it("highlights the host's local day, where 1.4.x took toISOString's UTC one", async () => {
+    const { env, sidebar } = await openPage();
+    const els = env.document.stub(['calendar-days', 'calendar-month-label']);
+    const now = new Date();
+    sidebar.calendarYear = now.getFullYear();
+    sidebar.calendarMonth = now.getMonth();
+    sidebar.renderCalendar();
+    const today = els['calendar-days'].querySelectorAll('.calendar-day.today').map((day) => day.dataset.date);
+    const pad = (n) => String(n).padStart(2, '0');
+    assert.deepEqual(today, [`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`]);
+  });
+
+  it("dots each Daily Note's local date, and the dateStr of one #17's transform hasn't keyed yet", async () => {
+    const { env, sidebar } = await openPage();
+    const els = env.document.stub(['calendar-days', 'calendar-month-label']);
+    const views = {
+      active: [
+        { id: 'keyed', isDaily: true, dailyKey: '2026-10-05', dateStr: '2026-10-06' },
+        { id: 'unkeyed', isDaily: true, dateStr: '2026-10-09' },
+        { id: 'plain', isDaily: false, dateStr: '2026-10-11' },
+      ],
+      archived: [{ id: 'archived', isDaily: true, dailyKey: '2026-10-12', dateStr: '2026-10-12' }],
+    };
+    sidebar._noteList = { view: (name) => views[name] || [] };
+    sidebar.calendarYear = 2026;
+    sidebar.calendarMonth = 9;
+    sidebar.renderCalendar();
+    const dotted = els['calendar-days'].querySelectorAll('.calendar-day.has-note').map((day) => day.dataset.date);
+    assert.deepEqual(dotted, ['2026-10-05', '2026-10-09', '2026-10-12']);
+  });
+
+  it("Utils.localDateKey is #1's localDateKey, through a year's every hour", async () => {
+    const env = createLegacyEnv();
+    env.load('js/utils.js');
+    const Utils = env.get('Utils');
+    const { localDateKey } = await import('../js/product/placement.js');
+    const start = Date.UTC(2026, 0, 1);
+    for (let at = start; at < start + 366 * 24 * 3600 * 1000; at += 3600 * 1000 + 61 * 1000) {
+      assert.equal(Utils.localDateKey(at), localDateKey(at), new Date(at).toISOString());
+      assert.equal(Utils.localDateKey(new Date(at)), localDateKey(at));
+    }
   });
 });
 

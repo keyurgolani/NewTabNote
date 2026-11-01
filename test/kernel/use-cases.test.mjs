@@ -56,9 +56,13 @@ function spyTx(log, records) {
       log.push(`versions ${store} ${key}`);
       return undefined;
     },
+    has: store => {
+      log.push(`has ${store}`);
+      return true;
+    },
     put: (store, record) => {
-      const { id, noteId } = /** @type {{id?: unknown, noteId?: unknown}} */ (record);
-      log.push(`put ${store} ${id ?? noteId}`);
+      const { id, noteId, dailyKey } = /** @type {{id?: unknown, noteId?: unknown, dailyKey?: unknown}} */ (record);
+      log.push(`put ${store} ${id ?? (store === 'dailyIndex' ? dailyKey : noteId)}`);
     },
     delete: (store, key) => {
       log.push(`delete ${store} ${key}`);
@@ -241,9 +245,19 @@ describe('units an adapter runs again', () => {
     // The first run makes the Daily Note and fails to commit. Before the run that commits,
     // another context made today's.
     await runUnits(work, { notes: {} });
-    const today = { id: 'their-daily', name: 'Daily Note', isDaily: true, dateStr: dailyDateStr(NOW), updatedAt: NOW };
+    // A clock without a zone is UTC's (ports/runtime.js)
+    const day = dailyDateStr(NOW, 'UTC');
+    const today = { id: 'their-daily', name: 'Daily Note', isDaily: true, dateStr: day, updatedAt: NOW };
     const { log } = await runUnits(work, { notes: { 'their-daily': today } });
-    assert.deepEqual(log, ['getAll notes', 'put blocks k1']);
+    // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b)
+    assert.deepEqual(log, [
+      `get dailyIndex ${day}`,
+      'getAll notes',
+      'has dailyIndex',
+      'put notes their-daily',
+      `put dailyIndex ${day}`,
+      'put blocks k1',
+    ]);
     assert.deepEqual(work.done().changedIds, ['their-daily']);
     assert.deepEqual(work.primary && work.primary(), { store: 'notes', key: 'their-daily' });
   });

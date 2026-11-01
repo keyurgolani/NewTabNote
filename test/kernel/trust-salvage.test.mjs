@@ -55,6 +55,9 @@ const STEP_10_ROWS = Object.freeze({
   tombstones: [{ entityType: 'note', id: 'n-gone', deletedAt: NOW, lastRevision: 3, seq: 1, reason: 'deleted' }],
 });
 
+/** A row in step 11's daily index (#17 PR 3b), as logical 3 writes one, for a date no note has */
+const STEP_11_ROWS = Object.freeze({ daily_index: [{ dailyKey: '1999-12-31', noteId: 'daily-index-canary' }] });
+
 /**
  * The v1.4.1 Storage on a fresh 1.4.1 profile, as a user who reinstalled 1.4.1 has it
  * @returns {Promise<{env: any, Storage: any}>}
@@ -176,10 +179,12 @@ describe('the salvage file (#20 slice 3)', () => {
     assert.equal(file.media.length, 2);
     assert.match(file.media[0].blob, /^data:image\/png;base64,/);
     assert.equal(file.folders.length, 1);
-    // Every other store under its own name, step 10's four included (#17 PR 2a), settings never
+    // Every other store under its own name, step 10's four (#17 PR 2a) and step 11's daily index
+    // (#17 PR 3b) included, settings never
     assert.deepEqual(Object.keys(file.stores).sort(), [
       'changes',
       'conflicts',
+      'daily_index',
       'links',
       'meta',
       'migrations',
@@ -273,14 +278,19 @@ describe('the salvage file (#20 slice 3)', () => {
     assert.deepEqual(stored?.unreadable, named);
   });
 
-  it("imports into the frozen v1.4.1 with step 10's four stores in it, which 1.4.1 doesn't read", async () => {
+  it("imports into the frozen v1.4.1 with step 10's four stores and step 11's daily index in it, which 1.4.1 doesn't read", async () => {
     const of = await postMigrationProfile();
-    for (const [store, list] of Object.entries(STEP_10_ROWS)) await putRaw(of.real, store, list);
+    for (const [store, list] of Object.entries({ ...STEP_10_ROWS, ...STEP_11_ROWS }))
+      await putRaw(of.real, store, list);
     const files = memoryFiles();
     const { pipeline } = await centerOn(of, files);
     asRun(await pipeline.run(runOf('save-salvage-file')));
     const file = files.last();
     for (const [store, list] of Object.entries(STEP_10_ROWS)) assert.deepEqual(file.stores[store], list, store);
+    assert.deepEqual(
+      file.stores.daily_index.filter((/** @type {any} */ row) => row.dailyKey === '1999-12-31'),
+      STEP_11_ROWS.daily_index,
+    );
 
     const { env, Storage } = await release141();
     const check = Storage.validateImport(file);
@@ -288,10 +298,11 @@ describe('the salvage file (#20 slice 3)', () => {
     const result = await Storage.importData(file, 'merge');
     assert.equal(result.notes, file.canvases.length);
     assert.equal(result.blocks, file.elements.length);
-    // Its own ten stores, and nothing of the four in them
+    // Its own ten stores, and nothing of the five in them
     const dumped = await legacyEnv.dumpDatabase(env.indexedDB);
     assert.deepEqual(Object.keys(dumped.stores).sort(), [...LEGACY_STORE_NAMES]);
     assert.equal(JSON.stringify(dumped).includes('The words that lost'), false);
+    assert.equal(JSON.stringify(dumped).includes('daily-index-canary'), false);
   });
 
   it('holds no secret: not the IndexedDB settings, not chrome.storage.local, not one inside a legacy copy (AC14 canary)', async () => {

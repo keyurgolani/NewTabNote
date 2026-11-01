@@ -69,20 +69,57 @@ function stamped(value) {
 }
 
 /**
+ * An instant of June 15, 2026 both in UTC and in this machine's zone, whatever the zone: halfway
+ * between that day's noon in UTC and its noon here, the middle of the hours the two days share,
+ * in any zone from UTC-12 to UTC+14. Storage names today's Daily Note by the local day and keys
+ * it by the UTC one, and the parity kernel's clock has no zone, so it names and keys by the UTC
+ * day (#17 PR 3b's dailyNoteName takes the clock's zone). Where the two days differ, so do the
+ * two notes, so the cases that make today's Daily Note run at this moment on both sides.
+ */
+const SAME_DAY = (Date.UTC(2026, 5, 15, 12) + new Date(2026, 5, 15, 12).getTime()) / 2;
+
+/**
+ * Has the code in each of `contexts` read `at` as now, as a page at that moment would: Date
+ * with no arguments, and Date.now()
+ * @param {number} at
+ * @param {LegacyContext[]} contexts
+ */
+function nowIn(at, contexts) {
+  for (const { env } of contexts) {
+    env.get(`(() => {
+      const Real = Date;
+      globalThis.Date = class extends Real {
+        constructor(...args) {
+          if (args.length === 0) super(${at});
+          else super(...args);
+        }
+        static now() {
+          return ${at};
+        }
+      };
+    })()`);
+  }
+}
+
+/**
  * Two profiles that start from the same records: `viaStorage` for production code, and
- * `viaKernel` for the kernel, whose clock is the real one, as Storage's is
+ * `viaKernel` for the kernel, whose clock is the real one, as Storage's is, or, with `at`, one
+ * that reads `at`, as Storage's Date does then on both sides
  * @param {Record<string, unknown[]>} [records] - rows per IndexedDB store
+ * @param {{at?: number}} [options]
  * @returns {Promise<{viaStorage: LegacyContext, viaKernel: LegacyContext, kernel: Kernel}>}
  */
-async function twin(records = {}) {
+async function twin(records = {}, { at } = {}) {
   const viaStorage = legacyContext();
   const viaKernel = legacyContext();
   opened.push(viaStorage, viaKernel);
+  if (at !== undefined) nowIn(at, [viaStorage, viaKernel]);
   for (const { env } of [viaStorage, viaKernel]) await legacyEnv.createDatabase(env.indexedDB, { records });
   await viaStorage.storage.open();
   const adapter = adapterFor(viaKernel);
   await adapter.open();
-  return { viaStorage, viaKernel, kernel: kernelFor(adapter, { ids: testIds('k'), clock: { now: () => Date.now() } }) };
+  const clock = at === undefined ? { now: () => Date.now() } : { now: () => at };
+  return { viaStorage, viaKernel, kernel: kernelFor(adapter, { ids: testIds('k'), clock }) };
 }
 
 /**
@@ -265,19 +302,23 @@ describe("the kernel's copies of production rules, run both ways", () => {
   });
 
   it("a capture's new Daily Note is the note, search entry, and template blocks Storage.ensureDailyNote makes", async () => {
-    const { viaStorage, viaKernel, kernel } = await twin({
-      canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
-      elements: [
-        legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}: plan</p>'),
-        legacyEnv.block('t1-b', 't1', 1, '', {
-          type: 'table',
-          tableData: [
-            ['{{title}}', 'Done'],
-            ['', 'x'],
-          ],
-        }),
-      ],
-    });
+    // At an instant of one day in UTC and here, on both sides (SAME_DAY)
+    const { viaStorage, viaKernel, kernel } = await twin(
+      {
+        canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
+        elements: [
+          legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}: plan</p>'),
+          legacyEnv.block('t1-b', 't1', 1, '', {
+            type: 'table',
+            tableData: [
+              ['{{title}}', 'Done'],
+              ['', 'x'],
+            ],
+          }),
+        ],
+      },
+      { at: SAME_DAY },
+    );
     for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
     const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
     assertCommitted(
@@ -452,19 +493,23 @@ describe("the kernel's copies of production rules, run both ways", () => {
   });
 
   it('ensureDailyNote makes the note, search entry, and template blocks Storage.ensureDailyNote makes, and finds it after', async () => {
-    const { viaStorage, viaKernel, kernel } = await twin({
-      canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
-      elements: [
-        legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}: plan</p>'),
-        legacyEnv.block('t1-b', 't1', 1, '', {
-          type: 'table',
-          tableData: [
-            ['{{title}}', 'Done'],
-            ['', 'x'],
-          ],
-        }),
-      ],
-    });
+    // At an instant of one day in UTC and here, on both sides (SAME_DAY)
+    const { viaStorage, viaKernel, kernel } = await twin(
+      {
+        canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
+        elements: [
+          legacyEnv.block('t1-a', 't1', 0, '<p>{{title}}: plan</p>'),
+          legacyEnv.block('t1-b', 't1', 1, '', {
+            type: 'table',
+            tableData: [
+              ['{{title}}', 'Done'],
+              ['', 'x'],
+            ],
+          }),
+        ],
+      },
+      { at: SAME_DAY },
+    );
     for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
     const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
     const made = await kernel.execute({ type: 'ensureDailyNote', commandId: 'c1', noteId: daily.id });

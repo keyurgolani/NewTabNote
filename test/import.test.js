@@ -671,13 +671,22 @@ describe('Replace all (AC4)', () => {
   });
 });
 
-describe('the fields #17 PR 3a writes beside the flags (Q8)', () => {
-  it("a backup's notes come in without placement, kind, and lifecycle, every field the kernel's list names, whatever they said", async () => {
-    const { PLACEMENT_FIELDS } = await import('../js/kernel/core/domain/placement.js');
+describe('the fields #17 PR 3 writes beside the flags (Q8)', () => {
+  it("a backup's notes come in without placement, kind, lifecycle, or a Daily Note's key, every field the kernel's list names, whatever they said", async () => {
+    const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
     const { env, Storage } = await setup();
+    // Storage's own copy of the list is the kernel's
+    assert.deepEqual(plain(env.get('NEW_NOTE_FIELDS')), [...NEW_NOTE_FIELDS]);
     const data = sameProfileBackup();
-    const stale = { placement: { kind: 'inbox' }, kind: 'template', lifecycle: 'trashed' };
-    for (const field of PLACEMENT_FIELDS) assert.ok(Object.hasOwn(stale, field), field);
+    const stale = {
+      placement: { kind: 'inbox' },
+      kind: 'template',
+      lifecycle: 'trashed',
+      dailyKey: '2020-01-01',
+      dailyTimeZone: 'Asia/Tokyo',
+      dailyDuplicateOf: 'gone',
+    };
+    for (const field of NEW_NOTE_FIELDS) assert.ok(Object.hasOwn(stale, field), field);
     data.canvases = data.canvases.map((n) => ({ ...n, ...stale }));
     for (const mode of ['merge', 'replace']) {
       await Storage.importData(structuredClone(data), mode);
@@ -686,8 +695,59 @@ describe('the fields #17 PR 3a writes beside the flags (Q8)', () => {
     const copies = notes.filter((n) => !['A', 'E', 'D', 'AR', 'T', 'TR'].includes(n.id));
     assert.equal(copies.length, 10);
     for (const copy of copies) {
-      for (const field of PLACEMENT_FIELDS) assert.equal(field in copy, false, `${copy.name}: ${field}`);
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in copy, false, `${copy.name}: ${field}`);
     }
+  });
+
+  it("Export JSON and a note's own export write every note without them (#17 PR 3b)", async () => {
+    const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
+    const { env, Storage } = await setup();
+    const fields = { placement: { kind: 'daily', dateKey: '2026-10-20' }, kind: 'note', lifecycle: 'active', dailyKey: '2026-10-20', dailyTimeZone: 'UTC', dailyDuplicateOf: null };
+    await new Promise((resolve, reject) => {
+      const tx = Storage.db.transaction('canvases', 'readwrite');
+      const store = tx.objectStore('canvases');
+      const request = store.get('A');
+      request.onsuccess = () => store.put({ ...request.result, ...fields, isDaily: true, dateStr: '2026-10-20' });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    const exported = plain(await Storage.exportAll());
+    const streamed = JSON.parse(await (await Storage.exportAllAsBlob()).text());
+    const single = plain(await Storage.exportNote('A'));
+    for (const file of [exported, streamed, single]) {
+      const note = file.canvases.find((n) => n.id === 'A');
+      assert.deepEqual([note.isDaily, note.dateStr], [true, '2026-10-20']);
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in note, false, field);
+    }
+    // The database keeps them
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases').A.dailyKey, '2026-10-20');
+  });
+
+  it('Export Current Note writes its note without them too, as every other export does (#17 PR 3b, review R88)', async () => {
+    const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
+    const { env, Storage } = await setup();
+    const fields = { placement: { kind: 'daily', dateKey: '2026-10-20' }, kind: 'note', lifecycle: 'active', dailyKey: '2026-10-20', dailyTimeZone: 'UTC', dailyDuplicateOf: null };
+    await new Promise((resolve, reject) => {
+      const tx = Storage.db.transaction('canvases', 'readwrite');
+      const store = tx.objectStore('canvases');
+      const request = store.get('A');
+      request.onsuccess = () => store.put({ ...request.result, ...fields, isDaily: true, dateStr: '2026-10-20' });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    const downloads = [];
+    env.get('Utils').downloadFile = (data, filename) => downloads.push({ data, filename });
+    const settings = makeController(env, Storage);
+    settings.getEditor = () => ({ noteId: 'A' });
+    await settings.exportCurrentNote();
+    assert.equal(downloads.length, 1);
+    const file = JSON.parse(downloads[0].data);
+    assert.equal(file.exportType, 'single-note');
+    assert.deepEqual([file.note.id, file.note.isDaily, file.note.dateStr], ['A', true, '2026-10-20']);
+    for (const field of NEW_NOTE_FIELDS) assert.equal(field in file.note, false, field);
+    assert.deepEqual(file.blocks.map((b) => b.id).sort(), ['a1', 'a2']);
+    // The database keeps them
+    assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'canvases').A.dailyKey, '2026-10-20');
   });
 
   it('Replace all moves a lifecycle the kernel wrote to trashed with the note, and leaves a note without one as it was', async () => {
