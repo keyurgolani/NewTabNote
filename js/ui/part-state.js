@@ -423,7 +423,7 @@ class PartState {
 
   /**
    * Draw a state: its glyph, words, and buttons. Buttons it doesn't show are hidden, not taken
-   * out, so the one with focus never moves, and each shown one goes in its slot (_arrange).
+   * out, and the shown ones go in their slots (_arrange), in that order on the page.
    * @param {'failed' | 'again' | 'threw' | 'save-failed'} state
    * @param {string} words
    * @param {string} note
@@ -440,16 +440,43 @@ class PartState {
     this.line.textContent = words;
     this.lineNote.textContent = note;
     this._slots = this._arrange(buttons, pressed);
-    /** @type {Array<[ButtonKey | 'spacer', HTMLElement]>} */
-    const items = [['try', this.tryButton], ['reload', this.reloadButton], ['anyway', this.anywayButton], ['spacer', this.spacer]];
-    for (const [key, item] of items) {
-      const slot = this._slots.indexOf(key);
-      item.hidden = slot === -1;
-      item.dataset.slot = String(Math.max(slot, 0));
-    }
-    this.actions.hidden = this._slots.length === 0;
+    const all = [this.tryButton, this.reloadButton, this.anywayButton, this.spacer];
+    const shown = this._slots.map((key) => this._buttonOf(key));
+    for (const item of all) item.hidden = !shown.includes(item);
+    this._order([...shown, ...all.filter((item) => item.hidden)]);
+    this.actions.hidden = shown.length === 0;
     this.place(element);
     this._say([words, note].filter(Boolean).join(' '), sayAgain);
+  }
+
+  /**
+   * @param {ButtonKey | 'spacer'} key
+   * @returns {HTMLButtonElement}
+   */
+  _buttonOf(key) {
+    if (key === 'try') return this.tryButton;
+    if (key === 'reload') return this.reloadButton;
+    if (key === 'anyway') return this.anywayButton;
+    return this.spacer;
+  }
+
+  /**
+   * Hold the buttons in `want`'s order, from where they start, which the row draws from its end
+   * beside the words and from the line's start under them. The page's order is the order Tab and
+   * a screen reader take, and a button drawn by it is in place at once, where a CSS order can be
+   * drawn a frame late in the panel's size container. Every button moves but the one with focus,
+   * which a move would take focus from; the others go around it.
+   * @param {Array<HTMLElement>} want
+   * @returns {void}
+   */
+  _order(want) {
+    const focused = want.find((item) => item === this.doc.activeElement) || null;
+    const pivot = focused ? want.indexOf(focused) : want.length;
+    want.forEach((item, at) => {
+      if (item === focused) return;
+      if (at < pivot) this.actions.insertBefore(item, focused);
+      else this.actions.appendChild(item);
+    });
   }
 
   /**

@@ -74,15 +74,16 @@ function shown({ part, host }) {
 const labelOf = (button) => (button.children.length === 2 ? button.children[0].textContent : button.textContent);
 
 /**
- * The shown buttons by their slot, from where the buttons start (the row's end beside the words,
- * the line's start under them): "slot:label", with "·" for a place kept empty at Try again's width
+ * The shown buttons in their order on the page, which is their order from where the buttons start
+ * (the row's end beside the words, the line's start under them): "slot:label", with "·" for a
+ * place kept empty at Try again's width
  */
 function slots({ part }) {
+  const placed = [...part.actions.children];
   return [part.tryButton, part.reloadButton, part.anywayButton, part.spacer]
-    .filter((item) => item && !item.hidden)
-    .map((item) => [Number(item.dataset.slot), item === part.spacer ? '·' : labelOf(item)])
-    .sort(([a], [b]) => a - b)
-    .map(([at, label]) => `${at}:${label}`);
+    .filter((item) => item && !item.hidden && placed.includes(item))
+    .sort((a, b) => placed.indexOf(a) - placed.indexOf(b))
+    .map((item, at) => `${at}:${item === part.spacer ? '·' : labelOf(item)}`);
 }
 
 /** Everything the live region says from now on, in order, without the emptying before each */
@@ -496,8 +497,10 @@ describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
   it("after a failed save from the Reload beside Try again, Try again takes that Reload's place, and its own stays empty", async () => {
     const ctx = charts({ saves: false });
     await ctx.part.load(async () => missing(async () => missing()));
+    ctx.part.tryButton.focus();
     ctx.part.tryButton.click();
     await settle();
+    ctx.part.reloadButton.focus();
     ctx.part.reloadButton.click();
     await settle();
     assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
@@ -505,6 +508,31 @@ describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
     ctx.part.tryButton.click();
     await settle();
     assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+  });
+
+  it('never moves the button with focus on the page, which would take its focus, and moves the others around it', async () => {
+    const ctx = charts({ saves: false });
+    await ctx.part.load(async () => missing(async () => missing()));
+    const { actions } = ctx.part;
+    const moved = [];
+    for (const method of ['appendChild', 'insertBefore']) {
+      const move = actions[method].bind(actions);
+      actions[method] = (child, ...rest) => {
+        if (child === ctx.doc.activeElement) moved.push(labelOf(child));
+        return move(child, ...rest);
+      };
+    }
+    ctx.part.tryButton.focus();
+    ctx.part.tryButton.click();
+    await settle();
+    ctx.part.reloadButton.focus();
+    ctx.part.reloadButton.click();
+    await settle();
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual(moved, []);
+    assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
   });
 
   it('a redraw leaves the buttons where they are, and a new load starts them again', async () => {
@@ -595,9 +623,8 @@ describe("a part's panel and its buttons (css/editor.css)", () => {
         values: { 'flex-direction': 'row-reverse', 'flex-wrap': 'nowrap', 'align-self': 'flex-start' },
       },
     ]);
-    // A button's slot is its order from where the buttons start
-    const order = cssRules(/^\.part-state-actions > \[data-slot="\d"\]$/).map(({ selectors, values }) => [selectors[0], values.order]);
-    assert.deepEqual(order, [['.part-state-actions > [data-slot="1"]', '1'], ['.part-state-actions > [data-slot="2"]', '2']]);
+    // The page's order is the buttons' order (js/ui/part-state.js), which no CSS order redraws late
+    assert.deepEqual(cssRules(/^\.part-state-(actions|try|reload|anyway|spacer|btn)\b/).filter(({ values }) => 'order' in values), []);
   });
 
   it('draws Reload anyway quiet, with no fill or border and the secondary label, still 44 px, and keeps an empty place empty', () => {

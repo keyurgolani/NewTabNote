@@ -5815,15 +5815,6 @@ kbd {
   }
 }
 
-/* A button's slot, from where the buttons start (js/ui/part-state.js, _arrange) */
-.part-state-actions > [data-slot="1"] {
-  order: 1;
-}
-
-.part-state-actions > [data-slot="2"] {
-  order: 2;
-}
-
 /* Reload anyway, the quiet one: no fill or border, the secondary label, still a 44 px target */
 .part-state-anyway {
   border-color: transparent;
