@@ -3,9 +3,10 @@
  * has them, each with its blocks and the versions on this profile it was made from, applied a
  * note at a time. Once it runs it answers with an outcome per note, and a plain outcome when it
  * doesn't. A note's title and blocks land only while it's at `expectedRevision`, and its pin,
- * archive, trash, template, and folder only while it's at `expectedPlacementVersion`; either
- * left out counts as 0. A part that doesn't land is a conflict, kept in `conflicts` with the
- * remote's part, and the note stays as it is. A note this profile doesn't have is made as the
+ * archive, trash, template, and folder only while it's at `expectedPlacementVersion`, a trash
+ * also only on the text it was made from; either left out counts as 0. A part that doesn't land
+ * is a conflict, kept in `conflicts` with the remote's part, and the note stays as it is. A
+ * note's outcome names what each part did. A note this profile doesn't have is made as the
  * remote has it, unless it was deleted here for good (`note-deleted`). It deletes no note
  * (application/remote.js).
  */

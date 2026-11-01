@@ -2,7 +2,10 @@
  * #17's conflict records (#17, "Merge"): what a command that lost to a newer version would
  * have written, kept in `conflicts` under its commandId, so a resend can't add a second one,
  * in the transaction that answers it `conflict` (adapter.js), which writes nothing else of it
- * but its ledger row. A record is `{id, noteId, scope, expected, current, at, command}`: the
+ * but its ledger row. One the note has already, the same change sent again under a new
+ * commandId, isn't kept again (R131). A remote change that replaced a 1.4.x note's text keeps
+ * that text in one too, as a stale save's (application/remote.js). A record is
+ * `{id, noteId, scope, expected, current, at, command}`: the
  * version the command expected and the one the note had, and the command itself, whose text
  * is the user's, kept by design so nothing typed is lost. It's the one new store that holds
  * note text (#17, "Security and privacy"). #6's conflict view reads it from #17 PR 4, and

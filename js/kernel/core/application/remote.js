@@ -5,17 +5,21 @@
  * are, and nothing sends these commands until #19 does.
  *
  * applyRemoteChanges takes a note at a time, so one note's conflict leaves the others to land,
- * and answers with an outcome per note. Each note's two parts go apart, each guarded by its own
- * version (#17, "Versions"):
+ * and answers with an outcome per note, which says what each part did (noteOutcome). Each
+ * note's two parts go apart, each guarded by its own version (#17, "Versions"):
  * - its content, its title and blocks (applyRemoteContent), lands only while the note is at the
  *   revision the change was made from;
  * - its placement, pinned, archived, trashed, a template, and its folder (applyRemotePlacement),
- *   only while the note is at that placement version.
+ *   only while the note is at that placement version. A trash also needs the text to be the
+ *   one the change was made from, since trash leads to deletion, and a remote delete over a
+ *   newer local edit keeps the note (the lead's Q2, condition 1; R131).
  * A change that says nothing it was made from counts as made from version 0, so it never lands
  * over an edit made here since #17. Otherwise that part is a conflict, which the adapter keeps
  * in `conflicts` with the part as the remote had it, the remote's text included, and the note
- * stays as it is. A part the note already has changes nothing, whatever its version, so no
- * resend moves a version or keeps a conflict.
+ * stays as it is. One that lands on a note at version 0, as 1.4.x stored it, keeps the title
+ * and blocks it replaced there instead, since neither side saw the other's text. A part the
+ * note already has changes nothing, whatever its version, so no resend moves a version or keeps
+ * a conflict.
  *
  * A note this profile doesn't have is made as the remote has it, unless it was deleted here for
  * good: then it stays deleted, and nothing of it is kept, since a conflict record would hold its
@@ -23,7 +27,7 @@
  */
 
 import { isId, isIdOrNull, isRecord } from '../contracts/checks.js';
-import { bulk, committed, rejected } from '../contracts/outcomes.js';
+import { bulk, committed, conflict, rejected } from '../contracts/outcomes.js';
 import {
   inBlockOrder,
   insertLinkText,
@@ -144,16 +148,56 @@ function placementOf(fields) {
 }
 
 /**
- * The note's outcome in a remote change: the first part's that didn't commit, else the last
- * part's that changed it, else the content part's
+ * The content part's code when it replaced the title and blocks of a note at version 0, as
+ * 1.4.x stored it, under a change that says nothing it was made from, and kept them as a
+ * conflict record (R131): a legacy replacement, which #6's conflict view tells from a conflict
+ */
+const REPLACED_LEGACY = 'remote-content-replaced-legacy';
+
+/**
+ * What a part's outcome adds to its note's code: `<part>-applied` for a part that changed the
+ * note, `content-replaced-legacy` for a legacy replacement, `<part>-<kind>` for one that didn't
+ * commit, and nothing for one that changed nothing
+ * @param {'content' | 'placement'} part
+ * @param {Outcome} outcome
+ * @returns {string | null}
+ */
+function partCode(part, outcome) {
+  if (outcome.kind !== 'committed') return `${part}-${outcome.kind}`;
+  if (outcome.changedIds.length === 0) return null;
+  return outcome.code === REPLACED_LEGACY ? 'content-replaced-legacy' : `${part}-applied`;
+}
+
+/**
+ * The note's outcome in a remote change, which says what each part did (R131). With nothing
+ * landed, it's the first part's that didn't commit, else the content part's. A part that landed
+ * with the other doing nothing answers as itself. A part that landed beside another that did
+ * something answers `committed`, so the list counts the note, with a code naming each part's in
+ * order, `remote-content-conflict-placement-applied` for a pin that landed beside text that
+ * didn't, say. It's a warning when part of the note went to `conflicts`.
  * @param {Outcome} content
  * @param {Outcome | undefined} placement
  * @returns {Outcome}
  */
 function noteOutcome(content, placement) {
-  if (content.kind !== 'committed' || !placement) return content;
-  if (placement.kind !== 'committed') return placement;
-  return placement.changedIds.length > 0 ? placement : content;
+  if (!placement) return content;
+  /** @type {import('../contracts/outcomes.js').Committed[]} */
+  const landed = [];
+  for (const part of [content, placement])
+    if (part.kind === 'committed' && part.changedIds.length > 0) landed.push(part);
+  if (landed.length === 0) {
+    if (content.kind !== 'committed') return content;
+    return placement.kind !== 'committed' ? placement : content;
+  }
+  const codes = [partCode('content', content), partCode('placement', placement)].filter(Boolean);
+  if (codes.length === 1) return landed[0];
+  const last = landed[landed.length - 1];
+  const setAside = content.kind !== 'committed' || placement.kind !== 'committed' || content.code === REPLACED_LEGACY;
+  return committed(`remote-${codes.join('-')}`, last.changedIds, {
+    revision: last.revision,
+    commitSeq: last.commitSeq,
+    severity: setAside ? 'warning' : 'success',
+  });
 }
 
 /** @type {{[T in RemoteCommandType]: CommandHandler<T>}} */
@@ -164,7 +208,7 @@ export const remoteCommands = {
     /** @type {BulkItem[]} */
     const items = [];
     for (const change of command.changes) {
-      const { note, blocks, expectedRevision = 0, expectedPlacementVersion = 0 } = change;
+      const { note, blocks, expectedRevision, expectedPlacementVersion = 0 } = change;
       const noteId = note.id;
       /** @type {Record<string, unknown>} */
       const placement = {};
@@ -181,12 +225,17 @@ export const remoteCommands = {
         noteId,
         note,
         blocks,
-        expectedRevision,
+        // None said, which counts as version 0 (applyRemoteContent)
+        expectedRevision: expectedRevision ?? null,
       });
       // A note it made has the remote's placement already, and one it couldn't write has none
       // to change. Its placement is applied whatever its content met, each on its own version.
       const placing =
         content.kind === 'conflict' || (content.kind === 'committed' && content.code !== 'remote-note-created');
+      // The text revision a trash lands on: the one the content part left, which holds the
+      // remote's text or text the same, or, when that part conflicted, the one the change was
+      // made from, which the note has moved past
+      const textRevision = content.kind === 'committed' ? content.revision : (expectedRevision ?? 0);
       const placed = placing
         ? await run({
             type: 'applyRemotePlacement',
@@ -194,6 +243,7 @@ export const remoteCommands = {
             noteId,
             placement,
             expectedPlacementVersion,
+            ...(textRevision === undefined ? {} : { expectedRevision: textRevision }),
           })
         : undefined;
       items.push({ id: noteId, outcome: noteOutcome(content, placed) });
@@ -205,21 +255,26 @@ export const remoteCommands = {
     const { noteId, note: remote, blocks, expectedRevision } = command;
     if (!isId(noteId) || !isRecord(remote) || remote.id !== noteId) return invalid();
     if (remote.name !== undefined && typeof remote.name !== 'string') return invalid();
-    // Each part says the version it was made from (applyRemoteChanges gives 0 for none)
-    if (expectedRevision === undefined || !isOptionalVersion(expectedRevision)) return invalid();
+    // Each part says the version it was made from, null when the change said none, which
+    // counts as version 0 (applyRemoteChanges)
+    if (expectedRevision === undefined) return invalid();
+    if (expectedRevision !== null && !isOptionalVersion(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
     /** @type {'created' | 'replaced' | 'unchanged'} */
     let result = 'unchanged';
+    // Whether the text it replaced went to `conflicts`, as a legacy replacement's does
+    let keptLocal = false;
     /** The names the note's wiki links hold once its blocks are the remote's */
     const linkedNames = /** @type {string[]} */ ([]);
     /** @type {Unit} */
     const apply = {
-      stores: ['notes', 'blocks', 'folders', 'searchIndex', 'tombstones'],
+      stores: ['notes', 'blocks', 'folders', 'searchIndex', 'tombstones', 'conflicts'],
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         result = 'unchanged';
+        keptLocal = false;
         linkedNames.length = 0;
         const local = await tx.get('notes', noteId);
         if (!local) {
@@ -256,8 +311,33 @@ export const remoteCommands = {
         const name = typeof remote.name === 'string' ? remote.name : local.name;
         // Already the note's title and blocks: nothing to apply, so no version moves
         if (name === local.name && sameRecords(stored, records)) return;
-        const stale = versionConflict(tx, noteId, { expectedRevision });
+        const stale = versionConflict(tx, noteId, { expectedRevision: expectedRevision ?? 0 });
         if (stale) return stale;
+        if (expectedRevision === null) {
+          // A change that says nothing it was made from lands only on a note at version 0, as
+          // 1.4.x stored it, though neither side saw the other's text. So the title and blocks
+          // it replaces are kept as a conflict record, as a stale save's are, under this part's
+          // commandId (R131). With no `conflicts` to keep them in, the change is the conflict.
+          const current = tx.versions('notes', noteId)?.revision ?? 0;
+          if (!tx.has('conflicts')) return conflict('revision-conflict', current);
+          const mine = {
+            type: 'saveNoteContent',
+            commandId: command.commandId,
+            noteId,
+            name: local.name,
+            blocks: stored,
+          };
+          tx.put('conflicts', {
+            id: command.commandId,
+            noteId,
+            scope: 'content',
+            expected: null,
+            current,
+            at: now,
+            command: /** @type {any} */ (mine),
+          });
+          keptLocal = true;
+        }
         const kept = new Set(records.map(block => block.id));
         for (const block of stored) if (!kept.has(block.id)) tx.delete('blocks', block.id);
         for (const block of records) tx.put('blocks', block);
@@ -288,6 +368,7 @@ export const remoteCommands = {
       ],
       () => {
         if (result === 'created') return committed('remote-note-created', [noteId]);
+        if (result === 'replaced' && keptLocal) return committed(REPLACED_LEGACY, [noteId], { severity: 'warning' });
         if (result === 'replaced') return committed('remote-content-applied', [noteId]);
         return committed('remote-content-unchanged', [], { severity: 'info' });
       },
@@ -296,9 +377,10 @@ export const remoteCommands = {
   },
 
   applyRemotePlacement(command, { clock }) {
-    const { noteId, placement, expectedPlacementVersion } = command;
+    const { noteId, placement, expectedPlacementVersion, expectedRevision } = command;
     if (!isId(noteId) || !isRecord(placement)) return invalid();
     if (expectedPlacementVersion === undefined || !isOptionalVersion(expectedPlacementVersion)) return invalid();
+    if (!isOptionalVersion(expectedRevision)) return invalid();
     const fields = placementOf(placement);
     if (!fields) return invalid();
     const now = clock.now();
@@ -319,7 +401,17 @@ export const remoteCommands = {
         );
         // Already placed as the remote has it: nothing to apply, so no version moves
         if (same) return;
-        const stale = versionConflict(tx, noteId, { expectedPlacementVersion });
+        // A trash needs the text revision the change was made from too, none said counting as
+        // 0, since trash leads to deletion (the lead's Q2, condition 1; R131). A pin, an archive,
+        // a template, and a folder need only the placement version.
+        const trashes = wanted.trashed === true && !local.trashed;
+        const stale = versionConflict(
+          tx,
+          noteId,
+          trashes
+            ? { expectedRevision: expectedRevision ?? 0, expectedPlacementVersion }
+            : { expectedPlacementVersion },
+        );
         if (stale) return stale;
         tx.put('notes', withPlacementGroup(local, { ...local, ...wanted, updatedAt: now }));
         placed = true;

@@ -149,7 +149,7 @@ describe("#17's AC1: every writer's scope and guard", () => {
     for (const [type, guard] of /** @type {Array<[CommandType, WriteGuard]>} */ (Object.entries(WRITE_GUARDS))) {
       const paths = versionPaths(type);
       if (guard.kind === 'guarded') {
-        assert.deepEqual(paths, [guard.guard], type);
+        assert.deepEqual(paths, [guard.guard, ...Object.keys(guard.also)], type);
         assert.equal(guard.guard.split('.').pop(), SCOPE_GUARDS[guard.scope], type);
       } else if (guard.kind === 'bulk') {
         // A bulk command carries no version of its own, only its items' for each note
