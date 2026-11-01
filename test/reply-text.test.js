@@ -61,19 +61,33 @@ const PLAIN_PIECES = [
   '- ', '* ', '1. ', '> ', '---', '***', '|', '|a|b|\n', '|-|:-:|\n', '**', '__', '*', '_', '- a\n', '1. a\n', "'", 'json',
 ];
 
-/** The smallest time of three calls, in ms */
-const timeOf = (fn, value) => {
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 3; k++) {
-    const start = performance.now();
-    fn(value);
-    best = Math.min(best, performance.now() - start);
-  }
-  return best;
+/** The time of one call, in ms */
+const timeOnce = (fn, value) => {
+  const start = performance.now();
+  fn(value);
+  return performance.now() - start;
 };
 
-/** Whether `fn` grows linearly: four times the input takes well under the sixteen times a quadratic read would */
-const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
+/**
+ * Whether `fn` grows linearly: four times the input takes well under the sixteen times a
+ * quadratic read would. The two sizes take turns, five calls each, and each keeps its best, so
+ * a busy machine slows both alike. The measure runs up to three times, so one stalled attempt
+ * doesn't decide it; a quadratic read misses every attempt.
+ */
+const linear = (fn, make) => {
+  const small = make(20_000);
+  const large = make(80_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let bestSmall = Number.POSITIVE_INFINITY;
+    let bestLarge = Number.POSITIVE_INFINITY;
+    for (let k = 0; k < 5; k++) {
+      bestSmall = Math.min(bestSmall, timeOnce(fn, small));
+      bestLarge = Math.min(bestLarge, timeOnce(fn, large));
+    }
+    if (bestLarge < Math.max(bestSmall * 8, 50)) return true;
+  }
+  return false;
+};
 
 describe("an AI reply's text is shown as text", () => {
   it("a reply's markup characters show as the reply wrote them", () => {
@@ -125,5 +139,7 @@ describe("an AI reply's text is shown as text", () => {
     assert.ok(linear(render, n => `\`\`\`${'a'.repeat(n)}`));
     assert.ok(linear(render, n => '&<"'.repeat(n / 3)));
     assert.ok(linear(render, n => '[a](b)'.repeat(n / 6)));
+    assert.ok(linear(render, n => `a${' '.repeat(n)}b`));
+    assert.ok(linear(render, n => `[a](b${'\t'.repeat(n)}c)`));
   });
 });
