@@ -179,6 +179,24 @@ class TabController {
    * @param {{quiet?: boolean}} [options]
    * @returns {Promise<boolean>}
    */
+  /**
+   * The button of the notice an open editor shows for changes it couldn't save (the reload-required
+   * notice's Reload, or a deleted note's Save as a new note), when the editors' notices explain
+   * every save that failed. A part's Reload that a save stopped lets that notice speak and moves
+   * focus to its button (#27 slice 3b). Null when no editor shows one, or a failed save has no
+   * notice of its own, which the part's own line says.
+   * @returns {HTMLElement | null}
+   */
+  ownNoticeButton() {
+    let button = null;
+    for (const editor of this.getOpenEditors()) {
+      const own = editor.ownNoticeButton();
+      if (own) button = button || own;
+      else if (editor.hasFailedSave()) return null;
+    }
+    return button;
+  }
+
   async saveOpenEditors(options) {
     const saved = await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave(options)));
     return saved.every((answer) => answer === true);

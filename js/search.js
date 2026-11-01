@@ -4,15 +4,15 @@
 class SearchEngine {
     /**
      * @param {Object} [options] - Fuse.js's, over these defaults
-     * @param {{loadLibrary?: Function|null, showUnexpectedError?: Function|null}} [ports] - App's:
-     *   the page loader's loadLibrary, which Fuse.js loads through at the first index (#27 slice
-     *   3), and the toast a library that didn't load lands on. Without loadLibrary, Fuse.js is the
-     *   global its script defined, as before.
+     * @param {{loadLibrary?: Function|null}} [ports] - App's: the page loader's loadLibrary, which
+     *   Fuse.js loads through at the first index (#27 slice 3). Without it, Fuse.js is the global
+     *   its script defined, as before.
      */
-    constructor(options = {}, { loadLibrary = null, showUnexpectedError = null } = {}) {
+    constructor(options = {}, { loadLibrary = null } = {}) {
         this.fuse = null;
         this.loadLibrary = loadLibrary;
-        this.showUnexpectedError = showUnexpectedError;
+        /** @type {Array<{noteId: string, vector: Array<number>}>} */
+        this.vectors = [];
         this.options = {
             keys: [
                 { name: 'name', weight: 0.7 },
@@ -27,28 +27,25 @@ class SearchEngine {
     }
 
     /**
-     * Initialize or update the search index with new data.
+     * Initialize or update the search index with new data. Answers the loader's Result for
+     * Fuse.js (#27 slice 3b): loaded, or failed with its reason and retry, when the index stays
+     * as it was and each caller says so where its results go.
      * @param {Array<Object>} data - Array of indexable items
-     * @returns {Promise<void>}
+     * @returns {Promise<any>}
      */
     async updateIndex(data) {
-        const FuseLibrary = await this.fuseLibrary();
-        if (!FuseLibrary) return;
-        this.fuse = new FuseLibrary(data, this.options);
+        const loaded = await this.fuseLibrary();
+        if (loaded.status === 'loaded') this.fuse = new loaded.module(data, this.options);
+        return loaded;
     }
 
     /**
-     * Fuse.js: through the page's loader, at the first index, or the global without it. One that
-     * didn't load leaves the index as it was, and the page shows what a failure here showed
-     * before, the "An unexpected error occurred" toast, so it answers null.
-     * @returns {Promise<any>}
+     * Fuse.js: through the page's loader, at the first index, or the global without it
+     * @returns {Promise<any>} the loader's Result
      */
     async fuseLibrary() {
-        if (!this.loadLibrary) return Fuse;
-        const loaded = await this.loadLibrary('fuse');
-        if (loaded.status === 'loaded') return loaded.module;
-        if (this.showUnexpectedError) this.showUnexpectedError('SearchEngine', new Error(`Fuse.js didn't load (${loaded.reason})`));
-        return null;
+        if (!this.loadLibrary) return { status: 'loaded', module: Fuse };
+        return this.loadLibrary('fuse');
     }
 
     /**
@@ -61,6 +58,49 @@ class SearchEngine {
     }
 
     /**
+     * Whether the model's matches join the keyword ones: the notes have vectors to match
+     * @returns {boolean}
+     */
+    get semantic() {
+        return typeof Embeddings !== 'undefined' && this.vectors.length > 0;
+    }
+
+    /**
+     * Keyword matches from the index Fuse.js built, best first; none without an index
+     * @param {string} query
+     * @returns {Array<any>}
+     */
+    keywordSearch(query) {
+        if (!query || !this.fuse) return [];
+        return this.fuse.search(query).map(result => ({
+            ...result.item,
+            // Search entries name their note as noteId, as the indexer writes them
+            id: result.item.noteId ?? result.item.id,
+            keywordScore: 1 - result.score, // Convert 0 (perfect) to 1 (perfect)
+            matches: result.matches
+        }));
+    }
+
+    /**
+     * The model's matches for `query`, by its vectors: none while the model isn't loaded or the
+     * notes have none
+     * @param {string} query
+     * @returns {Promise<Array<{id: string, semanticScore: number}>>}
+     */
+    async semanticSearch(query) {
+        if (!query || !this.semantic) return [];
+        const queryVector = await Embeddings.generateEmbedding(query);
+        if (!queryVector) return [];
+        return this.vectors.map(item => {
+            const similarity = Embeddings.cosineSimilarity(queryVector, item.vector);
+            return {
+                id: item.noteId,
+                semanticScore: similarity
+            };
+        }).filter(r => r.semanticScore > 0.6); // Threshold for semantic relevance
+    }
+
+    /**
      * Perform hybrid search combining keyword and semantic results.
      * @param {string} query - Search query
      * @returns {Promise<Array<{id: string, score: number, isSemantic?: boolean}>>} Ranked search results
@@ -69,31 +109,10 @@ class SearchEngine {
         if (!query) return [];
 
         // 1. Keyword Search (Fuse.js)
-        let keywordResults = [];
-        if (this.fuse) {
-            keywordResults = this.fuse.search(query).map(result => ({
-                ...result.item,
-                // Search entries name their note as noteId, as the indexer writes them
-                id: result.item.noteId ?? result.item.id,
-                keywordScore: 1 - result.score, // Convert 0 (perfect) to 1 (perfect)
-                matches: result.matches
-            }));
-        }
+        const keywordResults = this.keywordSearch(query);
 
         // 2. Semantic Search (Vectors)
-        let semanticResults = [];
-        if (typeof Embeddings !== 'undefined' && this.vectors.length > 0) {
-            const queryVector = await Embeddings.generateEmbedding(query);
-            if (queryVector) {
-                semanticResults = this.vectors.map(item => {
-                    const similarity = Embeddings.cosineSimilarity(queryVector, item.vector);
-                    return {
-                        id: item.noteId,
-                        semanticScore: similarity
-                    };
-                }).filter(r => r.semanticScore > 0.6); // Threshold for semantic relevance
-            }
-        }
+        const semanticResults = await this.semanticSearch(query);
 
         // 3. Combine and Rank
         const combined = new Map();

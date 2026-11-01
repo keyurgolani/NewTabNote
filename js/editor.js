@@ -4592,6 +4592,24 @@ class BlockEditor {
   }
 
   /**
+   * The button of the notice this editor shows for changes it couldn't save: the reload-required
+   * notice's Reload, or the deleted note's Save as a new note. Null when it shows neither.
+   * @returns {HTMLElement | null}
+   */
+  ownNoticeButton() {
+    const notice = this._reloadNotice || this._noteGoneNotice;
+    return notice ? notice.querySelector('button') : null;
+  }
+
+  /**
+   * A save of this editor's failed, its one retry included, and nothing has stored it since
+   * @returns {boolean}
+   */
+  hasFailedSave() {
+    return this._failedSeq.size > 0;
+  }
+
+  /**
    * @returns {void}
    */
   _clearNoteGone() {

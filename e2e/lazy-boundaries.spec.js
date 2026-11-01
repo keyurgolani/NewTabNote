@@ -3,13 +3,13 @@
  * loader, and the workspace chunk, and loads each vendored library at its first use: Chart.js at
  * the first Stats, Fuse.js at the first search, JSZip at the first Markdown export, and
  * transformers.js at the embedding model's first load. With a library's file gone, as a damaged
- * install or an update under an open page leaves it, each lands where a failure there landed
- * before (R1): Stats and search on "An unexpected error occurred", through App's path and never
- * an unhandled rejection; the export on "Export failed"; the model on its load failure. The
- * loader logs a line with the build, the library, and the reason, and typing still saves. Under
- * a build-info.json of another build, a library doesn't run: build-mismatch. A workspace chunk
- * that's gone, or a start that throws before App takes over, leaves the shell the page shows
- * today, with the boot guard's line; a rejection that doesn't stop the start is no failed start.
+ * install or an update under an open page leaves it, the place where the part goes says so, with
+ * Try again (#27 slice 3b; e2e/part-states.spec.js has every state), and no toast says it or an
+ * unhandled rejection. The loader logs a line with the build, the library, and the reason, and
+ * typing still saves. Under a build-info.json of another build, a library doesn't run:
+ * build-mismatch, with Reload alone. A workspace chunk that's gone, or a start that throws before
+ * App takes over, shows the boot failure with the boot guard's line; a rejection that doesn't stop
+ * the start is no failed start.
  */
 
 const fs = require('fs');
@@ -139,12 +139,18 @@ test("the embedding model's first load loads transformers.js", async ({ extensio
   expect(asked).toEqual(['js/lib/transformers.js']);
 });
 
-for (const { label, file, chunk, act, toast } of [
-  { label: 'Stats', file: 'js/lib/chart.js', chunk: 'chart', act: openStats, toast: 'An unexpected error occurred' },
-  { label: 'search', file: 'js/lib/fuse.js', chunk: 'fuse', act: (page) => driver.searchNotes(page, 'Untitled'), toast: 'An unexpected error occurred' },
-  { label: 'the Markdown export', file: 'js/lib/jszip.min.js', chunk: 'jszip', act: exportMarkdown, toast: 'Export failed' },
+for (const { label, file, chunk, act, place, words } of [
+  { label: 'Stats', file: 'js/lib/chart.js', chunk: 'chart', act: openStats, place: '.charts-grid > .part-state', words: 'Failed to load the charts. Please try again.' },
+  {
+    label: 'search', file: 'js/lib/fuse.js', chunk: 'fuse', act: (page) => driver.searchNotes(page, 'Untitled'),
+    place: '#sidebar-notes-list > .part-state', words: 'Failed to load search. Please try again.',
+  },
+  {
+    label: 'the Markdown export', file: 'js/lib/jszip.min.js', chunk: 'jszip', act: exportMarkdown,
+    place: '.settings-section > .part-state', words: 'Failed to export your notes as Markdown. Please try again.',
+  },
 ]) {
-  test(`${label} with ${file} gone shows "${toast}" as before, the loader logs why, and typing still saves`, async ({ playwright, headless }, testInfo) => {
+  test(`${label} with ${file} gone says so where it goes, with Try again and no toast, the loader logs why, and typing still saves`, async ({ playwright, headless }, testInfo) => {
     await withChangedBuild({ playwright, headless }, testInfo, { remove: [file] }, async (extension, dist) => {
       const { buildId } = JSON.parse(fs.readFileSync(path.join(dist, 'build-info.json'), 'utf8'));
       const lines = consoleLines(extension, 'NewTabNote loader:');
@@ -154,7 +160,9 @@ for (const { label, file, chunk, act, toast } of [
       await untilIdleWorkRan(page);
       await driver.recordToasts(page);
       await act(page);
-      await expect.poll(() => page.evaluate(() => window.__ntnToasts.map(({ text }) => text))).toContain(toast);
+      await expect(page.locator(place)).toContainText(words);
+      await expect(page.locator(place).getByRole('button', { name: 'Try again' })).toBeVisible();
+      expect(await page.evaluate(() => window.__ntnToasts.map(({ text }) => text))).toEqual([]);
       await expect.poll(() => lines.map(({ detail }) => detail)).toContainEqual({ buildId, chunk, reason: 'chunk-missing' });
       // The file, and the one retry, which the module map hasn't cached as failed
       expect(asked).toEqual([file, `${file}?r=1`]);
@@ -179,7 +187,7 @@ test("the embedding model with js/lib/transformers.js gone fails its load as bef
     const page = await driver.openNewTab(extension);
     await untilIdleWorkRan(page);
     await driver.recordToasts(page);
-    await page.evaluate(() => Embeddings.init());
+    expect(await page.evaluate(async () => (await Embeddings.init()).status)).toBe('failed');
     expect(await page.evaluate(() => [Embeddings.pipeline, Embeddings.isReady])).toEqual([null, false]);
     await expect.poll(() => lines.map(({ detail }) => detail)).toContainEqual({ buildId, chunk: 'transformers', reason: 'chunk-missing' });
     await expect.poll(() => failures.length).toBe(1);
@@ -190,7 +198,7 @@ test("the embedding model with js/lib/transformers.js gone fails its load as bef
   });
 });
 
-test("a library under another build's build-info.json doesn't run: build-mismatch, which still lands on Stats' toast", async ({ playwright, headless }, testInfo) => {
+test("a library under another build's build-info.json doesn't run: build-mismatch, which the charts say with Reload alone", async ({ playwright, headless }, testInfo) => {
   // Chart.js stays at its path, as a newer build's would after an update under the page
   const changes = {
     edit: { 'build-info.json': (text) => text.replace(/"buildId": "[^"]+"/, '"buildId": "an-update-under-the-page"') },
@@ -204,7 +212,11 @@ test("a library under another build's build-info.json doesn't run: build-mismatc
     await untilIdleWorkRan(page);
     await driver.recordToasts(page);
     await openStats(page);
-    await expect.poll(() => page.evaluate(() => window.__ntnToasts.map(({ text }) => text))).toContain('An unexpected error occurred');
+    const panel = page.locator('.charts-grid > .part-state');
+    await expect(panel).toContainText("Failed to load the charts. Reloading the page may fix it, and doesn't delete your notes.");
+    await expect(panel.getByRole('button', { name: 'Reload' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Try again' })).toBeHidden();
+    expect(await page.evaluate(() => window.__ntnToasts.map(({ text }) => text))).toEqual([]);
     // The page's own build, which the build wrote into the loader, against the one on disk
     await expect.poll(() => lines.map(({ detail }) => detail)).toContainEqual({ buildId, chunk: 'chart', reason: 'build-mismatch' });
     // The loader checks before it puts the library in, so the page asks for no file
@@ -234,7 +246,7 @@ test("a rejection that doesn't stop the start is no failed start: the boot guard
   });
 });
 
-test('a start that throws before App runs init is a failed start: the page keeps the shell, and the boot guard logs why', async ({ playwright, headless }, testInfo) => {
+test('a start that throws before App runs init is a failed start: the boot failure shows, and the boot guard logs why', async ({ playwright, headless }, testInfo) => {
   const workspace = chunkFile(resolveDist(), 'workspace');
   // App never reaches the page, so the composition root's start throws as it constructs it
   const noApp = "Object.defineProperty(window, 'App', { configurable: true, get: () => undefined, set: () => {} });\n";
@@ -248,14 +260,16 @@ test('a start that throws before App runs init is a failed start: the page keeps
     // The chunk loaded: the loader has nothing to say
     expect(lines).toEqual([]);
     expect(await page.evaluate(() => typeof window.app)).toBe('undefined');
-    await expect(page.locator('#editor-container')).toBeAttached();
+    await expect(page.locator('#ntn-boot-failure').getByRole('alert')).toHaveText(/NewTabNote couldn't start\.\s*Reloading doesn't delete your notes\./);
+    await expect(page.locator('#ntn-boot-failure').getByRole('button', { name: 'Reload' })).toBeFocused();
+    await expect(page.locator('#editor-container')).toBeHidden();
     await expect(page.getByText('Failed to initialize')).toHaveCount(0);
     // The root caught the throw: nothing went unhandled
     await expectNoUncaught(extension, page);
   });
 });
 
-test('a new tab whose workspace chunk is gone keeps the shell it shows today, and the boot guard logs why', async ({ playwright, headless }, testInfo) => {
+test('a new tab whose workspace chunk is gone shows the boot failure in place of the shell, and the boot guard logs why', async ({ playwright, headless }, testInfo) => {
   const workspace = chunkFile(resolveDist(), 'workspace');
   await withChangedBuild({ playwright, headless }, testInfo, { remove: [workspace] }, async (extension, dist) => {
     const { buildId } = JSON.parse(fs.readFileSync(path.join(dist, 'build-info.json'), 'utf8'));
@@ -265,9 +279,13 @@ test('a new tab whose workspace chunk is gone keeps the shell it shows today, an
     const page = await driver.openNewTab(extension, { wait: false });
     await expect.poll(() => guard.map(({ detail }) => detail)).toEqual([{ buildId, chunk: 'workspace', reason: 'chunk-missing' }]);
     await expect.poll(() => lines.map(({ detail }) => detail)).toEqual([{ buildId, chunk: 'workspace', reason: 'chunk-missing' }]);
-    // No app, and no copy or element slice 3b adds: the page is the static shell
+    // No app: the boot failure, in place of the shell, which is hidden and inert
     expect(await page.evaluate(() => typeof window.app)).toBe('undefined');
-    await expect(page.locator('#editor-container')).toBeAttached();
+    const failure = page.locator('#ntn-boot-failure');
+    await expect(failure.getByRole('alert')).toHaveText(/NewTabNote couldn't start\.\s*Reloading doesn't delete your notes\./);
+    await expect(failure.getByRole('button', { name: 'Reload' })).toBeFocused();
+    expect(await page.title()).toBe("NewTabNote couldn't start");
+    expect(await page.locator('#app').evaluate((app) => [app.hidden, app.inert])).toEqual([true, true]);
     await expect(page.getByText('Failed to initialize')).toHaveCount(0);
     await expect(page.getByText(/reinstall/i)).toHaveCount(0);
     await expectNoUncaught(extension, page);

@@ -48,8 +48,7 @@
       "alias-use": 33
     },
     "css/stats.css": {
-      "undefined-var": 4,
-      "gradient-text": 1,
+      "undefined-var": 3,
       "transition-all": 1,
       "alias-use": 14
     },

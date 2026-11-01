@@ -566,9 +566,10 @@ body.focus-mode .block:focus-within {
   color: var(--accent-color);
 }
 
-/* Header */
+/* Header. It keeps its height in its column, which a long stats page would squeeze. */
 #header {
   height: var(--header-height);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5650,8 +5651,9 @@ kbd {
 
 /* One-time notice to export before the storage upgrade (js/ui/export-notice.js), between the
    note's title and its blocks. #export-notice is always on the page, with nothing to show until
-   the notice fills it. */
-.export-notice.is-shown {
+   the notice fills it. A part's failure (.part-state, #27 slice 3b) is a card in its form. */
+.export-notice.is-shown,
+.part-state {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5736,9 +5738,131 @@ kbd {
 }
 
 .storage-guard-btn,
-.export-notice-btn {
+.export-notice-btn,
+.part-state-btn {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* A part that loads at its first use says how its load went where the part goes (#27 slice 3b,
+   js/ui/part-state.js): a failure in the export notice's form, or a status line once a load has run
+   400 ms. Screen readers hear the words through .part-state-live, on the page before they change. */
+.part-state {
+  gap: 12px 20px;
+  margin: 0;
+  padding: 14px 16px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.part-state.is-narrow {
+  gap: 10px;
+  padding: 12px;
+}
+
+/* A row of a section that is a card already (Settings > Data & Backup) */
+.part-state.is-flat {
+  margin-top: 14px;
+  padding: 14px 0 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* The status line of a load nobody pressed for */
+.part-state.is-line {
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+}
+
+.part-state-text {
+  flex: 1 1 260px;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.is-narrow .part-state-text {
+  flex-basis: 100%;
+}
+
+.part-state-note {
+  display: block;
+  font-size: 0.8125rem;
+}
+
+.part-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The glyph's shape and the words carry the state; #20's role colour comes back as a token with #16 */
+.part-state-glyph {
+  flex: none;
+  margin-top: 2px;
+}
+
+.part-state.is-line,
+.part-state-note,
+.part-state-glyph {
+  color: var(--text-secondary);
+}
+
+/* The arc turns for its first 5 s, then holds still beside the words (WCAG 2.2.2) */
+.part-state-spin {
+  animation: spin 1s linear 5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .part-state-spin {
+    animation: none;
+  }
+}
+
+/* A button keeps its place, its width, and its focus while its action runs */
+.part-state-btn[aria-disabled="true"] {
+  cursor: progress;
+}
+
+.part-state-swap {
+  display: inline-grid;
+  place-items: center;
+}
+
+.part-state-swap > span {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.part-state-swap > [data-reserved] {
+  visibility: hidden;
+}
+
+/* A button a state doesn't show, whatever display its class gives it */
+.part-state [hidden] {
+  display: none;
+}
+
+.part-state-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.charts-grid > .part-state {
+  grid-column: 1 / -1;
+}
+
+#sidebar-notes-list > .part-state {
+  margin: 12px;
 }
 
 /* A save found the open note deleted (BlockEditor._onNoteGone); stays in view while the pane scrolls */

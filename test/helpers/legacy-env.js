@@ -1183,6 +1183,7 @@ const NEW_TAB_FILES = [
   'js/utils.js',
   'js/core/storage-error.js',
   'js/ui/confirm-dialog.js',
+  'js/ui/part-state.js',
   'js/storage.js',
   'js/sidebar-utils.js',
   'js/blocks.js',

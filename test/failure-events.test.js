@@ -684,7 +684,7 @@ describe("the embedding model's load reports a model that won't load (js/embeddi
     const Embeddings = env.get('Embeddings');
     if (events) Embeddings.events = events;
     await Embeddings.init();
-    // Each note it embeds tries the load again
+    // The failure holds until Try again (#27 slice 3b): the notes it embeds after it don't load again
     const vectors = [await Embeddings.generateEmbedding(TITLE), await Embeddings.generateEmbedding(CREDENTIAL)];
     if (events) await events.flush();
     return { env, Embeddings, vectors };
@@ -713,7 +713,7 @@ describe("the embedding model's load reports a model that won't load (js/embeddi
     }
     const [, logs, vectors] = runs[0];
     assert.deepEqual(vectors, [null, null]);
-    assert.equal(logs.filter(([level, args]) => level === 'error' && args[0] === 'Embeddings: Failed to load model:').length, 3);
+    assert.equal(logs.filter(([level, args]) => level === 'error' && args[0] === 'Embeddings: Failed to load model:').length, 1);
     for (const [name, ...rest] of runs.slice(1)) assert.deepEqual(rest, runs[0].slice(1), name);
   });
 });

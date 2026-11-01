@@ -58,6 +58,19 @@ class SidebarController {
     this.sidebarResizer = null;
     // SearchEngine reference (set by App)
     this.searchEngine = null;
+    /** @type {any} App's guarded Reload for search's and the model's failures (App.partReload), set by App */
+    this.partReload = null;
+    /** @type {any} The model's places (a PartGroup), set by App: one state here and in Related Notes */
+    this.modelParts = null;
+    /** @type {any} Search's place in the list (#27 slice 3b), made at init with its live region */
+    this._searchPart = undefined;
+    /** @type {any} The model's place under search's results */
+    this._modelPart = undefined;
+    /** @type {HTMLElement[]} The model's matches drawn under the keyword ones */
+    this._modelItems = [];
+    // What the list holds beside a failure, which the failure's line says
+    this._meaningOnly = false;
+    this._keywordListed = false;
 
     // Virtual scroller instance for large flat lists
     /** @type {VirtualScroller|null} */
@@ -195,6 +208,9 @@ class SidebarController {
     this.applySidebarWidth();
     this.applySidebarViewMode();
     this._bindSidebarListeners();
+    // Search's and the model's live regions go on the page now, before they have anything to say
+    this.searchPlace();
+    this.modelPlace();
     this.setupCalendar();
     this.setupSidebarResize();
     this.setupSidebarViewToggle();
@@ -1127,6 +1143,7 @@ class SidebarController {
       await this.renderSearchResults(list);
       return;
     }
+    this._leaveSearch();
 
     // Notes view uses folder tree — not compatible with virtual scrolling
     if (this.sidebarView === 'notes') {
@@ -1418,28 +1435,214 @@ class SidebarController {
 
   // ─── Search ───
 
-  async renderSearchResults(list) {
-    const searchIndexData = await this.refreshSearchIndexEntries();
-    // Fuse.js builds from every entry before the search runs: it loads at the first one (#27 slice 3)
-    if (this.searchEngine) await this.searchEngine.updateIndex(searchIndexData);
-    const searchResults = this.searchEngine ? await this.searchEngine.search(this.searchQuery) : [];
+  /**
+   * Search's place (#27 slice 3b, js/ui/part-state.js): where Fuse.js's load says how it went,
+   * first in the list, where "No matching notes" goes, in the sidebar's narrow card. Its live
+   * region sits in the sidebar, outside the list each keystroke draws again. Null without the
+   * sidebar's markup.
+   * @returns {any}
+   */
+  searchPlace() {
+    if (this._searchPart !== undefined) return this._searchPart;
+    const sidebar = document.getElementById('sidebar');
+    const list = document.getElementById('sidebar-notes-list');
+    if (!sidebar || !list || typeof PartState === 'undefined') {
+      this._searchPart = null;
+      return null;
+    }
+    this._searchPart = new PartState({
+      doc: document,
+      words: PART_WORDS.search,
+      live: sidebar,
+      form: 'narrow',
+      place: (/** @type {HTMLElement | null} */ element) => {
+        const drawn = this._searchPart.element;
+        if (!element) {
+          if (drawn && drawn.parentNode) drawn.remove();
+          return;
+        }
+        if (element.parentNode === list) return;
+        // Where the results go: the list shows it alone until the search draws under it
+        this._destroyVirtualScroller();
+        list.innerHTML = '';
+        list.appendChild(element);
+      },
+      reload: this.partReload,
+      // Try again worked: the search runs again for the words typed, and says what it found
+      loaded: () => this.renderSearchResults(list, { tried: true }),
+      focusAfter: () => document.getElementById('sidebar-search'),
+      note: () => (this._meaningOnly ? PART_NOTES.meaningOnly : ''),
+    });
+    return this._searchPart;
+  }
 
+  /**
+   * The model's place under search's results: its status while it loads, where its matches then
+   * join the keyword ones, or its failure, which Related Notes shows too (#27 slice 3b, change 12)
+   * @returns {any}
+   */
+  modelPlace() {
+    if (this._modelPart !== undefined) return this._modelPart;
+    const sidebar = document.getElementById('sidebar');
+    const list = document.getElementById('sidebar-notes-list');
+    if (!sidebar || !list || typeof PartState === 'undefined') {
+      this._modelPart = null;
+      return null;
+    }
+    this._modelPart = new PartState({
+      doc: document,
+      words: PART_WORDS.semantic,
+      live: sidebar,
+      form: 'narrow',
+      place: (/** @type {HTMLElement | null} */ element) => {
+        const drawn = this._modelPart.element;
+        if (!element) {
+          if (drawn && drawn.parentNode) drawn.remove();
+          return;
+        }
+        // Under everything the list holds
+        if (element.parentNode !== list || list.lastChild !== element) list.appendChild(element);
+      },
+      group: this.modelParts,
+      reload: this.partReload,
+      loaded: (/** @type {any} */ result, /** @type {{focus: boolean}} */ { focus }) => this.renderSearchResults(list, { tried: focus }),
+      focusAfter: () => document.getElementById('sidebar-search'),
+      note: () => (this._keywordListed ? PART_NOTES.keywordOnly : ''),
+    });
+    return this._modelPart;
+  }
+
+  /**
+   * The list leaves search: what search drew beside its results goes, and a load still running
+   * for it draws nothing
+   * @returns {void}
+   */
+  _leaveSearch() {
+    for (const part of [this._searchPart, this._modelPart]) if (part) part.stop();
+    this._dropModelItems();
+  }
+
+  /** @returns {void} */
+  _dropModelItems() {
+    for (const item of this._modelItems) if (item.parentNode) item.remove();
+    this._modelItems = [];
+  }
+
+  /**
+   * The notes `results` name, in the view's list, best first
+   * @param {Array<any>} results
+   * @returns {Array<any>}
+   */
+  _matchingNotes(results) {
     let sourceNotes = this.notes;
     if (this.sidebarView === 'archive') sourceNotes = this.archivedNotes;
     if (this.sidebarView === 'trash') sourceNotes = this.trashedNotes;
 
-    const searchResultIds = new Set(searchResults.map(r => r.id));
+    const score = (/** @type {any} */ r) => (r.score !== undefined ? r.score : r.keywordScore !== undefined ? r.keywordScore : r.semanticScore);
+    const searchResultIds = new Set(results.map(r => r.id));
     const filteredNotes = sourceNotes.filter(n => searchResultIds.has(n.id));
-    const scoreMap = new Map(searchResults.map(r => [r.id, r.score]));
+    const scoreMap = new Map(results.map(r => [r.id, score(r)]));
     filteredNotes.sort((a, b) => (scoreMap.get(b.id) || 0) - (scoreMap.get(a.id) || 0));
+    return filteredNotes;
+  }
 
-    if (filteredNotes.length === 0) {
+  /**
+   * The search's results for the words typed. Fuse.js's keyword matches draw at once, and the
+   * model's join under them where its status was, so nothing drawn moves (#27 slice 3b); once the
+   * model has loaded, the two rank together, as before. Fuse.js's failure goes first in the list,
+   * where "No matching notes" would be, and the model's under the keyword matches.
+   * @param {HTMLElement} list
+   * @param {{tried?: boolean}} [options] - Try again here ran it: the list's count is said
+   * @returns {Promise<void>}
+   */
+  async renderSearchResults(list, { tried = false } = {}) {
+    const query = this.searchQuery;
+    const searchIndexData = await this.refreshSearchIndexEntries();
+    const search = this.searchPlace();
+    const engine = this.searchEngine;
+    // Fuse.js builds from every entry before the search runs: it loads at the first one (#27 slice 3)
+    let indexed = null;
+    if (engine) {
+      const index = () => engine.updateIndex(searchIndexData);
+      indexed = search ? await search.loading(index) : await index();
+    }
+    // A newer keystroke draws its own results
+    if (query !== this.searchQuery) return;
+    const searchFailed = Boolean(indexed && indexed.status !== 'loaded');
+
+    const model = this.modelPlace();
+    // With the model's vectors and no model yet, the keyword matches draw now and its matches
+    // come under them; otherwise both rank together, as before
+    const modelComing = Boolean(engine && engine.semantic && !Embeddings.isReady && model);
+    const first = !engine ? [] : modelComing ? engine.keywordSearch(query) : await engine.search(query);
+    if (query !== this.searchQuery) return;
+    const listed = this._matchingNotes(first);
+
+    this._dropModelItems();
+    // Without Fuse.js, what's listed is the model's
+    this._meaningOnly = searchFailed && listed.length > 0;
+    this._keywordListed = !searchFailed && listed.length > 0;
+    if (search && searchFailed) {
+      // Search's failure stays first, and the results it has go under it
+      this._destroyVirtualScroller();
+      list.innerHTML = '';
+      search.fail(indexed);
+      listed.forEach(note => list.appendChild(this.createSidebarNoteItem(note)));
+    } else {
+      if (search) search.clear();
+      if (listed.length === 0 && !modelComing) {
+        this._destroyVirtualScroller();
+        list.innerHTML = '';
+        this.renderEmptySidebar(list, true);
+      } else {
+        this._renderFlatNoteList(list, listed);
+      }
+    }
+    if (model && !modelComing) model.clear();
+    if (tried) this._sayCount(listed.length);
+    if (!modelComing) return;
+
+    // The model loads, with its status under the matches, and its matches take the status's place
+    const loaded = await model.loading(() => Embeddings.init());
+    if (query !== this.searchQuery) return;
+    if (loaded.status !== 'loaded') {
+      model.fail(loaded);
+      if (listed.length === 0 && !searchFailed) {
+        // Nothing matched the words: the model's failure says why nothing more is listed
+        list.querySelectorAll('.sidebar-empty').forEach((empty) => empty.remove());
+      }
+      return;
+    }
+    model.clear();
+    const shown = new Set(listed.map(note => note.id));
+    const added = this._matchingNotes(await engine.semanticSearch(query)).filter(note => !shown.has(note.id));
+    if (query !== this.searchQuery) return;
+    for (const note of added) {
+      const item = this.createSidebarNoteItem(note);
+      list.appendChild(item);
+      this._modelItems.push(item);
+    }
+    if (searchFailed && added.length > 0 && search) {
+      this._meaningOnly = true;
+      search.redraw();
+    }
+    if (listed.length === 0 && added.length === 0 && !searchFailed) {
       this._destroyVirtualScroller();
       list.innerHTML = '';
       this.renderEmptySidebar(list, true);
-    } else {
-      this._renderFlatNoteList(list, filteredNotes);
     }
+  }
+
+  /**
+   * Say what the list holds now that Try again drew it: "3 notes match.", "1 note matches.", or
+   * the list's own "No matching notes"
+   * @param {number} count
+   * @returns {void}
+   */
+  _sayCount(count) {
+    const part = this._searchPart;
+    if (!part) return;
+    part.announce(count === 0 ? 'No matching notes' : count === 1 ? '1 note matches.' : `${count} notes match.`);
   }
 
   // ─── Folder context menu ───
