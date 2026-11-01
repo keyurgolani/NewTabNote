@@ -127,6 +127,11 @@ function derivedTx(tx) {
         if (store === 'notes') for (const key of keys) found.add(key);
         return keys;
       }),
+    getKey: (store, key) =>
+      tx.getKey(store, key).then(stored => {
+        if (store === 'notes' && stored !== undefined) found.add(stored);
+        return stored;
+      }),
     getAllByIndex: (store, index, value) =>
       tx.getAllByIndex(store, index, value).then(records => sawAll(store, records)),
     getKeysByIndex: (store, index, value) => tx.getKeysByIndex(store, index, value),

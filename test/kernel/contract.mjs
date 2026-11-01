@@ -811,6 +811,26 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await blocksOf('n1'), []);
       });
 
+      it("refuses a block another note holds that comes without its note, as the editor sends blocks, with a revision or without, and takes nothing from that note (R131)", async () => {
+        await createNote({ noteId: 'm', name: 'Mine', blocks: [{ id: 'mb1', type: 'text', content: 'Mine', order: 0 }] });
+        await createNote({ noteId: 'n', name: 'Next', blocks: [{ id: 'nb1', type: 'text', content: 'Next', order: 0 }] });
+        const state = await kernel.query({ type: 'getNote', noteId: 'n' });
+        const revision = state.kind === 'ready' ? state.data.revision : undefined;
+        const before = [await noteOf('m'), await blocksOf('m'), await noteOf('n'), await blocksOf('n')];
+        const blocks = [
+          { id: 'nb1', type: 'text', content: 'Next', order: 0 },
+          { id: 'mb1', type: 'text', content: 'Mine', order: 1 },
+        ];
+        for (const fields of [{}, revision === undefined ? {} : { expectedRevision: revision }]) {
+          assertRejected(
+            await kernel.execute(cmd('saveNoteContent', { noteId: 'n', blocks, ...fields })),
+            'validation',
+            'block-of-another-note',
+          );
+          assert.deepEqual([await noteOf('m'), await blocksOf('m'), await noteOf('n'), await blocksOf('n')], before);
+        }
+      });
+
       it('keeps the blocks as they were when the save started, whatever the caller does to them after', async () => {
         await createNote({ noteId: 'n1' });
         const blocks = someBlocks('n1', 1);
@@ -1197,6 +1217,27 @@ export function runContractSuite(fixture) {
         assertRejected(await restore({ noteId: 'gone' }), 'not-found', 'note-not-found');
         assertRejected(await restore({ blocks: [{ id: 'x', canvasId: 'n2' }] }), 'validation', 'block-of-another-note');
         assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1')], before);
+      });
+
+      it('restoreSnapshot refuses a block another note holds that comes without its note, and takes nothing from that note (R131)', async () => {
+        await createNote({ noteId: 'n1', name: 'One', blocks: someBlocks('n1', 1) });
+        await createNote({ noteId: 'n2', name: 'Two', blocks: someBlocks('n2', 1) });
+        await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'mine', blocks: serialized(['Y']), title: 'One' }));
+        const before = [await noteOf('n1'), await blocksOf('n1'), await listOf('n1'), await noteOf('n2'), await blocksOf('n2')];
+        assertRejected(
+          await kernel.execute(
+            cmd('restoreSnapshot', {
+              noteId: 'n1',
+              snapshotId: 'mine',
+              preSnapshotId: 'pre',
+              blocks: [...serialized(['Y']), { id: 'n2-block-0', type: 'text', content: 'Theirs' }],
+              name: 'One',
+            }),
+          ),
+          'validation',
+          'block-of-another-note',
+        );
+        assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1'), await noteOf('n2'), await blocksOf('n2')], before);
       });
 
       it('restoreSnapshot is one unit on every adapter: a write it fails leaves the blocks, the note, and the snapshots as they were', async () => {
