@@ -273,9 +273,9 @@ test("a dropped block keeps its markup only when this page's editor started the 
     { name: 'Beta', blocks: [{ type: 'text', content: 'Beta one' }] },
   ]);
   await driver.openNote(page, 'Alpha');
-  const betaId = await page.evaluate(async () => (await Storage.getAllNotes(true)).find(note => note.name === 'Beta').id);
-  const betaBlocks = () => page.evaluate(async id => (await Storage.getElementsByNote(id))
-    .sort((a, b) => a.order - b.order).map(block => block.content), betaId);
+  const betaId = (await profileStore(page).getAllNotes(true)).find(note => note.name === 'Beta').id;
+  const betaBlocks = async () => (await profileStore(page).getElementsByNote(betaId))
+    .sort((a, b) => a.order - b.order).map(block => block.content);
   // The editor's own drag of its block, dropped on Beta while it lasts
   await page.evaluate(() => {
     const block = document.querySelector('#blocks-container > .block');
