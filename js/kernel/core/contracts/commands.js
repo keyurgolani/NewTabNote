@@ -71,6 +71,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/apply-remote-content.js').ApplyRemoteContent} ApplyRemoteContent */
 /** @typedef {import('./operations/apply-remote-placement.js').ApplyRemotePlacement} ApplyRemotePlacement */
 /** @typedef {import('./operations/apply-close-draft.js').ApplyCloseDraft} ApplyCloseDraft */
+/** @typedef {import('./operations/catch-up-note-records.js').CatchUpNoteRecords} CatchUpNoteRecords */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -83,7 +84,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
  *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup
  *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement
- *   | ApplyCloseDraft} Command
+ *   | ApplyCloseDraft | CatchUpNoteRecords} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -213,6 +214,8 @@ export const COMMANDS = Object.freeze({
     entityTypes: [],
     deadlineMs: MAINTENANCE_DEADLINE_MS,
   }),
+  // The worker's one-time catch-up of 1.4.x's lagging records after the update, in batches (#33)
+  catchUpNoteRecords: entry('catch-up-note-records', 'note', ['worker-internal'], { entityTypes: ['note'] }),
   // The auto-title and insights jobs run in the new tab until #35 moves them
   setInsightsPending: entry('set-insights-pending', 'job', ['newtab'], { entityTypes: ['note'] }),
   recordJobRun: entry('record-job-run', 'job', ['newtab'], { entityTypes: [] }),

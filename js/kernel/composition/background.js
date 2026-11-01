@@ -27,12 +27,13 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { failureOf } from '../adapters/indexeddb/failures.js';
 import { UPGRADE_BLOCKED_KEY } from '../adapters/indexeddb/health.js';
-import { startMigrations } from '../adapters/indexeddb/migrate.js';
+import { MIGRATE_LOCK, startMigrations } from '../adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS } from '../core/application/handlers-worker.js';
+import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
@@ -194,6 +195,13 @@ export function journalTransforms(events, ended, { made = false } = {}) {
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
 export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
 
+/**
+ * chrome.storage.local key of the one-time catch-up's record, kept as UPGRADE_RECORD_KEY is
+ * (#33, QA3): `{done: false, after}` once a batch commits, the last note id it read, so a run
+ * cut off picks up after it, and `{done: true, at}` once it finishes, so it never runs again
+ */
+export const RECORDS_CAUGHT_UP_KEY = 'setting_storageRecordsCaughtUp';
+
 // The marker a run sets while its upgrade waits on another connection (adapters/indexeddb/health.js)
 export { UPGRADE_BLOCKED_KEY };
 
@@ -353,8 +361,24 @@ async function record(settings, outcome, stored, now, version, costly) {
  */
 
 /**
- * The worker's client, with the migration behind it, and the transforms and the purge after it
- * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, purge: WorkerPurge}} WorkerClient
+ * What the worker's one-time catch-up of the records 1.4.x left behind their blocks did, at one
+ * start (#33, the lead's Q9 and QA3): `done` when it finished now, `done-before` when an earlier
+ * start finished it, so it ran nothing, and `stopped` when a batch didn't commit, which the next
+ * start picks up after the last batch that did. `caughtUp` counts the notes it caught up now.
+ * @typedef {{status: 'done' | 'done-before' | 'stopped', caughtUp: number}} RecordsCatchUp
+ */
+
+/**
+ * The worker's one-time catch-up, as its client exposes it
+ * @typedef {object} WorkerRecordsCatchUp
+ * @property {Promise<RecordsCatchUp | null>} done - the latest run's outcome, null while the
+ *   database isn't at this build's version
+ */
+
+/**
+ * The worker's client, with the migration behind it, and the transforms, the records' catch-up
+ * and the purge after it
+ * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, recordsCatchUp: WorkerRecordsCatchUp, purge: WorkerPurge}} WorkerClient
  */
 
 /**
@@ -622,13 +646,77 @@ export function createWorkerClient(host = workerHost()) {
     return next;
   };
 
+  /** @type {Promise<RecordsCatchUp | null>} */
+  let caughtUp = Promise.resolve(null);
+
   /**
-   * A sweep once the latest attempt and the transforms that followed it are in, when the attempt
-   * left the database at this build's version and the switch is on
+   * The one-time catch-up of the records 1.4.x left behind their blocks (#33, the lead's Q9 and
+   * QA3), once the transforms that followed the latest attempt are in: catchUpNoteRecords on
+   * `built`, the kernel on `opened`, batch by batch through every note in key order, under Web
+   * Lock `storage.migrate`, as the transforms run. After each batch that commits it records the
+   * last note it read (RECORDS_CAUGHT_UP_KEY), so a run cut off picks up after it at the next
+   * start and redoes no batch it finished, and once it's through, that it's done, so no start
+   * runs it again. A batch that stopped short of its notes, past its bytes, goes again as its
+   * first half, and the batches grow back once one finishes. The kernel never waits for it, and
+   * the keepalive spans it.
+   * @param {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter} opened
+   * @param {Client} built
+   * @returns {Promise<RecordsCatchUp | null>}
+   */
+  const requestCatchUp = (opened, built) => {
+    const before = transformed;
+    const next = Promise.all([done, before])
+      .then(async ([attempt]) => {
+        if (attempt.status !== 'migrated' && attempt.status !== 'current') return null;
+        if (await built.whenReady()) return null;
+        return host.locks.request(MIGRATE_LOCK, { mode: 'exclusive' }, async () => {
+          // Read under the lock, so a run that waited for another starts where that one ended
+          const stored = /** @type {Record<string, any>} */ ((await host.settings.get([RECORDS_CAUGHT_UP_KEY])) || {});
+          const record = stored[RECORDS_CAUGHT_UP_KEY];
+          if (record && record.done === true) return /** @type {RecordsCatchUp} */ ({ status: 'done-before', caughtUp: 0 });
+          let after = record && typeof record.after === 'string' ? record.after : null;
+          const keys = await opened.read(['notes'], tx => tx.getAllKeys('notes'));
+          let pending = keys.filter(key => after === null || key > after);
+          let size = CATCH_UP_NOTES;
+          /** @type {Set<string>} */
+          const caught = new Set();
+          while (pending.length > 0) {
+            const batch = pending.slice(0, size);
+            const outcome = await built.execute({ type: 'catchUpNoteRecords', commandId: randomIds.next(), noteIds: batch });
+            if (outcome.kind !== 'committed') {
+              storageLogger.warn('storage-records-catch-up-stopped', { code: outcome.code });
+              return /** @type {RecordsCatchUp} */ ({ status: 'stopped', caughtUp: caught.size });
+            }
+            for (const noteId of outcome.changedIds) caught.add(noteId);
+            if (outcome.code === 'records-caught-up-part' && batch.length > 1) {
+              size = Math.ceil(batch.length / 2);
+              continue;
+            }
+            after = batch[batch.length - 1];
+            pending = pending.slice(batch.length);
+            await host.settings.set({ [RECORDS_CAUGHT_UP_KEY]: { done: false, after } });
+            size = Math.min(CATCH_UP_NOTES, size * 2);
+          }
+          await host.settings.set({ [RECORDS_CAUGHT_UP_KEY]: { done: true, at: systemClock.now() } });
+          return /** @type {RecordsCatchUp} */ ({ status: 'done', caughtUp: caught.size });
+        });
+      })
+      .catch(error => {
+        storageLogger.warn('storage-records-catch-up-not-started', { code: failureOf(error).code });
+        return null;
+      });
+    caughtUp = next;
+    keepAliveUntil(next);
+    return next;
+  };
+
+  /**
+   * A sweep once the latest attempt and the transforms and the catch-up that followed it are in,
+   * when the attempt left the database at this build's version and the switch is on
    * @returns {Promise<PurgeOutcome | null>}
    */
   const requestPurge = () => {
-    const before = transformed;
+    const before = Promise.all([transformed, caughtUp]);
     const next = Promise.all([done, before])
       .then(([ended]) =>
         purgeOn && (ended.status === 'migrated' || ended.status === 'current') ? sweepPoints() : null,
@@ -684,9 +772,11 @@ export function createWorkerClient(host = workerHost()) {
       });
       sweepOnce(adapter, built);
       // At every start, and after every later attempt: the transforms a run cut off or never
-      // reached, then the deletes the worker didn't hear of, or a sweep its stop cut off
+      // reached, the catch-up of 1.4.x's lagging records until it's done once, then the deletes
+      // the worker didn't hear of, or a sweep its stop cut off
       if (upgraded) {
         requestTransforms();
+        requestCatchUp(adapter, built);
         requestPurge();
       }
       return built;
@@ -812,6 +902,15 @@ export function createWorkerClient(host = workerHost()) {
     transforms: Object.freeze({
       get done() {
         return transformed;
+      },
+    }),
+    recordsCatchUp: Object.freeze({
+      // The latest kernel's, which build() starts, so it's that one's even before the attempt is in
+      get done() {
+        return client.then(
+          () => caughtUp,
+          () => null,
+        );
       },
     }),
     purge: Object.freeze({

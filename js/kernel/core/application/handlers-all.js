@@ -13,6 +13,7 @@ import { jobCommands, jobQueries } from './jobs.js';
 import { maintenanceCommands } from './maintenance.js';
 import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
+import { recordCatchUpCommands } from './record-catch-up.js';
 import { remoteChangesRefusal, remoteCommands } from './remote.js';
 import { sessionCommands, sessionQueries } from './session.js';
 import { snapshotCommands, snapshotQueries } from './snapshots.js';
@@ -29,6 +30,7 @@ export const ALL_HANDLERS = handlerTable({
     ...preferenceCommands,
     ...sessionCommands,
     ...maintenanceCommands,
+    ...recordCatchUpCommands,
     ...jobCommands,
     ...snapshotCommands,
     ...workspaceDataCommands,
