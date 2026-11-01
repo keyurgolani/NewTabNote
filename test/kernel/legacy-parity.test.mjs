@@ -69,13 +69,14 @@ function stamped(value) {
 }
 
 /**
- * Midday UTC on a day of 2026, which is the same day locally in any zone within 12 hours of UTC.
- * Storage names today's Daily Note by the local day and keys it by the UTC one, and the parity
- * kernel's clock has no zone, so it names and keys by the UTC day (#17 PR 3b's dailyNoteName
- * takes the clock's zone). From local midnight to UTC midnight the two days differ, so the
- * cases that make today's Daily Note run at this moment on both sides.
+ * An instant of June 15, 2026 both in UTC and in this machine's zone, whatever the zone: halfway
+ * between that day's noon in UTC and its noon here, the middle of the hours the two days share,
+ * in any zone from UTC-12 to UTC+14. Storage names today's Daily Note by the local day and keys
+ * it by the UTC one, and the parity kernel's clock has no zone, so it names and keys by the UTC
+ * day (#17 PR 3b's dailyNoteName takes the clock's zone). Where the two days differ, so do the
+ * two notes, so the cases that make today's Daily Note run at this moment on both sides.
  */
-const MIDDAY_UTC = Date.UTC(2026, 5, 15, 12);
+const SAME_DAY = (Date.UTC(2026, 5, 15, 12) + new Date(2026, 5, 15, 12).getTime()) / 2;
 
 /**
  * Has the code in each of `contexts` read `at` as now, as a page at that moment would: Date
@@ -301,7 +302,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
   });
 
   it("a capture's new Daily Note is the note, search entry, and template blocks Storage.ensureDailyNote makes", async () => {
-    // At midday UTC on both sides, whose day is the local one too (MIDDAY_UTC)
+    // At an instant of one day in UTC and here, on both sides (SAME_DAY)
     const { viaStorage, viaKernel, kernel } = await twin(
       {
         canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
@@ -316,7 +317,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           }),
         ],
       },
-      { at: MIDDAY_UTC },
+      { at: SAME_DAY },
     );
     for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
     const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
@@ -492,7 +493,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
   });
 
   it('ensureDailyNote makes the note, search entry, and template blocks Storage.ensureDailyNote makes, and finds it after', async () => {
-    // At midday UTC on both sides, whose day is the local one too (MIDDAY_UTC)
+    // At an instant of one day in UTC and here, on both sides (SAME_DAY)
     const { viaStorage, viaKernel, kernel } = await twin(
       {
         canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
@@ -507,7 +508,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
           }),
         ],
       },
-      { at: MIDDAY_UTC },
+      { at: SAME_DAY },
     );
     for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
     const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
