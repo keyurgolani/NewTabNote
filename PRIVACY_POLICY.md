@@ -8,7 +8,7 @@ New Tab Note is a browser extension that provides a rich note-taking experience 
 
 ## Data Storage
 
-**All your data is stored locally on your device.** We do not collect, transmit, or store any of your data on external servers.
+**All your data is stored locally on your device.** We do not collect or store any of your data on external servers. What the extension sends, and where, is listed under Network Requests below.
 
 - **Notes and Content**: Stored in your browser's IndexedDB (local database)
 - **Settings and Preferences**: Stored in Chrome's local storage (`chrome.storage.local`)
@@ -26,11 +26,12 @@ New Tab Note is a browser extension that provides a rich note-taking experience 
 
 ## AI Features (Optional)
 
-If you choose to use AI-powered features (summarization, title generation, chat):
+If you choose to use AI-powered features (summarization, title generation, insights, chat):
 
 - **You provide your own API key** for your chosen AI provider (OpenAI, Anthropic, Google, etc.)
 - **Requests go directly from your browser to your chosen AI provider** - we do not proxy or intercept these requests
 - **Your API key is stored locally** on your device and is never transmitted to us
+- **Two background jobs, which you control in Settings**: Auto Title and Extract insights run in the background while they're on. Auto Title sends the text of a note that is still untitled, to suggest a title. It does this when you start writing in the note, once it has 10 characters. It does it again when you turn it on or change how often it runs, when a new tab opens, and every 15 minutes by default, once the note has at least 20 characters and each time it changes. Extract insights sends the text of a note once it has at least 50 characters and each time it changes: when you turn it on or change how often it runs, when a new tab opens, and every 6 hours by default. Both send only to the provider you chose, with your own key. Both start off when you install New Tab Note, and you can turn either one on or off in Settings at any time.
 - **Note content sent to AI providers** is subject to that provider's privacy policy
 
 Supported AI providers include: OpenAI, Anthropic, Google Gemini, xAI, DeepSeek, Mistral, Groq, Qwen, GLM, Kimi, MiniMax, OpenRouter, and Ollama (local).
@@ -47,13 +48,13 @@ This extension requests the following permissions:
 - **activeTab**: To read the current tab's address and title, only when you capture it with the right-click menu or a keyboard shortcut
 - **sidePanel**: To show the Intelligence side panel when you click the toolbar icon
 
-Host permissions cover the AI providers you can choose in Settings: OpenAI (api.openai.com), Anthropic (api.anthropic.com), Google Gemini (generativelanguage.googleapis.com), OpenRouter (openrouter.ai), xAI (api.x.ai), DeepSeek (api.deepseek.com), Mistral (api.mistral.ai), Groq (api.groq.com), Qwen (dashscope-intl.aliyuncs.com and dashscope.aliyuncs.com), GLM (api.z.ai and open.bigmodel.cn), Kimi (api.moonshot.ai and api.moonshot.cn), and MiniMax (api.minimax.io and api.minimax.chat), plus `http://localhost` for Ollama running on your own computer. The extension only contacts the provider you select, and only when you use an AI feature.
+Host permissions cover the AI providers you can choose in Settings: OpenAI (api.openai.com), Anthropic (api.anthropic.com), Google Gemini (generativelanguage.googleapis.com), OpenRouter (openrouter.ai), xAI (api.x.ai), DeepSeek (api.deepseek.com), Mistral (api.mistral.ai), Groq (api.groq.com), Qwen (dashscope-intl.aliyuncs.com and dashscope.aliyuncs.com), GLM (api.z.ai and open.bigmodel.cn), Kimi (api.moonshot.ai and api.moonshot.cn), and MiniMax (api.minimax.io and api.minimax.chat), plus `http://localhost` for Ollama running on your own computer. The extension only contacts the provider you select, and only when you use an AI feature or while a background job is on.
 
 ## Network Requests
 
 New Tab Note has no server of its own. These are the requests it can make, and when:
 
-- **Your chosen AI provider**: When you use an AI feature, your prompt and the note text that feature works on go to the provider you selected, or to Ollama at `http://localhost`.
+- **Your chosen AI provider**: When you use an AI feature, or while a background job above is on, your prompt and the note text that feature works on go to the provider you selected, or to Ollama at the address set in Settings (`http://localhost:11434` by default).
 - **Embedding model for semantic search**: The first time you open the AI sidebar or semantic search runs, your browser downloads the all-MiniLM-L6-v2 model from `huggingface.co` (its files may come from Hugging Face's `*.huggingface.co` and `*.hf.co` hosts) and the ONNX Runtime WebAssembly files from `cdn.jsdelivr.net`. Embeddings are computed on your device; your notes are not sent.
 - **Bookmark icons**: Bookmark blocks show the site's icon from Google's favicon service (`https://www.google.com/s2/favicons`), which receives the bookmarked site's domain name.
 - **Video blocks**: A video block with a YouTube or Vimeo link loads that service's player (`youtube.com` or `player.vimeo.com`) inside the note.
@@ -77,4 +78,4 @@ If you have questions about this privacy policy, please open an issue on our [Gi
 
 ---
 
-**Summary**: Your notes stay on your device. We don't collect or transmit any data. AI features are optional and use your own API keys.
+**Summary**: Your notes stay on your device, and we never receive any of your data. AI features are optional, use your own API key, and send note text only to the provider you choose, while you use them or while a background job is on.
