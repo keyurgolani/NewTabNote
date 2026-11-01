@@ -36,8 +36,13 @@ const StartCatchUp = (function initStartCatchUp() {
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
   /** How recently an orphan's blocks may have changed and still wait for a later full pass */
   const GRACE_MS = 10 * 60 * 1000;
-  /** Notes read, and deleted notes swept, per transaction in the full pass, so no one holds the blocks long */
+  /** Notes whose blocks the full pass reads per transaction, so no one read holds the blocks long */
   const BATCH = 50;
+  /**
+   * Deleted notes the full pass sweeps per transaction. A sweep deletes every block of each, so
+   * it holds the blocks store longer per note than a read: 10 keeps it in the reads' range
+   */
+  const SWEEP_BATCH = 10;
   /** The stores that name one note each, besides its blocks: [store, index or null for the key] */
   const NAMED = [['media', 'canvasId'], ['vectors', null], ['snapshots', 'noteId']];
 
@@ -253,21 +258,18 @@ const StartCatchUp = (function initStartCatchUp() {
   }
 
   /**
-   * rebuildNote, counted into `result`. A note whose rebuild fails is skipped and counted, and
-   * the rest go on.
+   * rebuildNote, counted into `result`. A note whose blocks can't be read is skipped and counted,
+   * and the rest go on. A transaction that fails is let through: the targeted catch-up then
+   * keeps its IDs for the next start, and the full pass isn't recorded.
    * @param {IDBDatabase} db
    * @param {string} noteId
    * @param {{textOf: ((blocks: Array<any>) => string)|null, targets: Array<any>, now: () => number}} context
    * @param {{rebuilt: number, skipped: number}} result
    */
   async function rebuildCounted(db, noteId, context, result) {
-    try {
-      const outcome = await rebuildNote(db, noteId, context);
-      if (outcome === 'wrote') result.rebuilt += 1;
-      else if (outcome === 'skipped') result.skipped += 1;
-    } catch {
-      result.skipped += 1;
-    }
+    const outcome = await rebuildNote(db, noteId, context);
+    if (outcome === 'wrote') result.rebuilt += 1;
+    else if (outcome === 'skipped') result.skipped += 1;
   }
 
   /**
@@ -376,7 +378,7 @@ const StartCatchUp = (function initStartCatchUp() {
   /**
    * The full pass: every note's record and links against its blocks, read BATCH notes per
    * transaction, then what no note's record names any more, scanned SCAN_BATCH IDs and swept
-   * BATCH notes per transaction. A note whose blocks can't be read is skipped and counted.
+   * SWEEP_BATCH notes per transaction. A note whose blocks can't be read is skipped and counted.
    * @param {{db: IDBDatabase, textOf?: ((blocks: Array<any>) => string)|null, now?: () => number}} options
    * @returns {Promise<{rebuilt: number, removed: number, skipped: number, notes: number}>}
    */
@@ -411,9 +413,9 @@ const StartCatchUp = (function initStartCatchUp() {
     const lists = [await namedIds(db, 'elements', 'canvasId')];
     for (const [store, index] of named) lists.push(await namedIds(db, store, index));
     const orphans = /** @type {Array<string>} */ ([...new Set(lists.flat())].filter((id) => typeof id === 'string' && !known.has(id)));
-    // A deleting transaction per BATCH orphans too, for the same reason
-    for (let at = 0; at < orphans.length; at += BATCH) {
-      result.removed += await sweep(db, orphans.slice(at, at + BATCH), { now, graceMs: GRACE_MS });
+    // A deleting transaction per SWEEP_BATCH orphans, for the same reason
+    for (let at = 0; at < orphans.length; at += SWEEP_BATCH) {
+      result.removed += await sweep(db, orphans.slice(at, at + SWEEP_BATCH), { now, graceMs: GRACE_MS });
     }
 
     console.info(`Start catch-up, full pass: ${result.notes} note(s) read, ${result.rebuilt} caught up, ${result.skipped} skipped, ${result.removed} record(s) of deleted notes removed`);
