@@ -11,7 +11,7 @@ const driver = require('./characterization/driver');
 const HOST = 'https://assets.example.test';
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
-/** Markup of every kind that loads, styles, navigates or makes a control, in one reply */
+/** A reply holding markup of each kind a page acts on, all of it shown as text */
 const markupReply = scope => [
   'Sure.',
   '',
@@ -72,7 +72,7 @@ test('a reply stored in either chat shows its markup as text, and the page loads
   const pageURL = page.url();
   await expect.poll(async () => (await shown(page, 'ai-chat-messages')).replies).toBe(1);
   await expect.poll(async () => (await shown(page, 'global-chat-messages')).replies).toBe(1);
-  // Long enough for a load, a style or a refresh to have happened
+  // Long enough for anything the page would do with markup to have happened
   await page.waitForTimeout(3000);
   for (const [container, scope] of [['ai-chat-messages', 'note'], ['global-chat-messages', 'global']]) {
     const seen = await shown(page, container);
