@@ -38,10 +38,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { pathToFileURL } = require('url');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const CATALOG = 'test/mutants/catalog.json';
 const REPORTER = path.join(__dirname, 'lib', 'mutant-reporter.mjs');
+// The element-assert guard npm test loads first (docs/testing.md), from this tree, since a scratch
+// tree a test of this script makes has no test/helpers
+const ELEMENT_GUARD = pathToFileURL(path.join(ROOT_DIR, 'test', 'helpers', 'element-assert-guard.mjs')).href;
 const MARK = '@@mutant-result ';
 const FIELDS = ['id', 'behavior', 'protects', 'file', 'find', 'replace', 'test', 'name'];
 const PENDING_FIELDS = ['behavior', 'protects', 'waitsFor'];
@@ -188,7 +192,7 @@ function runTestFile(cwd, testFile, timeoutSeconds) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ['--experimental-vm-modules', '--test', `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', testFile],
+      [`--import=${ELEMENT_GUARD}`, '--experimental-vm-modules', '--test', `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', testFile],
       { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     running = child;

@@ -62,7 +62,7 @@ describe('choiceDialog', () => {
     const result = choiceDialog(options);
     const overlay = openOverlay(env);
     overlay.dispatchEvent({ type: 'mousedown', target: overlay.querySelector('.confirm-dialog') });
-    assert.notEqual(openOverlay(env), null);
+    assert.ok(openOverlay(env) !== null, 'the dialog stays open');
     overlay.querySelector('[data-choice="merge"]').click();
     assert.equal(await result, 'merge');
   });
