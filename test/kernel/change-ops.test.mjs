@@ -628,6 +628,51 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
     }
   });
 
+  it("a new note's 50 blocks are each asked for by key once, and a key that finds no block counts as the block not there, so none is looked up again", async () => {
+    const world = await indexedDbWorld();
+    try {
+      const blocks = Array.from({ length: 50 }, (_, order) => ({
+        id: `b${order}`,
+        type: 'text',
+        content: `Line ${order}`,
+        order,
+      }));
+      const { answer: created, reads } = await blockReads(() =>
+        world.run('createNote', { noteId: 'n1', name: 'Long', blocks }),
+      );
+      assert.deepEqual(reads, { gets: 0, keyReads: 50, indexReads: 0 });
+      assert.deepEqual(await rowsOf(world, created), [
+        ['note', 'n1', [{ op: 'createNote' }, ...blocks.map(block => ({ op: 'insertBlock', blockId: block.id }))]],
+      ]);
+    } finally {
+      await world.close();
+    }
+  });
+
+  it('a key read that finds nothing after the commit deleted the block keeps what the block was before', async () => {
+    const world = await indexedDbWorld();
+    try {
+      await world.run('createNote', {
+        noteId: 'n1',
+        name: 'Plan',
+        blocks: [{ id: 'b1', type: 'text', content: 'b1', order: 0 }],
+      });
+      const b1 = (await recordsOf(world.of, 'elements')).find(record => record.id === 'b1');
+      const { answer, reads } = await blockReads(() =>
+        commitUnit(world, ['notes', 'blocks'], async tx => {
+          tx.delete('blocks', 'b1');
+          assert.equal(await tx.getKey('blocks', 'b1'), undefined);
+          tx.put('blocks', { ...b1, content: 'Back' });
+        }),
+      );
+      // The delete's own look-up answers first, so the key read's nothing changes no op
+      assert.deepEqual(reads, { gets: 1, keyReads: 1, indexReads: 0 });
+      assert.deepEqual(await rowsOf(world, answer), [['note', 'n1', [{ op: 'updateBlock', blockId: 'b1' }]]]);
+    } finally {
+      await world.close();
+    }
+  });
+
   it('a write of a block or a folder nothing read looks it up first, and a note it wrote only a block of takes a row', async () => {
     const world = await indexedDbWorld();
     try {

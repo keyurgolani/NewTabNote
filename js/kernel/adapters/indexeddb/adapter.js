@@ -356,7 +356,14 @@ function view(db, tx, scope, writable, tracker) {
     },
     getKey: async (store, key) => {
       const objectStore = handle(store);
-      return objectStore ? /** @type {string | undefined} */ (await result(objectStore.getKey(key))) : undefined;
+      const stored = objectStore
+        ? /** @type {string | undefined} */ (await result(objectStore.getKey(key)))
+        : undefined;
+      // A key with no record tells the tracker what a read that finds none does, so a write of
+      // it looks nothing up (R131). A write of it earlier in the transaction looked it up first,
+      // and IndexedDB answers in order, so that answer is the one kept.
+      if (stored === undefined) saw(store, key, undefined);
+      return stored;
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
