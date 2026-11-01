@@ -1493,20 +1493,22 @@ describe('BlockEditor "Save as a new note" (#12)', () => {
 });
 
 describe('BlockEditor when the page has to reload (#12)', () => {
-  /** A new tab started by its own root, on #17's adapter since #17 PR 4a, on A, with its editor */
+  /**
+   * A new tab started by its own root, on #17's adapter since #17 PR 4a, its one connection
+   * since #17 PR 4b, on A, with its editor
+   */
   async function newTabOnA() {
     const env = createLegacyEnv();
     await createDatabase(env.indexedDB, {
       records: { canvases: [note('A')], elements: [block('a1', 'A', 0, 'alpha')] },
     });
     env.load(...FILES);
-    const Storage = env.get('Storage');
     await startNewTabKernel(env);
     const navigation = quietNavigation();
     const editor = makeEditor(env, env.document, { navigation });
     const feedback = watchFeedback(env, editor);
     await runUntil(env, editor.loadNote('A'));
-    return { env, Storage, navigation, editor, feedback };
+    return { env, navigation, editor, feedback };
   }
 
   /** A newer build opens the database at a higher version, as after an update in another tab */
@@ -1523,7 +1525,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
   }
 
   it('an edit still in the debounce when another context upgrades is written before the connection closes', async () => {
-    const { env, Storage, editor, feedback } = await newTabOnA();
+    const { env, editor, feedback } = await newTabOnA();
     const spy = spyAllTransactions();
     type(editor, 'typed just before the upgrade');
     assert.notEqual(editor.saveTimeout, null, 'pending');
@@ -1533,7 +1535,6 @@ describe('BlockEditor when the page has to reload (#12)', () => {
       spy.restore();
     }
     assert.equal(env.adapter.openState(), 'version-changed', 'the connection closed');
-    assert.equal(Storage.openState, 'version-changed', "and the holders' Storage's");
     // #17's adapter commits the save's units in one transaction, its links with its blocks
     assert.deepEqual(writesOf(spy.opened)[0], { stores: ['canvases', 'elements', 'links'], mode: 'readwrite' },
       'its transaction opened before the close');
@@ -1561,7 +1562,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
   });
 
   it('a save under way when another context upgrades is reported saved, and the next edit gets the notice', async () => {
-    const { env, Storage, editor, feedback } = await newTabOnA();
+    const { env, editor, feedback } = await newTabOnA();
     // The upgrade comes in the same task the save opens its transaction in
     const client = env.documentClient;
     const realSave = client.saveContent;

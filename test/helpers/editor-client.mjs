@@ -8,6 +8,7 @@
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { chromeSettingsChanges, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
+  connectNewTabStorage,
   createNewTabAdapter,
   createNewTabBackupCheck,
   createNewTabLegacyStores,
@@ -77,6 +78,11 @@ export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pa
     return kernel.query(query);
   };
   const noteList = createNewTabNoteList({ ...client, query: listQuery });
+  // js/storage.js's shell, on a page that loads it, connected as the root connects it (#17 PR 4b)
+  const shell = /** @type {any} */ (globalThis).Storage;
+  if (shell && typeof shell.connect === 'function') {
+    connectNewTabStorage(client, { settings, storage: shell }, createNewTabStorageState(adapter));
+  }
   return {
     kernel: client,
     documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),

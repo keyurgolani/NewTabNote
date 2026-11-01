@@ -154,15 +154,16 @@ function recoveryCopies(env) {
 
 /**
  * The new tab started on `env`'s profile as its root starts it (#17 PR 4a): #17's adapter, which
- * writes #33's copy before it opens the database, with the holders' Storage opened beside it.
- * Answers the state App reads from the adapter, and why the tab can't start, or null.
+ * writes #33's copy before it opens the database, and its one connection, since the Storage
+ * global's shell opens none (#17 PR 4b). Answers the state App reads from the adapter, and why
+ * the tab can't start, or null.
  */
 async function startPage(env) {
   env.load(...STORAGE_FILES);
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
   const host = root.newTabHost();
   const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter, host);
+  const client = root.createNewTabClient(adapter);
   const failure = plain(await client.whenReady());
   return { state: root.createNewTabStorageState(adapter), failure, adapter, client };
 }
@@ -256,14 +257,13 @@ describe('startup: version 8 without themes (AC6)', () => {
     assert.equal(copies.length, 1);
   });
 
-  it('without navigator.locks a start still writes the copy', async () => {
+  it('without navigator.locks a start still writes the copy, once', async () => {
     const env = createLegacyEnv({ locks: null });
     await fixture(env.indexedDB, { omit: ['themes'] });
     await startPage(env);
-    // #17's adapter writes it before it opens. Without Web Locks, which every Chrome the
-    // extension runs in has, the holders' Storage opening beside it can write one more, until
-    // #17 PR 4b drops Storage's open: never none
-    assert.ok(recoveryCopies(env).length >= 1);
+    // #17's adapter writes it before it opens, and nothing beside it opens the database since
+    // #17 PR 4b made the Storage global a shell
+    assert.equal(recoveryCopies(env).length, 1);
   });
 
   it('no start reads all of chrome.storage.local to look for the copy', async () => {
@@ -498,7 +498,7 @@ describe("the new tab on a database the worker's run left below this version, th
     const { root, adapter, client } = await newTabRootOn(env);
     // Ready means the copy is there: it's written before the adapter's open, so before any command
     const copies = missingStoreCopies(env);
-    assert.equal(copies.length, 1, 'one copy, from the adapter or the holders\' Storage, whichever came first');
+    assert.equal(copies.length, 1, "one copy, the adapter's");
     const [[, copy]] = copies;
     assert.deepEqual(
       copy.canvases.map((n) => n.id).sort(),
@@ -695,7 +695,19 @@ describe("the new tab when its kernel can't open storage for another reason", ()
       [new DOMException('The quota has been exceeded.', 'QuotaExceededError'), "There's no room left to store your notes."],
     ]) {
       const { env, before, appErrors } = await startApp({}, (page) => {
-        page.get('Storage').open = async () => { throw failure; };
+        // The page's IndexedDB, which #17's adapter opens the database through, fails the open
+        // as Chrome does, since nothing beside the adapter opens it (#17 PR 4b)
+        const factory = page.global.indexedDB;
+        page.global.indexedDB = {
+          open() {
+            const request = { error: failure, result: undefined };
+            setImmediate(() => request.onerror && request.onerror({ target: request }));
+            return request;
+          },
+          databases: () => factory.databases(),
+          cmp: (a, b) => factory.cmp(a, b),
+          deleteDatabase: (name) => factory.deleteDatabase(name),
+        };
       });
       const appEl = env.document.getElementById('app');
       assert.equal(appEl.querySelector('h2').textContent, 'Failed to initialize');
@@ -705,13 +717,15 @@ describe("the new tab when its kernel can't open storage for another reason", ()
       assert.deepEqual(appEl.querySelectorAll('button').map((b) => b.textContent), ['Reload']);
       assert.deepEqual(await dumpDatabase(env.indexedDB), before);
       assert.deepEqual(env.chrome.writes(), []);
-      // The console has the words, the outcome's cause and code, and what opening threw
+      // The console has the words, and the outcome's cause and code, and none of what opening
+      // threw, since the adapter's failures carry codes only
       const [[, error]] = logged(env, 'error', 'Failed to initialize app:');
       assert.equal(error.message, words);
       assert.equal(error.cause.kind, 'unavailable');
       const [[, opened]] = logged(env, 'warn', 'NewTabNote kernel: storage-unavailable');
       assert.deepEqual([opened.cause, opened.code], [error.cause.cause, error.cause.code]);
-      assert.equal(opened.error.cause, failure);
+      const lines = env.logs.flatMap((l) => l.args.map((arg) => `${arg} ${arg && arg.message}`));
+      assert.deepEqual(lines.filter((line) => line.includes(failure.message)), []);
     }
   });
 });
@@ -734,8 +748,8 @@ describe('the export notice in the guard states (NTN-18 slice 0)', () => {
       assert.ok(env.document.querySelector('.storage-guard'));
       assert.deepEqual(decided, [], "App.init stops when the tab's kernel can't open storage, before the decision");
 
-      const Storage = env.get('Storage');
-      assert.equal(Storage.openState, openState);
+      // The database's state App reads, its adapter's
+      assert.equal(app.storageState.openState, openState);
       const writes = env.chrome.writes().length;
       // On the ports App has
       const notice = new (env.get('ExportNotice'))({
@@ -846,13 +860,13 @@ describe('background capture on a version-8 database', () => {
 
 /**
  * The new tab's kernel and its adapter, as its root makes them from the page's globals (#17's
- * adapter since #17 PR 4a, with Storage open beside it for the holders), once it's ready
+ * adapter since #17 PR 4a, the tab's one connection since #17 PR 4b), once it's ready
  */
 async function newTabRootOn(env) {
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
   const host = root.newTabHost();
   const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter, host);
+  const client = root.createNewTabClient(adapter);
   const failure = await client.whenReady();
   assert.equal(failure, null, `the new tab's kernel didn't start: ${JSON.stringify(plain(failure))}`);
   return { root, adapter, client };

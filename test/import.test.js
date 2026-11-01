@@ -126,7 +126,7 @@ async function setup({ latest = false } = {}) {
   else await createProfile(env.indexedDB);
   env.load(...FILES);
   // The page as the new tab's root starts it: #17's adapter, whose settings port the import runs
-  // through, as App's, and the holders' Storage beside it, which the root opens
+  // through, as App's, and the Storage global's shell connected to its kernel
   await startNewTabKernel(env);
   // Another tab's hand on the database, to put and read records: the frozen 1.4.1 Storage (#17 PR 4b)
   const release = await releaseStorage(env);
@@ -746,8 +746,6 @@ describe('the fields #17 PR 3 writes beside the flags (Q8)', () => {
   it("a backup's notes come in without placement, kind, lifecycle, or a Daily Note's key, every field the kernel's list names, whatever they said", async () => {
     const { NEW_NOTE_FIELDS } = await import('../js/kernel/core/domain/placement.js');
     const { env } = await setup();
-    // Storage's own copy of the list is the kernel's
-    assert.deepEqual(plain(env.get('NEW_NOTE_FIELDS')), [...NEW_NOTE_FIELDS]);
     const data = sameProfileBackup();
     const stale = {
       placement: { kind: 'inbox' },

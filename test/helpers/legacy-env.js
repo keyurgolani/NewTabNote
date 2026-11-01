@@ -1192,6 +1192,21 @@ function settingsOf(env) {
   };
 }
 
+/**
+ * Connects js/storage.js's shell on `env`'s page to the page's settings alone, for a page with
+ * no kernel (#17 PR 4b): llm.js's provider settings and the WebDAV config App's reconnect reads,
+ * through the holders' accessor, in chrome.storage.local, with the keys the root gives it
+ * (newtab.js, STORAGE_SHELL_SETTING_KEYS). A page that starts its kernel gets the whole shell.
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @returns {Promise<void>}
+ */
+async function connectStorageSettings(env) {
+  const { loadPageModule } = require('./page-module');
+  const { createHolderSettings } = await loadPageModule(env, 'js/kernel/composition/holder-settings.js');
+  const { STORAGE_SHELL_SETTING_KEYS } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  env.get('Storage').connect(createHolderSettings(env.chrome.api.storage.local, STORAGE_SHELL_SETTING_KEYS));
+}
+
 /** Where the frozen 1.4.1 Storage is (test/fixtures/storage/releases/) */
 const RELEASE_141_STORAGE = 'test/fixtures/storage/releases/v1.4.1/js/storage.js';
 
@@ -1225,13 +1240,12 @@ async function releaseStorage(env) {
 /**
  * Start the page's kernel the way the new tab's root does (js/kernel/composition/newtab.js),
  * from the page's globals: #17's adapter, opened as the database is, with startup maintenance,
- * and Storage opened beside it, watching its connection, for the holders that still call it.
- * Its document client becomes the one makeEditor gives editors, and `env.adapter` the adapter.
- * The page's clients are the root's, as startEditorClient sets them: `env.kernel`,
- * `env.noteList`, `env.settingsClient`, and what App gives its controllers of the database
- * (`env.storageState`, `env.recovery`, `env.validateBackup`), with the narrow handles App gives
- * NotesManager, GraphView and SyncService (`env.stores`, #17 PR 4b). Storage must not have
- * started: the root opens it, so a test of a path #17 PR 4a ported calls none of Storage's opens.
+ * the tab's one connection. Its document client becomes the one makeEditor gives editors, and
+ * `env.adapter` the adapter. The page's clients are the root's, as startEditorClient sets them:
+ * `env.kernel`, `env.noteList`, `env.settingsClient`, and what App gives its controllers of the
+ * database (`env.storageState`, `env.recovery`, `env.validateBackup`), with the narrow handles
+ * App gives NotesManager, GraphView and SyncService (`env.stores`). js/storage.js's shell, on a
+ * page that loads it, is connected as the root connects it (#17 PR 4b).
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @returns {Promise<Object>} the document client, once the kernel is ready
  */
@@ -1240,7 +1254,7 @@ async function startNewTabKernel(env) {
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
   const host = root.newTabHost();
   const adapter = root.createNewTabAdapter(host);
-  const kernel = root.createNewTabClient(adapter, host);
+  const kernel = root.createNewTabClient(adapter);
   const failure = await kernel.whenReady();
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
   env.adapter = adapter;
@@ -1252,6 +1266,7 @@ async function startNewTabKernel(env) {
   env.recovery = root.createNewTabRecovery(host);
   env.validateBackup = root.createNewTabBackupCheck();
   env.stores = root.createNewTabLegacyStores(kernel, host, env.storageState);
+  if (host.storage && typeof host.storage.connect === 'function') root.connectNewTabStorage(kernel, host, env.storageState);
   return env.documentClient;
 }
 
@@ -1466,6 +1481,7 @@ module.exports = {
   bootNewTab,
   releaseStorage,
   settingsOf,
+  connectStorageSettings,
   shownTabs,
   createDatabase,
   workerRun,

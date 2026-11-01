@@ -150,7 +150,7 @@ describe('conformance coverage finds an implementation', () => {
     }
   });
 
-  it('as a second fake in js/storage.js, outside the exempt stand-in', () => {
+  it('as a fake in js/storage.js, whose exempt stand-in went with #17 PR 4b', () => {
     const storage = tree.read('js/storage.js') ?? '';
     const planted = { 'js/storage.js': `${storage}\nconst fake = { local: { get() {}, set() {} } };\n` };
     assertFlags(problemsWith(planted), /^js\/storage\.js makes a chrome\.storage area, so it's a chrome-storage-local implementation/);
@@ -281,7 +281,10 @@ describe('conformance coverage keeps its lists true', () => {
     );
   });
 
-  it('an exemption once the stand-in it covers is gone', () => {
-    assertFlags(problemsWith({ 'js/storage.js': 'const Storage = {};\n' }), /^js\/storage\.js no longer has the chrome-storage-local implementation its exemption covers/);
+  it('an exemption once the stand-in it covers is gone, as js/storage.js lost its own in #17 PR 4b', () => {
+    const EXEMPT = {
+      'js/storage.js': { port: 'chrome-storage-local', within: 'chrome_mock_', owner: '#17', reason: 'the file:// stand-in' },
+    };
+    assertFlags(problemsWith({ 'js/storage.js': 'const Storage = {};\n' }, { EXEMPT }), /^js\/storage\.js no longer has the chrome-storage-local implementation its exemption covers/);
   });
 });

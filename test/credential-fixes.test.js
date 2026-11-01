@@ -12,7 +12,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createLegacyEnv, createDatabase, FakeDocument, settingsOf, startEditorClient } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, FakeDocument, connectStorageSettings, settingsOf, startEditorClient } = require('./helpers/legacy-env');
 
 const ROOT = path.join(__dirname, '..');
 const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
@@ -21,6 +21,7 @@ const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(
 async function llmPage() {
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
+  await connectStorageSettings(env);
   const storage = settingsOf(env);
   /** @type {Array<{url: string, headers: Record<string, string>}>} */
   const requests = [];
@@ -170,6 +171,7 @@ async function settingsPage(provider, key) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   env.global.ResizablePanel = class {};
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
+  await connectStorageSettings(env);
   const storage = settingsOf(env);
   await storage.setSetting('llmProvider', provider);
   if (key) {
@@ -216,6 +218,7 @@ describe("a key's provider is recorded safely (#21 slice 1a)", () => {
     const env = createLegacyEnv({ document: new FakeDocument() });
     env.global.ResizablePanel = class {};
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
+    await connectStorageSettings(env);
     const storage = settingsOf(env);
     await storage.setSetting('llmProvider', 'openai');
     const llm = env.get('LLM');

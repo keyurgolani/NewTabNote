@@ -1,5 +1,5 @@
-// Page contexts running Storage: production js/utils.js and js/storage.js, which the new tab
-// still opens beside #17's adapter for the holders #22 and #19 own until #17 PR 4b, or the
+// Page contexts running Storage: production js/utils.js and js/storage.js, the shell the new
+// tab's root connects to its kernel since #17 PR 4b, which opens no database, or the
 // frozen v1.4.1's (test/fixtures/storage/releases/), loaded into #33's test/helpers/legacy-env.js,
 // on fake-indexeddb, with its chrome.storage.local stub. Contexts that share an IndexedDB
 // factory and chrome.* are tabs of one browser profile. #12's legacy adapter, which ran the

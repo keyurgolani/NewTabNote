@@ -103,8 +103,8 @@ async function capture(worker) {
 }
 
 /**
- * The new tab on `worker`'s profile, as its root opens it since #17 PR 4a: #17's adapter, with
- * the holders' Storage beside it, once it's ready
+ * The new tab on `worker`'s profile, as its root opens it since #17 PR 4a: #17's adapter, its one
+ * connection since #17 PR 4b, once it's ready
  */
 async function newTab(worker) {
   const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
@@ -112,15 +112,11 @@ async function newTab(worker) {
   const root = await loadPageModule(page, 'js/kernel/composition/newtab.js');
   const host = root.newTabHost();
   const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter, host);
+  const client = root.createNewTabClient(adapter);
   const failure = await runUntil(page, client.whenReady());
   assert.equal(failure, null, JSON.stringify(plain(failure)));
-  /** Closes both of the tab's connections, as closing the tab does */
-  const close = () => {
-    adapter.close();
-    const { db } = page.get('Storage');
-    if (db) db.close();
-  };
+  /** Closes the tab's connection, as closing the tab does */
+  const close = () => adapter.close();
   return { page, adapter, client, close };
 }
 

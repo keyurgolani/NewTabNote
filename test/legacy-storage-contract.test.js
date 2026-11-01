@@ -1,17 +1,19 @@
 'use strict';
 
-// Production js/storage.js on fake-indexeddb behind #17's fault-injecting wrapper
-// (test/kernel/storage-faults.mjs): writes answer only for what they stored, and exportAll
-// exports what the database holds. The known defects are expected failures under their
-// test/known-defects.json entries, so the run fails once one is fixed and its entry stays.
-// A step that goes wrong for another reason throws a plain Error, which fails the test as it
-// should, rather than an assertion that would read as the defect.
+// The new tab on fake-indexeddb behind #17's fault-injecting wrapper
+// (test/kernel/storage-faults.mjs): its writes answer committed only for what they stored, and
+// the Storage global's exportAll, sync's upload, exports what the database holds. The writes are
+// the kernel's createNote and saveNoteContent, which App makes where 1.4.x called Storage's
+// createNote and saveElement, so KD-003 and KD-004 closed with js/storage.js's own code (#17 PR
+// 4b). KD-005 is an expected failure under its test/known-defects.json entry, so the run fails
+// once it's fixed and its entry stays. A step that goes wrong for another reason throws a plain
+// Error, which fails the test as it should, rather than an assertion that would read as the defect.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory } = require('fake-indexeddb');
 const {
-  createLegacyEnv, createDatabase, workerRun, dumpDatabase, recordsOf, settle, plain, note, block, startNewTabKernel,
+  createLegacyEnv, createDatabase, workerRun, dumpDatabase, recordsOf, settle, plain, note, startNewTabKernel,
 } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
@@ -19,9 +21,9 @@ const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const FAULT = 'QuotaExceededError';
 
 /**
- * Storage started on a database the wrapper watches, as the new tab's root opens it, beside
- * #17's adapter (#17 PR 4a). `real` is fake-indexeddb itself, for reading what was stored
- * without going through the wrapper.
+ * The new tab started on a database the wrapper watches, as its root opens it, with the Storage
+ * global's shell connected to its kernel (#17 PR 4b). `real` is fake-indexeddb itself, for
+ * reading what was stored without going through the wrapper.
  * @param {Object} [records] - Rows per store, as createDatabase takes them
  */
 async function started(records) {
@@ -56,62 +58,76 @@ async function outcomeOf(env, promise) {
 }
 
 /**
- * Whether `error`, or an error it wraps (StorageError's `cause`), is the fault the test
- * injected
- * @param {any} error
+ * The write either commits what it stored, or answers the injected abort as the kernel words
+ * it, not retryable, having stored nothing. Any other answer, or a commit of a record that
+ * isn't stored, fails.
+ * @param {{value?: any, error?: any}} settled - What the kernel's execute settled with
+ * @param {Object<string, any>} stored - The store's rows by key, read after the abort
+ * @param {string} key - The key of the record the write wrote
+ * @param {string} what - The write, for the messages
  */
-function isInjectedFault(error) {
-  for (let current = error; current; current = current.cause) {
-    if (current.name === FAULT) return true;
+function assertAnsweredHonestly(settled, stored, key, what) {
+  if (settled.error) throw settled.error;
+  const outcome = plain(settled.value);
+  if (outcome.kind === 'committed') {
+    assert.ok(key in stored, `${what} committed a record its aborted transaction never stored`);
+    return;
   }
-  return false;
+  assert.deepEqual(
+    [outcome.kind, outcome.cause, outcome.code, outcome.retryable],
+    ['unavailable', 'quota', 'quota', false],
+    `${what} answered ${JSON.stringify(outcome)}`,
+  );
+  assert.equal(key in stored, false, `${what} answered ${outcome.code}, and stored the record anyway`);
 }
 
 /**
- * The write either answers with what it stored, or rejects with the injected abort. A
- * rejection for any other reason, or an answer for a record that isn't stored, fails.
- * @param {{value?: any, error?: any}} outcome
- * @param {Object<string, any>} stored - The store's rows by key, read after the abort
- * @param {(value: any) => string} keyOf - The key of the record the write answered with
- * @param {string} what - The write, for the messages
+ * Runs `command` on the new tab's kernel, as App sends it
+ * @param {ReturnType<typeof createLegacyEnv>} env
+ * @param {Object} command
  */
-function assertAnsweredHonestly(outcome, stored, keyOf, what) {
-  if (outcome.error) {
-    assert.ok(isInjectedFault(outcome.error), `${what} rejected, but not with the aborted transaction's error: ${outcome.error && outcome.error.message}`);
-    return;
-  }
-  assert.ok(keyOf(plain(outcome.value)) in stored, `${what} resolved with a record its aborted transaction never stored`);
-}
+const send = (env, command) => env.kernel.execute(command);
 
-test('createNote and saveElement resolve once what they wrote is stored, when nothing fails', async () => {
-  const { env, real, storage } = await started({ canvases: [note('N', { name: 'Groceries' })] });
-  const created = await outcomeOf(env, storage.createNote('Plan'));
+/** A save of note N's one block, as the editor sends it */
+const SAVE = { type: 'saveNoteContent', commandId: 's1', noteId: 'N', blocks: [{ id: 'b1', type: 'text', content: 'eggs' }] };
+
+// Storage's createNote and saveElement answered before their transactions committed (KD-003,
+// KD-004). The new tab has written through the kernel since #17 PR 4a, and they went with
+// js/storage.js's own code in #17 PR 4b.
+test('createNote and saveNoteContent commit what they wrote, when nothing fails', async () => {
+  const { env, real } = await started({ canvases: [note('N', { name: 'Groceries' })] });
+  const created = await outcomeOf(env, send(env, { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Plan' }));
   if (created.error) throw created.error;
-  const saved = await outcomeOf(env, storage.saveElement(block('b1', 'N', 0, 'eggs')));
+  assert.equal(plain(created.value).kind, 'committed');
+  const saved = await outcomeOf(env, send(env, SAVE));
   if (saved.error) throw saved.error;
+  assert.equal(plain(saved.value).kind, 'committed');
   const dump = await dumpDatabase(real);
-  assert.equal(recordsOf(dump, 'canvases')[plain(created.value).id].name, 'Plan');
+  assert.equal(recordsOf(dump, 'canvases').n1.name, 'Plan');
   assert.equal(recordsOf(dump, 'elements').b1.content, 'eggs');
 });
 
-expectFailure('KD-003 createNote resolves only once its note is stored', async () => {
-  const { env, real, faults, storage } = await started();
+test('createNote answers committed only once its note is stored', async () => {
+  const { env, real, faults } = await started();
   // The note's write succeeds, then its transaction aborts, as one the disk refuses at commit does
   const aborted = faults.abortAfterNextWrite('canvases', FAULT);
-  const outcome = await outcomeOf(env, storage.createNote('Plan'));
+  const outcome = await outcomeOf(env, send(env, { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Plan' }));
   await aborted;
-  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'canvases'), (n) => n.id, 'createNote');
+  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'canvases'), 'n1', 'createNote');
 });
 
-expectFailure('KD-004 saveElement resolves only once its block is stored', async () => {
-  const { env, real, faults, storage } = await started({ canvases: [note('N', { name: 'Groceries' })] });
+test('saveNoteContent answers committed only once its block is stored', async () => {
+  const { env, real, faults } = await started({ canvases: [note('N', { name: 'Groceries' })] });
   const aborted = faults.abortAfterNextWrite('elements', FAULT);
-  const outcome = await outcomeOf(env, storage.saveElement(block('b1', 'N', 0, 'eggs')));
+  const outcome = await outcomeOf(env, send(env, SAVE));
   await aborted;
-  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'elements'), (b) => b.id, 'saveElement');
+  assertAnsweredHonestly(outcome, recordsOf(await dumpDatabase(real), 'elements'), 'b1', 'saveNoteContent');
 });
 
-/** What exportAll exports from a database holding two linked notes, a theme, and a snapshot */
+/**
+ * What the Storage global's exportAll, sync's upload, exports from a database holding two
+ * linked notes, a theme, and a snapshot
+ */
 async function exported() {
   const { storage } = await started({
     canvases: [note('A', { name: 'Alpha' }), note('B', { name: 'Beta' })],

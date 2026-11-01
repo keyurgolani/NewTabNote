@@ -9,7 +9,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv } = require('./helpers/legacy-env');
+const { connectStorageSettings, createLegacyEnv } = require('./helpers/legacy-env');
 
 const canary = () => `ntn-canary-glm-${Math.random().toString(16).slice(2, 10)}`;
 
@@ -17,7 +17,7 @@ const canary = () => `ntn-canary-glm-${Math.random().toString(16).slice(2, 10)}`
 async function setup(answer) {
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
-  await env.get('Storage').init();
+  await connectStorageSettings(env);
   const messages = [];
   env.chrome.api.runtime.sendMessage = (message, callback) => {
     messages.push(JSON.parse(JSON.stringify(message)));

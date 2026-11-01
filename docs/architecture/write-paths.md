@@ -82,7 +82,7 @@ Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files 
 
 ## Calls
 
-Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`. An update's Call lists the fields it sets.
+Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`.
 
 | File | Line | Method | Call | Command | Status |
 | --- | --- | --- | --- | --- | --- |

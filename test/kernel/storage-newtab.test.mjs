@@ -2,15 +2,15 @@
 // DatabaseManager (js/storage.js): startup maintenance on its `existing` open, the flush before
 // another context's upgrade closes the connection, the connection's state in the words App and
 // the export notice read, and the legacy stores a degraded database lacks. Each is held to what
-// js/storage.js did on the same profile, or to the frozen 1.4.1's, and none calls this build's
-// Storage open, which 4b's facade drops: the holders' Storage opens as the root opens it.
+// js/storage.js did on the same profile, or to the frozen 1.4.1's. What the holders read of the
+// new tab's writes is the facade's since #17 PR 4b, which storage-facade.test.mjs holds, with
+// getSyncData's export, without the six fields, in storage-backups.test.mjs.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
-import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -113,12 +113,16 @@ async function release141On(of) {
 describe("the new tab's startup maintenance on #17's adapter (#17 PR 4a)", () => {
   it("an existing open that maintains writes a new profile's first-run settings, on a database at this version and on one left at 8", async () => {
     /**
-     * What Storage.initializeDefaultSettings writes on a first run, from production js/storage.js
+     * What Storage.initializeDefaultSettings writes on a first run, from the frozen v1.4.1, since
+     * js/storage.js's copy went with #17 PR 4b
      * @returns {Promise<Record<string, unknown>>}
      */
     const storageFirstRun = async () => {
-      const env = legacyEnv.createLegacyEnv({ context: 'page' });
-      env.load('js/utils.js', 'js/storage.js');
+      const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
+      env.load(
+        'test/fixtures/storage/releases/v1.4.1/js/utils.js',
+        'test/fixtures/storage/releases/v1.4.1/js/storage.js',
+      );
       await env.get('Storage').initializeDefaultSettings();
       await legacyEnv.settle();
       return legacyEnv.plain(env.chrome.local);
@@ -156,54 +160,6 @@ describe("the new tab's startup maintenance on #17's adapter (#17 PR 4a)", () =>
     const outcome = await kernelOn(adapter).execute({ type: 'runStartupMaintenance', commandId: 'm1' });
     assert.deepEqual(unavailableAs(outcome), ['adapter', 'maintenance-needs-versioned-open', false]);
     assert.deepEqual(of.chrome.writes(), []);
-  });
-});
-
-describe("what the holders' Storage reads of the new tab's writes on #17's adapter (#17 PR 4a)", () => {
-  // legacy.test.mjs held the legacy adapter to Storage's readers. The holders #22 and #19 own
-  // still read through Storage until 4b, so they find what the new tab writes now
-  it("reads the note, its blocks, and the settings, and sync's export leaves out the six fields the record keeps", async () => {
-    const of = await atThisVersion();
-    const adapter = newTabAdapter(of);
-    // The holders' Storage, which the new tab's root opens beside the adapter, watching it
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    const kernel = createNewTabClient(adapter, { storage });
-    assert.equal(await kernel.whenReady(), null);
-    /** @param {Record<string, unknown>} command */
-    const run = async command => {
-      const outcome = await kernel.execute(/** @type {any} */ (command));
-      assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
-    };
-    await run({
-      type: 'createNote',
-      commandId: 'c1',
-      noteId: 'n1',
-      name: 'Plan',
-      blocks: [{ id: 'b1', type: 'text', content: 'Milk', order: 0 }],
-    });
-    await run({ type: 'setPreferences', commandId: 'c2', values: { sidebarWidth: 300 } });
-    await run({ type: 'saveWorkspaceSession', commandId: 'c3', session: { lastOpenedNoteId: 'n1', activeTabIndex: 0 } });
-
-    // GraphView's notes, and the editor's reads before #12
-    assert.equal((await storage.getNote('n1')).name, 'Plan');
-    assert.deepEqual(legacyEnv.plain((await storage.getAllNotes()).map((/** @type {{id: string}} */ note) => note.id)), ['n1']);
-    assert.equal((await storage.getElementsByNote('n1'))[0].content, 'Milk');
-    // Sync's settings
-    assert.equal(await storage.getSetting('sidebarWidth'), 300);
-    assert.equal(await storage.getSetting('activeTabIndex'), 0);
-    assert.equal(of.chrome.local.lastOpenedNoteId, 'n1');
-    // Sync's export, without what #17 PR 3 writes beside a note's flags, which the record keeps
-    const exported = legacyEnv.plain(await storage.exportAll());
-    const note = exported.canvases.find((/** @type {{id: string}} */ found) => found.id === 'n1');
-    const stored = (await recordsOf(of, 'canvases')).find(record => record.id === 'n1');
-    for (const field of ['placement', 'kind', 'lifecycle']) {
-      assert.equal(field in note, false, field);
-      assert.ok(field in stored, field);
-    }
-    storage.db.close();
-    adapter.close();
   });
 });
 

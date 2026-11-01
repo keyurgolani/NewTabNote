@@ -828,7 +828,7 @@ export function createIndexedDbAdapter({
    * The read-only integrity check (integrity.js), which only reports what it finds, so it
    * commits whatever that is. The worker runs it after an install or an update, as
    * runIntegrityCheck (#35 slice 1), never as it starts. With no connection to read, one
-   * another context's upgrade or delete closed included, it warns and commits, as
+   * another context's upgrade or delete closed included, it warns and commits, as 1.4.x's
    * Storage.runIntegrityCheck does on a closed database: a check is no reason to open the
    * database again, or to make one.
    * @param {Work} work

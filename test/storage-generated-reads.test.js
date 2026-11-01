@@ -1,15 +1,15 @@
 'use strict';
 
-// #28 slice 3: the read paths 1.4.x code takes, on production js/storage.js, over the generated
-// maximal and corrupt profiles (test/fixtures/storage/generate.mjs) at version 8. The new tab's
-// root opens each, Storage beside #17's adapter as it has since #17 PR 4a, without deleting or
-// changing a record; the note lists, archive, trash, templates,
-// folders, blocks, backlinks, settings, auto backups, and exportAll return what the generator's
-// roles say; and the Daily Note lookup finds an existing one among duplicates and makes none.
-// Where production is wrong today, the step is an expected failure in test/known-defects.json.
-// The Daily Note lookup and the wiki-link save run on the frozen v1.4.1 Storage, over the same
-// profile: js/storage.js's copies had no caller once the new tab wrote through #17's adapter,
-// and went with #17 PR 4a.
+// #28 slice 3: the reads the new tab makes, over the generated maximal and corrupt profiles
+// (test/fixtures/storage/generate.mjs) at version 8. The new tab's root opens each without
+// deleting or changing a record. The reads App makes on the tab's kernel since #17 PR 4a, the
+// note lists, archive, trash, templates, folders, blocks, backlinks, themes, snapshots, and the
+// wiki-link names, and the Storage global's exportAll, sync's upload, return what the
+// generator's roles say, and the settings and the automatic backups stay where they were. The
+// Daily Note lookup runs on the frozen v1.4.1 Storage, over the same profile, and finds an
+// existing one among duplicates and makes none. js/storage.js's own reads went with #17 PR 4b,
+// which made it the shell over the tab's kernel. Where production is wrong today, the step is an
+// expected failure in test/known-defects.json.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -35,10 +35,11 @@ async function load() {
 const TRANSFORMED_AT = Date.UTC(2026, 9, 31);
 
 /**
- * Production Storage on profile `of`, opened as the new tab's root opens it, beside #17's
- * adapter (#17 PR 4a)
+ * The new tab on profile `of`, started as its root starts it, with the Storage global's shell
+ * connected to its kernel (#17 PR 4b). `read` answers a query's data, or [] when it found
+ * nothing, as App reads it.
  */
-async function storageOn(of) {
+async function newTabOn(of) {
   const { support } = await load();
   const env = support.legacyEnv.createLegacyEnv({ indexedDB: of.real, chrome: of.chrome });
   env.load(...FILES);
@@ -50,7 +51,14 @@ async function storageOn(of) {
   ));
   const started = await settle(() => support.legacyEnv.startNewTabKernel(env).then(() => undefined));
   assert.equal(started.error, undefined, `the new tab didn't start: ${JSON.stringify(started.error)}`);
-  return { Storage, settle };
+  /** @param {object} query */
+  const read = async (query) => {
+    const state = await value(settle, () => env.kernel.query(query), query.type);
+    if (state.kind === 'empty') return [];
+    assert.equal(state.kind, 'ready', `${query.type}: ${JSON.stringify(state)}`);
+    return state.data;
+  };
+  return { env, Storage, settle, read };
 }
 
 /**
@@ -72,27 +80,28 @@ async function release141On(of) {
 }
 
 /**
- * Production Storage on a profile holding `fixture`, opened as the new tab's root opens it, and
- * the profile's CanvasTabDB records before it opened
+ * The new tab on a profile holding `fixture`, started as its root starts it, and the profile's
+ * CanvasTabDB records and chrome.storage.local before it started
  */
 async function opened(fixture) {
   const { support } = await load();
   const of = await support.profileWith(fixture);
   const before = await support.dump(of);
-  const { Storage, settle } = await storageOn(of);
-  return { of, before, Storage, settle, dump: () => support.dump(of) };
+  const localBefore = JSON.parse(JSON.stringify(of.chrome.local));
+  const tab = await newTabOn(of);
+  return { of, before, localBefore, ...tab, dump: () => support.dump(of) };
 }
 
 /**
- * Production Storage on a profile holding `fixture` once the worker's run and its transforms
- * are in (#17 PR 3a), at this build's version
+ * The new tab on a profile holding `fixture` once the worker's run and its transforms are in
+ * (#17 PR 3a), at this build's version
  */
 async function transformed(fixture) {
   const { support } = await load();
   const of = await support.profileWith(fixture);
   assert.equal((await support.run(of)).status, 'migrated');
   assert.equal((await support.transform(of, { clock: { now: () => TRANSFORMED_AT } })).status, 'transformed');
-  return storageOn(of);
+  return newTabOn(of);
 }
 
 /** The value `call` resolves with, failing the test when it rejects */
@@ -106,34 +115,35 @@ const ids = (rows) => rows.map((row) => row.id).sort();
 const canvasDb = (dumped) => dumped.databases.filter((db) => db.name === 'CanvasTabDB');
 
 describe('1.4.x reads on the maximal profile', () => {
-  it("the new tab's root opens it and changes nothing; the lists, folders, blocks, links, settings, and backups are what it holds", async () => {
+  it("the new tab's root opens it and changes nothing; the lists, folders, blocks, links, themes, and snapshots are what it holds, and the settings and backups stay", async () => {
     const { generate, inputs } = await load();
     const { fixture, roles, records } = generate.maximalFixture(inputs);
-    const { of, Storage, settle, before, dump } = await opened(fixture);
+    const { of, Storage, settle, read, before, localBefore, dump } = await opened(fixture);
     assert.deepStrictEqual(canvasDb(await dump()), canvasDb(before));
 
     const listed = [roles.plain, roles.foldered, roles.daily, roles.pinned, roles.popup, roles.blocks].sort();
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(), 'getAllNotes')), listed);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(true), 'getAllNotes(true)')), [...listed, roles.archived].sort());
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getArchivedNotes(), 'getArchivedNotes')), [roles.archived]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getTrashedNotes(), 'getTrashedNotes')), [roles.trashed]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getTemplates(), 'getTemplates')), [roles.template]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllFolders(), 'getAllFolders')), [roles.childFolder, roles.rootFolder].sort());
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'active' })), listed);
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'withArchived' })), [...listed, roles.archived].sort());
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'archived' })), [roles.archived]);
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'trashed' })), [roles.trashed]);
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'templates' })), [roles.template]);
+    assert.deepStrictEqual(ids(await read({ type: 'listFolders' })), [roles.childFolder, roles.rootFolder].sort());
     assert.deepStrictEqual(
-      ids(await value(settle, () => Storage.getElementsByNote(roles.blocks), 'getElementsByNote')),
+      ids(await read({ type: 'getNoteBlocks', noteId: roles.blocks })),
       ids(records.elements.filter((block) => block.canvasId === roles.blocks)),
     );
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getBacklinks(roles.pinned), 'getBacklinks')), [roles.plain]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getCustomThemes(), 'getCustomThemes')), ['theme-1']);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getSnapshots(roles.pinned), 'getSnapshots')), ['snapshot-1']);
-    const settings = await value(settle, () => Storage.getAllSettings(), 'getAllSettings');
-    assert.deepStrictEqual(
-      Object.keys(settings).sort(),
-      Object.keys(fixture.chromeStorageLocal).filter((key) => key.startsWith('setting_')).map((key) => key.slice(8)).sort(),
-    );
-    assert.equal(settings.llmApiKey, 'canary-llm-api-key');
-    const backups = await value(settle, () => Storage.getAutoBackups(), 'getAutoBackups');
-    assert.deepStrictEqual(backups.map((backup) => backup.key), Object.keys(fixture.chromeStorageLocal).filter((key) => key.startsWith('auto_backup_')));
+    assert.deepStrictEqual(ids(await read({ type: 'getBacklinks', noteId: roles.pinned })), [roles.plain]);
+    assert.deepStrictEqual(ids(await read({ type: 'listThemes' })), ['theme-1']);
+    assert.deepStrictEqual(ids(await read({ type: 'listSnapshots', noteId: roles.pinned })), ['snapshot-1']);
+    // Every setting and automatic backup it held is still there, and the AI key reads where
+    // llm.js reads it, through the Storage global's shell
+    const localNow = JSON.parse(JSON.stringify(of.chrome.local));
+    for (const prefix of ['setting_', 'auto_backup_']) {
+      const held = Object.entries(localBefore).filter(([key]) => key.startsWith(prefix));
+      assert.ok(held.length > 0, prefix);
+      for (const [key, was] of held) assert.deepStrictEqual(localNow[key], was, key);
+    }
+    assert.equal(await value(settle, () => Storage.getSetting('llmApiKey'), 'getSetting'), 'canary-llm-api-key');
     const exported = await value(settle, () => Storage.exportAll(), 'exportAll');
     assert.deepStrictEqual(ids(exported.canvases), records.canvases.filter((note) => !note.trashed).map((note) => note.id).sort());
     // The Daily Note for its date is the one there, and none is made
@@ -149,12 +159,12 @@ describe('1.4.x reads on the corrupt profiles', () => {
     it(`${id}: the new tab's root opens it, deletes and changes nothing, and the note list, blocks, folders, and exportAll still answer`, async () => {
       const { generate, inputs } = await load();
       const { fixture } = generate.corruptFixtures(inputs).get(id);
-      const { Storage, settle, before, dump } = await opened(fixture);
+      const { Storage, settle, read, before, dump } = await opened(fixture);
       assert.deepStrictEqual(canvasDb(await dump()), canvasDb(before));
-      await value(settle, () => Storage.getAllNotes(true), 'getAllNotes');
-      await value(settle, () => Storage.getElementsByNote('note-a'), 'getElementsByNote');
-      await value(settle, () => Storage.getAllFolders(), 'getAllFolders');
-      await value(settle, () => Storage.getTrashedNotes(), 'getTrashedNotes');
+      await read({ type: 'listNotes', view: 'withArchived' });
+      await read({ type: 'getNoteBlocks', noteId: 'note-a' });
+      await read({ type: 'listFolders' });
+      await read({ type: 'listNotes', view: 'trashed' });
       await value(settle, () => Storage.exportAll(), 'exportAll');
       assert.deepStrictEqual(canvasDb(await dump()), canvasDb(before), 'a read wrote');
     });
@@ -163,23 +173,23 @@ describe('1.4.x reads on the corrupt profiles', () => {
   it('truncated: a block with only its note is among the note\'s blocks, and a note with no updatedAt is still stored', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
-    const { Storage, settle } = await opened(fixture);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getElementsByNote('note-a'), 'getElementsByNote')), ['block-a1', roles.truncatedBlock]);
-    assert.equal((await value(settle, () => Storage.getNote(roles.truncatedNote), 'getNote')).id, roles.truncatedNote);
+    const { read } = await opened(fixture);
+    assert.deepStrictEqual(ids(await read({ type: 'getNoteBlocks', noteId: 'note-a' })), ['block-a1', roles.truncatedBlock]);
+    assert.equal((await read({ type: 'getNote', noteId: roles.truncatedNote })).note.id, roles.truncatedNote);
   });
 
-  // getAllNotes reads the updatedAt index, which skips a note without updatedAt (KD-011). Since
-  // #17 PR 3a the worker's transform fills it (from createdAt, else the newest block's time, else
-  // the run's start), so Storage lists the note once the run is in, and the kernel lists it by
-  // its createdAt, else last, until then (domain/note.js's notesInView).
+  // The kernel lists a note without updatedAt by its createdAt, else last (domain/note.js's
+  // notesInView), where Storage's getAllNotes read the updatedAt index, which skips it (KD-011).
+  // Since #17 PR 3a the worker's transform fills the field (from createdAt, else the newest
+  // block's time, else the run's start), and the kernel lists the note by it once the run is in.
   it('a note with no updatedAt is listed with the other notes once the worker\'s run and its transform are in, at the time the transform gave it (#17 PR 3a, KD-011)', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
-    const { Storage, settle } = await transformed(fixture);
-    const notes = await value(settle, () => Storage.getAllNotes(true), 'getAllNotes');
+    const { read } = await transformed(fixture);
+    const notes = await read({ type: 'listNotes', view: 'withArchived' });
     assert.deepStrictEqual(ids(notes), ['note-a', 'note-b', roles.truncatedNote].sort());
     // An id and nothing else: no createdAt and no block, so the run's start, the newest time
-    // here, and the index lists it first
+    // here, and the list has it first
     assert.deepStrictEqual([notes[0].id, notes[0].updatedAt], [roles.truncatedNote, TRANSFORMED_AT]);
   });
 
@@ -191,9 +201,9 @@ describe('1.4.x reads on the corrupt profiles', () => {
     assert.deepStrictEqual(ids(exported.canvases), ['note-a', 'note-b', roles.truncatedNote].sort());
   });
 
-  // _readExport builds the backup from getAllNotes(true), so the note, its blocks, and its media
-  // go missing from the user's own backup on a profile no run has reached. #17's point export
-  // keeps them, and the transform fills the field once the run is in (the case above).
+  // Sync's upload, the Storage global's exportAll, leaves the note out on a profile no run has
+  // reached, with its blocks and media. #17's point export keeps them, and the transform fills
+  // the field once the run is in (the case above).
   expectFailure('KD-005 exportAll includes notes without updatedAt', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('truncated');
@@ -205,46 +215,57 @@ describe('1.4.x reads on the corrupt profiles', () => {
   it('mistyped, as 1.4.x reads it (a characterization, not a rule): archived "no" reads as archived, so the note lists only with archived ones', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('mistyped');
-    const { Storage, settle } = await opened(fixture);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllNotes(), 'getAllNotes')), ['note-a', 'note-b']);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getArchivedNotes(), 'getArchivedNotes')), [roles.mistypedNote]);
+    const { read } = await opened(fixture);
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'active' })), ['note-a', 'note-b']);
+    assert.deepStrictEqual(ids(await read({ type: 'listNotes', view: 'archived' })), [roles.mistypedNote]);
   });
 
-  expectFailure('KD-010 a note whose name isn\'t text leaves the other notes\' names for wiki-link autocomplete', async () => {
+  // Storage.getNoteNames and 1.4.1's updateNoteLinks threw on a name that isn't text (KD-010).
+  // The editor reads the names from its document client, and saveNoteContent writes the
+  // links, since #17 PR 4a, and js/storage.js's copy went with #17 PR 4b.
+  it('a note whose name isn\'t text leaves the other notes\' names for wiki-link autocomplete', async () => {
     const { generate, inputs } = await load();
     const { fixture } = generate.corruptFixtures(inputs).get('mistyped');
-    const { Storage, settle } = await opened(fixture);
-    const names = await value(settle, () => Storage.getNoteNames(), 'getNoteNames');
+    const { env, settle } = await opened(fixture);
+    const names = await value(settle, () => env.documentClient.noteNames(), 'noteNames');
     assert.deepStrictEqual([...names].sort(), ['Alpha', 'Beta']);
   });
 
-  expectFailure('KD-010 a note whose name isn\'t text doesn\'t stop another note\'s wiki links from saving', async () => {
+  it('a note whose name isn\'t text doesn\'t stop another note\'s wiki links from saving', async () => {
     const { generate, inputs } = await load();
     const { fixture } = generate.corruptFixtures(inputs).get('mistyped');
-    const { of, dump } = await opened(fixture);
-    const old = await release141On(of);
-    await value(old.settle, () => old.Storage.updateNoteLinks('note-a', ['Beta']), 'updateNoteLinks');
+    const { env, settle, read, dump } = await opened(fixture);
+    // Beta's one block, which the profile keeps as 1.4.x wrote it, with a link to Alpha typed in
+    const [block] = await read({ type: 'getNoteBlocks', noteId: 'note-b' });
+    const saved = await value(settle, () => env.kernel.execute({
+      type: 'saveNoteContent',
+      commandId: 'save-links',
+      noteId: 'note-b',
+      blocks: [{ id: block.id, type: 'text', content: `${block.content}, see [[Alpha]]` }],
+      linkedNames: ['Alpha'],
+    }), 'saveNoteContent');
+    assert.equal(saved.kind, 'committed', JSON.stringify(saved));
     const links = (await dump()).databases[0].stores.find((s) => s.name === 'links').records.map((r) => r.value);
-    assert.deepStrictEqual(links.map((link) => [link.fromNoteId, link.toNoteId]), [['note-a', 'note-b']]);
+    assert.deepStrictEqual(links.map((link) => [link.fromNoteId, link.toNoteId]), [['note-b', 'note-a']]);
   });
 
   it('dangling: the note filed in a folder that\'s gone still lists, and the orphan block, media, and folder are kept', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('dangling');
-    const { Storage, settle } = await opened(fixture);
-    assert.ok(ids(await value(settle, () => Storage.getAllNotes(), 'getAllNotes')).includes(roles.filedNowhere));
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getAllFolders(), 'getAllFolders')), [roles.orphanFolder]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getElementsByNote('note-gone'), 'getElementsByNote')), [roles.orphanBlock]);
-    assert.deepStrictEqual(ids(await value(settle, () => Storage.getBacklinks('note-gone'), 'getBacklinks')), ['note-a']);
+    const { read } = await opened(fixture);
+    assert.ok(ids(await read({ type: 'listNotes', view: 'active' })).includes(roles.filedNowhere));
+    assert.deepStrictEqual(ids(await read({ type: 'listFolders' })), [roles.orphanFolder]);
+    assert.deepStrictEqual(ids(await read({ type: 'getNoteBlocks', noteId: 'note-gone' })), [roles.orphanBlock]);
+    assert.deepStrictEqual(ids(await read({ type: 'getBacklinks', noteId: 'note-gone' })), ['note-a']);
   });
 
   it('oversized: the block over a batch of bytes and the 64 KiB title read back whole', async () => {
     const { generate, inputs } = await load();
     const { fixture, roles } = generate.corruptFixtures(inputs).get('oversized');
-    const { Storage, settle } = await opened(fixture);
-    const [block] = await value(settle, () => Storage.getElementsByNote(roles.oversizedNote), 'getElementsByNote');
+    const { read } = await opened(fixture);
+    const [block] = await read({ type: 'getNoteBlocks', noteId: roles.oversizedNote });
     assert.equal(block.content.length, generate.BATCH_BYTES + 512 * 1024);
-    assert.equal((await value(settle, () => Storage.getNote(roles.oversizedNote), 'getNote')).name.length, 64 * 1024);
+    assert.equal((await read({ type: 'getNote', noteId: roles.oversizedNote })).note.name.length, 64 * 1024);
   });
 
   it('daily-duplicates: the lookup for that day finds the newest Daily Note outside trash and makes none', async () => {

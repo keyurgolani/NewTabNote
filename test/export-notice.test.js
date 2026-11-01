@@ -427,13 +427,14 @@ describe('the notice', () => {
     assert.equal(listeners.length, before, 'the settings listener is gone');
   });
 
-  it('closes in the file:// preview too, whose chrome.storage stand-in has no real events', async () => {
+  it('closes when chrome.storage.onChanged never fires, as the file:// preview\'s stand-in never did', async () => {
     const env = createLegacyEnv({ document: new FakeDocument() });
-    delete env.global.chrome;
     env.load(...FILES);
-    assert.equal(typeof env.get('chrome.storage.onChanged.addListener'), 'function', 'storage.js put its stand-in in place');
-    // The settings port hears of changes through chrome.storage.onChanged, the stand-in's here,
-    // as the new tab's root builds it
+    // An onChanged with no real events, as js/storage.js's stand-in for a page run from file://
+    // had until #17 PR 4b
+    env.global.chrome.storage.onChanged = { addListener() {}, removeListener() {} };
+    // The settings port hears of changes through chrome.storage.onChanged, as the new tab's root
+    // builds it
     const { createNewTabSettingsClient, newTabHost } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
     const settings = createNewTabSettingsClient(null, newTabHost());
     const { notice, card } = showNotice(env, { settings });

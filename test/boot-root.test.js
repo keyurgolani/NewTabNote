@@ -265,6 +265,23 @@ describe("the composition root, which the workspace chunk's boot() runs (js/kern
     assert.equal(built.length, 1);
     assert.equal(built[0].options.loader, null);
   });
+
+  it("connects the Storage global's shell to the tab's kernel before it makes App, so llm.js's settings answer (#17 PR 4b)", async () => {
+    const { env, built, startNewTab } = await root('interactive');
+    env.chrome.local.setting_llmProvider = 'ollama';
+    // What LLMService reads first, asked as App is made
+    const reads = [];
+    const Recorded = env.global.App;
+    env.global.App = class extends Recorded {
+      constructor(options) {
+        super(options);
+        reads.push(env.get('Storage').getSetting('llmProvider', 'none'));
+      }
+    };
+    await startNewTab({ loader: null });
+    assert.equal(built.length, 1);
+    assert.equal(await reads[0], 'ollama');
+  });
 });
 
 describe('the boot guard (js/entries/boot-guard.js)', () => {

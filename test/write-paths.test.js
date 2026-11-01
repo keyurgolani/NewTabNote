@@ -22,7 +22,10 @@ function ops(source, file = 'js/x.js', options = {}) {
   return { calls: hits.map(h => (h.key ? `${h.op} ${h.key}` : h.op)), hits, problems };
 }
 
-/** A js/storage.js whose DatabaseManager defines every method the lists name, as the real one does */
+/**
+ * A js/storage.js whose DatabaseManager defines every method the lists name, as the real one
+ * does, and transaction() and getStore(), which it lost in #17 PR 4b, so a case can open one
+ */
 const STORAGE_STUB = `class DatabaseManager {\n${[...WRITES, ...MODE_WRITES, ...READS].map(op => `  ${op}() {}`).join('\n')}\n}\n`;
 
 /**
@@ -58,16 +61,15 @@ describe('the write-path doc', () => {
     assert.deepEqual(check(ROOT), []);
   });
 
-  it("Storage's own deletes run on no live path, so every delete leaves its tombstone (#17 PR 2b)", () => {
-    // DatabaseManager's deletes leave no tombstone, so a note they deleted would stay in the
-    // recovery points. #12 slice 7 deleted App's copies of the controller paths that called
-    // them, so none is listed now, and one that comes back has to be one of these. #17 PR 4a
-    // deleted emptyTrash, cleanupTrash, and bulkNoteAction, so a call to one fails the scan
+  it('Storage has no deletes of its own, so every delete leaves its tombstone (#17 PR 2b, PR 4b)', () => {
+    // DatabaseManager's deletes left no tombstone, so a note they deleted would stay in the
+    // recovery points. #12 slice 7 and #17 PR 4a deleted their callers, and #17 PR 4b the
+    // methods, so a call to one fails the scan as a method DatabaseManager doesn't define
+    const members = storageMembers(ROOT);
+    const deletes = ['permanentlyDeleteNote', 'deleteFolder', 'deleteElements', 'deleteElementsByNote', 'deleteMediaByNote', 'deleteSnapshotsByNote'];
+    assert.deepEqual(deletes.filter(op => members.has(op)), []);
     const { rows } = collect(ROOT);
-    const deletes = rows.filter(row => /\.(permanentlyDeleteNote|deleteFolder)\(/.test(row.call));
-    for (const row of deletes) {
-      assert.ok(['deleted in slice 7', 'no live caller'].includes(row.status), `${row.method}: ${row.call} is ${row.status}`);
-    }
+    assert.deepEqual(rows.filter(row => deletes.includes(row.op)), []);
   });
 
   it('no DatabaseManager method is listed as both a read and a write', () => {
@@ -80,10 +82,10 @@ describe('the write-path doc', () => {
     assert.deepEqual([...WRITES, ...READS].filter(op => !members.has(op)), []);
     assert.deepEqual(staleListings(members), []);
     // A DatabaseManager that loses a listed method fails the check until the lists drop it
-    const { problems } = withRepo({ 'js/storage.js': 'class DatabaseManager {\n  getNote() {}\n}\n' }, root => collect(root));
-    assert.ok(problems.some(p => /^WRITES in scripts\/write-paths\.js lists updateNote, which DatabaseManager doesn't define: drop it$/.test(p)), problems[0]);
+    const { problems } = withRepo({ 'js/storage.js': 'class DatabaseManager {\n  getSetting() {}\n}\n' }, root => collect(root));
+    assert.ok(problems.some(p => /^WRITES in scripts\/write-paths\.js lists setSetting, which DatabaseManager doesn't define: drop it$/.test(p)), problems[0]);
     assert.ok(problems.some(p => /^READS in scripts\/write-paths\.js lists getAllNotes, which DatabaseManager doesn't define/.test(p)));
-    assert.ok(!problems.some(p => / lists getNote,/.test(p)));
+    assert.ok(!problems.some(p => / lists getSetting,/.test(p)));
   });
 
   it('every rule names a command, and every command has a slice, a PR, or a ledger issue', () => {
@@ -122,27 +124,27 @@ describe('scanning', () => {
       class A {
         _getStorage() { return this.storage; }
         run(note) {
-          Storage.updateNote(note);
-          self.Storage.trashNote(note.id);
-          (typeof window !== 'undefined' ? window : self).Storage.permanentlyDeleteNote(note.id);
+          Storage.setSearchIndexEntry(note);
+          self.Storage.removeSearchIndexEntry(note.id);
+          (typeof window !== 'undefined' ? window : self).Storage.saveVector(note.id, []);
           this.storage.setSetting('theme', 'dark');
-          appStorage().createNote('x');
+          appStorage().setSearchIndex([]);
           this._getStorage().saveElement({});
           const storage = this.storage;
-          storage.archiveNote(note.id);
+          storage.importNote(note);
           const { storage: db } = this;
-          db.unarchiveNote(note.id);
+          db.importAll(note);
           Storage.transaction(['canvases'], 'readwrite');
           Storage.getStore('canvases', 'readwrite');
-          Storage.getNote(note.id);
+          Storage.getAllNotes(true);
           Storage.getSetting('theme');
           Storage.transaction('canvases');
-          this.notesManager.archiveNote(note.id);
+          this.notesManager.saveVector(note.id);
         }
       }`);
     assert.deepEqual(problems, []);
-    assert.deepEqual(calls, ['updateNote', 'trashNote', 'permanentlyDeleteNote', 'setSetting theme', 'createNote', 'saveElement',
-      'archiveNote', 'unarchiveNote', 'transaction canvases', 'getStore canvases']);
+    assert.deepEqual(calls, ['setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector', 'setSetting theme', 'setSearchIndex', 'saveElement',
+      'importNote', 'importAll', 'transaction canvases', 'getStore canvases']);
   });
 
   it('shows the receiver it resolved, never a local name', () => {
@@ -151,8 +153,8 @@ describe('scanning', () => {
       class A {
         run(note) {
           const db = this.storage;
-          db.archiveNote(note.id);
-          editorStorage().saveElement(note.blocks[0]);
+          db.saveVector(note.id, []);
+          editorStorage().setSearchIndexEntry(note);
         }
       }
       function add(db, note) {
@@ -163,8 +165,8 @@ describe('scanning', () => {
       function cursorWrite(request) { const cursorOverNotes = request.result; cursorOverNotes.delete(); }
       function cache(id) { const api = A._chromeApi(); const area = api.storage.local; area.set({ lastOpenedNoteId: id }); }`);
     assert.deepEqual(hits.map(h => h.call), [
-      'this.storage.archiveNote(…)',
-      'Storage.saveElement(…)',
+      'this.storage.saveVector(…)',
+      'Storage.setSearchIndexEntry(…)',
       "objectStore('canvases').add(…)",
       'cursor.delete(…)',
       'chrome.storage.local.set({lastOpenedNoteId})',
@@ -180,20 +182,6 @@ describe('scanning', () => {
       Storage.setSetting(SIDEBAR_KEY, true);
       Storage.setSetting(KEYS.width, 300);`);
     assert.deepEqual(calls, ['setSetting insightsExtracting_${…}', 'setSetting (computed)', 'setSetting sidebarOpen', 'setSetting sidebarWidth']);
-  });
-
-  it('lists the fields an update sets', () => {
-    const { hits } = ops(`
-      class S {
-        rename(note, name) { note.name = name; this.storage.updateNote(note); }
-        pin(note) { note.pinned = !note.pinned; note.updatedAt = Date.now(); this.storage.updateNote(note); }
-        insights(found) { this.noteData.insights = found; Storage.updateNote(this.noteData); }
-      }`);
-    assert.deepEqual(hits.map(h => h.call), [
-      'this.storage.updateNote({name})',
-      'this.storage.updateNote({pinned, updatedAt})',
-      'Storage.updateNote({insights})',
-    ]);
   });
 
   it('finds chrome.storage, raw IndexedDB, and Web Storage writes', () => {
@@ -233,7 +221,7 @@ describe('scanning', () => {
     const { hits } = ops(`
       class App {
         run() {
-          async function helper() { await Storage.trashNote(id); }
+          async function helper() { await Storage.saveVector(id, []); }
           return helper();
         }
       }`);
@@ -246,11 +234,11 @@ describe('scanning', () => {
       'a getStore mode in a variable': 'function f(mode) { Storage.getStore("canvases", mode).put(n); }',
       'a getStore store in a variable': 'function f(mode) { const s = Storage.getStore(x, mode); s.put(n); }',
       'a transaction mode in a variable': 'function f(db, mode) { db.transaction("canvases", mode); }',
-      'Storage kept on another property': 'class A { constructor() { this.db = Storage; } f(n) { this.db.updateNote(n); } }',
-      'Storage passed as a parameter': 'function f(storage, n) { storage.updateNote(n); }',
-      'the opener window': 'function f(n) { window.opener.Storage.updateNote(n); }',
-      'a dependency bag': 'class A { f(n) { this.deps.storage.updateNote(n); } }',
-      'a ternary alias': 'function f(n, other) { const s = n ? Storage : other; s.updateNote(n); }',
+      'Storage kept on another property': 'class A { constructor() { this.db = Storage; } f(n) { this.db.saveVector(n); } }',
+      'Storage passed as a parameter': 'function f(storage, n) { storage.saveVector(n); }',
+      'the opener window': 'function f(n) { window.opener.Storage.saveVector(n); }',
+      'a dependency bag': 'class A { f(n) { this.deps.storage.saveVector(n); } }',
+      'a ternary alias': 'function f(n, other) { const s = n ? Storage : other; s.saveVector(n); }',
       'a store bound with let': 'function f(tx, n) { let store; store = tx.objectStore("canvases"); store.put(n); }',
       'a chrome.storage area bound with let': 'function f(id) { let area = chrome.storage.local; area.set({ id }); }',
     };
@@ -264,15 +252,14 @@ describe('scanning', () => {
       class App {
         constructor() { this.searchEngine = new SearchEngine(); }
         run(id) {
-          this.archiveNote(id);
-          this.notesManager.archiveNote(id);
-          this.sidebarController.trashNote(id);
-          this.searchEngine.updateNote(id);
-          LLM.init();
+          this.saveVector(id);
+          this.notesManager.saveVector(id);
+          this.sidebarController.setSetting(id);
+          this.searchEngine.setSearchIndex(id);
         }
       }
       const storage = new PopupStorage();
-      storage.createNote('Quick');`);
+      storage.setSearchIndexEntry('Quick');`);
     assert.deepEqual(problems, []);
     assert.deepEqual(calls, []);
   });
@@ -280,42 +267,64 @@ describe('scanning', () => {
   it("fails a call to a method DatabaseManager doesn't define though a list names it, as Storage.isUpgraded() since #17 PR 4a (R88)", () => {
     const members = storageMembers(ROOT);
     assert.equal(members.has('isUpgraded'), false, 'js/storage.js lost it');
-    const { calls, problems } = ops('Storage.isUpgraded();\nStorage.getNote(id);\n', 'js/x.js', { members });
+    const { calls, problems } = ops('Storage.isUpgraded();\nStorage.getAllNotes(true);\n', 'js/x.js', { members });
     assert.deepEqual(calls, []);
     assert.equal(problems.length, 1);
     assert.match(problems[0], /calls Storage\.isUpgraded, which DatabaseManager doesn't define/);
     // A read and a write the lists name fail the same way once DatabaseManager loses them
-    const lost = ops('Storage.getNote(id);\nStorage.updateNote(note);\n', 'js/x.js', { members: new Set(['constructor']) });
+    const lost = ops('Storage.getAllNotes(true);\nStorage.saveVector(id, v);\n', 'js/x.js', { members: new Set(['constructor']) });
     assert.deepEqual(lost.calls, []);
-    assert.match(lost.problems[0], /calls Storage\.getNote, which DatabaseManager doesn't define/);
-    assert.match(lost.problems[1], /calls Storage\.updateNote, which DatabaseManager doesn't define/);
+    assert.match(lost.problems[0], /calls Storage\.getAllNotes, which DatabaseManager doesn't define/);
+    assert.match(lost.problems[1], /calls Storage\.saveVector, which DatabaseManager doesn't define/);
+  });
+
+  it("fails a call to what js/storage.js's shell doesn't have, its transaction() and getStore() among them (#17 PR 4b)", () => {
+    const members = storageMembers(ROOT);
+    const { calls, problems } = ops(`
+      Storage.transaction(['canvases'], 'readwrite');
+      Storage.getStore('canvases', 'readwrite').put(note);
+      Storage.getStore('links').getAll();
+      this.storage.transaction('settings', 'readwrite');
+      Storage.createNote('x');
+      Storage.getNote(id);
+      db.transaction('canvases', 'readwrite');
+    `, 'js/x.js', { members });
+    assert.deepEqual(calls, ['transaction canvases']);
+    assert.deepEqual(problems.map(p => p.replace(/^js\/x\.js:\d+ /, '')), [
+      "calls Storage.transaction, which DatabaseManager doesn't define: fix the call",
+      "calls Storage.getStore, which DatabaseManager doesn't define: fix the call",
+      "calls Storage.getStore, which DatabaseManager doesn't define: fix the call",
+      "calls this.storage.transaction, which DatabaseManager doesn't define: fix the call",
+      "calls Storage.createNote, which DatabaseManager doesn't define: fix the call, or list it in UNDEFINED_WRITES",
+      "calls Storage.getNote, which DatabaseManager doesn't define: fix the call, or list it in UNDEFINED_WRITES",
+    ]);
   });
 
   it('reports a Storage method DatabaseManager lacks, one it has but nobody classified, and one handed on uncalled', () => {
     const { calls, problems } = ops(`
       Storage.saveEverything();
       Storage.newThing();
-      const save = Storage.updateNote;
+      const save = Storage.saveVector;
       if (typeof Storage.importAll === 'function') Storage.importAll(data);
-    `, 'js/x.js', { members: new Set(['newThing', 'updateNote']) });
+    `, 'js/x.js', { members: new Set(['newThing', 'saveVector']) });
     assert.deepEqual(calls, ['importAll']);
     assert.equal(problems.length, 3);
     assert.match(problems[0], /saveEverything, which DatabaseManager doesn't define/);
     assert.match(problems[1], /DatabaseManager\.newThing isn't in WRITES or READS/);
-    assert.match(problems[2], /passes Storage\.updateNote on without calling it/);
+    assert.match(problems[2], /passes Storage\.saveVector on without calling it/);
   });
 
   it('names the method each call sits in, and what an anonymous function is for', () => {
     const { hits } = ops(`
-      let ready = Storage.init();
+      let ready = Storage.setSetting('a', 1);
       async function capture() { await Storage.saveElement({}); }
       class SidebarController {
         bind() {
-          button.addEventListener('click', async () => { await this.storage.createFolder('x'); });
+          button.addEventListener('click', async () => { await this.storage.setSearchIndex([]); });
           this.panel.onResizeEnd = (w) => this.storage.setSetting('sidebarWidth', w);
-          const items = [{ label: 'Delete', action: async () => { await this.storage.deleteFolder(f.id); } }];
-          chrome.runtime.onInstalled.addListener(() => Storage.init());
-          [1].forEach(() => Storage.trashNote(id));
+          const items = [{ label: 'Delete', action: async () => { await this.storage.removeSearchIndexEntry(f.id); } }];
+          chrome.runtime.onInstalled.addListener(() => Storage.saveVector(id, []));
+          [1].forEach(() => Storage.setSearchIndexEntry(e));
         }
       }`);
     assert.deepEqual(hits.map(h => h.method), [
@@ -334,28 +343,21 @@ describe('classifying', () => {
   const hit = fields => ({ file: 'js/controllers/sidebar-controller.js', line: 1, method: 'SidebarController.x', kind: 'storage', key: null, fields: [], call: '', ...fields });
 
   it('gives a call its command and status', () => {
-    const pin = classify(hit({ method: 'SidebarController.toggleNotePin', op: 'updateNote', fields: ['pinned'] }));
-    assert.deepEqual([pin.command, pin.status], ['setPinned', 'kernel command, slice 4']);
+    const vector = classify(hit({ method: 'NotesManager.updateMissingEmbeddings', op: 'saveVector' }));
+    assert.deepEqual([vector.command, vector.status], ['saveVector', 'kernel command, #17 PR 4b']);
     const key = classify(hit({ file: 'js/llm.js', method: 'LLMService.setApiKey', op: 'setSetting', key: 'llmApiKey' }));
     assert.deepEqual([key.command, key.status], ['saveProviderSettings', 'ledgered to #11']);
   });
 
-  it('matches note writes on the fields they set, not on menu text', () => {
-    // Folder renames, moves, and collapses matched this way until #17 PR 4a deleted Storage.updateFolder
-    const write = (fields) => classify(hit({ method: 'SidebarController.showNoteContextMenu > action', op: 'updateNote', fields })).command;
-    assert.equal(write(['pinned']), 'setPinned');
-    assert.equal(write(['folderId']), 'moveNoteToFolder');
-    assert.equal(write(['insights']), 'attachInsights');
-  });
-
-  it('leaves a new call in a method-scoped rule unclassified', () => {
-    assert.equal(classify(hit({ file: 'js/controllers/tab-controller.js', method: 'TabController.saveTabs', op: 'updateNote' })).command, null);
-    assert.notEqual(classify(hit({ file: 'js/editor.js', method: 'BlockEditor._afterSaveWrite', op: 'setSetting', key: 'theme' })).command, 'saveNoteContent');
+  it("leaves a call outside a file-scoped rule's file unclassified", () => {
+    assert.equal(classify(hit({ file: 'js/editor.js', method: 'BlockEditor.x', op: 'saveElement' })).command, null);
+    const remote = classify(hit({ file: 'js/services/sync-service.js', method: 'SyncService._applyResolution', op: 'saveElement' }));
+    assert.deepEqual([remote.command, remote.status], ['applyRemoteChanges', 'no live path']);
   });
 
   it('ledgers every write in a ledgered file to its issue', () => {
-    const created = classify(hit({ file: 'js/services/sync-service.js', method: 'SyncService.x', op: 'createNote' }));
-    assert.equal(created.status, 'ledgered to #19');
+    const vector = classify(hit({ file: 'js/services/sync-service.js', method: 'SyncService.x', op: 'saveVector' }));
+    assert.equal(vector.status, 'ledgered to #19');
   });
 
   it('leaves a call no rule covers unclassified', () => {
@@ -374,8 +376,8 @@ describe('statuses from the code', () => {
   toggleSidebar() {
     Storage.setSetting('sidebarWidth', 1);
   }
-  archiveNote(id) {
-    return Storage.archiveNote(id);
+  saveVector(id) {
+    return Storage.saveVector(id, []);
   }
 }
 window.App = App;
@@ -383,7 +385,7 @@ window.App = App;
     });
     assert.deepEqual(rows, [
       "App.toggleSidebar | Storage.setSetting('sidebarWidth', …) | setPreferences | kernel command, slice 6",
-      'App.archiveNote | Storage.archiveNote(…) | archiveNote | no live caller',
+      'App.saveVector | Storage.saveVector(…) | saveVector | no live caller',
     ]);
     assert.ok(!STATUSES.some(([status]) => status === 'deleted in slice 7'));
   });
@@ -412,12 +414,11 @@ manager.updateInsightsSettings(true);
 
 describe('the check', () => {
   const source = (extra = '') => `class SidebarController {
-  toggleNotePin(note) {
-    note.pinned = !note.pinned;
-    this.storage.updateNote(note);${extra}
+  saveEmbedding(note) {
+    this.storage.saveVector(note.id, []);${extra}
   }
 }
-new SidebarController().toggleNotePin(n);
+new SidebarController().saveEmbedding(n);
 `;
 
   it('fails until the doc is written, then passes when only line numbers move', () => {
@@ -435,9 +436,8 @@ new SidebarController().toggleNotePin(n);
     const menu = (label, local) => `class SidebarController {
   showNoteContextMenu(note) {
     const items = [{ label: '${label}', action: async () => {
-      note.pinned = true;
       const ${local} = this.storage;
-      await ${local}.updateNote(note);
+      await ${local}.saveVector(note.id, []);
     } }];
     return items;
   }
@@ -454,27 +454,27 @@ new SidebarController().showNoteContextMenu(n);
   it('fails when a write path is added or removed without rewriting the doc', () => {
     withRepo({ 'js/sidebar.js': source() }, (root) => {
       main(['--write'], { root, ...quiet });
-      fs.writeFileSync(path.join(root, 'js/sidebar.js'), source('\n    this.storage.archiveNote(note.id);'));
-      assert.match(check(root).join('\n'), /missing from docs\/architecture\/write-paths\.md: .*archiveNote/);
+      fs.writeFileSync(path.join(root, 'js/sidebar.js'), source('\n    this.storage.setSearchIndexEntry(note);'));
+      assert.match(check(root).join('\n'), /missing from docs\/architecture\/write-paths\.md: .*setSearchIndexEntry/);
       assert.equal(main([], { root, ...quiet }), 1);
       fs.writeFileSync(path.join(root, 'js/sidebar.js'), 'class SidebarController {}\n');
-      assert.match(check(root).join('\n'), /in docs\/architecture\/write-paths\.md but not in the code: .*updateNote/);
+      assert.match(check(root).join('\n'), /in docs\/architecture\/write-paths\.md but not in the code: .*saveVector/);
     });
   });
 
   it('refuses to write or pass a call no rule covers', () => {
-    withRepo({ 'js/sidebar.js': source('\n    this.storage.deleteMediaByNote(note.id);') }, (root) => {
+    withRepo({ 'js/sidebar.js': source("\n    this.storage.setSetting('mystery', 1);") }, (root) => {
       assert.equal(main(['--write'], { root, ...quiet }), 1);
       assert.ok(!fs.existsSync(path.join(root, DOC)));
-      assert.match(check(root).join('\n'), /deleteMediaByNote\(…\) has no rule/);
+      assert.match(check(root).join('\n'), /setSetting\('mystery', …\) has no rule/);
     });
   });
 
   it('skips js/storage.js, js/lib/, and js/kernel/', () => {
     withRepo({
-      'js/storage.js': `${STORAGE_STUB}Storage.updateNote(n);\n`,
-      'js/lib/vendor.js': 'Storage.updateNote(n);',
-      'js/kernel/adapters/legacy/notes.js': 'Storage.updateNote(n);',
+      'js/storage.js': `${STORAGE_STUB}Storage.saveVector(n);\n`,
+      'js/lib/vendor.js': 'Storage.saveVector(n);',
+      'js/kernel/adapters/legacy/notes.js': 'Storage.saveVector(n);',
     }, (root) => {
       assert.equal(main(['--write'], { root, ...quiet }), 0);
       assert.match(fs.readFileSync(path.join(root, DOC), 'utf8'), /\| Total \| 0 \|/);

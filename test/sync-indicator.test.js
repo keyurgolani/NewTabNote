@@ -19,7 +19,7 @@ describe("App's sync indicator (#13)", () => {
     const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
     const host = root.newTabHost();
     const adapter = root.createNewTabAdapter(host);
-    const kernel = root.createNewTabClient(adapter, host);
+    const kernel = root.createNewTabClient(adapter);
     assert.equal(await kernel.whenReady(), null);
     const shown = [];
     const app = {
