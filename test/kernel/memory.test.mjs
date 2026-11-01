@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryCommitLog } from '../../js/kernel/core/memory/commit-log.js';

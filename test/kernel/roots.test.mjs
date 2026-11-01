@@ -1,5 +1,6 @@
 // What each composition root builds (#12, "Where the kernel runs"; #17 PR 1b): one kernel per
-// context, with its surface as the caller the policy checks. The worker's runs #17's migration
+// context, with its surface as the caller the policy checks, and since #17 PR 4b the table of
+// the handlers its page sends (core/application/handlers.js). The worker's runs #17's migration
 // run first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
 // So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, its one
 // connection since #17 PR 4b, which connects production js/storage.js's shell to its kernel,
@@ -145,6 +146,56 @@ describe('each composition root', () => {
       cause: 'policy',
       code: 'not-on-surface',
     });
+    closeAll([tab]);
+  });
+
+  it('runs what its page sends through its table, and refuses as not-registered, with an error, a read the policy allows that its page never sends (#17 PR 4b)', async () => {
+    const tab = legacyContext();
+    const { client: newtab } = newTabOf(tab);
+    assert.equal(await newtab.whenReady(), null);
+    const created = await newtab.execute({
+      type: 'createNote',
+      commandId: newtab.ids.next(),
+      noteId: newtab.ids.next(),
+      name: 'Listed',
+    });
+    assert.equal(created.kind, 'committed');
+    const popup = createPopupClient(pageHostOf(tab));
+    const panel = createSidePanelClient(pageHostOf(tab));
+    assert.equal(await popup.whenReady(), null);
+    assert.equal(await panel.whenReady(), null);
+    /** @type {unknown[][]} */
+    const errors = [];
+    const error = console.error;
+    console.error = (/** @type {unknown[]} */ ...args) => {
+      errors.push(args);
+    };
+    try {
+      // Popup's list and its summary switch, and Side Panel's list
+      const read = [
+        await popup.query({ type: 'listNotes', view: 'popup' }),
+        await popup.query({ type: 'getPopupInsightsEnabled' }),
+        await panel.query({ type: 'listNotes', view: 'sidePanel' }),
+      ];
+      assert.deepEqual(
+        read.map(state => state.kind),
+        ['ready', 'ready', 'ready'],
+      );
+      assert.deepEqual(errors, []);
+      for (const client of [popup, panel]) {
+        assert.deepEqual(await client.query({ type: 'getNote', noteId: 'n1' }), {
+          kind: 'failed',
+          cause: 'policy',
+          code: 'not-registered',
+        });
+      }
+    } finally {
+      console.error = error;
+    }
+    assert.deepEqual(errors, [
+      ['NewTabNote kernel: handler-missing', { surface: 'popup', type: 'getNote', code: 'not-registered' }],
+      ['NewTabNote kernel: handler-missing', { surface: 'sidepanel', type: 'getNote', code: 'not-registered' }],
+    ]);
     closeAll([tab]);
   });
 

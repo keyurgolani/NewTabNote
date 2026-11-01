@@ -20,7 +20,7 @@ import {
 } from '../../js/kernel/composition/background.js';
 import { createFailureEvents } from '../../js/kernel/composition/trust.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';

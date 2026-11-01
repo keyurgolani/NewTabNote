@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
 import { newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { NOTE_VIEWS } from '../../js/kernel/core/domain/note.js';

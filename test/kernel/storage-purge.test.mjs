@@ -29,7 +29,7 @@ import {
   verifyPoint,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
   DELETED_AT,

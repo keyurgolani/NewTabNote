@@ -18,7 +18,7 @@ import {
 } from '../../js/kernel/composition/newtab.js';
 import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from '../kernel/test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 

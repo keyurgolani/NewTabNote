@@ -74,6 +74,7 @@ async function refusals() {
 async function startReads() {
   const { createIndexedDbAdapter } = await import('/js/kernel/adapters/indexeddb/adapter.js');
   const { createKernel } = await import('/js/kernel/core/application/kernel.js');
+  const { NEWTAB_HANDLERS } = await import('/js/kernel/core/application/handlers-all.js');
   const { createBaselinePolicy } = await import('/js/kernel/core/ports/policy.js');
   const deadline = Date.now() + 5_000;
   const db = await new Promise((resolve, reject) => {
@@ -147,6 +148,7 @@ async function startReads() {
     adapter,
     policy: createBaselinePolicy(),
     caller: { surface: 'newtab', contextId: 'connection-closing' },
+    handlers: NEWTAB_HANDLERS,
     ids: { next: () => `pin-${Date.now()}-${(count += 1)}` },
     clock: { now: () => Date.now() },
   });
