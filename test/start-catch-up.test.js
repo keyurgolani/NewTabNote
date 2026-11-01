@@ -144,6 +144,33 @@ describe('the new tab catches a note up right after the drafts', () => {
     StartCatchUp.forget(shared.localStorage, ['A', 'G']);
     assert.deepEqual(JSON.parse(JSON.stringify(StartCatchUp.pending(shared.localStorage))), { dropped: ['B'], gone: [] });
   });
+
+  it('keeps the ID of a note whose permanent delete failed, so the note still catches up at the next start', CASE, async () => {
+    const { shared, seed } = sharedProfile();
+    const blocks = [block('a1', 'A', 0, 'From the side panel start')];
+    await createDatabase(seed.indexedDB, {
+      records: { canvases: [note('A', { preview: 'old line' }), note('B')], elements: [...blocks, block('b1', 'B', 0, 'bravo')] },
+    });
+    const StartCatchUp = seed.get('StartCatchUp');
+    StartCatchUp.remember({ saved: [], recovered: [], dropped: ['A', 'B'], gone: [], kept: [] }, shared.localStorage);
+
+    // Another page empties the trash: A's delete fails, B's goes through
+    const other = createLegacyEnv({ indexedDB: shared.indexedDB, localStorage: shared.localStorage });
+    other.load('js/utils.js', 'js/core/storage-error.js', 'js/sidebar-utils.js', 'js/close-drafts.js', 'js/start-catch-up.js', 'js/storage.js');
+    const Storage = other.get('Storage');
+    await Storage.init();
+    const deleteElements = Storage.deleteElementsByNote;
+    Storage.deleteElementsByNote = () => Promise.reject(new DOMException('test: the disk is gone', 'UnknownError'));
+    await assert.rejects(Storage.permanentlyDeleteNote('A'), { name: 'UnknownError' });
+    Storage.deleteElementsByNote = deleteElements;
+    await Storage.permanentlyDeleteNote('B');
+    assert.deepEqual(JSON.parse(JSON.stringify(StartCatchUp.pending(shared.localStorage))), { dropped: ['A'], gone: [] },
+      "A still waits for the catch-up, and B, deleted, doesn't");
+
+    await startNewTab(shared);
+    assert.equal(recordsOf(await dumpDatabase(shared.indexedDB), 'canvases').A.preview, 'From the side panel start');
+    assert.equal(shared.localStorage.getItem(StartCatchUp.PENDING_KEY), null);
+  });
 });
 
 describe('the catch-up writes only what the blocks give, and only what differs', () => {
