@@ -9,11 +9,21 @@
 const { test, expect, expectNoUncaught } = require('./harness');
 const driver = require('./characterization/driver');
 
-/** recovery.html at `hash`, in a page of its own */
-async function openRecovery(extension, hash = '') {
+/** recovery.html at `hash`, in a page of its own, in `colorScheme` when one is given */
+async function openRecovery(extension, hash = '', { colorScheme } = {}) {
   const page = await extension.context.newPage();
+  if (colorScheme) await page.emulateMedia({ colorScheme });
   await page.goto(extension.url(`recovery.html${hash}`));
   return page;
+}
+
+/** The focused element's id, with its outline and its inner ring as Chrome computes them */
+function focusRing(page) {
+  return page.evaluate(() => {
+    const active = document.activeElement;
+    const style = getComputedStyle(active);
+    return `${active.id}: outline ${style.outlineStyle}, inner ring ${style.boxShadow === 'none' ? 'none' : 'drawn'}`;
+  });
 }
 
 test('opens on the shipped bundle, runs its open check in the page, and draws the Trust Center, then the Recovery Center', async ({ extension }) => {
@@ -47,5 +57,26 @@ test("is where Settings' Trust Center section leads, and its way back is the new
   await expect(page).toHaveURL(/\/recovery\.html#trust$/);
   await expect(page.locator('#trust-h1')).toHaveText(/^Trust Center: /);
   await expect(page.getByRole('link', { name: 'Back to your notes' })).toHaveAttribute('href', extension.url('newtab.html'));
+  await expectNoUncaught(extension, page);
+});
+
+test('a heading the page moves focus to shows its ring after a key press, and none after a click', async ({ extension }) => {
+  await extension.seedOnboarded();
+  // Dark, where the inner ring alone once drew a box round a heading that showed no outline
+  const page = await openRecovery(extension, '#trust', { colorScheme: 'dark' });
+  await expect(page.locator('#trust-main .trust-tone-checking')).toHaveCount(0);
+  const views = page.getByRole('navigation', { name: 'Trust and recovery' });
+  const heading = page.locator('#trust-h1');
+
+  await views.getByRole('link', { name: 'Recovery Center' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(heading).toHaveText('Recovery Center: Nothing needs recovering');
+  await expect(heading).toBeFocused();
+  expect(await focusRing(page)).toBe('trust-h1: outline solid, inner ring drawn');
+
+  await views.getByRole('link', { name: 'Trust Center' }).click();
+  await expect(heading).toHaveText(/^Trust Center: /);
+  await expect(heading).toBeFocused();
+  expect(await focusRing(page)).toBe('trust-h1: outline none, inner ring none');
   await expectNoUncaught(extension, page);
 });
