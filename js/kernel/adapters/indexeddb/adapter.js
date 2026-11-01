@@ -108,7 +108,7 @@ import {
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
 } from './registry.js';
-import { abort, indexValue, result } from './requests.js';
+import { abort, endOf, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 import { createVersionTracker } from './versions.js';
@@ -190,22 +190,7 @@ import { createVersionTracker } from './versions.js';
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
 
-/**
- * How a transaction ended: committed, or aborted with its error, which is null when this
- * adapter aborted it
- * @typedef {{committed: true} | {committed: false, error: DOMException | null}} Ending
- */
-
-/**
- * @param {IDBTransaction} tx
- * @returns {Promise<Ending>}
- */
-function ending(tx) {
-  return new Promise(resolve => {
-    tx.addEventListener('complete', () => resolve({ committed: true }));
-    tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));
-  });
-}
+/** @typedef {import('./requests.js').Ending} Ending */
 
 /**
  * The IndexedDB stores among `stores` the database has, once each
@@ -733,7 +718,7 @@ export function createIndexedDbAdapter({
       });
     }
     const open = tx;
-    const ended = ending(open);
+    const ended = endOf(open);
     /** @type {Promise<Decided>} */
     const deciding = running.then(async first => {
       try {

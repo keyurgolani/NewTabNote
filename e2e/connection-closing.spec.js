@@ -63,13 +63,18 @@ async function refusals() {
 
 /**
  * In the page: two reads that keep their transactions open until Chrome closes their
- * connections, or 5 seconds pass. One on a scratch database's own connection, which records
- * each event in order with what a transaction over no store is refused with right then; one
- * through #17's adapter on CanvasTabDB. Resolves once both run; window.closing then resolves
- * with what each came to.
+ * connections, or 5 seconds pass. One on a scratch database's own connection records each
+ * event in order with what a transaction over no store is refused with right then, and, as its
+ * transaction aborts, opens another and records what that one comes to: the window a command's
+ * run again, and a call that starts before the close, open their transactions in. One goes
+ * through #17's adapter on CanvasTabDB, and as its transaction aborts, a command goes through a
+ * kernel on the adapter. Resolves once both run; window.closing then resolves with what each
+ * came to, and the adapter's next call.
  */
 async function startReads() {
   const { createIndexedDbAdapter } = await import('/js/kernel/adapters/indexeddb/adapter.js');
+  const { createKernel } = await import('/js/kernel/core/application/kernel.js');
+  const { createBaselinePolicy } = await import('/js/kernel/core/ports/policy.js');
   const deadline = Date.now() + 5_000;
   const db = await new Promise((resolve, reject) => {
     const request = indexedDB.open('ntn-closing-read', 1);
@@ -87,16 +92,42 @@ async function startReads() {
   };
   /** @type {unknown[][]} */
   const events = [];
+  /** @type {unknown[][]} */
+  const late = [];
   const raw = new Promise(resolve => {
+    // What the transaction opened after the abort comes to lands within this after close
     db.onclose = () => {
       events.push(['close', refused()]);
-      resolve(events);
+      setTimeout(() => resolve({ events, late }), 1_000);
     };
     const tx = db.transaction('rows', 'readonly');
-    tx.onabort = () => events.push(['abort', tx.error ? tx.error.name : null, refused()]);
+    tx.onabort = () => {
+      events.push(['abort', tx.error ? tx.error.name : null, refused()]);
+      /** @type {IDBTransaction} */
+      let next;
+      try {
+        next = db.transaction('rows', 'readonly');
+      } catch (error) {
+        late.push(['refused', error.name]);
+        return;
+      }
+      next.onabort = () => late.push(['abort', next.error ? next.error.name : null, refused(), events.length]);
+      next.oncomplete = () => late.push(['complete', refused(), events.length]);
+      const request = next.objectStore('rows').get('none');
+      request.onsuccess = () => late.push(['success', refused(), events.length]);
+      request.onerror = () => late.push(['error', request.error ? request.error.name : null, refused(), events.length]);
+      // Whether the request's error bubbles to its transaction and its connection, where 1.4.1's
+      // transactions listen for it (saveNoteWithBlocks' onerror)
+      next.onerror = event => {
+        if (event.target === request) late.push(['transaction-error', events.length]);
+      };
+      db.addEventListener('error', event => {
+        if (event.target === request) late.push(['connection-error', events.length]);
+      });
+    };
     tx.oncomplete = () => {
       events.push(['complete']);
-      resolve(events);
+      resolve({ events, late });
     };
     const store = tx.objectStore('rows');
     const next = () => {
@@ -111,21 +142,56 @@ async function startReads() {
 
   const adapter = createIndexedDbAdapter({ indexedDB, settings: chrome.storage.local, mode: 'versioned' });
   await adapter.open();
+  let count = 0;
+  const kernel = createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: { surface: 'newtab', contextId: 'connection-closing' },
+    ids: { next: () => `pin-${Date.now()}-${(count += 1)}` },
+    clock: { now: () => Date.now() },
+  });
   /** @param {Promise<unknown>} call */
   const answer = call =>
-    call.then(
-      value => ({ value }),
-      error => ({ failed: [error.unavailableCause, error.code, error.retryable] }),
-    );
+    Promise.race([
+      call.then(
+        value => ({ value }),
+        error => ({ failed: [error.unavailableCause, error.code, error.retryable] }),
+      ),
+      new Promise(resolve => setTimeout(() => resolve({ unanswered: 3000 }), 3000)),
+    ]);
+  /** @param {any} outcome */
+  const outcomeOf = outcome =>
+    outcome.value ? [outcome.value.kind, outcome.value.cause ?? null, outcome.value.code ?? null, outcome.value.retryable ?? null] : outcome;
+  // The adapter's read transaction, caught as it opens, sends the command as it aborts
+  /** @type {Promise<unknown> | null} */
+  let command = null;
+  const { transaction } = IDBDatabase.prototype;
+  IDBDatabase.prototype.transaction = function watched(...args) {
+    const tx = transaction.apply(this, args);
+    if (this.name === 'CanvasTabDB') {
+      IDBDatabase.prototype.transaction = transaction;
+      command = new Promise(resolve =>
+        tx.addEventListener('abort', () =>
+          resolve(
+            answer(kernel.execute({ type: 'createNote', commandId: `pin-${Date.now()}`, noteId: `pin-${Date.now()}`, name: 'Between' })).then(outcomeOf),
+          ),
+        ),
+      );
+    }
+    return tx;
+  };
   const read = answer(
     adapter.read(['notes'], async tx => {
       while (Date.now() < deadline) await tx.get('notes', 'none');
       return 'read through';
     }),
   );
-  window.closing = Promise.all([raw, read]).then(async ([order, inFlight]) => ({
-    order,
+  IDBDatabase.prototype.transaction = transaction;
+  window.closing = Promise.all([raw, read]).then(async ([seen, inFlight]) => ({
+    order: seen.events,
+    late: seen.late,
     inFlight,
+    command: command ? await command : 'no transaction caught',
     next: await answer(adapter.read(['notes'], async () => 'read')),
     openState: adapter.openState(),
   }));
@@ -158,7 +224,19 @@ test("Chrome's close of a connection aborts the read open on it before the page 
     await devtools.send('Storage.clearDataForOrigin', { origin, storageTypes: 'indexeddb' });
     rounds.push(await page.evaluate(() => window.closing));
   }
+  // What Chrome does with what opens between its aborts and its close, as R88 asked to see
+  console.log(JSON.stringify(rounds.map(({ late, command }) => ({ late, command }))));
   for (const [round, seen] of rounds.entries()) {
+    // A transaction opened between the aborts and the close: its request fails once close has
+    // fired, while the connection refuses a transaction, and the error bubbles to the transaction
+    // and the connection, but the transaction fires neither complete nor abort
+    expect(seen.late, `round ${round}`).toEqual([
+      ['error', 'AbortError', 'InvalidStateError', 3],
+      ['transaction-error', 3],
+      ['connection-error', 3],
+    ]);
+    // A command sent then, whose transaction that close catches, answers, as reload-required
+    expect(seen.command, `round ${round}`).toEqual(['unavailable', 'storage', 'reload-required', false]);
     expect(seen.order, `round ${round}`).toEqual([
       ['error', 'AbortError', 'InvalidAccessError'],
       ['abort', 'UnknownError', 'InvalidAccessError'],

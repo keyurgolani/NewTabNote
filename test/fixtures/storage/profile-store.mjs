@@ -88,13 +88,29 @@ function requested(request) {
 }
 
 /**
+ * Resolves when `tx` commits, and rejects when it aborts, or when Chrome closes its connection
+ * first: a transaction that close catches fires neither complete nor abort
+ * (e2e/connection-closing.spec.js). A close this store makes, on another context's upgrade, fires
+ * no close event and lets the transaction finish. Whichever comes first, the other listeners go.
  * @param {IDBTransaction} tx
  * @returns {Promise<void>}
  */
 function committed(tx) {
   return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error || new Error('profile store: the transaction aborted'));
+    const { db } = tx;
+    /** @param {() => void} then */
+    const settle = then => {
+      tx.removeEventListener('complete', completed);
+      tx.removeEventListener('abort', aborted);
+      db.removeEventListener('close', closed);
+      then();
+    };
+    const completed = () => settle(() => resolve());
+    const aborted = () => settle(() => reject(tx.error || new Error('profile store: the transaction aborted')));
+    const closed = () => settle(() => reject(new Error('profile store: Chrome closed the connection')));
+    tx.addEventListener('complete', completed);
+    tx.addEventListener('abort', aborted);
+    db.addEventListener('close', closed);
   });
 }
 

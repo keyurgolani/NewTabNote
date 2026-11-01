@@ -58,7 +58,7 @@ import {
   recordSha256,
   subtractHashes,
 } from './records.js';
-import { result } from './requests.js';
+import { committed, endOf, result } from './requests.js';
 import { openWithoutUpgrade } from './shapes.js';
 
 /** @typedef {import('./records.js').Digester} Digester */
@@ -149,17 +149,9 @@ export const DEFAULT_LIMITS = Object.freeze({ records: BATCH_RECORDS, bytes: BAT
  * @typedef {{keyRange: typeof IDBKeyRange, crypto: Digester, limits: Limits}} Io
  */
 
-/**
- * Resolves when `tx` commits, rejects with its error when it aborts
- * @param {IDBTransaction} tx
- * @returns {Promise<void>}
- */
-export function committed(tx) {
-  return new Promise((resolve, reject) => {
-    tx.addEventListener('complete', () => resolve());
-    tx.addEventListener('abort', () => reject(tx.error || new DOMException('The transaction aborted', 'AbortError')));
-  });
-}
+// Resolves when a transaction commits, and rejects when it aborts or Chrome closes its
+// connection under it (requests.js): the migration runner and the transforms take it from here
+export { committed };
 
 /**
  * Creates the recovery database's stores. Runs inside its upgrade, synchronously.
@@ -277,11 +269,11 @@ export function readBatch(db, store, after, range, { keyRange, limits }) {
       if (entries.length >= limits.records) return;
       cursor.continue();
     };
-    tx.oncomplete = () => {
-      if (answered) resolve({ entries, end, keyPath });
+    endOf(tx).then(ending => {
+      if (!ending.committed) reject(ending.error);
+      else if (answered) resolve({ entries, end, keyPath });
       else reject(new DOMException('The read ended before its cursor answered', 'UnknownError'));
-    };
-    tx.onabort = () => reject(tx.error);
+    });
   });
 }
 

@@ -21,7 +21,7 @@
  */
 
 import { failureOf } from './failures.js';
-import { abort } from './requests.js';
+import { abort, endOf } from './requests.js';
 import { DB_NAME } from './schema.js';
 import {
   LATEST_STRUCTURAL,
@@ -177,7 +177,11 @@ export function readSchema(db) {
     const metaRequest = names.includes(META_STORE) ? tx.objectStore(META_STORE).get(SCHEMA_KEY) : null;
     /** @type {IDBRequest | null} */
     const receiptsRequest = names.includes(MIGRATIONS_STORE) ? tx.objectStore(MIGRATIONS_STORE).getAll() : null;
-    tx.oncomplete = () => {
+    endOf(tx).then(end => {
+      if (!end.committed) {
+        reject(end.error);
+        return;
+      }
       const record = metaRequest ? metaRequest.result : undefined;
       /** @type {Inspection['meta']} */
       let meta = null;
@@ -188,8 +192,7 @@ export function readSchema(db) {
             : 'unreadable';
       }
       resolve({ version: db.version, stores, meta, receipts: receiptsRequest ? receiptsRequest.result || [] : [] });
-    };
-    tx.onabort = () => reject(tx.error);
+    });
   });
 }
 

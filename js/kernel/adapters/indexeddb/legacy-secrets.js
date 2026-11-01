@@ -31,7 +31,7 @@
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
-import { abort, result } from './requests.js';
+import { abort, committed, result } from './requests.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -139,11 +139,7 @@ async function removeIdbKey(indexedDB) {
     db = await openWithoutUpgrade(indexedDB, DB_NAME);
     if (!db || !db.objectStoreNames.contains('settings')) return;
     const tx = db.transaction('settings', 'readwrite');
-    const done = new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve(undefined);
-      tx.onabort = () => reject(tx.error);
-      tx.onerror = () => reject(tx.error);
-    });
+    const done = committed(tx);
     try {
       tx.objectStore('settings').delete(IDB_SECRET_KEY);
     } catch (error) {

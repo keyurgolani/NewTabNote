@@ -14,7 +14,7 @@
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf } from './failures.js';
 import { CHANGES_KEY, CHANGES_STORE, META_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/ports/commit-log.js').Change} Change */
 /** @typedef {import('../../core/ports/commit-log.js').ChangeEntry} ChangeEntry */
@@ -70,15 +70,8 @@ export function writeChanges(tx, head, changes, opId) {
   return seq;
 }
 
-/**
- * @param {IDBTransaction} tx
- * @returns {Promise<void>}
- */
-const completion = tx =>
-  new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error || new DOMException('The transaction was aborted', 'AbortError'));
-  });
+/** How an append or a prune ends, Chrome's close of the connection included (requests.js) */
+const completion = committed;
 
 /**
  * Appends one commit's changes in a transaction of its own, as the adapter does in a commit's,

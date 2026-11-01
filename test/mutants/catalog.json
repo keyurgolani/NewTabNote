@@ -35,9 +35,9 @@
       "id": "commit-wait-idb-abort-reads-committed",
       "behavior": "commit waits",
       "protects": "A transaction that aborts after its requests succeeded answers unavailable, never committed.",
-      "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));",
-      "replace": "tx.addEventListener('abort', () => resolve({ committed: true }));",
+      "file": "js/kernel/adapters/indexeddb/requests.js",
+      "find": "    const aborted = () => settle({ committed: false, error: tx.error });",
+      "replace": "    const aborted = () => settle({ committed: true });",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a transaction that aborts after its requests succeeded answers unavailable, and stores none of them"
     },
@@ -90,6 +90,16 @@
       "replace": "",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a unit declared readonly can't write, even in a command another unit makes readwrite"
+    },
+    {
+      "id": "commit-wait-idb-end-on-chrome-close",
+      "behavior": "commit waits",
+      "protects": "A command whose transaction Chrome's close of the connection catches answers, though the transaction fires neither complete nor abort, never waiting on it for good.",
+      "file": "js/kernel/adapters/indexeddb/requests.js",
+      "find": "    db.addEventListener('close', closed);\n",
+      "replace": "",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same"
     },
     {
       "id": "commit-wait-idb-read-on-closed-connection",
