@@ -12,9 +12,9 @@
 
 ### 📝 Advanced Block-Based Editor
 ![Slash command block menu](docs/screenshots/02-slash-menu.png)
-- **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
+- **18+ Block Types**: Structured content with headings, tables, code blocks, math equations, and more.
 - **Slash Commands**: Type `/` to instantly access any block type.
-- **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
+- **Markdown Support**: Paste Markdown headings, lists, and quotes (`#`, `-`, `>`), and they turn into blocks.
 - **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
 ### 🤖 Your Personal AI Assistant
@@ -25,7 +25,7 @@
 
 ### 📂 Professional Organization
 - **Unlimited Notes & Folders**: Organize your life without limits.
-- **Fuzzy Search**: Find any note instantly by searching titles or content.
+- **Fuzzy Search**: Find notes by title, even with a typo, or by the first few words of their text.
 - **Tabbed Interface**: Work on multiple notes simultaneously with a familiar tabbed view.
 - **Daily Notes**: One-click access to your daily journal or scratchpad.
 
