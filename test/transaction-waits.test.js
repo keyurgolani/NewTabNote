@@ -10,12 +10,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ALLOWED, scanSource, collect, main } = require('../scripts/transaction-waits.js');
+const { ALLOWED, VENDORED, scanSource, collect, main, problemOf } = require('../scripts/transaction-waits.js');
 
 const ROOT = path.join(__dirname, '..');
 
-/** The waits one file's source has, as `event on receiver` */
-const waitsIn = (source) => scanSource('js/x.js', source).map((wait) => `${wait.event} on ${wait.on}`);
+/**
+ * The waits one file's source has, as `event on receiver`, or `name <expression> on receiver`
+ * for an event name the scan can't read
+ */
+const waitsIn = (source, file = 'js/x.js') =>
+  scanSource(file, source).map((wait) => `${wait.event === null ? `name ${wait.named}` : wait.event} on ${wait.on}`);
 
 /** A scratch repository holding only `files`, removed after `body` */
 function withRepo(files, body) {
@@ -51,11 +55,61 @@ describe("waits on a transaction's end", () => {
     `), ['complete on tx', 'abort on tx', 'complete on tx', "complete on db.transaction('links', 'readonly')", 'abort on done']);
   });
 
+  it("finds the ways around a plain one: a name it can't read, any assignment, an object's key, a call that names the handler, brackets, .call and .apply, and a transaction named like a signal (R131)", () => {
+    // R131's planted waits, each in a function of its own
+    const waits = waitsIn(`
+      export function loop(db) {
+        const tx = db.transaction('canvases', 'readwrite');
+        for (const type of ['complete', 'abort']) tx.addEventListener(type, () => {});
+      }
+      const END = 'complete';
+      export const byConst = (tx) => new Promise((resolve) => tx.addEventListener(END, resolve));
+      export const assigned = (tx, done) => Object.assign(tx, { oncomplete: done, onabort: done });
+      export const nullish = (tx, done) => {
+        tx.oncomplete ??= done;
+        tx.onabort ||= done;
+      };
+      export const optional = (tx, done) => tx?.addEventListener('complete', done);
+      export const element = (tx, done) => tx['addEventListener']('complete', done);
+      export const viaCall = (tx, done) => EventTarget.prototype.addEventListener.call(tx, 'abort', done);
+      export const viaApply = (tx, done) => EventTarget.prototype.addEventListener.apply(tx, ['complete', done]);
+      export const defined = (tx, done) => Object.defineProperty(tx, 'oncomplete', { value: done });
+      export const named = (db) => {
+        const writeSignal = db.transaction('x', 'readwrite');
+        writeSignal.onabort = () => {};
+      };
+      export const method = (tx) => Object.assign(tx, { onabort() {} });
+    `);
+    assert.deepEqual(waits, [
+      'name type on tx',
+      'name END on tx',
+      'complete on tx',
+      'abort on tx',
+      'complete on tx',
+      'abort on tx',
+      'complete on tx',
+      'complete on tx',
+      'abort on tx',
+      'complete on tx',
+      'complete on tx',
+      'abort on writeSignal',
+      'abort on tx',
+    ]);
+    const [unread] = scanSource('js/x.js', 'tx.addEventListener(type, done);');
+    assert.match(problemOf(unread), /^js\/x\.js:1 listens on tx for type, a name the scan can't read: name the event with a literal, and wait on a transaction's end with endOf\(tx\)/);
+  });
+
+  it(`holds the vendored libraries in ${VENDORED} to every rule but the literal name, which their minified code can't keep`, () => {
+    const source = 'e.addEventListener(t, f); tx.oncomplete = f; tx.addEventListener("abort", f);';
+    assert.deepEqual(waitsIn(source, `${VENDORED}chart.js`), ['complete on tx', 'abort on tx']);
+    assert.deepEqual(waitsIn(source), ['name t on e', 'complete on tx', 'abort on tx']);
+  });
+
   it("leaves an AbortSignal's abort, a FileReader's, and every other event alone", () => {
     assert.deepEqual(waitsIn(`
       signal.addEventListener('abort', cancel);
       controller.signal.addEventListener('abort', cancel);
-      timeoutSignal.addEventListener('abort', cancel);
+      signal.onabort = cancel;
       const reader = new FileReader();
       reader.onabort = () => {};
       reader.addEventListener('abort', () => {});
