@@ -101,10 +101,10 @@ describe('js/background.js installs it, and handles none of its messages itself'
   it('calls installWorkerNetwork once, and adds no onMessage listener, proxy or offscreen document of its own', () => {
     assert.equal(code.match(/\binstallWorkerNetwork\(/g)?.length, 1);
     // With the guard, the journal, and the worker's own handlers (#17 PR 1b: a page's wait on
-    // the migration), and nothing else
+    // the migration; #17 PR 2b: a page's purge after a delete for good), and nothing else
     assert.match(
       code,
-      /\binstallWorkerNetwork\(\{ guard: contextGuard, events: failureEvents, ownHandlers: \{ \[MIGRATE_MESSAGE\]: migrationStatus \} \}\);/,
+      /\binstallWorkerNetwork\(\{ guard: contextGuard, events: failureEvents, ownHandlers: \{ \[MIGRATE_MESSAGE\]: migrationStatus, \[PURGE_MESSAGE\]: purgeStatus \} \}\);/,
     );
     assert.match(code, /import \{[^}]*\binstallWorkerNetwork\b[^}]*\} from '\.\/kernel\/composition\/worker-network\.js';/);
     for (const pattern of [/onMessage\s*\.\s*addListener/, /\bonMessage\b/, /API_REQUEST/, /NETWORK_REFUSED|REFUSAL_MESSAGE/, /createDocument/, /\bcheckRequest\b/, /\bsend\(/, /api-request\.js/, /network-refusals\.js/, /\brefuseAll\b/, /\bonRefused\b/]) {

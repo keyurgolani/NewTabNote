@@ -22,7 +22,12 @@
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').Conflict} Conflict */
 
-/** Each store and the field that keys its records */
+/**
+ * Each store and the field, or fields, that key its records. `conflicts` and `tombstones` are
+ * #17's (#17 PR 2b): deleting a note drops its conflict records and puts its tombstone, in the
+ * delete's own unit. A database below version 10 has neither, and an adapter skips writes to
+ * them there (LATER_STORES).
+ */
 export const STORES = Object.freeze({
   notes: Object.freeze({ keyPath: 'id' }),
   blocks: Object.freeze({ keyPath: 'id' }),
@@ -33,9 +38,19 @@ export const STORES = Object.freeze({
   snapshots: Object.freeze({ keyPath: 'id' }),
   links: Object.freeze({ keyPath: 'id' }),
   themes: Object.freeze({ keyPath: 'id' }),
+  conflicts: Object.freeze({ keyPath: 'id' }),
+  tombstones: Object.freeze({ keyPath: Object.freeze(['entityType', 'id']) }),
 });
 
 /** @typedef {keyof typeof STORES} StoreName */
+
+/**
+ * The stores a database below version 10 lacks, whose writes an adapter skips there, as
+ * commands committed before step 10: no conflict record and no tombstone, so a note deleted
+ * there stays in its recovery point (#17 PR 2b's declared gap)
+ * @type {readonly StoreName[]}
+ */
+export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflicts', 'tombstones']));
 
 /**
  * @typedef {object} StoreRecords
@@ -48,6 +63,8 @@ export const STORES = Object.freeze({
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
  * @property {import('../domain/note.js').LinkRecord} links
  * @property {import('../domain/theme.js').ThemeRecord} themes
+ * @property {{id: string, noteId?: unknown} & Record<string, unknown>} conflicts
+ * @property {import('../domain/tombstone.js').TombstoneRecord} tombstones
  */
 
 /**
@@ -216,7 +233,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
  *   Notes have content revisions: committed outcomes report them, only title and block
- *   changes move them, and a stale `expectedRevision` is a conflict
+ *   changes move them, and a stale `expectedRevision` is a conflict. A tombstone a unit puts
+ *   gets its note's last content revision and the commit's change-log seq, in the same
+ *   transaction (#17 PR 2b), so a note made again under its id carries on past it.
  * @property {boolean} idempotency
  *   A commandId sent again with the same command gets its committed or conflict outcome
  *   again, and nothing runs. Sent with another command it's rejected as
