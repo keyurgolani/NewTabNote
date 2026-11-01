@@ -1,9 +1,11 @@
 // #17 PR 4a, Q8: the profile store the e2e specs and the characterization driver write and read a
 // profile through (test/fixtures/storage/profile-store.mjs) makes the records 1.4.x's Storage
 // made, and reads them as it read them. Each record it writes has the fields the recorded v1.4.0
-// fixture holds for the same write. On one profile its writes are the frozen v1.4.1 Storage's,
-// ids and times aside, and on a profile 1.4.1 wrote, and on the recorded fixture, it reads what
-// 1.4.1 reads. e2e/harness/profile-store.js offers every call it has.
+// fixture holds for the same write, and each block type the specs seed the fields v1.4.0's
+// editor save wrote for it, in recorded/v8.v1.4.0.json or recorded/v8.v1.4.0.blocks.json; a seed
+// in any other shape is refused. On one profile its writes are the frozen v1.4.1 Storage's, ids
+// and times aside, and on a profile 1.4.1 wrote, and on the recorded fixture, it reads what 1.4.1
+// reads. e2e/harness/profile-store.js offers every call it has.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +14,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 import { loadFixture } from '../fixtures/storage/load-fixture.mjs';
-import { createProfileStore, generateId } from '../fixtures/storage/profile-store.mjs';
+import { BLOCK_TYPE_FIELDS, createProfileStore, editorBlock, generateId } from '../fixtures/storage/profile-store.mjs';
 import { closeAll, releaseContext } from './legacy-fixture.mjs';
 import { FIXTURES, legacyEnv, newProfile } from './migration-support.mjs';
 
@@ -26,15 +28,31 @@ const host = requireCommonJs('../../e2e/harness/profile-store.js');
 const RECORDED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'recorded', 'v8.v1.4.0.json'), 'utf8'));
 
 /**
- * The recorded fixture's records in CanvasTabDB's store `name`
+ * v1.4.0's editor save of a code block, a bookmark and a table, recorded on their own
+ * @type {import('../fixtures/storage/load-fixture.mjs').Fixture}
+ */
+const RECORDED_BLOCKS = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'recorded', 'v8.v1.4.0.blocks.json'), 'utf8'));
+
+/**
+ * A recorded fixture's records in CanvasTabDB's store `name`
  * @param {string} name
+ * @param {import('../fixtures/storage/load-fixture.mjs').Fixture} [fixture]
  * @returns {any[]}
  */
-const recordedIn = name => {
-  const db = RECORDED.databases.find(found => found.name === 'CanvasTabDB');
+const recordedIn = (name, fixture = RECORDED) => {
+  const db = fixture.databases.find(found => found.name === 'CanvasTabDB');
   const store = db && db.stores.find(found => found.name === name);
   return store ? store.records.map(record => record.value) : [];
 };
+
+/**
+ * The blocks v1.4.0's editor save wrote, through Block.serialize, which gives every block its
+ * calloutIcon, in either recording. The welcome note's, which v1.4.0 writes with fewer fields,
+ * aren't the editor's.
+ * @returns {any[]}
+ */
+const editorSaved = () =>
+  [...recordedIn('elements'), ...recordedIn('elements', RECORDED_BLOCKS)].filter(block => 'calloutIcon' in block);
 
 /** @param {object} record */
 const fieldsOf = record => Object.keys(record).sort();
@@ -191,7 +209,7 @@ describe('the profile store the e2e specs and the driver write and read through 
     const [block] = Object.values(legacyEnv.recordsOf(dump, 'elements'));
     assert.deepEqual(
       fieldsOf(block),
-      recordedFields(recordedIn('elements'), element => element.type === 'text' && !('imageUrl' in element)),
+      recordedFields(editorSaved(), element => element.type === 'text'),
     );
     assert.deepEqual([block.content, block.canvasId, block.order], ['beta body', beta.id, 0]);
     assert.deepEqual(
@@ -230,6 +248,74 @@ describe('the profile store the e2e specs and the driver write and read through 
     assert.deepStrictEqual(await reads(store, noteIds), await reads(recorded.storage, noteIds));
     assert.equal((await store.getCustomThemes()).length, 1);
     closeAll([recorded]);
+  });
+
+  it("seeds each block type the specs seed with the fields v1.4.0's editor save wrote for it, and refuses any other shape, writing nothing", async () => {
+    const saved = editorSaved();
+    for (const type of Object.keys(BLOCK_TYPE_FIELDS)) {
+      assert.deepEqual(
+        fieldsOf(editorBlock({ type }, 'note', 0)),
+        recordedFields(saved, block => block.type === type),
+        `${type}: the store's fields are the recorded editor save's`,
+      );
+    }
+    // Every type it seeds, written: each record has those fields, and the values given
+    const env = await emptyProfile();
+    const store = createProfileStore(env.indexedDB);
+    const [seeded] = await store.seedNotes([
+      {
+        name: 'Typed',
+        blocks: [
+          { type: 'code', content: 'npm run build' },
+          { type: 'bookmark', url: 'https://example.test/docs', title: 'Build docs' },
+          {
+            type: 'table',
+            content: '',
+            tableData: [
+              ['a', 'b'],
+              ['1', '2'],
+            ],
+            rows: 2,
+            cols: 2,
+          },
+        ],
+      },
+    ]);
+    const blocks = (await store.getElementsByNote(seeded.id)).sort((a, b) => a.order - b.order);
+    assert.deepEqual(
+      blocks.map(block => [block.type, fieldsOf(block).join(',')]),
+      ['code', 'bookmark', 'table'].map(type => [type, recordedFields(saved, block => block.type === type).join(',')]),
+    );
+    assert.deepEqual(
+      [blocks[1].url, blocks[1].title, blocks[2].tableData],
+      [
+        'https://example.test/docs',
+        'Build docs',
+        [
+          ['a', 'b'],
+          ['1', '2'],
+        ],
+      ],
+    );
+    // A field no release's editor saved for the type, and a type no recording holds
+    const before = await legacyEnv.dumpDatabase(env.indexedDB);
+    await assert.rejects(
+      store.seedNotes([
+        {
+          name: 'Wrong',
+          blocks: [
+            { type: 'text', content: 'x' },
+            { type: 'text', rows: 2 },
+          ],
+        },
+      ]),
+      /saved a text block with no rows/,
+    );
+    await assert.rejects(
+      store.seedNotes([{ name: 'Wrong', blocks: [{ type: 'video', videoUrl: 'x' }] }]),
+      /no recording holds the video block/,
+    );
+    assert.deepStrictEqual(await legacyEnv.dumpDatabase(env.indexedDB), before);
   });
 
   it('refuses to trash an untitled note with nothing in it, which 1.4.x deleted for good, and writes nothing', async () => {

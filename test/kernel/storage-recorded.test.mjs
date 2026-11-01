@@ -23,12 +23,23 @@ const SHAPES = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'shapes.json'), 'u
 /** Releases that fell back to #17's synthesized fixture for their row, each with why */
 const FALLBACKS = /** @type {Record<string, string>} */ ({});
 
-/** @returns {Map<string, Fixture>} every recorded fixture, by its release */
+/**
+ * Every release's recording, by its release. record-release.mjs --blocks's v8.v1.4.0.blocks.json
+ * (#17 PR 4a) isn't one: it holds v1.4.0's editor save of three block types for the profile
+ * store, whose test reads it, as storage-fixtures.test.mjs's coverage check does. A second
+ * recording of one release fails here, where a map would keep one of them unseen.
+ * @returns {Map<string, Fixture>}
+ */
 function recorded() {
   const dir = path.join(FIXTURES, 'recorded');
   const out = new Map();
-  for (const file of fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() : []) {
+  const files = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter(name => name.endsWith('.json') && !name.endsWith('.blocks.json'))
+    : [];
+  for (const file of files.sort()) {
     const fixture = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    if (out.has(fixture.header.source.tag))
+      throw new Error(`recorded/${file}: a second recording of ${fixture.header.source.tag}`);
     out.set(fixture.header.source.tag, fixture);
   }
   return out;

@@ -22,6 +22,19 @@
 // `{{CANARY:<slot>}}` placeholder (a canary left over in any other form fails the run), and
 // the extension's ID, a profile value, becomes `ntn-extension-id`. header.source names the
 // tag, its commit and tree, the browser, and the write paths that ran.
+//
+// With --blocks it records <shape>.<tag>.blocks.json instead (#17 PR 4a, Q8): one note whose
+// blocks the editor save writes (Block.serialize, canvasId, order, saveElement, with the preview
+// SidebarUtils computes), a code block, a bookmark and a table, beside what the release writes on
+// its own at its first run, its welcome note included. The main recording has none of the three
+// in the editor's shape: its one code block is the welcome note's, which the release writes with
+// fewer fields. The e2e specs seed all three through test/fixtures/storage/profile-store.mjs,
+// whose test holds each block type they seed to the fields recorded here or in the main
+// recording. A recording of its own leaves recorded/v8.v1.4.0.json as it was, and with it the
+// perf probe's typical profile and the fixture digest docs/performance/baseline-1.4.0.json
+// measured. Only v1.4.0's is recorded:
+//
+//   node scripts/fixtures/record-release.mjs v1.4.0 --blocks
 
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -48,11 +61,14 @@ const SLOTS = [
   'folder-1', 'theme-1', 'popup-note', 'llm-api-key',
   'webdav-password', 'webdav-username', 'chat-message', 'prompt-template', 'daily-template', 'llm-endpoint', 'insight',
 ];
+// The slots the --blocks seed fills
+const BLOCK_SLOTS = ['blocks-note-title', 'code-block', 'bookmark-title', 'table-cell'];
 const PNG_BASE64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 1, 2, 3, 4]).toString('base64');
 
 const tag = process.argv[2];
-if (!RECORDABLE.includes(tag)) {
-  console.error(`usage: node ${RECORDER} <tag>, one of ${RECORDABLE.join(' ')}`);
+const blocksOnly = process.argv.slice(3).includes('--blocks');
+if (!RECORDABLE.includes(tag) || (blocksOnly && tag !== 'v1.4.0')) {
+  console.error(`usage: node ${RECORDER} <tag>, one of ${RECORDABLE.join(' ')}; or node ${RECORDER} v1.4.0 --blocks`);
   process.exit(2);
 }
 const shape = Object.keys(SHAPES).find(name => SHAPES[name].releases.includes(tag));
@@ -222,6 +238,41 @@ async function seed({ c, png }) {
   return ran;
 }
 
+/**
+ * The --blocks seed, run in the release's new tab page: one note, and the editor save of a code
+ * block, a bookmark and a table, each through Block.serialize and saveElement
+ * @param {{c: Record<string, string>}} input
+ */
+async function seedBlocks({ c }) {
+  /* global Block, SidebarUtils */
+  const S = window.Storage;
+  const note = await S.createNote(c['blocks-note-title']);
+  const blocks = [
+    new Block({ type: 'code', content: c['code-block'] }),
+    new Block({ type: 'bookmark', url: 'https://example.test/bookmarked', title: c['bookmark-title'] }),
+    new Block({ type: 'table', rows: 2, cols: 2, tableData: [[c['table-cell'], 'b'], ['1', '2']] }),
+  ];
+  for (let i = 0; i < blocks.length; i++) {
+    const data = blocks[i].serialize();
+    data.canvasId = note.id;
+    data.order = i;
+    await S.saveElement(data);
+  }
+  const ran = ['Storage.createNote', 'the editor save (Block.serialize, saveElement)'];
+  if (typeof SidebarUtils !== 'undefined' && SidebarUtils.buildNoteSaveMetadata) {
+    const current = await S.getNote(note.id);
+    const metadata = SidebarUtils.buildNoteSaveMetadata(blocks);
+    current.preview = metadata.preview;
+    current.todoProgress = metadata.todoProgress;
+    await S.updateNote(current);
+    ran.push('the editor save metadata (preview, todoProgress)');
+  }
+  // A read on the stores the seed wrote, so each write before it has committed
+  await S.getAllNotes(true);
+  await S.getElementsByNote(note.id);
+  return ran;
+}
+
 /** `value` with each canary back to its placeholder, and the extension ID to PROFILE_ID */
 function placeholders(value, canaries, extensionId) {
   const swaps = Object.entries(canaries).map(([slot, canary]) => [canary, `{{CANARY:${slot}}}`]);
@@ -245,7 +296,9 @@ execFileSync('git', ['archive', '--format=tar', '-o', path.join(scratch, 'source
 execFileSync('tar', ['-xf', path.join(scratch, 'source.tar'), '-C', source]);
 console.log(`${tag}: ${commit} unpacked in ${source}`);
 
-const canaries = Object.fromEntries(SLOTS.map(slot => [slot, `ntn-canary-${slot}-${randomBytes(4).toString('hex')}`]));
+const canaries = Object.fromEntries(
+  (blocksOnly ? BLOCK_SLOTS : SLOTS).map(slot => [slot, `ntn-canary-${slot}-${randomBytes(4).toString('hex')}`]),
+);
 const extension = await launchExtension({ dist: source, headless: true });
 let fixture;
 try {
@@ -254,18 +307,21 @@ try {
   const page = await extension.openSurface('newtab');
   await page.waitForFunction(() => window.Storage && window.Storage.db, null, { timeout: 30_000 });
   await page.waitForTimeout(SETTLE_MS);
-  const ran = await page.evaluate(seed, { c: canaries, png: PNG_BASE64 });
+  const ran = blocksOnly
+    ? await page.evaluate(seedBlocks, { c: canaries })
+    : await page.evaluate(seed, { c: canaries, png: PNG_BASE64 });
 
-  const popup = await extension.openSurface('popup');
-  const quick = popup.locator('#quick-note-input');
-  if ((await quick.count()) > 0) {
+  // The --blocks seed has no Popup quick note
+  const popup = blocksOnly ? null : await extension.openSurface('popup');
+  const quick = popup && popup.locator('#quick-note-input');
+  if (quick && (await quick.count()) > 0) {
     await quick.fill(canaries['popup-note']);
     await quick.press('Enter');
     await popup.waitForFunction(() => document.getElementById('quick-note-input').value === '', null, { timeout: 10_000 });
     ran.push('the Popup quick note');
   }
   await page.waitForTimeout(SETTLE_MS);
-  await popup.close();
+  if (popup) await popup.close();
   await page.close();
 
   const dumped = await fixtureHost(extension.worker).dumpFixture({});
@@ -277,12 +333,14 @@ try {
   if (!db || db.version !== SHAPES[shape].idbVersion) {
     throw new Error(`${tag} left CanvasTabDB at ${db ? db.version : 'no version'}, not ${shape}'s ${SHAPES[shape].idbVersion}`);
   }
-  const id = `${shape}.${tag}`;
+  const id = blocksOnly ? `${shape}.${tag}.blocks` : `${shape}.${tag}`;
   fixture = {
     format: recorded.format,
     header: {
       id,
-      purpose: `What ${tag}'s own code writes for a synthetic seed: notes, blocks, media, settings and backups, as far as ${tag} has them.`,
+      purpose: blocksOnly
+        ? `What ${tag}'s editor save writes for a code block, a bookmark and a table, which ${shape}.${tag} has none of in that shape, beside what ${tag} writes at its first run.`
+        : `What ${tag}'s own code writes for a synthetic seed: notes, blocks, media, settings and backups, as far as ${tag} has them.`,
       shape,
       releases: [tag],
       provenance: 'recorded',

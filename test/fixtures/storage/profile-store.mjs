@@ -10,7 +10,8 @@
 //   answered before (KD-003, KD-004);
 // - a note and its search entry, or a note and its name in the entry, go in one transaction;
 // - trashNote refuses an untitled note with nothing in it, which 1.4.x deleted for good;
-// - seedNotes gives each block the fields 1.4.x's editor saved a text block with.
+// - seedNotes gives each block every field 1.4.x's editor saved a block of its type with, and
+//   refuses a field that type's record has none of, or a type no recording holds.
 //
 // Each call opens CanvasTabDB as it is, at whatever version, makes no database and upgrades
 // none, and closes it before it answers, so it never blocks another context's upgrade. A store
@@ -41,6 +42,80 @@ export const PROFILE_DATABASE = 'CanvasTabDB';
  * template
  * @typedef {{name: string, blocks?: Array<Record<string, unknown>>, archived?: boolean, isTemplate?: boolean}} SeedNote
  */
+
+/**
+ * What 1.4.x's editor saved for a block of each type the e2e specs seed, beside the fields every
+ * block has: Block.serialize's own (SERIALIZED_FIELDS), then the note's id and the block's
+ * order. Each value is the one Block gave a block made without it. test/kernel/profile-store.test.mjs
+ * holds each type to its editor save in recorded/v8.v1.4.0.json or recorded/v8.v1.4.0.blocks.json.
+ * @type {Readonly<Record<string, Readonly<Record<string, unknown>>>>}
+ */
+export const BLOCK_TYPE_FIELDS = Object.freeze({
+  text: Object.freeze({}),
+  h1: Object.freeze({}),
+  todo: Object.freeze({}),
+  code: Object.freeze({}),
+  image: Object.freeze({}),
+  bookmark: Object.freeze({ url: '', title: '', description: '', favicon: '' }),
+  table: Object.freeze({ rows: 2, cols: 2, tableData: null, hasHeaderRow: true }),
+});
+
+/**
+ * The fields Block.serialize wrote for every type, with the value Block gave a block made
+ * without each; `id`, `type`, and the times aside
+ */
+export const SERIALIZED_FIELDS = Object.freeze({
+  content: '',
+  indentLevel: 0,
+  checked: false,
+  imageUrl: null,
+  calloutIcon: '\u{1F4A1}',
+});
+
+/**
+ * A block of `fields` in note `canvasId` at `order`, as 1.4.x's editor saved one: Block.serialize's
+ * fields for its type, each given one over Block's value for it, with the note's id and the
+ * order. A type no recording holds, or a field its type's record has none of, throws, so a seed
+ * in a shape no release wrote fails where it's made.
+ * @param {Record<string, unknown>} fields
+ * @param {string} canvasId
+ * @param {number} order
+ * @returns {BlockRecord}
+ */
+export function editorBlock(fields, canvasId, order) {
+  const type = fields.type === undefined ? 'text' : String(fields.type);
+  if (!Object.hasOwn(BLOCK_TYPE_FIELDS, type)) {
+    throw new Error(`profile store: no recording holds the ${type} block 1.4.x's editor saved`);
+  }
+  const now = Date.now();
+  /** @type {BlockRecord} */
+  const block = {
+    id: generateId(),
+    type,
+    ...SERIALIZED_FIELDS,
+    createdAt: now,
+    updatedAt: now,
+    ...BLOCK_TYPE_FIELDS[type],
+    canvasId,
+    order,
+    ...fields,
+  };
+  const known = new Set([
+    'id',
+    'type',
+    ...Object.keys(SERIALIZED_FIELDS),
+    'createdAt',
+    'updatedAt',
+    ...Object.keys(BLOCK_TYPE_FIELDS[type]),
+    'canvasId',
+    'order',
+  ]);
+  const unknown = Object.keys(block).filter(field => !known.has(field));
+  if (unknown.length > 0) {
+    throw new Error(`profile store: 1.4.x's editor saved a ${type} block with no ${unknown.join(', ')}`);
+  }
+  return block;
+}
 
 /**
  * An id as 1.4.x's Utils.generateId made one: the time, a dash, and up to nine base-36 characters
@@ -456,35 +531,22 @@ export function createProfileStore(factory) {
     /**
      * Writes `notes` as a user writes them one after another, each in a later millisecond than
      * the one before was last written, so the last is the newest: each note, its blocks in order
-     * with the fields 1.4.x's editor saved a text block with (an id, the note's id, `order`,
-     * `type` text, empty `content`, `checked` false, `indentLevel` 0, and the time), each given
-     * field over them, then archived or made a template. Answers each note's id and name.
+     * as 1.4.x's editor saved them (editorBlock), then archived or made a template. Every block
+     * is checked before anything is written. Answers each note's id and name.
      * @param {SeedNote[]} notes
      * @returns {Promise<Array<{id: string, name: string}>>}
      */
     seedNotes: notes =>
       withDatabase(async db => {
+        // A shape no release wrote fails here, with nothing written
+        for (const { blocks = [] } of notes) blocks.forEach((block, order) => editorBlock(block, 'checked', order));
         let lastWrite = 0;
         /** @type {Array<{id: string, name: string}>} */
         const seeded = [];
         for (const { name, blocks = [], archived = false, isTemplate = false } of notes) {
           while (Date.now() <= lastWrite) await new Promise(resolve => setTimeout(resolve, 1));
           const note = await createNoteIn(db, name);
-          for (const [order, block] of blocks.entries()) {
-            const now = Date.now();
-            await saveElementIn(db, {
-              id: generateId(),
-              canvasId: note.id,
-              type: 'text',
-              content: '',
-              order,
-              checked: false,
-              indentLevel: 0,
-              createdAt: now,
-              updatedAt: now,
-              ...block,
-            });
-          }
+          for (const [order, block] of blocks.entries()) await saveElementIn(db, editorBlock(block, note.id, order));
           if (archived) {
             note.archived = true;
             note.archivedAt = Date.now();
