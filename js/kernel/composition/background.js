@@ -571,8 +571,8 @@ export function createWorkerClient(host = workerHost()) {
 }
 
 /**
- * The refusals the worker's open journals itself, as storage.open-failed (js/background.js's
- * whenReady), so the run doesn't journal them again
+ * The refusals the worker's open journals itself, as storage.open-failed (#35's coordinator,
+ * ./coordinator.js, on its kernel's first answer), so the run doesn't journal them again
  */
 const OPEN_JOURNALS = Object.freeze(['missing-core-stores', 'version-too-new']);
 
