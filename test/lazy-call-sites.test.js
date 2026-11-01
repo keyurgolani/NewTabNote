@@ -243,9 +243,12 @@ describe("a part's Reload: App's guarded reload and the editors' own notices", (
     assert.deepEqual(calls, ['guarded', 'now']);
     assert.equal(reload.ownNotice(), null, 'no editor shows a notice');
     tabs.editor._onReloadRequired();
-    const button = reload.ownNotice();
-    assert.equal(button.textContent, 'Reload');
-    assert.ok(tabs.editor.root.contains(button));
+    // The notice's words take focus, which a second Enter can't reload from without the guards,
+    // and from which Tab reaches its Reload
+    const words = reload.ownNotice();
+    assert.equal(words.textContent, "This page lost its connection to your notes, so these changes aren't saved. Copy anything you need, then reload.");
+    assert.equal(words.getAttribute('tabindex'), '-1');
+    assert.ok(tabs.editor.root.contains(words));
     assert.equal(appOf(env, App, {}).partReload(), null, "without the loader a part's Reload is the browser's");
   });
 
@@ -253,9 +256,17 @@ describe("a part's Reload: App's guarded reload and the editors' own notices", (
     const { tabs } = await page();
     tabs.editor._onReloadRequired();
     tabs.secondaryEditor._failedSeq.set('B', 3);
-    assert.equal(tabs.ownNoticeButton(), null);
+    assert.equal(tabs.ownNoticeText(), null);
     tabs.secondaryEditor._failedSeq.clear();
-    assert.equal(tabs.ownNoticeButton().textContent, 'Reload');
+    assert.match(tabs.ownNoticeText().textContent, /^This page lost its connection to your notes/);
+  });
+
+  it("hands over to a deleted note's notice by its words too", async () => {
+    const { tabs } = await page();
+    tabs.editor._onNoteGone({ noteId: tabs.editor.noteId });
+    const words = tabs.ownNoticeText();
+    assert.equal(words.textContent, "This note was deleted, so these changes aren't saved.");
+    assert.equal(words.getAttribute('tabindex'), '-1');
   });
 });
 

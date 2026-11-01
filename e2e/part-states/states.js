@@ -221,11 +221,36 @@ function restoreLibrary(extension, name) {
   fs.copyFileSync(path.join(resolveDist(), file), path.join(extension.extensionDir, file));
 }
 
-/** Type into the open note, so a save is due */
+/**
+ * Type at the end of the open note's first block, so a save is due: the caret goes to the end of
+ * its text wherever the click lands, as at 800, where the block wraps and End would stop mid-text
+ */
 async function typeLine(page, text) {
-  await page.locator('#editor-container .block-content').first().click();
-  await page.keyboard.press('End');
+  const block = page.locator('#editor-container .block-content').first();
+  const before = await block.textContent();
+  await block.click();
+  await block.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
   await page.keyboard.type(text);
+  await expect(block).toHaveText(`${before}${text}`);
+}
+
+/** Press the part's Reload, and wait for the failed save in its place */
+async function pressReload(panel, words = "Failed to save your changes, so the page didn't reload.") {
+  const reload = panel.locator('button.part-state-reload');
+  await expect(reload).toBeVisible();
+  const pressed = await boxOf(reload);
+  await reload.click();
+  await expect(panel).toContainText(words, { timeout: 15_000 });
+  expect(holds(await boxOf(panel.locator('button.part-state-try')), pressed), 'Try again takes the place of the Reload pressed').toBe(true);
+  expect(overlaps(await boxOf(panel.locator('button.part-state-anyway')), pressed), 'Reload anyway lands clear of it').toBe(false);
+  return panel;
 }
 
 /**
@@ -236,15 +261,16 @@ async function saveFailed(page) {
   await failingSaves(page);
   await typeLine(page, ' and a line never stored');
   await openStats(page);
-  const panel = page.locator(PLACES.charts);
-  const reload = panel.locator('button.part-state-reload');
-  await expect(reload).toBeVisible();
-  const pressed = await boxOf(reload);
-  await reload.click();
-  await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
-  expect(holds(await boxOf(panel.locator('button.part-state-try')), pressed), 'Try again takes the place of the Reload pressed').toBe(true);
-  expect(overlaps(await boxOf(panel.locator('button.part-state-anyway')), pressed), 'Reload anyway lands clear of it').toBe(false);
-  return panel;
+  return pressReload(page.locator(PLACES.charts));
+}
+
+/** u5 reached from the second failure's Reload, the one beside Try again */
+async function saveFailedFromAgain(page) {
+  await failingSaves(page);
+  await typeLine(page, ' and a line never stored');
+  await openStats(page);
+  const panel = await tryAgain(page, 'charts', 'Failed to load the charts again.');
+  return pressReload(panel);
 }
 
 /**
@@ -422,7 +448,7 @@ const STATES = [
     },
   },
   {
-    name: 'u5-notice', about: "a part's Reload whose failed save the editor's own notice explains: the notice speaks and takes focus, and the row stays as it was", build: () => threw('fuse'),
+    name: 'u5-notice', about: "a part's Reload, from the keyboard, whose failed save the editor's own notice explains: its words take focus, and the row stays as it was", build: () => threw('fuse'),
     // The row said the guards were saving, then the notice speaks for the failure
     said: 'Saving your changes before reloading.',
     reach: async (page) => {
@@ -434,9 +460,31 @@ const STATES = [
       await typeLine(page, ' and a line never stored');
       const notice = page.locator('.reload-notice');
       await expect(notice).toBeVisible();
-      await panel.locator('button.part-state-reload').click();
-      await expect(notice.getByRole('button', { name: 'Reload' })).toBeFocused({ timeout: 15_000 });
+      // From the keyboard, so the focus ring shows where the handover puts focus: on the notice's
+      // words, which a second Enter can't reload from, not on its unguarded Reload
+      await panel.locator('button.part-state-reload').focus();
+      await page.keyboard.press('Enter');
+      const words = notice.locator('.note-gone-text');
+      await expect(words).toBeFocused({ timeout: 15_000 });
+      await expect(words).toHaveAttribute('tabindex', '-1');
+      await driver.markPage(page);
+      await page.keyboard.press('Enter');
+      expect(await driver.wasReloaded(page)).toBe(false);
+      await expect(words).toBeFocused();
       await expect(panel).toContainText('Failed to load search.');
+      return panel;
+    },
+  },
+  {
+    name: 'u5-from-again', about: "u5 from the second failure's Reload, beside Try again: Try again in that Reload's place, its own place kept empty, and Reload anyway on a line of its own under them", build: () => missing('chart'),
+    reach: saveFailedFromAgain,
+  },
+  {
+    name: 'u5-from-again-failed-again', about: "the same after its Try again failed too, in the save's words for a second failure", build: () => missing('chart'),
+    reach: async (page) => {
+      const panel = await saveFailedFromAgain(page);
+      await panel.locator('button.part-state-try').click();
+      await expect(panel).toContainText("Failed to save your changes again, so the page didn't reload.", { timeout: 15_000 });
       return panel;
     },
   },

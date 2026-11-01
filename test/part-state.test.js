@@ -492,6 +492,8 @@ describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
     await settle();
     assert.deepEqual(slots(ctx), ['0:Try again', '1:Reload anyway']);
     assert.match(ctx.part.anywayButton.className, /\bpart-state-anyway\b/);
+    // With no place kept empty, the buttons share one row
+    assert.doesNotMatch(ctx.part.actions.className, /\bis-split\b/);
   });
 
   it("after a failed save from the Reload beside Try again, Try again takes that Reload's place, and its own stays empty", async () => {
@@ -504,10 +506,13 @@ describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
     ctx.part.reloadButton.click();
     await settle();
     assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+    // A place kept empty beside the words puts Reload anyway on a line of its own (css/editor.css)
+    assert.match(ctx.part.actions.className, /\bis-split\b/);
     // Its Try again, failing again, leaves every button where it is
     ctx.part.tryButton.click();
     await settle();
     assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+    assert.match(ctx.part.actions.className, /\bis-split\b/);
   });
 
   it('never moves the button with focus on the page, which would take its focus, and moves the others around it', async () => {
@@ -625,6 +630,17 @@ describe("a part's panel and its buttons (css/editor.css)", () => {
     ]);
     // The page's order is the buttons' order (js/ui/part-state.js), which no CSS order redraws late
     assert.deepEqual(cssRules(/^\.part-state-(actions|try|reload|anyway|spacer|btn)\b/).filter(({ values }) => 'order' in values), []);
+  });
+
+  it("beside the words, a row with a place kept empty puts Reload anyway on a line of its own under the buttons, at the row's end, so the words keep their room", () => {
+    const at = ['@container (min-width: 470px)'];
+    const split = cssRules(/^\.part-state:not\(\.is-narrow\) > \.part-state-actions\.is-split\b/).map(({ selectors, at: where, values }) => ({ selectors, at: where, values }));
+    assert.deepEqual(split, [
+      { selectors: ['.part-state:not(.is-narrow) > .part-state-actions.is-split'], at, values: { display: 'grid', 'grid-template-columns': 'auto auto', 'justify-content': 'end' } },
+      { selectors: ['.part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-try'], at, values: { 'grid-area': '1 / 1' } },
+      { selectors: ['.part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-spacer'], at, values: { 'grid-area': '1 / 2' } },
+      { selectors: ['.part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-anyway'], at, values: { 'grid-area': '2 / 1 / 3 / 3', 'justify-self': 'end' } },
+    ]);
   });
 
   it('draws Reload anyway quiet, with no fill or border and the secondary label, still 44 px, and keeps an empty place empty', () => {

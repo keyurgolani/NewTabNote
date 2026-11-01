@@ -59,6 +59,8 @@ const BUTTONS = {
   'u5-save-failed': ['Try again', 'Reload anyway'],
   'u5-trying-again': ['Saving…', 'Reload anyway'],
   'u5-notice': ['Reload'],
+  'u5-from-again': ['Try again', 'Reload anyway'],
+  'u5-from-again-failed-again': ['Try again', 'Reload anyway'],
   'm5-related-first-download': [],
 };
 
@@ -244,6 +246,14 @@ for (const width of WIDTHS) {
       const anyway = await states.boxOf(panel.locator('button.part-state-anyway'));
       expect(states.holds(taken, pressed), `Try again takes the place of the Reload pressed: ${JSON.stringify({ pressed, taken })}`).toBe(true);
       expect(states.overlaps(anyway, pressed), `Reload anyway lands clear of it: ${JSON.stringify({ pressed, anyway })}`).toBe(false);
+      // With Try again's own place kept empty beside the words, Reload anyway takes a line of its
+      // own under the buttons, at the row's end, and the words keep the room they have beside a
+      // single Reload's u5 (about 210 px at 800)
+      const spacer = await states.boxOf(panel.locator('button.part-state-spacer'));
+      expect(anyway.y, 'Reload anyway is under the buttons').toBeGreaterThanOrEqual(taken.y + taken.height);
+      expect(Math.abs((anyway.x + anyway.width) - (spacer.x + spacer.width)), "Reload anyway ends where the row's buttons do").toBeLessThanOrEqual(1);
+      const room = await panel.locator('.part-state-text > span:last-child').evaluate((words) => words.getBoundingClientRect().width);
+      expect(room, 'the words keep their room').toBeGreaterThanOrEqual(210);
       await expect(tryAgain).toBeFocused();
       // Its Try again, failing again, keeps every button where it is
       const buttons = [tryAgain, panel.locator('button.part-state-anyway')];
