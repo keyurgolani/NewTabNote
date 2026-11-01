@@ -309,16 +309,7 @@ class App {
       await this.tellRecoveredNotes();
 
       // Defer non-critical initialization until after first render (Req 27.1)
-      const deferWork = async () => {
-        await this.initAnalyticsController();
-        await this.initGraphView();
-        await this.initSyncService();
-        if (this.notesManager) {
-          await this.notesManager.deferredInit();
-          this.indexerWorker = this.notesManager.indexerWorker;
-        }
-        await this.checkRecordsWeekly();
-      };
+      const deferWork = () => this.runDeferredWork();
 
       if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(() => deferWork().catch(e => this.logger.error('App', 'Deferred init failed', e)));
@@ -334,6 +325,25 @@ class App {
       } else {
         this.showErrorState(error);
       }
+    }
+  }
+
+  /**
+   * The start's work deferred until after first render (Req 27.1). The weekly catch-up pass
+   * runs last, even when a step before it failed; it never throws itself.
+   * @returns {Promise<void>}
+   */
+  async runDeferredWork() {
+    try {
+      await this.initAnalyticsController();
+      await this.initGraphView();
+      await this.initSyncService();
+      if (this.notesManager) {
+        await this.notesManager.deferredInit();
+        this.indexerWorker = this.notesManager.indexerWorker;
+      }
+    } finally {
+      await this.checkRecordsWeekly();
     }
   }
 
@@ -409,8 +419,8 @@ class App {
    * Catch up the notes the close-time drafts named (js/start-catch-up.js, #33): a draft already
    * in the blocks leaves its note's record to catch up with them, and a note deleted for good
    * leaves records that name it. This start's drafts and those a Popup or Side Panel start
-   * passed on, by ID. The IDs are dropped once caught up; a failure leaves them for the next
-   * start and the weekly pass.
+   * passed on, by ID. The passed IDs are dropped once caught up. If it fails, they wait for the
+   * next start, and this start's own drafts' IDs, kept nowhere, for the weekly pass.
    * @returns {Promise<void>}
    */
   async catchUpAfterDrafts() {

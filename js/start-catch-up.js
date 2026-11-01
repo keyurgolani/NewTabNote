@@ -9,8 +9,10 @@
  *   links (Utils.extractWikiLinks over the editor's text). It never writes the name, and never
  *   moves updatedAt, which the close-time drafts' newer-note rule reads.
  * - A note deleted for good can leave records that name it: blocks, media, its vector and
- *   snapshots, each naming exactly one note. The catch-up removes those, in one readwrite
- *   transaction that first reads the note's record and removes nothing when it's there.
+ *   snapshots, each naming exactly one note. The catch-up removes those, in readwrite
+ *   transactions that first read each note's record and remove nothing of a note that's there.
+ *   Its link rows stay, as the delete itself leaves them, and its search entry goes at the next
+ *   new tab's index rebuild.
  *
  * It runs twice:
  * - right after the close-time drafts (js/close-drafts.js), for the notes their apply named:
@@ -34,7 +36,7 @@ const StartCatchUp = (function initStartCatchUp() {
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
   /** How recently an orphan's blocks may have changed and still wait for a later full pass */
   const GRACE_MS = 10 * 60 * 1000;
-  /** Notes read per transaction in the full pass, so no one transaction holds the blocks long */
+  /** Notes read, and deleted notes swept, per transaction in the full pass, so no one holds the blocks long */
   const BATCH = 50;
   /** The stores that name one note each, besides its blocks: [store, index or null for the key] */
   const NAMED = [['media', 'canvasId'], ['vectors', null], ['snapshots', 'noteId']];
@@ -149,13 +151,32 @@ const StartCatchUp = (function initStartCatchUp() {
   }
 
   /**
-   * What `blocks` give `note`, and whether its record and links differ from it
+   * What `blocks` give `note`, and whether its record and links differ from it. A note whose
+   * blocks can't be read (a block import let in that the editor can't read, say) is `failed`,
+   * and nothing of it is written.
    * @param {any} note
    * @param {Array<any>} blocks
    * @param {Array<any>} links - its stored links
    * @param {{textOf: ((blocks: Array<any>) => string)|null, targets: Array<any>}} context
+   * @returns {{record: any, links: Array<string>|null, failed?: boolean}}
    */
-  function derive(note, blocks, links, { textOf, targets }) {
+  function derive(note, blocks, links, context) {
+    try {
+      return deriveFrom(note, blocks, links, context);
+    } catch {
+      return { record: null, links: null, failed: true };
+    }
+  }
+
+  /**
+   * derive's work, which throws on blocks it can't read
+   * @param {any} note
+   * @param {Array<any>} blocks
+   * @param {Array<any>} links
+   * @param {{textOf: ((blocks: Array<any>) => string)|null, targets: Array<any>}} context
+   * @returns {{record: any, links: Array<string>|null}}
+   */
+  function deriveFrom(note, blocks, links, { textOf, targets }) {
     const ordered = blocks.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
     const derived = { record: null, links: null };
     const Sidebar = /** @type {any} */ (globalThis).SidebarUtils;
@@ -185,7 +206,8 @@ const StartCatchUp = (function initStartCatchUp() {
    * @param {IDBDatabase} db
    * @param {string} noteId
    * @param {{textOf: ((blocks: Array<any>) => string)|null, targets: Array<any>, now: () => number}} context
-   * @returns {Promise<boolean>} whether it wrote anything
+   * @returns {Promise<'wrote'|'unchanged'|'skipped'>} whether it wrote anything, or skipped a
+   *   note whose blocks it can't read
    */
   async function rebuildNote(db, noteId, context) {
     const linked = Boolean(context.textOf) && db.objectStoreNames.contains('links');
@@ -194,27 +216,58 @@ const StartCatchUp = (function initStartCatchUp() {
     const noteRead = tx.objectStore('canvases').get(noteId);
     const blocksRead = tx.objectStore('elements').index('canvasId').getAll(noteId);
     const linksRead = linked ? tx.objectStore('links').index('fromNoteId').getAll(noteId) : null;
-    let wrote = false;
+    /** @type {'wrote'|'unchanged'|'skipped'} */
+    let outcome = 'unchanged';
     // Requests in one transaction answer in order, so all three are in when the last is
     (linksRead || blocksRead).addEventListener('success', () => {
       const note = noteRead.result;
       if (!note) return;
-      const derived = derive(note, blocksRead.result, linksRead ? linksRead.result : null, { ...context, textOf: linked ? context.textOf : null });
+      const textOf = linked ? context.textOf : null;
+      const derived = derive(note, blocksRead.result, linksRead ? linksRead.result : null, { ...context, textOf });
+      if (derived.failed) {
+        outcome = 'skipped';
+        return;
+      }
       if (derived.record) {
         tx.objectStore('canvases').put(derived.record);
-        wrote = true;
+        outcome = 'wrote';
       }
       if (derived.links) {
-        const store = tx.objectStore('links');
-        for (const link of linksRead.result) store.delete(link.id);
-        for (const toNoteId of derived.links) {
-          store.add({ id: Utils.generateId(), fromNoteId: noteId, toNoteId, createdAt: context.now() });
-        }
-        wrote = true;
+        // The targets are from before this transaction: resolve against the notes as stored
+        // now, read in it, so a note made or renamed since counts as it would for a save
+        const notesRead = tx.objectStore('canvases').getAll();
+        notesRead.addEventListener('success', () => {
+          const current = derive(note, blocksRead.result, linksRead.result, { textOf, targets: linkTargets(notesRead.result) });
+          if (!current.links) return;
+          const store = tx.objectStore('links');
+          for (const link of linksRead.result) store.delete(link.id);
+          for (const toNoteId of current.links) {
+            store.add({ id: Utils.generateId(), fromNoteId: noteId, toNoteId, createdAt: context.now() });
+          }
+          outcome = 'wrote';
+        });
       }
     });
     await done;
-    return wrote;
+    return outcome;
+  }
+
+  /**
+   * rebuildNote, counted into `result`. A note whose rebuild fails is skipped and counted, and
+   * the rest go on.
+   * @param {IDBDatabase} db
+   * @param {string} noteId
+   * @param {{textOf: ((blocks: Array<any>) => string)|null, targets: Array<any>, now: () => number}} context
+   * @param {{rebuilt: number, skipped: number}} result
+   */
+  async function rebuildCounted(db, noteId, context, result) {
+    try {
+      const outcome = await rebuildNote(db, noteId, context);
+      if (outcome === 'wrote') result.rebuilt += 1;
+      else if (outcome === 'skipped') result.skipped += 1;
+    } catch {
+      result.skipped += 1;
+    }
   }
 
   /**
@@ -266,58 +319,69 @@ const StartCatchUp = (function initStartCatchUp() {
    * Catch up the notes a start's drafts named: rebuild the dropped ones, sweep the gone ones
    * @param {{db: IDBDatabase, dropped?: Array<string>, gone?: Array<string>,
    *   textOf?: ((blocks: Array<any>) => string)|null, now?: () => number}} options
-   * @returns {Promise<{rebuilt: number, removed: number}>}
+   * @returns {Promise<{rebuilt: number, removed: number, skipped: number}>}
    */
   async function catchUp({ db, dropped = [], gone = [], textOf = editorText(), now = Date.now }) {
-    const result = { rebuilt: 0, removed: 0 };
+    const result = { rebuilt: 0, removed: 0, skipped: 0 };
     if (!db || !db.objectStoreNames.contains('canvases') || !db.objectStoreNames.contains('elements')) return result;
     const rebuild = [...new Set(dropped)];
     if (rebuild.length > 0) {
       const targets = linkTargets(await everyNote(db));
-      for (const noteId of rebuild) {
-        if (await rebuildNote(db, noteId, { textOf, targets, now })) result.rebuilt += 1;
-      }
+      for (const noteId of rebuild) await rebuildCounted(db, noteId, { textOf, targets, now }, result);
     }
     result.removed = await sweep(db, [...new Set(gone)], { now });
-    if (result.rebuilt > 0 || result.removed > 0) {
-      console.info(`Start catch-up: ${result.rebuilt} note(s) caught up, ${result.removed} record(s) of deleted notes removed`);
+    if (result.rebuilt > 0 || result.removed > 0 || result.skipped > 0) {
+      console.info(`Start catch-up: ${result.rebuilt} note(s) caught up, ${result.skipped} skipped, ${result.removed} record(s) of deleted notes removed`);
     }
     return result;
   }
 
+  /** Distinct note IDs the orphan scan reads per transaction, so no one read holds a store long */
+  const SCAN_BATCH = 500;
+
   /**
-   * The distinct note IDs a store's records name, by its index, or its keys
-   * @param {IDBTransaction} tx
+   * The distinct note IDs a store's records name, by its index, or its keys, SCAN_BATCH per
+   * readonly transaction. A note made between two of them is safe: the sweep reads every
+   * candidate's record again in its own transaction.
+   * @param {IDBDatabase} db
    * @param {string} name
    * @param {string|null} index
    * @returns {Promise<Array<IDBValidKey>>}
    */
-  function namedIds(tx, name, index) {
-    const store = tx.objectStore(name);
-    if (!index) return answer(store.getAllKeys());
-    return new Promise((resolve, reject) => {
-      const keys = [];
-      const cursor = store.index(index).openKeyCursor(null, 'nextunique');
-      cursor.onsuccess = () => {
-        if (!cursor.result) {
-          resolve(keys);
-          return;
-        }
-        keys.push(cursor.result.key);
-        cursor.result.continue();
-      };
-      cursor.onerror = () => reject(cursor.error);
-    });
+  async function namedIds(db, name, index) {
+    const keys = [];
+    let after = null;
+    for (;;) {
+      const store = db.transaction(name, 'readonly').objectStore(name);
+      const range = after === null ? null : IDBKeyRange.lowerBound(after, true);
+      const batch = await new Promise((resolve, reject) => {
+        const found = [];
+        const cursor = index ? store.index(index).openKeyCursor(range, 'nextunique') : store.openKeyCursor(range);
+        cursor.onsuccess = () => {
+          if (!cursor.result || found.length >= SCAN_BATCH) {
+            resolve(found);
+            return;
+          }
+          found.push(cursor.result.key);
+          cursor.result.continue();
+        };
+        cursor.onerror = () => reject(cursor.error);
+      });
+      keys.push(...batch);
+      if (batch.length < SCAN_BATCH) return keys;
+      after = batch[batch.length - 1];
+    }
   }
 
   /**
    * The full pass: every note's record and links against its blocks, read BATCH notes per
-   * transaction, then what no note's record names any more
+   * transaction, then what no note's record names any more, scanned SCAN_BATCH IDs and swept
+   * BATCH notes per transaction. A note whose blocks can't be read is skipped and counted.
    * @param {{db: IDBDatabase, textOf?: ((blocks: Array<any>) => string)|null, now?: () => number}} options
-   * @returns {Promise<{rebuilt: number, removed: number, notes: number}>}
+   * @returns {Promise<{rebuilt: number, removed: number, skipped: number, notes: number}>}
    */
   async function fullPass({ db, textOf = editorText(), now = Date.now }) {
-    const result = { rebuilt: 0, removed: 0, notes: 0 };
+    const result = { rebuilt: 0, removed: 0, skipped: 0, notes: 0 };
     if (!db || !db.objectStoreNames.contains('canvases') || !db.objectStoreNames.contains('elements')) return result;
     const notes = await everyNote(db);
     result.notes = notes.length;
@@ -336,31 +400,34 @@ const StartCatchUp = (function initStartCatchUp() {
       batch.forEach((n, i) => {
         const [blocks, links] = answered[i];
         const derived = derive(n, blocks, links, { textOf: linked ? textOf : null, targets });
-        if (derived.record || derived.links) lagging.push(n.id);
+        if (derived.failed) result.skipped += 1;
+        else if (derived.record || derived.links) lagging.push(n.id);
       });
     }
-    for (const noteId of lagging) {
-      if (await rebuildNote(db, noteId, { textOf, targets, now })) result.rebuilt += 1;
-    }
+    for (const noteId of lagging) await rebuildCounted(db, noteId, { textOf, targets, now }, result);
 
     const known = new Set(notes.map((n) => n.id));
     const named = NAMED.filter(([store]) => db.objectStoreNames.contains(store));
-    const tx = db.transaction(['elements', ...named.map(([store]) => store)], 'readonly');
-    const lists = await Promise.all([namedIds(tx, 'elements', 'canvasId'), ...named.map(([store, index]) => namedIds(tx, store, index))]);
+    const lists = [await namedIds(db, 'elements', 'canvasId')];
+    for (const [store, index] of named) lists.push(await namedIds(db, store, index));
     const orphans = /** @type {Array<string>} */ ([...new Set(lists.flat())].filter((id) => typeof id === 'string' && !known.has(id)));
-    result.removed = await sweep(db, orphans, { now, graceMs: GRACE_MS });
+    // A deleting transaction per BATCH orphans too, for the same reason
+    for (let at = 0; at < orphans.length; at += BATCH) {
+      result.removed += await sweep(db, orphans.slice(at, at + BATCH), { now, graceMs: GRACE_MS });
+    }
 
-    console.info(`Start catch-up, full pass: ${result.notes} note(s) read, ${result.rebuilt} caught up, ${result.removed} record(s) of deleted notes removed`);
+    console.info(`Start catch-up, full pass: ${result.notes} note(s) read, ${result.rebuilt} caught up, ${result.skipped} skipped, ${result.removed} record(s) of deleted notes removed`);
     return result;
   }
 
   /**
-   * Whether the full pass is due: never run, or last run more than seven days ago
+   * Whether the full pass is due: never run, last run more than seven days ago, or last run in
+   * the future, as a clock set back would have it
    * @param {unknown} checkedAt
    * @param {number} now
    */
   function due(checkedAt, now) {
-    return typeof checkedAt !== 'number' || now - checkedAt > WEEK_MS;
+    return typeof checkedAt !== 'number' || now - checkedAt > WEEK_MS || checkedAt > now;
   }
 
   return Object.freeze({
