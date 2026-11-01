@@ -20,12 +20,14 @@
  *   package, since Playwright can't throttle a page before it has one; `throttledAtMs` says
  *   when, and `documentAtMs` when the document existed, both on the page's clock.
  * - JS heap is CDP Runtime.getHeapUsage's usedSize after HeapProfiler.collectGarbage, once the
- *   save the probe's own key sets off has committed: from the echo, the driver waits until a
- *   readwrite IndexedDB transaction has begun and none is open, for SAVE_WAIT_MS at most, and
- *   reports when the save ended (`saveMs`, after the echo; null when none began in time). Read
- *   at the echo, the heap counted what that save allocates, which is garbage once it commits,
- *   so where the save started against the collection moved #147's typical heap between modes
- *   0.8 MiB apart (#147's T2 profile).
+ *   save the probe's own key sets off, and the writes it sets off in turn, have committed: from
+ *   the echo, the driver waits until a readwrite IndexedDB transaction has begun, none is open,
+ *   and none has begun for QUIET_MS since the last one ended, for SAVE_WAIT_MS at most, and
+ *   reports when the last one ended (`saveMs`, after the echo; null when none began in time).
+ *   Read at the echo, the heap counted what that save allocates, which is garbage once it
+ *   commits, so where the save started against the collection moved #147's typical heap
+ *   between modes 0.8 MiB apart (#147's T2 profile). Read once the save alone has committed,
+ *   it caught the save's follow-up work, a snapshot and two search-index writes, partway in.
  * - The network is off in Chromium itself (the harness's `network: 'offline'`: a dead proxy and
  *   no host resolution), not through a route, which would send each of the page's own requests
  *   through this process and cost a package by its file count.
@@ -51,10 +53,16 @@ const MAX_TRIES = 200;
 const MARK = 'ntn:interaction-ready';
 /**
  * How long the heap reading waits after the echo for the save the probe's key sets off. The
- * stack's begins 19 to 69 ms after the echo and commits by 160, so this is only a bound for a
- * package that never saves the key.
+ * stack's begins 19 to 69 ms after the echo, and its last follow-up write ends by 450, so this
+ * is only a bound for a package that never saves the key.
  */
 const SAVE_WAIT_MS = 5000;
+/**
+ * How long no write may begin after the last one ended before the heap is read. The stack's
+ * save is followed by a snapshot and two search-index writes, about 190, 240 and 430 ms after
+ * the echo, the last up to 180 ms after the one before.
+ */
+const QUIET_MS = 300;
 
 /**
  * Runs in the new tab before its scripts: watches the focused block for the probe's key, and
@@ -70,14 +78,16 @@ function probeInit({ editor, key }) {
     target: null,
     /** Each readwrite transaction the page opened, by when it began and ended: times only */
     writes: [],
-    /** When the last write begun since the echo ended, once saved() first answered true */
+    /** When the last write begun since the echo ended, once settled() first answered true */
     savedAt: null,
-    /** Whether a write has begun since the echo and none is open */
-    saved() {
+    /** Whether a write has begun since the echo, none is open, and none began for `quietMs` */
+    settled(quietMs) {
       if (probe.echoedAt === null) return false;
       const since = probe.writes.filter(write => write.began >= probe.echoedAt);
       if (since.length === 0 || probe.writes.some(write => write.ended === null)) return false;
-      probe.savedAt = Math.max(...since.map(write => write.ended));
+      const last = Math.max(...since.map(write => write.ended));
+      if (performance.now() - last < quietMs) return false;
+      probe.savedAt = last;
       return true;
     },
     /** Focuses the first editable block, caret at its end, and starts watching it */
@@ -167,10 +177,10 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
       if (tries >= MAX_TRIES) throw new Error(`no key echoed in the editor after ${tries} tries`);
     }
 
-    // The heap once the save the key set off has committed, so what that save allocates, and
-    // lets go of as it commits, isn't in the reading
+    // The heap once the save the key set off, and the writes it set off in turn, have
+    // committed, so what they allocate, and let go of as they commit, isn't in the reading
     const saved = await page
-      .waitForFunction(() => window.__ntnProbe.saved(), null, { polling: 10, timeout: SAVE_WAIT_MS })
+      .waitForFunction(quietMs => window.__ntnProbe.settled(quietMs), QUIET_MS, { polling: 10, timeout: SAVE_WAIT_MS })
       .then(() => true, () => false);
     await cdp.send('HeapProfiler.collectGarbage');
     const heap = await cdp.send('Runtime.getHeapUsage');
@@ -205,4 +215,4 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
   }
 }
 
-module.exports = { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS };
+module.exports = { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS, QUIET_MS };

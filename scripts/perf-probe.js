@@ -156,7 +156,7 @@ function roundOrder(count, round) {
  */
 async function measureTiming({ packages, runs, profiles, log }) {
   // Loaded only for --timing, so the bytes alone need no browser
-  const { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS } = require('./perf/timing');
+  const { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS, QUIET_MS } = require('./perf/timing');
   const result = {
     runs,
     order: packages.length > 1 ? `interleaved: every round runs each package once, rotated one place each round, balanced every ${packages.length} rounds` : 'one package',
@@ -165,7 +165,7 @@ async function measureTiming({ packages, runs, profiles, log }) {
     settleMs: SETTLE_MS,
     editor: EDITOR,
     key: KEY,
-    heap: `after a collection, once the save the key sets off has committed (saveMs), or ${SAVE_WAIT_MS} ms after the echo`,
+    heap: `after a collection, once the save the key sets off and the writes it sets off have committed, with none begun for ${QUIET_MS} ms (saveMs), or ${SAVE_WAIT_MS} ms after the echo`,
     browser: null,
     reference: packages[0].label,
     profiles: {},
