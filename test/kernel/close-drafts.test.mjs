@@ -552,6 +552,16 @@ for (const fixture of FIXTURES) {
         const outcome = await apply(ctx, /** @type {CloseDraft} */ (/** @type {unknown} */ ({ ...stackDraft(), v: 2 })));
         assert.deepEqual([outcome.kind, outcome.code], ['rejected', 'invalid-command']);
       });
+
+      it('is refused, writing nothing, when a block it deleted names no id (d18)', async () => {
+        await profileOf(ctx);
+        const before = await recordOf(ctx, 'notes', 'A');
+        for (const deletedBlockIds of [[''], [5], [null], ['a2', '']]) {
+          const outcome = await apply(ctx, /** @type {CloseDraft} */ (/** @type {unknown} */ ({ ...stackDraft(), deletedBlockIds })));
+          assert.deepEqual([outcome.kind, outcome.code], ['rejected', 'invalid-command'], JSON.stringify(deletedBlockIds));
+        }
+        assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before);
+      });
     });
   });
 }
