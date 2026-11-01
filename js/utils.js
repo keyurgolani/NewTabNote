@@ -21,11 +21,12 @@ function forwardIndexOf(text, needle) {
 }
 
 /**
- * `/```(\w*)\n?([\s\S]*?)```/g` replaced by `replace(lang, code)`, in one pass: from a fence,
- * the language runs over the word characters after it, a line break after them is skipped,
- * and the code runs to the next fence. With no fence after that, no later one has one either.
+ * `/```(\w*)\n?([\s\S]*?)```/g` replaced by `replace(lang, code, fence)`, in one pass: from a
+ * fence, the language runs over the word characters after it, a line break after them is
+ * skipped, and the code runs to the next fence. With no fence after that, no later one has one
+ * either. `fence` is the whole match.
  * @param {string} text
- * @param {(lang: string, code: string) => string} replace
+ * @param {(lang: string, code: string, fence: string) => string} replace
  * @returns {string}
  */
 function replaceFencedCode(text, replace) {
@@ -38,7 +39,7 @@ function replaceFencedCode(text, replace) {
     if (text[start] === '\n') start++;
     const end = text.indexOf('```', start);
     if (end === -1) break;
-    out += text.slice(from, at) + replace(lang, text.slice(start, end));
+    out += text.slice(from, at) + replace(lang, text.slice(start, end), text.slice(at, end + 3));
     from = end + 3;
   }
   return out + text.slice(from);
@@ -245,6 +246,52 @@ function replaceTags(text, by, nonEmpty) {
     lt = text.indexOf('<', from);
   }
   return out + text.slice(from);
+}
+
+
+/** What a reply's text escapes: enough that none of it reads as markup or leaves an attribute */
+const REPLY_TEXT_ESCAPES = { '&': '&amp;', '<': '&lt;', '"': '&quot;' };
+
+/** The opening tag of a link parseMarkdown makes from `[label](address)` */
+const MADE_LINK = /<a href="([^"]*)" target="_blank" rel="noopener noreferrer">/g;
+
+/** The addresses a reply's link keeps */
+const REPLY_LINK_SCHEMES = /^(?:https?|mailto):/i;
+
+/**
+ * `text` with REPLY_TEXT_ESCAPES applied everywhere but where parseMarkdown escapes the text
+ * itself: code fences and code spans, found as it finds them, and wiki-link names. Its
+ * placeholders hold no backtick, line break or bracket, as parseMarkdown's don't, so the text
+ * it reads splits the same way.
+ * @param {string} text - With no NUL, which can't start a placeholder of the text's own
+ * @returns {string}
+ */
+function escapeReplyText(text) {
+  /** @type {string[]} */
+  const fences = [];
+  /** @type {string[]} */
+  const spans = [];
+  let result = replaceFencedCode(text, (lang, code, fence) => `\x00F${fences.push(fence) - 1}\x00`);
+  result = result.replace(/`([^`\n]+)`/g, span => `\x00S${spans.push(span) - 1}\x00`);
+  const escape = (/** @type {string} */ part) => part.replace(/[&<"]/g, char => REPLY_TEXT_ESCAPES[char]);
+  // Wiki links as convertWikiLinksToHtml reads them: from a `[[`, the name runs to the first `]`,
+  // which another `]` must follow
+  const nextClose = forwardIndexOf(result, ']');
+  let out = '';
+  let from = 0;
+  for (let at = result.indexOf('[['); at !== -1; at = result.indexOf('[[', at + 1)) {
+    if (at < from) continue;
+    const close = nextClose(at + 2);
+    if (close === -1) break;
+    if (close === at + 2 || result[close + 1] !== ']') continue;
+    out += escape(result.slice(from, at + 2)) + result.slice(at + 2, close);
+    from = close;
+    at = close + 1;
+  }
+  out += escape(result.slice(from));
+  // The spans first, since one can hold a fence's placeholder
+  out = out.replace(/\x00S(\d+)\x00/g, (placeholder, index) => spans[Number(index)] ?? placeholder);
+  return out.replace(/\x00F(\d+)\x00/g, (placeholder, index) => fences[Number(index)] ?? placeholder);
 }
 
 
@@ -1016,6 +1063,21 @@ const Utils = {
     result = result.replace(/(<\/(?:h[1-3]|ul|ol|blockquote|pre|hr)>)<\/p>/g, '$1');
 
     return result;
+  },
+
+  /**
+   * An AI reply's Markdown as HTML, with the reply's own text shown as text: its `&`, `<` and
+   * `"` are escaped before parseMarkdown reads it (escapeReplyText), so only the Markdown becomes
+   * markup, and a link keeps its address only for http, https and mailto. Callers sanitize the
+   * result as before.
+   * @param {string} text
+   * @returns {string}
+   */
+  parseMarkdownText(text) {
+    if (!text) return '';
+    // A NUL is dropped where the HTML is parsed anyway
+    const html = this.parseMarkdown(escapeReplyText(String(text).replace(/\x00/g, '')));
+    return html.replace(MADE_LINK, (tag, address) => (REPLY_LINK_SCHEMES.test(address) ? tag : '<a>'));
   },
 
   /**

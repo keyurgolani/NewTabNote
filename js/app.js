@@ -4838,7 +4838,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }
@@ -5003,7 +5003,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // For assistant messages, render markdown; for user messages, use plain text
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }

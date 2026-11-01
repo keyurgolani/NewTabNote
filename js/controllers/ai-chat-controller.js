@@ -607,7 +607,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // parseBlock: convert a completed markdown block to sanitized HTML
     const parseBlock = (markdown) => {
-      return sanitizeHtml(Utils.parseMarkdown(markdown));
+      return sanitizeHtml(Utils.parseMarkdownText(markdown));
     };
 
     /**
@@ -1288,7 +1288,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.classList.remove('ai-streaming');
 
     // Parse markdown
-    contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(fullResponse));
+    contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(fullResponse));
 
     // Add source notes for global chat
     if (sourceNotes && sourceNotes.length > 0) {
@@ -1671,7 +1671,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }
@@ -1739,7 +1739,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }
