@@ -48,6 +48,9 @@ export const PROFILE_DATABASE = 'CanvasTabDB';
  * block has: Block.serialize's own (SERIALIZED_FIELDS), then the note's id and the block's
  * order. Each value is the one Block gave a block made without it. test/kernel/profile-store.test.mjs
  * holds each type to its editor save in recorded/v8.v1.4.0.json or recorded/v8.v1.4.0.blocks.json.
+ * h2 and bullet aren't here: both recordings hold them only in v1.4.0's first-run welcome note,
+ * in its nine-field shape, which isn't an editor save. A spec can seed them once a recording holds
+ * the editor's save of each.
  * @type {Readonly<Record<string, Readonly<Record<string, unknown>>>>}
  */
 export const BLOCK_TYPE_FIELDS = Object.freeze({
