@@ -214,14 +214,18 @@ async function record(settings, outcome, stored, now, version, costly) {
  * The worker's kernel and its client. It starts a migration attempt now: a run, unless one of
  * this build that read the stores and then stopped short of space or failed stands
  * (RETRY_AFTER_MS). It builds the kernel on #17's adapter once the attempt is done, as the top
- * of this file says, and builds it again after every later attempt. Its caller,
- * `worker-internal`, may capture and maintain, and nothing else. Until an attempt is done,
+ * of this file says, and builds it again after every later attempt. Its startup maintenance
+ * writes first-run settings only, since the read-only integrity check runs after an install
+ * or an update, as runIntegrityCheck (#35 slice 1). Its caller, `worker-internal`, may
+ * capture, maintain and check, and nothing else. #35's coordinator builds it on its first
+ * start, so the worker opens nothing until an event needs storage. Until an attempt is done,
  * every call waits for it, except while the upgrade is blocked (an open page of an older build
  * holds the database): then `whenReady` and every command answer `blocked-upgrade`, retryable,
- * at once, so a capture says "Not captured" rather than wait. Its connection closes when
- * another context upgrades or deletes the database, so it never blocks one, and the next
- * command starts another attempt, which upgrades only after its own verified point, then opens
- * the database again once. A run keeps the worker alive (KEEPALIVE_MS) until it ends.
+ * at once, so a capture says "Not captured" rather than wait, and the coordinator says
+ * `migrating` until the attempt ends. Its connection closes when another context upgrades or
+ * deletes the database, so it never blocks one, and the next command starts another attempt,
+ * which upgrades only after its own verified point, then opens the database again once. A run
+ * keeps the worker alive (KEEPALIVE_MS) until it ends.
  * @param {WorkerHost} [host]
  * @returns {WorkerClient}
  */
