@@ -416,7 +416,10 @@ export function createIndexedDbAdapter({
   /**
    * The read-only integrity check (integrity.js), which only reports what it finds, so it
    * commits whatever that is. The worker runs it after an install or an update, as
-   * runIntegrityCheck (#35 slice 1), never as it starts.
+   * runIntegrityCheck (#35 slice 1), never as it starts. With no connection to read, one
+   * another context's upgrade or delete closed included, it warns and commits, as
+   * Storage.runIntegrityCheck does on a closed database: a check is no reason to open the
+   * database again, or to make one.
    * @param {Work} work
    * @returns {Promise<Outcome>}
    */
@@ -426,7 +429,8 @@ export function createIndexedDbAdapter({
     try {
       db = connection.database();
     } catch (error) {
-      throw startFailure(error);
+      integrityLog.warn('Integrity check encountered an error:', error);
+      return work.done();
     }
     await runIntegrityCheck(db, integrityLog);
     return work.done();

@@ -157,6 +157,45 @@ describe("#17's integrity check reports what Storage's reports (#17 PR 1b, #35 s
     assert.deepEqual(await adapterSays(partial), fromStorage);
   });
 
+  it('warns and commits on a database another context deleted, as Storage does, and makes none', async () => {
+    const of = await profileHolding(merged(KEPT, ORPHANED), { nine: true });
+    const deleted = () => legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
+
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    await storage.openExisting();
+    await deleted();
+    const before = env.logs.length;
+    await storage.runIntegrityCheck();
+    assert.deepEqual(
+      env.logs.slice(before).map((/** @type {{level: string, args: unknown[]}} */ log) => [log.level, String(log.args[0])]),
+      [['warn', 'Integrity check encountered an error:']],
+    );
+
+    await legacyEnv.createDatabase(of.real, { records: merged(KEPT, ORPHANED) });
+    /** @type {Array<[string, string]>} */
+    const said = [];
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.real,
+      settings: of.chrome.api.storage.local,
+      mode: 'existing',
+      integrityLog: {
+        info: message => said.push(['info', message]),
+        warn: message => said.push(['warn', message]),
+      },
+    });
+    const client = kernelClient({ adapter, surface: 'worker-internal' });
+    assert.equal(await client.whenReady(), null);
+    await deleted();
+    const checked = await client.execute({ type: 'runIntegrityCheck', commandId: client.ids.next() });
+    assert.deepEqual(checked.kind === 'committed' && checked.code, 'integrity-checked');
+    assert.deepEqual(said, [['warn', 'Integrity check encountered an error:']]);
+    const names = (await of.real.databases()).map((/** @type {IDBDatabaseInfo} */ db) => db.name);
+    assert.ok(!names.includes('CanvasTabDB'), `the check made no notes database: ${names.join(', ')}`);
+    adapter.close();
+  });
+
   it("warns with what stopped it when a store can't be read, as Storage does, and still commits", async () => {
     // Blocks without the index both count them by
     const of = await profileHolding(merged(KEPT, ORPHANED), {
