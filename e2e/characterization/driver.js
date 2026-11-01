@@ -542,8 +542,8 @@ async function shortOfSpace(extension) {
  * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and the note,
  * and no recovery point, then a capture. The capture's command finds the worker's connection gone
  * with the database this deleted, so it starts another attempt, which copies the note into a
- * verified pre-migration point before it upgrades to 9. Settings > Data & Backup then has a copy
- * to export. Test code only, as shortOfSpace is.
+ * verified pre-migration point before it upgrades to this build's version. Settings > Data &
+ * Backup then has a copy to export. Test code only, as shortOfSpace is.
  */
 async function upgradedAfterACopy(extension) {
   await workerStorageSettled(extension);
@@ -591,7 +591,7 @@ async function upgradedAfterACopy(extension) {
     const upgrade = await self.storageUpgrade;
     const held = (await indexedDB.databases()).map(db => `${db.name}@${db.version}`);
     return Boolean(upgrade && upgrade.status === 'migrated' && upgrade.recoveryPointId)
-      && held.includes('CanvasTabDB@9') && held.some(name => name.startsWith('NewTabNoteRecovery@'));
+      && held.includes(`CanvasTabDB@${upgrade.to}`) && held.some(name => name.startsWith('NewTabNoteRecovery@'));
   }), { timeout: SETTLE_TIMEOUT_MS }).toBe(true);
 }
 
