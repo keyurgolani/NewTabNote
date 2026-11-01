@@ -189,8 +189,10 @@ function brokenRecovery(factory) {
 
 /**
  * Starts js/background.js `times` times on one profile, each a new worker as Chrome starts one
- * after the last stopped: the same IndexedDB and chrome.storage. `setup` gets each start's
- * environment before it starts. Answers NewTabNoteTrust's journal and the storage after them.
+ * after the last stopped: the same IndexedDB and chrome.storage. Each gets a browser start, an
+ * event that needs storage, since #35's coordinator starts the run only on one. `setup` gets
+ * each start's environment before it starts. Answers NewTabNoteTrust's journal and the storage
+ * after them.
  */
 async function restarts(times, setup) {
   const factory = new IDBFactory();
@@ -202,7 +204,11 @@ async function restarts(times, setup) {
       if (typeof callback === 'function') callback();
     };
     await setup(env, start);
+    // chrome.* is shared across starts, so only this worker's listener hears the browser start
+    const startup = env.chrome.api.runtime.onStartup;
+    const earlier = startup.listeners.length;
     await startWorker(env);
+    for (const listener of startup.listeners.slice(earlier)) await listener();
     for (let round = 0; round < 10; round += 1) {
       await new Promise(resolve => setImmediate(resolve));
       await new Promise(resolve => setTimeout(resolve, 30));

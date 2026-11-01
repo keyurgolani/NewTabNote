@@ -270,7 +270,9 @@ describe('a worker whose storage can\'t be reached', () => {
     assert.deepEqual(await welcomeOf(worker, 'session-1'), { status: 'degraded', reason: 'storage-unavailable' });
 
     const seen = await trustOf(worker.indexedDB);
-    assert.deepEqual(seen.events, ['storage.open-failed', 'capture.failed']);
+    // The run that couldn't read the database first, as its own migration event (#20, which
+    // raises no incident), then the coordinator's failed open, then the capture
+    assert.deepEqual(seen.events, ['storage.migration-failed', 'storage.open-failed', 'capture.failed']);
   });
 });
 
