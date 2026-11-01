@@ -22,11 +22,18 @@ function ops(source, file = 'js/x.js', options = {}) {
   return { calls: hits.map(h => (h.key ? `${h.op} ${h.key}` : h.op)), hits, problems };
 }
 
-/** A scratch repository holding only `files`, removed after `body` */
+/** A js/storage.js whose DatabaseManager defines every method the lists name, as the real one does */
+const STORAGE_STUB = `class DatabaseManager {\n${[...WRITES, ...MODE_WRITES, ...READS].map(op => `  ${op}() {}`).join('\n')}\n}\n`;
+
+/**
+ * A scratch repository holding only `files`, and STORAGE_STUB as js/storage.js unless they give
+ * their own, or null for none, removed after `body`
+ */
 function withRepo(files, body) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'write-paths-'));
   try {
-    for (const [file, text] of Object.entries(files)) {
+    for (const [file, text] of Object.entries({ 'js/storage.js': STORAGE_STUB, ...files })) {
+      if (text === null) continue;
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.writeFileSync(path.join(root, file), text);
     }
@@ -465,12 +472,29 @@ new SidebarController().showNoteContextMenu(n);
 
   it('skips js/storage.js, js/lib/, and js/kernel/', () => {
     withRepo({
-      'js/storage.js': 'Storage.updateNote(n);',
+      'js/storage.js': `${STORAGE_STUB}Storage.updateNote(n);\n`,
       'js/lib/vendor.js': 'Storage.updateNote(n);',
       'js/kernel/adapters/legacy/notes.js': 'Storage.updateNote(n);',
     }, (root) => {
       assert.equal(main(['--write'], { root, ...quiet }), 0);
       assert.match(fs.readFileSync(path.join(root, DOC), 'utf8'), /\| Total \| 0 \|/);
+    });
+  });
+
+  it("fails when js/storage.js has no class DatabaseManager, or there's no js/storage.js, where the lookup let every call through (R88's read of #17 PR 4b)", () => {
+    for (const [what, storage] of [['no class', 'window.Storage = {};\n'], ['no file', null]]) {
+      withRepo({ 'js/storage.js': storage, 'js/sidebar.js': source() }, (root) => {
+        assert.equal(storageMembers(root), null, what);
+        assert.deepEqual(collect(root).problems, [
+          'js/storage.js has no class DatabaseManager, so no call to it can be checked: keep the class, or take Storage out of scripts/write-paths.js',
+        ], what);
+        assert.equal(main(['--write'], { root, ...quiet }), 1, what);
+        assert.ok(!fs.existsSync(path.join(root, DOC)), `${what}: the doc was written`);
+      });
+    }
+    // The same repository with the class passes
+    withRepo({ 'js/sidebar.js': source() }, (root) => {
+      assert.deepEqual(collect(root).problems, []);
     });
   });
 });

@@ -725,7 +725,10 @@ function listFiles(root = ROOT_DIR) {
   return files.sort();
 }
 
-/** DatabaseManager's method names, from js/storage.js, or null when there's no such class */
+/**
+ * DatabaseManager's method names, from js/storage.js, or null when there's no js/storage.js or
+ * no such class in it, which fails the check (collect)
+ */
 function storageMembers(root = ROOT_DIR) {
   const file = path.join(root, 'js/storage.js');
   if (!fs.existsSync(file)) return null;
@@ -836,6 +839,8 @@ function staleListings(members) {
   return problems;
 }
 
+const NO_DATABASE_MANAGER = "js/storage.js has no class DatabaseManager, so no call to it can be checked: keep the class, or take Storage out of scripts/write-paths.js";
+
 /** Every write path in js/, classified, and what keeps the doc from being written */
 function collect(root = ROOT_DIR) {
   const files = listFiles(root);
@@ -844,7 +849,10 @@ function collect(root = ROOT_DIR) {
   const members = storageMembers(root);
   const index = referencesOf(sources);
   const rows = [];
-  const problems = staleListings(members);
+  // Without the class nothing can tell a method it has from one it lost, so the lookup fails
+  // the check, where it used to let every listing and call through (R88's read of #17 PR 4b)
+  const problems = members ? [] : [NO_DATABASE_MANAGER];
+  problems.push(...staleListings(members));
   for (const file of files) {
     const result = scanSource(file, texts.get(file), { members });
     for (const hit of result.hits) {
