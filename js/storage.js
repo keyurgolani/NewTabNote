@@ -1381,15 +1381,26 @@ class DatabaseManager {
    * would bring it back, so the transaction aborts, blocks included, and the
    * promise resolves with null. Every editor note comes from a stored one: notes
    * are created and imported in IndexedDB before an editor loads them.
+   *
+   * A closing page (the editor's pagehide flush) runs no more callbacks, and Chrome aborts
+   * a transaction the page hasn't committed as the page goes, so with `closing` the blocks
+   * are put and committed at once, in a transaction over the blocks alone (#142). The note's
+   * record, which the read has to come back for, keeps what it had until the note's next
+   * save. A note deleted since the editor last saved gets the blocks with no note to show
+   * them, so the editor writes nothing on close for a note it has found gone. The commit is
+   * lost with the page when another transaction over the blocks runs on past the page's last
+   * few milliseconds, as before.
    * @param {Object} note - Note record (`updatedAt` is set on it)
    * @param {Array<Object>} elements - Block records, each with `canvasId` set to the note's ID
+   * @param {{closing?: boolean}} [options] - closing: the page is going, so commit the blocks now
    * @returns {Promise<Object|null>} The note once the transaction completes, or null when
    *   the note no longer exists and nothing was written
    */
-  saveNoteWithBlocks(note, elements) {
+  saveNoteWithBlocks(note, elements, { closing = false } = {}) {
     note.updatedAt = Date.now();
     return new Promise((resolve, reject) => {
-      const tx = this.transaction(['canvases', 'elements'], 'readwrite');
+      // A closing write touches only the blocks, so only a transaction over them can hold it back
+      const tx = this.transaction(closing ? ['elements'] : ['canvases', 'elements'], 'readwrite');
       let gone = false;
       tx.oncomplete = () => resolve(note);
       tx.onerror = () => {
@@ -1408,6 +1419,11 @@ class DatabaseManager {
         const elementStore = tx.objectStore('elements');
         for (const element of elements) {
           elementStore.put(element);
+        }
+        if (closing) {
+          // The page is going: the blocks are all this writes, and they commit now (#142)
+          if (typeof tx.commit === 'function') tx.commit();
+          return;
         }
         const canvases = tx.objectStore('canvases');
         const read = canvases.get(note.id);

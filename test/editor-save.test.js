@@ -73,6 +73,23 @@ function spyTransactions(storage) {
 
 const writesOf = (opened) => opened.filter((t) => t.mode === 'readwrite');
 
+/** Record the transactions whose commit() is called, as a closing page's flush calls it. */
+function spyCommits(storage) {
+  const db = storage.db;
+  const original = db.transaction.bind(db);
+  const committed = [];
+  db.transaction = (stores, mode) => {
+    const tx = original(stores, mode);
+    const commit = tx.commit.bind(tx);
+    tx.commit = () => {
+      committed.push([].concat(stores));
+      return commit();
+    };
+    return tx;
+  };
+  return committed;
+}
+
 async function setup() {
   const env = createLegacyEnv();
   await createDatabase(env.indexedDB, {
@@ -304,6 +321,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.equal(env.pendingFrames(), 0);
     await settle();
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'hidden tab' });
+    assert.equal((await Storage.getNote('A')).preview, 'hidden tab', 'preview computed without a frame');
     assert.equal(editor.saveTimeout, null);
   });
 
@@ -316,15 +334,31 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.notEqual(editor.saveTimeout, null);
   });
 
-  it('pagehide (closing the tab) writes the pending edit synchronously', async () => {
+  it('pagehide (closing the tab) commits the pending edit\'s blocks before the handler returns (#142)', async () => {
     const opened = spyTransactions(Storage);
+    const committed = spyCommits(Storage);
     type(editor, 'tab closing');
     env.window.fire('pagehide');
-    assert.equal(writesOf(opened).length, 1);
+    assert.deepEqual(writesOf(opened), [{ stores: ['elements'], mode: 'readwrite' }], 'over the blocks alone');
+    assert.deepEqual(committed, [['elements']], 'a closing page runs no more callbacks, so it commits now');
     await settle();
-    const stored = await Storage.getNote('A');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'tab closing' });
-    assert.equal(stored.preview, 'tab closing', 'preview computed without a frame');
+    assert.equal((await Storage.getNote('A')).preview, '', "the note's record catches up on its next save");
+  });
+
+  it('pagehide writes nothing for a note the editor found deleted, as a closing write commits without the read that finds it gone (#142)', async () => {
+    type(editor, 'typed into A');
+    await Storage.permanentlyDeleteNote('A'); // another tab
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteGone, true, 'its save found A gone');
+    type(editor, 'typed again');
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide');
+    assert.equal(writesOf(opened).length, 0);
+    await settle();
+    const rows = await elementsById(env);
+    assert.equal(rows.a1, undefined, "A's blocks stay deleted");
+    assert.equal(rows.a2, undefined);
   });
 
   it('a save waiting for its frame is written by pagehide, and only once', async () => {
@@ -389,6 +423,23 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     env.frames();
     await editor.flushSave();
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha in main' });
+  });
+
+  it("closing the pop-out writes its whole pending save, title included, as this page and its connection stay (#142)", async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    pip.noteData.name = 'Renamed in the pop-out';
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    const committed = spyCommits(Storage);
+    pipWindow.fire('pagehide');
+    assert.deepEqual(writesOf(opened), [{ stores: ['canvases', 'elements'], mode: 'readwrite' }],
+      "the note's record and its blocks, opened before the handler returns");
+    assert.deepEqual(committed, [], 'not the closing write: only the pop-out went');
+    await settle();
+    const stored = await Storage.getNote('C');
+    assert.equal(stored.name, 'Renamed in the pop-out');
+    assert.equal(stored.preview, 'charlie in the pop-out');
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
   });
 
   it('switching panes: each editor keeps its own pending edit on its own note', async () => {
