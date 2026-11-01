@@ -3697,6 +3697,23 @@ export function runContractSuite(fixture) {
             }),
           ),
           await kernel.execute(cmd('saveNoteContent', { noteId: 'gone', blocks: [{ id: 'b2', content: secret }] })),
+          // A closing tab's edit, the command whose payload holds the most content (#33)
+          await kernel.execute(
+            cmd('applyCloseDraft', {
+              draft: {
+                v: 1,
+                id: 'draft-1',
+                noteId: 'n1',
+                at: NOW,
+                base: { revision: null, updatedAt: NOW, issued: [] },
+                blocks: [{ id: 'b1', type: 'text', content: `${secret} ${url}`, order: 0 }],
+                deletedBlockIds: [],
+                preview: secret,
+                todoProgress: null,
+                linkedNames: [secret],
+              },
+            }),
+          ),
           await kernel.execute(cmd('runBulkAction', { action: 'trash', noteIds: ['n1', 'gone'] })),
         ];
         for (const outcome of outcomes) {

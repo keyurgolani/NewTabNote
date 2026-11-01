@@ -815,9 +815,19 @@ describe("the worker's data transforms (#17 PR 3a)", () => {
     };
     const worker = createWorkerClient({ ...hostOf(of), locks, timers, keepAlive: async () => {} });
     assert.equal(await worker.whenReady(), null);
+    // Which ends first, since the versions alone read the same either way: the purge waits for
+    // the catch-up (w11)
+    /** @type {string[]} */
+    const ended = [];
+    const endings = Promise.all([
+      worker.recordsCatchUp.done.then(() => ended.push('catch-up')),
+      Promise.resolve(worker.purge.done).then(() => ended.push('purge')),
+    ]);
     assert.equal((await worker.transforms.done)?.status, 'transformed');
     assert.equal((await worker.recordsCatchUp.done)?.status, 'done');
     assert.equal((await worker.purge.done)?.status, 'nothing');
+    await endings;
+    assert.deepEqual(ended, ['catch-up', 'purge']);
     // The transforms take it through logical 2 and 3 (#17 PR 3b) in one run
     assert.deepEqual(released, [1, 3, 3, 3]);
     assert.deepEqual(await state(of), { logicalVersion: 3, grouped: true });
