@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 
 import { inlineMarkdown } from '../../js/kernel/core/blocks/markup.js';
 import { stripTags } from '../../js/kernel/core/blocks/strip-tags.js';
+import { linear } from '../helpers/linear-time.js';
 
 const requireCommonJs = createRequire(import.meta.url);
 /** @type {{sidebarExtractBlockText: (block: unknown) => string, htmlToMarkdown: (html: unknown) => string}} */
@@ -69,29 +70,6 @@ const seededStrings = (/** @type {number} */ count) => {
   return strings;
 };
 
-/**
- * How long one call takes, the fastest of three
- * @param {(value: string) => unknown} fn
- * @param {string} value
- */
-const timeOf = (fn, value) => {
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 3; k++) {
-    const start = performance.now();
-    fn(value);
-    best = Math.min(best, performance.now() - start);
-  }
-  return best;
-};
-
-/**
- * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
- * the sixteen times a quadratic read would
- * @param {(value: string) => unknown} fn
- * @param {(n: number) => string} make
- */
-const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
-
 describe("the regex readers give 1.4.x's bytes (#14 slice 1, answer 5)", () => {
   const values = [...corpusValues(), ...seededStrings(20_000)];
 
@@ -121,5 +99,13 @@ describe('the regex readers read in linear time (#14 slice 1)', () => {
     assert.ok(linear(inlineMarkdown, n => '<b>'.repeat(n / 3)));
     assert.ok(linear(inlineMarkdown, n => '<a href="x">'.repeat(n / 12)));
     assert.ok(linear(inlineMarkdown, n => '<'.repeat(n)));
+  });
+
+  // The inputs above complete nothing; these complete a wiki link, a formatting pair or a link
+  // in every few characters
+  it('Markdown export reads many completed wiki links, formatting and links in linear time', () => {
+    assert.ok(linear(inlineMarkdown, n => '<a class="wiki-link" data-note-name="N">N</a>'.repeat(n / 46)));
+    assert.ok(linear(inlineMarkdown, n => '<b>x</b>'.repeat(n / 8)));
+    assert.ok(linear(inlineMarkdown, n => '<a href="x">y</a>'.repeat(n / 17)));
   });
 });

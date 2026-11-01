@@ -42,6 +42,7 @@ function oldMarkdownInlineToHtml(text) {
 // ============ The same, with slice 2's declared change to links ============
 
 const { isLinkHref } = require('../js/kernel/core/blocks/rich-text.js');
+const { linear } = require('./helpers/linear-time.js');
 const unescapeHtml = html => html.replace(/&(amp|lt|gt|quot|#39);/g, (_, name) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[name]);
 
 /** 1.4.x's code, where a link match whose address the schema refuses stays as its text */
@@ -91,31 +92,6 @@ function values() {
   return [...found];
 }
 
-/** How long one call takes, the fastest of three */
-function timeOf(fn, value) {
-  let best = Infinity;
-  for (let k = 0; k < 3; k++) {
-    const start = performance.now();
-    fn(value);
-    best = Math.min(best, performance.now() - start);
-  }
-  return best;
-}
-
-/**
- * Whether four times the input takes well under the sixteen times a quadratic read would. A
- * busy machine can stall a measurement, so it measures up to three times; a quadratic read
- * grows too fast every time.
- */
-const linear = (fn, make) => {
-  const small = make(20_000);
-  const large = make(80_000);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (timeOf(fn, large) < Math.max(timeOf(fn, small) * 8, 50)) return true;
-  }
-  return false;
-};
-
 describe("AIResponseUtils' inline Markdown keeps 1.4.x's bytes (#14 slice 1)", () => {
   it('markdownInlineToHtml gives what it gave, wherever no link has a refused scheme', () => {
     const all = values();
@@ -154,5 +130,11 @@ describe("AIResponseUtils' inline Markdown reads in linear time (#14 slice 1)", 
       assert.ok(linear(markdownToBlocks, n => `[a](b${run.repeat(n)}c)`), JSON.stringify(run));
       assert.ok(linear(markdownToBlocks, n => `- [a](b${run.repeat(n)}c)`), JSON.stringify(run));
     }
+  });
+
+  // A wiki link in every few characters, and a block on every line
+  it('reads many wiki links, and many lines, in linear time', () => {
+    assert.ok(linear(markdownInlineToHtml, n => '[[a]] '.repeat(n / 6)));
+    assert.ok(linear(markdownToBlocks, n => '- a\n'.repeat(n / 4)));
   });
 });
